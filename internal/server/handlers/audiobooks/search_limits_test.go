@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/search_limits_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4969947c-9081-4cfe-acaa-5dd0af4d0264
 // last-edited: 2026-10-10
 
@@ -80,4 +80,28 @@ func TestListAudiobooks_SearchLimitsAreNot500(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 	require.Equal(t, "2", w.Header().Get("Retry-After"))
 	require.Contains(t, w.Body.String(), "pattern searches")
+}
+
+// TestListAudiobooks_ErrorsDoNotEchoLongValues: a numeric, duration or range
+// value (which the text-length limit did not reach) and an unknown field name,
+// each thousands of bytes long, earn a 400 that is short: the set-size check
+// runs before any value is parsed, and what an error does quote is shortened.
+func TestListAudiobooks_ErrorsDoNotEchoLongValues(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	for name, f := range map[string]map[string]string{
+		"year range":      {"field": "year", "value": "[" + long + " TO 5]"},
+		"year comparison": {"field": "year", "value": ">" + long},
+		"file size":       {"field": "file_size", "value": ">5" + long},
+		"duration":        {"field": "duration", "value": "[" + long + "]"},
+		"unknown field":   {"field": long, "value": "a"},
+	} {
+		h, deps := newHandler(t)
+		c, w := newCtx("GET", filtersQuery(t, []map[string]string{f}), nil, nil)
+		h.ListAudiobooks(c)
+		require.Equal(t, http.StatusBadRequest, w.Code, "%s: %.200s", name, w.Body.String())
+		// The unknown-field answer lists the valid fields (about 600 bytes);
+		// every answer is far below the 5,000-byte input.
+		require.Less(t, w.Body.Len(), 1500, name)
+		require.False(t, deps.rec.listFiltersSeen, name)
+	}
 }

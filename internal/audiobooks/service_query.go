@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-10
 
@@ -81,7 +81,8 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 // (querygrammar.AcquirePatternSlot; a *BusyError when none frees within its
 // wait) and a Budget of libraryPatternBudget for its pattern matches, or
 // shares the request's (WithSharedSearchAllowance, search_allowance.go). A spent
-// budget returns its *TooSlowError and nothing else: the walk's predicate can
+// budget returns its *TooSlowError (or, for a match that cannot be trusted on a
+// field cut at the pattern input limit, its *InexactError) and nothing else: the walk's predicate can
 // only answer false once the budget is spent, so any rows it produced are
 // incomplete and are dropped. Every list path (GetAudiobooksPage, the search
 // result cache's builds, MatchingBookIDs) runs through here, so the slot is

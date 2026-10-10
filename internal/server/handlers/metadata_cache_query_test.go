@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -1054,4 +1054,20 @@ func longestEcho(msg, input string) int {
 		}
 	}
 	return best
+}
+
+// TestCompileReviewTitleFilter_ErrorsDoNotEchoLongInput: the errors for another
+// field name and for bare text mixed with title: tokens name at most 64 bytes
+// of what the caller typed, however long (q is capped at 1,024 bytes).
+func TestCompileReviewTitleFilter_ErrorsDoNotEchoLongInput(t *testing.T) {
+	long := strings.Repeat("w", 900)
+	for _, q := range []string{long + ":a", "title:a " + long} {
+		_, err := compileReviewTitleFilter(q)
+		if err == nil {
+			t.Fatalf("%.20s...: no error", q)
+		}
+		if len(err.Error()) > 300 {
+			t.Errorf("%.20s...: error is %d bytes", q, len(err.Error()))
+		}
+	}
 }

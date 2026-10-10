@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-10
 
@@ -85,6 +85,12 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 	cf := compiledFilter{FieldFilter: f}
 	wrap := func(err error) error {
 		return fmt.Errorf("%s:%s — %w", f.Field, querygrammar.ShortToken(f.Value), err)
+	}
+	// Every kind of value is bounded here, before any parser sees it: only the
+	// text path used to be, so a 5,000-byte numeric or duration value was
+	// parsed and quoted back in the error message at full size.
+	if err := querygrammar.CheckValueLength(f.Value); err != nil {
+		return cf, wrap(err)
 	}
 	switch {
 	case durationFilterFields[f.Field]:
@@ -184,17 +190,24 @@ const (
 // with more than MaxPatternFilters regex/glob filters, counted across every
 // slice given (book-global and per-user filters together).
 func CheckFilterSetSize(sets ...[]FieldFilter) error {
-	total, patterns := 0, 0
+	// Total first: counting the pattern filters compiles every value, and a
+	// set over the byte limit must be refused before any of them is.
+	total := 0
 	for _, filters := range sets {
 		for _, f := range filters {
 			total += len(f.Value)
-			if isPatternFilter(f) {
-				patterns++
-			}
 		}
 	}
 	if total > MaxFilterValueBytesTotal {
 		return fmt.Errorf("the filter values total %d bytes; the limit is %d (search for fewer or shorter values)", total, MaxFilterValueBytesTotal)
+	}
+	patterns := 0
+	for _, filters := range sets {
+		for _, f := range filters {
+			if isPatternFilter(f) {
+				patterns++
+			}
+		}
 	}
 	if patterns > MaxPatternFilters {
 		return fmt.Errorf("the search has %d regex or * filters; the limit is %d (combine some, or narrow with a plain word instead)", patterns, MaxPatternFilters)

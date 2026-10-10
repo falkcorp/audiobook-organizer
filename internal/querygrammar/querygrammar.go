@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
 // last-edited: 2026-10-10
 
@@ -13,12 +13,20 @@
 //	"two words"   literal substring (quotes switch every operator off)
 //	/RE2/         RE2 regex, case-insensitive by default ((?-i) opts out)
 //	a*  *a  *a*   glob on the WHOLE (trimmed) value; only * is a wildcard
-//
-// A regex or glob is run over at most the first 16 KB of a field
-// (MaxPatternInputBytes); a substring is matched against all of it.
-//   - the value is non-empty
+//	*             the value is non-empty
 //
 // and, for numeric fields, ParseNumericExpr's comparisons and ranges.
+//
+// A regex or glob is run over at most the first 16 KB of a field
+// (MaxPatternInputBytes); a substring is matched against all of it. On a field
+// longer than that, a pattern never sees past the cut, so:
+//   - a row whose only match lies past 16 KB is not found, and a negated
+//     filter therefore keeps it;
+//   - a pattern whose answer depends on how the field ENDS (a $ or \z, a \b,
+//     a glob that does not end in *) cannot be answered from a cut field when
+//     it matches: the cut point is not the end. Budget.Match refuses the
+//     whole search with an *InexactError rather than answer true for a field
+//     that may not end that way.
 //
 // Every malformed value is an ERROR, never a pattern that matches nothing or
 // everything: a bad filter that silently answers "0 books" reads as a fact
@@ -90,14 +98,21 @@ const (
 	MaxPatternInst = 500
 	// MaxPatternInputBytes is how much of a field a regex or glob sees: the
 	// first 16 KB, cut back to a UTF-8 rune boundary. Every title, author,
-	// series and nearly every description is shorter; a pattern that needs
-	// text past 16 KB of a longer field does not see it (a substring search
-	// still scans the whole field).
+	// series and nearly every description is shorter. On a longer field a
+	// pattern does not see past the cut (a substring search still scans the
+	// whole field), which has two consequences: a match that lies past the cut
+	// is not found, so a NEGATED filter keeps the row; and a match of a
+	// pattern that depends on how the field ends ($, \z, \b, a glob with no
+	// trailing *) is not trusted, because the cut is not the end
+	// (TextMatcher.MatchExact; Budget.Match refuses the search).
 	MaxPatternInputBytes = 16 << 10
 )
 
-// checkTextValueLength refuses a value over MaxTextValueBytes.
-func checkTextValueLength(raw string) error {
+// CheckValueLength refuses a filter value over MaxTextValueBytes. CompileText
+// applies it to every text value; a caller that compiles other kinds of value
+// (numeric, duration) applies it first, so no kind of value reaches a parser,
+// or an error message, at unbounded size.
+func CheckValueLength(raw string) error {
 	if len(raw) > MaxTextValueBytes {
 		return fmt.Errorf("value is %d bytes long; the limit is %d (search for a shorter part of it)", len(raw), MaxTextValueBytes)
 	}
@@ -144,6 +159,10 @@ type TextMatcher struct {
 	Kind   Kind
 	needle string         // lower-cased, KindSubstring
 	re     *regexp.Regexp // KindGlob, KindRegex
+	// endSensitive: whether a match depends on where the field ENDS (an end
+	// anchor, a word boundary, a glob with no trailing *). Such a match found
+	// in a field that was cut at MaxPatternInputBytes is not trustworthy.
+	endSensitive bool // KindGlob, KindRegex
 }
 
 // IsRegexForm reports whether an unquoted value is written as a regex, i.e.
@@ -171,7 +190,7 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 	if raw == "" {
 		return nil, errors.New("empty value")
 	}
-	if err := checkTextValueLength(raw); err != nil {
+	if err := CheckValueLength(raw); err != nil {
 		return nil, err
 	}
 	if quoted {
@@ -182,7 +201,7 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &TextMatcher{Raw: raw, Kind: KindRegex, re: re}, nil
+		return &TextMatcher{Raw: raw, Kind: KindRegex, re: re, endSensitive: regexEndSensitive(re.String())}, nil
 	}
 	if strings.Contains(raw, "*") {
 		if strings.Trim(raw, "*") == "" {
@@ -200,7 +219,9 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 		if err := checkProgramSize(expr); err != nil {
 			return nil, err
 		}
-		return &TextMatcher{Raw: raw, Kind: KindGlob, re: re}, nil
+		// `a*` and `*a*` ignore how the field ends (the trailing * takes the
+		// rest); `*a` and `a*b` do not.
+		return &TextMatcher{Raw: raw, Kind: KindGlob, re: re, endSensitive: !strings.HasSuffix(raw, "*")}, nil
 	}
 	return &TextMatcher{Raw: raw, Kind: KindSubstring, needle: strings.ToLower(raw)}, nil
 }
@@ -236,16 +257,42 @@ func compileRegexForm(raw string) (*regexp.Regexp, error) {
 
 // cutPatternInput is the part of a field a regex or glob is run over: all
 // of it up to MaxPatternInputBytes, else the first MaxPatternInputBytes cut
-// back to a UTF-8 rune boundary.
-func cutPatternInput(s string) string {
+// back to a UTF-8 rune boundary (at most utf8.UTFMax-1 bytes back, so
+// a field of invalid bytes still keeps nearly all of its 16 KB). cut reports
+// whether any of s was left out.
+func cutPatternInput(s string) (in string, cut bool) {
 	if len(s) <= MaxPatternInputBytes {
-		return s
+		return s, false
 	}
-	cut := MaxPatternInputBytes
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
+	end := MaxPatternInputBytes
+	for i := 0; i < utf8.UTFMax-1 && !utf8.RuneStart(s[end]); i++ {
+		end--
 	}
-	return s[:cut]
+	return s[:end], true
+}
+
+// regexEndSensitive reports whether a compiled expression can match
+// differently depending on where the input ends: it holds an end-of-text or
+// end-of-line anchor, or a word boundary (which looks at the next byte).
+func regexEndSensitive(expr string) bool {
+	re, err := syntax.Parse(expr, syntax.Perl)
+	if err != nil { // cannot happen: expr compiled; refuse to trust the match
+		return true
+	}
+	var walk func(*syntax.Regexp) bool
+	walk = func(n *syntax.Regexp) bool {
+		switch n.Op {
+		case syntax.OpEndText, syntax.OpEndLine, syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+			return true
+		}
+		for _, sub := range n.Sub {
+			if walk(sub) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(re)
 }
 
 // regexErrorReason is why regexp refused a pattern, WITHOUT the pattern:
@@ -280,19 +327,36 @@ func closingSlash(raw string) int {
 	return -1
 }
 
-// Match reports whether s satisfies the value.
+// Match reports whether s satisfies the value. It is MatchExact without the
+// exactness: use MatchExact (or Budget.Match, which refuses the search) where
+// a wrong true must not pass.
 //
 // A regex or glob sees at most the first MaxPatternInputBytes of s.
 func (m *TextMatcher) Match(s string) bool {
+	matched, _ := m.MatchExact(s)
+	return matched
+}
+
+// MatchExact is Match plus whether the answer can be trusted. exact is false
+// only when s was cut at MaxPatternInputBytes AND the pattern matched AND its
+// answer depends on how the field ends (see the package doc): the cut point
+// stands in for an end the field does not have there. A cut field that did
+// not match is reported exact (false): a match past the cut is the documented
+// 16 KB limit, not an unknown.
+func (m *TextMatcher) MatchExact(s string) (matched, exact bool) {
 	switch m.Kind {
 	case KindRegex:
-		return m.re.MatchString(cutPatternInput(s))
+		in, cut := cutPatternInput(s)
+		matched = m.re.MatchString(in)
+		return matched, !(cut && matched && m.endSensitive)
 	case KindGlob:
-		return m.re.MatchString(cutPatternInput(strings.TrimSpace(s)))
+		in, cut := cutPatternInput(strings.TrimSpace(s))
+		matched = m.re.MatchString(in)
+		return matched, !(cut && matched && m.endSensitive)
 	case KindNonEmpty:
-		return strings.TrimSpace(s) != ""
+		return strings.TrimSpace(s) != "", true
 	default:
-		return strings.Contains(strings.ToLower(s), m.needle)
+		return strings.Contains(strings.ToLower(s), m.needle), true
 	}
 }
 
@@ -347,18 +411,18 @@ func ParseNumericExprUnits(raw string, num NumberParser) (Comparison, error) {
 	parseNum := func(s, raw string) (float64, error) {
 		v, err := num(strings.TrimSpace(s))
 		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("%q is not a valid value in %q (use e.g. >2020, <=64, [2015 TO 2020])", strings.TrimSpace(s), raw)
+			return 0, fmt.Errorf("%q is not a valid value in %q (use e.g. >2020, <=64, [2015 TO 2020])", ShortToken(strings.TrimSpace(s)), ShortToken(raw))
 		}
 		return v, nil
 	}
 	e := strings.TrimSpace(raw)
 	if strings.HasPrefix(e, "[") {
 		if !strings.HasSuffix(e, "]") {
-			return Comparison{}, fmt.Errorf("range %q has no closing ]; use [2015 TO 2020]", raw)
+			return Comparison{}, fmt.Errorf("range %q has no closing ]; use [2015 TO 2020]", ShortToken(raw))
 		}
 		inner := strings.Fields(e[1 : len(e)-1])
 		if len(inner) != 3 || !strings.EqualFold(inner[1], "TO") {
-			return Comparison{}, fmt.Errorf("invalid range %q; use [2015 TO 2020] (* leaves a side open)", raw)
+			return Comparison{}, fmt.Errorf("invalid range %q; use [2015 TO 2020] (* leaves a side open)", ShortToken(raw))
 		}
 		out := Comparison{Op: "range", Lo: math.Inf(-1), Hi: math.Inf(1)}
 		if inner[0] != "*" {
@@ -376,7 +440,7 @@ func ParseNumericExprUnits(raw string, num NumberParser) (Comparison, error) {
 			out.Hi = v
 		}
 		if out.Lo > out.Hi {
-			return Comparison{}, fmt.Errorf("range %q is empty: the low end is above the high end", raw)
+			return Comparison{}, fmt.Errorf("range %q is empty: the low end is above the high end", ShortToken(raw))
 		}
 		return out, nil
 	}
@@ -411,11 +475,11 @@ func unitNumber(s string, mult map[string]float64) (float64, error) {
 	}
 	m, ok := mult[t[i:]]
 	if !ok {
-		return 0, fmt.Errorf("unknown unit %q", t[i:])
+		return 0, fmt.Errorf("unknown unit %q", ShortToken(t[i:]))
 	}
 	v, err := strconv.ParseFloat(t[:i], 64)
 	if err != nil || v < 0 {
-		return 0, fmt.Errorf("invalid number %q", s)
+		return 0, fmt.Errorf("invalid number %q", ShortToken(s))
 	}
 	return v * m, nil
 }

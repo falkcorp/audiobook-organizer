@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
 // last-edited: 2026-10-10
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // conformanceCase is one row of testdata/conformance.json, the corpus shared
@@ -385,8 +386,8 @@ func TestErrors_DoNotEchoTheValue(t *testing.T) {
 func TestMatch_PatternInputIsCut(t *testing.T) {
 	head := strings.Repeat("é", MaxPatternInputBytes/2-1) + "x" // 16 KB - 1 byte
 	field := head + "é" + strings.Repeat("y", 100) + "TAIL"
-	if got := cutPatternInput(field); got != head {
-		t.Fatalf("cut to %d bytes, want %d (rune boundary)", len(got), len(head))
+	if got, cut := cutPatternInput(field); got != head || !cut {
+		t.Fatalf("cut to %d bytes (cut=%v), want %d (rune boundary)", len(got), cut, len(head))
 	}
 	re := mustCompile(t, "/tail/")
 	if re.Match(field) {
@@ -401,11 +402,154 @@ func TestMatch_PatternInputIsCut(t *testing.T) {
 
 	mb := strings.Repeat("A long description of the book with many words and sentences. ", 16700) // ~1 MB
 	slow := mustCompile(t, `/(?:\pL?){245}zzz/`)
-	start := time.Now()
-	slow.Match(mb)
-	took := time.Since(start)
-	t.Logf("(?:\\pL?){245}zzz over %d bytes (cut to %d): %s", len(mb), MaxPatternInputBytes, took)
-	if took > 2*time.Second { // ~80 ms on an M1 Max; uncut it was 5.1 s
-		t.Fatalf("one match over a 1 MB field took %s", took)
+	// Relative, not absolute, so the bound holds under -race and CPU load: a
+	// match over the 1 MB field must cost about what one over exactly 16 KB
+	// does (it IS one over 16 KB). Uncut it costs 64 times as much (5.1 s
+	// against ~80 ms measured), far outside the 8x allowed here.
+	best := func(in string) time.Duration {
+		d := time.Duration(1<<63 - 1)
+		for range 3 {
+			start := time.Now()
+			slow.Match(in)
+			d = min(d, time.Since(start))
+		}
+		return d
+	}
+	atLimit := best(mb[:MaxPatternInputBytes])
+	took := best(mb)
+	t.Logf("(?:\\pL?){245}zzz over %d bytes (cut to %d): %s; over exactly %d bytes: %s", len(mb), MaxPatternInputBytes, took, MaxPatternInputBytes, atLimit)
+	if took > 8*atLimit {
+		t.Fatalf("one match over a 1 MB field took %s, over 8x the %s of a match over %d bytes", took, atLimit, MaxPatternInputBytes)
+	}
+}
+
+// TestCutPatternInput_InvalidUTF8: the walk back to a rune boundary stops
+// after utf8.UTFMax-1 bytes, so a field of nothing but continuation bytes
+// keeps its 16 KB instead of being cut to "" (which would make /^$/ match
+// 16 KB of garbage).
+func TestCutPatternInput_InvalidUTF8(t *testing.T) {
+	garbage := strings.Repeat("\x80", MaxPatternInputBytes+50)
+	got, cut := cutPatternInput(garbage)
+	if !cut || len(got) < MaxPatternInputBytes-(utf8.UTFMax-1) || len(got) > MaxPatternInputBytes {
+		t.Fatalf("cut=%v len=%d, want a prefix within %d bytes of %d", cut, len(got), utf8.UTFMax-1, MaxPatternInputBytes)
+	}
+	if mustCompile(t, "/^$/").Match(garbage) {
+		t.Fatal("16 KB of invalid bytes matched /^$/")
+	}
+	if got, cut := cutPatternInput("short"); got != "short" || cut {
+		t.Fatalf("a short field is kept whole, got %q cut=%v", got, cut)
+	}
+	exact := strings.Repeat("a", MaxPatternInputBytes)
+	if got, cut := cutPatternInput(exact); len(got) != MaxPatternInputBytes || cut {
+		t.Fatalf("a field of exactly the limit is not cut (len %d, cut=%v)", len(got), cut)
+	}
+}
+
+// TestMatchExact_CutField: on a field longer than MaxPatternInputBytes a
+// match of a pattern that depends on how the field ends is not exact (the cut
+// is not the end), and Budget.Match refuses the whole evaluation with an
+// *InexactError instead of answering true. Patterns that ignore the end, and
+// every field that was not cut, stay exact.
+func TestMatchExact_CutField(t *testing.T) {
+	tail := "end"
+	// "end" sits exactly at the cut but the field goes on for 100 more bytes.
+	atCut := strings.Repeat("x", MaxPatternInputBytes-len(tail)) + tail + strings.Repeat("y", 100)
+	allA := strings.Repeat("a", MaxPatternInputBytes+1000) + "XYZ"
+	cases := []struct {
+		name, pattern, field string
+		matched, exact       bool
+	}{
+		{"dollar", "/end$/", atCut, true, false},
+		{"backslash z", `/end\z/`, atCut, true, false},
+		{"word boundary", `/end\b/`, atCut, true, false},
+		{"plus dollar", "/^a+$/", allA, true, false},
+		{"multiline end", "/(?m)end$/", atCut, true, false},
+		{"suffix glob", "*end", atCut, true, false},
+		{"middle glob", "x*end", atCut, true, false},
+		{"unanchored regex", "/end/", atCut, true, true},
+		{"prefix glob", "x*", atCut, true, true},
+		{"contains glob", "*end*", atCut, true, true},
+		{"start anchor", "/^x+end/", atCut, true, true},
+		{"end anchor, no match", "/zzz$/", atCut, false, true},
+		{"suffix glob, no match", "*zzz", atCut, false, true},
+		{"substring ignores the cut", "end", atCut, true, true},
+	}
+	for _, tc := range cases {
+		m := mustCompile(t, tc.pattern)
+		matched, exact := m.MatchExact(tc.field)
+		if matched != tc.matched || exact != tc.exact {
+			t.Errorf("%s: MatchExact = (%v, %v), want (%v, %v)", tc.name, matched, exact, tc.matched, tc.exact)
+		}
+	}
+
+	// A field that is not cut is exact whatever the pattern.
+	short := strings.Repeat("x", 100) + tail
+	for _, pat := range []string{"/end$/", `/end\b/`, "*end"} {
+		if matched, exact := mustCompile(t, pat).MatchExact(short); !matched || !exact {
+			t.Errorf("%s over a short field = (%v, %v), want (true, true)", pat, matched, exact)
+		}
+	}
+	// A field of exactly the limit is not cut either.
+	full := strings.Repeat("x", MaxPatternInputBytes-len(tail)) + tail
+	if matched, exact := mustCompile(t, "/end$/").MatchExact(full); !matched || !exact {
+		t.Errorf("/end$/ over a field of exactly %d bytes = (%v, %v), want (true, true)", len(full), matched, exact)
+	}
+}
+
+// TestBudgetMatch_InexactRefusesTheEvaluation: Budget.Match on an untrustworthy
+// match stops the evaluation (Expired) and Err is an *InexactError; a spent
+// budget still reports *TooSlowError.
+func TestBudgetMatch_InexactRefusesTheEvaluation(t *testing.T) {
+	atCut := strings.Repeat("x", MaxPatternInputBytes-3) + "end" + strings.Repeat("y", 100)
+	b := NewBudget(time.Hour)
+	m := mustCompile(t, "/end$/")
+	if b.Match(m, "an end") != true || b.Err() != nil {
+		t.Fatal("a short field matches normally")
+	}
+	if b.Match(m, atCut) {
+		t.Fatal("an untrustworthy match must not answer true")
+	}
+	var inexact *InexactError
+	if !b.Expired() || !errors.As(b.Err(), &inexact) {
+		t.Fatalf("Expired=%v Err=%v, want an *InexactError", b.Expired(), b.Err())
+	}
+	if b.Match(m, "an end") {
+		t.Fatal("after the evaluation is refused every match answers false")
+	}
+	var slow *TooSlowError
+	spent := NewBudget(0)
+	if !errors.As(spent.Err(), &slow) || errors.As(spent.Err(), &inexact) {
+		t.Fatalf("a spent budget reports %v, want *TooSlowError", spent.Err())
+	}
+}
+
+// TestNumericErrors_DoNotEchoLongValue: a numeric or range error names at
+// most 64 bytes of what it refuses, however long the value.
+func TestNumericErrors_DoNotEchoLongValue(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	for _, raw := range []string{"[" + long + " TO 5]", ">" + long, ">5" + long, "[" + long, "[1 TO 2 TO " + long + "]"} {
+		_, err := ParseNumericExprUnits(raw, nil)
+		if err == nil {
+			t.Errorf("%.20s...: no error", raw)
+			continue
+		}
+		if len(err.Error()) > 400 {
+			t.Errorf("%.20s...: error is %d bytes: %.120s...", raw, len(err.Error()), err.Error())
+		}
+	}
+	_, err := ParseNumericExprUnits("5"+long, func(s string) (float64, error) { return unitNumber(s, byteUnits) })
+	if err == nil || len(err.Error()) > 400 {
+		t.Errorf("unit error not bounded: %v", err)
+	}
+}
+
+// TestShortToken_InvalidUTF8: ShortToken keeps its 64 bytes on invalid input.
+func TestShortToken_InvalidUTF8(t *testing.T) {
+	got := ShortToken(strings.Repeat("\xff", 200))
+	if len(got) < 64 {
+		t.Fatalf("ShortToken of invalid bytes kept only %d", len(got))
+	}
+	if got := ShortToken(strings.Repeat("\x80", 200)); len(got) < 61 {
+		t.Fatalf("ShortToken of continuation bytes kept only %d", len(got))
 	}
 }
