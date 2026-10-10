@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-10-09
 
@@ -160,7 +160,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			if ch.defID == "acoustid.fingerprint-rescan" {
 				logging.Info(ctx, "maintenance.library-optimize: fingerprint-rescan-missing excluded",
 					"operation_id", opID,
-					"reason", serverdecode.EnvVar+" is not set",
+					"reason", serverdecode.EnvVar+" is not true",
 				)
 				_ = reporter.Log(slog.LevelInfo,
 					"Skipping fingerprint-rescan-missing: in-process audio decoding is not allowed on this server")
