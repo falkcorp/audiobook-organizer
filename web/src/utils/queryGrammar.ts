@@ -1,5 +1,5 @@
 // file: web/src/utils/queryGrammar.ts
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e5b2d17-4c9a-4f36-b1e8-0d7a3c6f9e24
 // last-edited: 2026-10-10
 
@@ -26,8 +26,11 @@
  *
  * Server-side limits (internal/querygrammar): a value is at most 256 bytes, a
  * compiled regex at most 500 instructions, and a regex or glob is matched
- * against only the first 16 KB of a field (a plain word sees all of it). The
- * client-side evaluator does not cut; the fields it holds (titles) are short.
+ * against only the first 16 KB of a field (a plain word sees all of it), so a
+ * match past the cut is not found, and a match of a pattern that depends on how
+ * the field ends ($, \z, \b, a glob not ending in *) on a cut field refuses
+ * the search. The client-side evaluator does not cut; the fields it holds
+ * (titles) are short.
  */
 
 import { parseSearch, type FieldFilter } from './searchParser';

@@ -1,7 +1,7 @@
 // file: internal/search/field_routing.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
-// last-edited: 2026-09-27
+// last-edited: 2026-10-10
 
 package search
 
@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
 // Which query fields the Bleve index can answer, and the duration grammar
@@ -106,16 +108,16 @@ func ParseDurationSeconds(s string) (int, error) {
 	}
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
 		if f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
-			return 0, fmt.Errorf("invalid duration %q", s)
+			return 0, fmt.Errorf("invalid duration %q", querygrammar.ShortToken(s))
 		}
 		return int(math.Round(f)), nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: use seconds or units like 20m, 1h30m", s)
+		return 0, fmt.Errorf("invalid duration %q: use seconds or units like 20m, 1h30m", querygrammar.ShortToken(s))
 	}
 	if d < 0 {
-		return 0, fmt.Errorf("invalid duration %q", s)
+		return 0, fmt.Errorf("invalid duration %q", querygrammar.ShortToken(s))
 	}
 	return int(math.Round(d.Seconds())), nil
 }

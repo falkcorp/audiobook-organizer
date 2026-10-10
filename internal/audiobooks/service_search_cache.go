@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
 // last-edited: 2026-10-10
 
@@ -500,10 +500,12 @@ func (e *listSearchEvaluator) Less(ctx context.Context, a, b string) (bool, erro
 }
 
 // IsSearchLimitError reports whether err is a querygrammar evaluation limit
-// (a spent pattern budget or every pattern slot busy): an answer about the
+// (a spent pattern budget, an inexact match on a long field, or every
+// pattern slot busy): an answer about the
 // search, which callers pass on rather than retry or swallow.
 func IsSearchLimitError(err error) bool {
 	var slow *querygrammar.TooSlowError
+	var inexact *querygrammar.InexactError
 	var busy *querygrammar.BusyError
-	return errors.As(err, &slow) || errors.As(err, &busy)
+	return errors.As(err, &slow) || errors.As(err, &inexact) || errors.As(err, &busy)
 }

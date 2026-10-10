@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-10
 
@@ -530,11 +530,11 @@ func compileReviewTitleFilter(input string) (*reviewTitleFilter, error) {
 	} else {
 		for _, f := range filters {
 			if f.field != "title" {
-				return nil, fmt.Errorf("%s: only title: filters apply here", f.field)
+				return nil, fmt.Errorf("%s: only title: filters apply here", querygrammar.ShortToken(f.field))
 			}
 		}
 		if freeText != "" {
-			return nil, fmt.Errorf(`"%s": mix of title: tokens and bare text — write every part as title:…`, freeText)
+			return nil, fmt.Errorf(`"%s": mix of title: tokens and bare text — write every part as title:…`, querygrammar.ShortToken(freeText))
 		}
 	}
 	out := &reviewTitleFilter{parts: make([]reviewTitlePart, 0, len(filters))}
@@ -1323,7 +1323,8 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 }
 
 // respondSearchLimit answers the querygrammar evaluation limits and reports
-// whether it did: a spent pattern budget is a 400 (the search, as written,
+// whether it did: a spent pattern budget, or a pattern that cannot be
+// answered exactly on a long field, is a 400 (the search, as written,
 // cannot be answered within the limit), every pattern slot busy is a 503
 // with Retry-After. The audiobooks handler package has the same function;
 // httputil and querygrammar are both leaf packages, so neither can host it.
@@ -1331,6 +1332,11 @@ func respondSearchLimit(c *gin.Context, err error) bool {
 	var slow *querygrammar.TooSlowError
 	if errors.As(err, &slow) {
 		httputil.RespondWithBadRequest(c, slow.Error())
+		return true
+	}
+	var inexact *querygrammar.InexactError
+	if errors.As(err, &inexact) {
+		httputil.RespondWithBadRequest(c, inexact.Error())
 		return true
 	}
 	var busy *querygrammar.BusyError

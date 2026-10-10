@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-10
 
@@ -639,10 +639,18 @@ func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 		// answer that cannot be mistaken for a fact about the library.
 		if field, unknown := audiobookspkg.FirstUnknownFilterField(fieldFilters); unknown {
 			httputil.RespondWithBadRequest(c,
-				"filter on \""+field+"\" names a field the library list cannot filter on; "+
+				"filter on \""+querygrammar.ShortToken(field)+"\" names a field the library list cannot filter on; "+
 					"filtering on it would match no books and report a count of 0, which reads "+
 					"as \"none exist\". Valid fields: "+
 					strings.Join(audiobookspkg.KnownFilterFields(), ", ")+".")
+			return listRequest{}, false
+		}
+		// Bound the set as a whole, as the Review query bounds its q. This runs
+		// BEFORE the value check below so that no value is parsed, and no error
+		// message built from one, until the set is known to be small: an error
+		// that quotes a value must not be able to quote a pasted wall of them.
+		if err := audiobookspkg.CheckFilterSetSize(fieldFilters); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid filters parameter: "+err.Error())
 			return listRequest{}, false
 		}
 		// Reject values the matcher cannot evaluate (duration:>abc,
@@ -650,13 +658,6 @@ func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 		// value that parses to nothing matches nothing and reads as "0 books".
 		if err := audiobookspkg.FirstInvalidFilterValue(fieldFilters); err != nil {
 			httputil.RespondWithBadRequest(c, "invalid filter value: "+err.Error())
-			return listRequest{}, false
-		}
-		// Bound the set as a whole, as the Review query bounds its q: each
-		// value is already within querygrammar's per-value limits, and this
-		// refuses a pasted wall of them before any row is scanned.
-		if err := audiobookspkg.CheckFilterSetSize(fieldFilters); err != nil {
-			httputil.RespondWithBadRequest(c, "invalid filters parameter: "+err.Error())
 			return listRequest{}, false
 		}
 		for _, ff := range fieldFilters {
@@ -1275,7 +1276,8 @@ func (h *Handler) GetAudiobook(c *gin.Context) {
 }
 
 // respondSearchLimit answers the querygrammar evaluation limits and reports
-// whether it did: a spent pattern budget is a 400 (the search, as written,
+// whether it did: a spent pattern budget, or a pattern that cannot be
+// answered exactly on a long field, is a 400 (the search, as written,
 // cannot be answered within the limit; nothing partial is returned), every
 // pattern slot busy is a 503 with Retry-After. The review handler in package
 // handlers has the same function; httputil and querygrammar are both leaf
@@ -1284,6 +1286,11 @@ func respondSearchLimit(c *gin.Context, err error) bool {
 	var slow *querygrammar.TooSlowError
 	if errors.As(err, &slow) {
 		httputil.RespondWithBadRequest(c, slow.Error())
+		return true
+	}
+	var inexact *querygrammar.InexactError
+	if errors.As(err, &inexact) {
+		httputil.RespondWithBadRequest(c, inexact.Error())
 		return true
 	}
 	var busy *querygrammar.BusyError

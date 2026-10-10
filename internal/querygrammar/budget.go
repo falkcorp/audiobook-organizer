@@ -1,5 +1,5 @@
 // file: internal/querygrammar/budget.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1771412b-a65b-42bd-815e-dcf0c2cf7c1d
 // last-edited: 2026-10-10
 
@@ -49,6 +49,19 @@ func (e *TooSlowError) Error() string {
 		"Try a simpler search, such as fewer regex or * terms, shorter patterns, or another filter that narrows it first", e.Budget)
 }
 
+// InexactError is returned when an evaluation met a field it could not answer
+// exactly: a regex or glob that depends on how the field ends (a $ or \z, a
+// \b, a glob with no trailing *) matched a field longer than
+// MaxPatternInputBytes, where the cut point is not the end. Callers answer it
+// with a 400, like TooSlowError: nothing partial is returned, because a row
+// answered "true" here might not end that way.
+type InexactError struct{}
+
+func (e *InexactError) Error() string {
+	return fmt.Sprintf("the search cannot be answered exactly: its pattern depends on how a field ends ($, \\z, \\b, or a * wildcard pattern that does not end in *) "+
+		"and a field is longer than the %d KB a pattern is run over. Drop the end anchor, end the pattern with *, or add another filter that excludes the long field", MaxPatternInputBytes>>10)
+}
+
 // BusyError is returned when every pattern-evaluation slot stayed taken for
 // the whole wait. Callers answer it with a 503 and Retry-After.
 type BusyError struct {
@@ -67,6 +80,7 @@ type Budget struct {
 	now     func() time.Time
 	spent   atomic.Int64 // nanoseconds
 	expired atomic.Bool
+	inexact atomic.Bool // a match could not be trusted (InexactError)
 }
 
 // NewBudget returns a Budget of limit, timed by the wall clock on EVERY
@@ -100,25 +114,32 @@ func (m *TextMatcher) Costly() bool {
 // Match is m.Match(s), timed against the budget when m is Costly. Once the
 // budget is spent it returns false without matching; the caller must then
 // discard the whole evaluation (Err), since a row that "did not match"
-// after expiry is unknown, not false.
+// after expiry is unknown, not false. The same goes for a match that could
+// not be trusted (MatchExact's exact=false): the budget is then Expired with
+// an *InexactError, and the caller discards the evaluation the same way.
 func (b *Budget) Match(m *TextMatcher, s string) bool {
 	if b == nil || !m.Costly() {
 		return m.Match(s)
 	}
-	if b.expired.Load() {
+	if b.Expired() {
 		return false
 	}
 	start := b.now()
-	ok := m.Match(s)
+	ok, exact := m.MatchExact(s)
 	if b.spent.Add(int64(b.now().Sub(start))) >= int64(b.limit) {
 		b.expired.Store(true)
+	}
+	if !exact {
+		b.inexact.Store(true)
+		return false
 	}
 	return ok
 }
 
-// Expired reports whether the budget is spent.
+// Expired reports whether the evaluation must stop and be discarded: the
+// budget is spent, or a match could not be trusted.
 func (b *Budget) Expired() bool {
-	return b != nil && b.expired.Load()
+	return b != nil && (b.expired.Load() || b.inexact.Load())
 }
 
 // Spent is the pattern-matching time charged so far.
@@ -129,12 +150,18 @@ func (b *Budget) Spent() time.Duration {
 	return time.Duration(b.spent.Load())
 }
 
-// Err is a *TooSlowError once the budget is spent, else nil.
+// Err is a *TooSlowError once the budget is spent, an *InexactError once a
+// match could not be trusted, else nil.
 func (b *Budget) Err() error {
-	if !b.Expired() {
+	switch {
+	case b == nil:
 		return nil
+	case b.expired.Load():
+		return &TooSlowError{Budget: b.limit}
+	case b.inexact.Load():
+		return &InexactError{}
 	}
-	return &TooSlowError{Budget: b.limit}
+	return nil
 }
 
 // Concurrency: a process-wide bound on evaluations that run patterns.
@@ -151,6 +178,15 @@ var (
 	patternSlotWait = 2 * time.Second
 )
 
+// patternSlotAcquisitions counts successful AcquirePatternSlot calls for the
+// life of the process.
+var patternSlotAcquisitions atomic.Uint64
+
+// PatternSlotAcquisitions is how many pattern slots have ever been taken. A
+// test reads the difference across a call to assert how many slots the call
+// took (a request that should share one allowance takes exactly one).
+func PatternSlotAcquisitions() uint64 { return patternSlotAcquisitions.Load() }
+
 func defaultPatternSlots() int {
 	return max(2, runtime.NumCPU()/2)
 }
@@ -165,6 +201,7 @@ func AcquirePatternSlot(ctx context.Context) (release func(), err error) {
 	patternSlotsMu.Unlock()
 	select {
 	case slots <- struct{}{}:
+		patternSlotAcquisitions.Add(1)
 		return func() { <-slots }, nil
 	default:
 	}
@@ -172,6 +209,7 @@ func AcquirePatternSlot(ctx context.Context) (release func(), err error) {
 	defer timer.Stop()
 	select {
 	case slots <- struct{}{}:
+		patternSlotAcquisitions.Add(1)
 		return func() { <-slots }, nil
 	case <-timer.C:
 		return nil, &BusyError{Slots: cap(slots), Waited: wait}
@@ -204,7 +242,7 @@ func ShortToken(v string) string {
 		return v
 	}
 	cut := keep
-	for cut > 0 && !utf8.RuneStart(v[cut]) {
+	for i := 0; i < utf8.UTFMax-1 && !utf8.RuneStart(v[cut]); i++ {
 		cut--
 	}
 	return v[:cut] + "…"

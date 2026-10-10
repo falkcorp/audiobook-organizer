@@ -1,5 +1,5 @@
 // file: internal/audiobooks/search_allowance.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1feebd0f-6ce3-434b-b259-94010968fefa
 // last-edited: 2026-10-10
 
@@ -66,7 +66,14 @@ func patternAllowance(ctx context.Context) (budget *querygrammar.Budget, end fun
 				a.budget = querygrammar.NewBudget(libraryPatternBudget)
 			}
 		})
-		return a.budget, func() {}, a.err
+		// once.Do returns after the winning call finished, so these reads are
+		// ordered after its writes. A nil budget with a nil error means the
+		// request's done() won the race for the Once (it marks "never taken")
+		// between the ended check above and here: the allowance is over, so
+		// this misused scan takes its own below rather than run untimed.
+		if a.err != nil || a.budget != nil {
+			return a.budget, func() {}, a.err
+		}
 	}
 	release, err := querygrammar.AcquirePatternSlot(ctx)
 	if err != nil {

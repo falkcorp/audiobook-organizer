@@ -1,5 +1,5 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
 // last-edited: 2026-10-10
 
@@ -76,6 +76,34 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 		return nil, err
 	}
 
+	// The total is established straight after the page, while the shared
+	// allowance is still ours, so the pattern slot can be given back BEFORE the
+	// enrichment, file load and fingerprint loop below: none of that does any
+	// pattern matching, and holding one of the few slots through it would make
+	// a large-limit request refuse other searches for no reason. total is the
+	// service's own match count, or -1 when it could not establish one.
+	total := matchTotal
+	hasFilters := filters.IsPrimaryVersion != nil || filters.ExcludeQuarantined || filters.LibraryState != "" || filters.Tag != "" || len(filters.Tags) > 0
+	if search == "" && authorID == nil && seriesID == nil {
+		if hasFilters {
+			tc, err := s.audiobookService.CountAudiobooksFiltered(ctx, filters)
+			if audiobooks.IsSearchLimitError(err) {
+				// The shared budget ran out in the count (see the top of
+				// this function): refuse the response rather than serve the
+				// page length as the total.
+				return nil, err
+			}
+			if err == nil {
+				total = tc
+			}
+		} else {
+			if tc, err := s.audiobookService.CountAudiobooks(ctx); err == nil {
+				total = tc
+			}
+		}
+	}
+	done() // both scans have returned; the deferred call above is the backstop for early returns
+
 	// Safety net for the degraded (memdb-down) read path, where the Pebble
 	// fallback does not honor ExcludeQuarantined. In the normal memdb path the
 	// scan already excluded these, so this drops nothing.
@@ -120,31 +148,12 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 	// many matches existed and any "page 2 of N" was fiction.
 	totalCount := len(enriched)
 
-	// The service returns -1 when it cannot establish a true total; anything
-	// >= 0 is a real match count (exact, or an explicitly-warned lower bound
-	// when a post-filter over-fetch window was exhausted). Prefer it.
-	if matchTotal >= 0 {
-		totalCount = matchTotal
-	}
-
-	hasFilters := filters.IsPrimaryVersion != nil || filters.ExcludeQuarantined || filters.LibraryState != "" || filters.Tag != "" || len(filters.Tags) > 0
-	if search == "" && authorID == nil && seriesID == nil {
-		if hasFilters {
-			tc, err := s.audiobookService.CountAudiobooksFiltered(ctx, filters)
-			if audiobooks.IsSearchLimitError(err) {
-				// The shared budget ran out in the count (see the top of
-				// this function): refuse the response rather than serve the
-				// page length as the total.
-				return nil, err
-			}
-			if err == nil {
-				totalCount = tc
-			}
-		} else {
-			if tc, err := s.audiobookService.CountAudiobooks(ctx); err == nil {
-				totalCount = tc
-			}
-		}
+	// matchTotal (and total, once the count ran) is -1 when no true total could
+	// be established; anything >= 0 is a real match count (exact, or an
+	// explicitly-warned lower bound when a post-filter over-fetch window was
+	// exhausted). Prefer it.
+	if total >= 0 {
+		totalCount = total
 	}
 
 	resp := gin.H{"items": enriched, "count": totalCount, "limit": limit, "offset": offset}

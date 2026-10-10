@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c1e5a92-3f04-4d8b-b6e1-0a9d2c47f815
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
@@ -62,7 +63,7 @@ func parseDurationExpr(expr string) (durationExpr, error) {
 		inner := strings.TrimSpace(e[1 : len(e)-1])
 		parts := strings.Split(strings.ToUpper(inner), " TO ")
 		if len(parts) != 2 {
-			return durationExpr{}, fmt.Errorf("invalid range %q: use [10m TO 2h]", expr)
+			return durationExpr{}, fmt.Errorf("invalid range %q: use [10m TO 2h]", querygrammar.ShortToken(expr))
 		}
 		// Re-slice the original (not upper-cased) text by the split lengths so
 		// units keep their case-insensitive parse either way.

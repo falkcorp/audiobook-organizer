@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_budget_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 87f0a067-4601-427f-9ecf-398a030c9059
 // last-edited: 2026-10-10
 
@@ -345,4 +345,82 @@ func TestValidateFilterValue_DoesNotEchoLongValue(t *testing.T) {
 		t.Logf("%d bytes -> echoes %d: %s", len(v), n, msg)
 		require.LessOrEqual(t, n, 64, msg)
 	}
+}
+
+// TestLibrarySearch_EndAnchoredPatternOnCutField: a description longer than
+// the pattern input limit whose cut point looks like the end of a pattern
+// ("...the end" at byte 16 KB of a longer field) is refused with an
+// *InexactError by the list and by the count, not answered true; a pattern
+// that does not depend on the end finds the same row.
+func TestLibrarySearch_EndAnchoredPatternOnCutField(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+	desc := strings.Repeat("x", querygrammar.MaxPatternInputBytes-len("the end")) + "the end" + strings.Repeat("y", 500)
+	_, err = ps.CreateBook(&database.Book{Title: "One Long Book", FilePath: "/synthetic/long.m4b", Description: &desc})
+	require.NoError(t, err)
+	svc := NewAudiobookService(ps)
+
+	for _, v := range []string{"/the end$/", "*the end"} {
+		f := ListFilters{FieldFilters: []FieldFilter{{Field: "description", Value: v}}}
+		var inexact *querygrammar.InexactError
+		_, _, err := svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, f)
+		require.ErrorAs(t, err, &inexact, "list %s", v)
+		require.True(t, IsSearchLimitError(err))
+		_, err = svc.CountAudiobooksFiltered(context.Background(), f)
+		require.ErrorAs(t, err, &inexact, "count %s", v)
+	}
+	f := ListFilters{FieldFilters: []FieldFilter{{Field: "description", Value: "/the end/"}}}
+	books, _, err := svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, f)
+	require.NoError(t, err)
+	require.Len(t, books, 1)
+}
+
+// TestPatternAllowance_EndedBetweenCheckAndAcquire: a scan that read the
+// shared allowance as live but lost the race with done() (the Once is spent
+// with nothing taken) gets its own slot and budget, never a nil Budget with a
+// nil error, which would run the scan untimed.
+func TestPatternAllowance_EndedBetweenCheckAndAcquire(t *testing.T) {
+	restore := querygrammar.SetPatternSlotsForTesting(1, 10*time.Millisecond)
+	defer restore()
+	ctx, done := WithSharedSearchAllowance(context.Background())
+	a := ctx.Value(searchAllowanceKey{}).(*sharedSearchAllowance)
+	// done() has won the Once but the scan already passed the ended check.
+	a.once.Do(func() {})
+	budget, end, err := patternAllowance(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, budget, "the scan must be timed")
+	require.NotNil(t, end)
+	end() // returns the slot it took
+	done()
+	release, err := querygrammar.AcquirePatternSlot(context.Background())
+	require.NoError(t, err, "the scan's own slot was returned")
+	release()
+}
+
+// TestValidateFilterValue_LongNumericAndDurationValues: a numeric, duration or
+// range value is held to the same 256-byte limit as a text value and its error
+// does not quote it back at full size.
+func TestValidateFilterValue_LongNumericAndDurationValues(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	for _, f := range []FieldFilter{
+		{Field: "year", Value: "[" + long + " TO 5]"},
+		{Field: "year", Value: ">" + long},
+		{Field: "file_size", Value: ">5" + long},
+		{Field: "duration", Value: "[" + long + "]"},
+		{Field: "duration", Value: ">" + long},
+		{Field: "has_duration", Value: long},
+	} {
+		err := ValidateFilterValue(f)
+		require.Error(t, err, f.Field)
+		require.Less(t, len(err.Error()), 400, "%s: %.100s", f.Field, err.Error())
+	}
+	// Defence in depth: the parsers themselves also shorten what they quote.
+	_, err := parseDurationExpr("[" + long + "]")
+	require.Error(t, err)
+	require.Less(t, len(err.Error()), 400)
+	_, err = parseDurationExpr(">" + long)
+	require.Error(t, err)
+	require.Less(t, len(err.Error()), 400)
 }
