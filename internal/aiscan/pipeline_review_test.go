@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_review_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8a6674cc-107e-46c1-bf79-9bd8302491e2
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package aiscan
 
@@ -50,6 +50,13 @@ func TestShutdownLeavesBatchRunningForResume(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	run := runWithCtx(ctx, pm1, scan.ID)
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
+	// Let pm1 finish its groups side before the "restart". A real restart
+	// kills the old process; here pm1 lives on in the same process, and the
+	// phase claims that keep a phase from running twice are per manager. A
+	// groups_enrich still running in pm1 when pm2 resumes was run a second
+	// time by pm2, both managers went on to cross-validate, and the two
+	// concurrent result writes left every result twice (8 instead of 4).
+	awaitGroupsSettled(t, pm1, store, scan.ID)
 	cancel(lifecycle.ErrShutdown)
 	require.ErrorIs(t, awaitRun(t, run), context.Canceled)
 
