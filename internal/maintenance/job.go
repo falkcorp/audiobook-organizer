@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -38,9 +38,9 @@ func OperationIDFromCtx(ctx context.Context) string {
 // dryRun — so a job with any OTHER custom parameter has no argument to receive
 // it on. The documented workaround was store.GetOperationParams(opID), which
 // reads the Pebble key opstate:<opID>:params. Nothing on the maintenance path
-// writes that key: it is written only by operations.SaveParams, whose two
-// remaining callers are internal/organizer/service.go and
-// internal/itunes/service/importer.go. The maintenance dispatcher's call was
+// writes that key: it was written only by operations.SaveParams, deleted with
+// the params side table in 01-P4 (its last callers were internal/organizer and
+// internal/itunes/service/importer.go). The maintenance dispatcher's call was
 // deleted with the v1 op minter (#2784), which persisted params natively on the
 // v2 row instead. So the read path survived its writer and any job relying on
 // it silently receives nothing.
@@ -327,9 +327,10 @@ type jobUserStateStore interface {
 
 // GetOperationParams is deliberately ABSENT from this interface.
 //
-// It reads the Pebble key opstate:<opID>:params, written only by
-// operations.SaveParams — whose surviving callers are internal/organizer and
-// internal/itunes, neither of which is on the maintenance path. The maintenance
+// It read the Pebble key opstate:<opID>:params, written only by
+// operations.SaveParams, which was deleted with the params side table in 01-P4;
+// its last callers were internal/organizer and internal/itunes, neither on the
+// maintenance path. The maintenance
 // dispatcher's call went away with the v1 op minter (#2784), so from that point
 // every maintenance job calling it received nothing, silently, forever. Five
 // did: revert-metadata-fetch (which was thereby 100% non-functional, since its

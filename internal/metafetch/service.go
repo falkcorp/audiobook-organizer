@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.48.0
+// version: 5.48.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package metafetch
 
@@ -52,9 +52,9 @@ type forwardedStores interface {
 	organizer.OrganizerStore
 	// organizer.NewService, for the organize service ensureLibraryCopy routes
 	// a protected book's library copy through (OrganizeOneBook +
-	// CreateOrganizedVersion). Adds six methods over OrganizerStore's four
+	// CreateOrganizedVersion). Adds five methods over OrganizerStore's four
 	// (GetAllBooksCore, DeleteBook, BatchCreateBookFiles, CreateOperationChange,
-	// SaveOperationParams, DeleteOperationState); every store handed to
+	// DeleteOperationState); every store handed to
 	// NewService already had them.
 	organizer.Store
 	// foldernames.IsRealSeries, the search parse's series evidence
