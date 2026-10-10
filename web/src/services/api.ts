@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.172.0
+// version: 2.173.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-09
 
@@ -486,15 +486,6 @@ export interface AIAuthorSuggestion {
   roles?: SuggestionRoles;
 }
 
-export interface ApplyAISuggestion {
-  group_index: number;
-  action: string;
-  canonical_name: string;
-  keep_id: number;
-  merge_ids: number[];
-  rename: boolean;
-}
-
 export interface OperationLog {
   id: number;
   operation_id: string;
@@ -767,19 +758,6 @@ export interface SystemStorage {
   quota_enabled: boolean;
   quota_percent: number;
   user_quotas_enabled: boolean;
-}
-
-export interface SystemLogs {
-  logs: Array<{
-    operation_id: string;
-    timestamp: string;
-    level: string;
-    message: string;
-    details?: string;
-  }>;
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 export interface MetadataSource {
@@ -1960,20 +1938,6 @@ export async function countAuthors(): Promise<number> {
   return data.count ?? 0;
 }
 
-export interface Announcement {
-  id: string;
-  severity: 'info' | 'warning' | 'error';
-  message: string;
-  link?: string;
-}
-
-export async function getAnnouncements(): Promise<Announcement[]> {
-  const response = await apiFetch(`${API_BASE}/system/announcements`);
-  if (!response.ok) return [];
-  const data = await response.json();
-  return data.announcements || [];
-}
-
 export interface AuthorDedupGroup {
   canonical: Author;
   variants: Author[];
@@ -2085,14 +2049,6 @@ export interface AuthorAlias {
   alias_name: string;
   alias_type: string;
   created_at: string;
-}
-
-export async function getAuthorAliases(authorId: number): Promise<AuthorAlias[]> {
-  const response = await apiFetch(`${API_BASE}/authors/${authorId}/aliases`);
-  if (!response.ok) return [];
-  const body = await response.json();
-  const data = body.data;
-  return data.aliases || [];
 }
 
 export async function createAuthorAlias(
@@ -2568,29 +2524,6 @@ export interface SelectionSpec {
   };
 }
 
-// startBulkMetadataFetch enqueues a v2 bulk metadata fetch operation.
-// Pass a SelectionSpec with either book_ids (explicit page-level selection)
-// or filter (cross-page selection, resolved server-side with IsPrimaryVersion=true).
-// Returns the operation ID for polling via the bell.
-export async function startBulkMetadataFetch(
-  selection: SelectionSpec,
-  options?: { prefer_audible?: boolean; skip_cached?: boolean }
-): Promise<{ operation_id: string }> {
-  return wrapTrigger('library.bulk-metadata-fetch', async () => {
-    const response = await apiFetch(`${API_BASE}/operations/v2`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        def_id: 'library.bulk-metadata-fetch',
-        params: { selection, ...options },
-      }),
-    });
-    if (!response.ok) throw await buildApiError(response, 'Failed to start bulk metadata fetch');
-    const body = await response.json();
-    return body?.data ?? { operation_id: '' };
-  });
-}
-
 export async function startLibraryImport(path: string): Promise<{ operation_id: string }> {
   return wrapTrigger('library.import', async () => {
     const response = await apiFetch(`${API_BASE}/operations/v2`, {
@@ -2867,27 +2800,6 @@ export async function clearStaleOperations(): Promise<{ cleared: number }> {
   return body.data;
 }
 
-export interface OperationChange {
-  id: string;
-  operation_id: string;
-  book_id: string;
-  change_type: string;
-  field_name: string;
-  old_value: string;
-  new_value: string;
-  reverted_at: string | null;
-  created_at: string;
-}
-
-export async function getOperationChanges(operationId: string): Promise<OperationChange[]> {
-  const response = await apiFetch(`${API_BASE}/operations/${operationId}/changes`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch operation changes');
-  }
-  const data = await response.json();
-  return data.changes || [];
-}
-
 /**
  * Body of a successful POST /operations/:id/revert. `partial` is true when
  * some change rows were left un-reverted: `failed` restores, or
@@ -2914,15 +2826,6 @@ export async function revertOperation(operationId: string): Promise<RevertOperat
   }
   const body = await response.json().catch(() => ({}));
   return (body?.data ?? body) as RevertOperationResult;
-}
-
-export async function getBookChanges(bookId: string): Promise<OperationChange[]> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/changes`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch book changes');
-  }
-  const data = await response.json();
-  return data.changes || [];
 }
 
 // System
@@ -2976,26 +2879,6 @@ export async function startOrganize(
       'Failed to start organize'
     )
   );
-}
-
-export async function getSystemLogs(params?: {
-  level?: string;
-  search?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<SystemLogs> {
-  const query = new URLSearchParams();
-  if (params?.level) query.append('level', params.level);
-  if (params?.search) query.append('search', params.search);
-  if (params?.limit) query.append('limit', params.limit.toString());
-  if (params?.offset) query.append('offset', params.offset.toString());
-
-  const response = await apiFetch(`${API_BASE}/system/logs?${query}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch system logs');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 // Config
@@ -3187,27 +3070,6 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function listSessions(): Promise<AuthSession[]> {
-  const response = await apiFetch(`${API_BASE}/auth/sessions`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to list sessions');
-  }
-  const data = await response.json();
-  return data.sessions || [];
-}
-
-export async function revokeSession(sessionId: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/auth/sessions/${sessionId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to revoke session');
-  }
-}
-
 // Version Management
 export async function getBookVersions(bookId: string): Promise<Book[]> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/versions`);
@@ -3247,15 +3109,6 @@ export async function setPrimaryVersion(bookId: string): Promise<void> {
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to set primary version');
   }
-}
-
-export async function getVersionGroup(groupId: string): Promise<Book[]> {
-  const response = await apiFetch(`${API_BASE}/version-groups/${groupId}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch version group');
-  }
-  const body = await response.json();
-  return body.data?.audiobooks || [];
 }
 
 // Split selected segments into a new version (new book in same version group)
@@ -3425,21 +3278,6 @@ export async function getITunesImportStatus(operationId: string): Promise<ITunes
   }
   const body = await response.json();
   return body.data;
-}
-
-export async function getITunesImportStatusBulk(
-  operationIds: string[]
-): Promise<Record<string, ITunesImportStatus>> {
-  const response = await apiFetch(`${API_BASE}/itunes/import-status/bulk`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids: operationIds }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch bulk import status');
-  }
-  const data = await response.json();
-  return data.data.statuses || {};
 }
 
 // Series dedup
@@ -3615,18 +3453,6 @@ export async function updateSeriesName(id: number, name: string): Promise<Operat
   return awaitSeriesRenameOp(response, 'Failed to update series name');
 }
 
-// Metadata Fetching
-export interface MetadataResult {
-  title: string;
-  author: string;
-  description?: string;
-  publisher?: string;
-  publish_year?: number;
-  isbn?: string;
-  cover_url?: string;
-  language?: string;
-}
-
 /** MetadataScoreStep mirrors metafetch.ScoreStep. `op` is the same vocabulary as
  *  WaterfallStep in components/review/evidence/types.ts -- keep the three in sync. */
 export interface MetadataScoreStep {
@@ -3781,21 +3607,6 @@ export interface SearchMetadataResponse {
   is_fresh?: boolean;
   /** When the cache row was written. */
   fetched_at?: string;
-}
-
-export async function searchMetadata(
-  title: string,
-  author?: string
-): Promise<{ results: MetadataResult[]; source: string }> {
-  const params = new URLSearchParams({ title });
-  if (author) params.append('author', author);
-
-  const response = await apiFetch(`${API_BASE}/metadata/search?${params.toString()}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to search metadata');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 /**
@@ -4110,31 +3921,6 @@ export async function bulkFetchMetadata(
   return body.data;
 }
 
-// AI Parsing
-export interface AIParseResult {
-  title: string;
-  author: string;
-  series?: string;
-  series_number?: number;
-  narrator?: string;
-  publisher?: string;
-  year?: number;
-  confidence: 'high' | 'medium' | 'low';
-}
-
-export async function parseFilenameWithAI(filename: string): Promise<{ metadata: AIParseResult }> {
-  const response = await apiFetch(`${API_BASE}/ai/parse-filename`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to parse filename with AI');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
 export async function testMetadataSource(
   sourceId: string,
   apiKey: string
@@ -4379,16 +4165,6 @@ export async function getBookMetadataHistory(bookId: string): Promise<MetadataCh
   return data.history || [];
 }
 
-export async function getFieldMetadataHistory(
-  bookId: string,
-  field: string
-): Promise<MetadataChangeRecord[]> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/metadata-history/${field}`);
-  if (!response.ok) throw await buildApiError(response, 'Failed to fetch field history');
-  const data = await response.json();
-  return data.history || [];
-}
-
 export async function undoLastApply(
   bookId: string
 ): Promise<{ message: string; undone_fields: string[] }> {
@@ -4520,26 +4296,6 @@ export interface CandidateResult {
   fallback_deferred?: boolean;
 }
 
-export interface BatchFetchResponse {
-  results: CandidateResult[];
-  matched: number;
-  no_match: number;
-  errors: number;
-  total: number;
-  total_count: number;
-  limit: number;
-  offset: number;
-  total_matched?: number;
-  total_no_match?: number;
-  total_errors?: number;
-  /** Results on this page whose fallback lookup was deferred. */
-  deferred?: number;
-  /** Results on this page the fetch did not search. */
-  skipped?: number;
-  total_deferred?: number;
-  total_skipped?: number;
-}
-
 export interface BatchFetchRequest {
   book_ids?: string[];
   selection?: {
@@ -4616,57 +4372,6 @@ export async function batchFetchCandidates(
   // successful fetch took the callers' "already being fetched" branch.
   const body = await response.json();
   return body.data ?? body;
-}
-
-export async function getOperationResults(
-  operationId: string,
-  limit = 100,
-  offset = 0
-): Promise<BatchFetchResponse> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  const response = await apiFetch(`${API_BASE}/operations/${operationId}/results?${params}`);
-  if (!response.ok) throw await buildApiError(response, 'Failed to get operation results');
-  return response.json();
-}
-
-// MetadataFetchSummary is one row in the Resume Review picker —
-// a completed metadata_candidate_fetch operation with its result
-// breakdown so the user knows what they're about to review.
-export interface MetadataFetchSummary {
-  id: string;
-  type: string;
-  status: string;
-  created_at: string;
-  completed_at?: string;
-  result_count: number;
-  matched_count: number;
-  no_match_count: number;
-  error_count: number;
-  deferred_count?: number;
-  skipped_count?: number;
-}
-
-// getRecentMetadataFetches returns up to the last 10 completed
-// metadata batch-fetch operations that have persisted results,
-// newest first. Used by the Resume Review picker dialog so users
-// can pick which fetch to review when multiple are outstanding —
-// solves the scenario where someone fires a second fetch before
-// reviewing the first.
-export async function getRecentMetadataFetches(): Promise<MetadataFetchSummary[]> {
-  const response = await apiFetch(`${API_BASE}/metadata/recent-fetches`);
-  if (!response.ok) throw await buildApiError(response, 'Failed to list recent metadata fetches');
-  const data = await response.json();
-  return data.operations || [];
-}
-
-export async function getPendingReview(): Promise<{
-  operation_id: string;
-  total_books: number;
-  message: string;
-}> {
-  const response = await apiFetch(`${API_BASE}/metadata/pending-review`, { method: 'POST' });
-  if (!response.ok) throw await buildApiError(response, 'Failed to get pending review');
-  return response.json();
 }
 
 // CachedMetadataEntry is one row from GET /audiobooks/metadata/cached.
@@ -5011,96 +4716,6 @@ export async function clearMetadataNoMatch(bookId: string): Promise<void> {
   if (!response.ok) throw await buildApiError(response, 'Failed to clear no-match status');
 }
 
-// MetadataResultItem is one row in the unified metadata-results listing.
-// `result_json` is a JSON-encoded CandidateResult and is only populated
-// for statuses that have a stored fetch result (matched / no_match /
-// applied / rejected / error / deferred / skipped). `unfetched` rows have
-// status only.
-export type MetadataResultStatus =
-  'matched' | 'no_match' | 'applied' | 'rejected' | 'error' | 'deferred' | 'skipped' | 'unfetched';
-
-export interface MetadataResultItem {
-  book_id: string;
-  status: MetadataResultStatus;
-  result_json?: string;
-  operation_id?: string;
-  fetched_at?: string;
-}
-
-export interface MetadataResultsResponse {
-  items: MetadataResultItem[];
-  total: number;
-  by_status: Record<string, number>;
-  limit: number;
-  offset: number;
-}
-
-// getMetadataResults returns the latest metadata-fetch result per book,
-// optionally filtered by status. Single source of truth for the Library
-// page filter toggles and the "Resume Review" entry point. Replaces the
-// scattered logic that lived in getPendingReview + client-side filtering.
-//
-// Pass status=['matched'] to retrieve the same set the legacy Resume
-// Review button used to surface. Pass no status filter to see every
-// book that has been fetched. Pass includeUnfetched=true to also include
-// books that have never been queried.
-export async function getMetadataResults(
-  opts: {
-    status?: MetadataResultStatus[];
-    limit?: number;
-    offset?: number;
-    includeUnfetched?: boolean;
-  } = {}
-): Promise<MetadataResultsResponse> {
-  const params = new URLSearchParams();
-  for (const s of opts.status ?? []) params.append('status', s);
-  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
-  if (opts.offset !== undefined) params.set('offset', String(opts.offset));
-  if (opts.includeUnfetched) params.set('include_unfetched', 'true');
-  const qs = params.toString();
-  const url = qs
-    ? `${API_BASE}/library/metadata-results?${qs}`
-    : `${API_BASE}/library/metadata-results`;
-  const response = await apiFetch(url);
-  if (!response.ok) throw await buildApiError(response, 'Failed to list metadata results');
-  const data = await response.json();
-  return data.data ?? data;
-}
-
-export async function batchApplyCandidates(
-  operationId: string,
-  bookIds: string[]
-): Promise<{
-  applied: number;
-  /** Books the library scan was reading; each is applied by its queued operation. */
-  queued_book_ids?: string[];
-  queued_count?: number;
-  queued_operation_ids?: string[];
-}> {
-  const response = await apiFetch(`${API_BASE}/metadata/batch-apply-candidates`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // dry_run:false is explicit: absent, the server enqueues a preview
-    // (metadata.bulk-apply-preview) and applies nothing.
-    body: JSON.stringify({ operation_id: operationId, book_ids: bookIds, dry_run: false }),
-  });
-  if (!response.ok) throw await buildApiError(response, 'Failed to apply candidates');
-  return response.json();
-}
-
-export async function batchRejectCandidates(
-  operationId: string,
-  bookIds: string[]
-): Promise<{ rejected: number }> {
-  const response = await apiFetch(`${API_BASE}/metadata/batch-reject-candidates`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ operation_id: operationId, book_ids: bookIds }),
-  });
-  if (!response.ok) throw await buildApiError(response, 'Failed to reject candidates');
-  return response.json();
-}
-
 /** A label on one metadata candidate, kept as scorer training data. */
 export type CandidateFeedbackLabel = 'negative' | 'positive';
 
@@ -5142,19 +4757,6 @@ export async function deleteCandidateFeedback(
     { method: 'DELETE' }
   );
   if (!response.ok) throw await buildApiError(response, 'Failed to remove candidate feedback');
-  return response.json();
-}
-
-export async function batchUnrejectCandidates(
-  operationId: string,
-  bookIds: string[]
-): Promise<{ unrejected: number }> {
-  const response = await apiFetch(`${API_BASE}/metadata/batch-unreject-candidates`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ operation_id: operationId, book_ids: bookIds }),
-  });
-  if (!response.ok) throw await buildApiError(response, 'Failed to unreject candidates');
   return response.json();
 }
 
@@ -5549,40 +5151,9 @@ export async function updateMaintenanceWindowConfig(cfg: MaintenanceWindowConfig
     throw await buildApiError(response, 'Failed to update maintenance window config');
 }
 
-// AI Author Review
-export type AIReviewMode = 'full' | 'groups';
-
-// Both AI author endpoints answer 202 with the id of the enqueued v2 run, not
-// a legacy Operation record. Poll it with getOperationStatus (/operations/v2/
-// :id) and read its output with getOperationResult once it completes.
-//
-// requestAIAuthorReview may answer with a run that was ALREADY in flight: the
-// server blocks a second review of the same mode by handing back the running
-// one, so `status` can be 'running' rather than 'queued' on a fresh call.
-export interface EnqueuedAIReview {
-  operation_id: string;
-  status: string;
-  mode: AIReviewMode;
-}
-
 export interface EnqueuedOperation {
   operation_id: string;
   status: string;
-}
-
-export async function requestAIAuthorReview(
-  mode: AIReviewMode = 'groups'
-): Promise<EnqueuedAIReview> {
-  const response = await apiFetch(`${API_BASE}/authors/duplicates/ai-review`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to start AI author review');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 // result_data is whatever the operation stored: parsed JSON when it is valid,
@@ -5591,21 +5162,6 @@ export async function getOperationResult(id: string): Promise<{ result_data: unk
   const response = await apiFetch(`${API_BASE}/operations/${id}/result`);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to get operation result');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function applyAIAuthorReview(
-  suggestions: ApplyAISuggestion[]
-): Promise<EnqueuedOperation> {
-  const response = await apiFetch(`${API_BASE}/authors/duplicates/ai-review/apply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ suggestions }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to apply AI author review');
   }
   const body = await response.json();
   return body.data;
@@ -5663,12 +5219,6 @@ export interface AIScanResult {
 
 export interface AIScanDetail extends AIScan {
   phases: AIScanPhase[];
-}
-
-export interface AIScanComparison {
-  new_in_b: AIScanResult[];
-  resolved_from_a: AIScanResult[];
-  unchanged: AIScanResult[];
 }
 
 // --- AI Scan Pipeline API Functions ---
@@ -5738,22 +5288,6 @@ export async function cancelAIScan(id: number): Promise<void> {
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to cancel scan');
   }
-}
-
-export async function deleteAIScan(id: number): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/ai/scans/${id}`, { method: 'DELETE' });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to delete scan');
-  }
-}
-
-export async function compareAIScans(a: number, b: number): Promise<AIScanComparison> {
-  const response = await apiFetch(`${API_BASE}/ai/scans/compare?a=${a}&b=${b}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to compare scans');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 // --- Rename Preview & Apply ---
@@ -5885,14 +5419,6 @@ export interface ReconcilePreview {
   untracked_files: string[];
   matches: ReconcileMatch[];
   unmatched_books: ReconcileBrokenRecord[];
-}
-
-export async function getReconcilePreview(): Promise<ReconcilePreview> {
-  const response = await apiFetch(`${API_BASE}/operations/reconcile/preview`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to get reconcile preview');
-  }
-  return response.json();
 }
 
 export async function startReconcile(
@@ -6131,53 +5657,6 @@ export async function getBookExternalIDs(bookId: string): Promise<{
 }
 
 // --- User tag API functions ---
-
-export async function getBookUserTags(bookId: string): Promise<string[]> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/user-tags`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to get book tags');
-  }
-  const data = await response.json();
-  return data.tags;
-}
-
-export async function setBookUserTags(bookId: string, tags: string[]): Promise<string[]> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/user-tags`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tags }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to set book tags');
-  }
-  const data = await response.json();
-  return data.tags;
-}
-
-export async function addBookUserTag(bookId: string, tag: string): Promise<string[]> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/user-tags`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to add book tag');
-  }
-  const data = await response.json();
-  return data.tags;
-}
-
-export async function removeBookUserTag(bookId: string, tag: string): Promise<string[]> {
-  const response = await apiFetch(
-    `${API_BASE}/audiobooks/${bookId}/user-tags/${encodeURIComponent(tag)}`,
-    { method: 'DELETE' }
-  );
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to remove book tag');
-  }
-  const data = await response.json();
-  return data.tags;
-}
 
 // DetailedBookTag carries the source attribution alongside the
 // tag string. `source='user'` is a human-applied label; everything
@@ -7013,14 +6492,6 @@ export async function compareAcoustID(
   }
   const responseData = await response.json();
   return responseData.data ?? responseData;
-}
-
-export async function triggerDedupRefresh(): Promise<Operation> {
-  return wrapTrigger('dedup.refresh', async () => {
-    const response = await apiFetch(`${API_BASE}/dedup/refresh`, { method: 'POST' });
-    if (!response.ok) throw await buildApiError(response, 'Failed to trigger dedup refresh');
-    return (await response.json()).data;
-  });
 }
 
 // Enqueues the dedup.purge-stale UOS op so the cleanup appears in the bell
