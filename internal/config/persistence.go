@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.46.0
+// version: 1.46.1
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-10
 
@@ -853,12 +853,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// embed_cover_art step below, which records its marker even when it
 		// changes nothing: a marker written against a blob we then refuse to
 		// load would skip that migration once the operator repairs the blob.
-		// This is a probe on a throwaway copy; the real load is further down.
+		// The probe is a zero Config, not Snapshot(): Snapshot is a shallow
+		// copy, and decoding into it would write into AppConfig's live maps
+		// and slices outside the lock. Types are checked the same either way;
+		// the real load is further down.
 		// It runs after the reshaping migrations above on purpose, because a
 		// pre-migration flat blob is not expected to match today's Config.
 		// Those migrations only move existing values into nested shape, so a
 		// rewrite they persist before this check preserves the operator's data.
-		probe := Snapshot()
+		var probe Config
 		if err := json.Unmarshal([]byte(blobStr), &probe); err != nil {
 			return fmt.Errorf("stored config_blob does not match the config schema; refusing to run "+
 				"on defaults because the next settings save would overwrite it: %w", err)
