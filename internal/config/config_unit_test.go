@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.17.0
-// last-edited: 2026-10-09
+// version: 1.18.0
+// last-edited: 2026-10-10
 
 package config
 
@@ -1066,11 +1066,13 @@ func TestLoadConfigFromDatabaseUnit(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("getAllSettings error returns nil", func(t *testing.T) {
+	t.Run("getAllSettings error is returned", func(t *testing.T) {
+		// Fatal at startup: running on defaults would let the next whole-struct
+		// SaveConfigToDatabase overwrite the stored config_blob.
 		store := newMockSettingsStore()
-		store.getAllErr = fmt.Errorf("table not found")
+		store.getAllErr = fmt.Errorf("read failed")
 		err := LoadConfigFromDatabase(store)
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, store.getAllErr)
 	})
 
 	t.Run("applies settings from store", func(t *testing.T) {

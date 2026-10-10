@@ -76,6 +76,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/fpworker"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
@@ -226,7 +227,14 @@ type Server struct {
 	// setupRoutes (before the /api/* redirect middleware, so their pre-middleware
 	// ordering is preserved) via closures that delegate to this handler; the
 	// remaining protected system routes are registered directly in wireHandlers.
-	systemHandler      *systemhandlers.Handler
+	systemHandler *systemhandlers.Handler
+	// startupSteps is the process's startup step runner and degraded-token
+	// set (internal/startup). cmd builds it, runs the pre-server steps
+	// through it and passes it in ServerConfig.StartupSteps; Start stores it
+	// here and runs its own steps through it. Atomic because /health reads it
+	// through a lazy provider and Start writes it; nil before Start, which
+	// /health renders as "no startup step degraded".
+	startupSteps       atomic.Pointer[startup.Steps]
 	batchPoller        *BatchPoller
 	mergeService       *merge.Service
 	diagnosticsService *diagnostics.Service
@@ -391,6 +399,12 @@ type ServerConfig struct {
 	// When set, it is used to build absolute links (temp-login URLs, etc.) instead
 	// of trusting the inbound Host header. Leave empty to return relative paths.
 	ExternalURL string
+
+	// StartupSteps is the runner cmd used for the steps before the server
+	// existed. Start runs its own steps (startup.Table: opRegistrationGate,
+	// container.Start, searchindex, http) through the same value so /health's
+	// `degraded` list covers the whole process. Nil gets a fresh runner.
+	StartupSteps *startup.Steps
 }
 
 // Ops returns the narrow view of the store: the 88 methods internal/server

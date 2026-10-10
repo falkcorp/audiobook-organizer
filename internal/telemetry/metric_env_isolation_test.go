@@ -1,5 +1,5 @@
 // file: internal/telemetry/metric_env_isolation_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3a71e58-04bd-4f92-9e6a-5d18b2f7a0c4
 // last-edited: 2026-10-10
 
@@ -273,7 +273,7 @@ func TestRateLimitedErrorHandler_ClassTableIsBounded(t *testing.T) {
 
 func TestInitSummary_BothHalvesOffKeepsBothMessages(t *testing.T) {
 	cfg := LoadConfig("test", "https://u:secret@tempo.example.invalid:4317")
-	level, msg, attrs := initSummary(cfg, false, errors.New("trace boom https://u:secret@tempo.example.invalid:4317"),
+	level, msg, attrs := initSummary(cfg, cfg.MetricsEnabled, false, errors.New("trace boom https://u:secret@tempo.example.invalid:4317"),
 		otlpStatus{Err: errors.New("endpoint \"nohostport\" is neither a URL nor host:port")})
 	if level != slog.LevelError {
 		t.Errorf("level = %v, want error", level)

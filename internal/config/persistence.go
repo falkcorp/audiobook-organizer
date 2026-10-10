@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
@@ -704,8 +704,14 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 
 	settings, err := store.GetAllSettings()
 	if err != nil {
-		slog.Info("Note Could not load settings from database", "err", err)
-		return nil
+		// Returned, not swallowed. This used to log at Info and return nil, so
+		// the process ran on defaults -- and SaveConfigToDatabase persists the
+		// WHOLE config struct as config_blob, so the first settings save of
+		// that process would overwrite the stored config with those defaults.
+		// cmd runs this as the Fatal startup step "loadConfigFromDB"
+		// (internal/startup.Table). An empty settings keyspace is not an
+		// error: GetAllSettings returns no rows and nil.
+		return fmt.Errorf("read settings: %w", err)
 	}
 
 	// Index settings for O(1) lookup

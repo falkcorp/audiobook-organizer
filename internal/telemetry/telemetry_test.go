@@ -1,16 +1,18 @@
 // file: internal/telemetry/telemetry_test.go
-// version: 2.1.0
+// version: 2.3.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package telemetry
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -194,5 +196,35 @@ func TestInitTracing_SpansReachAPlaintextCollector(t *testing.T) {
 				t.Fatalf("collector received %d spans from %q, want 1", got, tc.endpoint)
 			}
 		})
+	}
+}
+
+// TestInitOTEL_MetricsErrorStillReturnsShutdown: cmd runs InitOTEL as a
+// Degraded startup step, so a metrics failure is survived and the returned
+// shutdown is deferred. It must be non-nil and safe to call; until
+// 2026-10-10 it was nil alongside the error.
+func TestInitOTEL_MetricsErrorStillReturnsShutdown(t *testing.T) {
+	origProvider, origOTLP, origErr := meterProvider, meterOTLP, meterErr
+	t.Cleanup(func() {
+		meterProvider, meterOTLP, meterErr = origProvider, origOTLP, origErr
+		meterOnce = sync.Once{}
+		if origProvider != nil || origErr != nil {
+			meterOnce.Do(func() {}) // keep the one-time registration consumed
+		}
+	})
+	boom := errors.New("prometheus exporter failed")
+	meterOnce = sync.Once{}
+	meterOnce.Do(func() {})
+	meterProvider, meterOTLP, meterErr = nil, otlpStatus{}, boom
+
+	shutdown, err := InitOTEL(context.Background(), &Config{ServiceName: "test", MetricsEnabled: true})
+	if !errors.Is(err, boom) {
+		t.Fatalf("InitOTEL error = %v, want the metrics error", err)
+	}
+	if shutdown == nil {
+		t.Fatal("InitOTEL returned a nil shutdown alongside a metrics error")
+	}
+	if err := shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown: %v", err)
 	}
 }

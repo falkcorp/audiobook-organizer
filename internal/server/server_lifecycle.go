@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.28.0
+// version: 4.29.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package server
 
@@ -33,8 +33,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/watcher"
 	"github.com/gin-gonic/gin"
@@ -107,6 +109,31 @@ func (s *Server) startSearchIndexing() {
 	}
 }
 
+// adoptSearchIndex takes the Bleve index the searchindex service opened and,
+// when there is one, switches search indexing live (startSearchIndexing).
+//
+// Bleve open failures are logged inside IndexService.Start, which then
+// returns nil with Index() nil, and the server runs without search. That
+// contract is kept; the "searchindex" step (Degraded in startup.Table) is
+// what makes the missing index visible as the search_index token in /health.
+// There is no reopen path, so nothing Clears the token in this process.
+func (s *Server) adoptSearchIndex(steps *startup.Steps) {
+	if s.container != nil && s.searchIndex == nil {
+		if idx, ok := serviceregistry.TryGet[*search.IndexService](s.container, "searchindex"); ok && idx != nil {
+			s.searchIndex = idx.Index()
+		}
+	}
+	_ = steps.Run("searchindex", func() error {
+		if s.searchIndex == nil {
+			return errors.New("search index not open")
+		}
+		return nil
+	})
+	if s.searchIndex != nil {
+		s.startSearchIndexing()
+	}
+}
+
 // deferredActivityFlushBudget bounds how long shutdown (or a failed Start)
 // waits for RecordDeferred entries to reach the store. The unit's
 // TimeoutStopSec is 30s and the HTTP drain and ops registry spend part of it
@@ -157,11 +184,37 @@ func (s *Server) closeActivityStore() {
 	lifecycleLog.Info("Activity log store closed")
 }
 
+// startupStepsFor stores the runner Start uses for its steps, creating one
+// when cmd did not supply it (tests, child mode), and returns it.
+func (s *Server) startupStepsFor(cfg ServerConfig) *startup.Steps {
+	steps := cfg.StartupSteps
+	if steps == nil {
+		steps = startup.New().SetErrorLog(lifecycleLog.Error)
+	}
+	s.startupSteps.Store(steps)
+	return steps
+}
+
+// startupDegradedSource is /health's lazy provider for the degraded
+// startup-step tokens: the runner Start stored, or nil before Start. The nil
+// check keeps a nil *startup.Steps from being boxed into a non-nil interface.
+func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
+	if st := s.startupSteps.Load(); st != nil {
+		return st
+	}
+	return nil
+}
+
 func (s *Server) Start(cfg ServerConfig) error {
+	// Every step below runs through the process's startup runner, which
+	// applies the step's class from startup.Table (Fatal returns the error,
+	// Degraded records a /health token and continues).
+	steps := s.startupStepsFor(cfg)
+
 	// Refuse to serve with a hole in the operations registry, before touching
 	// anything else -- nothing below this line should run on a server that is
 	// about to be rejected.
-	if err := s.opRegistrationGate(); err != nil {
+	if err := steps.Run("opRegistrationGate", s.opRegistrationGate); err != nil {
 		return err
 	}
 
@@ -176,9 +229,14 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Container.Start runs services in resolved dep order; failures
 	// abort startup and roll back already-started services.
 	if s.container != nil {
-		if err := s.container.Start(s.bgCtx); err != nil {
+		if err := steps.Run("container.Start", func() error {
+			if err := s.container.Start(s.bgCtx); err != nil {
+				return fmt.Errorf("container start: %w", err)
+			}
+			return nil
+		}); err != nil {
 			s.flushDeferredActivity()
-			return fmt.Errorf("container start: %w", err)
+			return err
 		}
 	}
 
@@ -201,17 +259,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// start writing through s.store, so no write made after Start can
 	// miss the queue (pre-PR #903 this happened later and was
 	// timing-dependent).
-	//
-	// Bleve open failures are already logged inside IndexService.Start;
-	// when Index() returns nil the server runs without search.
-	if s.container != nil && s.searchIndex == nil {
-		if idx, ok := serviceregistry.TryGet[*search.IndexService](s.container, "searchindex"); ok && idx != nil {
-			s.searchIndex = idx.Index()
-		}
-	}
-	if s.searchIndex != nil {
-		s.startSearchIndexing()
-	}
+	s.adoptSearchIndex(steps)
 
 	// HNSW snapshot is now loaded earlier, in NewServer (between Build and PostInit),
 	// so that dedup.Engine.PostInit can detect the populated store and skip the
@@ -219,7 +267,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	s.startCacheWarmers()
 
-	if err := s.configureAndStartHTTP(cfg); err != nil {
+	// Fatal. configureAndStartHTTP itself only returns setup errors; a
+	// listener that fails to BIND does so inside its goroutine, which logs
+	// and os.Exit(1)s (H113), so that failure stops the process without
+	// passing through this Run.
+	if err := steps.Run("http", func() error { return s.configureAndStartHTTP(cfg) }); err != nil {
 		s.flushDeferredActivity()
 		return err
 	}

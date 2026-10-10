@@ -102,6 +102,7 @@ var layerOf = map[string]int{
 	"internal/seqnum":                  0, // table: leaf
 	"internal/serverdecode":            0, // computed: imports no module package
 	"internal/serviceregistry":         0, // computed: imports no module package
+	"internal/startup":                 0, // computed: imports no module package
 	"internal/syncapi/conformance":     0, // computed: imports no module package
 	"internal/syncapi/progress":        0, // computed: imports no module package
 	"internal/telemetry":               0, // computed: imports no module package

@@ -1,5 +1,5 @@
 // file: internal/telemetry/endpoint_fuzz_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8a1c64-9d27-4e50-b6a3-0c71e5d9f284
 // last-edited: 2026-10-10
 
@@ -140,7 +140,7 @@ func checkNoLeak(t *testing.T, in string) {
 	_, terr := parseOTLPEndpoint(keyTraceEndpoint, in)
 	_, merr := parseOTLPEndpoint(keyMetricsEndpoint, in)
 	var flat []string
-	_, msg, attrs := initSummary(cfg, terr == nil, terr, otlpStatus{Enabled: merr == nil, Err: merr})
+	_, msg, attrs := initSummary(cfg, cfg.MetricsEnabled, terr == nil, terr, otlpStatus{Enabled: merr == nil, Err: merr})
 	flat = append(flat, msg)
 	for _, a := range attrs {
 		flat = append(flat, fmt.Sprint(a))
