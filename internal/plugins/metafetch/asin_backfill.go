@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -64,6 +64,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -126,6 +127,14 @@ var errASINFilledMeanwhile = errors.New("asin filled or locked by another writer
 // errISBNFilledMeanwhile aborts an ISBN-only write when another writer filled
 // an ISBN (or a user locked ISBN-13) between the lookup and the write.
 var errISBNFilledMeanwhile = errors.New("isbn filled or locked by another writer during the lookup")
+
+// errOwnerRejectedRecord aborts a write of an Audible record the owner
+// rejected for the book (metafetch.LoadRejectedCandidates).
+var errOwnerRejectedRecord = errors.New("the owner rejected this Audible record for the book")
+
+// asinRejectOwnerRejected is the reject-reason tally key for a match the
+// owner rejected for the book.
+const asinRejectOwnerRejected = "owner_rejected"
 
 // asinBackfillParams are the op parameters. AfterBookID is the checkpoint
 // cursor (the registry merges it back into params on resume); it is the only
@@ -191,6 +200,9 @@ type asinBackfillStore interface {
 	asinBackfillMarkerStore
 	// The owner-manual guard reads the book's franchise tags.
 	applygate.ManualOnlyTagReader
+	// The owner's rejected matches: a record the owner rejected for the
+	// book is never written onto it (ownerRejected).
+	metafetch.RejectedCandidateReader
 }
 
 var _ asinBackfillStore = (database.Store)(nil)
@@ -284,6 +296,13 @@ func newASINBackfillTally() *asinBackfillTally {
 		rejects: map[string]int{}, evidence: map[string]int{},
 		suspectReasons: map[string]int{}, unverifiedReasons: map[string]int{},
 	}
+}
+
+// addOwnerRejected tallies a match not written because the owner rejected it.
+func (t *asinBackfillTally) addOwnerRejected() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.rejects[asinRejectOwnerRejected]++
 }
 
 // addKnownIdentityReason tallies why an existing ASIN was not confirmed.
@@ -835,12 +854,50 @@ func (r *asinBackfillRun) search(ctx context.Context, f asinBookFacts) ([]metada
 	return out, nil
 }
 
-// apply writes the matched ASIN (or, in a dry run, logs it).
+// ownerRejected reports whether the owner rejected Audible's record
+// (its title, ASIN and ISBN) for bookID: the same match every candidate
+// apply refuses (metafetch.RejectedSet, identifiers across sources). A
+// failed read is returned, never read as "not rejected". Writing a
+// rejected record's ASIN would anchor every later identity check and
+// Audnexus lookup on the edition the owner said is wrong.
+func (r *asinBackfillRun) ownerRejected(bookID, title, asin, isbn string) (bool, error) {
+	rejected, err := metafetch.LoadRejectedCandidates(r.store, bookID)
+	if err != nil {
+		return false, fmt.Errorf("read owner rejections: %w", err)
+	}
+	return rejected.Matches("Audible", title, metafetch.CandidateIdentifiers(asin, "", "", isbn)), nil
+}
+
+// refuseOwnerRejected counts and logs a match left alone because the owner
+// rejected it, and in a live run remembers it under markerKey like a miss,
+// so the next run inside the retry window does not ask Audible again.
+func (r *asinBackfillRun) refuseOwnerRejected(bookID, markerKey, asin string) {
+	r.tally.addOwnerRejected()
+	r.log.Info("the owner rejected this Audible record for the book; nothing written: book_id=%s asin=%s",
+		logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(asin))
+	if !r.dry {
+		r.markRaw(markerKey, asinMissMarker{At: r.now().UTC(), Outcome: asinRejectOwnerRejected})
+	}
+}
+
+// apply writes the matched ASIN (or, in a dry run, logs it). A record the
+// owner rejected for the book is never written: checked inside the write's
+// Modify (under the book's write stripe, where RecordRejection writes too),
+// and on the dry run's read so its preview matches.
 func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, title string, d asinDecision) {
 	bookID := b.ID
 	t := r.tally
 	evidence := strings.Join(d.Evidence, "+")
 	if r.dry {
+		rejected, rerr := r.ownerRejected(bookID, d.Title, d.ASIN, d.ISBN)
+		if rerr != nil {
+			r.bookError(bookID, "read owner rejections", rerr)
+			return
+		}
+		if rejected {
+			r.refuseOwnerRejected(bookID, asinMissKey(bookID), d.ASIN)
+			return
+		}
 		t.matchedWritten.Add(1)
 		// The same conditions the live write applies, on the row and locks
 		// this run already read, so the preview is what a live run would do.
@@ -871,6 +928,14 @@ func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, tit
 		if locks.Locked(database.FieldKeyASIN) {
 			return errASINFilledMeanwhile
 		}
+		// The owner's rejections, read under the same lock: fail closed.
+		rejected, rerr := r.ownerRejected(bookID, d.Title, asin, isbn)
+		if rerr != nil {
+			return rerr
+		}
+		if rejected {
+			return errOwnerRejectedRecord
+		}
 		fresh.ASIN = &asin
 		// The matched product's audiobook ISBN rides along, under the same
 		// rules: only when the book has no ISBN at all (an ISBN-10 already
@@ -886,6 +951,8 @@ func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, tit
 		return nil
 	})
 	switch {
+	case errors.Is(err, errOwnerRejectedRecord):
+		r.refuseOwnerRejected(bookID, asinMissKey(bookID), asin)
 	case errors.Is(err, errASINFilledMeanwhile):
 		t.filledMeanwhile.Add(1)
 		r.log.Info("asin filled or locked during the search; left alone: book_id=%s", logger.SanitizeLogValue(bookID))
@@ -1071,7 +1138,19 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 		return nil
 	}
 
+	// The product the book's ASIN names may be the record the owner
+	// rejected for the book: its ISBN would extend that record. Checked on
+	// the dry run's read and again inside the write's Modify.
 	if r.dry {
+		rejected, rerr := r.ownerRejected(b.ID, id.Title, asin, isbn)
+		if rerr != nil {
+			r.bookError(b.ID, "read owner rejections", rerr)
+			return nil
+		}
+		if rejected {
+			r.refuseOwnerRejected(b.ID, isbnMissKey(b.ID), asin)
+			return nil
+		}
 		t.isbnWritten.Add(1)
 		t.propose(asinProposal{BookID: b.ID, Title: b.Title, ASIN: asin, ISBN13: isbn, AudibleTitle: id.Title, Via: "asin_lookup"})
 		r.log.Info("would write isbn13=%s from asin=%s book_id=%s",
@@ -1089,11 +1168,20 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 		if locks.Locked(database.FieldKeyISBN13) {
 			return errISBNFilledMeanwhile
 		}
+		rejected, rerr := r.ownerRejected(b.ID, id.Title, asin, isbn)
+		if rerr != nil {
+			return rerr
+		}
+		if rejected {
+			return errOwnerRejectedRecord
+		}
 		v := isbn
 		fresh.ISBN13 = &v
 		return nil
 	})
 	switch {
+	case errors.Is(err, errOwnerRejectedRecord):
+		r.refuseOwnerRejected(b.ID, isbnMissKey(b.ID), asin)
 	case errors.Is(err, errISBNFilledMeanwhile):
 		t.filledMeanwhile.Add(1)
 		r.log.Info("isbn filled, locked or asin changed during the lookup; left alone: book_id=%s", logger.SanitizeLogValue(b.ID))
