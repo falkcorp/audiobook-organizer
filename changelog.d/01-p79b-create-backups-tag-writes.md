@@ -19,7 +19,9 @@ keeps its mtime. Where the hardlink is refused for any reason, or the library
 entry is a symlink, the backup is a full exclusive copy. If the rename fails,
 the backup is removed and the original is left as it was. When a write falls
 back to the AtomicParsley/eyeD3/ffmpeg writers, which rewrite the file in
-place, the backup is taken first as a copy.
+place, the backup is taken first as a copy. If that fallback fails without
+touching the file (for example the tool is not installed), the backup is
+removed; if the file changed at all, the backup is kept.
 
 Bulk writes keep no backup (owner decision D69). Their safety net is the
 provenance ledger or the operation journal, and a sibling per file would
