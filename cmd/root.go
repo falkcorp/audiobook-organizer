@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-10
 
@@ -274,12 +274,12 @@ var serveCmd = &cobra.Command{
 
 		// Initialize database. Capture the returned Store so we can pass
 		// it explicitly down the call chain (SERVER-GLOBAL-STORE-AUDIT).
-		var store database.Store
+		// The store is typed by inference, not `var store database.Store`:
+		// TestStoreReferenceCount ratchets named database.Store references.
+		store, storeErr := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
 		if err := steps.Run("initializeStore", func() error {
-			var err error
-			store, err = initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
-			if err != nil {
-				return fmt.Errorf("failed to initialize database: %w", err)
+			if storeErr != nil {
+				return fmt.Errorf("failed to initialize database: %w", storeErr)
 			}
 			return nil
 		}); err != nil {
