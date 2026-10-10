@@ -1,5 +1,5 @@
 // file: internal/metafetch/writeback_backup_ctx_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f164b316-5969-47b6-ba84-173a926a536b
 // last-edited: 2026-10-10
 
@@ -19,14 +19,11 @@ import (
 // write-back ops included (runBulkWriteBack -> WriteBackMetadataForBookContext
 // -> writeBackForBook -> here). With create_backups on, a ctx wrapped with
 // tagger.WithoutBackup must leave no .bak-* sibling and a plain ctx exactly
-// one. The older write_backup_before_tag_write setting is held off so its
-// own dated backup does not count.
+// one: create_backups is the only backup switch, so nothing else adds a
+// sibling.
 func TestWriteFileTagsSafe_BackupFollowsContext(t *testing.T) {
 	prev := config.Snapshot()
-	config.Mutate(func(c *config.Config) {
-		c.CreateBackups = true
-		c.MetadataScoring.WriteBackupBefore = false
-	})
+	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
 
 	cases := []struct {

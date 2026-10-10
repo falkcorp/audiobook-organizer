@@ -410,9 +410,6 @@ func TestInitConfigDefaults(t *testing.T) {
 		assert.Equal(t, 5, AppConfig.MetadataScoring.LLMRerankTopK)
 	})
 
-	t.Run("tag write backup default", func(t *testing.T) {
-		assert.True(t, AppConfig.MetadataScoring.WriteBackupBefore)
-	})
 
 	t.Run("API and auth defaults", func(t *testing.T) {
 		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)

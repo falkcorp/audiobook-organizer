@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataScoringSection.tsx
-// version: 1.2.2
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 import {
   Box,
@@ -258,18 +258,6 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
             slotProps={{
               htmlInput: { min: 1 },
             }}
-          />
-        </Grid>
-
-        <Grid size={12}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={config.write_backup_before}
-                onChange={(e) => onChange({ write_backup_before: e.target.checked })}
-              />
-            }
-            label="Write tag backup before applying metadata"
           />
         </Grid>
       </Grid>

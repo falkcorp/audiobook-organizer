@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
 // last-edited: 2026-10-10
 
@@ -186,7 +186,8 @@ func (mfs *Service) runFileWrites(n int, fn func(i int)) {
 }
 
 // writeFileTagsSafe is the one per-file tag write of writeBackForBook: an
-// optional backup, then an atomic temp-copy write. bookFileID/store, when set,
+// atomic temp-copy write that keeps a create_backups backup when ctx wants
+// one. bookFileID/store, when set,
 // let WriteTagsSafe persist the file's before/after hashes.
 //
 // A protected path is REFUSED here, never redirected: the tag-write guard
@@ -213,7 +214,6 @@ func (mfs *Service) writeFileTagsSafe(ctx context.Context, path string, tagMap m
 	if mfs.fileTagWrite != nil {
 		return mfs.fileTagWrite(path, tagMap)
 	}
-	backupFileBeforeWrite(path)
 	opts.KeepBackup = tagger.BackupWanted(ctx)
 	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
 		return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
