@@ -1,5 +1,5 @@
 // file: internal/telemetry/metric_env_isolation_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3a71e58-04bd-4f92-9e6a-5d18b2f7a0c4
 // last-edited: 2026-10-10
 
@@ -277,9 +277,69 @@ func TestRedactUserinfo(t *testing.T) {
 		"control-dns":         {"dns:///h:4317", "dns:///h:4317"},
 		"control-parse-error": {"parse \"http://h:1\": invalid port", "parse \"http://h:1\": invalid port"},
 	} {
-		if got := redactUserinfo(tc[0]); got != tc[1] {
-			t.Errorf("%s: redactUserinfo(%q) = %q, want %q", name, tc[0], got, tc[1])
+		if got := redactEndpointSecrets(tc[0]); got != tc[1] {
+			t.Errorf("%s: redactEndpointSecrets(%q) = %q, want %q", name, tc[0], got, tc[1])
 		}
+	}
+}
+
+func TestParseOTLPEndpoint_DropsQueryFragmentPathAndDisplays(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in, display string
+		dropped     string
+	}{
+		"query":         {"https://192.0.2.1:4317/?api_key=SECRET", "https://192.0.2.1:4317", "query/fragment+path"},
+		"fragment":      {"http://192.0.2.1:4317#token=SECRET", "http://192.0.2.1:4317", "query/fragment"},
+		"path-token":    {"https://192.0.2.1:4317/v1/SECRET", "https://192.0.2.1:4317", "path"},
+		"all":           {"https://u:SECRET@192.0.2.1:4317/p?a=SECRET#b=SECRET", "https://192.0.2.1:4317", "userinfo+query/fragment+path"},
+		"dns-query":     {"dns:///192.0.2.1:4317?k=SECRET", "dns:///192.0.2.1:4317", "query/fragment"},
+		"password-hash": {"https://u:pa#SECRET@192.0.2.1:4317", "https://192.0.2.1:4317", "userinfo"},
+		"control":       {"https://192.0.2.1:4317", "https://192.0.2.1:4317", ""},
+		"control-bare":  {"192.0.2.1:4317", "192.0.2.1:4317", ""},
+	} {
+		tgt, err := parseOTLPEndpoint(tc.in)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if tgt.Display() != tc.display || strings.Join(tgt.Dropped(), "+") != tc.dropped {
+			t.Errorf("%s: Display=%q Dropped=%q, want %q / %q", name, tgt.Display(), strings.Join(tgt.Dropped(), "+"), tc.display, tc.dropped)
+		}
+	}
+}
+
+// Nothing secret in an endpoint may reach an emitted message or attribute,
+// whether the init succeeds or fails.
+func TestInitSummary_NeverEmitsEndpointSecrets(t *testing.T) {
+	ep := "https://user:SECRET1@192.0.2.1:4317/p?api_key=SECRET2#frag=SECRET3"
+	cfg := LoadConfig("test", ep, WithMetricsOTLP(ep, time.Minute, false))
+	flat := func(level slog.Level, msg string, attrs []any) string {
+		parts := []string{msg}
+		for _, a := range attrs {
+			if s, ok := a.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	cases := map[string]string{}
+	level, msg, attrs := initSummary(cfg, true, nil, otlpStatus{Enabled: true})
+	cases["ok"] = flat(level, msg, attrs)
+	level, msg, attrs = initSummary(cfg, false,
+		errors.New("dial "+ep+": refused"), otlpStatus{Err: errors.New("bad endpoint \"" + ep + "\"")})
+	cases["both-failed"] = flat(level, msg, attrs)
+	for name, out := range cases {
+		for _, secret := range []string{"SECRET1", "SECRET2", "SECRET3"} {
+			if strings.Contains(out, secret) {
+				t.Errorf("%s: %s leaked in %q", name, secret, out)
+			}
+		}
+		if !strings.Contains(out, "https://192.0.2.1:4317") {
+			t.Errorf("%s: the display endpoint is missing from %q", name, out)
+		}
+	}
+	if !strings.Contains(cases["ok"], "otlp_metrics_endpoint") {
+		t.Errorf("metric endpoint display not logged: %q", cases["ok"])
 	}
 }
 

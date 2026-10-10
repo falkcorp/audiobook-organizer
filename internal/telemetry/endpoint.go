@@ -1,5 +1,5 @@
 // file: internal/telemetry/endpoint.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
 // last-edited: 2026-10-10
 
@@ -27,6 +27,37 @@ type otlpTarget struct {
 	// authenticates with OTLP endpoint userinfo, so dropping it changes
 	// nothing functionally and keeps it out of exporter errors and logs.
 	DroppedUserinfo bool
+	// DroppedQuery is true when a "?query" or "#fragment" was removed.
+	DroppedQuery bool
+	// DroppedPath is true when the path of an http(s) URL was removed.
+	DroppedPath bool
+}
+
+// Display is the only form of the endpoint that may be logged: scheme://host:port
+// for a URL, dns:///host:port for a gRPC target, or the bare host:port. The
+// target is already normalised, so this is just the stored value; the field a
+// caller reads is deliberately not the configured string.
+func (t otlpTarget) Display() string {
+	if t.URL != "" {
+		return t.URL
+	}
+	return t.Target
+}
+
+// Dropped names what parseOTLPEndpoint removed ("userinfo", "query",
+// "path"), never the removed values.
+func (t otlpTarget) Dropped() []string {
+	var out []string
+	if t.DroppedUserinfo {
+		out = append(out, "userinfo")
+	}
+	if t.DroppedQuery {
+		out = append(out, "query/fragment")
+	}
+	if t.DroppedPath {
+		out = append(out, "path")
+	}
+	return out
 }
 
 // stripUserinfo removes URL userinfo from an endpoint string: everything
@@ -57,12 +88,31 @@ func stripUserinfo(ep string) (string, bool) {
 //
 // Everything else is an error. Error messages are stable: the trace path's
 // callers and tests depend on them.
+//
+// Anything after host:port that could carry a secret is removed before the
+// endpoint reaches an exporter, an error message or a log line: userinfo
+// ("user:pass@"), "?query", "#fragment" and, for http(s) URLs, the path.
+// OTLP/gRPC authenticates with headers and credentials only; the SDK ignores
+// the path for gRPC (otlptracegrpc and otlpmetricgrpc both record it as
+// "URLPath is ignored by gRPC exporters", and WithEndpointURL takes only
+// u.Host), so dropping it changes nothing. A dns:/// target keeps its path,
+// which is the target name.
+//
+// Order: when a '?' or '#' comes after the last '@', the query is cut first
+// (a query may itself contain '@'); otherwise the '?'/'#' is inside the
+// userinfo password and goes with it.
 func parseOTLPEndpoint(endpoint string) (otlpTarget, error) {
-	ep, dropped := stripUserinfo(strings.TrimSpace(endpoint))
-	// From here on the userinfo is gone: the messages in
-	// parseStrippedOTLPEndpoint quote the stripped endpoint only.
+	ep := strings.TrimSpace(endpoint)
+	var droppedQuery bool
+	if qi := strings.IndexAny(ep, "?#"); qi >= 0 && qi > strings.LastIndex(ep, "@") {
+		ep, droppedQuery = ep[:qi], true
+	}
+	ep, droppedUser := stripUserinfo(ep)
+	if qi := strings.IndexAny(ep, "?#"); qi >= 0 { // a '?'/'#' that was inside the password is gone; any left is a query
+		ep, droppedQuery = ep[:qi], true
+	}
 	t, err := parseStrippedOTLPEndpoint(ep)
-	t.DroppedUserinfo = dropped
+	t.DroppedUserinfo, t.DroppedQuery = droppedUser, droppedQuery
 	return t, err
 }
 
@@ -78,7 +128,8 @@ func parseStrippedOTLPEndpoint(ep string) (otlpTarget, error) {
 			if u.Hostname() == "" || u.Port() == "" {
 				return otlpTarget{}, fmt.Errorf("endpoint %q must name a host and a port", endpoint)
 			}
-			return otlpTarget{URL: ep}, nil
+			clean := strings.ToLower(u.Scheme) + "://" + u.Host
+			return otlpTarget{URL: clean, DroppedPath: ep != clean}, nil
 		case "dns":
 			if strings.TrimLeft(rest, "/") == "" {
 				return otlpTarget{}, fmt.Errorf("endpoint %q names no target", endpoint)
