@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-04
+// last-edited: 2026-10-09
 
 package database
 
@@ -22,8 +22,8 @@ import (
 )
 
 func (p *PebbleStore) GetAllAuthors() ([]Author, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllAuthors()
+	if mem := p.memOrFallback("GetAllAuthors"); mem != nil {
+		return mem.GetAllAuthors()
 	}
 	var authors []Author
 	iter, err := p.db.NewIter(&pebble.IterOptions{
@@ -502,8 +502,8 @@ func (p *PebbleStore) GetAuthorAliases(authorID int) ([]AuthorAlias, error) {
 }
 
 func (p *PebbleStore) GetAllAuthorAliases() ([]AuthorAlias, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllAuthorAliases()
+	if mem := p.memOrFallback("GetAllAuthorAliases"); mem != nil {
+		return mem.GetAllAuthorAliases()
 	}
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("author_alias:0"),
@@ -860,8 +860,8 @@ func encodeBookNarrators(bookID string, rows []BookNarrator) ([]BookNarrator, []
 }
 
 func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllAuthorBookCounts()
+	if mem := p.memOrFallback("GetAllAuthorBookCounts"); mem != nil {
+		return mem.GetAllAuthorBookCounts()
 	}
 	// Full Pebble book scan combined with junction table scan.
 	counts := make(map[int]int)
@@ -933,8 +933,8 @@ func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
 // GetAllAuthorFileCounts returns the number of audio files per author.
 // Uses the in-memory query layer when enabled, otherwise the Pebble fallback.
 func (p *PebbleStore) GetAllAuthorFileCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllAuthorFileCounts()
+	if mem := p.memOrFallback("GetAllAuthorFileCounts"); mem != nil {
+		return mem.GetAllAuthorFileCounts()
 	}
 	return p.GetAllAuthorFileCounts_Pebble()
 }

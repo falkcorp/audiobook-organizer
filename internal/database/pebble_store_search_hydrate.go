@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_hydrate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d7c2f1e-8a43-4b6e-9d1f-2c7a0e4b8f63
-// last-edited: 2026-09-25
+// last-edited: 2026-10-09
 
 package database
 
@@ -113,8 +113,8 @@ func (p *PebbleStore) readBookForSearch(id string, withSig bool) (*Book, error) 
 func (p *PebbleStore) SearchBookRanksFiltered(query string, ids []string, f BookSummaryFilter) (map[string]SearchRank, error) {
 	lowerQuery := strings.ToLower(query)
 	out := make(map[string]SearchRank, len(ids))
-	if p.UseMemDB && p.mem() != nil {
-		if err := p.mem().searchBookRanks(lowerQuery, ids, f, out); err == nil {
+	if mem := p.memOrFallback("SearchBookRanksFiltered"); mem != nil {
+		if err := mem.searchBookRanks(lowerQuery, ids, f, out); err == nil {
 			return out, nil
 		}
 		clear(out)

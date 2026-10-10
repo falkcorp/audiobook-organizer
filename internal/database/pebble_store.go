@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.210.1
+// version: 1.210.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-09
 
@@ -248,6 +248,11 @@ type PebbleStore struct {
 	// in NewPebbleStore before the store is returned, so no mutex is needed.
 	warmupCancel context.CancelFunc
 	warmupDone   chan struct{}
+	// warmupDuration is how long the warmup goroutine ran, in milliseconds,
+	// stored (atomically) just before warmupDone closes -- on success, failure
+	// and cancellation alike. Read it only after warmupDone is closed; see
+	// WarmupStatus.
+	warmupDuration atomic.Int64
 
 	// libGen is bumped by every book-level mutation (CreateBook, UpdateBook,
 	// DeleteBook) so response caches derived from the book corpus can key on
@@ -271,6 +276,65 @@ func (p *PebbleStore) mem() *MemStore { return p.memPtr.Load() }
 // memdb readiness so warm-up queries hit the fast O(log n) memdb path
 // instead of the slow Pebble JSON-unmarshal path.
 func (p *PebbleStore) IsMemReady() bool { return p.memPtr.Load() != nil }
+
+// memOrFallback returns the published memdb when this store reads through it
+// (UseMemDB) and it is ready, and nil otherwise. A nil result from a store that
+// wants memdb (UseMemDB true, not yet published) is a fallback read: it is
+// counted in memdb_fallback_reads_total under site, the calling method's name.
+// Stores built with UseMemDB=false never use memdb on purpose, so they are not
+// counted. Callers keep their existing control flow: a nil result means "take
+// the Pebble path".
+func (p *PebbleStore) memOrFallback(site string) *MemStore {
+	if !p.UseMemDB {
+		return nil
+	}
+	if m := p.mem(); m != nil {
+		return m
+	}
+	recordMemdbFallback(site)
+	return nil
+}
+
+// WarmupStatus reports the memdb warmup state without blocking. ready is true
+// once the memdb is published and serving reads. done is true once the warmup
+// goroutine has finished -- published (ready too) or fallen back to Pebble
+// reads (ready false) -- so done means "nothing left to wait for". ms is the
+// warmup duration in milliseconds and is meaningful only when done.
+func (p *PebbleStore) WarmupStatus() (ready, done bool, ms int64) {
+	ready = p.IsMemReady()
+	if p.warmupDone == nil {
+		return ready, true, 0
+	}
+	select {
+	case <-p.warmupDone:
+		return ready, true, p.warmupDuration.Load()
+	default:
+		return ready, false, 0
+	}
+}
+
+// WaitForWarmupCtx is WaitForWarmup with cancellation: it returns nil once the
+// warmup goroutine has finished (or immediately when there is none) and
+// ctx.Err() if ctx ends first.
+func (p *PebbleStore) WaitForWarmupCtx(ctx context.Context) error {
+	if p.warmupDone == nil {
+		return nil
+	}
+	// Finished warmup wins over a canceled ctx, deterministically: select picks
+	// at random when both are ready, and callers use a canceled ctx to probe
+	// "is warmup already done" without blocking.
+	select {
+	case <-p.warmupDone:
+		return nil
+	default:
+	}
+	select {
+	case <-p.warmupDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // WaitForWarmup blocks until the async memdb warmup goroutine has finished —
 // memdb is published (success) or the store has fallen back to Pebble reads
@@ -655,14 +719,17 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 		store.beginMemWarmupBuffering()
 
 		go func() {
+			started := time.Now()
 			defer close(store.warmupDone)
+			// Registered after the close above so it runs first: the duration
+			// is stored before warmupDone closes, on every exit path.
+			defer func() { store.warmupDuration.Store(time.Since(started).Milliseconds()) }()
 			// Disarm on EVERY exit path — warmup error, Close() cancelling the
 			// context mid-scan, or success (where publishWarmMemStore has already
 			// disarmed and this is a no-op). Otherwise a cancelled warmup leaves
 			// the store buffering forever into a slice nobody drains.
 			defer store.endMemWarmupBuffering()
 
-			started := time.Now()
 			slog.Info("memdb warmup starting (async)")
 			if warmErr := memStore.WarmFromPebble(warmupCtx, store); warmErr != nil {
 				slog.Warn("memdb warmup failed, will stay on Pebble for reads",
@@ -900,8 +967,8 @@ func (p *PebbleStore) migrateImportPathKeys() error {
 // MUST fetch via GetBookByID / GetAllBooksFullFrom (full Pebble). See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllBooksCore(limit, offset, nil)
+	if mem := p.memOrFallback("GetAllBooksCore"); mem != nil {
+		return mem.GetAllBooksCore(limit, offset, nil)
 	}
 	return p.getAllBooksCoreFromPebble(limit, offset)
 }
@@ -984,7 +1051,7 @@ func (p *PebbleStore) getAllBooksCoreFromPebble(limit, offset int) ([]BookCore, 
 // is O(1) seek vs GetAllBooks's O(offset) linear scan — use for cursor-based
 // full-table iteration (e.g. search index backfill).
 func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, error) {
-	if p.UseMemDB && p.mem() != nil {
+	if mem := p.memOrFallback("GetAllBooksFullFrom"); mem != nil {
 		// MemDB path. NOTE: this IS the production path — UseMemDB defaults to
 		// true. The previous implementation loaded only limit*2+1 books from the
 		// start and searched for afterID within that window, so cursor pagination
@@ -997,7 +1064,7 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 		// the same MarkedForDeletion filter, so the ID ordering is authoritative.
 		// Seek past afterID, then load the next `limit` books straight from
 		// Pebble (GetBookByID bypasses memdb but returns identical data).
-		ids, err := p.mem().ListBookIDs()
+		ids, err := mem.ListBookIDs()
 		if err != nil {
 			return nil, err
 		}
@@ -1083,8 +1150,8 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 // so no JSON unmarshal cost. Saves ~50x memory vs GetAllBooks(0,0) when
 // the caller only needs the ID set.
 func (p *PebbleStore) ListBookIDs() ([]string, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().ListBookIDs()
+	if mem := p.memOrFallback("ListBookIDs"); mem != nil {
+		return mem.ListBookIDs()
 	}
 
 	ids := make([]string, 0, 1024)
@@ -1121,8 +1188,8 @@ func (p *PebbleStore) ListBookIDs() ([]string, error) {
 // When memdb is available, takes the indexed-iteration fast path that
 // avoids materializing the full Book slice. Falls back to Pebble otherwise.
 func (p *PebbleStore) GetAllBookSummaries(limit, offset int) ([]BookSummary, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetBookSummaries(limit, offset, BookSummaryFilter{})
+	if mem := p.memOrFallback("GetAllBookSummaries"); mem != nil {
+		return mem.GetBookSummaries(limit, offset, BookSummaryFilter{})
 	}
 	return p.getAllBookSummariesFull(limit, offset)
 }
@@ -1133,8 +1200,8 @@ func (p *PebbleStore) GetAllBookSummaries(limit, offset int) ([]BookSummary, err
 // counts (slow but correct, only hit during cold start before memdb
 // publishes).
 func (p *PebbleStore) CountBookSummariesFiltered(f BookSummaryFilter) (int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().CountBookSummaries(f)
+	if mem := p.memOrFallback("CountBookSummariesFiltered"); mem != nil {
+		return mem.CountBookSummaries(f)
 	}
 	// Count without projecting: walkFilteredBooksPebble applies the same
 	// predicate set the row path uses, so the count and the rows can never
@@ -1157,8 +1224,8 @@ func (p *PebbleStore) CountBookSummariesFiltered(f BookSummaryFilter) (int, erro
 // Go" pattern that was making /audiobooks?is_primary_version=true scan 68K
 // rows on every page load.
 func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSummaryFilter) ([]BookSummary, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetBookSummaries(limit, offset, f)
+	if mem := p.memOrFallback("GetAllBookSummariesFiltered"); mem != nil {
+		return mem.GetBookSummaries(limit, offset, f)
 	}
 	if offset < 0 {
 		offset = 0
@@ -1668,8 +1735,8 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 	// store with UseMemDB explicitly false. That is worse than a dead branch:
 	// it makes a two-implementation conformance test silently vacuous, because
 	// flipping the flag runs the memdb path twice and asserts memdb == memdb.
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().ListBooksByITunesPID(limit, offset)
+	if mem := p.memOrFallback("ListBooksByITunesPID"); mem != nil {
+		return mem.ListBooksByITunesPID(limit, offset)
 	}
 
 	var books []Book
@@ -1875,8 +1942,8 @@ func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]B
 // title-query fan-out (that O(N^2) shape is what GetBooksByTitleInDir would
 // produce if called per book, so this method never calls it).
 func (p *PebbleStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetFolderDuplicatesCore()
+	if mem := p.memOrFallback("GetFolderDuplicatesCore"); mem != nil {
+		return mem.GetFolderDuplicatesCore()
 	}
 
 	var entries []folderDupEntry
@@ -2009,8 +2076,8 @@ func singleParentDir(paths []string) (string, bool) {
 // logs "metadata dedup failed" and continues, so a returned error just means
 // tier 3 is empty for this run.
 func (p *PebbleStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetDuplicateBooksByMetadataCore(threshold)
+	if mem := p.memOrFallback("GetDuplicateBooksByMetadataCore"); mem != nil {
+		return mem.GetDuplicateBooksByMetadataCore(threshold)
 	}
 
 	var entries []metadataDupEntry
@@ -2218,8 +2285,8 @@ func metadataTitleSimilarity(a, b string) float64 {
 // any of the heavy fields MUST fetch via GetBookByID / GetAllBooksFullFrom
 // (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetBooksBySeriesIDCore(seriesID, 0, 0)
+	if mem := p.memOrFallback("GetBooksBySeriesIDCore"); mem != nil {
+		return mem.GetBooksBySeriesIDCore(seriesID, 0, 0)
 	}
 	books, err := p.getBooksBySeriesIDFull(seriesID, true)
 	if err != nil {
@@ -2420,8 +2487,8 @@ func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int, primaryOnly bool) ([]
 func (p *PebbleStore) GetBooksByAuthorIDCore(authorID int) ([]BookCore, error) {
 	var books []Book
 	var err error
-	if p.UseMemDB && p.mem() != nil {
-		books, err = p.mem().GetBooksByAuthorID(authorID, 0, 0)
+	if mem := p.memOrFallback("GetBooksByAuthorIDCore"); mem != nil {
+		books, err = mem.GetBooksByAuthorID(authorID, 0, 0)
 	} else {
 		books, err = p.getBooksByAuthorIDFull(authorID)
 	}
@@ -4178,8 +4245,8 @@ func (p *PebbleStore) SearchBookIDsFiltered(query string, limit, offset int, f B
 	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
 		return []string{}, nil
 	}
-	if p.UseMemDB && p.mem() != nil {
-		ids, err := p.mem().SearchBookIDsFiltered(query, limit, offset, f)
+	if mem := p.memOrFallback("SearchBookIDsFiltered"); mem != nil {
+		ids, err := mem.SearchBookIDsFiltered(query, limit, offset, f)
 		if err == nil {
 			return ids, nil
 		}
@@ -4190,15 +4257,15 @@ func (p *PebbleStore) SearchBookIDsFiltered(query string, limit, offset int, f B
 
 // searchBooks is the shared body; f == nil means unfiltered.
 func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummaryFilter) ([]Book, error) {
-	if p.UseMemDB && p.mem() != nil {
+	if mem := p.memOrFallback("searchBooks"); mem != nil {
 		var (
 			ids []string
 			err error
 		)
 		if f != nil {
-			ids, err = p.mem().SearchBookIDsFiltered(query, limit, offset, *f)
+			ids, err = mem.SearchBookIDsFiltered(query, limit, offset, *f)
 		} else {
-			ids, err = p.mem().SearchBookIDs(query, limit, offset)
+			ids, err = mem.SearchBookIDs(query, limit, offset)
 		}
 		if err == nil {
 			books := make([]Book, 0, len(ids))
@@ -4338,8 +4405,8 @@ func (p *PebbleStore) countPrimaryBooksScan() (count, numberLeading int, err err
 // IsPrimaryVersion. Matches what GetAllBooksCore/PageBooks iterates — use this
 // for progress denominators in ops that process every book.
 func (p *PebbleStore) CountAllBooks() (int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		all, err := p.mem().GetAllBooksCore(0, 0, nil)
+	if mem := p.memOrFallback("CountAllBooks"); mem != nil {
+		all, err := mem.GetAllBooksCore(0, 0, nil)
 		if err != nil {
 			return 0, err
 		}
@@ -4387,8 +4454,8 @@ func (p *PebbleStore) GetDistinctGenres() ([]string, error) {
 // JSON-decodes every book row and was the cold cost behind a 5.8 s mean on
 // GET /audiobooks/facets (2026-10-06); it stays as the pre-warmup fallback.
 func (p *PebbleStore) GetGenreCounts() (map[string]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetGenreCounts()
+	if mem := p.memOrFallback("GetGenreCounts"); mem != nil {
+		return mem.GetGenreCounts()
 	}
 	counts := map[string]int{}
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
@@ -4413,8 +4480,8 @@ func (p *PebbleStore) GetGenreCounts() (map[string]int, error) {
 //
 // Delegates to memdb when it is serving, for the same reason as GetGenreCounts.
 func (p *PebbleStore) GetDistinctLanguages() ([]string, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetDistinctLanguages()
+	if mem := p.memOrFallback("GetDistinctLanguages"); mem != nil {
+		return mem.GetDistinctLanguages()
 	}
 	// Scan book:* index directly without loading all books
 	seen := map[string]bool{}

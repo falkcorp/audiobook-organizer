@@ -1,5 +1,5 @@
 // file: internal/database/book_listing_fields_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e3a5d21-7c49-4f0b-b6d8-1a9e4c7f2b05
 // last-edited: 2026-10-10
 
@@ -16,6 +16,9 @@ import (
 // absent; a memdb known to be short falls through to Pebble.
 func TestGetBookListingFields_MemdbMatchesPebble(t *testing.T) {
 	p := seedTrash(t, 6, 6)
+	// The memdb publishes asynchronously; without this wait the test races the
+	// warmup and p.mem() below is nil on a fast run.
+	p.WaitForWarmup()
 	matched := "matched"
 	b, err := p.GetBookByID("b007")
 	if err != nil || b == nil {
