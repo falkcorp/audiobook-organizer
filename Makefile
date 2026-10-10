@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.37.0
+# version: 2.38.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-10
 
@@ -57,7 +57,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         web-install web-build web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mockery-install mocks-check staticcheck oplint sdkguard bench-check fmt-check \
+        vet mocks mockery-install mocks-check staticcheck staticcheck-install oplint sdkguard bench-check fmt-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -454,25 +454,29 @@ mocks-check: mockery-install
 ## below regenerates from .mockery.yaml and diffs. All three go red on that same
 ## mutation. Do not reintroduce this target; add cases to mocks-check instead.
 
-## staticcheck: Run staticcheck (install: go install honnef.co/go/tools/cmd/staticcheck@latest)
+## staticcheck-install: Build the pinned staticcheck into GOBIN from
+## tools/staticcheck/go.mod: v0.8.1 (2026.2.1, the newest release) with
+## golang.org/x/tools raised to v0.51.0. The release's own x/tools cannot read
+## the export data go1.27.2 writes ("export data version 5 is greater than
+## maximum supported version 4", Woodpecker pipeline 703). Same fix as
+## mockery-install; drop the x/tools override once a release carries >= v0.50.
+STATICCHECK := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)/staticcheck
+
+staticcheck-install:
+	@go -C tools/staticcheck install tool
+
+## staticcheck: Run staticcheck, built by staticcheck-install.
 #
 # This used to SKIP with "staticcheck not installed" and let `make ci` continue,
 # which meant the gate reported green on every machine that lacked the binary --
 # indistinguishable, from the output, from a machine where it ran and passed.
 # Three findings sat on main behind that skip. staticcheck is not run by the PR
 # workflows either (ci.yml's go-lint job runs golangci-lint), so `make ci` is the
-# only place it gates a change before merge: a silent skip here is a silent skip
-# everywhere. Now it fails, the way oplint/sdkguard/fmt-check already do.
-staticcheck:
+# only place it gates a change before merge. It now always builds the pinned
+# binary first and runs that one, never whatever staticcheck is first on PATH.
+staticcheck: staticcheck-install
 	@echo "🔍 Running staticcheck..."
-	@if ! command -v staticcheck >/dev/null 2>&1; then \
-		echo "❌ staticcheck is not installed, and this gate must not report green without running."; \
-		echo ""; \
-		echo "Install it with:"; \
-		echo "  go install honnef.co/go/tools/cmd/staticcheck@latest"; \
-		exit 1; \
-	fi
-	@staticcheck ./...
+	@$(STATICCHECK) ./...
 	@echo "✅ staticcheck passed"
 
 ## oplint: Run plugin import lint

@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.4.0
+# version: 2.5.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
 # last-edited: 2026-10-10
 #
@@ -12,7 +12,8 @@
 #
 # These three stay on the prod host's docker agent (2 workflows at a time,
 # 8 CPU / 16 GiB per step container) because they share the installed
-# linters. Tool versions match scripts/setup-mockery.sh.
+# linters. Tool versions: tools/staticcheck/go.mod, tools/mockery/go.mod and
+# the golangci-lint pin below (same as ci.yml).
 #
 # Caches: /ci-cache is a host directory the U0 agent mounts into every step
 # container (WOODPECKER_BACKEND_DOCKER_VOLUMES; see docs/ci/woodpecker.md), an
@@ -66,8 +67,8 @@ steps:
       # A few seconds once the caches are warm: go install skips the copy when
       # the installed binary is already current, so only a version bump
       # rewrites a file in GOBIN.
-      - go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
-      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+      - go -C tools/staticcheck install tool   # staticcheck v0.8.1 on x/tools v0.51.0; see tools/staticcheck/go.mod
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0   # matches ci.yml; v2.13.1 cannot read go1.27.2 export data
       - go -C tools/mockery install tool   # mockery v3.8.0 on x/tools v0.51.0; see tools/mockery/go.mod
 
   - name: staticcheck
