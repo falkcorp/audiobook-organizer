@@ -1151,7 +1151,7 @@ type Config struct {
 	DefaultUserQuotaGB int  `json:"default_user_quota_gb"`
 
 	// Metadata
-	WriteBackMetadata         bool             `json:"write_back_metadata"`
+	WriteBackMetadata bool `json:"write_back_metadata"`
 	// EmbedCoverArt gates metafetch.embedCoverInBookFiles. Default true: the
 	// embed ran unconditionally before the setting was wired, so true keeps
 	// behaviour unchanged on upgrade.
