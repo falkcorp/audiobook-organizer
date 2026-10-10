@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.3
+// version: 1.28.4
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-10
 
@@ -371,12 +371,13 @@ var serveCmd = &cobra.Command{
 		}
 		fmt.Println("Configuration loaded from database")
 		fmt.Printf("  - Root dir (organize output): %s\n", config.AppConfig.RootDir)
-		fmt.Printf("  - OpenAI API key: %s\n", func() string {
-			if config.AppConfig.OpenAIAPIKey != "" {
-				return "***" + config.AppConfig.OpenAIAPIKey[len(config.AppConfig.OpenAIAPIKey)-4:]
-			}
-			return "(not set)"
-		}())
+		// Report only whether the key is set: even a key suffix is secret
+		// material in the startup log (CodeQL go/clear-text-logging).
+		openAIKeyState := "(not set)"
+		if config.AppConfig.OpenAIAPIKey != "" {
+			openAIKeyState = "set"
+		}
+		fmt.Printf("  - OpenAI API key: %s\n", openAIKeyState)
 
 		// Apply env var overrides (command line takes precedence over DB)
 		syncConfigFromEnv()
