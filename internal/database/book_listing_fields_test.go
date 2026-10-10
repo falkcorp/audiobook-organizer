@@ -1,7 +1,7 @@
 // file: internal/database/book_listing_fields_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3a5d21-7c49-4f0b-b6d8-1a9e4c7f2b05
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package database
 

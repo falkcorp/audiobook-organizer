@@ -1,7 +1,7 @@
 // file: internal/database/soft_deleted_count_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d1c8b47-2e95-4a3f-8c06-b5e9a7f2d413
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package database
 
@@ -21,6 +21,14 @@ func seedTrash(t *testing.T, n, m int) *PebbleStore {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
+	// Memdb warmup is async. Every caller compares the memdb path with the
+	// Pebble path (or dereferences p.mem()), so wait until memdb is published
+	// instead of racing it; otherwise p.mem() is nil in roughly one full-package
+	// run in four.
+	p.WaitForWarmup()
+	if !p.IsMemReady() {
+		t.Fatal("memdb warmup did not publish; the memdb read path cannot be exercised")
+	}
 	yes := true
 	base := time.Now().Truncate(time.Second)
 	for i := range n + m {
