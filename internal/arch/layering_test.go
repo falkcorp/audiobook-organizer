@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-09
 
@@ -375,10 +375,27 @@ func TestLayering(t *testing.T) {
 				"package %q has no entry in layerOf: choose its layer (see docs/architecture/layering.md)", pkg))
 		}
 	}
-	for pkg := range layerOf {
+	for _, pkg := range sortedLayerKeys() {
 		if _, ok := graph[pkg]; !ok {
 			problems = append(problems, fmt.Sprintf(
 				"layerOf lists %q, which is not a package in the module: remove the entry", pkg))
+		}
+	}
+
+	// layerOf must equal the layer the classification rule computes from the
+	// import graph, except for layerOverride. Without this a PR could clear a
+	// violation by raising the importer's layer.
+	computed := computeLayers(graph)
+	for _, pkg := range sortedKeys(graph) {
+		declared, ok := layerOf[pkg]
+		if !ok {
+			continue // already reported as a missing layerOf entry
+		}
+		if want := computed[pkg]; declared != want {
+			problems = append(problems, fmt.Sprintf(
+				"layerOf[%q] is %d but the classification rule computes %d: set it to %d, or fix the imports that change the computed layer. "+
+					"A layer change needs an entry in layerOverride with go list evidence",
+				pkg, declared, want, want))
 		}
 	}
 
@@ -398,7 +415,8 @@ func TestLayering(t *testing.T) {
 				if _, ok := allowed[e]; !ok {
 					problems = append(problems, fmt.Sprintf(
 						"layering violation: %s (layer %d) imports %s (layer %d); a package may import only its own layer or lower. "+
-							"Fix the import, or move a package to the right layer in layerOf",
+							"Fix the import (invert the dependency, pass a function or interface in), or list the edge in allowed with a reason. "+
+							"Do not raise the importer's layer: layerOf must match the computed layer",
 						pkg, from, dep, to))
 				}
 			}
@@ -454,4 +472,98 @@ func sortedEdges(m map[edge]string) []edge {
 		return keys[i][1] < keys[j][1]
 	})
 	return keys
+}
+
+func sortedLayerKeys() []string {
+	keys := make([]string, 0, len(layerOf))
+	for k := range layerOf {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// namedLayer is the layer table from docs/architecture/layering.md: the
+// packages that are assigned a layer by name.
+var namedLayer = map[string]int{
+	// Layer 0 leaf.
+	"internal/util": 0, "internal/pathutil": 0, "internal/personname": 0, "internal/titleutil": 0,
+	"internal/authorname": 0, "internal/audioext": 0, "internal/httputil": 0, "internal/logger": 0,
+	"internal/logging": 0, "internal/metrics": 0, "internal/cache": 0, "internal/models": 0,
+	"internal/seqnum": 0, "internal/querygrammar": 0,
+	// Layer 1 config.
+	"internal/config": 1,
+	// Layer 2 storage.
+	"internal/database": 2, "internal/openlibrary": 2, "internal/search": 2,
+	// Layer 3 domain.
+	"internal/merge": 3, "internal/versionprimary": 3, "internal/versions": 3, "internal/dedup": 3,
+	"internal/matcher": 3, "internal/fingerprint": 3, "internal/metadata": 3, "internal/organizer": 3,
+	"internal/scanner": 3, "internal/itunes": 3, "internal/audiobooks": 3, "internal/metafetch": 3,
+	"internal/reconcile": 3, "internal/repairs": 3, "internal/undo": 3, "internal/writeback": 3,
+	// Layer 4 jobs.
+	"internal/operations/registry": 4, "internal/scheduler": 4, "internal/maintenance/jobs": 4,
+	// Layer 5 transport.
+	"internal/realtime": 5, "internal/syncapi": 5,
+	// Layer 6 entry: the module-root main package.
+	".": 6,
+}
+
+// layerOverride lists the only deliberate departures from the table, each
+// with go list evidence. An override applies before namedLayer.
+var layerOverride = map[string]int{
+	// matcher imports only internal/personname (layer 0).
+	"internal/matcher": 0,
+	// fingerprint imports only internal/audioutil (no module imports, layer 0).
+	"internal/fingerprint": 0,
+}
+
+// familyLayer returns the layer of a directory family, or false.
+func familyLayer(pkg string) (int, bool) {
+	switch {
+	case pkg == "internal/plugins" || strings.HasPrefix(pkg, "internal/plugins/"):
+		return 4, true
+	case pkg == "internal/server" || strings.HasPrefix(pkg, "internal/server/"):
+		return 5, true
+	case pkg == "cmd" || strings.HasPrefix(pkg, "cmd/") || strings.HasPrefix(pkg, "tools/cmd/"):
+		return 6, true
+	}
+	return 0, false
+}
+
+// computeLayers applies the classification rule: override, then table name,
+// then directory family, then max(layer of in-module imports) floored at 3,
+// then 0 for a package that imports no module package.
+func computeLayers(graph map[string][]string) map[string]int {
+	out := map[string]int{}
+	var layer func(pkg string) int
+	layer = func(pkg string) int {
+		if l, ok := out[pkg]; ok {
+			return l
+		}
+		var l int
+		if o, ok := layerOverride[pkg]; ok {
+			l = o
+		} else if n, ok := namedLayer[pkg]; ok {
+			l = n
+		} else if f, ok := familyLayer(pkg); ok {
+			l = f
+		} else if deps := graph[pkg]; len(deps) == 0 {
+			l = 0
+		} else {
+			for _, d := range deps {
+				if dl := layer(d); dl > l {
+					l = dl
+				}
+			}
+			if l < 3 {
+				l = 3
+			}
+		}
+		out[pkg] = l
+		return l
+	}
+	for pkg := range graph {
+		layer(pkg)
+	}
+	return out
 }

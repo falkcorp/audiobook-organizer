@@ -1,5 +1,5 @@
 <!-- file: docs/architecture/layering.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 988432fb-4249-462f-8415-5b8a97e914bf -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -11,7 +11,7 @@
 
 | Layer | Packages | May import |
 |---|---|---|
-| 0 leaf | `util`, `pathutil`, `personname`, `titleutil`, `authorname`, `audioext`, `httputil`, `logger`, `logging`, `metrics`, `cache`, `models`, `seqnum`, `querygrammar`, plus `matcher` and `fingerprint` (reclassified, see below) and every package that imports no module package | standard library and third-party only |
+| 0 leaf | `util`, `pathutil`, `personname`, `titleutil`, `authorname`, `audioext`, `httputil`, `logger`, `logging`, `metrics`, `cache`, `models`, `seqnum`, `querygrammar`, plus `matcher` and `fingerprint` (reclassified, see below) and every package that imports no module package | layer 0, standard library and third-party |
 | 1 config | `config` (becomes a true leaf after 07-M1) | layer 0 |
 | 2 storage | `database`, `openlibrary`, `search` | layers 0-1; not domain packages |
 | 3 domain | `merge`, `versionprimary`, `versions`, `dedup`, `metadata`, `organizer`, `scanner`, `itunes`, `audiobooks`, `metafetch`, `reconcile`, `repairs`, `undo`, `writeback` and the rest | layers 0-3 |
@@ -23,11 +23,14 @@
 
 Packages the table does not name take the layer of their directory family (`plugins/*` = 4, `server/**` = 5, `cmd/*` and `tools/cmd/*` = 6), else the maximum layer of their in-module imports floored at 3, else 0 when they import no module package. `matcher` imports only `personname` and `fingerprint` imports only `audioutil`, so both are layer 0; that is why `database` importing them is not a violation.
 
+Only default build tags are checked; files behind `bench`, `pprof`, `native_taglib` and `embed_frontend` are not in the graph.
+
 The authoritative assignment is the `layerOf` map in the test; every package in the module must have an entry, so a new package must choose a layer.
 
 ## Reading a failure
 
-- `layering violation: A (layer n) imports B (layer m)`: A imports something above it. Prefer to fix the import (invert the dependency, pass a function or interface in). If B really sits in the wrong layer, change B's entry in `layerOf` and say why in the trailing comment. Only add an `allowed` entry for a violation that is being tracked for a later fix.
+- `layering violation: A (layer n) imports B (layer m)`: A imports something above it. Fix the import (invert the dependency, pass a function or interface in). Only add an `allowed` entry for a violation that is tracked for a later fix. Do not raise A's layer to make the edge legal: the test recomputes every layer from the classification rule and fails when `layerOf` disagrees.
+- `layerOf["X"] is n but the classification rule computes m`: `layerOf` must equal the rule's result. Set it to the computed value, or change the imports that drive the computed layer. A deliberate departure needs an entry in `layerOverride` (today `matcher` and `fingerprint`) with `go list` evidence.
 - `package "X" has no entry in layerOf`: a new package; pick its layer by the rule above.
 - `layerOf lists "X", which is not a package`: the package was deleted or renamed; remove or rename the entry.
 - `the loader is broken, not the code`: `go list` did not return the module (fewer than 150 packages, or the `internal/server -> internal/database` control edge is missing). Check the toolchain and the working tree, not the layering.
