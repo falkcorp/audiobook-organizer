@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.18.0
+// version: 1.18.1
 // last-edited: 2026-10-10
 
 package config
@@ -409,7 +409,6 @@ func TestInitConfigDefaults(t *testing.T) {
 		assert.InDelta(t, 0.05, AppConfig.MetadataScoring.LLMRerankEpsilon, 0.001)
 		assert.Equal(t, 5, AppConfig.MetadataScoring.LLMRerankTopK)
 	})
-
 
 	t.Run("API and auth defaults", func(t *testing.T) {
 		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)

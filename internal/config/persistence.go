@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-10
 
@@ -59,7 +59,7 @@ func LoadConfigFromFile() error {
 	// A retired key in this file is logged and otherwise ignored — the loop
 	// below only reads the keys it names — so startup never fails over it.
 	for _, rk := range removedConfigKeys {
-		if _, present := fileConfig[rk.key]; present {
+		if hasConfigKey(fileConfig, rk.key) {
 			warnRemovedKey(rk.key, path)
 		}
 	}
