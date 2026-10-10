@@ -1,5 +1,5 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.4.0
+# version: 1.5.0
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
 # last-edited: 2026-10-10
 #
@@ -235,3 +235,29 @@ groups:
             did not stop it. Check
             `journalctl -u audiobook-organizer` and the Operations tab for
             that operation's last log line.
+
+      # Direct AI request failures (11-PR7). ai_failures_total counts a failed
+      # attempt by reason; ai_requests_total counts every attempt that reached
+      # the SDK. reply_parse and count_mismatch are excluded from the
+      # numerator: a reply the model got wrong is not a backend fault, and the
+      # scan phase's split-and-retry handles a short reply by design. They are
+      # on the dashboard's "Reply-quality failures by task" panel instead. The
+      # second clause keeps an idle task (a handful of calls in an hour) from
+      # alerting on one failure. Starting thresholds; tune after a week of
+      # data. Unit test: alert-rules.test.yml.
+      - alert: AudiobookOrganizerAIFailureRatioHigh
+        expr: >-
+          sum by (task) (rate(ai_failures_total{reason!~"reply_parse|count_mismatch"}[15m]))
+          / sum by (task) (rate(ai_requests_total[15m])) > 0.2
+          and sum by (task) (rate(ai_requests_total[15m])) > 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audiobook-organizer AI requests are failing"
+          description: >-
+            More than 20% of {{ $labels.task }} AI requests have failed
+            (transport, quota, rate limit or timeout, not unusable replies)
+            over the last 15 minutes, sustained for 15 minutes. Check the
+            "AI failures by reason" panel on the audiobook-organizer-ai
+            dashboard and `journalctl -u audiobook-organizer`.

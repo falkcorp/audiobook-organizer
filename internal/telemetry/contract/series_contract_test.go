@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.2.5
+// version: 1.3.1
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-10
 
@@ -20,6 +20,7 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -28,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,6 +47,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -163,6 +166,7 @@ func buildSeedingTable() []seedRow {
 	noCapable := once(seedDispatchNoCapable)
 	gin := once(seedOtelgin)
 	opsSeed := once(seedOpsMetrics)
+	aiCall := once(seedAICalls)
 	pebbleRow := func(name string) seedRow {
 		return seedRow{"audiobook_organizer_pebble_" + name, "metrics.SetPebbleSource(main, fixedSample)", pebble}
 	}
@@ -221,6 +225,12 @@ func buildSeedingTable() []seedRow {
 		{"ai_dispatch_failover_total", "aidispatch.Call with failover", failover},
 		{"ai_dispatch_slot_wait_seconds", "aidispatch.Call with failover", failover},
 		{"ai_dispatch_no_capable_total", "aidispatch.Call with no capable endpoint", noCapable},
+
+		{"ai_requests_total", "OpenAIParser.ParseFilename against an httptest chat endpoint", aiCall},
+		{"ai_request_duration_seconds", "OpenAIParser.ParseFilename against an httptest chat endpoint", aiCall},
+		{"ai_tokens_total", "OpenAIParser.ParseFilename against an httptest chat endpoint", aiCall},
+		{"ai_failures_total", "OpenAIParser.ParseFilename, reply that is not JSON (reason reply_parse)", aiCall},
+		{"ai_parse_results_total", "ai.RecordParseResult", aiCall},
 
 		pebbleRow("block_cache_bytes"),
 		pebbleRow("block_cache_blocks"),
@@ -325,6 +335,32 @@ func seedDispatchNoCapable() error {
 // seedMemdbFallback makes one read that wants the in-memory layer find it
 // unpublished: a zero-value store with UseMemDB on has no memdb, and this
 // method refuses without touching Pebble, so it counts outcome=refused.
+// aiChatReply is a chat completion whose content is not JSON, so ParseFilename
+// returns a *ReplyParseError after a request that succeeded: one call seeds
+// ai_requests_total{outcome=ok}, the duration, both token directions and
+// ai_failures_total{reason=reply_parse}. The usage is canned, not real.
+const aiChatReply = `{"id":"contract","object":"chat.completion","created":1,"model":"contract-model",` +
+	`"choices":[{"index":0,"message":{"role":"assistant","content":"not json"},"finish_reason":"stop"}],` +
+	`"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`
+
+// seedAICalls drives the exported parser against an httptest server, so the
+// ai_* families are exposed by the real observe path and not by a hand-made
+// instrument, plus the exported parse-result counter. A 200 reply only: the
+// SDK retries 5xx and 429 with its own backoff.
+func seedAICalls() error {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(aiChatReply))
+	}))
+	defer srv.Close()
+	p := ai.NewOpenAIParserWithBaseURL(nil, "contract-key", srv.URL, "contract-model", true)
+	if _, err := p.ParseFilename(context.Background(), "contract"); err == nil {
+		return errors.New("ParseFilename accepted a non-JSON reply; the reply_parse seed did not fire")
+	}
+	ai.RecordParseResult(ai.TaskBatchParse, true)
+	return nil
+}
+
 func seedMemdbFallback() error {
 	s := &database.PebbleStore{UseMemDB: true}
 	s.SetMeterProvider(otel.GetMeterProvider())
@@ -632,15 +668,14 @@ func TestSeriesContract(t *testing.T) {
 	}
 }
 
-// TestReservedAISeries: the AI call families 11-PR7 will add are reserved; no
-// family may claim one of those names before PR7 moves them into the golden.
+// TestReservedAISeries: a name listed in testdata/series_reserved.txt is held
+// for a PR that has not landed yet, so no family may claim it and it must not
+// also be in the golden. The file is empty since 11-PR7 moved the five ai_*
+// call families into the golden; it stays so the next reservation is one line.
 func TestReservedAISeries(t *testing.T) {
 	reserved, err := readReserved()
 	if err != nil {
 		t.Fatalf("read reserved: %v", err)
-	}
-	if len(reserved) == 0 {
-		t.Fatalf("%s lists no names", reservedPath)
 	}
 	golden := map[string]bool{}
 	for _, r := range mustGolden(t) {
@@ -649,12 +684,105 @@ func TestReservedAISeries(t *testing.T) {
 	fams := scrape(t)
 	for _, name := range reserved {
 		if _, ok := fams[name]; ok {
-			t.Errorf("reserved family %s is exposed on /metrics before 11-PR7: only PR7 may claim it, moving it from %s to %s",
+			t.Errorf("reserved family %s is exposed on /metrics: only the PR it is reserved for may claim it, moving it from %s to %s",
 				name, reservedPath, goldenPath)
 		}
 		if golden[name] {
 			t.Errorf("%s is both reserved and in the golden: remove it from %s", name, reservedPath)
 		}
+	}
+}
+
+// TestAIFamiliesOnScrape: the five ai_* call families (11-PR7) are on the same
+// /metrics scrape as everything else, with Prometheus-conventional names
+// (_total on counters, _seconds with _bucket/_sum/_count on the histogram), the
+// label sets the dashboard and alert read, and no otel_scope_* label.
+func TestAIFamiliesOnScrape(t *testing.T) {
+	rec := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, line := range []string{
+		"ai_requests_total{",
+		"ai_request_duration_seconds_bucket{",
+		"ai_request_duration_seconds_sum{",
+		"ai_request_duration_seconds_count{",
+		"ai_tokens_total{",
+		"ai_failures_total{",
+		"ai_parse_results_total{",
+	} {
+		if !strings.Contains(body, "\n"+line) {
+			t.Errorf("/metrics has no sample line starting %q", line)
+		}
+	}
+	if strings.Contains(body, "otel_scope_") {
+		t.Errorf("/metrics carries an otel_scope_ label")
+	}
+	fams := scrape(t)
+	want := map[string][]string{
+		"ai_requests_total":           {"model", "outcome", "provider", "task"},
+		"ai_request_duration_seconds": {"model", "provider", "task"},
+		"ai_tokens_total":             {"direction", "model", "provider", "task"},
+		"ai_failures_total":           {"model", "provider", "reason", "task"},
+		"ai_parse_results_total":      {"accepted", "task"},
+	}
+	for name, labels := range want {
+		f, ok := fams[name]
+		if !ok {
+			t.Errorf("family %s missing from the scrape", name)
+			continue
+		}
+		if got := sortedKeys(f.labels); !slices.Equal(got, labels) {
+			t.Errorf("%s labels = %v, want %v", name, got, labels)
+		}
+	}
+}
+
+// TestAIDashboardUsesGoldenNames: every ai_* / ai_dispatch_* metric a panel of
+// the AI dashboard reads is a family in the golden (a histogram through its
+// _bucket, _sum or _count samples), so a rename that forgets the dashboard
+// fails here instead of leaving a panel empty.
+func TestAIDashboardUsesGoldenNames(t *testing.T) {
+	raw, err := os.ReadFile("../../../deploy/grafana/dashboards/audiobook-organizer-ai.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dash struct {
+		Panels []struct {
+			Title   string `json:"title"`
+			Targets []struct {
+				Expr string `json:"expr"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(raw, &dash); err != nil {
+		t.Fatalf("dashboard is not valid JSON: %v", err)
+	}
+	golden := map[string]goldenRow{}
+	for _, r := range mustGolden(t) {
+		golden[r.name] = r
+	}
+	nameRE := regexp.MustCompile(`\bai_[a-z_]+\b`)
+	seen := 0
+	for _, p := range dash.Panels {
+		for _, tg := range p.Targets {
+			for _, name := range nameRE.FindAllString(tg.Expr, -1) {
+				seen++
+				base := name
+				for _, suf := range []string{"_bucket", "_sum", "_count"} {
+					if trimmed, ok := strings.CutSuffix(name, suf); ok {
+						if r, ok := golden[trimmed]; ok && r.typ == "histogram" {
+							base = trimmed
+						}
+					}
+				}
+				if _, ok := golden[base]; !ok {
+					t.Errorf("panel %q reads %s, which is not a golden family", p.Title, name)
+				}
+			}
+		}
+	}
+	if len(dash.Panels) < 10 || seen == 0 {
+		t.Errorf("dashboard has %d panels and %d ai_ names; the check is not reading it", len(dash.Panels), seen)
 	}
 }
 
@@ -756,6 +884,11 @@ var ourInstruments = []instrumentSpec{
 	{name: "ai_dispatch.failover", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Class}},
 	{name: "ai_dispatch.no_capable", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability}},
 	{name: "ai_dispatch.slot_wait", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.Endpoint}},
+	{name: "ai.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Provider, telemetry.Model, telemetry.Task, telemetry.Outcome}},
+	{name: "ai.request.duration", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.Provider, telemetry.Model, telemetry.Task}},
+	{name: "ai.tokens", kind: kindCounter, unit: "{token}", keys: []attribute.Key{telemetry.Provider, telemetry.Model, telemetry.Task, telemetry.Direction}},
+	{name: "ai.failures", kind: kindCounter, unit: "{failure}", keys: []attribute.Key{telemetry.Provider, telemetry.Model, telemetry.Task, telemetry.Reason}},
+	{name: "ai.parse_results", kind: kindCounter, unit: "{result}", keys: []attribute.Key{telemetry.Task, telemetry.Accepted}},
 }
 
 var allowedNamePrefixes = []string{"audiobook_organizer.", "ai_dispatch.", "ai."}

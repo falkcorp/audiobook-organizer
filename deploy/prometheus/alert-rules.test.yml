@@ -1,5 +1,5 @@
 # file: deploy/prometheus/alert-rules.test.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 5f1c8e3a-2b7d-4c96-a0e4-8d3b6f2a9c71
 # last-edited: 2026-10-10
 #
@@ -74,3 +74,42 @@ tests:
             exp_annotations:
               summary: "audiobook-organizer operation appears stalled"
               description: "Operation scheduler.dedup-llm-review has a run in flight that has not reported progress for 2h 10m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
+
+  # AudiobookOrganizerAIFailureRatioHigh: 5 requests a minute for the
+  # filename_parse task. From minute 0 half of them fail with a rate limit
+  # (above the 20% line); the batch_parse task fails the same share but only
+  # with reply_parse, which the rule excludes; the embed task fails 10%.
+  - interval: 1m
+    input_series:
+      - series: 'ai_requests_total{provider="local",model="m",task="filename_parse",outcome="ok"}'
+        values: '0+3x60'
+      - series: 'ai_requests_total{provider="local",model="m",task="filename_parse",outcome="error"}'
+        values: '0+2x60'
+      - series: 'ai_failures_total{provider="local",model="m",task="filename_parse",reason="rate_limit"}'
+        values: '0+2x60'
+      - series: 'ai_requests_total{provider="local",model="m",task="batch_parse",outcome="ok"}'
+        values: '0+5x60'
+      - series: 'ai_failures_total{provider="local",model="m",task="batch_parse",reason="reply_parse"}'
+        values: '0+3x60'
+      - series: 'ai_requests_total{provider="local",model="m",task="embed",outcome="ok"}'
+        values: '0+9x60'
+      - series: 'ai_requests_total{provider="local",model="m",task="embed",outcome="error"}'
+        values: '0+1x60'
+      - series: 'ai_failures_total{provider="local",model="m",task="embed",reason="unreachable"}'
+        values: '0+1x60'
+    alert_rule_test:
+      # Inside for: 15m.
+      - eval_time: 10m
+        alertname: AudiobookOrganizerAIFailureRatioHigh
+        exp_alerts: []
+      # Past it: only filename_parse fires. batch_parse failures are all
+      # reply-quality, embed is at 10%.
+      - eval_time: 40m
+        alertname: AudiobookOrganizerAIFailureRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              task: filename_parse
+            exp_annotations:
+              summary: "audiobook-organizer AI requests are failing"
+              description: "More than 20% of filename_parse AI requests have failed (transport, quota, rate limit or timeout, not unusable replies) over the last 15 minutes, sustained for 15 minutes. Check the \"AI failures by reason\" panel on the audiobook-organizer-ai dashboard and `journalctl -u audiobook-organizer`."

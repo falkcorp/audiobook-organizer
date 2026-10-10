@@ -48,6 +48,11 @@ ai_dispatch_inflight	gauge	endpoint	otel
 ai_dispatch_failover_total	counter	capability,class,endpoint	otel
 ai_dispatch_no_capable_total	counter	capability	otel
 ai_dispatch_slot_wait_seconds	histogram	endpoint	otel
+ai_requests_total	counter	model,outcome,provider,task	otel
+ai_request_duration_seconds	histogram	model,provider,task	otel
+ai_tokens_total	counter	direction,model,provider,task	otel
+ai_failures_total	counter	model,provider,reason,task	otel
+ai_parse_results_total	counter	accepted,task	otel
 audiobook_organizer_pebble_block_cache_bytes	gauge	store
 audiobook_organizer_pebble_block_cache_blocks	gauge	store
 audiobook_organizer_pebble_block_cache_hits_total	counter	store

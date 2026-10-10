@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package ai
 
@@ -383,7 +383,7 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 // The parent ctx is still respected — if it is cancelled between attempts the
 // retry loop exits immediately.
 func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([][]float32, error) {
-	return embedWithRetry(ctx, c.client, c.model, texts, c.requestTimeout, false)
+	return embedWithRetry(ctx, c.client, providerForBaseURL(c.baseURL), c.model, texts, c.requestTimeout, false)
 }
 
 // embedViaEndpoint sends one pool-routed embedding request to baseURL. It
@@ -391,7 +391,17 @@ func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([]
 // transport files the aidispatch guard already tracks.
 func embedViaEndpoint(ctx context.Context, baseURL, apiKey, model string, texts []string, reqTimeout time.Duration) ([][]float32, error) {
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
-	return embedWithRetry(ctx, &client, model, texts, reqTimeout, true)
+	return embedWithRetry(ctx, &client, providerForBaseURL(baseURL), model, texts, reqTimeout, true)
+}
+
+// embeddingUsage reads the input-token count the provider reported on an
+// embeddings reply (embeddings have no output tokens). It lives here, not in
+// ai_metrics.go, because it names the SDK type.
+func embeddingUsage(r *openai.CreateEmbeddingResponse) (in, out int64) {
+	if r == nil {
+		return 0, 0
+	}
+	return r.Usage.PromptTokens, 0
 }
 
 // embedWithRetry is embedBatchRaw's retry loop, parameterised by client and
@@ -402,9 +412,11 @@ func embedViaEndpoint(ctx context.Context, baseURL, apiKey, model string, texts 
 // immediately instead of retrying it: on the routed path the dispatcher, not
 // this loop, decides what happens next, and it fails over to a peer. The
 // legacy path passes false and keeps its historical three attempts.
-func embedWithRetry(ctx context.Context, client *openai.Client, model string, texts []string, reqTimeout time.Duration, stopOnUnreachable bool) ([][]float32, error) {
+func embedWithRetry(ctx context.Context, client *openai.Client, provider, model string, texts []string, reqTimeout time.Duration, stopOnUnreachable bool) ([][]float32, error) {
 	var lastErr error
 	delays := []time.Duration{1 * time.Second, 4 * time.Second}
+	// One observed request per attempt: a retry is a new attempt.
+	meta := callMeta{provider: provider, task: TaskEmbed, model: model}
 
 	// Resolve the per-attempt timeout, guarding against a zero value that
 	// would produce an already-expired context.
@@ -425,19 +437,21 @@ func embedWithRetry(ctx context.Context, client *openai.Client, model string, te
 		// network call times out in reqTimeout rather than waiting for the
 		// (potentially very long) parent op context.
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, reqTimeout)
-		resp, err := client.Embeddings.New(attemptCtx, openai.EmbeddingNewParams{
-			Input: openai.EmbeddingNewParamsInputUnion{
-				OfArrayOfStrings: texts,
-			},
-			Model: openai.EmbeddingModel(model),
-			User:  openai.String("ao-embeddings"),
-			// WithMaxRetries(0): the SDK's own built-in retry logic would
-			// otherwise silently retry 429/5xx responses before this loop
-			// ever sees the error, defeating both the permanent-error
-			// short-circuit (still burning 3 HTTP calls per attempt on a
-			// permanent 429) and the attempt bookkeeping this loop relies
-			// on. This loop is the sole retry authority for embedBatchRaw.
-		}, option.WithMaxRetries(0))
+		resp, err := observe(attemptCtx, meta, func(callCtx context.Context) (*openai.CreateEmbeddingResponse, error) {
+			return client.Embeddings.New(callCtx, openai.EmbeddingNewParams{
+				Input: openai.EmbeddingNewParamsInputUnion{
+					OfArrayOfStrings: texts,
+				},
+				Model: openai.EmbeddingModel(model),
+				User:  openai.String("ao-embeddings"),
+				// WithMaxRetries(0): the SDK's own built-in retry logic would
+				// otherwise silently retry 429/5xx responses before this loop
+				// ever sees the error, defeating both the permanent-error
+				// short-circuit (still burning 3 HTTP calls per attempt on a
+				// permanent 429) and the attempt bookkeeping this loop relies
+				// on. This loop is the sole retry authority for embedBatchRaw.
+			}, option.WithMaxRetries(0))
+		}, embeddingUsage)
 		attemptCancel() // always release the child context, never defer in a loop
 		if err != nil {
 			// TODO(#TASK-12-followup): route embedBatchRaw through
