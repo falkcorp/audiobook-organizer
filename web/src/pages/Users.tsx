@@ -1,8 +1,10 @@
 // file: web/src/pages/Users.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState, useRef } from 'react';
+import { apiFetch, isAuthRedirectError } from '../utils/apiFetch';
 import {
   Box,
   Button,
@@ -63,13 +65,17 @@ export default function Users() {
   const load = useCallback(async () => {
     try {
       const [uResp, iResp] = await Promise.all([
-        fetch(`${API_BASE}/users`).then((r) => r.json()),
-        fetch(`${API_BASE}/users/invites`).then((r) => r.json()),
+        apiFetch(`${API_BASE}/users`).then((r) => r.json()),
+        apiFetch(`${API_BASE}/users/invites`).then((r) => r.json()),
       ]);
       setUsers(uResp.users || []);
       setInvites(iResp.invites || []);
-    } catch {
-      setError('Failed to load users');
+    } catch (err) {
+      setError(
+        isAuthRedirectError(err)
+          ? 'Your session has expired. Sign in again to continue.'
+          : 'Failed to load users'
+      );
     }
   }, []);
 
@@ -77,25 +83,54 @@ export default function Users() {
     load();
   }, [load]);
 
+  // Runs a user-management write and surfaces any failure in the page alert.
+  // A failed or login-redirected call must never look like a success, so the
+  // list is only reloaded when the write actually went through.
+  const runUserAction = useCallback(
+    async (path: string, failureMessage: string): Promise<Response | null> => {
+      setError('');
+      try {
+        const resp = await apiFetch(`${API_BASE}${path}`, { method: 'POST' });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          setError(body?.error || failureMessage);
+          return null;
+        }
+        return resp;
+      } catch (err) {
+        setError(
+          isAuthRedirectError(err)
+            ? 'Your session has expired. Sign in again to continue.'
+            : failureMessage
+        );
+        return null;
+      }
+    },
+    []
+  );
+
   const handleDeactivate = useCallback(
     async (id: string) => {
-      await fetch(`${API_BASE}/users/${id}/deactivate`, { method: 'POST' });
-      load();
+      if (await runUserAction(`/users/${id}/deactivate`, 'Failed to deactivate user')) {
+        load();
+      }
     },
-    [load]
+    [load, runUserAction]
   );
 
   const handleReactivate = useCallback(
     async (id: string) => {
-      await fetch(`${API_BASE}/users/${id}/reactivate`, { method: 'POST' });
-      load();
+      if (await runUserAction(`/users/${id}/reactivate`, 'Failed to reactivate user')) {
+        load();
+      }
     },
-    [load]
+    [load, runUserAction]
   );
 
   const handleResetPassword = useCallback(
     async (id: string) => {
-      const resp = await fetch(`${API_BASE}/users/${id}/reset-password`, { method: 'POST' });
+      const resp = await runUserAction(`/users/${id}/reset-password`, 'Failed to reset password');
+      if (!resp) return;
       const data = await resp.json();
       // The endpoint returns { token, login_url }. Copy the URL — it is what the
       // user actually clicks. The bare token is kept as a fallback for a server
@@ -109,7 +144,7 @@ export default function Users() {
       }
       load();
     },
-    [load]
+    [load, runUserAction]
   );
 
   const handleCopyToken = useCallback((token: string) => {
@@ -277,7 +312,7 @@ function CreateInviteDialog({
   const handleCreate = async () => {
     setError('');
     try {
-      const resp = await fetch(`${API_BASE}/users/invite`, {
+      const resp = await apiFetch(`${API_BASE}/users/invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, role_id: roleId }),
@@ -290,7 +325,11 @@ function CreateInviteDialog({
       onClose();
       onCreated();
     } catch (err: unknown) {
-      setError((err as Error).message);
+      setError(
+        isAuthRedirectError(err)
+          ? 'Your session has expired. Sign in again to continue.'
+          : (err as Error).message
+      );
     }
   };
 

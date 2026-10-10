@@ -1,7 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.25.0
+// version: 1.26.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-20
+// last-edited: 2026-10-10
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -18,6 +18,7 @@ import { useAuth } from './contexts/AuthContext';
 import { useOperationsStore } from './stores/useOperationsStore';
 import { useReviewStore } from './stores/useReviewStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { apiFetch } from './utils/apiFetch';
 
 // Lazy-loaded pages (code-split for smaller initial bundle)
 const Library = lazy(() => import('./pages/Library').then((m) => ({ default: m.Library })));
@@ -155,13 +156,15 @@ function App() {
     intervalRef.current = setInterval(async () => {
       if (isUnmountedRef.current) return;
       try {
-        const response = await fetch('/api/v1/health');
+        const response = await apiFetch('/api/v1/health');
         if (response.ok) {
           // Server is back, reload the page
           window.location.reload();
         }
       } catch (_e) {
-        // Server still down, increment attempts
+        // Server still down (or, for an ApiAuthRedirectError, answering with a
+        // login page rather than the health JSON): either way it is not back
+        // in a usable state, so do not reload; increment attempts
         if (!isUnmountedRef.current) {
           setReconnectAttempts((prev) => prev + 1);
         }

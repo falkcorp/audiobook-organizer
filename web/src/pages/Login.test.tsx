@@ -1,7 +1,7 @@
 // file: web/src/pages/Login.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2c3d4e-5f60-4718-9a2b-3c4d5e6f7081
-// last-edited: 2026-08-21
+// last-edited: 2026-10-10
 
 // Guards Login.tsx's redirectTo against an attacker-controlled
 // location.state.from. Before this, an already-authenticated visit whose
@@ -10,13 +10,14 @@
 // the page) would be handed straight to navigate() with no validation — see
 // safeReturn.test.ts for the sanitizeReturn allow-list this now runs through.
 
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '@mui/material';
 import { appTheme } from '../theme';
 import { Login } from './Login';
 import { useAuth } from '../contexts/AuthContext';
+import { loginPageResponse } from '../test/loginRedirect';
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: vi.fn(),
@@ -87,5 +88,45 @@ describe('Login redirectTo — rejects an unvalidated location.state.from', () =
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/library?tag=metadata', { replace: true });
     });
+  });
+});
+
+function unauthenticated() {
+  return { ...authenticated(), user: null, isAuthenticated: false } as unknown as ReturnType<
+    typeof useAuth
+  >;
+}
+
+describe('Login oauth-providers load (runs before a session exists)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows SSO buttons when the providers endpoint answers with JSON', async () => {
+    mockUseAuth.mockReturnValue(unauthenticated());
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: { providers: ['github'] } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+      )
+    );
+    renderLogin('/library');
+    expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
+  });
+
+  it('shows no SSO buttons, and does not throw, when a login page comes back instead of JSON', async () => {
+    mockUseAuth.mockReturnValue(unauthenticated());
+    const fetchMock = vi.fn(async () => loginPageResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    renderLogin('/library');
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // Let the rejected apiFetch settle before asserting the absence.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole('button', { name: /sign in with/i })).not.toBeInTheDocument();
   });
 });

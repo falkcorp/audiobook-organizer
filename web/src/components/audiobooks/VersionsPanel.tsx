@@ -1,9 +1,11 @@
 // file: web/src/components/audiobooks/VersionsPanel.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 5e3f4a2b-6c7d-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Box,
   Chip,
   IconButton,
@@ -18,6 +20,7 @@ import {
   Restore as RestoreIcon,
   Star as ActiveIcon,
 } from '@mui/icons-material';
+import { apiFetch } from '../../utils/apiFetch';
 import { type BookVersion, trashVersion, restoreVersion } from '../../services/versionApi';
 
 const API_BASE = '/api/v1';
@@ -40,17 +43,23 @@ const STATUS_COLORS: Record<string, 'success' | 'primary' | 'warning' | 'error' 
 export default function VersionsPanel({ bookId }: VersionsPanelProps) {
   const [versions, setVersions] = useState<BookVersion[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
-      const resp = await fetch(`${API_BASE}/audiobooks/${bookId}/versions`);
+      const resp = await apiFetch(`${API_BASE}/audiobooks/${bookId}/versions`);
       if (resp.ok) {
         const data = await resp.json();
         setVersions(data.versions || []);
+      } else {
+        setLoadError(`Failed to load versions (HTTP ${resp.status})`);
       }
-    } catch {
-      // silently fail
+    } catch (err) {
+      // An expired session (ApiAuthRedirectError) lands here too; show it
+      // instead of rendering an empty list that looks like "no versions".
+      setLoadError(err instanceof Error ? err.message : 'Failed to load versions');
     } finally {
       setLoading(false);
     }
@@ -87,6 +96,7 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
         Loading versions...
       </Typography>
     );
+  if (loadError) return <Alert severity="error">{loadError}</Alert>;
   if (versions.length === 0) return null;
 
   return (

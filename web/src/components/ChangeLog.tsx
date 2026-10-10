@@ -1,7 +1,7 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
@@ -11,6 +11,7 @@ import * as api from '../services/api';
 import { fetchActivity } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 import { useToast } from './toast/ToastProvider';
+import { apiFetch } from '../utils/apiFetch';
 
 interface ChangeLogProps {
   bookId: string;
@@ -98,7 +99,7 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
   const handleRevert = async (timestamp: string) => {
     setReverting(timestamp);
     try {
-      const revertResp = await fetch(`/api/v1/audiobooks/${bookId}/revert-metadata`, {
+      const revertResp = await apiFetch(`/api/v1/audiobooks/${bookId}/revert-metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ timestamp }),
@@ -111,7 +112,7 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
       // server refuses (409) or fails (500) before writing tags when the
       // rename cannot be done, so the operator must see why: the revert
       // itself landed, but the files were not updated.
-      const wbResp = await fetch(`/api/v1/audiobooks/${bookId}/write-back`, {
+      const wbResp = await apiFetch(`/api/v1/audiobooks/${bookId}/write-back`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rename: true }),

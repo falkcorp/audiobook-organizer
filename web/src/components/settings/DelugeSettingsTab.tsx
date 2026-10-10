@@ -1,6 +1,7 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -20,6 +21,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { apiFetch } from '../../utils/apiFetch';
 
 const API_BASE = '/api/v1';
 
@@ -50,7 +52,7 @@ export default function DelugeSettingsTab() {
   } | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/deluge/status`)
+    apiFetch(`${API_BASE}/deluge/status`)
       .then((r) => r.json())
       .then(setStatus)
       .catch(() => {});
@@ -60,7 +62,7 @@ export default function DelugeSettingsTab() {
     setTesting(true);
     setTestResult(null);
     try {
-      const resp = await fetch(`${API_BASE}/deluge/test-connection`, { method: 'POST' });
+      const resp = await apiFetch(`${API_BASE}/deluge/test-connection`, { method: 'POST' });
       const data = await resp.json();
       setTestResult(data);
     } catch (err: unknown) {
@@ -72,7 +74,7 @@ export default function DelugeSettingsTab() {
 
   const handleLoadTorrents = useCallback(async () => {
     try {
-      const resp = await fetch(`${API_BASE}/deluge/torrents`);
+      const resp = await apiFetch(`${API_BASE}/deluge/torrents`);
       const data = await resp.json();
       setTorrents(data.torrents || {});
       setShowTorrents(true);
@@ -85,7 +87,7 @@ export default function DelugeSettingsTab() {
     setImporting(true);
     setImportResult(null);
     try {
-      const resp = await fetch(`${API_BASE}/discovery/import`, {
+      const resp = await apiFetch(`${API_BASE}/discovery/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dry_run: false }),
