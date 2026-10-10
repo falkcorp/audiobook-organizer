@@ -47,3 +47,11 @@ func (r *Registry) HeldConcurrencyKeysForTest() map[string]string {
 	}
 	return held
 }
+
+// BoundToForTest reports whether f was built bound to done: the channel its
+// Check watches for the run context ending. It compares channels, not
+// behavior, because a behavioral probe (Check() right after ctx.Done()) races
+// executeRun's own revoke in its select and passes either way.
+func (f Fence) BoundToForTest(done <-chan struct{}) bool {
+	return f.st != nil && f.st.done != nil && f.st.done == done
+}
