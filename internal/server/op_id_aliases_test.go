@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-10
 
@@ -250,6 +250,10 @@ var renamedOpIDs = map[string]string{
 	"maintenance.dedup-llm-review":          "dedup.llm-review",
 	"maintenance.series-prune":              "dedup.series-prune",
 	"maintenance.series-normalize":          "dedup.series-normalize",
+	"scheduler.temp-file-cleanup":           "maintenance.temp-file-cleanup",
+	"scheduler.trash-cleanup":               "maintenance.trash-cleanup",
+	"scheduler.tombstone-cleanup":           "maintenance.tombstone-cleanup",
+	"scheduler.db-optimize":                 "maintenance.db-optimize",
 }
 
 func TestOpIDs_EveryAliasResolves(t *testing.T) {

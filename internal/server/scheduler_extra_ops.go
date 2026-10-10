@@ -1,7 +1,7 @@
 // file: internal/server/scheduler_extra_ops.go
-// version: 2.2.2
+// version: 2.3.0
 // guid: f1e2d3c4-b5a6-7890-fedc-ba9876543210
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // scheduler_extra_ops is a thin shim that wires the ExtraOpsRegistrar
 // methods (now living in internal/scheduler/extra_ops.go) into the server
@@ -21,14 +21,11 @@ import opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/
 // named type, which is unrelated and still in use.
 
 func init() {
-	// All 13 Register* methods have moved to internal/scheduler.ExtraOpsRegistrar
+	// All 7 Register* methods have moved to internal/scheduler.ExtraOpsRegistrar
 	// (SERVER-THIN-RESIDUAL). These shims keep the addOpRegistrar contract intact
 	// while delegating to s.extraOpsRegistrar which is constructed in NewServer.
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterDedupLLMReviewOp(reg)
-	})
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
-		return s.extraOpsRegistrar.RegisterTrashCleanupOp(reg)
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterMetadataUpgradeOp(reg)
@@ -37,19 +34,10 @@ func init() {
 		return s.extraOpsRegistrar.RegisterAuthorSplitScanOp(reg)
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
-		return s.extraOpsRegistrar.RegisterDBOptimizeOp(reg)
-	})
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterCleanupOldBackupsOp(reg)
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
-		return s.extraOpsRegistrar.RegisterTempFileCleanupOp(reg)
-	})
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterPurgeDeletedOp(reg)
-	})
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
-		return s.extraOpsRegistrar.RegisterTombstoneCleanupOp(reg)
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterResolveProductionAuthorsOp(reg)

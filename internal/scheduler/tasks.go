@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.22.2
+// version: 1.23.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-10
 
@@ -903,9 +903,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.temp-file-cleanup", schedulerExtraOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.temp-file-cleanup", struct{}{})
 			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.temp-file-cleanup: %w", enqErr)
+				return nil, fmt.Errorf("failed to enqueue maintenance.temp-file-cleanup: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "temp-file-cleanup"), nil
 		},
@@ -924,9 +924,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.trash-cleanup", schedulerExtraOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.trash-cleanup", struct{}{})
 			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.trash-cleanup: %w", enqErr)
+				return nil, fmt.Errorf("failed to enqueue maintenance.trash-cleanup: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "trash-cleanup"), nil
 		},
@@ -1012,9 +1012,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.db-optimize", schedulerExtraOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.db-optimize", struct{}{})
 			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.db-optimize: %w", enqErr)
+				return nil, fmt.Errorf("failed to enqueue maintenance.db-optimize: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "db-optimize"), nil
 		},
@@ -1115,9 +1115,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.tombstone-cleanup", schedulerExtraOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.tombstone-cleanup", struct{}{})
 			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.tombstone-cleanup: %w", enqErr)
+				return nil, fmt.Errorf("failed to enqueue maintenance.tombstone-cleanup: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "tombstone-cleanup"), nil
 		},

@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-10
 
@@ -197,7 +197,16 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 	// an AppDirs accessor for every future walker otherwise. server already
 	// reads the process config, so resolving here keeps the interface at one
 	// method and the rule at one resolver.
-	return sweep.CleanupOrphanedTempFiles(rootDir, appdirs.Current(), s.activityWriter, opID)
+	removed := sweep.CleanupOrphanedTempFiles(rootDir, appdirs.Current(), s.activityWriter, opID)
+	// The run's summary entry, NoOp-tagged when nothing was removed. It was
+	// written only by scheduler.temp-file-cleanup, the scheduled twin merged
+	// into maintenance.temp-file-cleanup on 2026-10-10; emitting it here keeps
+	// the activity feed's daily line now that the task enqueues the survivor.
+	// Same shape as runAutoPurgeSoftDeleted's summary.
+	activity.EmitInfo(s.activityWriter, opID, "temp-file-cleanup", "temp-file-cleanup",
+		fmt.Sprintf("Removed %d orphaned temp files", removed),
+		activity.TagsIf(removed == 0, activity.NoOpTag)...)
+	return removed
 }
 
 func (s *Server) CleanupTrashedVersions() int {

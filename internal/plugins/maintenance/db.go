@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-def0-345678901234
-// last-edited: 2026-10-02
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -12,16 +12,26 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
+// dbOptimizeDef is the only registration of the database compaction.
+// scheduler.db-optimize ran the same compaction under its own ID and
+// ConcurrencyKey until 2026-10-10, so the two could compact the same stores at
+// once; it resolves here as a FormerID, and the db_optimize scheduler task
+// enqueues this def. Permissions and the 2h Timeout are the stricter gate and
+// longer budget the merged def carried (a full main-store compaction measured
+// 28m31s on production).
 func (p *Plugin) dbOptimizeDef() sdk.OperationDef {
 	sched := "0 2 * * 0" // 02:00 every Sunday
 	return sdk.OperationDef{
 		ID:              "maintenance.db-optimize",
+		FormerIDs:       []string{"scheduler.db-optimize"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Optimize database",
@@ -31,7 +41,7 @@ func (p *Plugin) dbOptimizeDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.db-optimize",
 		Cancellable:     false,
 		Isolate:         false,
-		Timeout:         60 * time.Minute,
+		Timeout:         2 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runDBOptimize,
@@ -52,9 +62,6 @@ func (p *Plugin) runDBOptimize(ctx context.Context, _ json.RawMessage, reporter 
 // every interval and a before/after line when each store finishes. Before
 // 2026-10-02 the only lines were "Compacting main database..." and, ~28
 // minutes later, "Main database optimized in ...".
-//
-// scheduler.db-optimize (internal/scheduler/extra_ops.go) is the same work
-// under another ID and reports the same way.
 func runDBOptimizeSteps(ctx context.Context, store compactableStore, aux StoreOptimizer, reporter sdk.Reporter, interval time.Duration) {
 	storesOptimized := 0
 	const storesTotal = 3
@@ -130,7 +137,7 @@ func runDBOptimizeSteps(ctx context.Context, store compactableStore, aux StoreOp
 // is scheduled weekly (0 2 * * 0). Measured on prod 2026-09-08: enqueued
 // 10:25:45, "canceling stuck op ... no progress for 5m9s" at 10:30:54.
 //
-// Two things made that worse than a plain failure. The op's own Timeout is 60m,
+// Two things made that worse than a plain failure. The op's own Timeout was then 60m,
 // so the deadline the author chose never applied -- a different, shorter clock
 // fired first. And the cancellation did not stop anything: the op is declared
 // Cancellable:false and PebbleStore.Optimize hardcoded context.Background(), so

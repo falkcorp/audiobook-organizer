@@ -1,9 +1,9 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.20.2
+// version: 1.21.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
-// extra_ops registers OperationDefs for 13 scheduler tasks that previously
+// extra_ops registers OperationDefs for 7 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
 // extracts the closure logic into a typed Run func so the UOS v2 dispatcher
 // can manage lifecycle, cancellation, and concurrency without the old
@@ -30,7 +30,6 @@ import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -40,8 +39,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
-	"github.com/falkcorp/audiobook-organizer/internal/sweep"
-	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/gin-gonic/gin"
 )
@@ -50,11 +47,9 @@ import (
 // All fields are optional (nil-safe) to match the server's lazy-init pattern.
 type ExtraOpsDeps struct {
 	ActivityWriter       *activity.Writer
-	AIScanStore          *database.AIScanStore
 	DedupCache           *cache.Cache[gin.H]
 	DedupEngine          *dedup.Engine
 	MetadataFetchService *metafetch.Service
-	OLService            *metafetch.OpenLibraryService
 	AudiobookService     *audiobookspkg.AudiobookService
 	// ScanStandDown is the scan stand-down gate the metadata refresh/upgrade ops
 	// hold while they apply (metadata is never applied during a library scan).
@@ -62,19 +57,17 @@ type ExtraOpsDeps struct {
 	ScanStandDown opsregistry.ScanStandDownGate
 }
 
-// ExtraOpsStore is everything the 13 scheduler OperationDefs need from the
+// ExtraOpsStore is everything the 7 scheduler OperationDefs need from the
 // store. Measured with an empty-interface compiler probe under -gcflags=-e:
 // zero methods are called here directly -- the field only ever forwards into
 // three callees, so it is spelled as the union of their own already-narrow
 // interfaces rather than a fresh method list. Was database.Store (398 methods)
 // until 2026-08-19.
 type ExtraOpsStore interface {
-	metabatch.Store                // NewMetadataUpgradeService
-	versions.TrashedVersionCleaner // CleanupTrashedVersions
+	metabatch.Store // NewMetadataUpgradeService
 
 	extraOpsAuthorStore
 	extraOpsAuthorLinkStore
-	extraOpsMaintenanceStore
 
 	// ModifyBook is the author split's primary-author write: a locked
 	// read-modify-write of AuthorID/Author, never GetBookByID -> UpdateBook.
@@ -107,15 +100,7 @@ type extraOpsAuthorLinkStore interface {
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
-// extraOpsMaintenanceStore is the db-optimize and tombstone-resolve ops.
-type extraOpsMaintenanceStore interface {
-	Optimize(ctx context.Context) error
-	// CompactionStats feeds db-optimize's in-flight progress lines.
-	CompactionStats() database.CompactionStats
-	ResolveTombstoneChains() (int, error)
-}
-
-// ExtraOpsRegistrar holds a Store reference and typed Deps so the 13 scheduler
+// ExtraOpsRegistrar holds a Store reference and typed Deps so the 7 scheduler
 // OperationDefs can be registered without a *Server pointer.
 type ExtraOpsRegistrar struct {
 	Deps  ExtraOpsDeps
@@ -179,34 +164,6 @@ func (r *ExtraOpsRegistrar) RegisterDedupLLMReviewOp(reg *opsregistry.Registry) 
 			}
 			_ = progress.Log("info", "Starting LLM review of ambiguous dedup candidates", nil)
 			return r.Deps.DedupEngine.RunLLMReview(ctx)
-		},
-	})
-}
-
-// --- trash-cleanup ---
-
-// RegisterTrashCleanupOp registers the scheduler.trash-cleanup OperationDef.
-func (r *ExtraOpsRegistrar) RegisterTrashCleanupOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.trash-cleanup",
-		Liveness:        opsregistry.LivenessNone,
-		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
-		Plugin:          "scheduler",
-		DisplayName:     "Trash Cleanup",
-		Description:     "Purge trashed book versions past their 14-day TTL.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         1 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.trash-cleanup",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			progress := extraOpsProgressAdapter{r: reporter}
-			purged := versions.CleanupTrashedVersions(r.Store)
-			_ = progress.Log("info", fmt.Sprintf("Trash cleanup: purged %d versions", purged), nil)
-			return nil
 		},
 	})
 }
@@ -533,113 +490,6 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 	})
 }
 
-// --- db-optimize ---
-
-// RegisterDBOptimizeOp registers the scheduler.db-optimize OperationDef.
-func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.db-optimize",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "scheduler",
-		DisplayName:     "Database Optimize",
-		Description:     "Optimize database (VACUUM/compact) for the main, AI scan, and OpenLibrary stores.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.db-optimize",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
-			if r.Store == nil {
-				return fmt.Errorf("database not initialized")
-			}
-			r.runDBOptimize(ctx, reporter, compactprogress.DefaultInterval)
-			return nil
-		},
-	})
-}
-
-// runDBOptimize compacts the main, AI-scan and OpenLibrary stores in turn.
-//
-// Each compaction is one blocking Pebble call that can run for half an hour
-// (28m31s on production for the main store), and until 2026-10-02 the op
-// said "Optimizing main database (0/3)" and then nothing until it finished.
-// Every step now runs through compactprogress.RunStep, which samples the
-// store's Pebble counters every interval and logs what the engine is doing
-// (bytes compacted and rate, compactions in flight, debt, L0 files, size on
-// disk, tombstones), then logs a before/after completion line per store.
-// Progress FRAMES still go out only when those counters move -- see
-// compactprogress.Moved for why a blind heartbeat would be wrong.
-//
-// The "(n/3)" in each label counts stores, not key ranges: each store is
-// compacted as one full-keyspace range.
-func (r *ExtraOpsRegistrar) runDBOptimize(ctx context.Context, reporter opsregistry.Reporter, interval time.Duration) {
-	const storesTotal = 3
-	storesOptimized := 0
-	startTotal := time.Now()
-	p := sdk.NewProgress(reporter, storesTotal)
-	p.Start("Starting database optimization")
-
-	step := func(i int, name string, run func(context.Context) error, stats func() database.CompactionStats) {
-		label := fmt.Sprintf("Compacting %s (%d/%d)", name, i+1, storesTotal)
-		p.StepN(i, label)
-		res := compactprogress.RunStep(ctx, reporter, compactprogress.Step{
-			Label:    label,
-			Run:      run,
-			Stats:    stats,
-			Frame:    func(msg string) { p.StepN(i, msg) },
-			Interval: interval,
-		})
-		if res.Err == nil {
-			storesOptimized++
-		}
-	}
-
-	// 1. Main store
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"Compacting main database (Pebble, full keyspace); engine counters are logged every %s", interval))
-	step(0, "main database", r.Store.Optimize, r.Store.CompactionStats)
-	p.StepN(1, fmt.Sprintf("Main database done (1/%d)", storesTotal))
-
-	// 2. AI scan store
-	switch ai := r.Deps.AIScanStore; {
-	case ai == nil:
-		_ = reporter.Log(slog.LevelInfo, "AI scan store not initialized, skipping")
-	default:
-		if _, owned := ai.CompactionStats(); !owned {
-			// Production wiring: the AI scan keyspace lives inside the main
-			// database, so step 1 already compacted it and Optimize is a no-op.
-			storesOptimized++
-			_ = reporter.Log(slog.LevelInfo,
-				"AI scan store shares the main database; it was compacted in step 1, nothing separate to do")
-		} else {
-			step(1, "AI scan database", ai.Optimize, func() database.CompactionStats {
-				st, _ := ai.CompactionStats()
-				return st
-			})
-		}
-	}
-	p.StepN(2, fmt.Sprintf("AI scan database done (2/%d)", storesTotal))
-
-	// 3. OpenLibrary store (accessed via OLService)
-	if svc := r.Deps.OLService; svc != nil && svc.Store() != nil {
-		// Stats go through the service so each sample holds svc.Mu, the lock
-		// the delete-OL-data and factory-reset handlers close the store under.
-		step(2, "OpenLibrary cache", svc.Store().Optimize, func() database.CompactionStats {
-			st, _ := svc.CompactionStats()
-			return st
-		})
-	} else {
-		_ = reporter.Log(slog.LevelInfo, "OpenLibrary store not initialized, skipping")
-	}
-	p.StepN(3, fmt.Sprintf("OpenLibrary cache done (3/%d)", storesTotal))
-
-	p.Done(fmt.Sprintf("Database optimization complete: %d/%d stores in %s",
-		storesOptimized, storesTotal, time.Since(startTotal).Round(time.Millisecond)))
-}
-
 // --- cleanup-old-backups ---
 
 // RegisterCleanupOldBackupsOp registers the scheduler.cleanup-old-backups OperationDef.
@@ -733,43 +583,6 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	return err
 }
 
-// --- temp-file-cleanup ---
-
-// RegisterTempFileCleanupOp registers the scheduler.temp-file-cleanup OperationDef.
-func (r *ExtraOpsRegistrar) RegisterTempFileCleanupOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.temp-file-cleanup",
-		Liveness:        opsregistry.LivenessNone,
-		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
-		Plugin:          "scheduler",
-		DisplayName:     "Temp File Cleanup",
-		Description:     "Remove orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         1 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.temp-file-cleanup",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p schedulerExtraOpParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("temp-file-cleanup: decode params: %w", err)
-			}
-			progress := extraOpsProgressAdapter{r: reporter}
-			actID := activityOpID(reporter, p)
-			removed := sweep.CleanupOrphanedTempFiles(config.AppConfig.RootDir, appdirs.Current(), r.Deps.ActivityWriter, actID)
-			activity.FlushOperation(r.Deps.ActivityWriter, actID)
-			msg := fmt.Sprintf("Removed %d orphaned temp files", removed)
-			_ = progress.Log("info", msg, nil)
-			activity.EmitInfo(r.Deps.ActivityWriter, actID, "temp-file-cleanup", "temp-file-cleanup", msg,
-				activity.TagsIf(removed == 0, activity.NoOpTag)...)
-			return nil
-		},
-	})
-}
-
 // --- purge-deleted ---
 
 // RegisterPurgeDeletedOp registers the scheduler.purge-deleted OperationDef.
@@ -802,45 +615,6 @@ func (r *ExtraOpsRegistrar) RegisterPurgeDeletedOp(reg *opsregistry.Registry) er
 			activity.FlushOperation(r.Deps.ActivityWriter, actID)
 			_ = progress.Log("info", "Purge complete", nil)
 			prog.Done("Purge complete")
-			return nil
-		},
-	})
-}
-
-// --- tombstone-cleanup ---
-
-// RegisterTombstoneCleanupOp registers the scheduler.tombstone-cleanup OperationDef.
-func (r *ExtraOpsRegistrar) RegisterTombstoneCleanupOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.tombstone-cleanup",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "scheduler",
-		DisplayName:     "Tombstone Cleanup",
-		Description:     "Resolve author tombstone chains (A→B→C becomes A→C).",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         1 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.tombstone-cleanup",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			progress := extraOpsProgressAdapter{r: reporter}
-			store := r.Store
-			if store == nil {
-				return fmt.Errorf("database not initialized")
-			}
-			p := sdk.NewProgress(reporter, 0)
-			p.Start("Resolving tombstone chains")
-			_ = progress.Log("info", "Starting author tombstone chain resolution", nil)
-			updated, err := store.ResolveTombstoneChains()
-			if err != nil {
-				return fmt.Errorf("tombstone chain resolution failed: %w", err)
-			}
-			resultMsg := fmt.Sprintf("Resolved %d tombstone chains", updated)
-			_ = progress.Log("info", resultMsg, nil)
-			p.Done(resultMsg)
 			return nil
 		},
 	})
