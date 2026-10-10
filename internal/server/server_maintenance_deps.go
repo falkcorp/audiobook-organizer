@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.59.1
+// version: 1.60.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-10
 
@@ -35,7 +35,6 @@ import (
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
-	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -162,10 +161,8 @@ func (s *Server) RunMetadataRefreshScan(ctx context.Context, progress operations
 }
 
 func (s *Server) RunBulkWriteBack(ctx context.Context, opID string, bookIDs []string, doRename bool, startIdx int, progress operations.ProgressReporter) error {
-	// Bulk write-back keeps no .bak-* sibling per file (owner decision D69):
-	// its safety net is the provenance ledger, and create_backups would double
-	// the library's footprint until the backup-cleanup op runs.
-	ctx = tagger.WithoutBackup(ctx)
+	// runBulkWriteBack applies the bulk backup opt-out (tagger.WithoutBackup,
+	// owner decision D69) itself.
 	return s.runBulkWriteBack(ctx, opID, bookIDs, doRename, startIdx, progress, nil)
 }
 

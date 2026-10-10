@@ -1,5 +1,5 @@
 // file: internal/server/library_writeback_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-10
 
@@ -16,7 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -102,10 +101,8 @@ func (s *Server) RegisterBulkWriteBackOp(reg *opsregistry.Registry) error {
 // method rather than a closure so the resume test can drive it with a
 // recording reporter and a cancelled context.
 func (s *Server) runBulkWriteBackOp(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
-	// Bulk write-back keeps no .bak-* sibling per file (owner decision D69):
-	// its safety net is the provenance ledger, and create_backups would double
-	// the library's footprint until the backup-cleanup op runs.
-	ctx = tagger.WithoutBackup(ctx)
+	// No backup opt-out here: runBulkWriteBack applies tagger.WithoutBackup
+	// itself (owner decision D69), so every caller of it gets it.
 	var p bulkWriteBackOpParams
 	if len(rawParams) > 0 {
 		if err := json.Unmarshal(rawParams, &p); err != nil {

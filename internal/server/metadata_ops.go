@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-10-10
 //
@@ -49,6 +49,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	ulid "github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 )
@@ -1008,6 +1009,13 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 // starting at startIdx. Uses a parallel worker pool — cover embedding and tag
 // writes both go through TagLib so there is no ffmpeg ordering constraint.
 // Checkpoints every 10 completions so a restart can resume near where it left off.
+//
+// BACKUPS. Every write under here keeps no .bak-* sibling (owner decision
+// D69): a bulk write-back's safety net is the provenance ledger, and with
+// create_backups on a backup per file would hold a full copy of every file it
+// touched until the backup-cleanup sweep runs. The opt-out is applied HERE,
+// not by each caller, so no caller can miss it: dedup.series-normalize called
+// this directly and kept a backup for every file until 2026-10-10.
 func (s *Server) runBulkWriteBack(
 	ctx context.Context,
 	opID string,
@@ -1017,6 +1025,7 @@ func (s *Server) runBulkWriteBack(
 	progress operations.ProgressReporter,
 	onDone func(bookID string),
 ) error {
+	ctx = tagger.WithoutBackup(ctx)
 	workers := writeBackWorkers()
 
 	store := s.storeForWiring()
