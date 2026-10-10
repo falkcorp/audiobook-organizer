@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.9.0
+// version: 1.9.1
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-10
 
@@ -121,7 +121,7 @@ export function summarizeApply(r: RepairApplyResult): string {
   const ownerRefused = r.by_outcome.owner_apply_refused ?? 0;
   if (ownerRefused > 0) parts.push(`owner apply refused ${ownerRefused}`);
   const canceled = r.by_outcome.canceled_skipped ?? 0;
-  if (canceled > 0) parts.push(`not applied (canceled) ${canceled}`);
+  if (canceled > 0) parts.push(`canceled before finishing ${canceled}`);
   if (r.not_in_plan && r.not_in_plan.length > 0) parts.push(`not in trial ${r.not_in_plan.length}`);
   let line = parts.join(' · ');
   if (r.dry_run) line = `Preview only, nothing was written: ${line}`;

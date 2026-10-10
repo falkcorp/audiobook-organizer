@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-10
 //
@@ -210,7 +210,7 @@ describe('RepairsPanel', () => {
     expect(banner).not.toHaveTextContent(/were not written/);
   });
 
-  it('shows canceled rows as Not applied and the banner and rail as a canceled apply', async () => {
+  it('shows canceled rows as Canceled and the banner and rail as a canceled apply', async () => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([
       {
         ...FIXER,
@@ -243,7 +243,7 @@ describe('RepairsPanel', () => {
     const user = userEvent.setup();
     renderPanel();
     const fixer = await screen.findByTestId('repairs-fixer-vg-primary');
-    expect(fixer).toHaveTextContent('not applied (canceled) 1');
+    expect(fixer).toHaveTextContent('canceled before finishing 1');
     await screen.findByTestId('repairs-row-g2');
     await user.click(screen.getByRole('checkbox', { name: 'Select Title g1' }));
     await user.click(screen.getByRole('checkbox', { name: 'Select Title g2' }));
@@ -251,12 +251,12 @@ describe('RepairsPanel', () => {
 
     const banner = await screen.findByTestId('repairs-apply-result');
     const chip = screen.getByTestId('repairs-outcome-g2');
-    expect(chip).toHaveTextContent('Not applied: apply canceled');
+    expect(chip).toHaveTextContent('Canceled: not applied, or stopped partway');
     expect(chip.className).toMatch(/colorWarning/);
     expect(banner.className).toMatch(/Warning/);
     expect(banner.className).not.toMatch(/Success/);
-    expect(banner).toHaveTextContent('not applied (canceled) 1');
-    expect(banner).toHaveTextContent(/The apply was canceled; rows marked "Not applied" were not written/);
+    expect(banner).toHaveTextContent('canceled before finishing 1');
+    expect(banner).toHaveTextContent(/The apply was canceled; rows marked "Canceled" were not applied, or were stopped partway/);
   });
 
   it('sends nothing when the confirm is cancelled', async () => {

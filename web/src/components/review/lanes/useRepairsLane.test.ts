@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-10-10
 //
@@ -582,7 +582,7 @@ describe('useRepairsLane: canceled_skipped', () => {
   };
 
   it('counts canceled rows in the summary and reports a warning, not success', () => {
-    expect(summarizeApply(canceled)).toContain('not applied (canceled) 7');
+    expect(summarizeApply(canceled)).toContain('canceled before finishing 7');
     expect(applySeverity(canceled)).toBe('warning');
   });
 

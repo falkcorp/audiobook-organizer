@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.175.0
+// version: 2.176.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -7535,7 +7535,9 @@ export type RepairOutcome =
   | 'retry_later'
   | 'owner_apply_refused'
   /** The apply was canceled (or timed out / was stopped) before this row was
-   * written. Nothing was settled for it, so a later apply checks it again. */
+   * finished: it was not applied, or it was stopped partway (some of a
+   * multi-step row's writes may have landed). Nothing was settled for it, so a
+   * later apply checks it again and finishes it. */
   | 'canceled_skipped';
 
 export interface RepairRowResult {
