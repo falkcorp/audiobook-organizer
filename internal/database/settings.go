@@ -1,7 +1,7 @@
 // file: internal/database/settings.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
-// last-edited: 2026-09-09
+// last-edited: 2026-10-10
 
 package database
 
@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 	"golang.org/x/crypto/argon2"
@@ -360,27 +361,77 @@ func (s *PebbleStore) SetSetting(key, value, typ string, isSecret bool) error {
 	return s.db.Set([]byte("setting:"+key), data, nil)
 }
 
+// GetAllSettings returns every row under the "setting:" prefix.
+//
+// It fails rather than returning a partial list. Callers act on what is
+// ABSENT from the result: config.LoadConfigFromDatabase falls back to
+// defaults (and then the legacy per-key path) when config_blob is missing,
+// and SaveConfigToDatabase writes the whole config struct back, so a row that
+// silently drops out of this list is overwritten on the next settings save.
+// cmd's guardAgainstKeyRegeneration uses the list to decide whether any
+// encrypted secret exists before generating a new key, so a dropped secret
+// row there means a new key and the loss of every stored secret.
+//
+// Every writer under the prefix (SetSetting, EmbeddingStore's index flag,
+// cmd/pebble-inject-skip) stores the JSON Setting envelope, so a row that does
+// not unmarshal is corruption, not another format. All such keys are reported
+// together; the error names keys only, never stored values (a value may be a
+// secret).
 func (s *PebbleStore) GetAllSettings() ([]Setting, error) {
-	var settings []Setting
-
 	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("setting:"),
-		UpperBound: []byte("setting:\xff"),
+		LowerBound: []byte(settingKeyPrefix),
+		UpperBound: []byte(settingKeyPrefix + "\xff"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	return collectSettings(iter)
+}
 
+// settingKeyPrefix is the Pebble key prefix of every settings row.
+const settingKeyPrefix = "setting:"
+
+// settingsIter is the subset of *pebble.Iterator collectSettings uses; it is
+// an interface so a test can inject an iterator error, which a real Pebble
+// store does not produce on demand.
+type settingsIter interface {
+	First() bool
+	Valid() bool
+	Next() bool
+	Key() []byte
+	Value() []byte
+	Error() error
+	Close() error
+}
+
+// collectSettings drains iter and closes it. It returns an error if any row
+// fails to unmarshal (naming every such key), if the iterator reports an
+// error, or if Close does.
+func collectSettings(iter settingsIter) (settings []Setting, err error) {
+	defer func() {
+		if cerr := iter.Close(); cerr != nil && err == nil {
+			settings, err = nil, fmt.Errorf("close settings iterator: %w", cerr)
+		}
+	}()
+
+	var corrupt []error
 	for iter.First(); iter.Valid(); iter.Next() {
 		var setting Setting
-		if err := json.Unmarshal(iter.Value(), &setting); err != nil {
+		if uerr := json.Unmarshal(iter.Value(), &setting); uerr != nil {
+			key := strings.TrimPrefix(string(iter.Key()), settingKeyPrefix)
+			// %T, not uerr: a json.SyntaxError's text can quote the stored
+			// bytes, and the stored bytes may be an encrypted secret.
+			corrupt = append(corrupt, fmt.Errorf("setting %q: stored row is not a valid setting record (%T)", key, uerr))
 			continue
 		}
-
 		settings = append(settings, setting)
 	}
-
+	if ierr := iter.Error(); ierr != nil {
+		return nil, fmt.Errorf("iterate settings: %w", ierr)
+	}
+	if len(corrupt) > 0 {
+		return nil, fmt.Errorf("%d unreadable settings row(s): %w", len(corrupt), errors.Join(corrupt...))
+	}
 	return settings, nil
 }
 

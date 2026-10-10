@@ -1,5 +1,5 @@
 // file: cmd/commands_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
 // last-edited: 2026-10-10
 
@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -382,5 +385,45 @@ func TestServe_ConfigLoadErrorIsFatal(t *testing.T) {
 	}
 	if started {
 		t.Fatal("serve reached startServer after a config-load failure")
+	}
+}
+
+// The review case behind making GetAllSettings strict (PR #3930 SF1): a real
+// Pebble store whose config_blob row is not a valid setting record. It used to
+// be skipped, so LoadConfigFromDatabase saw "no blob", ran on defaults, and the
+// first settings save overwrote the stored config. Now the real loader fails,
+// and serve never reaches startServer.
+func TestServe_CorruptConfigBlobRowIsFatal(t *testing.T) {
+	stubCommandDeps(t)
+	dbPath := filepath.Join(t.TempDir(), "corrupt.pebble")
+	raw, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Set([]byte("setting:config_blob"), []byte("{truncated"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	initializeStore = func(string, string) (database.Store, error) {
+		st, err := database.NewPebbleStore(dbPath)
+		if err != nil {
+			return nil, err
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		return st, nil
+	}
+	loadConfigFromDB = config.LoadConfigFromDatabase
+
+	started, _, err := serveWithStubs(t)
+	if err == nil {
+		t.Fatal("serve returned nil with a corrupt config_blob row")
+	}
+	if started {
+		t.Fatal("serve reached startServer with a corrupt config_blob row")
+	}
+	if !strings.Contains(err.Error(), "config_blob") {
+		t.Fatalf("error does not name the corrupt row: %v", err)
 	}
 }
