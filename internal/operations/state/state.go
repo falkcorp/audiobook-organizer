@@ -1,5 +1,5 @@
 // file: internal/operations/state/state.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 713db576-1d8b-4ede-a52b-63e91ee2ed85
 // last-edited: 2026-10-10
 
@@ -7,11 +7,14 @@
 // each one means. Go helpers and the generated web/src/generated/ops.ts both
 // read this table.
 //
-// Every classifier that used to keep its own status list now asks this
-// package: database.isTerminalV2Status / IsTerminalV2Status /
+// Every v2 classifier that used to keep its own status list now asks this
+// package (the v1 operation: keyspace's isResumableOpStatus in
+// pebble_store_operations.go is left to the v1 retirement):
+// database.isTerminalV2Status / IsTerminalV2Status /
 // isResumableV2Status, registry.isTerminalStatus / IsTerminalStatus /
 // isInterruptedStatus / IsInterruptedStatus, scheduler.isTerminalOpV2Status,
-// childop.IsTerminal, the pause handler's isTerminalOpStatus, and on the web
+// childop.IsTerminal, the pause handler's isTerminalOpStatus, dedup.run-all's
+// resume check, and on the web
 // side every predicate in web/src/generated/ops.ts (regenerate with
 // `make generate-ops`; `make ci` fails when that file is stale).
 //

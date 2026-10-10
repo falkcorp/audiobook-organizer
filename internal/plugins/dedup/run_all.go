@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
-// last-edited: 2026-09-28
+// last-edited: 2026-10-10
 
 // dedup.run-all is the Review page's one-button "Find all duplicates" run: every
 // duplicate check, in order, as ONE server-side operation. Until 2026-09-28 the
@@ -122,6 +122,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -468,7 +469,7 @@ func (p *Plugin) runAllChild(ctx context.Context, rep sdk.Reporter, st *runAllSt
 			return nil
 		case row.Status == "failed" || row.Status == "canceled":
 			return childEndedError(step, row)
-		case strings.HasPrefix(row.Status, "interrupted_"):
+		case state.IsInterrupted(row.Status):
 			_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s was interrupted by a restart (%s); starting it again", step.Label, row.Status))
 			st.ChildOpID = ""
 		}

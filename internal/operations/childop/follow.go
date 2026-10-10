@@ -1,5 +1,5 @@
 // file: internal/operations/childop/follow.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2e9a41-5d3b-4f86-a0e7-1b9c6d4f2a58
 // last-edited: 2026-10-10
 
@@ -80,9 +80,14 @@ type Options struct {
 // DefaultInterval is the poll interval when Options.Interval is zero.
 const DefaultInterval = 5 * time.Second
 
-// IsTerminal reports whether a follower has nothing more to wait for:
-// state.Props.Settled (completed, failed, canceled, or any interrupted*
-// status). An interrupted row does not move again in this process.
+// IsTerminal reports whether a follower stops: state.Props.Settled
+// (completed, failed, canceled, or any interrupted* status).
+//
+// An interrupted row is not necessarily final. A scan stand-down release
+// re-queues an interrupted_quiesced scan under the same id while the process
+// runs (registry resumeDroppedScanOnRelease → resumeQuiescedOp), so a caller
+// that stops here on interrupted_quiesced may see that run start again later.
+// See WINDOW-QUIESCED-SCAN-OVERLAP in TODO.md.
 func IsTerminal(status string) bool {
 	return state.IsSettled(status)
 }

@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-10-10
 
@@ -639,14 +639,22 @@ func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string, onPo
 // wait for in this process: state.Props.Settled (completed, failed, canceled,
 // or any interrupted* status).
 //
-// It is Settled rather than the strict state.Props.Terminal because nothing
-// moves an interrupted row again in-session. interrupted_quiesced and
-// interrupted_restart are only picked up by the next boot's resume sweep (or
-// an operator's Retry), and interrupted_ask waits for a person. Waiting on
-// any of them would hold the scheduler's window until ctx ends. Before
-// 2026-10-10 this was a hand-written list (completed, failed, canceled,
-// interrupted_dropped, interrupted_quiesced) that missed interrupted_ask and
-// the legacy spellings; those now end the wait too.
+// It is Settled rather than the strict state.Props.Terminal so that the wait
+// agrees with every other caller of the table. Before 2026-10-10 this was a
+// hand-written list (completed, failed, canceled, interrupted_dropped,
+// interrupted_quiesced); interrupted_ask and the legacy interrupted_restart /
+// bare interrupted now end the wait too. That changes nothing observable:
+// interrupted_ask is written only by the boot sweep (resumeAsk) on rows from a
+// previous process, and the two legacy spellings are never written to v2 rows,
+// so no live wait can be looking at one.
+//
+// An interrupted row CAN move again in-session, under the same id: a scan
+// stand-down release re-queues an interrupted_quiesced scan while the process
+// runs (registry/worker.go resumeDroppedScanOnRelease → resumeQuiescedOp →
+// ResetOperationV2ForResume). So a maintenance window that stopped waiting on
+// a quiesced scan can see that scan come back and run alongside the window's
+// next task. The pre-2026-10-10 list had the same behaviour; it is tracked as
+// WINDOW-QUIESCED-SCAN-OVERLAP in TODO.md.
 func isTerminalOpV2Status(status string) bool {
 	return state.IsSettled(status)
 }

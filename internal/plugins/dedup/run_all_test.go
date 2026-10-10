@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ef555d0e-38d5-4c56-ae25-d1de6f868f64
-// last-edited: 2026-09-28
+// last-edited: 2026-10-10
 
 package dedup
 
@@ -390,6 +390,25 @@ func TestRunAll_ResumeInterruptedChildReEnqueues(t *testing.T) {
 	ops.scripts["requeued-away"] = []database.OperationV2Row{{Status: "interrupted_dropped"}}
 	params := mustJSON(t, runAllState{DryRun: opmode.Live(),
 		Plan: []string{"find", "ai-review"}, StepIndex: 0, ChildOpID: "requeued-away",
+	})
+	if err := p.runRunAll(context.Background(), params, &runAllReporter{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.enqueuedDefs(); strings.Join(got, ",") != "dedup.full-scan,dedup.llm-review" {
+		t.Fatalf("enqueued %v, want the interrupted step re-enqueued first", got)
+	}
+}
+
+// TestRunAll_ResumeBareInterruptedChildReEnqueues: the legacy bare
+// "interrupted" spelling belongs to the interrupted family (state.IsInterrupted),
+// so a resumed run-all starts that step again. The old HasPrefix("interrupted_")
+// test let it fall through to the follow, which then stopped on it as settled
+// and failed the parent.
+func TestRunAll_ResumeBareInterruptedChildReEnqueues(t *testing.T) {
+	p, reg, ops, _ := newRunAllPlugin(t, true)
+	ops.scripts["legacy-interrupted"] = []database.OperationV2Row{{Status: "interrupted"}}
+	params := mustJSON(t, runAllState{DryRun: opmode.Live(),
+		Plan: []string{"find", "ai-review"}, StepIndex: 0, ChildOpID: "legacy-interrupted",
 	})
 	if err := p.runRunAll(context.Background(), params, &runAllReporter{}); err != nil {
 		t.Fatal(err)
