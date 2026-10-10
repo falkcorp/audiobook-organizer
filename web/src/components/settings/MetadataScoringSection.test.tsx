@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataScoringSection.test.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: c7d6e5f4-a3b2-1098-cdef-a98765432109
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -15,7 +15,6 @@ const defaultConfig: MetadataScoringConfig = {
   llm_enabled: false,
   llm_rerank_epsilon: 0.05,
   llm_rerank_top_k: 5,
-  write_backup_before: true,
   // new scoring knobs, populated so every field renders with a value
   transcription_title_exact_boost: 2.0,
   transcription_title_substr_boost: 1.4,

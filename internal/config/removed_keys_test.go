@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package config
 
@@ -254,5 +254,34 @@ func TestRemovedAutoFetchMetadata_WarnsOnLoad(t *testing.T) {
 	out := logs.String()
 	if !strings.Contains(out, "key=auto_fetch_metadata ") || !strings.Contains(out, "removed setting is ignored") {
 		t.Errorf("no removed-setting WARN for auto_fetch_metadata in logs:\n%s", out)
+	}
+}
+
+// TestRemovedWriteBackupBefore_WarnsOnLoad: metadata_scoring.write_backup_before
+// was removed 2026-10-10 (create_backups is the one backup switch). A config
+// file still carrying the nested key loads, with a removed-setting WARN, and a
+// config update carrying the flat legacy name is refused.
+func TestRemovedWriteBackupBefore_WarnsOnLoad(t *testing.T) {
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	logs := captureRemovedKeyLogs(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("root_dir: /srv/books\nmetadata_scoring:\n  write_backup_before: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(cfgPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("ReadInConfig: %v", err)
+	}
+	InitConfig()
+
+	out := logs.String()
+	if !strings.Contains(out, "key=metadata_scoring.write_backup_before ") || !strings.Contains(out, "removed setting is ignored") {
+		t.Errorf("no removed-setting WARN for metadata_scoring.write_backup_before in logs:\n%s", out)
+	}
+	if msg, ok := removedKeyInUpdate(map[string]any{"write_backup_before_tag_write": true}); !ok || !strings.Contains(msg, "create_backups") {
+		t.Errorf("update with write_backup_before_tag_write: ok=%v msg=%q, want a refusal naming create_backups", ok, msg)
 	}
 }

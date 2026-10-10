@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
@@ -562,7 +562,6 @@ func TestInitConfig_MetadataScoringDefaults(t *testing.T) {
 	assert.False(t, snap.MetadataScoring.LLMEnabled)
 	assert.Equal(t, 0.05, snap.MetadataScoring.LLMRerankEpsilon)
 	assert.Equal(t, 5, snap.MetadataScoring.LLMRerankTopK)
-	assert.True(t, snap.MetadataScoring.WriteBackupBefore)
 }
 
 func TestInitConfig_MetadataScoringFromEnv(t *testing.T) {

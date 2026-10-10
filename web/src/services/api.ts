@@ -800,7 +800,6 @@ export interface MetadataScoringConfig {
   llm_enabled: boolean;
   llm_rerank_epsilon: number;
   llm_rerank_top_k: number;
-  write_backup_before: boolean;
 
   // --- new scoring knobs (TASK-02). All optional; the backend fail-open
   // defaults apply when a field is absent. Names mirror the Go json tags.

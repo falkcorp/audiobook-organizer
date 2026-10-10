@@ -1450,23 +1450,6 @@ func TestBestTitleMatchForBook(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// backupFileBeforeWrite
-// ---------------------------------------------------------------------------
-
-func TestBackupFileBeforeWrite(t *testing.T) {
-	// With default config (WriteBackupBeforeTagWrite = false), should be no-op
-	t.Run("disabled_by_default", func(t *testing.T) {
-		backupFileBeforeWrite("/some/path.m4b")
-		// No panic or error expected
-	})
-
-	t.Run("empty_path", func(t *testing.T) {
-		backupFileBeforeWrite("")
-		// No panic expected
-	})
-}
-
-// ---------------------------------------------------------------------------
 // removeEmptyDirs
 // ---------------------------------------------------------------------------
 

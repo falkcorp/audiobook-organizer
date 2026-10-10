@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-10
 //
@@ -24,9 +24,8 @@ import (
 var taglibAvailable = true
 
 // writeMetadataWithTaglib performs metadata writing using TagLib via WASM.
-// TagLib edits tag atoms in place and does not corrupt audio data on failure —
-// no pre-write file copy is needed. The optional WriteBackupBeforeTagWrite
-// config flag handles backups at the call-site layer (backupFileBeforeWrite).
+// The write goes through tagger.WriteTagsSafe (temp copy, then rename), which
+// keeps a .bak-* backup when create_backups is on and ctx does not opt out.
 //
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
