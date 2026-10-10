@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -15,31 +15,65 @@ Properties, in the order they matter in an incident:
 - **Off by default.** With `otel_metrics_otlp_endpoint` empty no OTLP reader
   exists and no outbound connection is made.
 - **Never fatal.** A malformed endpoint, an unreachable collector or a failing
-  export costs the OTLP copy only. The server starts, `/metrics` keeps
-  serving, and the only trace of a configuration problem is one error-level
-  log line: `OpenTelemetry initialized with the OTLP metric push OFF`, with an
-  `otlp_metrics_error` attribute.
+  export costs the OTLP copy only. The server starts and `/metrics` keeps
+  serving. A malformed endpoint is reported once, at start-up, as an
+  error-level line: `OpenTelemetry initialized with the OTLP metric push OFF`,
+  with an `otlp_metrics_error` attribute (URL userinfo is redacted). A
+  failing export is logged by a rate-limited handler: the first error, then at
+  most one line per 10 minutes (`OpenTelemetry export error (rate limited)`,
+  with a `suppressed_since_last` count). The handler is process-wide, so it
+  also covers trace-export errors.
 - **No fallback.** The trace endpoint (`otel_exporter_otlp_endpoint`) is never
   reused for metrics. Setting only the trace endpoint leaves metric push off.
 - gRPC only, cumulative temporality, no scope labels.
+- **Isolated from the trace exporter's environment.** The OTel SDK reads the
+  generic `OTEL_EXPORTER_OTLP_*` variables, which the trace exporter also
+  uses. The metric push pins what matters, so none of them can change it:
+  the transport (see "Transport rule"), headers (always empty, so a trace
+  collector's `OTEL_EXPORTER_OTLP_HEADERS` bearer token is never sent to the
+  metric host), and temporality (always cumulative, whatever
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` says).
 
 ## The four keys
 
 | Config key | Environment variable | Default | Meaning |
 |---|---|---|---|
 | `otel_metrics_otlp_endpoint` | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | empty (off) | OTLP/gRPC collector |
-| `otel_metrics_otlp_interval` | `OTEL_METRIC_EXPORT_INTERVAL` | `60s` | Push period, a Go duration; clamped to 5s..1h, an unparsable value becomes 60s |
-| `otel_metrics_otlp_insecure` | `OTEL_EXPORTER_OTLP_METRICS_INSECURE` | `false` | Plaintext gRPC to a bare `host:port` |
+| `otel_metrics_otlp_interval` | `OTEL_METRIC_EXPORT_INTERVAL` | `60s` | Push period. The OTel standard form, an integer in milliseconds (`60000`), or a Go duration (`60s`); clamped to 5s..1h, an unparsable value becomes 60s |
+| `otel_metrics_otlp_insecure` | `OTEL_EXPORTER_OTLP_METRICS_INSECURE` | `false` | Plaintext gRPC to a bare `host:port` or `dns:///` target |
 | `telemetry_environment` | none | `prod` | `deployment.environment` resource attribute on both surfaces |
+
+These keys take effect only from the environment or the config file. A value
+set through the UI or API is saved in `config_blob` and does **not** take
+effect: telemetry reads its configuration before the database is loaded.
 
 Accepted endpoint forms:
 
 - `http://collector.example.invalid:4317`: plaintext gRPC.
 - `https://collector.example.invalid:4317`: TLS.
 - `collector.example.invalid:4317` or `dns:///collector.example.invalid:4317`:
-  TLS, unless `otel_metrics_otlp_insecure` is true (bare `host:port` only).
+  TLS, unless `otel_metrics_otlp_insecure` is true.
 
 A URL needs both a host and a port; `http://host` is rejected and logged.
+
+### Transport rule
+
+One rule, applied to every form: an `http://` URL is plaintext and an
+`https://` URL is TLS (the URL decides; the insecure key is not consulted); a
+bare `host:port` or `dns:///` target is TLS unless `otel_metrics_otlp_insecure`
+is true. The choice is pinned with explicit credentials, so the generic
+`OTEL_EXPORTER_OTLP_ENDPOINT` / `_INSECURE` variables cannot downgrade a TLS
+endpoint, and `OTEL_EXPORTER_OTLP_CERTIFICATE` / `_CLIENT_CERTIFICATE` cannot
+turn an explicit plaintext one back into TLS. The consequences:
+
+- TLS uses the system root CAs. `OTEL_EXPORTER_OTLP_CERTIFICATE`, the client
+  certificate variables and their `_METRICS_` forms are **not honoured** for
+  metrics. For a private CA put it in the system trust store or set
+  `SSL_CERT_FILE` / `SSL_CERT_DIR` for the service.
+- Metric headers are not supported yet: both `OTEL_EXPORTER_OTLP_HEADERS` and
+  `OTEL_EXPORTER_OTLP_METRICS_HEADERS` are ignored. A collector that needs an
+  auth header cannot be used until that is added.
+- Compression and timeout variables are still read by the SDK.
 
 ## Turn it on
 
@@ -68,12 +102,13 @@ restart. No code revert is needed and `/metrics` is untouched.
 
 ## Troubleshooting
 
-- **No data at the collector, no error logged.** The gRPC dial is
-  non-blocking, so an unreachable collector is not a start-up error. Check
-  reachability and TLS: a `host:port` endpoint without
-  `otel_metrics_otlp_insecure=true` uses TLS and will fail against a
-  plaintext receiver.
+- **No data at the collector.** The gRPC dial is non-blocking, so an
+  unreachable collector is not a start-up error. Failed exports appear as
+  `OpenTelemetry export error (rate limited)` lines: the first, then at most
+  one per 10 minutes with a `suppressed_since_last` count. Check reachability
+  and TLS: a `host:port` endpoint without `otel_metrics_otlp_insecure=true`
+  uses TLS and will fail against a plaintext receiver.
 - **Error line at start-up with `otlp_metrics_error`.** The endpoint was
   malformed; fix the value. The server is running with `/metrics` only.
-- **Interval seems ignored.** Values below 5s or above 1h are clamped; the
+- **Interval seems ignored.** A bare number is milliseconds (`30` is 30ms, clamped up to 5s; use `30000`). Values below 5s or above 1h are clamped; the
   start-up line carries `otlp_metrics_interval_note` when that happened.
