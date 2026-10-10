@@ -1,7 +1,7 @@
 // file: internal/scheduler/wait_for_operation_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c2e4f61-9a37-4b0d-85e2-1f6a3d7c9b40
-// last-edited: 2026-08-23
+// last-edited: 2026-10-10
 
 package scheduler
 
@@ -106,8 +106,16 @@ func TestWaitForOperationKeepsPollingOnStoreError(t *testing.T) {
 // nearly every production run and metadata.batch-save ends interrupted_dropped,
 // so a wait that did not recognise them would block until ctx expired and the
 // window would never reach its remaining tasks.
+//
+// interrupted_ask and the legacy interrupted_restart / bare interrupted were
+// added on 2026-10-10 when the predicate moved to state.Props.Settled: none of
+// them moves again in-session (ask waits for a person), so the old list held
+// the window on them until ctx expired.
 func TestWaitForOperationTerminalStatuses(t *testing.T) {
-	terminal := []string{"completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced"}
+	terminal := []string{
+		"completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced",
+		"interrupted_ask", "interrupted_restart", "interrupted",
+	}
 	for _, status := range terminal {
 		t.Run("terminal/"+status, func(t *testing.T) {
 			ts, calls := waitTestScheduler(t, func(int) (*database.OperationV2Row, error) {
@@ -120,7 +128,7 @@ func TestWaitForOperationTerminalStatuses(t *testing.T) {
 		})
 	}
 
-	for _, status := range []string{"queued", "running"} {
+	for _, status := range []string{"queued", "running", "waiting_deps", "not-a-status"} {
 		t.Run("nonterminal/"+status, func(t *testing.T) {
 			ts, calls := waitTestScheduler(t, func(call int) (*database.OperationV2Row, error) {
 				if call <= 3 {

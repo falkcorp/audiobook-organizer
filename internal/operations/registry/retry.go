@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
-// last-edited: 2026-09-25
+// last-edited: 2026-10-10
 
 package registry
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // ErrOpNotRetryable is returned by RetryInterrupted for a row that cannot be
@@ -23,11 +24,12 @@ var ErrOpNotRetryable = errors.New("registry: operation cannot be retried in pla
 // IsInterruptedStatus reports whether a v2 status belongs to the interrupted
 // family: the legacy bare "interrupted" plus every "interrupted_*" status the
 // registry mints (quiesced, ask, restart, dropped). Prefix-matched on purpose,
-// so a status added later is covered the day it is minted. This is the single
-// server-side definition; the handler's retry predicate and RetryInterrupted
-// both use it, and web/src/utils/operationPolling.ts isInterrupted mirrors it.
+// so a status added later is covered the day it is minted. It is
+// state.IsInterrupted; the handler's retry predicate and RetryInterrupted both
+// use it, and web/src/utils/operationPolling.ts isInterrupted is generated from
+// the same table.
 func IsInterruptedStatus(status string) bool {
-	return status == "interrupted" || strings.HasPrefix(status, "interrupted_")
+	return state.IsInterrupted(status)
 }
 
 // RetryInterrupted is the operator's Retry on an interrupted run. It re-queues

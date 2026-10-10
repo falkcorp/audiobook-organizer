@@ -1,7 +1,7 @@
 // file: internal/operations/childop/follow.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e9a41-5d3b-4f86-a0e7-1b9c6d4f2a58
-// last-edited: 2026-09-28
+// last-edited: 2026-10-10
 
 // Package childop follows a child operation to a terminal status and tells the
 // parent when the child has shown signs of life, so the parent can feed its own
@@ -36,10 +36,10 @@ package childop
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // Reader reads one operation row. *database.PebbleStore satisfies it.
@@ -80,13 +80,11 @@ type Options struct {
 // DefaultInterval is the poll interval when Options.Interval is zero.
 const DefaultInterval = 5 * time.Second
 
-// IsTerminal reports whether status is one an operation does not leave.
+// IsTerminal reports whether a follower has nothing more to wait for:
+// state.Props.Settled (completed, failed, canceled, or any interrupted*
+// status). An interrupted row does not move again in this process.
 func IsTerminal(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled":
-		return true
-	}
-	return strings.HasPrefix(status, "interrupted_")
+	return state.IsSettled(status)
 }
 
 // Follow polls opID until its status is terminal and returns that row, or
