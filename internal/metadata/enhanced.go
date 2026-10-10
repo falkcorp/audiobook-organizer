@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-10
 
@@ -508,8 +508,10 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 	// new bytes. A backup that cannot be taken fails the write, as it does on
 	// the native path. On a failed CLI write the backup is kept, not removed:
 	// the writers restore the original from their own copy, but a failed
-	// restore is possible, and then this is the only good copy.
-	if tagger.BackupWanted(context.Background()) {
+	// restore is possible, and then this is the only good copy. A format no
+	// CLI writer handles is refused below without touching the file, so it
+	// gets no backup.
+	if cliWriterSupports(target) && tagger.BackupWanted(context.Background()) {
 		bak, berr := fileops.KeepBackupCopy(target)
 		if berr != nil {
 			return fmt.Errorf("write metadata to %s: backup before CLI write: %w", filePath, berr)
@@ -536,6 +538,16 @@ func writeMetadataViaCLI(filePath string, metadata map[string]any, config fileop
 	default:
 		return fmt.Errorf("unsupported file format: %s", filepath.Ext(filePath))
 	}
+}
+
+// cliWriterSupports reports whether writeMetadataViaCLI has a writer for
+// path's container. Keep it in step with that switch.
+func cliWriterSupports(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".m4b", ".m4a", ".mp3", ".flac":
+		return true
+	}
+	return false
 }
 
 // writeM4BMetadata writes metadata to M4B/M4A files using AtomicParsley.
