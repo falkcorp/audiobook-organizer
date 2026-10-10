@@ -1,7 +1,7 @@
 // file: internal/undo/metadata_apply.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4e2c71-5d08-4a3f-8e61-c7f02a9d3b54
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package undo
 
@@ -53,6 +53,12 @@ const MetadataCacheAbsent = "absent"
 // compare-and-set: the identity hash, the fetch time, the candidate count,
 // the search fingerprint, the ASIN fetched for and the last empty fetch. A fetch that replaces the row changes at least
 // the time.
+//
+// A row marked Stale (its book was retitled or re-credited since, which
+// rewrites the row in place and keeps its time) carries a trailing "|stale",
+// so a revert after the retitle refuses as changed-since instead of putting
+// the prior row back unmarked. An unmarked row's stamp is unchanged, so the
+// stamps journaled before the mark existed still match.
 func MetadataCacheStamp(e *database.MetadataCandidateCache) string {
 	if e == nil {
 		return MetadataCacheAbsent
@@ -61,8 +67,12 @@ func MetadataCacheStamp(e *database.MetadataCandidateCache) string {
 	if e.LastEmptyFetchAt != nil {
 		empty = e.LastEmptyFetchAt.UTC().Format(time.RFC3339Nano)
 	}
-	return strings.Join([]string{e.SourceHash, e.FetchedAt.UTC().Format(time.RFC3339Nano),
-		strconv.Itoa(len(e.Candidates)), e.SearchFingerprint, e.FetchedForASIN, empty}, "|")
+	parts := []string{e.SourceHash, e.FetchedAt.UTC().Format(time.RFC3339Nano),
+		strconv.Itoa(len(e.Candidates)), e.SearchFingerprint, e.FetchedForASIN, empty}
+	if e.Stale {
+		parts = append(parts, "stale")
+	}
+	return strings.Join(parts, "|")
 }
 
 // EncodeMetadataCacheOld is the OldValue for a copy over prior (nil: none).

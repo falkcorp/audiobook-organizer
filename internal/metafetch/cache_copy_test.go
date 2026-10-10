@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache_copy_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c9d4b7e-1a62-4f08-b5e3-8d2f6a0c9e41
 // last-edited: 2026-10-10
 
@@ -73,8 +73,6 @@ func TestCopyCandidateCache_RefusesOnCheckAndEmptySource(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoCandidatesToCopy)
 }
 
-// ApplyOptions.Guard runs under the write lock: a refusal writes nothing and
-// is returned wrapped; CandidateSourceHash is the hash the apply stamps.
 // A source row marked Stale (its book was retitled after the fetch) is not
 // copied: the copy would be a fresh, unmarked row for the target.
 func TestCopyCandidateCache_RefusesStaleSource(t *testing.T) {
@@ -90,6 +88,8 @@ func TestCopyCandidateCache_RefusesStaleSource(t *testing.T) {
 	require.Nil(t, entry, "nothing is written for a stale source")
 }
 
+// ApplyOptions.Guard runs under the write lock: a refusal writes nothing and
+// is returned wrapped; CandidateSourceHash is the hash the apply stamps.
 func TestApplyOptionsGuard_RefusesCommit(t *testing.T) {
 	st, svc, _, to := copyFixture(t)
 	cand := MetadataCandidate{Title: "Synthetic Saga", Author: "Synthetic Author A", Narrator: "Synthetic Narrator A", ASIN: "B0SYNTH001", Source: "audible"}

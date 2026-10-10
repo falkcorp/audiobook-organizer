@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_metadata_cache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2a8f41-3b07-4c95-a1e6-9f5c0b7d3e28
 // last-edited: 2026-10-10
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,4 +219,28 @@ func TestUpdateBook_NonIdentityWriteLeavesRowUntouched(t *testing.T) {
 	require.False(t, entry.Stale)
 	require.Equal(t, before, rawCacheRow(t, s, b.ID), "the row is byte-identical")
 	require.Equal(t, g, s.MetadataCacheGeneration())
+}
+
+// An unreadable row cannot be stamped: the retitle drops it (the delete the
+// update path kept for this case), so the candidate fetch sees no row and
+// refetches. The generation moves once and the change log names the book.
+func TestUpdateBook_RetitleDropsUnreadableRow(t *testing.T) {
+	s := newKeepCacheStore(t)
+	b, err := s.CreateBook(&Book{Title: "Title 000001", FilePath: "/lib/s/u.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	require.NoError(t, s.db.Set(metadataCacheKey(b.ID), []byte("{not json"), pebble.Sync))
+	g := s.MetadataCacheGeneration()
+
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.Title = "Title 000002"; return nil })
+	require.NoError(t, err)
+
+	_, closer, gerr := s.db.Get(metadataCacheKey(b.ID))
+	if gerr == nil {
+		_ = closer.Close()
+	}
+	require.ErrorIs(t, gerr, pebble.ErrNotFound, "the unreadable row is dropped")
+	require.Equal(t, g+1, s.MetadataCacheGeneration(), "the drop moves the generation once")
+	ids, _, ok := s.MetadataCacheChangedSince(g)
+	require.True(t, ok)
+	require.Equal(t, []string{b.ID}, ids)
 }

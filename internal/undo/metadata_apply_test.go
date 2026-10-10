@@ -1,7 +1,7 @@
 // file: internal/undo/metadata_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a8c1e63-9f27-4b05-8d3e-e6b2a0c79f18
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package undo
 
@@ -59,4 +59,24 @@ func TestCheckMetadataCacheCopy(t *testing.T) {
 	require.NoError(t, CheckMetadataCacheCopy(copied, c))
 	require.ErrorIs(t, CheckMetadataCacheCopy(prior, c), ErrAlreadyRestored)
 	require.Equal(t, ReasonChangedSince, RefusalReason(CheckMetadataCacheCopy(nil, c)))
+}
+
+// A retitle marks the copied row Stale in place (same time, same candidates):
+// the revert refuses it as changed-since rather than restoring the prior row
+// unmarked. An unmarked row's stamp keeps its pre-mark format, so a journal
+// row written before the mark existed still matches.
+func TestCheckMetadataCacheCopy_StaleRowIsChangedSince(t *testing.T) {
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	copied := &database.MetadataCandidateCache{BookID: "b", SourceHash: "h", FetchedAt: at,
+		Candidates: []json.RawMessage{json.RawMessage(`{}`)}, SearchFingerprint: "fp", FetchedForASIN: "B00OLDASIN"}
+	require.Equal(t, "h|"+at.Format(time.RFC3339Nano)+"|1|fp|B00OLDASIN|", MetadataCacheStamp(copied),
+		"an unmarked stamp is the pre-mark format")
+	c := &database.OperationChange{BookID: "b", ChangeType: ChangeTypeMetadataCacheCopy, FieldName: MetadataCacheField,
+		OldValue: MetadataCacheAbsent, NewValue: MetadataCacheStamp(copied)}
+	require.NoError(t, CheckMetadataCacheCopy(copied, c))
+
+	marked := *copied
+	marked.Stale, marked.StaleQuestionFP = true, "fp"
+	require.NotEqual(t, MetadataCacheStamp(copied), MetadataCacheStamp(&marked))
+	require.Equal(t, ReasonChangedSince, RefusalReason(CheckMetadataCacheCopy(&marked, c)))
 }

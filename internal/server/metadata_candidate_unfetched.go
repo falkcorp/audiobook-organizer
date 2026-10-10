@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
@@ -51,8 +51,9 @@ const unfetchedPageSize = 1000
 // the op logs so a run that selects nothing says why.
 type unfetchedSelection struct {
 	IDs []string
-	// NoRow: books with no metadata_cache row (never fetched, or invalidated:
-	// a book write that changes its search identity deletes the row).
+	// NoRow: books with no metadata_cache row (never fetched, or an
+	// unreadable row a retitle dropped). A write that changes a book's
+	// search identity keeps its row, marked Stale, which is selected below.
 	NoRow int
 	// StaleEmpty: books whose 0-candidate row answered other questions than
 	// a search would ask now (metafetch.SearchFingerprintCurrent).
@@ -98,8 +99,9 @@ type unfetchedSelection struct {
 // not applied (audiobooks.BookMetadataApplied), the owner has not marked it
 // "no match", no fetch already running holds it (busy), and either
 //
-//   - it has no metadata_cache row: never fetched, or its candidates were
-//     invalidated (a write that changes its search identity deletes the row);
+//   - it has no metadata_cache row: never fetched, or an unreadable row a
+//     retitle dropped (a write that changes its search identity keeps a
+//     readable row and marks it Stale, the case below);
 //   - or its row holds 0 candidates recorded, by this ladder version
 //     (metafetch.FingerprintPrefix), for questions a search no longer asks
 //     (metafetch.SearchFingerprintCurrent false): its title, author or the
