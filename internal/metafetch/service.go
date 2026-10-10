@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.48.1
+// version: 5.49.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-09
 
@@ -543,7 +543,11 @@ type SearchOptions struct {
 	BypassFetchCache bool
 }
 
+// coverEmbedLog logs the embed_cover_art gate.
+var coverEmbedLog = logger.New("metafetch-cover-embed")
+
 // embedCoverInBookFiles embeds cover art into all audio files for a book.
+// It returns immediately when the embed_cover_art setting is off.
 // Always overwrites existing cover art. Before overwriting, extracts the old
 // cover and saves it as a timestamped version in covers/history/ so it can be
 // restored later via the changelog.
@@ -553,6 +557,10 @@ type SearchOptions struct {
 // here, under a copy policy, which is how a step could write a copy its job
 // had not locked; now it only refuses a protected book outright.
 func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string) {
+	if !config.AppConfig.EmbedCoverArt {
+		coverEmbedLog.Debug("cover embed skipped: embed_cover_art setting is off")
+		return
+	}
 	if book == nil || book.FilePath == "" || coverPath == "" {
 		return
 	}

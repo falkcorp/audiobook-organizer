@@ -1152,6 +1152,9 @@ type Config struct {
 
 	// Metadata
 	WriteBackMetadata         bool             `json:"write_back_metadata"`
+	// EmbedCoverArt gates metafetch.embedCoverInBookFiles. Default true: the
+	// embed ran unconditionally before the setting was wired, so true keeps
+	// behaviour unchanged on upgrade.
 	EmbedCoverArt             bool             `json:"embed_cover_art"`
 	MetadataSources           []MetadataSource `json:"metadata_sources"`
 	Language                  string           `json:"language"`
@@ -2358,7 +2361,7 @@ func InitConfig() {
 
 	// Set metadata defaults
 	viper.SetDefault("write_back_metadata", false)
-	viper.SetDefault("embed_cover_art", false)
+	viper.SetDefault("embed_cover_art", true)
 	viper.SetDefault("language", "en")
 	viper.SetDefault("metadata_review_default_view", "compact")
 
@@ -3724,7 +3727,7 @@ func ResetToDefaults() {
 			DefaultUserQuotaGB: 100,
 
 			// Metadata
-			EmbedCoverArt: false,
+			EmbedCoverArt: true,
 			Language:      "en",
 
 			// Open Library dumps
