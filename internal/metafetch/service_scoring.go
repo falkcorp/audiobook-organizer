@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -995,15 +995,16 @@ func (mfs *Service) RerankTopK(
 	origMin := candidates[ambiguousEnd-1].Score
 	for i := range topCands {
 		normFinal := llmScores[i]
+		pre := candidates[i].Score
 		if origMax == origMin {
 			// No spread in the original window — every candidate rescales
 			// to the same point.
 			candidates[i].Score = origMax
-			recordRerank(&candidates[i], normFinal, origMin, origMax)
+			recordRerank(&candidates[i], normFinal, origMin, origMax, pre)
 			continue
 		}
 		candidates[i].Score = origMin + normFinal*(origMax-origMin)
-		recordRerank(&candidates[i], normFinal, origMin, origMax)
+		recordRerank(&candidates[i], normFinal, origMin, origMax, pre)
 	}
 
 	// Resort the full list so the reranked top-K is in correct order against

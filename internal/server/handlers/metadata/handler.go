@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.41.0
+// version: 1.41.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -635,7 +635,10 @@ func (h *Handler) respondCandidates(c *gin.Context, id string, respH gin.H, entr
 	for k, v := range respH {
 		out[k] = v
 	}
-	out["results"] = withApplyChecks(book, entry, results)
+	// The dialog reads this list; order it by the ranking score. results is a
+	// copy, so the cache row, the 60-second listCache and every other reader
+	// keep the stored order.
+	out["results"] = withApplyChecks(book, entry, metafetch.SortForDisplay(results))
 	httputil.RespondWithOK(c, out)
 }
 

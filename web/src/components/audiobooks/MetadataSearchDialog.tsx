@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -35,6 +35,7 @@ import HeadphonesIcon from '@mui/icons-material/Headphones';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
+import { rankScoreOf } from './rankScore';
 import {
   METADATA_APPLY_FIELD_LABELS,
   candidateApplyFieldValue,
@@ -644,7 +645,7 @@ export function MetadataSearchDialog({
           {results
             .filter((c) => !sourceFilter || c.source === sourceFilter)
             .sort((a, b) =>
-              sortResults === 'source' ? a.source.localeCompare(b.source) : b.score - a.score
+              sortResults === 'source' ? a.source.localeCompare(b.source) : rankScoreOf(b) - rankScoreOf(a)
             )
             .map((candidate, idx) => {
               const isStaged = staged?.candidate === candidate;

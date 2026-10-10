@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.40.4
+// version: 1.40.5
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -1374,7 +1374,7 @@ func (mfs *Service) searchMetadataForBook(
 							"The result names a different author than the book.")
 					}
 				} else {
-					rec.mul("author", "Author missing", 0.75,
+					rec.mulAbsence("author", "Author missing", 0.75,
 						"The book's author is known but the result does not name one.")
 				}
 			}
@@ -1405,7 +1405,7 @@ func (mfs *Service) searchMetadataForBook(
 				rec.mul("narrator_present", "Has narrator", 1.15,
 					"The result names a narrator, so it is more likely an audiobook edition.")
 			} else {
-				rec.mul("narrator_present", "No narrator", 0.85,
+				rec.mulAbsence("narrator_present", "No narrator", 0.85,
 					"The result names no narrator, typical of a print or ebook record.")
 			}
 
@@ -1485,7 +1485,7 @@ func (mfs *Service) searchMetadataForBook(
 		if err == nil && result != nil {
 			if seen.add(*result) {
 				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords)
-				asinRec := &scoreRecorder{score: score, steps: asinBd.Steps}
+				asinRec := recorderFrom(score, &asinBd)
 				if score <= 0 && !strong.siblingEvidence(*result) {
 					// A direct ASIN match always scores high: a score <= 0 means
 					// the title gave no search words, so the stored ASIN is the
@@ -1571,8 +1571,10 @@ func (mfs *Service) searchMetadataForBook(
 			}
 			if candidateNum == expectedNum {
 				c.Score *= k.SeriesNumberExactBoost // Strong boost for exact number match
+				c.RankScore *= k.SeriesNumberExactBoost
 			} else if candidateNum != "" && candidateNum != expectedNum {
 				c.Score *= k.SeriesNumberWrongPenalty // Penalize wrong number in same series
+				c.RankScore *= k.SeriesNumberWrongPenalty
 			}
 		}
 	}

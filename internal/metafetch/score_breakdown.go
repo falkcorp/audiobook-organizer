@@ -1,7 +1,7 @@
 // file: internal/metafetch/score_breakdown.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: 6c81e35a-2b47-4d19-90fa-7e5c3d81b026
-// last-edited: 2026-08-20
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -55,6 +55,15 @@ type ScoreStep struct {
 	Detail  string  `json:"detail,omitempty"`
 	// Capped marks an operand clamped by a configured cap.
 	Capped bool `json:"capped,omitempty"`
+	// RankNeutral marks a multiply step that lowers Score because a field is
+	// ABSENT (no author, no narrator) and which the ranking score
+	// (ScoreBreakdown.RankScore) does not apply: RecomposeRankScore replays it
+	// as x1. Score, the apply gates and the stored candidate order still
+	// carry the penalty.
+	RankNeutral bool `json:"rank_neutral,omitempty"`
+	// RankOperand is a replace step's value in the ranking score when it differs
+	// from Operand (llm_rerank rescales both scores into the same window).
+	RankOperand float64 `json:"rank_operand,omitempty"`
 }
 
 // ScoreBreakdown is a score together with the ordered operations that produced
@@ -62,6 +71,11 @@ type ScoreStep struct {
 type ScoreBreakdown struct {
 	Score float64     `json:"score"`
 	Steps []ScoreStep `json:"steps"`
+	// RankScore is Score computed with every RankNeutral step at x1.00: the
+	// value the interactive Search/Browse dialog orders its list by. Zero means
+	// "not recorded" (a breakdown cached before 2026-10-10); read it through
+	// MetadataCandidate.RankValue.
+	RankScore float64 `json:"rank_score,omitempty"`
 }
 
 // RecomposeScore replays the steps from the base and returns the resulting
@@ -89,6 +103,32 @@ func RecomposeScore(steps []ScoreStep) float64 {
 	return total
 }
 
+// RecomposeRankScore replays the steps like RecomposeScore but with every
+// RankNeutral step as x1.00 and a replace step taking its RankOperand when it
+// has one. It reproduces ScoreBreakdown.RankScore.
+func RecomposeRankScore(steps []ScoreStep) float64 {
+	total := 0.0
+	for _, st := range steps {
+		switch st.Op {
+		case ScoreOpBase:
+			total = st.Operand
+		case ScoreOpMultiply:
+			if !st.RankNeutral {
+				total *= st.Operand
+			}
+		case ScoreOpAdd:
+			total += st.Operand
+		case ScoreOpReplace:
+			if st.RankOperand != 0 {
+				total = st.RankOperand
+			} else {
+				total = st.Operand
+			}
+		}
+	}
+	return total
+}
+
 // IsConsistent reports whether the steps reproduce the score within epsilon.
 // An empty breakdown is never consistent: a zero score with no steps means
 // "nothing was recorded", not "zero was proven".
@@ -109,12 +149,29 @@ func (b ScoreBreakdown) IsConsistent(epsilon float64) bool {
 // applied without being recorded, because applying it IS recording it.
 type scoreRecorder struct {
 	score float64
+	// rank is the ranking score: score with the absence penalties (mulAbsence)
+	// left out. See ScoreBreakdown.RankScore.
+	rank  float64
 	steps []ScoreStep
+}
+
+// recorderFrom resumes a recorder from an already-recorded breakdown.
+func recorderFrom(score float64, bd *ScoreBreakdown) *scoreRecorder {
+	rank := score
+	if bd != nil && bd.RankScore != 0 {
+		rank = bd.RankScore
+	}
+	var steps []ScoreStep
+	if bd != nil {
+		steps = bd.Steps
+	}
+	return &scoreRecorder{score: score, rank: rank, steps: steps}
 }
 
 func newScoreRecorder(base float64, label, detail string) *scoreRecorder {
 	return &scoreRecorder{
 		score: base,
+		rank:  base,
 		steps: []ScoreStep{{
 			ID: "base", Label: label, Op: ScoreOpBase,
 			Operand: base, Running: base, Detail: detail,
@@ -127,6 +184,7 @@ func newScoreRecorder(base float64, label, detail string) *scoreRecorder {
 // reading "x 1.00" is noise rather than evidence.
 func (sr *scoreRecorder) mul(id, label string, factor float64, detail string) {
 	sr.score *= factor
+	sr.rank *= factor
 	if factor == 1 {
 		return
 	}
@@ -136,9 +194,28 @@ func (sr *scoreRecorder) mul(id, label string, factor float64, detail string) {
 	})
 }
 
+// mulAbsence applies a penalty for a field the candidate did not supply (no
+// author, no narrator). Score takes the factor, exactly as before: the apply
+// gates, the stored candidate order and every Candidates[0] read it. The
+// ranking score does not, because a missing value is not disagreement
+// (Fellegi-Sunter: "missing" is its own level) and Open Library / Google Books
+// rows never name a narrator. The step is marked RankNeutral so the panel and
+// RecomposeRankScore can show which part of the score the ranking leaves out.
+func (sr *scoreRecorder) mulAbsence(id, label string, factor float64, detail string) {
+	sr.score *= factor
+	if factor == 1 {
+		return
+	}
+	sr.steps = append(sr.steps, ScoreStep{
+		ID: id, Label: label, Op: ScoreOpMultiply,
+		Operand: factor, Running: sr.score, Detail: detail, RankNeutral: true,
+	})
+}
+
 // add applies an additive term, recording it only when non-zero.
 func (sr *scoreRecorder) add(id, label string, term float64, detail string, capped bool) {
 	sr.score += term
+	sr.rank += term
 	if term == 0 {
 		return
 	}
@@ -168,6 +245,7 @@ func (sr *scoreRecorder) mulResult(id, label string, result float64, detail stri
 	if prev != 0 {
 		factor = result / prev
 	}
+	sr.rank *= factor
 	sr.steps = append(sr.steps, ScoreStep{
 		ID: id, Label: label, Op: ScoreOpMultiply,
 		Operand: factor, Running: result, Detail: detail,
@@ -177,6 +255,7 @@ func (sr *scoreRecorder) mulResult(id, label string, result float64, detail stri
 // replace substitutes the running total outright. See ScoreOpReplace.
 func (sr *scoreRecorder) replace(id, label string, value float64, detail string) {
 	sr.score = value
+	sr.rank = value
 	sr.steps = append(sr.steps, ScoreStep{
 		ID: id, Label: label, Op: ScoreOpReplace,
 		Operand: value, Running: value, Detail: detail,
@@ -192,12 +271,20 @@ func (sr *scoreRecorder) adopt(steps []ScoreStep, score float64) {
 			continue
 		}
 		sr.steps = append(sr.steps, st)
+		switch st.Op {
+		case ScoreOpMultiply:
+			if !st.RankNeutral {
+				sr.rank *= st.Operand
+			}
+		case ScoreOpAdd:
+			sr.rank += st.Operand
+		}
 	}
 	sr.score = score
 }
 
 func (sr *scoreRecorder) breakdown() *ScoreBreakdown {
-	return &ScoreBreakdown{Score: sr.score, Steps: sr.steps}
+	return &ScoreBreakdown{Score: sr.score, Steps: sr.steps, RankScore: sr.rank}
 }
 
 // baseTierLabel names the scorer that produced the base score. The tier is
@@ -251,17 +338,29 @@ func durationStepDetail(bookSec, candSec int) string {
 // ambiguous range). A reranked score is therefore not a function of this book's
 // evidence alone, and a panel that implied otherwise would be misleading in a
 // way the reviewer could not detect from the row.
-func recordRerank(c *MetadataCandidate, llmScore, origMin, origMax float64) {
+func recordRerank(c *MetadataCandidate, llmScore, origMin, origMax, preScore float64) {
 	if c.ScoreBreakdown == nil {
 		// No recorded derivation to extend. Record the rerank alone rather than
 		// leaving the panel to imply the pipeline produced this number.
 		c.ScoreBreakdown = &ScoreBreakdown{Steps: []ScoreStep{}}
 	}
-	sr := &scoreRecorder{score: c.ScoreBreakdown.Score, steps: c.ScoreBreakdown.Steps}
+	// The ranking score keeps its distance from Score: a candidate that was
+	// ranked 1/0.75 above its penalised score stays that far above the rescaled
+	// one. Score itself is the rescaled value, exactly as before.
+	rank := c.Score
+	if preScore > 0 {
+		rank = c.Score * c.RankValue() / preScore
+	}
+	sr := &scoreRecorder{score: c.ScoreBreakdown.Score, rank: rank, steps: c.ScoreBreakdown.Steps}
 	sr.replace("llm_rerank", "LLM rerank", c.Score, fmt.Sprintf(
 		"An LLM re-judged the top candidates and scored this one %.2f, rescaled into "+
 			"[%.3f, %.3f] — the range the surrounding candidates occupy — so it stays "+
 			"comparable with the results it was not asked about.",
 		llmScore, origMin, origMax))
+	sr.rank = rank
+	if rank != c.Score {
+		sr.steps[len(sr.steps)-1].RankOperand = rank
+	}
+	c.RankScore = rank
 	c.ScoreBreakdown = sr.breakdown()
 }

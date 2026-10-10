@@ -276,7 +276,7 @@ func TestRecordRerank_ReplacesRatherThanScales(t *testing.T) {
 			}},
 		},
 	}
-	recordRerank(&c, 0.75, 0.2, 1.1)
+	recordRerank(&c, 0.75, 0.2, 1.1, 0.4)
 
 	last := c.ScoreBreakdown.Steps[len(c.ScoreBreakdown.Steps)-1]
 	if last.Op != ScoreOpReplace {
