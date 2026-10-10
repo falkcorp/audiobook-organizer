@@ -8210,6 +8210,58 @@
         }
       }
     },
+    "/metadata/unreject-candidate": {
+      "post": {
+        "operationId": "handleUnrejectCandidate",
+        "summary": "Unreject one candidate for one book",
+        "description": "Removes the owner's rejection of one candidate for one book, by book and candidate (source, title, ASIN/ISBN) alone, and re-ranks the book's cached candidates. Afterwards the candidate matches no rejection; another record of the same title rejected by its own ASIN or ISBN stays rejected.",
+        "tags": [
+          "reading"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "book_id",
+                  "candidate"
+                ],
+                "properties": {
+                  "book_id": {
+                    "type": "string"
+                  },
+                  "candidate": {
+                    "type": "object",
+                    "description": "The candidate as the search returned it; source and title are required."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success: {unrejected: bool}, false when no rejection matched"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/metadata/batch-update": {
       "post": {
         "operationId": "batchUpdateMetadata",
