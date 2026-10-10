@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
 // last-edited: 2026-10-10
 
@@ -22,11 +22,21 @@
 // longer than that, a pattern never sees past the cut, so:
 //   - a row whose only match lies past 16 KB is not found, and a negated
 //     filter therefore keeps it;
-//   - a pattern whose answer depends on how the field ENDS (a $ or \z, a \b,
-//     a glob that does not end in *) cannot be answered from a cut field when
-//     it matches: the cut point is not the end. Budget.Match refuses the
-//     whole search with an *InexactError rather than answer true for a field
-//     that may not end that way.
+//   - a pattern whose answer depends on how the field ENDS (a $ or \z, a (?m)$,
+//     a \b or \B, a glob that does not end in *) cannot be answered from a cut
+//     field when its match lands at the cut: the cut point is not the end.
+//     Budget.Match refuses the whole search with an *InexactError, naming the
+//     book, rather than answer true for a field that may not end that way. A
+//     regex match that ends before the cut is exact and is not refused; a
+//     glob match never is (a glob is anchored to the end of what it sees).
+//
+// Known blind spot: because a pattern never sees past the cut, a pattern
+// anchored to the END ($, \z, or a glob such as *the end) can never match a
+// field over 16 KB, whatever the field ends with. Its non-match is reported as
+// exact (refusing it would refuse every $ search in a library with one long
+// description), so a negated filter such as -description:*the end keeps every
+// such row. Follow-up: also run end-anchored patterns over the field's last
+// 16 KB (todo.d).
 //
 // Every malformed value is an ERROR, never a pattern that matches nothing or
 // everything: a bad filter that silently answers "0 books" reads as a fact
@@ -100,11 +110,14 @@ const (
 	// first 16 KB, cut back to a UTF-8 rune boundary. Every title, author,
 	// series and nearly every description is shorter. On a longer field a
 	// pattern does not see past the cut (a substring search still scans the
-	// whole field), which has two consequences: a match that lies past the cut
-	// is not found, so a NEGATED filter keeps the row; and a match of a
-	// pattern that depends on how the field ends ($, \z, \b, a glob with no
-	// trailing *) is not trusted, because the cut is not the end
-	// (TextMatcher.MatchExact; Budget.Match refuses the search).
+	// whole field), which has three consequences: a match that lies past the
+	// cut is not found, so a NEGATED filter keeps the row; a match of a
+	// pattern that depends on how the field ends ($, \z, (?m)$, \b, \B, a
+	// glob with no trailing *) that lands at the cut is not trusted, because
+	// the cut is not the end (TextMatcher.MatchExact; Budget.Match refuses
+	// the search); and a pattern anchored to the END can never match a field
+	// over this size, whatever the field ends with, so a negated filter keeps
+	// every such row (blind spot; follow-up: also match the last 16 KB).
 	MaxPatternInputBytes = 16 << 10
 )
 
@@ -340,15 +353,29 @@ func (m *TextMatcher) Match(s string) bool {
 // MatchExact is Match plus whether the answer can be trusted. exact is false
 // only when s was cut at MaxPatternInputBytes AND the pattern matched AND its
 // answer depends on how the field ends (see the package doc): the cut point
-// stands in for an end the field does not have there. A cut field that did
-// not match is reported exact (false): a match past the cut is the documented
-// 16 KB limit, not an unknown.
+// stands in for an end the field does not have there. For a regex that is
+// decided by where the match landed (a match that ends before the cut did not
+// depend on the cut); a glob is anchored to the end of its input, so any
+// match of an end-sensitive glob on a cut field is unknown. A cut field that
+// did not match is reported exact (true): a match past the cut is the
+// documented 16 KB limit, not an unknown (an end-anchored pattern can never
+// match a field over 16 KB; see the package doc).
 func (m *TextMatcher) MatchExact(s string) (matched, exact bool) {
 	switch m.Kind {
 	case KindRegex:
 		in, cut := cutPatternInput(s)
-		matched = m.re.MatchString(in)
-		return matched, !(cut && matched && m.endSensitive)
+		if cut && m.endSensitive {
+			// Judge by where the leftmost match LANDED, not by the pattern
+			// alone: every assertion RE2 checked for that match sits at or
+			// before loc[1]. If loc[1] < len(in) a \b or \B read a real byte
+			// (the cut is on a rune boundary), a $ or \z cannot have held
+			// (they only hold at len(in)) and a (?m)$ held at a real \n, so
+			// the match is the same on the whole field. A match that ends
+			// exactly at the cut may have leaned on the cut, so it is unknown.
+			loc := m.re.FindStringIndex(in)
+			return loc != nil, loc == nil || loc[1] < len(in)
+		}
+		return m.re.MatchString(in), true
 	case KindGlob:
 		in, cut := cutPatternInput(strings.TrimSpace(s))
 		matched = m.re.MatchString(in)

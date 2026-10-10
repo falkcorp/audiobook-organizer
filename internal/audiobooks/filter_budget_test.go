@@ -358,7 +358,7 @@ func TestLibrarySearch_EndAnchoredPatternOnCutField(t *testing.T) {
 	t.Cleanup(func() { _ = ps.Close() })
 	ps.WaitForWarmup()
 	desc := strings.Repeat("x", querygrammar.MaxPatternInputBytes-len("the end")) + "the end" + strings.Repeat("y", 500)
-	_, err = ps.CreateBook(&database.Book{Title: "One Long Book", FilePath: "/synthetic/long.m4b", Description: &desc})
+	created, err := ps.CreateBook(&database.Book{Title: "One Long Book", FilePath: "/synthetic/long.m4b", Description: &desc})
 	require.NoError(t, err)
 	svc := NewAudiobookService(ps)
 
@@ -367,6 +367,11 @@ func TestLibrarySearch_EndAnchoredPatternOnCutField(t *testing.T) {
 		var inexact *querygrammar.InexactError
 		_, _, err := svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, f)
 		require.ErrorAs(t, err, &inexact, "list %s", v)
+		// The message names the field and the book so the user can exclude it.
+		require.Equal(t, "description", inexact.Field)
+		require.Equal(t, created.ID, inexact.BookID)
+		require.Contains(t, err.Error(), created.ID)
+		require.Contains(t, err.Error(), "One Long Book")
 		require.True(t, IsSearchLimitError(err))
 		_, err = svc.CountAudiobooksFiltered(context.Background(), f)
 		require.ErrorAs(t, err, &inexact, "count %s", v)

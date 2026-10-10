@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.7.0
+// version: 1.9.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
 // last-edited: 2026-10-10
 
@@ -455,6 +455,8 @@ func TestMatchExact_CutField(t *testing.T) {
 	// "end" sits exactly at the cut but the field goes on for 100 more bytes.
 	atCut := strings.Repeat("x", MaxPatternInputBytes-len(tail)) + tail + strings.Repeat("y", 100)
 	allA := strings.Repeat("a", MaxPatternInputBytes+1000) + "XYZ"
+	early := "the war began. " + strings.Repeat("x", MaxPatternInputBytes)
+	earlyLine := "line one end\n" + strings.Repeat("x", MaxPatternInputBytes)
 	cases := []struct {
 		name, pattern, field string
 		matched, exact       bool
@@ -466,6 +468,12 @@ func TestMatchExact_CutField(t *testing.T) {
 		{"multiline end", "/(?m)end$/", atCut, true, false},
 		{"suffix glob", "*end", atCut, true, false},
 		{"middle glob", "x*end", atCut, true, false},
+		// A match that ends well before the cut did not depend on it.
+		{"early word boundary", `/\bwar\b/`, early, true, true},
+		{"early trailing boundary", `/war\b/`, early, true, true},
+		{"early not-boundary", `/\Bar/`, early, true, true},
+		{"early multiline end", "/(?m)end$/", earlyLine, true, true},
+		{"early backslash z, no match", `/war\z/`, early, false, true},
 		{"unanchored regex", "/end/", atCut, true, true},
 		{"prefix glob", "x*", atCut, true, true},
 		{"contains glob", "*end*", atCut, true, true},
@@ -551,5 +559,29 @@ func TestShortToken_InvalidUTF8(t *testing.T) {
 	}
 	if got := ShortToken(strings.Repeat("\x80", 200)); len(got) < 61 {
 		t.Fatalf("ShortToken of continuation bytes kept only %d", len(got))
+	}
+}
+
+// TestInexactError_NamesTheBookAndEveryForm: the message lists every
+// end-sensitive form, names the first offending book, and shortens what it
+// echoes to 64 bytes.
+func TestInexactError_NamesTheBookAndEveryForm(t *testing.T) {
+	atCut := strings.Repeat("x", MaxPatternInputBytes-3) + "end" + strings.Repeat("y", 100)
+	b := NewBudget(time.Hour)
+	m := mustCompile(t, "/end$/")
+	long := strings.Repeat("T", 500)
+	b.MatchRow(m, atCut, RowRef{Field: "description", ID: "BOOK1", Title: long})
+	b.MatchRow(m, atCut, RowRef{Field: "description", ID: "BOOK2", Title: "second"})
+	msg := b.Err().Error()
+	for _, want := range []string{`$`, `\z`, `(?m)$`, `\b`, `\B`, "does not end in *", "description", "BOOK1"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "BOOK2") {
+		t.Errorf("message names the second book, want the first: %q", msg)
+	}
+	if strings.Contains(msg, strings.Repeat("T", 65)) {
+		t.Errorf("message echoes more than 64 bytes of the title: %q", msg)
 	}
 }
