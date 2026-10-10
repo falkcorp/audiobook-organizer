@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c5d6e7f8-a9b0-1c2d-3e4f-5a6b7c8d9e0f
 // last-edited: 2026-10-10
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -296,7 +297,7 @@ func TestKeepBackup_SameSecondDoesNotOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1700000000, 0)
-	first, _, err := keepBackup(path, now)
+	first, _, err := keepBackup(path, now, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestKeepBackup_SameSecondDoesNotOverwrite(t *testing.T) {
 	if err := os.WriteFile(path, []byte("second"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := keepBackup(path, now)
+	second, _, err := keepBackup(path, now, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,17 +323,17 @@ func TestKeepBackup_SameSecondDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-// The backup is a hardlink to the pre-write inode (no data blocks copied),
-// and after the rename its mtime is the backup time. The cleanup sweeps age
-// .bak-* files by mtime, so a link that kept the audio's old mtime would be
-// deleted on the next sweep (KeepBackup, MTIME CONTRACT).
-func TestWriteTagsSafe_KeepBackupIsHardlinkDatedNow(t *testing.T) {
+// The backup is a hardlink to the pre-write inode (no data copied to take
+// it), and taking it changes nothing about that inode: its mtime stays the
+// audio's. The sweeps age a backup by the time in its name (BackupTime), so
+// the name must carry the write time.
+func TestWriteTagsSafe_KeepBackupIsHardlinkNamedNow(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audio.m4b")
 	if err := os.WriteFile(path, []byte("synthetic bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-400 * 24 * time.Hour)
+	old := time.Now().Add(-400 * 24 * time.Hour).Truncate(time.Second)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
@@ -356,8 +357,12 @@ func TestWriteTagsSafe_KeepBackupIsHardlinkDatedNow(t *testing.T) {
 	if !os.SameFile(before, bak) {
 		t.Error("backup is not the pre-write inode; want a hardlink, not a copy")
 	}
-	if bak.ModTime().Before(start.Add(-2 * time.Second)) {
-		t.Errorf("backup mtime = %v, want about now (>= %v): the sweep would age it from the audio's old mtime", bak.ModTime(), start)
+	if !bak.ModTime().Equal(before.ModTime()) {
+		t.Errorf("backup mtime = %v, want the original's %v: taking a backup must not touch the inode", bak.ModTime(), before.ModTime())
+	}
+	taken := BackupTime(filepath.Base(baks[0]), bak.ModTime())
+	if taken.Before(start.Add(-2*time.Second)) || taken.After(time.Now().Add(2*time.Second)) {
+		t.Errorf("BackupTime(%s) = %v, want about now (%v): the sweep would age it from the audio's old mtime", baks[0], taken, start)
 	}
 	now, err := os.Stat(path)
 	if err != nil {
@@ -365,6 +370,128 @@ func TestWriteTagsSafe_KeepBackupIsHardlinkDatedNow(t *testing.T) {
 	}
 	if os.SameFile(now, bak) {
 		t.Error("the live file still shares the backup's inode after the write")
+	}
+}
+
+// A library file organized by hardlink shares its inode with the seeding
+// download. Keeping a backup must not change that download's mtime: the
+// protected-path guard exists to leave it alone, and a torrent client's
+// fast-resume check reads it.
+func TestWriteTagsSafe_KeepBackupLeavesSharedInodeMtime(t *testing.T) {
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed.m4b")
+	lib := filepath.Join(dir, "lib.m4b")
+	if err := os.WriteFile(seed, []byte("synthetic seeding bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-400 * 24 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(seed, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(seed, lib); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := WriteTagsSafe(lib, writeBytes([]byte(" tagged")), WriteTagsSafeOptions{KeepBackup: true}); err != nil {
+		t.Fatalf("WriteTagsSafe: %v", err)
+	}
+	fi, err := os.Stat(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.ModTime().Equal(old) {
+		t.Errorf("seed mtime = %v, want %v unchanged: the backup write stamped a shared inode", fi.ModTime(), old)
+	}
+	if got, _ := os.ReadFile(seed); string(got) != "synthetic seeding bytes" {
+		t.Errorf("seed bytes changed: %q", got)
+	}
+}
+
+// A symlink-strategy library entry is backed up as a real copy of the bytes it
+// points at, never as a second symlink to the source.
+func TestWriteTagsSafe_KeepBackupOfSymlinkIsACopy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.m4b")
+	lib := filepath.Join(dir, "lib.m4b")
+	original := []byte("synthetic source bytes")
+	if err := os.WriteFile(src, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(src, lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := WriteTagsSafe(lib, writeBytes([]byte(" tagged")), WriteTagsSafeOptions{KeepBackup: true}); err != nil {
+		t.Fatalf("WriteTagsSafe: %v", err)
+	}
+	baks := backupSiblings(t, lib)
+	if len(baks) != 1 {
+		t.Fatalf("want one backup, got %v", baks)
+	}
+	li, err := os.Lstat(baks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !li.Mode().IsRegular() {
+		t.Errorf("backup mode = %v, want a regular file", li.Mode())
+	}
+	// Not the source's inode either (macOS link(2) follows a symlink): the
+	// source belongs to whatever placed it, so the backup must be our copy.
+	if si, err := os.Stat(src); err == nil && os.SameFile(si, li) {
+		t.Error("backup is a hardlink of the symlink's source; want an independent copy")
+	}
+	if got, _ := os.ReadFile(baks[0]); !bytes.Equal(got, original) {
+		t.Errorf("backup = %q, want the source bytes", got)
+	}
+}
+
+// KeepBackupCopy never hardlinks: its callers rewrite the file in place.
+func TestKeepBackupCopy_IsACopy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio.mp3")
+	if err := os.WriteFile(path, []byte("synthetic bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, err := KeepBackupCopy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := os.Stat(path)
+	b, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(a, b) {
+		t.Error("KeepBackupCopy hardlinked; an in-place writer would change the backup too")
+	}
+}
+
+func TestBackupNameTime(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	unix := time.Date(2026, 10, 1, 8, 30, 0, 0, time.UTC)
+	legacy := time.Date(2025, 3, 4, 5, 6, 7, 0, time.Local)
+	for _, tc := range []struct {
+		name string
+		want time.Time
+		ok   bool
+	}{
+		{"book.m4b.bak-" + strconv.FormatInt(unix.Unix(), 10), unix, true},
+		{"book.m4b.bak-" + strconv.FormatInt(unix.Unix(), 10) + "-3", unix, true},
+		{"book.m4b.bak-20250304-050607", legacy, true},
+		{"book.bak-x.m4b.bak-" + strconv.FormatInt(unix.Unix(), 10), unix, true},                 // last infix wins
+		{"book.m4b.bak-1", time.Time{}, false},                                                   // before 2000
+		{"book.m4b.bak-" + strconv.FormatInt(now.Add(time.Hour).Unix(), 10), time.Time{}, false}, // future
+		{"book.m4b.bak-notatime", time.Time{}, false},
+		{"book.m4b.bak-20250304-050607.tmp", time.Time{}, false},
+		{"book.m4b", time.Time{}, false},
+	} {
+		got, ok := backupNameTime(tc.name, now)
+		if ok != tc.ok || (ok && !got.Equal(tc.want)) {
+			t.Errorf("backupNameTime(%q) = %v, %v; want %v, %v", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+	mtime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	if got := BackupTime("book.m4b.bak-notatime", mtime); !got.Equal(mtime) {
+		t.Errorf("BackupTime fallback = %v, want the mtime %v", got, mtime)
 	}
 }
 
@@ -435,5 +562,37 @@ func TestWriteTagsSafe_KeepBackupCopyFallback(t *testing.T) {
 	}
 	if bak.ModTime().Before(start.Add(-2 * time.Second)) {
 		t.Errorf("fallback backup mtime = %v, want about now", bak.ModTime())
+	}
+}
+
+// Every link refusal falls back to a copy, not just the "unsupported"
+// errnos: a single-book edit on a mount that answers EMLINK, EACCES or ENOSYS
+// must still write its tags and keep a backup.
+func TestWriteTagsSafe_AnyLinkErrorFallsBackToCopy(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.EMLINK, syscall.EACCES, syscall.ENOSYS} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "audio.m4b")
+			original := []byte("synthetic bytes")
+			if err := os.WriteFile(path, original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			prev := linkFile
+			linkFile = func(oldname, newname string) error {
+				return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errno}
+			}
+			t.Cleanup(func() { linkFile = prev })
+
+			if _, _, err := WriteTagsSafe(path, writeBytes([]byte(" tagged")), WriteTagsSafeOptions{KeepBackup: true}); err != nil {
+				t.Fatalf("WriteTagsSafe with link error %v: %v", errno, err)
+			}
+			baks := backupSiblings(t, path)
+			if len(baks) != 1 {
+				t.Fatalf("want one backup, got %v", baks)
+			}
+			if got, _ := os.ReadFile(baks[0]); !bytes.Equal(got, original) {
+				t.Errorf("fallback backup = %q, want the pre-write bytes", got)
+			}
+		})
 	}
 }

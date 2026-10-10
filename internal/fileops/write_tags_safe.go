@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-10-10
 
@@ -12,8 +12,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
-	"syscall"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -51,24 +52,32 @@ type WriteTagsSafeOptions struct {
 	// tagged copy is renamed in: the create_backups setting.
 	//
 	// How: after the tag write on the temp copy has succeeded, the original is
-	// HARDLINKED to the backup name, so the backup costs no data blocks: once
-	// the rename lands, the backup is the only name of the old inode. path
-	// exists at every instant (nothing renames the original away). Where a
-	// hardlink is refused (EXDEV, EPERM, ENOTSUP/EOPNOTSUPP: some network and
-	// FAT-family filesystems) the backup is a full fsynced copy instead
-	// (CopyFileExclusive).
+	// HARDLINKED to the backup name, so taking the backup copies no data: the
+	// rename then makes the backup the only library name of the old inode.
+	// From that moment the backup holds a full file's blocks (the old bytes;
+	// the path now names the new ones), so each kept backup costs one file's
+	// size on disk until the sweep removes it. When the file is shared with
+	// another name (a hardlink-organized download), the old inode lives on
+	// under that name anyway and the backup costs nothing more. path exists at
+	// every instant (nothing renames the original away). Where a hardlink is
+	// refused for any reason, or path is not a regular file (a symlink-strategy
+	// library entry, which a link would only duplicate as a symlink), the
+	// backup is a full fsynced copy instead (CopyFileExclusive).
+	//
+	// Nothing here changes the original inode's metadata: a library file can
+	// share its inode with a seeding download, and that file's mtime must not
+	// move (libtorrent's fast-resume checks it).
 	//
 	// Failure: a failed tag write leaves no backup; a failed backup fails the
 	// write and leaves the original untouched; a failed rename removes the
 	// backup again (the original is intact, so the backup adds nothing).
 	//
-	// MTIME CONTRACT. The backup-cleanup sweeps (maintenance.cleanup-old-backups
-	// and scheduler.cleanup-old-backups) age a .bak-* file by its mtime. A
-	// hardlink shares the original's mtime, which can be years old, so after
-	// the rename the backup's mtime is set to now (os.Chtimes): it is then
-	// dated from when it was taken, not from when the audio was last written.
-	// The copy fallback already has mtime now. Both sweeps walk RootDir only,
-	// so a backup beside a file outside the library root is never collected.
+	// AGE CONTRACT. The backup-cleanup sweeps (maintenance.cleanup-old-backups
+	// and scheduler.cleanup-old-backups) age a .bak-* file by the time in its
+	// NAME (BackupTime), not by its mtime: a hardlinked backup keeps the
+	// original's mtime, which can be years old. Changing the name format here
+	// means changing BackupTime with it. Both sweeps walk RootDir only, so a
+	// backup beside a file outside the library root is never collected.
 	KeepBackup bool
 }
 
@@ -85,26 +94,113 @@ var (
 	renameFile = os.Rename
 )
 
-// linkUnsupported reports whether err from os.Link means this filesystem
-// will not hardlink here, so a full copy must stand in.
-func linkUnsupported(err error) bool {
-	return errors.Is(err, syscall.EXDEV) || errors.Is(err, syscall.EPERM) ||
-		errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
+// backupInfix separates a file's name from its backup timestamp:
+// <name>.bak-<unix seconds>[-N]. Legacy backups (the retired
+// write_backup_before switch) used <name>.bak-YYYYMMDD-HHMMSS in local time.
+const backupInfix = ".bak-"
+
+// legacyBackupLayout is the time layout of a legacy backup name's suffix.
+const legacyBackupLayout = "20060102-150405"
+
+var (
+	// legacyBackupSuffix is exactly 8 digits, a dash and 6 digits. It is
+	// checked before backupSuffix, which it would otherwise also match (a
+	// current name is 10 unix-second digits and a -N of at most 3).
+	legacyBackupSuffix = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}$`)
+	backupSuffix       = regexp.MustCompile(`^([0-9]+)(?:-[0-9]+)?$`)
+	// earliestBackupTime rejects a parsed time no backup can carry, so an
+	// unrelated ".bak-1" name falls back to its mtime instead of reading as
+	// 1970 and being deleted at once.
+	earliestBackupTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// BackupTime returns when the .bak-* file called name was taken: the time in
+// its name (<unix>[-N], or the legacy YYYYMMDD-HHMMSS in local time), else
+// modTime. A name time before 2000 or in the future also falls back to
+// modTime. The backup sweeps age files by this (see KeepBackup, AGE
+// CONTRACT): a hardlinked backup's mtime is the original audio's, so mtime
+// alone would delete a fresh backup of an old file on the next sweep.
+func BackupTime(name string, modTime time.Time) time.Time {
+	if t, ok := backupNameTime(name, time.Now()); ok {
+		return t
+	}
+	return modTime
+}
+
+// backupNameTime parses the timestamp after the last ".bak-" in name.
+func backupNameTime(name string, now time.Time) (time.Time, bool) {
+	i := strings.LastIndex(name, backupInfix)
+	if i < 0 {
+		return time.Time{}, false
+	}
+	suffix := name[i+len(backupInfix):]
+	var t time.Time
+	switch {
+	case legacyBackupSuffix.MatchString(suffix):
+		lt, err := time.ParseInLocation(legacyBackupLayout, suffix, time.Local)
+		if err != nil {
+			return time.Time{}, false
+		}
+		t = lt
+	default:
+		m := backupSuffix.FindStringSubmatch(suffix)
+		if m == nil {
+			return time.Time{}, false
+		}
+		secs, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			return time.Time{}, false
+		}
+		t = time.Unix(secs, 0)
+	}
+	// A minute of slack for clock skew between the writer and the sweep.
+	if t.Before(earliestBackupTime) || t.After(now.Add(time.Minute)) {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// KeepBackupCopy makes a fresh sibling <path>.bak-<unix>[-N] that is a full,
+// fsynced COPY of path, and returns its name. It is for writers that rewrite
+// path in place (the AtomicParsley/eyeD3/ffmpeg CLI fallbacks): a hardlink
+// there would share the inode the writer is about to change, and the backup
+// would end up holding the new bytes.
+func KeepBackupCopy(path string) (string, error) {
+	name, _, err := keepBackup(path, time.Now(), false)
+	return name, err
 }
 
 // keepBackup makes a fresh sibling named <path>.bak-<unix> (adding -N when
 // that name is taken) holding path's current bytes, and returns its name and
-// whether it is a hardlink. It hardlinks; where the filesystem refuses a link
-// it copies (CopyFileExclusive: O_EXCL, fsynced file and directory). Both
-// steps are exclusive, so an existing backup is never overwritten.
-func keepBackup(path string, now time.Time) (name string, linked bool, err error) {
-	base := path + ".bak-" + strconv.FormatInt(now.Unix(), 10)
-	useLink := true
+// whether it is a hardlink. With allowLink it hardlinks a regular file and
+// copies when the link fails for any reason but a taken name, or when path is
+// not a regular file; without it, it always copies (CopyFileExclusive:
+// O_EXCL, fsynced file and directory). Both steps are exclusive, so an
+// existing backup is never overwritten.
+func keepBackup(path string, now time.Time, allowLink bool) (name string, linked bool, err error) {
+	base := path + backupInfix + strconv.FormatInt(now.Unix(), 10)
+	useLink := allowLink
+	if useLink {
+		// Lstat, not Stat: os.Link does not follow a symlink on Linux, so a
+		// link of a symlink-strategy entry would back up the symlink, not the
+		// bytes it points at.
+		fi, lerr := os.Lstat(path)
+		if lerr != nil {
+			return "", false, lerr
+		}
+		useLink = fi.Mode().IsRegular()
+	}
 	name = base
 	for i := 1; i <= maxBackupNameAttempts; {
 		if useLink {
 			err = linkFile(path, name)
-			if err != nil && !errors.Is(err, fs.ErrExist) && linkUnsupported(err) {
+			if err != nil && !errors.Is(err, fs.ErrExist) {
+				// Any refusal (EXDEV, EPERM, EMLINK, EACCES, ENOSYS, an odd
+				// network-mount errno) is a reason to copy, not to fail the
+				// tag write: the copy is exclusive and safe for every case,
+				// and only its own failure fails the write.
+				logger.New("fileops").Debug("WriteTagsSafe: hardlink backup refused, copying instead: path=%s error=%v",
+					logger.SanitizeLogValue(path), err)
 				useLink = false
 				continue // same name, by copy
 			}
@@ -217,9 +313,8 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	// backup, and it links or copies rather than renaming the original away,
 	// so path never stops existing.
 	var backupPath string
-	var backupLinked bool
 	if opts.KeepBackup {
-		if backupPath, backupLinked, err = keepBackup(path, time.Now()); err != nil {
+		if backupPath, _, err = keepBackup(path, time.Now(), true); err != nil {
 			return originalHash, "", fmt.Errorf("WriteTagsSafe: backup original: %w", err)
 		}
 	}
@@ -231,19 +326,6 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 			_ = os.Remove(backupPath)
 		}
 		return originalHash, "", fmt.Errorf("WriteTagsSafe: rename: %w", err)
-	}
-
-	// Step 5a: date a hardlinked backup from now. The cleanup sweeps age
-	// .bak-* by mtime (see KeepBackup, MTIME CONTRACT); before the rename the
-	// link shared the live file's inode, so this could not run earlier
-	// without changing the original's mtime. A failure only makes the backup
-	// eligible for cleanup sooner, so it is logged, not returned.
-	if backupLinked {
-		now := time.Now()
-		if cerr := os.Chtimes(backupPath, now, now); cerr != nil {
-			logger.New("fileops").Warn("WriteTagsSafe: backup %s keeps the original's mtime; the cleanup sweep may remove it early: %v",
-				logger.SanitizeLogValue(backupPath), cerr)
-		}
 	}
 
 	// Step 6: fingerprint the result (only when it will be persisted).
