@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -478,19 +478,19 @@ Every direct AI request (the seven chat sites in `openai_parser.go`, `scoreMetad
 
 | Series | Labels | Meaning |
 |---|---|---|
-| `ai_requests_total` | `provider`, `model`, `task`, `outcome` | One per attempt that reached the SDK; a retry is a new attempt. `outcome` is `ok`, `error`, `timeout` or `canceled`. |
-| `ai_request_duration_seconds` | `provider`, `model`, `task` | Wall time of the SDK call. Buckets come from the view in `internal/telemetry/views.go`. |
+| `ai_requests_total` | `provider`, `model`, `task`, `outcome` | One per HTTP attempt. A retry is a new attempt whoever retries: the retry layer (`DoWithRetry`) or the SDK's own two retries, which every constructor except the routed parser keeps and which `attemptMiddleware` records, so a 429 or 5xx the SDK absorbs is counted as an `error` request with its `ai_failures_total` reason. `outcome` is `ok`, `error`, `timeout` or `canceled`. |
+| `ai_request_duration_seconds` | `provider`, `model`, `task` | Wall time of one HTTP attempt (to the end of the reply for the final attempt), excluding the SDK's retry backoff. Buckets come from the view in `internal/telemetry/views.go`. |
 | `ai_tokens_total` | `provider`, `model`, `task`, `direction` | `direction` is `input` or `output`, from the usage block the provider returned. A reply with all-zero usage (some local servers omit it) records nothing. Embeddings record `input` only. |
 | `ai_failures_total` | `provider`, `model`, `task`, `reason` | `reason` is `rate_limit`, `quota`, `unreachable`, `timeout`, `permanent`, `reply_parse`, `count_mismatch` or `other`. |
 | `ai_parse_results_total` | `task`, `accepted` | One per item of a scan-phase batch parse at its final disposition: `accepted="true"` when the model's result had a field merged into the book, `"false"` for a nil result, a result that merged nothing, or an item the batch could not resolve. Usable, not high-confidence: nothing compares `ParsedMetadata.Confidence`. |
 
-Closed enums. `task` is one of `filename_parse`, `audiobook_parse`, `batch_parse`, `cover_art`, `cover_text`, `author_dedup_review`, `author_discovery`, `metadata_review`, `embed`. `provider` is `openai` (base URL empty or the OpenAI host; an empty base URL also consults `OPENAI_BASE_URL`, as the SDK does) or `local`. `model` is the model string sent, folded to `other` when longer than 64 characters or containing whitespace.
+Closed enums. `task` is one of `filename_parse`, `audiobook_parse`, `batch_parse`, `cover_art`, `cover_text`, `author_dedup_review`, `author_discovery`, `metadata_review`, `embed`. `provider` is `openai` (base URL empty or the OpenAI host; an empty base URL also consults `OPENAI_BASE_URL`, as the SDK does) or `local`. `model` is the model string sent, folded to `other` when empty (`unknown`), longer than 64 characters or containing whitespace, and bounded: pool routing sends each endpoint's own model, so the process admits only the first 5 distinct (provider, model) pairs it sees and folds every later one to `other` until restart (`modelLabelSet` in `ai_metrics.go`). The histogram exports 15 series per (provider, model, task), so the worst case is (5 + 2 `other`) x 9 tasks x 15 = 945, under the 1,000-series cap; `TestSeriesCardinalityBound` pins it.
 
 - A reply that arrives but cannot be used (`*ReplyParseError`, `*ResultCountError`) is an `ok` request plus an `ai_failures_total` increment (`reply_parse` or `count_mismatch`), recorded where the error is returned. It is the one case where a failure has no matching `outcome="error"` request. The alert and the dashboard's failure-ratio panel exclude those two reasons; a separate panel shows them.
 - A cancellation is `outcome="canceled"` and no failure; a deadline is `outcome="timeout"` with `reason="timeout"`.
 - Batch-API submissions (`embedding_batch.go`, `openai_batch.go`) and `internal/server/bench.go` are not wrapped, and the tokens of a batch job arrive in its result file, so they are not recorded. Pool-routed calls reach the same wrapped SDK sites, so they are counted here as well as in `ai_dispatch_*`, which measures the routing layer.
-- `endpoint` and `node` are deliberately not labels: the pool is growable and the histogram multiplies every label by its bucket count. The pool endpoint id, when a caller knows it, is a span attribute (`ai.endpoint_id`) only. No filename, prompt, reply or title is ever a label or span attribute.
-- Spans are named `ai.<task>`, nest under the caller's context, and carry `ai.provider`, `ai.model`, `ai.task`, the token counts and `error=true` on failure.
+- `endpoint` and `node` are deliberately not labels: the pool is growable and the histogram multiplies every label by its bucket count. The pool endpoint id, which a pool-routed parser knows, is a span attribute (`ai.endpoint_id`) only. No filename, prompt, reply or title is ever a label or span attribute.
+- Spans are named `ai.<task>`, nest under the caller's context, and carry `ai.provider`, `ai.model`, `ai.task`, `ai.endpoint_id` (routed parsers), the token counts and, when the SDK retried, `ai.http_attempts`. A failed call sets the span status to Error with `error=true` and only a classification (`ai.outcome`, `ai.failure_reason`, `http.response.status_code`); the error text is never recorded, because it can carry the endpoint URL and the provider's response body. A cancellation leaves the span status alone. A reply failure is an `ai.reply_failure` event on the caller's span, never an error status, since the batch split recovers a count mismatch by design.
 - Dashboard: `deploy/grafana/dashboards/audiobook-organizer-ai.json`. Alert: `AudiobookOrganizerAIFailureRatioHigh` in `deploy/prometheus/alert-rules.yml`.
 
 ---

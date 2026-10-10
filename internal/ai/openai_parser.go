@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.24.0
+// version: 13.24.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-10
 
@@ -276,6 +276,10 @@ type OpenAIParser struct {
 	// parser talks to OpenAI, "local" for any other OpenAI-compatible base URL.
 	// Set once by newOpenAIParser, which every constructor goes through.
 	provider string
+
+	// endpointID is the pool row id of a routed parser (newRoutedEndpointParser),
+	// empty otherwise. Span attribute only, never a metric label.
+	endpointID string
 }
 
 // Default cache TTL for AI responses (24 hours — metadata doesn't change often)
@@ -360,8 +364,13 @@ func NewOpenAIParserWithBaseURL(cfg *config.Config, apiKey, baseURL, model strin
 // path aidispatch owns failover, and DoWithRetry already retries transient
 // failures in place, so SDK retries only re-sent a quota-exhausted 429 twice
 // more before the dispatcher could move the batch to a peer.
-func newRoutedEndpointParser(apiKey, baseURL, model string) *OpenAIParser {
-	return newOpenAIParser(nil, apiKey, baseURL, model, true, option.WithMaxRetries(0))
+//
+// endpointID is the pool row's id; it goes on the ai.* span as ai.endpoint_id
+// (never a metric label, rule C5).
+func newRoutedEndpointParser(apiKey, baseURL, model, endpointID string) *OpenAIParser {
+	p := newOpenAIParser(nil, apiKey, baseURL, model, true, option.WithMaxRetries(0))
+	p.endpointID = endpointID
+	return p
 }
 
 func newOpenAIParser(cfg *config.Config, apiKey, baseURL, model string, enabled bool, extra ...option.RequestOption) *OpenAIParser {
@@ -374,6 +383,10 @@ func newOpenAIParser(cfg *config.Config, apiKey, baseURL, model string, enabled 
 	if baseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(baseURL))
 	}
+	// attemptMiddleware records each HTTP attempt of an observed call, so the
+	// SDK's own retries are counted (see observe). Before the caller's options
+	// so it wraps the transport the same way for every constructor.
+	clientOptions = append(clientOptions, option.WithMiddleware(attemptMiddleware))
 	clientOptions = append(clientOptions, extra...)
 
 	client := openai.NewClient(clientOptions...)
@@ -409,7 +422,7 @@ func providerForBaseURL(baseURL string) string {
 
 // callMeta builds the metric/trace identity of one request made by this parser.
 func (p *OpenAIParser) callMeta(task, model string) callMeta {
-	return callMeta{provider: p.provider, task: task, model: model}
+	return callMeta{provider: p.provider, task: task, model: model, endpointID: p.endpointID}
 }
 
 // chatUsage reads the token counts the provider reported on a chat reply. It

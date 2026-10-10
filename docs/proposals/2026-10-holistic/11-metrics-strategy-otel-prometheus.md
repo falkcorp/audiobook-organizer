@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/11-metrics-strategy-otel-prometheus.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: b7aecfb3-f5ea-482f-80e4-3e5cc0453ff1 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-10 -->
 
 # 11: Metrics strategy, OTel and Prometheus (decision D14d)
 
@@ -209,7 +209,7 @@ Owner decision D55: keep `internal/ai/telemetry.go` and add AI metrics instead o
 
 `task` is a closed enum of 9: `filename_parse`, `audiobook_parse`, `batch_parse`, `cover_art`, `cover_text`, `author_dedup_review`, `author_discovery`, `metadata_review`, `embed`. `provider` is a closed pair, `openai` (base URL empty or the OpenAI host) or `local` (any other OpenAI-compatible base URL). `model` is the configured model name (`filename_parse_model`, `metadata_review_model`, the endpoint's `chat_model`, the pinned embed model): a handful. All four keys come from `attr.go` (C3).
 
-**Cardinality.** `node`/`endpoint` is **not** a label on any AI series, and above all not on the duration histogram: 12 buckets × nodes × models × 9 tasks grows with the pool (the pool is documented as growable, never hard-coded). Worst case today is about 2 providers × ~6 models × 9 tasks × 12 buckets, under C2's 1,000-series cap; the test counts it. Per-node latency and the chosen node stay in traces (span attributes `ai.node`, `ai.endpoint_id`, where high cardinality is fine) and in the existing `ai_dispatch_*` series.
+**Cardinality.** `node`/`endpoint` is **not** a label on any AI series, and above all not on the duration histogram: 12 buckets × nodes × models × 9 tasks grows with the pool (the pool is documented as growable, never hard-coded). Pool routing sends each endpoint's own model, so the model count is the size of a growable pool and not a constant: the `model` label therefore admits at most 5 distinct (provider, model) pairs per process and folds every further model to `other`. The widest family, the duration histogram, exports 15 series (12 buckets, +Inf, `_sum`, `_count`) per (provider, model, task), so the worst case is (5 + 2 `other`) × 9 tasks × 15 = 945, under C2's 1,000-series cap; the test counts it. One request is one HTTP attempt, the SDK's own retries included. Per-node latency and the chosen node stay in traces (span attributes `ai.node`, `ai.endpoint_id`, where high cardinality is fine) and in the existing `ai_dispatch_*` series.
 
 **Relation to the 5 existing `ai_dispatch_*` series (PR 3 migrates them to OTel with identical names; neither is renamed).** Keep both: `ai_dispatch_*` answers routing questions (which endpoint, slot wait, failover, no capable endpoint) and has no model, task or token view; `ai_*` answers call-quality questions (latency, tokens, failure reason, parse acceptance) and deliberately drops `endpoint`. A dispatch attempt that reaches the SDK produces one `ai_dispatch_requests_total` and one `ai_requests_total`; a refused call (`ai_dispatch_no_capable_total`) never reaches the SDK and produces no `ai_*` series. No double counting because they measure different layers; the dashboard shows them side by side.
 
@@ -222,7 +222,7 @@ Owner decision D55: keep `internal/ai/telemetry.go` and add AI metrics instead o
 - Latency p50/p95/p99 by task: `histogram_quantile(0.95, sum by (le, task) (rate(ai_request_duration_seconds_bucket[5m])))`
 - Latency p95 by model: `histogram_quantile(0.95, sum by (le, model) (rate(ai_request_duration_seconds_bucket[5m])))`
 - Tokens per minute by direction and model: `sum by (model, direction) (rate(ai_tokens_total[5m])) * 60`
-- Tokens per accepted parse (cost proxy): `sum(rate(ai_tokens_total{task=~".*parse.*"}[1h])) / sum(rate(ai_parse_results_total{accepted="true"}[1h]))`
+- Tokens per accepted batch parse (cost proxy): `sum(rate(ai_tokens_total{task="batch_parse"}[1h])) / sum(rate(ai_parse_results_total{task="batch_parse",accepted="true"}[1h]))`. Both sides are restricted to `batch_parse`: `ai_parse_results_total` is only recorded by the scan batch phase, so a numerator over every `.*parse.*` task (which includes the single-book `filename_parse` and `audiobook_parse` calls) would rise with UI re-parses and say nothing about batch cost.
 - Parse accepted ratio by task: `sum by (task) (rate(ai_parse_results_total{accepted="true"}[1h])) / sum by (task) (rate(ai_parse_results_total[1h]))`
 - Dispatch beside call quality: `ai_dispatch_inflight`, `rate(ai_dispatch_failover_total[15m])` and `ai_dispatch_slot_wait_seconds` p95 on the same row.
 

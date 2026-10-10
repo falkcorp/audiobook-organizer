@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
 // last-edited: 2026-10-11
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -33,7 +34,8 @@ var aiMetricsLog = logger.New("ai.metrics")
 //
 // on the existing /metrics scrape. "endpoint" and "node" are deliberately not
 // labels (rule C5: the pool is growable, and the histogram multiplies every
-// label by its bucket count); the endpoint id is a span attribute only.
+// label by its bucket count); the endpoint id is a span attribute only. The
+// model label is bounded for the same reason, see modelLabelSet.
 //
 // This file must not import openai-go: aidispatch's
 // TestGuard_NoAIBackendCallsOutsideTheDispatcher treats any file that does as
@@ -92,30 +94,88 @@ var (
 // maxModelLabelLen bounds a model label value; see callMeta.normalized.
 const maxModelLabelLen = 64
 
+// maxModelLabels is how many distinct (provider, model) pairs the process
+// labels by name before folding further models to "other". It is the cardinality
+// guard of rule C2 for a growable pool: every routed parser sends its own
+// endpoint's model, so the number of models is not a constant of the product.
+//
+// The arithmetic: the duration histogram exports 15 series (12 buckets, +Inf,
+// _sum, _count) per (provider, model, task), the widest family. Past the limit
+// a model folds to "other", one more pair per provider, so at most
+// maxModelLabels + 2 pairs exist: (5 + 2) x 9 tasks x 15 = 945, under the
+// 1,000-series cap. Raising this by one costs 135 series and breaks the cap, so
+// TestSeriesCardinalityBound fails first.
+const maxModelLabels = 5
+
+// modelLabelSet admits the first maxModelLabels distinct (provider, model) pairs
+// seen by the process and folds the rest to "other". Admission is sticky for the
+// life of the process, so one pair always gets the same label in all four
+// families: a model rotated in after the limit is reached stays "other" until
+// restart rather than evicting a name already in dashboards.
+type modelLabelSet struct {
+	mu       sync.Mutex
+	admitted map[string]struct{}
+}
+
+var modelLabels = &modelLabelSet{admitted: map[string]struct{}{}}
+
+func (s *modelLabelSet) admit(provider, model string) string {
+	if model == modelOther {
+		return model
+	}
+	key := provider + "\x00" + model
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.admitted[key]; ok {
+		return model
+	}
+	if len(s.admitted) >= maxModelLabels {
+		return modelOther
+	}
+	s.admitted[key] = struct{}{}
+	return model
+}
+
+// reset forgets every admitted pair; tests only.
+func (s *modelLabelSet) reset() {
+	s.mu.Lock()
+	s.admitted = map[string]struct{}{}
+	s.mu.Unlock()
+}
+
+// Model label values that are not a model name.
+const (
+	modelOther   = "other"
+	modelUnknown = "unknown"
+)
+
 // callMeta identifies one AI request for metrics and traces. Every field is a
 // small closed or configured value; never a filename, prompt or reply.
 type callMeta struct {
 	provider string
 	model    string
 	task     string
-	// endpointID, when the caller knows its pool endpoint, goes on the span
-	// only.
+	// endpointID is the pool row id of a routed parser. It goes on the span
+	// only (ai.endpoint_id), never on a metric.
 	endpointID string
 }
 
-// normalized folds a model string that would make a poor label value (empty,
-// longer than 64 characters, or containing whitespace, as free text leaking
-// into the model field would) to a fixed value.
+// normalized folds a model string that would make a poor label value to a
+// fixed one: empty is "unknown"; longer than 64 characters or containing
+// whitespace (free text leaking into the model field) is "other"; and past the
+// first maxModelLabels distinct (provider, model) pairs the process has seen, a
+// model is "other" too (see modelLabelSet).
 func (m callMeta) normalized() callMeta {
-	switch {
-	case m.model == "":
-		m.model = "unknown"
-	case len(m.model) > maxModelLabelLen || strings.ContainsAny(m.model, " \t\r\n"):
-		m.model = "other"
-	}
 	if m.provider == "" {
 		m.provider = providerOpenAI
 	}
+	switch {
+	case m.model == "":
+		m.model = modelUnknown
+	case len(m.model) > maxModelLabelLen || strings.ContainsAny(m.model, " \t\r\n"):
+		m.model = modelOther
+	}
+	m.model = modelLabels.admit(m.provider, m.model)
 	return m
 }
 
@@ -174,11 +234,11 @@ func newAIInstruments(m metric.Meter) *aiInstruments {
 	var err error
 	ins.requests, err = m.Int64Counter("ai.requests",
 		metric.WithUnit("{request}"),
-		metric.WithDescription("Direct AI requests that reached the SDK, by provider, model, task and outcome. A retry is a new attempt."))
+		metric.WithDescription("Direct AI HTTP attempts, by provider, model, task and outcome. One per attempt: a retry, whether the SDK's own or the retry layer's, is a new attempt."))
 	errs = append(errs, err)
 	ins.duration, err = m.Float64Histogram("ai.request.duration",
 		metric.WithUnit("s"),
-		metric.WithDescription("Wall time of the SDK call, by provider, model and task."))
+		metric.WithDescription("Wall time of one HTTP attempt, by provider, model and task, excluding the SDK's retry backoff."))
 	errs = append(errs, err)
 	ins.tokens, err = m.Int64Counter("ai.tokens",
 		metric.WithUnit("{token}"),

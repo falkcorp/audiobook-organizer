@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-10
 
@@ -332,9 +332,6 @@ func seedDispatchNoCapable() error {
 	return nil
 }
 
-// seedMemdbFallback makes one read that wants the in-memory layer find it
-// unpublished: a zero-value store with UseMemDB on has no memdb, and this
-// method refuses without touching Pebble, so it counts outcome=refused.
 // aiChatReply is a chat completion whose content is not JSON, so ParseFilename
 // returns a *ReplyParseError after a request that succeeded: one call seeds
 // ai_requests_total{outcome=ok}, the duration, both token directions and
@@ -361,6 +358,9 @@ func seedAICalls() error {
 	return nil
 }
 
+// seedMemdbFallback makes one read that wants the in-memory layer find it
+// unpublished: a zero-value store with UseMemDB on has no memdb, and this
+// method refuses without touching Pebble, so it counts outcome=refused.
 func seedMemdbFallback() error {
 	s := &database.PebbleStore{UseMemDB: true}
 	s.SetMeterProvider(otel.GetMeterProvider())

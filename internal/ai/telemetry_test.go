@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
 // last-edited: 2026-10-10
 
@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -44,7 +45,11 @@ func installAITelemetry(t *testing.T) *aiTelemetry {
 	prevMetrics := aiMetrics.Load()
 	aiMetrics.Store(newAIInstruments(telemetry.MeterFrom(mp, "ai")))
 	aiTracerOverride.Store(&tr)
+	// The admitted-model set is process state like the instruments: a test must
+	// start from an empty one or its model labels depend on test order.
+	modelLabels.reset()
 	t.Cleanup(func() {
+		modelLabels.reset()
 		aiMetrics.Store(prevMetrics)
 		aiTracerOverride.Store(nil)
 		_ = mp.Shutdown(context.Background())
@@ -412,7 +417,7 @@ func TestRetryIsANewAttempt(t *testing.T) {
 	})
 	// newRoutedEndpointParser sets the SDK's own retries to zero, so the first
 	// 500 reaches DoWithRetry instead of being absorbed inside the SDK.
-	p := newRoutedEndpointParser("test-key", srv.URL, "test-model")
+	p := newRoutedEndpointParser("test-key", srv.URL, "test-model", "")
 	if _, err := p.ParseBatch(context.Background(), []string{"x"}); err != nil {
 		t.Fatalf("ParseBatch: %v", err)
 	}
@@ -463,14 +468,15 @@ func TestSpanNestsUnderCallerContext(t *testing.T) {
 	}
 }
 
-func TestWithAISpanPassesSpanContextAndRecordsError(t *testing.T) {
+func TestWithAISpanPassesSpanContextAndMarksFailure(t *testing.T) {
 	tel := installAITelemetry(t)
+	failure := errors.New(`POST "http://192.0.2.7:11434/v1/chat/completions": 500 Internal Server Error ` + siteSentinel)
 	_, err := WithAISpan(context.Background(), "ai.test", func(ctx context.Context) (int, error) {
 		_, child := tracer().Start(ctx, "child")
 		child.End()
-		return 0, context.Canceled
+		return 0, failure
 	})
-	if err != context.Canceled {
+	if err != failure {
 		t.Fatalf("err = %v", err)
 	}
 	var parentID, childParent string
@@ -484,9 +490,10 @@ func TestWithAISpanPassesSpanContextAndRecordsError(t *testing.T) {
 					errorAttr = true
 				}
 			}
-			if len(sp.Events()) == 0 {
-				t.Errorf("failure was not recorded as a span event")
+			if sp.Status().Code != codes.Error {
+				t.Errorf("status = %v, want Error", sp.Status().Code)
 			}
+			assertSpanHasNoText(t, sp, siteSentinel, "192.0.2.7")
 		case "child":
 			childParent = sp.Parent().SpanID().String()
 		}
@@ -496,6 +503,280 @@ func TestWithAISpanPassesSpanContextAndRecordsError(t *testing.T) {
 	}
 	if !errorAttr {
 		t.Errorf("span has no error=true attribute")
+	}
+}
+
+// A cancellation is the caller giving up, not a failed call: the metrics treat
+// it that way, so the span must not be red either.
+func TestWithAISpanCancellationIsNotAnError(t *testing.T) {
+	tel := installAITelemetry(t)
+	if _, err := WithAISpan(context.Background(), "ai.test", func(context.Context) (int, error) {
+		return 0, context.Canceled
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, sp := range tel.spans.Ended() {
+		if sp.Status().Code == codes.Error {
+			t.Errorf("a cancelled call set span status Error")
+		}
+		for _, kv := range sp.Attributes() {
+			if kv.Key == "error" {
+				t.Errorf("a cancelled call set the error attribute")
+			}
+		}
+	}
+}
+
+// assertSpanHasNoText fails when anything a span carries (attributes, events,
+// status description) contains one of the banned substrings.
+func assertSpanHasNoText(t *testing.T, sp sdktrace.ReadOnlySpan, banned ...string) {
+	t.Helper()
+	check := func(where, v string) {
+		for _, b := range banned {
+			if b != "" && strings.Contains(v, b) {
+				t.Errorf("span %s %s carries %q: %q", sp.Name(), where, b, v)
+			}
+		}
+	}
+	check("name", sp.Name())
+	check("status description", sp.Status().Description)
+	for _, kv := range sp.Attributes() {
+		check("attribute "+string(kv.Key), kv.Value.Emit())
+	}
+	for _, ev := range sp.Events() {
+		check("event name", ev.Name)
+		for _, kv := range ev.Attributes {
+			check("event "+ev.Name+" attribute "+string(kv.Key), kv.Value.Emit())
+		}
+	}
+}
+
+// S2: a failed call must not put the error text into any span EVENT, status or
+// attribute. A transport error formats as the request URL and the dial target
+// (for a pool endpoint, a LAN host and port); an API error carries the
+// provider's raw response body in its fields and, in older SDK versions, in its
+// text. Attribute-only checks cannot catch an exception event, which is what
+// RecordError used to add, so this reads Events() and the status description.
+func TestFailedCallSpanCarriesNoErrorText(t *testing.T) {
+	const bodyText = "raw-body-echo-of-the-prompt"
+	for name, build := range map[string]func(srv *stubEndpoint) *OpenAIParser{
+		"legacy parser": func(srv *stubEndpoint) *OpenAIParser { return newTestParser(t, srv) },
+		"routed parser": func(srv *stubEndpoint) *OpenAIParser {
+			return newRoutedEndpointParser("test-key", srv.URL, "test-model", "pool-node")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tel := installAITelemetry(t)
+			srv := newStubEndpoint(t, "", func(_ int64, w http.ResponseWriter) bool {
+				http.Error(w, `{"error":{"message":"`+bodyText+`","type":"invalid_request_error","code":"bad"}}`, http.StatusUnauthorized)
+				return true
+			})
+			if _, err := build(srv).ParseFilename(context.Background(), "x"); err == nil {
+				t.Fatal("ParseFilename succeeded against a 401")
+			}
+			host := strings.TrimPrefix(srv.URL, "http://")
+			var seen bool
+			for _, sp := range tel.spans.Ended() {
+				if sp.Name() != "ai."+TaskFilenameParse {
+					continue
+				}
+				seen = true
+				assertSpanHasNoText(t, sp, bodyText, srv.URL, host, "127.0.0.1", "chat/completions", "POST")
+				if sp.Status().Code != codes.Error {
+					t.Errorf("status = %v, want Error", sp.Status().Code)
+				}
+				got := map[string]string{}
+				for _, kv := range sp.Attributes() {
+					got[string(kv.Key)] = kv.Value.Emit()
+				}
+				if got["ai.failure_reason"] != reasonPermanent || got["ai.outcome"] != outcomeError ||
+					got["http.response.status_code"] != "401" {
+					t.Errorf("classification attributes = %v, want reason=permanent outcome=error status=401", got)
+				}
+			}
+			if !seen {
+				t.Fatal("no ai.filename_parse span recorded")
+			}
+		})
+	}
+}
+
+func TestUnreachableCallSpanCarriesNoErrorText(t *testing.T) {
+	tel := installAITelemetry(t)
+	srv := newStubEndpoint(t, "", nil)
+	url := srv.URL
+	srv.Close() // nothing listens: the dial is refused
+	p := newRoutedEndpointParser("test-key", url, "test-model", "pool-node")
+	_, err := p.ParseFilename(context.Background(), "x")
+	if err == nil {
+		t.Fatal("ParseFilename succeeded against a closed port")
+	}
+	if !strings.Contains(err.Error(), strings.TrimPrefix(url, "http://")) {
+		t.Skipf("the transport error no longer names the dial target (%v); nothing left to leak", err)
+	}
+	host := strings.TrimPrefix(url, "http://")
+	var seen bool
+	for _, sp := range tel.spans.Ended() {
+		if sp.Name() != "ai."+TaskFilenameParse {
+			continue
+		}
+		seen = true
+		assertSpanHasNoText(t, sp, host, "127.0.0.1", "dial tcp", "connection refused", "Post ")
+		got := map[string]string{}
+		for _, kv := range sp.Attributes() {
+			got[string(kv.Key)] = kv.Value.Emit()
+		}
+		if got["ai.failure_reason"] != reasonUnreachable {
+			t.Errorf("ai.failure_reason = %q, want %q", got["ai.failure_reason"], reasonUnreachable)
+		}
+	}
+	if !seen {
+		t.Fatal("no ai.filename_parse span recorded")
+	}
+}
+
+// N1: a reply the model got wrong is an event on the caller's span, never a red
+// status: a count mismatch is recovered by the batch split by design.
+func TestReplyFailureIsAnEventNotAnErrorStatus(t *testing.T) {
+	tel := installAITelemetry(t)
+	srv := newStubEndpoint(t, chatReply(`{"results":[{"title":"A"},{"title":"B"}]}`, 11, 7), nil)
+	parentCtx, parent := tracer().Start(context.Background(), "caller")
+	_, err := newTestParser(t, srv).ParseBatch(parentCtx, []string{"only-one"})
+	parent.End()
+	if err == nil {
+		t.Fatal("ParseBatch accepted a reply of the wrong length")
+	}
+	var found bool
+	for _, sp := range tel.spans.Ended() {
+		if sp.Name() != "caller" {
+			continue
+		}
+		if sp.Status().Code == codes.Error {
+			t.Errorf("a recoverable count mismatch turned the caller's span red")
+		}
+		for _, ev := range sp.Events() {
+			if ev.Name == "ai.reply_failure" {
+				found = true
+				assertSpanHasNoText(t, sp, "only-one", "results", "title")
+			}
+		}
+	}
+	if !found {
+		t.Error("no ai.reply_failure event on the caller's span")
+	}
+}
+
+// S3: the SDK retries a 429 on its own inside one call. Each HTTP attempt is a
+// request: two throttles then a success is three requests (two error, one ok),
+// two rate_limit failures and three duration observations, whichever
+// constructor built the parser.
+func TestSDKRetriesAreCountedPerAttempt(t *testing.T) {
+	tel := installAITelemetry(t)
+	srv := newStubEndpoint(t, chatReply(`{"title":"T"}`, 11, 7), func(n int64, w http.ResponseWriter) bool {
+		if n <= 2 {
+			// Retry-After-Ms keeps the SDK's backoff to a millisecond.
+			w.Header().Set("Retry-After-Ms", "1")
+			http.Error(w, `{"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}}`, http.StatusTooManyRequests)
+			return true
+		}
+		return false
+	})
+	if _, err := newTestParser(t, srv).ParseFilename(context.Background(), "x"); err != nil {
+		t.Fatalf("ParseFilename: %v", err)
+	}
+	if got := srv.requests.Load(); got != 3 {
+		t.Fatalf("server saw %d requests, want 3 (the SDK retried twice)", got)
+	}
+	rm := tel.collect(t)
+	task := map[string]string{"task": TaskFilenameParse}
+	for outcome, want := range map[string]int64{"error": 2, "ok": 1} {
+		if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskFilenameParse, "outcome": outcome}); got != want {
+			t.Errorf("ai.requests{outcome=%s} = %d, want %d", outcome, got, want)
+		}
+	}
+	if got := counterSum(rm, "ai.failures", map[string]string{"task": TaskFilenameParse, "reason": "rate_limit"}); got != 2 {
+		t.Errorf("ai.failures{reason=rate_limit} = %d, want 2 (the throttles the SDK absorbed)", got)
+	}
+	if got := histogramCount(rm, "ai.request.duration", task); got != 3 {
+		t.Errorf("duration observations = %d, want 3 (one per attempt)", got)
+	}
+	if got := counterSum(rm, "ai.tokens", map[string]string{"direction": "input"}); got != 11 {
+		t.Errorf("input tokens = %d, want 11 (the final reply only)", got)
+	}
+	for _, sp := range tel.spans.Ended() {
+		if sp.Name() != "ai."+TaskFilenameParse {
+			continue
+		}
+		var attempts int64
+		for _, kv := range sp.Attributes() {
+			if kv.Key == "ai.http_attempts" {
+				attempts = kv.Value.AsInt64()
+			}
+		}
+		if attempts != 3 {
+			t.Errorf("span ai.http_attempts = %d, want 3", attempts)
+		}
+	}
+}
+
+// An absorbed 429 whose body names quota exhaustion is a quota failure, not a
+// rate_limit, and peeking at the body must leave it whole for the SDK: the
+// final attempt's error is classified from the body the SDK parses.
+func TestSDKRetriedQuota429IsQuotaAndBodyIsIntact(t *testing.T) {
+	tel := installAITelemetry(t)
+	srv := newStubEndpoint(t, "", func(_ int64, w http.ResponseWriter) bool {
+		w.Header().Set("Retry-After-Ms", "1")
+		http.Error(w, `{"error":{"message":"out of credit","type":"insufficient_quota","code":"credit_balance_exhausted"}}`, http.StatusTooManyRequests)
+		return true
+	})
+	_, err := newTestParser(t, srv).ParseFilename(context.Background(), "x")
+	if err == nil {
+		t.Fatal("ParseFilename succeeded against a 429")
+	}
+	if _, quota := aiHTTPFailure(err); !quota {
+		t.Fatalf("the final error lost its body to the peek: %v", err)
+	}
+	rm := tel.collect(t)
+	if got := counterSum(rm, "ai.failures", map[string]string{"task": TaskFilenameParse, "reason": "quota"}); got != 3 {
+		t.Errorf("ai.failures{reason=quota} = %d, want 3 (two absorbed, one final)", got)
+	}
+	if got := counterSum(rm, "ai.failures", map[string]string{"task": TaskFilenameParse, "reason": "rate_limit"}); got != 0 {
+		t.Errorf("a quota 429 was counted as rate_limit %d time(s)", got)
+	}
+	if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskFilenameParse, "outcome": "error"}); got != 3 {
+		t.Errorf("ai.requests{outcome=error} = %d, want 3", got)
+	}
+}
+
+// S4: a cover-text reply that cannot be parsed is an ok request plus a
+// reply_parse failure, so the reply-quality panel can show cover_text.
+func TestCoverTextUnparseableReplyRecordsReplyParse(t *testing.T) {
+	tel := installAITelemetry(t)
+	srv := newVisionServer(t, "I cannot read this.")
+	tp := newTestPool(visionEP("pool-node", srv.url(), 10))
+	if _, err := NewRoutedCoverTextReader(tp.PoolSource).ReadCoverText(context.Background(), []byte{1}, "image/jpeg"); err == nil {
+		t.Fatal("ReadCoverText accepted a non-JSON reply")
+	}
+	rm := tel.collect(t)
+	if got := counterSum(rm, "ai.failures", map[string]string{"task": TaskCoverText, "reason": "reply_parse"}); got != 1 {
+		t.Errorf("ai.failures{task=cover_text,reason=reply_parse} = %d, want 1", got)
+	}
+	if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskCoverText, "outcome": "ok"}); got != 1 {
+		t.Errorf("ai.requests{task=cover_text,outcome=ok} = %d, want 1", got)
+	}
+	// N3: a routed parser knows its pool endpoint, so the span names it.
+	var endpoint string
+	for _, sp := range tel.spans.Ended() {
+		if sp.Name() == "ai."+TaskCoverText {
+			for _, kv := range sp.Attributes() {
+				if kv.Key == "ai.endpoint_id" {
+					endpoint = kv.Value.AsString()
+				}
+			}
+		}
+	}
+	if endpoint != "pool-node" {
+		t.Errorf("span ai.endpoint_id = %q, want pool-node", endpoint)
 	}
 }
 
@@ -545,9 +826,36 @@ func TestModelLabelFolding(t *testing.T) {
 		{strings.Repeat("m", 64), strings.Repeat("m", 64)},
 		{strings.Repeat("m", 65), "other"},
 	} {
+		modelLabels.reset()
 		if got := (callMeta{model: c.in}).normalized().model; got != c.want {
 			t.Errorf("model %q folded to %q, want %q", c.in, got, c.want)
 		}
+	}
+	modelLabels.reset()
+	t.Cleanup(modelLabels.reset)
+}
+
+// The model label is bounded: the first maxModelLabels distinct (provider,
+// model) pairs keep their names, every later one is "other", and a pair that
+// was admitted keeps its name however many others arrive after it.
+func TestModelLabelIsBounded(t *testing.T) {
+	modelLabels.reset()
+	t.Cleanup(modelLabels.reset)
+	for i := range maxModelLabels {
+		name := "model-" + string(rune('a'+i))
+		if got := (callMeta{provider: providerLocal, model: name}).normalized().model; got != name {
+			t.Fatalf("model %d folded to %q before the limit", i, got)
+		}
+	}
+	if got := (callMeta{provider: providerLocal, model: "model-extra"}).normalized().model; got != modelOther {
+		t.Errorf("model past the limit = %q, want %q", got, modelOther)
+	}
+	if got := (callMeta{provider: providerLocal, model: "model-a"}).normalized().model; got != "model-a" {
+		t.Errorf("an admitted model lost its name after the limit was reached: %q", got)
+	}
+	// The same name under the other provider is a different pair.
+	if got := (callMeta{provider: providerOpenAI, model: "model-a"}).normalized().model; got != modelOther {
+		t.Errorf("a new (provider, model) pair past the limit = %q, want %q", got, modelOther)
 	}
 }
 
@@ -590,22 +898,26 @@ func exportedSeries(m *metricdata.Metrics) int {
 }
 
 // TestSeriesCardinalityBound drives every label combination the product can
-// reach and counts the exported series of each family against C2.
+// reach, with far more models than the label admits, and counts the exported
+// series of each family against C2.
 //
-// The reachable set is 2 providers x 2 models per task x 9 tasks: each task
-// reads one configured model, so a second model value appears only across a
-// settings change. The spec's "2 providers x ~6 models x 9 tasks" would be
-// 108 combinations, which the 15 series per combination of the 12-bucket
-// histogram turns into 1,620, over the cap; the test pins the bound that does
-// hold and fails if the bucket list or the label set grows past it.
+// Pool routing sends each endpoint's own model, so the number of models is the
+// size of a growable pool, not a constant. The model label therefore admits at
+// most maxModelLabels distinct (provider, model) pairs and folds the rest to
+// "other" (see modelLabelSet); the worst case is (maxModelLabels + 2 "other"
+// pairs) x 9 tasks, and the 15 series per combination of the 12-bucket
+// histogram make that 945. The test fails if the bucket list, the label set or
+// maxModelLabels grows past the cap.
 func TestSeriesCardinalityBound(t *testing.T) {
 	tel := installAITelemetry(t)
 	ins := aiInstrumentsFor()
 	ctx := context.Background()
 	tasks := []string{TaskFilenameParse, TaskAudiobookParse, TaskBatchParse, TaskCoverArt, TaskCoverText,
 		TaskAuthorDedupReview, TaskAuthorDiscovery, TaskMetadataReview, TaskEmbed}
+	const modelsOffered = 40 // a pool far larger than any real one
 	for _, provider := range []string{providerOpenAI, providerLocal} {
-		for _, model := range []string{"model-a", "model-b"} {
+		for i := range modelsOffered {
+			model := "model-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 			for _, task := range tasks {
 				m := callMeta{provider: provider, model: model, task: task}
 				ins.duration.Record(ctx, 1, metricWithSet(m))
@@ -633,6 +945,11 @@ func TestSeriesCardinalityBound(t *testing.T) {
 		if n >= seriesPerFamilyCap {
 			t.Errorf("%s exports %d series, cap is %d", name, n, seriesPerFamilyCap)
 		}
+	}
+	// The histogram is the widest family; pin its worst case so a bucket or
+	// label change is a visible diff, not a silent drift towards the cap.
+	if n := exportedSeries(metricByName(rm, "ai.request.duration")); n != (maxModelLabels+2)*len(tasks)*15 {
+		t.Errorf("ai.request.duration exports %d series, want %d", n, (maxModelLabels+2)*len(tasks)*15)
 	}
 }
 
