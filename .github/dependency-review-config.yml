@@ -1,7 +1,7 @@
 # file: .github/dependency-review-config.yml
-# version: 1.3.0
+# version: 1.4.0
 # guid: dep-review-cfg-2025-12-07
-# last-edited: 2026-08-20
+# last-edited: 2026-10-10
 
 # Dependency Review Configuration
 # This file configures the dependency-review-action for automated security scanning
@@ -54,6 +54,28 @@ allow-dependencies-licenses:
   - pkg:golang/golang.org/x/sys
   - pkg:golang/golang.org/x/text
   - pkg:golang/golang.org/x/time
+  # OpenTelemetry Go. Each module's LICENSE is Apache-2.0 followed by a
+  # BSD-3-Clause section ("Copyright 2009 The Go Authors") for code copied from
+  # the Go standard library. Both licenses are in allow-licenses, but ScanCode
+  # reports the pair as LicenseRef-bad-apache-2.0-bsd-3-clause, which matches
+  # no entry: the same whole-expression trap as golang.org/x above. It first
+  # failed on 2026-10-10 when otlpmetricgrpc v1.47.0 arrived (#3916).
+  # Listed: every go.opentelemetry.io module in the build whose LICENSE has
+  # that section (auto/sdk and proto/otlp are plain Apache-2.0 and pass).
+  - pkg:golang/go.opentelemetry.io/otel
+  - pkg:golang/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
+  - pkg:golang/go.opentelemetry.io/otel/exporters/otlp/otlptrace
+  - pkg:golang/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+  - pkg:golang/go.opentelemetry.io/otel/exporters/prometheus
+  - pkg:golang/go.opentelemetry.io/otel/exporters/stdout/stdouttrace
+  - pkg:golang/go.opentelemetry.io/otel/log
+  - pkg:golang/go.opentelemetry.io/otel/metric
+  - pkg:golang/go.opentelemetry.io/otel/metric/x
+  - pkg:golang/go.opentelemetry.io/otel/sdk
+  - pkg:golang/go.opentelemetry.io/otel/sdk/metric
+  - pkg:golang/go.opentelemetry.io/otel/trace
+  - pkg:golang/go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin
+  - pkg:golang/go.opentelemetry.io/contrib/propagators/b3
   # Two npm packages, both surfaced by the MUI 9 / React 19 toolchain upgrade.
   # Same narrow-fix reasoning as the golang.org/x block above: each carries a
   # permissive license that simply is not in allow-licenses, and adding either
