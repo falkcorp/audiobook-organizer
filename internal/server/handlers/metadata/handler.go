@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.42.1
+// version: 1.43.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-10-10
 
@@ -460,6 +460,29 @@ func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 			"source":      "",
 			"review_only": true,
 		})
+		return
+	}
+	if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
+		// Matches WERE found, and every one the fetch could apply is a
+		// record the owner rejected for this book. Not a 404: nothing is
+		// missing. The book is returned unchanged.
+		book, berr := store.GetBookByID(id)
+		if berr != nil || book == nil {
+			httputil.RespondWithError(c, 404, "audiobook not found", "NOT_FOUND")
+			return
+		}
+		httputil.RespondWithOK(c, gin.H{
+			"message":        "Not applied: every match found is one you rejected for this book. Un-reject it from the metadata search window to apply it.",
+			"book":           h.enrichBook(book),
+			"source":         "",
+			"owner_rejected": true,
+		})
+		return
+	}
+	if errors.Is(err, metafetch.ErrOwnerRejectionCheckFailed) {
+		// Fails closed: the rejections could not be read, so nothing was
+		// fetched or applied.
+		httputil.InternalError(c, "could not read your rejected matches for this book; nothing was applied", err)
 		return
 	}
 	if err != nil {

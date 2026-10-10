@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.20.4
+// version: 1.21.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -50,6 +50,90 @@ func (e *ReviewOnlyNotAppliedError) Error() string {
 // Is makes errors.Is(err, ErrReviewOnlyCandidatesNotApplied) hold.
 func (e *ReviewOnlyNotAppliedError) Is(target error) bool {
 	return target == ErrReviewOnlyCandidatesNotApplied
+}
+
+// ErrOwnerRejectedNotApplied is returned by FetchMetadataForBook and
+// FetchMetadataForBookByTitle when every record that would otherwise have
+// been applied is one the owner rejected for the book
+// (RejectedSet.HasMetadata). Nothing was written to the book.
+var ErrOwnerRejectedNotApplied = errors.New("metadata: owner_rejected: every match is one the owner rejected for this book; not applied")
+
+// ErrOwnerRejectionCheckFailed is returned by FetchMetadataForBook and
+// FetchMetadataForBookByTitle when the book's rejections cannot be read.
+// The fetch fails closed, before any source is searched: it cannot tell
+// whether the owner rejected what it would apply.
+var ErrOwnerRejectionCheckFailed = errors.New("metadata: owner_rejection_check_failed: the owner's rejections could not be read; not applied")
+
+// OwnerRejectedNotAppliedError is the ErrOwnerRejectedNotApplied a fetch
+// returns, naming the sources whose records the owner rejected (errors.As).
+type OwnerRejectedNotAppliedError struct {
+	Title   string
+	Sources []string
+}
+
+func (e *OwnerRejectedNotAppliedError) Error() string {
+	return fmt.Sprintf("%s: '%s' matched only records rejected on %s", ErrOwnerRejectedNotApplied, e.Title, strings.Join(e.Sources, ", "))
+}
+
+// Is makes errors.Is(err, ErrOwnerRejectedNotApplied) hold.
+func (e *OwnerRejectedNotAppliedError) Is(target error) bool {
+	return target == ErrOwnerRejectedNotApplied
+}
+
+// loadFetchRejections reads bookID's rejections for an auto-fetch. A failed
+// read is ErrOwnerRejectionCheckFailed: the fetch fails closed.
+func (mfs *Service) loadFetchRejections(bookID string) (RejectedSet, error) {
+	rejected, err := LoadRejectedCandidates(mfs.db, bookID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrOwnerRejectionCheckFailed, err)
+	}
+	return rejected, nil
+}
+
+// dropOwnerRejected removes from results the records of source the owner
+// rejected for the book, keeping the order of the rest.
+func dropOwnerRejected(results []metadata.BookMetadata, rejected RejectedSet, source string) []metadata.BookMetadata {
+	kept := make([]metadata.BookMetadata, 0, len(results))
+	for i := range results {
+		if rejected.HasMetadata(source, &results[i]) {
+			continue
+		}
+		kept = append(kept, results[i])
+	}
+	return kept
+}
+
+// pickNotRejected is the auto-fetch's pick for one source with the owner's
+// rejections applied. pick scores results and returns the best record (or
+// none); when that record is one the owner rejected, the pick is made again
+// without the source's rejected records, so it falls through to the next
+// acceptable record. ownerRejected is true when the source's best match was
+// rejected and no other record is acceptable: the caller moves on to the
+// next source and reports the rejection if nothing is applied. A
+// review-only source is never applied, so its pick is left as it is.
+func pickNotRejected(results []metadata.BookMetadata, rejected RejectedSet, source string,
+	pick func([]metadata.BookMetadata) []metadata.BookMetadata) (scored []metadata.BookMetadata, ownerRejected bool) {
+	scored = pick(results)
+	if len(scored) == 0 || len(rejected) == 0 || IsReviewOnlyCandidateSource(source) ||
+		!rejected.HasMetadata(source, &scored[0]) {
+		return scored, false
+	}
+	scored = pick(dropOwnerRejected(results, rejected, source))
+	return scored, len(scored) == 0
+}
+
+// fetchNotApplied is the error for an auto-fetch that applied nothing:
+// owner-rejected matches first (an applicable source matched, and the
+// owner's no is why it was not applied), then review-only ones; nil when
+// neither happened.
+func fetchNotApplied(title string, ownerRejected, reviewOnly []string) error {
+	if len(ownerRejected) > 0 {
+		return &OwnerRejectedNotAppliedError{Title: title, Sources: ownerRejected}
+	}
+	if len(reviewOnly) > 0 {
+		return reviewOnlyNotApplied(title, reviewOnly)
+	}
+	return nil
 }
 
 // reviewOnlyNotApplied is the error for a fetch whose only matches came from
@@ -130,8 +214,16 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 		currentNarrator = SearchAuthorHint(th.narrator)
 	}
 
+	// The owner's rejections, read once and before any source is searched:
+	// a rejected record is never the one applied, and a list that cannot be
+	// read fails the book closed without spending provider quota.
+	rejected, rejErr := mfs.loadFetchRejections(id)
+	if rejErr != nil {
+		return nil, rejErr
+	}
+
 	var lastErr error
-	var reviewOnlyFound []string
+	var reviewOnlyFound, ownerRejectedFound []string
 	for _, src := range sources {
 		// Stop promptly if the caller cancelled — don't start another source.
 		if err := ctx.Err(); err != nil {
@@ -271,7 +363,17 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if th.title != "" {
 				scoreTitles = append(scoreTitles, th.title)
 			}
-			scored := mfs.bestTitleMatchForBook(book, results, currentAuthor, currentNarrator, scoreTitles...)
+			// The owner's rejections: a rejected best record falls through to
+			// the source's next acceptable record, then to the next source.
+			scored, ownerRejected := pickNotRejected(results, rejected, src.Name(), func(rs []metadata.BookMetadata) []metadata.BookMetadata {
+				return mfs.bestTitleMatchForBook(book, rs, currentAuthor, currentNarrator, scoreTitles...)
+			})
+			if ownerRejected {
+				autoFetchLog.Debug("auto-fetch: every acceptable %s match for %q is one the owner rejected; not applied",
+					src.Name(), logger.SanitizeLogValue(searchTitle))
+				ownerRejectedFound = append(ownerRejectedFound, src.Name())
+				continue
+			}
 			if len(scored) == 0 {
 				slog.Debug("all results rejected by quality scorer for", "name", src.Name(), "count", len(results), "value", searchTitle)
 				continue // try next source
@@ -400,8 +502,8 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 		}
 	}
 
-	if len(reviewOnlyFound) > 0 {
-		return nil, reviewOnlyNotApplied(book.Title, reviewOnlyFound)
+	if err := fetchNotApplied(book.Title, ownerRejectedFound, reviewOnlyFound); err != nil {
+		return nil, err
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("no metadata found from any source (last error: %v)", lastErr)
@@ -442,8 +544,14 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		titleOnlyNarrator = *book.Narrator
 	}
 
+	// Read once, before any source is searched (see FetchMetadataForBook).
+	rejected, rejErr := mfs.loadFetchRejections(id)
+	if rejErr != nil {
+		return nil, rejErr
+	}
+
 	var lastErr error
-	var reviewOnlyFound []string
+	var reviewOnlyFound, ownerRejectedFound []string
 	for _, src := range sources {
 		results, searchErr := src.SearchByTitle(context.Background(), searchTitle)
 		if searchErr != nil {
@@ -471,7 +579,13 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 			continue
 		}
 
-		scored := mfs.bestTitleMatchForBook(book, results, "", titleOnlyNarrator, searchTitle, book.Title)
+		scored, ownerRejected := pickNotRejected(results, rejected, src.Name(), func(rs []metadata.BookMetadata) []metadata.BookMetadata {
+			return mfs.bestTitleMatchForBook(book, rs, "", titleOnlyNarrator, searchTitle, book.Title)
+		})
+		if ownerRejected {
+			ownerRejectedFound = append(ownerRejectedFound, src.Name())
+			continue
+		}
 		if len(scored) == 0 {
 			continue
 		}
@@ -530,8 +644,8 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		}, nil
 	}
 
-	if len(reviewOnlyFound) > 0 {
-		return nil, reviewOnlyNotApplied(book.Title, reviewOnlyFound)
+	if err := fetchNotApplied(book.Title, ownerRejectedFound, reviewOnlyFound); err != nil {
+		return nil, err
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("no metadata found from any source (last error: %v)", lastErr)

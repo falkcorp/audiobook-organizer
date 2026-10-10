@@ -1,0 +1,158 @@
+// file: internal/metafetch/owner_rejected_autofetch_test.go
+// version: 1.0.0
+// guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
+// last-edited: 2026-10-10
+
+package metafetch
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+)
+
+// The auto-fetch (FetchMetadataForBook, FetchMetadataForBookByTitle)
+// applies a fresh search's best record with nobody picking it: the iTunes
+// import enrichment, organize's fetch-first, the fetch endpoint and its
+// queued form, and the production-company resolvers. A record the owner
+// rejected for the book must never be the one it applies (regression,
+// 2026-10-10). All fixtures are synthetic.
+
+const rejFetchTitle = "Synthetic Field Notes 5"
+
+type autoFetchRun struct {
+	label string
+	run   func(*Service, string) (*FetchMetadataResponse, error)
+}
+
+var autoFetchRuns = []autoFetchRun{
+	{"FetchMetadataForBook", func(s *Service, id string) (*FetchMetadataResponse, error) {
+		return s.FetchMetadataForBook(context.Background(), id)
+	}},
+	{"FetchMetadataForBookByTitle", func(s *Service, id string) (*FetchMetadataResponse, error) {
+		return s.FetchMetadataForBookByTitle(id)
+	}},
+}
+
+func rejFetchRecord(asin, desc string) metadata.BookMetadata {
+	return metadata.BookMetadata{Title: rejFetchTitle, Author: "Synthetic Penwright", ASIN: asin, Description: desc}
+}
+
+// rejectFor stores the owner's rejection of source's record r for bookID,
+// built the way the reject handler builds it: from the candidate the
+// search turned r into (its Source is the provider's Name()).
+func rejectFor(t *testing.T, store RejectionStore, bookID, source string, r metadata.BookMetadata) {
+	t.Helper()
+	c := newSearchCandidate(r, source, 0.9, nil, 0, false)
+	require.NoError(t, RecordRejection(store, bookID, &c))
+}
+
+func rejFetchFixture(t *testing.T, sources ...metadata.MetadataSource) (*verdictFixture, string) {
+	t.Helper()
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: rejFetchTitle, FilePath: "/lib/sfn/book.m4b"})
+	require.NoError(t, err)
+	f.mfs.SetOverrideSources(sources)
+	return f, b.ID
+}
+
+// Every record the chain returns is rejected: nothing is applied, and the
+// error says the owner rejected them.
+func TestAutoFetch_AllRecordsOwnerRejectedAppliesNothing(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			rec := rejFetchRecord("B0SYNREJ01", "rejected description")
+			f, id := rejFetchFixture(t, &verdictSource{name: "Audible", results: []metadata.BookMetadata{rec}})
+			rejectFor(t, f.store, id, "Audible", rec)
+
+			_, err := fetch.run(f.mfs, id)
+			require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
+			var ore *OwnerRejectedNotAppliedError
+			require.ErrorAs(t, err, &ore)
+			require.Equal(t, []string{"Audible"}, ore.Sources)
+			require.Contains(t, err.Error(), "owner_rejected")
+			require.Nil(t, f.book(id).Description, "an owner-rejected record was applied")
+		})
+	}
+}
+
+// The source's best record is rejected: the next record of the same source
+// is applied instead.
+func TestAutoFetch_RejectedBestFallsThroughToNextRecord(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			rejected := rejFetchRecord("B0SYNREJ01", "rejected description")
+			kept := rejFetchRecord("B0SYNKEP02", "kept description")
+			f, id := rejFetchFixture(t, &verdictSource{name: "Audible", results: []metadata.BookMetadata{rejected, kept}})
+			// The fixture must put the rejected record first, or the test
+			// proves nothing.
+			scored := f.mfs.bestTitleMatchForBook(f.book(id), []metadata.BookMetadata{rejected, kept}, "", "", rejFetchTitle)
+			require.NotEmpty(t, scored)
+			require.Equal(t, "B0SYNREJ01", scored[0].ASIN, "fixture: the rejected record must rank first")
+			rejectFor(t, f.store, id, "Audible", rejected)
+
+			resp, err := fetch.run(f.mfs, id)
+			require.NoError(t, err)
+			require.Equal(t, "Audible", resp.Source)
+			got := f.book(id)
+			require.NotNil(t, got.Description)
+			require.Equal(t, "kept description", *got.Description, "the rejected record was applied")
+		})
+	}
+}
+
+// Source A's only record is rejected: source B's record is applied.
+func TestAutoFetch_RejectedSourceFallsThroughToNextSource(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			recA := rejFetchRecord("B0SYNREJ01", "source A description")
+			recB := rejFetchRecord("B0SYNKEP02", "source B description")
+			a := &verdictSource{name: "Audible", results: []metadata.BookMetadata{recA}}
+			b := &verdictSource{name: "Synthetic Source B", results: []metadata.BookMetadata{recB}}
+			f, id := rejFetchFixture(t, a, b)
+			rejectFor(t, f.store, id, "Audible", recA)
+
+			resp, err := fetch.run(f.mfs, id)
+			require.NoError(t, err)
+			require.Equal(t, "Synthetic Source B", resp.Source)
+			got := f.book(id)
+			require.NotNil(t, got.Description)
+			require.Equal(t, "source B description", *got.Description)
+		})
+	}
+}
+
+// failingRejectionScan is a store whose rejection keyspace cannot be read.
+type failingRejectionScan struct{ *database.PebbleStore }
+
+func (s failingRejectionScan) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	if strings.HasPrefix(prefix, RejectedCandidatePrefix) {
+		return nil, errors.New("scan failed")
+	}
+	return s.PebbleStore.ScanPrefix(prefix)
+}
+
+// An unreadable rejection list fails the book closed before any source is
+// asked: the fetch cannot tell whether the owner rejected what it would
+// apply.
+func TestAutoFetch_UnreadableRejectionsFailClosed(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			src := &verdictSource{name: "Audible", results: []metadata.BookMetadata{rejFetchRecord("B0SYNKEP02", "description")}}
+			f, id := rejFetchFixture(t, src)
+			svc := NewService(failingRejectionScan{f.store})
+			svc.SetOverrideSources([]metadata.MetadataSource{src})
+
+			_, err := fetch.run(svc, id)
+			require.ErrorIs(t, err, ErrOwnerRejectionCheckFailed)
+			require.Zero(t, src.calls.Load(), "no source may be searched")
+			require.Nil(t, f.book(id).Description)
+		})
+	}
+}

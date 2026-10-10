@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-10-10
 
@@ -468,6 +468,12 @@ func (h *Handler) RunQueuedApply(ctx context.Context, q QueuedApply, beat func(m
 		if errors.Is(err, metafetch.ErrReviewOnlyCandidatesNotApplied) {
 			// A match was found and left for review (the auto-fetch never
 			// applies a review-only source): the queued fetch did its job.
+			bookLockLog.Info("queued fetch for book %s: %s", logger.SanitizeLogValue(q.BookID), logger.SanitizeLogValue(err.Error()))
+			return nil
+		}
+		if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
+			// Every match is a record the owner rejected for the book: the
+			// queued fetch did its job by applying none of them.
 			bookLockLog.Info("queued fetch for book %s: %s", logger.SanitizeLogValue(q.BookID), logger.SanitizeLogValue(err.Error()))
 			return nil
 		}

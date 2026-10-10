@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package itunesservice
 
@@ -1091,6 +1091,21 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 			// answered, so this resets the breaker like any success.
 			log.Debug("Only review-only matches for '%s', left for review: %v", book.Title, err)
 			breakerFails.Store(0)
+			return nil
+		}
+		if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
+			// Every provider answered; the only matches are records the
+			// owner rejected for this book, and none is ever applied. The
+			// providers answered, so this resets the breaker too.
+			log.Debug("Only owner-rejected matches for '%s', not applied: %v", book.Title, err)
+			breakerFails.Store(0)
+			return nil
+		}
+		if errors.Is(err, metafetch.ErrOwnerRejectionCheckFailed) {
+			// The book's rejections could not be read, so nothing was
+			// fetched or applied. A local read failure, not a provider one:
+			// it does not count toward the rate-limit breaker.
+			log.Warn("Skipped metadata enrichment for '%s': %v", book.Title, err)
 			return nil
 		}
 		if err != nil {
