@@ -1,6 +1,6 @@
 ### Added
 
-#### `database.FirstAudioFile` / `FirstAudioFiles` read the first audio file from `book_file` rows
+#### `bookfiles.FirstAudioFile` / `FirstAudioFiles` read the first audio file from `book_file` rows
 
 `Book.FilePath` is stale for many books, so callers that only want "a path for
 this book" now have one tested helper that reads the `book_file` rows and never
