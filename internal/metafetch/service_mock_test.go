@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-10
 
@@ -520,13 +520,13 @@ func TestLoadRejectedCandidates(t *testing.T) {
 	})
 	t.Run("folds_case_of_stored_keys", func(t *testing.T) {
 		mock := &database.MockStore{ScanPrefixFunc: func(string) ([]database.KVPair, error) {
-			return []database.KVPair{{Key: RejectedCandidateStoreKey("book-1", "Audible", "Quiet Harbor"), Value: []byte("1")}}, nil
+			return []database.KVPair{{Key: RejectedCandidateStoreKey("book-1", "Audible", "Synthetic Field Notes 3"), Value: []byte("1")}}, nil
 		}}
 		keys, err := LoadRejectedCandidates(mock, "book-1")
 		assert.NoError(t, err)
-		assert.True(t, keys.Has("audible", "QUIET HARBOR"))
-		assert.True(t, keys.HasCandidate(&MetadataCandidate{Source: "Audible", Title: "Quiet Harbor"}))
-		assert.False(t, keys.Has("Audible", "Quiet Harbor Returns"))
+		assert.True(t, keys.Has("audible", "SYNTHETIC FIELD NOTES 3"))
+		assert.True(t, keys.HasCandidate(&MetadataCandidate{Source: "Audible", Title: "Synthetic Field Notes 3"}))
+		assert.False(t, keys.Has("Audible", "Synthetic Field Notes 3 Returns"))
 	})
 	t.Run("scan_error_is_returned", func(t *testing.T) {
 		mock := &database.MockStore{ScanPrefixFunc: func(string) ([]database.KVPair, error) {

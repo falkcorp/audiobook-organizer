@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.30.0
+// version: 4.31.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-10
 
@@ -1649,6 +1649,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/metadata/bulk-apply-preview/:id", s.perm(auth.PermLibraryView), s.handleGetBulkApplyPreview)
 			protected.POST("/metadata/batch-reject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleRejectCandidates)
 			protected.POST("/metadata/batch-unreject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidates)
+			protected.POST("/metadata/unreject-candidate", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidate)
 			// fetch-metadata / search-metadata / apply-metadata / mark-no-match /
 			// revert-metadata / metadata-rejections / cow-versions(+prune) /
 			// write-back migrated to the handlers/metadata sub-package (wireHandlers).
