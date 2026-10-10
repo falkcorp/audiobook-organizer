@@ -1,13 +1,15 @@
 #!/bin/bash
 # file: scripts/setup-mockery.sh
-# version: 1.5.0
+# version: 1.6.0
 # guid: c3d4e5f6-a7b8-9012-cdef-345678901abc
+# last-edited: 2026-10-10
 
 # Setup script for integrating mockery v3 into the project.
 #
-# PINNED VERSION: v3.8.0 (module github.com/vektra/mockery/v3). This must
-# match the version installed in .github/workflows/ci.yml's mocks-check job.
-# Do NOT use @latest — it drifts silently (e.g. resolving to a newer mockery
+# PINNED VERSION: v3.8.0 (module github.com/vektra/mockery/v3), built from
+# tools/mockery/go.mod, which also raises golang.org/x/tools to v0.51.0 so
+# mockery can read go1.27.2's export data. CI and Woodpecker build it the
+# same way (`go -C tools/mockery install tool`). Do NOT use @latest — it drifts silently (e.g. resolving to a newer mockery
 # major/minor than CI expects) and produces spurious formatting-only diffs
 # (interface{} -> any, receiver renames, etc.) that make `make mocks-check`
 # fail locally even though CI is green. If you see a large, repo-wide mock
@@ -20,11 +22,10 @@ MOCKERY_VERSION="v3.8.0"
 
 echo "🔧 Setting up mockery for improved test coverage..."
 
-# Check if mockery is installed
-if ! command -v mockery &> /dev/null; then
-    echo "📦 Installing mockery ${MOCKERY_VERSION}..."
-    go install "github.com/vektra/mockery/v3@${MOCKERY_VERSION}"
-fi
+# Always (re)build from the tools module: a mockery from a plain
+# `go install ...@v3.8.0` reports the same version but carries the old x/tools.
+echo "📦 Building mockery ${MOCKERY_VERSION} from tools/mockery..."
+go -C "$(git rev-parse --show-toplevel)/tools/mockery" install tool
 
 echo "✅ Mockery is installed (expected version: ${MOCKERY_VERSION})"
 mockery version

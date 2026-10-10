@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.23.1
+# version: 3.24.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-10
 
@@ -426,16 +426,12 @@ jobs:
           submodules: recursive
 
       # setup-go keeps the floating '1.27' like every other job (the toolchain
-      # drift check in scripts/check_toolchain_versions.py requires it), but the
-      # two mockery steps below run under GOTOOLCHAIN=go1.27.1, the Makefile pin:
-      # mockery v3.8.0 (the newest release on 2026-10-09) vendors an x/tools
-      # that reads export data up to format version 4, and go1.27.2 writes
-      # version 5, so under 1.27.2 it fails every package with "could not
-      # import fmt ... export data version 5 is greater than maximum supported
-      # version 4" (ci.yml run 37886715226, the first after setup-go started
-      # resolving '1.27' to 1.27.2). Drop the two env lines when a mockery
-      # release reads version 5; the golangci-lint jobs moved to v2.14.0 for
-      # the same reason and need no pin.
+      # drift check in scripts/check_toolchain_versions.py requires it).
+      # mockery is built from tools/mockery/go.mod, not `go install ...@v3.8.0`:
+      # the v3.8.0 release requires an x/tools that reads export data only up
+      # to format version 4, and go1.27.2 writes version 5 ("could not import
+      # fmt ... export data version 5 is greater than maximum supported version
+      # 4", ci.yml run 37886715226). The tools module raises x/tools to v0.51.0.
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -456,8 +452,8 @@ jobs:
       - name: Install system packages
         run: sudo apt-get update && sudo apt-get install -y libtag1-dev
 
-      # Pinned mockery version: v3.8.0 (module github.com/vektra/mockery/v3).
-      # Must match scripts/setup-mockery.sh. The committed mocks (including
+      # Pinned mockery version: v3.8.0 (module github.com/vektra/mockery/v3),
+      # built from tools/mockery/go.mod like `make mockery-install`. The committed mocks (including
       # the merged internal/database/mocks/mock_store.go) were generated
       # with mockery v3, which supports package-based config and merging
       # multiple interfaces into one output file — mockery v2.53.6 does NOT
@@ -465,9 +461,7 @@ jobs:
       # overwrites the previous one), so v2 cannot regenerate this repo's
       # mocks at all. Do not downgrade this pin to v2.
       - name: Install mockery
-        env:
-          GOTOOLCHAIN: go1.27.1
-        run: go install github.com/vektra/mockery/v3@v3.8.0
+        run: go -C tools/mockery install tool
 
       # `git diff` compares the working tree against the INDEX, so it is blind
       # to files that are not tracked yet. That is precisely the case this job
@@ -477,11 +471,9 @@ jobs:
       # --porcelain` lists untracked entries (as `??`) alongside modified ones,
       # so it sees both halves of "stale".
       - name: Check mockery mocks are fresh
-        env:
-          GOTOOLCHAIN: go1.27.1
         run: |
           set -e
-          mockery
+          "$(go env GOPATH)/bin/mockery"
           MOCK_PATHS=(':(glob)internal/**/mocks/**' 'internal/ai/mock_*_test.go' 'internal/metadata/mock_*_test.go')
           CHANGED=$(git status --porcelain --untracked-files=all -- "${MOCK_PATHS[@]}")
           if [ -n "$CHANGED" ]; then
