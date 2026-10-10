@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.35.0
+// version: 3.35.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -88,6 +89,12 @@ type Registry struct {
 	// enqueue could list the active set while a retried row was still
 	// interrupted, miss it, and insert a second queued run.
 	admitLocks sync.Map
+
+	// ops records the OTel run metrics (internal/opsmetrics). Never nil.
+	// inflightUnreg unregisters this registry's ops.inflight callback; set by
+	// Start and cleared by Shutdown, guarded by mu.
+	ops           *opsmetrics.Recorder
+	inflightUnreg func()
 
 	// shuttingDown is flipped at the top of Shutdown so the abandoned-run
 	// watchdog in executeRun stops spawning replacement workers. Without
@@ -190,6 +197,10 @@ type Registry struct {
 // Options contains optional tunable parameters for a Registry. Zero values
 // use sensible defaults. Primarily used in tests to shorten intervals.
 type Options struct {
+	// OpsMetrics overrides the recorder for the OTel run metrics. Nil = the
+	// recorder on the global meter provider (opsmetrics.Default). Tests pass
+	// one built on a private provider.
+	OpsMetrics *opsmetrics.Recorder
 	// WatchdogInterval overrides the 30-second watchdog ticker. Zero = default.
 	WatchdogInterval time.Duration
 	// AbandonedCap overrides the per-plugin abandoned goroutine cap (default 4).
@@ -254,7 +265,12 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 	if workers <= 0 {
 		workers = 8
 	}
+	ops := opts.OpsMetrics
+	if ops == nil {
+		ops = opsmetrics.Default()
+	}
 	return &Registry{
+		ops:                ops,
 		defs:               make(map[string]OperationDef),
 		running:            make(map[string]*runHandle),
 		abandonedAlive:     make(map[string]struct{}),
@@ -491,6 +507,7 @@ func (r *Registry) SetPluginMaxConcurrent(plugin string, max int) {
 func (r *Registry) Start(ctx context.Context) {
 	r.logger.Info("registry: starting", "workers", r.workers)
 	trackLiveRegistry(r)
+	r.registerInflightGauge()
 	// Clear the notify gate in case this Registry is being restarted after a
 	// prior Shutdown (Shutdown sets notifyStopped to reject late enrollments).
 	r.mu.Lock()
@@ -681,6 +698,9 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	r.defs[def.ID] = def
 	r.publishAliasesLocked(def)
 	r.mu.Unlock()
+	// def_id is a closed label set (spec 11 rule C1): only registered defs
+	// get their own series, anything else folds into "other".
+	opsmetrics.RegisterDefID(def.ID)
 
 	// Persist to op_definitions_v2. Best-effort; log on error.
 	if err := r.upsertDefToDB(def); err != nil {
@@ -1367,6 +1387,9 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// Deregister from the live-registry tracker on return: once Shutdown has
 	// run, ShutdownAllForStore must not re-drain this registry.
 	defer untrackLiveRegistry(r)
+	// Unregister the ops.inflight callback on every return path so a registry
+	// created per test cannot leak a callback into the next one.
+	defer r.unregisterInflightGauge()
 	// Flip the shutdown flag before canceling handles so the abandoned-run
 	// watchdog (in worker.go executeRun) refuses to spawn replacement
 	// workers. Without this, a replacement worker is born just as the
@@ -1650,4 +1673,40 @@ func phaseNames(phases []Phase) []string {
 		names[i] = p.Name
 	}
 	return names
+}
+
+// registerInflightGauge registers the ops.inflight observable-gauge callback
+// over r.running, the authoritative set of runs holding a slot. The callback
+// reads the map at collection time under r.mu, so there is no counter pair
+// whose missed decrement could leave a permanent false in-flight run (and a
+// false OpStalledV2 alert). Idempotent until unregisterInflightGauge.
+func (r *Registry) registerInflightGauge() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inflightUnreg != nil {
+		return
+	}
+	r.inflightUnreg = r.ops.RegisterInflight(r.inflightByDef)
+}
+
+// unregisterInflightGauge removes the callback registered by Start.
+func (r *Registry) unregisterInflightGauge() {
+	r.mu.Lock()
+	unreg := r.inflightUnreg
+	r.inflightUnreg = nil
+	r.mu.Unlock()
+	if unreg != nil {
+		unreg()
+	}
+}
+
+// inflightByDef counts the registered runs per (def, plugin).
+func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[opsmetrics.InflightKey]int64, len(r.running))
+	for _, h := range r.running {
+		out[opsmetrics.InflightKey{DefID: h.defID, Plugin: h.plugin}]++
+	}
+	return out
 }

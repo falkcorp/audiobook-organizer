@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-10
 
@@ -48,6 +48,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
@@ -161,6 +162,7 @@ func buildSeedingTable() []seedRow {
 	failover := once(seedDispatchFailover)
 	noCapable := once(seedDispatchNoCapable)
 	gin := once(seedOtelgin)
+	opsSeed := once(seedOpsMetrics)
 	pebbleRow := func(name string) seedRow {
 		return seedRow{"audiobook_organizer_pebble_" + name, "metrics.SetPebbleSource(main, fixedSample)", pebble}
 	}
@@ -206,6 +208,11 @@ func buildSeedingTable() []seedRow {
 		{"audiobook_organizer_review_index_request_seconds", "metrics.ObserveReviewIndexRequest", do(func() { metrics.ObserveReviewIndexRequest("contract", time.Second) })},
 		{"audiobook_organizer_number_leading_titles", "metrics.SetNumberLeadingTitles", do(func() { metrics.SetNumberLeadingTitles(1) })},
 		{"audiobook_organizer_fixer_duration_seconds", "metrics.ObserveFixerDuration", do(func() { metrics.ObserveFixerDuration("contract", "trial", time.Second) })},
+
+		{"audiobook_organizer_ops_runs_total", "opsmetrics Started and Finished", opsSeed},
+		{"audiobook_organizer_ops_run_duration_seconds", "opsmetrics Finished", opsSeed},
+		{"audiobook_organizer_ops_items_total", "opsmetrics Items", opsSeed},
+		{"audiobook_organizer_ops_inflight", "opsmetrics RegisterInflight", opsSeed},
 
 		{"ai_dispatch_requests_total", "aidispatch.Call with failover", failover},
 		{"ai_dispatch_inflight", "aidispatch.Call with failover", failover},
@@ -322,6 +329,23 @@ func seedMemdbFallback() error {
 	if _, err := s.GetBooksByMetadataSourceHashInMemory("contract"); !errors.Is(err, database.ErrMemDBNotReady) {
 		return fmt.Errorf("memdb fallback seed: err %v, want ErrMemDBNotReady", err)
 	}
+	return nil
+}
+
+// seedOpsMetrics records one point on every instrument the v2 registry wires.
+// The in-flight callback is never unregistered: the source lives as long as
+// the test process.
+func seedOpsMetrics() error {
+	opsmetrics.RegisterDefID("contract")
+	r := opsmetrics.Default()
+	r.Started("contract")
+	if !r.Finished("contract", "completed", time.Second) {
+		return fmt.Errorf("ops seed: Finished(completed) recorded nothing")
+	}
+	r.Items("contract", opsmetrics.ItemsProcessed, 1)
+	r.RegisterInflight(func() map[opsmetrics.InflightKey]int64 {
+		return map[opsmetrics.InflightKey]int64{{DefID: "contract", Plugin: "contract"}: 1}
+	})
 	return nil
 }
 
@@ -717,6 +741,10 @@ type instrumentSpec struct {
 // and its golden rows' source becomes "otel".
 var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.memdb.fallback_reads", kind: kindCounter, keys: []attribute.Key{telemetry.Outcome, telemetry.Site}},
+	{name: "audiobook_organizer.ops.runs", kind: kindCounter, unit: "{run}", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},
+	{name: "audiobook_organizer.ops.run.duration", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},
+	{name: "audiobook_organizer.ops.items", kind: kindCounter, unit: "{item}", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},
+	{name: "audiobook_organizer.ops.inflight", kind: kindGauge, unit: "{run}", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "ai_dispatch.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Outcome}},
 	{name: "ai_dispatch.inflight", kind: kindUpDownCounter, unit: "{request}", keys: []attribute.Key{telemetry.Endpoint}},
 	{name: "ai_dispatch.failover", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Class}},

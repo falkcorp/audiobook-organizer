@@ -1,5 +1,5 @@
 // file: internal/telemetry/views.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9154168b-56f2-4d06-bb53-f0b09d8954fa
 // last-edited: 2026-10-10
 
@@ -37,6 +37,9 @@ import (
 var histogramBuckets = map[string][]float64{
 	// internal/metrics/metrics.go operationDuration.
 	"audiobook_organizer.operation.duration": {0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 43200, 86400},
+	// internal/opsmetrics: same boundaries as operation.duration (copied, not
+	// aliased: the two families are compared side by side during the soak).
+	"audiobook_organizer.ops.run.duration": {0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 43200, 86400},
 	// internal/metrics/metrics.go cacheGetDuration: 500ns up to ~130ms.
 	"audiobook_organizer.cache.get.duration": prometheus.ExponentialBuckets(0.0000005, 4, 10),
 	// internal/metrics/pipeline_metrics.go reviewIndexRequestSeconds. Spec 11
