@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.139.0
+// version: 1.140.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package database
 
@@ -258,8 +258,6 @@ type MockStore struct {
 	// Operation State Persistence
 	SaveOperationStateFunc       func(opID string, state []byte) error
 	GetOperationStateFunc        func(opID string) ([]byte, error)
-	SaveOperationParamsFunc      func(opID string, params []byte) error
-	GetOperationParamsFunc       func(opID string) ([]byte, error)
 	DeleteOperationStateFunc     func(opID string) error
 	DeleteOperationWithLogsFunc  func(id string) error
 	GetInterruptedOperationsFunc func() ([]Operation, error)
@@ -1761,20 +1759,6 @@ func (m *MockStore) SaveOperationState(opID string, state []byte) error {
 func (m *MockStore) GetOperationState(opID string) ([]byte, error) {
 	if m.GetOperationStateFunc != nil {
 		return m.GetOperationStateFunc(opID)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) SaveOperationParams(opID string, params []byte) error {
-	if m.SaveOperationParamsFunc != nil {
-		return m.SaveOperationParamsFunc(opID, params)
-	}
-	return nil
-}
-
-func (m *MockStore) GetOperationParams(opID string) ([]byte, error) {
-	if m.GetOperationParamsFunc != nil {
-		return m.GetOperationParamsFunc(opID)
 	}
 	return nil, nil
 }

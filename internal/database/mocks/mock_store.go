@@ -698,68 +698,6 @@ func (_c *MockOperationStore_GetOperationLogs_Call) RunAndReturn(run func(operat
 	return _c
 }
 
-// GetOperationParams provides a mock function for the type MockOperationStore
-func (_mock *MockOperationStore) GetOperationParams(opID string) ([]byte, error) {
-	ret := _mock.Called(opID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetOperationParams")
-	}
-
-	var r0 []byte
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]byte, error)); ok {
-		return returnFunc(opID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) []byte); ok {
-		r0 = returnFunc(opID)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]byte)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(opID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockOperationStore_GetOperationParams_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetOperationParams'
-type MockOperationStore_GetOperationParams_Call struct {
-	*mock.Call
-}
-
-// GetOperationParams is a helper method to define mock.On call
-//   - opID string
-func (_e *MockOperationStore_Expecter) GetOperationParams(opID any) *MockOperationStore_GetOperationParams_Call {
-	return &MockOperationStore_GetOperationParams_Call{Call: _e.mock.On("GetOperationParams", opID)}
-}
-
-func (_c *MockOperationStore_GetOperationParams_Call) Run(run func(opID string)) *MockOperationStore_GetOperationParams_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockOperationStore_GetOperationParams_Call) Return(bytes []byte, err error) *MockOperationStore_GetOperationParams_Call {
-	_c.Call.Return(bytes, err)
-	return _c
-}
-
-func (_c *MockOperationStore_GetOperationParams_Call) RunAndReturn(run func(opID string) ([]byte, error)) *MockOperationStore_GetOperationParams_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetOperationResults provides a mock function for the type MockOperationStore
 func (_mock *MockOperationStore) GetOperationResults(operationID string) ([]database.OperationResult, error) {
 	ret := _mock.Called(operationID)
@@ -1465,63 +1403,6 @@ func (_c *MockOperationStore_PruneOperationLogs_Call) Return(n int, err error) *
 }
 
 func (_c *MockOperationStore_PruneOperationLogs_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockOperationStore_PruneOperationLogs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SaveOperationParams provides a mock function for the type MockOperationStore
-func (_mock *MockOperationStore) SaveOperationParams(opID string, params []byte) error {
-	ret := _mock.Called(opID, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SaveOperationParams")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, []byte) error); ok {
-		r0 = returnFunc(opID, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockOperationStore_SaveOperationParams_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveOperationParams'
-type MockOperationStore_SaveOperationParams_Call struct {
-	*mock.Call
-}
-
-// SaveOperationParams is a helper method to define mock.On call
-//   - opID string
-//   - params []byte
-func (_e *MockOperationStore_Expecter) SaveOperationParams(opID any, params any) *MockOperationStore_SaveOperationParams_Call {
-	return &MockOperationStore_SaveOperationParams_Call{Call: _e.mock.On("SaveOperationParams", opID, params)}
-}
-
-func (_c *MockOperationStore_SaveOperationParams_Call) Run(run func(opID string, params []byte)) *MockOperationStore_SaveOperationParams_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 []byte
-		if args[1] != nil {
-			arg1 = args[1].([]byte)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockOperationStore_SaveOperationParams_Call) Return(err error) *MockOperationStore_SaveOperationParams_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockOperationStore_SaveOperationParams_Call) RunAndReturn(run func(opID string, params []byte) error) *MockOperationStore_SaveOperationParams_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -19084,68 +18965,6 @@ func (_c *MockStore_GetOperationLogs_Call) RunAndReturn(run func(operationID str
 	return _c
 }
 
-// GetOperationParams provides a mock function for the type MockStore
-func (_mock *MockStore) GetOperationParams(opID string) ([]byte, error) {
-	ret := _mock.Called(opID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetOperationParams")
-	}
-
-	var r0 []byte
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]byte, error)); ok {
-		return returnFunc(opID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) []byte); ok {
-		r0 = returnFunc(opID)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]byte)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(opID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockStore_GetOperationParams_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetOperationParams'
-type MockStore_GetOperationParams_Call struct {
-	*mock.Call
-}
-
-// GetOperationParams is a helper method to define mock.On call
-//   - opID string
-func (_e *MockStore_Expecter) GetOperationParams(opID any) *MockStore_GetOperationParams_Call {
-	return &MockStore_GetOperationParams_Call{Call: _e.mock.On("GetOperationParams", opID)}
-}
-
-func (_c *MockStore_GetOperationParams_Call) Run(run func(opID string)) *MockStore_GetOperationParams_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_GetOperationParams_Call) Return(bytes []byte, err error) *MockStore_GetOperationParams_Call {
-	_c.Call.Return(bytes, err)
-	return _c
-}
-
-func (_c *MockStore_GetOperationParams_Call) RunAndReturn(run func(opID string) ([]byte, error)) *MockStore_GetOperationParams_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetOperationResults provides a mock function for the type MockStore
 func (_mock *MockStore) GetOperationResults(operationID string) ([]database.OperationResult, error) {
 	ret := _mock.Called(operationID)
@@ -28217,63 +28036,6 @@ func (_c *MockStore_SaveLibraryFingerprint_Call) Return(err error) *MockStore_Sa
 }
 
 func (_c *MockStore_SaveLibraryFingerprint_Call) RunAndReturn(run func(path string, size int64, modTime time.Time, crc32 uint32) error) *MockStore_SaveLibraryFingerprint_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SaveOperationParams provides a mock function for the type MockStore
-func (_mock *MockStore) SaveOperationParams(opID string, params []byte) error {
-	ret := _mock.Called(opID, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SaveOperationParams")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, []byte) error); ok {
-		r0 = returnFunc(opID, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_SaveOperationParams_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveOperationParams'
-type MockStore_SaveOperationParams_Call struct {
-	*mock.Call
-}
-
-// SaveOperationParams is a helper method to define mock.On call
-//   - opID string
-//   - params []byte
-func (_e *MockStore_Expecter) SaveOperationParams(opID any, params any) *MockStore_SaveOperationParams_Call {
-	return &MockStore_SaveOperationParams_Call{Call: _e.mock.On("SaveOperationParams", opID, params)}
-}
-
-func (_c *MockStore_SaveOperationParams_Call) Run(run func(opID string, params []byte)) *MockStore_SaveOperationParams_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 []byte
-		if args[1] != nil {
-			arg1 = args[1].([]byte)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_SaveOperationParams_Call) Return(err error) *MockStore_SaveOperationParams_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_SaveOperationParams_Call) RunAndReturn(run func(opID string, params []byte) error) *MockStore_SaveOperationParams_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-09
 
 package database
 
@@ -324,24 +324,6 @@ func (p *PebbleStore) SaveOperationState(opID string, state []byte) error {
 
 func (p *PebbleStore) GetOperationState(opID string) ([]byte, error) {
 	key := []byte(fmt.Sprintf("opstate:%s", opID))
-	value, closer, err := p.db.Get(key)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-	return append([]byte(nil), value...), nil
-}
-
-func (p *PebbleStore) SaveOperationParams(opID string, params []byte) error {
-	key := []byte(fmt.Sprintf("opstate:%s:params", opID))
-	return p.db.Set(key, params, pebble.Sync)
-}
-
-func (p *PebbleStore) GetOperationParams(opID string) ([]byte, error) {
-	key := []byte(fmt.Sprintf("opstate:%s:params", opID))
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil

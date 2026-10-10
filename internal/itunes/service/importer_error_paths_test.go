@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -82,7 +82,6 @@ func TestExecute_CorruptXML_ReturnsError(t *testing.T) {
 
 	m := dbmocks.NewMockStore(t)
 	// Execute always calls SaveParams + LoadCheckpoint before attempting to parse.
-	m.EXPECT().SaveOperationParams("op-corrupt", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-corrupt").Return(nil, nil).Once()
 	// On parse failure ClearState (DeleteOperationState) is called.
 	m.EXPECT().DeleteOperationState("op-corrupt").Return(nil).Once()
@@ -109,7 +108,6 @@ func TestExecute_NonXMLBinary_ReturnsError(t *testing.T) {
 	require.NoError(t, os.WriteFile(binPath, bytes.Repeat([]byte{0x00, 0xff, 0x80, 0x01}, 32), 0o644))
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-binary", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-binary").Return(nil, nil).Once()
 	m.EXPECT().DeleteOperationState("op-binary").Return(nil).Once()
 
@@ -139,7 +137,6 @@ func TestExecute_TombstonedPID_Skipped(t *testing.T) {
 	authorRecord := &database.Author{ID: 1, Name: "Author A"}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-tombstone", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-tombstone").Return(nil, nil).Once()
 	// assignAuthorAndSeries: look up / create author + series.
 	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
@@ -186,7 +183,6 @@ func TestExecute_ExistingPID_LinkedNotCreated(t *testing.T) {
 	authorRecord := &database.Author{ID: 2, Name: "Author B"}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-existing-pid", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-existing-pid").Return(nil, nil).Once()
 	// assignAuthorAndSeries: look up author + series.
 	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
@@ -233,7 +229,6 @@ func TestExecute_SkipDuplicates_ExistingPath_Linked(t *testing.T) {
 	authorRecord := &database.Author{ID: 3, Name: "Author C"}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-skip-dup", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-skip-dup").Return(nil, nil).Once()
 	// assignAuthorAndSeries: look up author + series.
 	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
@@ -284,7 +279,6 @@ func TestExecute_CreateBookFails_ContinuesAndCountsFailed(t *testing.T) {
 	authorRecord := &database.Author{ID: 4, Name: "Author D"}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-fail-create", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-fail-create").Return(nil, nil).Once()
 	// assignAuthorAndSeries runs before PID check and before CreateBook.
 	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
@@ -640,7 +634,6 @@ func TestExecute_NewBook_WritesExternalIDMappingAtImport(t *testing.T) {
 	created := &database.Book{ID: "new-book-id-9", Title: "Audiobook E"}
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-new-book", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-new-book").Return(nil, nil).Once()
 	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
 	m.EXPECT().GetSeriesByName(mock.Anything, mock.Anything).Return(nil, nil).Maybe()

@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
@@ -224,7 +224,6 @@ type serverTagReader interface {
 type serverOperationReader interface {
 	GetInterruptedOperations() ([]database.Operation, error)
 	GetOperationByID(id string) (*database.Operation, error)
-	GetOperationParams(opID string) ([]byte, error)
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 	GetOperationSummaryLog(id string) (*database.OperationSummaryLog, error)
 	GetRecentOperations(limit int) ([]database.Operation, error)
@@ -248,7 +247,6 @@ type serverOperationWriter interface {
 	AddOperationLog(operationID string, level string, message string, details *string) error
 	CreateOperationChange(change *database.OperationChange) error
 	CreateOperationResult(result *database.OperationResult) error
-	SaveOperationParams(opID string, params []byte) error
 	UpdateOperationError(id string, errorMessage string) error
 	UpdateOperationResultData(id string, resultData string) error
 	UpdateOperationStatus(id string, status string, progress int, total int, message string) error

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
-// last-edited: 2026-08-21
+// last-edited: 2026-10-09
 
 // package jobs, not jobs_test: bulkDelugeImportJob is unexported, so the test
 // has to live inside the package to construct it directly. That is also why
@@ -99,9 +99,6 @@ func runBDI(
 
 	var updated *database.BookFile
 	store := &bdiStore{MockStore: &database.MockStore{
-		// Returning no params leaves len(raw) == 0, so Run keeps the dryRun
-		// argument it was passed (false) instead of unmarshalling over it.
-		GetOperationParamsFunc: func(string) ([]byte, error) { return nil, nil },
 		GetBookFilesNeedingDelugeImportCoreFunc: func() ([]database.BookFileCore, error) {
 			return []database.BookFileCore{full.Core()}, nil
 		},

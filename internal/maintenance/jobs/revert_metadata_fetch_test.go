@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c2f8a91-4db7-4e35-9a80-2f5c1d7b3e64
-// last-edited: 2026-09-07
+// last-edited: 2026-10-09
 
 package jobs_test
 
@@ -88,28 +88,6 @@ func TestRevertMetadataFetchJob_MissingFetchOpIDsIsAnError(t *testing.T) {
 
 	err = j.Run(context.Background(), store, &noopReporter{}, false)
 	require.Error(t, err, "no fetch_op_ids must be a clear error, not a silent no-op")
-	assert.Contains(t, err.Error(), "fetch_op_ids required")
-}
-
-// The dead path must stay dead. A populated params side table must NOT revive the
-// job: if it did, the fix would be cosmetic and the real channel untested.
-func TestRevertMetadataFetchJob_IgnoresOperationParamsSideTable(t *testing.T) {
-	sideTableReads := 0
-	store := &database.MockStore{
-		GetOperationParamsFunc: func(opID string) ([]byte, error) {
-			sideTableReads++
-			return []byte(`{"fetch_op_ids":["fetch-op-a"]}`), nil
-		},
-	}
-
-	j, err := maintenance.Get("revert-metadata-fetch")
-	require.NoError(t, err)
-
-	ctx := maintenance.WithOperationID(context.Background(), "op-revert-2")
-	err = j.Run(ctx, store, &noopReporter{}, false)
-
-	assert.Zero(t, sideTableReads, "the job must not read the params side table")
-	require.Error(t, err, "a side-table fetch_op_ids must not satisfy the requirement")
 	assert.Contains(t, err.Error(), "fetch_op_ids required")
 }
 

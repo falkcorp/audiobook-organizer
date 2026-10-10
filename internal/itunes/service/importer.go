@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package itunesservice
 
@@ -138,14 +138,13 @@ type itunesImportState interface {
 
 // importerCheckpointStore is the resume surface. internal/operations deliberately
 // declares these one method at a time so each helper takes only what it uses;
-// this groups the four the import pipeline reaches via operations.SaveParams,
-// LoadCheckpoint, SaveCheckpoint and ClearState. PathReconciler and PathRepairer
+// this groups the three the import pipeline reaches via LoadCheckpoint,
+// SaveCheckpoint and ClearState. PathReconciler and PathRepairer
 // carry their own OperationStateDeleter rather than sharing this.
 type importerCheckpointStore interface {
 	operations.OperationStateWriter
 	operations.OperationStateReader
 	operations.OperationStateDeleter
-	operations.OperationParamsWriter
 }
 
 // importerVersionStore is what the version-primary hand-off
@@ -356,16 +355,6 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 	for _, pm := range req.PathMappings {
 		pathMappings[pm.From] = pm.To
 	}
-	_ = operations.SaveParams(imp.store, opID, operations.ITunesImportParams{
-		LibraryXMLPath: req.LibraryPath,
-		LibraryPath:    req.LibraryPath,
-		ImportMode:     req.ImportMode,
-		PathMappings:   pathMappings,
-		SkipDuplicates: req.SkipDuplicates,
-		EnrichMetadata: req.FetchMetadata,
-		AutoOrganize:   !req.PreserveLocation,
-	})
-
 	checkpoint, _ := operations.LoadCheckpoint(imp.store, opID)
 	resumeIndex := 0
 	if checkpoint != nil && checkpoint.Phase == "importing" {

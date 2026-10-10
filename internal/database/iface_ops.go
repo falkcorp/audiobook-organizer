@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b93b0da0-8afb-46fb-983e-c43f238ea67c
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 package database
 
@@ -30,8 +30,6 @@ type OperationStateStore interface {
 	// State persistence (resumable operations)
 	SaveOperationState(opID string, state []byte) error
 	GetOperationState(opID string) ([]byte, error)
-	SaveOperationParams(opID string, params []byte) error
-	GetOperationParams(opID string) ([]byte, error)
 	DeleteOperationState(opID string) error
 }
 

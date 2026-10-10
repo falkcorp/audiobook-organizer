@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.9.2
+// version: 2.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-03
+// last-edited: 2026-10-09
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -451,23 +451,10 @@ func TestCoverage_OperationStatePersistence(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `{"step": 5}`, string(data))
 
-	// Save params
-	err = store.SaveOperationParams(opID, []byte(`{"folder": "/tmp"}`))
-	require.NoError(t, err)
-
-	// Get params
-	params, err := store.GetOperationParams(opID)
-	require.NoError(t, err)
-	assert.Equal(t, `{"folder": "/tmp"}`, string(params))
-
 	// Not found
 	data, err = store.GetOperationState("nonexistent")
 	require.NoError(t, err)
 	assert.Nil(t, data)
-
-	params, err = store.GetOperationParams("nonexistent")
-	require.NoError(t, err)
-	assert.Nil(t, params)
 
 	// Delete
 	err = store.DeleteOperationState(opID)
