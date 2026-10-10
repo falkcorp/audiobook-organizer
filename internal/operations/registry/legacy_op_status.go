@@ -1,5 +1,5 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
 // last-edited: 2026-10-10
 
@@ -215,7 +215,7 @@ func (r *Registry) propagateLegacyOpStatus(opID, v2Status string) {
 	// Preserve the counters. UpdateOperationStatus takes progress and total
 	// positionally and overwrites both, so passing 0,0 would leave a completed
 	// job rendering as 0% — trading "stuck at pending" for "finished at zero",
-	// which is no more honest. A completed run with no counters is reported as
+	// which is no more accurate. A completed run with no counters is reported as
 	// fully done, since that is what completing means.
 	progress, total, message := 0, 0, legacyStatus
 	if legacy, lerr := store.GetOperationByID(p.LegacyOpID); lerr == nil && legacy != nil {
