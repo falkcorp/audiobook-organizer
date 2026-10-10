@@ -1,5 +1,5 @@
 // file: internal/repairs/writer.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
 // last-edited: 2026-10-10
 
@@ -100,6 +100,11 @@ type Writer struct {
 	// run, see setLease). leaseLost latches the first failed renewal.
 	lease     func() bool
 	leaseLost atomic.Bool
+	// leaseValid reports, WITHOUT renewing, whether the lease is still held
+	// (ScanStandDownValid); nil when none is installed. beat consults it only
+	// on a fenced write, to tell a lost lease from a cancel without renewing
+	// a stopped run's lease (see setLeaseValid).
+	leaseValid func() bool
 	// fence is the run's write permit check (registry.Fence.Check); nil when
 	// none is installed. RunApply installs it for the run (setFence). beat
 	// checks it BEFORE the lease, so a canceled, timed-out or abandoned run
@@ -250,6 +255,17 @@ func (w *Writer) setLease(renew func() bool) {
 	w.leaseLost.Store(false)
 }
 
+// setLeaseValid installs the non-renewing lease check beat uses on a fenced
+// write (nil removes it). RunApply installs it beside setLease.
+//
+// WHY A SEPARATE CHECK: a fenced write must not renew. The renewal is the
+// run's progress heartbeat, and a canceled or abandoned run that keeps
+// calling the Writer would otherwise keep its stand-down lease alive -- and
+// the library scan parked -- for as long as it keeps trying.
+func (w *Writer) setLeaseValid(valid func() bool) {
+	w.leaseValid = valid
+}
+
 // setFence installs the run's write permit; nil clears it. beat checks it
 // before the lease, so a fenced Writer refuses every write.
 func (w *Writer) setFence(check func() error) {
@@ -258,10 +274,10 @@ func (w *Writer) setFence(check func() error) {
 
 // beat checks the run's fence, then renews the lease, before a write. A
 // revoked fence refuses with an error wrapping whatever the check returned
-// (registry.ErrFenced). Once a renewal fails the lease is gone for good (the
-// registry never resurrects a lapsed holder), so every later write is refused
-// without trying again; that error wraps ErrStandDownLost. Either way the
-// write it guards is not made.
+// (registry.ErrFenced), and never renews the lease. Once a renewal fails the
+// lease is gone for good (the registry never resurrects a lapsed holder), so
+// every later write is refused without trying again; that error wraps
+// ErrStandDownLost. Either way the write it guards is not made.
 //
 // Every write method of the Writer reaches beat: Modify, ModifyCredits,
 // SetPrimaryAuthor, SetUserState, AddBookTag, Recompute and LockWaiting
@@ -274,8 +290,11 @@ func (w *Writer) beat(what string) error {
 			// The registry also revokes the fence when the stand-down lease
 			// is lost (RenewScanStandDown). Report that loss too, so callers
 			// that stop on ErrStandDownLost (retire_into, repairs_ops, the
-			// engine's abort path) still see it behind the fence.
-			if w.lease != nil && (w.leaseLost.Load() || !w.lease()) {
+			// engine's abort path) still see it behind the fence. Decided
+			// from the latched loss or the non-renewing check, never from
+			// w.lease(): renewing here would keep a stopped run's lease, and
+			// the parked scan, alive while it keeps retrying.
+			if w.lease != nil && (w.leaseLost.Load() || (w.leaseValid != nil && !w.leaseValid())) {
 				w.leaseLost.Store(true)
 				return fmt.Errorf("%w: %s not written: %w", ErrStandDownLost, what, err)
 			}

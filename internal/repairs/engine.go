@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-10
 
@@ -644,6 +644,12 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			return true
 		})
 		defer deps.Writer.setLease(nil)
+		// A fenced write tells a lost lease from a cancel with this
+		// non-renewing check, so a stopped run never renews (Writer.beat).
+		deps.Writer.setLeaseValid(func() bool {
+			return deps.StandDown == nil || deps.StandDown.ScanStandDownValid(holder)
+		})
+		defer deps.Writer.setLeaseValid(nil)
 		deps.Writer.lockRenewEvery = deps.Wait.LockRenewEvery
 	}
 	var done atomic.Int64
