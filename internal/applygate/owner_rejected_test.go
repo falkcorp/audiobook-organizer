@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_rejected_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b82d75a5-b760-4375-98c3-d10426139c5d
 // last-edited: 2026-10-10
 
@@ -8,11 +8,25 @@ package applygate
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
+
+// kvRejections is an in-memory rejection keyspace.
+type kvRejections map[string][]byte
+
+func (m kvRejections) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	var out []database.KVPair
+	for k, v := range m {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, database.KVPair{Key: k, Value: v})
+		}
+	}
+	return out, nil
+}
 
 // The owner-rejected leg refuses a rejected candidate before every other leg,
 // fails closed on an unreadable list, and no owner review lifts either.
@@ -24,7 +38,11 @@ func TestEvaluate_OwnerRejectedLeg(t *testing.T) {
 		t.Fatalf("fixture: an unrejected candidate is refused: %+v", v)
 	}
 
-	rejected := &Rejections{Keys: metafetch.RejectedSet{metafetch.RejectionKey("AUDIBLE", "synthetic field notes 1"): {Any: true}}}
+	// A legacy rejection ("1") stored in another case than the candidate's.
+	rejected := LoadRejections(kvRejections{metafetch.RejectedCandidateStoreKey("b1", "AUDIBLE", "synthetic field notes 1"): []byte("1")}, "b1")
+	if rejected.ReadErr != nil {
+		t.Fatal(rejected.ReadErr)
+	}
 	unreadable := &Rejections{ReadErr: errors.New("scan failed")}
 	for _, tc := range []struct {
 		name string

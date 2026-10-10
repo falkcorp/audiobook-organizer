@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-10
 
@@ -164,8 +164,8 @@ func (m *mockRawKVStore) ScanPrefix(_ string) ([]database.KVPair, error) {
 func TestLoadRejectedCandidateKeys_NoRejections(t *testing.T) {
 	store := &mockRawKVStore{}
 	keys := metabatch.LoadRejectedCandidateKeys(store, "book-001")
-	if len(keys) != 0 {
-		t.Errorf("want empty map, got %v", keys)
+	if !keys.Empty() {
+		t.Errorf("want an empty set, got %v", keys)
 	}
 }
 
@@ -194,8 +194,8 @@ func TestLoadRejectedCandidateKeys_WithRejections(t *testing.T) {
 func TestLoadRejectedCandidateKeys_StoreError(t *testing.T) {
 	store := &mockRawKVStore{err: fmt.Errorf("db error")}
 	keys := metabatch.LoadRejectedCandidateKeys(store, "book-001")
-	if len(keys) != 0 {
-		t.Errorf("want empty map on store error, got %v", keys)
+	if !keys.Empty() {
+		t.Errorf("want an empty set on store error, got %v", keys)
 	}
 }
 

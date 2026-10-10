@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-10
 
@@ -229,6 +229,25 @@ const (
 	// reports these rows as verdict "skipped", reason "already_applied".
 	applySkipAlreadyApplied = "already_applied"
 )
+
+// ownerRejectedAtApply is the gate verdict for an apply that
+// metafetch.Service.ApplyMetadataCandidateWithOptions refused for the
+// owner's rejection (err: ErrOwnerRejectedNotApplied, or
+// ErrOwnerRejectionCheckFailed) after the plan's gate allowed it: the plan's
+// verdict with the owner-rejected leg's refusal in front.
+func ownerRejectedAtApply(planned *applygate.Verdict, err error) *applygate.Verdict {
+	var v applygate.Verdict
+	if planned != nil {
+		v = *planned
+	}
+	v.Allowed = false
+	v.Reason = applygate.ReasonOwnerRejected
+	if errors.Is(err, metafetch.ErrOwnerRejectionCheckFailed) {
+		v.Reason = applygate.ReasonOwnerRejectionCheckFailed
+	}
+	v.Detail = err.Error()
+	return &v
+}
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
 // written. The real apply and the dry-run preview both come from
@@ -736,6 +755,13 @@ func applyCachedCandidateForBookTimed(
 	historyErr := error(nil)
 	if aerr != nil && resp != nil && errors.Is(aerr, metafetch.ErrApplyHistoryIncomplete) {
 		historyErr, aerr = aerr, nil
+	}
+	if aerr != nil && (errors.Is(aerr, metafetch.ErrOwnerRejectedNotApplied) || errors.Is(aerr, metafetch.ErrOwnerRejectionCheckFailed)) {
+		// The owner rejected the candidate between the plan (whose gate read
+		// the rejections) and the apply, or the apply's own re-read failed:
+		// the apply's backstop refused it and nothing was written. Reported
+		// as the gate's owner-rejected refusal, which no pin lifts.
+		return applyOutcome{Reason: applySkipGateBlocked, Err: aerr, Gate: ownerRejectedAtApply(plan.Gate, aerr)}.withPlan(plan)
 	}
 	if aerr != nil && errors.Is(aerr, metafetch.ErrMarkedNoMatch) {
 		// Marked "no match" between the plan and the apply: nothing written,

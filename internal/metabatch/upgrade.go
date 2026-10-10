@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 //
@@ -141,12 +141,13 @@ type upgradeOutcome struct {
 
 // Skip reasons reported on upgradeOutcome.Reason.
 const (
-	upgradeSkipUnranked         = "current source is unranked; it is never replaced"
-	upgradeSkipMarkedNoMatch    = "owner marked the book no match"
-	upgradeSkipNoResults        = "search returned no candidates"
-	upgradeSkipNoneOutrank      = "no candidate from a higher-ranked source"
-	upgradeSkipGateRefused      = "every higher-ranked candidate was refused by the gate"
-	upgradeSkipMarkedDuringDone = "owner marked the book no match while it was being searched"
+	upgradeSkipUnranked          = "current source is unranked; it is never replaced"
+	upgradeSkipMarkedNoMatch     = "owner marked the book no match"
+	upgradeSkipNoResults         = "search returned no candidates"
+	upgradeSkipNoneOutrank       = "no candidate from a higher-ranked source"
+	upgradeSkipGateRefused       = "every higher-ranked candidate was refused by the gate"
+	upgradeSkipMarkedDuringDone  = "owner marked the book no match while it was being searched"
+	upgradeSkipRejectedDuringRun = "owner rejected the candidate while the book was being searched"
 )
 
 // errOwnerManualOnly is tryUpgradeBook's skip for an owner-manual-only book.
@@ -557,6 +558,13 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// a skip, not a failure.
 		if errors.Is(applyErr, metafetch.ErrMarkedNoMatch) {
 			return skip(upgradeSkipMarkedDuringDone)
+		}
+		// The owner rejected the candidate while this run searched (the
+		// gate read the rejections before the search): the apply's own
+		// re-read refused it and nothing was written. A skip, like the
+		// gate's owner_rejected refusal. An unreadable list is an error.
+		if errors.Is(applyErr, metafetch.ErrOwnerRejectedNotApplied) {
+			return skip(upgradeSkipRejectedDuringRun)
 		}
 		// The write committed but its change history did not: the overwrite
 		// stands and cannot be undone. Counted as an error, and said so.

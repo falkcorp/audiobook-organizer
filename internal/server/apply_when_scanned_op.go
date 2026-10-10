@@ -404,6 +404,12 @@ func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookRea
 
 	// Batch apply: fill-only (owner decision A3#3).
 	resp, err := mfs.ApplyMetadataCandidateWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true})
+	if err != nil && (errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) || errors.Is(err, metafetch.ErrOwnerRejectionCheckFailed)) {
+		// The owner rejected the candidate after the plan's gate read the
+		// rejections (or the apply's re-read failed): refused before any
+		// write, like the gate's own owner_rejected refusal.
+		return opResultApplyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, err)}
+	}
 	if err != nil && errors.Is(err, metafetch.ErrMarkedNoMatch) {
 		// Marked "no match" between the plan and the apply.
 		return opResultApplyOutcome{skipped: true}
