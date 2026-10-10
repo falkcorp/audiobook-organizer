@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -684,6 +685,9 @@ func applyCachedCandidateForBookTimed(
 	pin *metafetch.CandidatePin,
 	mode string,
 ) applyOutcome {
+	// Only the batch apply op runs this, so every file write it starts is a
+	// bulk write: no .bak-* sibling per file (owner decision D69).
+	ctx = tagger.WithoutBackup(ctx)
 	applyStart := time.Now()
 	plan := planCachedApply(svc, books, id, claims, pin).withBulkMode(pin, mode)
 	if plan.Reason != "" {
