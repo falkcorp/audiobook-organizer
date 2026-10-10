@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.144.0
+// version: 1.145.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
@@ -1286,6 +1286,17 @@ type Config struct {
 	// Empty (the default) disables OpenTelemetry entirely.
 	OTelExporterOTLPEndpoint string `json:"otel_exporter_otlp_endpoint" mapstructure:"otel_exporter_otlp_endpoint"`
 
+	// OTelMetricsOTLPEndpoint is the OTLP/gRPC collector the optional metric
+	// push reader sends to. Empty (the default) means no push; /metrics is
+	// unaffected either way. It never falls back to OTelExporterOTLPEndpoint.
+	OTelMetricsOTLPEndpoint string `json:"otel_metrics_otlp_endpoint" mapstructure:"otel_metrics_otlp_endpoint"`
+	// OTelMetricsOTLPInterval is the push period as a Go duration ("60s").
+	OTelMetricsOTLPInterval string `json:"otel_metrics_otlp_interval" mapstructure:"otel_metrics_otlp_interval"`
+	// OTelMetricsOTLPInsecure allows plaintext gRPC to a bare host:port.
+	OTelMetricsOTLPInsecure bool `json:"otel_metrics_otlp_insecure" mapstructure:"otel_metrics_otlp_insecure"`
+	// TelemetryEnvironment is the deployment.environment resource attribute.
+	TelemetryEnvironment string `json:"telemetry_environment" mapstructure:"telemetry_environment"`
+
 	// ListWarmerHeapDeltaMB caps how many MB above the post-eager-hydrate
 	// baseline heap the library-list cache warmer's trickle phase may grow
 	// heap by before backing off. Also read from the legacy
@@ -2393,6 +2404,10 @@ func InitConfig() {
 	viper.SetDefault("authority_evidence_enabled", false)
 	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
 	viper.SetDefault("otel_exporter_otlp_endpoint", "")
+	viper.SetDefault("otel_metrics_otlp_endpoint", "")
+	viper.SetDefault("otel_metrics_otlp_interval", "60s")
+	viper.SetDefault("otel_metrics_otlp_insecure", false)
+	viper.SetDefault("telemetry_environment", "prod")
 	viper.SetDefault("list_warmer_heap_delta_mb", 4096)
 	viper.SetDefault("list_warmer_trickle_interval_ms", 10000)
 	viper.SetDefault("library_counts_cache_min_interval_seconds", 600)
@@ -2413,6 +2428,9 @@ func InitConfig() {
 	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
 	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
 	viper.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
+	viper.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
+	viper.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
+	viper.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
 	// LIST_WARMER_MAX_HEAP_MB is a legacy alias for the same setting — viper
 	// checks env var names in the order given, so the current name wins when
 	// both are set.
@@ -2958,6 +2976,10 @@ func InitConfig() {
 			AuthorityEvidenceEnabled:             viper.GetBool("authority_evidence_enabled"),
 			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
 			OTelExporterOTLPEndpoint:             viper.GetString("otel_exporter_otlp_endpoint"),
+			OTelMetricsOTLPEndpoint:              viper.GetString("otel_metrics_otlp_endpoint"),
+			OTelMetricsOTLPInterval:              viper.GetString("otel_metrics_otlp_interval"),
+			OTelMetricsOTLPInsecure:              viper.GetBool("otel_metrics_otlp_insecure"),
+			TelemetryEnvironment:                 viper.GetString("telemetry_environment"),
 			ListWarmerHeapDeltaMB:                viper.GetInt("list_warmer_heap_delta_mb"),
 			ListWarmerTrickleIntervalMS:          viper.GetInt("list_warmer_trickle_interval_ms"),
 			LibraryCountsCacheMinIntervalSeconds: viper.GetInt("library_counts_cache_min_interval_seconds"),

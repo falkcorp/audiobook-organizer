@@ -1,21 +1,19 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package telemetry
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"net"
-	"net/url"
-	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/sdk/metric"
@@ -61,11 +59,17 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 		}
 	}
 
+	// The OTLP metric push is an optional copy of the Prometheus instruments
+	// and, like tracing, is never fatal: initMetrics reports it through
+	// otlpStatus, not through the error, which is reserved for the Prometheus
+	// reader itself.
+	var otlp otlpStatus
 	if cfg.MetricsEnabled {
-		shutdownMetrics, err := initMetrics(cfg.ServiceName)
+		shutdownMetrics, status, err := initMetrics(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
+		otlp = status
 		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
@@ -73,10 +77,19 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	// call: internal/logger's ratchet). A trace exporter that could not be
 	// started makes it an error-level line that says so.
 	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
-		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", cfg.ExporterEndpoint}
+		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", cfg.ExporterEndpoint,
+		"otlp_metrics", otlp.Enabled}
 	if tracingErr != nil {
 		level, msg = slog.LevelError, "OpenTelemetry initialized with tracing OFF: the trace exporter could not be started"
 		attrs = append(attrs, "tracing_error", tracingErr.Error())
+	}
+	if otlp.Err != nil {
+		level = slog.LevelError
+		msg = "OpenTelemetry initialized with the OTLP metric push OFF: /metrics is unaffected"
+		attrs = append(attrs, "otlp_metrics_error", otlp.Err.Error())
+	}
+	if otlp.IntervalNote != "" {
+		attrs = append(attrs, "otlp_metrics_interval_note", otlp.IntervalNote)
 	}
 	slog.Log(ctx, level, msg, attrs...)
 
@@ -106,31 +119,29 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 // "localhost:4317" as a scheme, so no bare endpoint ever passed; and a URL
 // that did pass was handed to WithEndpoint, which wants host:port.
 func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
-	ep := strings.TrimSpace(endpoint)
-	if scheme, rest, ok := strings.Cut(ep, "://"); ok {
-		switch strings.ToLower(scheme) {
-		case "http", "https":
-			u, err := url.Parse(ep)
-			if err != nil {
-				return nil, fmt.Errorf("endpoint %q is not a URL: %w", endpoint, err)
-			}
-			if u.Hostname() == "" || u.Port() == "" {
-				return nil, fmt.Errorf("endpoint %q must name a host and a port", endpoint)
-			}
-			return otlptracegrpc.WithEndpointURL(ep), nil
-		case "dns":
-			if strings.TrimLeft(rest, "/") == "" {
-				return nil, fmt.Errorf("endpoint %q names no target", endpoint)
-			}
-			return otlptracegrpc.WithEndpoint(ep), nil
-		}
-		return nil, fmt.Errorf("endpoint %q: scheme %q is not http, https or dns", endpoint, scheme)
+	t, err := parseOTLPEndpoint(endpoint)
+	if err != nil {
+		return nil, err
 	}
-	host, port, err := net.SplitHostPort(ep)
-	if err != nil || host == "" || port == "" {
-		return nil, fmt.Errorf("endpoint %q is neither a URL nor host:port", endpoint)
+	if t.URL != "" {
+		return otlptracegrpc.WithEndpointURL(t.URL), nil
 	}
-	return otlptracegrpc.WithEndpoint(ep), nil
+	return otlptracegrpc.WithEndpoint(t.Target), nil
+}
+
+// metricEndpointOption is traceEndpointOption for the metric exporter. Insecure
+// (plaintext gRPC) applies only to a bare host:port: an http:// URL is already
+// plaintext by the SDK's rule, an https:// URL is TLS, and a dns:/// target
+// follows the SDK's own insecure environment switch.
+func metricEndpointOption(t otlpTarget, insecure bool) []otlpmetricgrpc.Option {
+	if t.URL != "" {
+		return []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpointURL(t.URL)}
+	}
+	opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(t.Target)}
+	if t.Bare && insecure {
+		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	}
+	return opts
 }
 
 // initTracing builds the gRPC span exporter for the configured endpoint and
@@ -155,11 +166,13 @@ func initTracing(ctx context.Context, cfg *Config) (*sdktrace.TracerProvider, er
 
 // The Prometheus exporter registers a collector with the default Prometheus
 // registry, and a second registration of the same collector is an error. The
-// meter provider is therefore built once per process and reused by any later
+// process-wide meter provider is therefore built once and reused by any later
 // InitOTEL call (tests call it more than once; the server calls it once).
+// newMeterProvider itself has no such state, so tests build private providers.
 var (
 	meterOnce     sync.Once
 	meterProvider *metric.MeterProvider
+	meterOTLP     otlpStatus
 	meterErr      error
 
 	// meterShutdownOnce makes the returned shutdown idempotent for the same
@@ -169,8 +182,101 @@ var (
 	meterShutdownErr  error
 )
 
-// initMetrics builds (once) the Prometheus-exporting meter provider, installs
-// it globally and returns its idempotent shutdown.
+const (
+	defaultMetricsInterval = 60 * time.Second
+	minMetricsInterval     = 5 * time.Second
+	maxMetricsInterval     = time.Hour
+)
+
+// otlpStatus reports what newMeterProvider did about the optional OTLP reader.
+type otlpStatus struct {
+	// Enabled: an OTLP periodic reader was installed.
+	Enabled bool
+	// Err: a non-fatal configuration or dial problem; the OTLP copy is off.
+	Err error
+	// Readers: total readers on the provider (1 = Prometheus alone).
+	Readers int
+	// IntervalNote: set when the configured interval was unset, invalid or
+	// clamped.
+	IntervalNote string
+}
+
+// ParseMetricsInterval parses an OTEL_METRIC_EXPORT_INTERVAL-style Go duration
+// ("60s"). Empty, unparsable or non-positive input gives 0, which
+// newMeterProvider treats as "use the 60s default".
+func ParseMetricsInterval(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+// clampInterval returns the effective push interval and a note when it
+// differs from what was asked for.
+func clampInterval(d time.Duration) (time.Duration, string) {
+	switch {
+	case d <= 0:
+		return defaultMetricsInterval, "interval unset or invalid, using " + defaultMetricsInterval.String()
+	case d < minMetricsInterval:
+		return minMetricsInterval, "interval " + d.String() + " below minimum, using " + minMetricsInterval.String()
+	case d > maxMetricsInterval:
+		return maxMetricsInterval, "interval " + d.String() + " above maximum, using " + maxMetricsInterval.String()
+	}
+	return d, ""
+}
+
+// newMeterProvider builds a meter provider. Reader 1 is always the Prometheus
+// exporter (promOpts lets tests give it a private registerer). Reader 2, an
+// OTLP/gRPC periodic reader with cumulative temporality, exists only when
+// cfg.MetricsOTLPEndpoint is set. That key is the only input: the trace
+// endpoint (cfg.ExporterEndpoint) is deliberately never consulted.
+//
+// The OTLP reader is never fatal. A bad endpoint or an exporter that cannot be
+// built is reported in otlpStatus.Err and the provider carries the Prometheus
+// reader alone, with a nil error. Only the Prometheus reader failing returns
+// an error. The gRPC dial is non-blocking, so an unreachable collector costs
+// nothing at start-up.
+func newMeterProvider(ctx context.Context, cfg *Config, promOpts ...prometheus.Option) (*metric.MeterProvider, otlpStatus, error) {
+	exporter, err := prometheus.New(append([]prometheus.Option{prometheus.WithoutScopeInfo()}, promOpts...)...)
+	if err != nil {
+		return nil, otlpStatus{}, err
+	}
+	opts := append([]metric.Option{
+		metric.WithReader(exporter),
+		metric.WithResource(NewResourceWithEnvironment(cfg.ServiceName, cfg.Environment)),
+	}, Views()...)
+	status := otlpStatus{Readers: 1}
+
+	if cfg.MetricsOTLPEndpoint != "" {
+		reader, note, err := newOTLPReader(ctx, cfg)
+		status.IntervalNote = note
+		if err != nil {
+			status.Err = err
+		} else {
+			opts = append(opts, metric.WithReader(reader))
+			status.Enabled = true
+			status.Readers = 2
+		}
+	}
+	return metric.NewMeterProvider(opts...), status, nil
+}
+
+func newOTLPReader(ctx context.Context, cfg *Config) (metric.Reader, string, error) {
+	target, err := parseOTLPEndpoint(cfg.MetricsOTLPEndpoint)
+	if err != nil {
+		return nil, "", err
+	}
+	interval, note := clampInterval(cfg.MetricsOTLPInterval)
+	exp, err := otlpmetricgrpc.New(ctx, metricEndpointOption(target, cfg.MetricsOTLPInsecure)...)
+	if err != nil {
+		return nil, note, err
+	}
+	return metric.NewPeriodicReader(exp, metric.WithInterval(interval)), note, nil
+}
+
+// initMetrics builds (once) the process-wide meter provider, installs it
+// globally and returns its idempotent shutdown and the OTLP status.
 //
 //   - WithoutScopeInfo: no otel_scope_name / otel_scope_version labels, so an
 //     OTel family exports the same label set as the client_golang family it
@@ -179,26 +285,17 @@ var (
 //     deployment.environment onto target_info.
 //   - Views() declares every histogram's buckets (views.go).
 //
-// The first caller's serviceName wins: the provider is built once per process.
-func initMetrics(serviceName string) (func(context.Context) error, error) {
+// The first caller's cfg wins: the provider is built once per process.
+func initMetrics(ctx context.Context, cfg *Config) (func(context.Context) error, otlpStatus, error) {
 	meterOnce.Do(func() {
-		exporter, err := prometheus.New(prometheus.WithoutScopeInfo())
-		if err != nil {
-			meterErr = err
-			return
-		}
-		opts := append([]metric.Option{
-			metric.WithReader(exporter),
-			metric.WithResource(NewResource(serviceName)),
-		}, Views()...)
-		meterProvider = metric.NewMeterProvider(opts...)
+		meterProvider, meterOTLP, meterErr = newMeterProvider(ctx, cfg)
 	})
 	if meterErr != nil {
-		return nil, meterErr
+		return nil, otlpStatus{}, meterErr
 	}
 	otel.SetMeterProvider(meterProvider)
 	return func(ctx context.Context) error {
 		meterShutdownOnce.Do(func() { meterShutdownErr = meterProvider.Shutdown(ctx) })
 		return meterShutdownErr
-	}, nil
+	}, meterOTLP, nil
 }
