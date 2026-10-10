@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
-# last-edited: 2026-10-09
+# last-edited: 2026-10-10
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
 
 The inline shell check this replaced truncated go.mod to major.minor, read only
@@ -50,6 +50,7 @@ COPIES = (
     ".vscode/settings.json",
     "go.mod",
     ".github/repository-config.yml",
+    "scripts/ci_remote.py",
 )
 
 
@@ -64,6 +65,10 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         for src in REPO_ROOT.glob("Dockerfile*"):
             if src.is_file():
                 shutil.copy2(src, self.root / src.name)
+        wp = self.root / ".woodpecker"
+        wp.mkdir(parents=True, exist_ok=True)
+        for src in (REPO_ROOT / ".woodpecker").glob("*.y*ml"):
+            shutil.copy2(src, wp / src.name)
         wf = self.root / ".github" / "workflows"
         wf.mkdir(parents=True, exist_ok=True)
         for src in (REPO_ROOT / ".github" / "workflows").glob("*.y*ml"):
@@ -170,7 +175,7 @@ class CheckToolchainVersionsTest(unittest.TestCase):
 
     def test_later_ci_go_version_drift_fails(self) -> None:
         # The old check read only `head -1` of ci.yml; drift a later job.
-        self.mutate(".github/workflows/ci.yml", "go-version: '1.27'", "go-version: '1.28'", occurrence=2)
+        self.mutate(".github/workflows/ci.yml", f"go-version: '{PIN}'", "go-version: '1.28'", occurrence=2)
         self.assertFails("go-version '1.28'")
 
     def test_makefile_pin_bump_alone_fails(self) -> None:
@@ -189,6 +194,61 @@ class CheckToolchainVersionsTest(unittest.TestCase):
 
     def test_action_output_mismatch_fails(self) -> None:
         self.assertFails("action node-version '20'", "--action-node-output", "20")
+
+    def test_workflow_minor_only_go_version_fails(self) -> None:
+        # The floating minor let runners move to a newer patch than every other
+        # copy (2026-10-08); the full patch is now required in workflows too.
+        self.mutate(".github/workflows/ci.yml", f"go-version: '{PIN}'", f"go-version: '{_major}.{_minor}'")
+        self.assertFails(f"go-version '{_major}.{_minor}' != '{PIN}'")
+
+    def test_workflow_expression_go_version_is_skipped(self) -> None:
+        self.mutate(".github/workflows/ci.yml", f"go-version: '{PIN}'", "go-version: ${{ matrix.go }}")
+        res = self.run_check()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_woodpecker_gotoolchain_mismatch_fails(self) -> None:
+        self.mutate(".woodpecker/test-rest.yaml", f"GOTOOLCHAIN: go{PIN}", f"GOTOOLCHAIN: go{WRONG_PATCH}")
+        self.assertFails(f"::error file=.woodpecker/test-rest.yaml,line=")
+        self.assertFails(f"GOTOOLCHAIN go{WRONG_PATCH} != Makefile pin")
+
+    def _woodpecker_image_digest(self) -> str:
+        text = (self.root / ".woodpecker" / "checks-lint.yaml").read_text(encoding="utf-8")
+        found = re.findall(rf"&go_image golang:{PIN_RE}-[a-z]+@sha256:([0-9a-f]{{64}})", text)
+        self.assertEqual(len(found), 1, "fixture drifted: expected one digest-pinned &go_image in checks-lint.yaml")
+        return found[0]
+
+    def test_woodpecker_image_digest_mismatch_fails(self) -> None:
+        digest = self._woodpecker_image_digest()
+        # 63 hex digits: not a sha256, so the strict reference parser rejects it.
+        self.mutate(".woodpecker/checks-lint.yaml", f"@sha256:{digest}", f"@sha256:{digest[:63]}")
+        self.assertFails("::error file=.woodpecker/checks-lint.yaml,line=")
+        self.assertFails("is not 'golang:<version>[-<variant>]@sha256:<64 hex>'")
+
+    def test_woodpecker_image_without_digest_fails(self) -> None:
+        digest = self._woodpecker_image_digest()
+        self.mutate(".woodpecker/checks-lint.yaml", f"@sha256:{digest}", "")
+        self.assertFails("::error file=.woodpecker/checks-lint.yaml,line=")
+        self.assertFails("image has no @sha256: digest")
+
+    def test_woodpecker_image_version_drift_fails(self) -> None:
+        self.mutate(".woodpecker/checks-lint.yaml", f"&go_image golang:{PIN}-", f"&go_image golang:{WRONG_PATCH}-")
+        self.assertFails(f"golang:{WRONG_PATCH} != Makefile pin")
+
+    def test_ci_remote_constant_mismatch_fails(self) -> None:
+        self.mutate("scripts/ci_remote.py", f'GO_TOOLCHAIN = "go{PIN}"', f'GO_TOOLCHAIN = "go{WRONG_PATCH}"')
+        self.assertFails("::error file=scripts/ci_remote.py,line=")
+        self.assertFails(f"GO_TOOLCHAIN go{WRONG_PATCH} != Makefile pin")
+
+    def test_ci_remote_constant_missing_fails(self) -> None:
+        # A renamed constant must not make the check vacuous.
+        self.mutate("scripts/ci_remote.py", "GO_TOOLCHAIN =", "GO_TOOLCHAIN_X =")
+        self.assertFails("::error file=scripts/ci_remote.py::expected exactly one")
+
+    def test_output_lists_new_sections(self) -> None:
+        res = self.run_check()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("--- Woodpecker", res.stdout)
+        self.assertIn("--- ci_remote.py", res.stdout)
 
     def test_comments_and_expressions_are_ignored(self) -> None:
         path = self.root / ".github" / "workflows" / "zz-extra.yml"

@@ -1,7 +1,7 @@
 # file: .github/workflows/codeql.yml
-# version: 1.4.0
+# version: 1.5.0
 # guid: 4e7a1b2c-3d5f-6e8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-09-22
+# last-edited: 2026-10-10
 #
 # Overrides GitHub's dynamic default CodeQL workflow so the Go toolchain and
 # build steps match ci.yml. (Until Go 1.27 this also carried GOEXPERIMENT=jsonv2
@@ -39,7 +39,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27'
+          go-version: '1.27.2'
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libtag1-dev
