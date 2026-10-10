@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.31.0
+// version: 3.32.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-19
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -169,6 +170,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			return fmt.Errorf("list book ids: %w", err)
 		}
 		return p.reparseStoredIntros(ctx, store, reporter, ids, dryRun)
+	}
+
+	// Everything below extracts audio clips with ffmpeg (including extract_only),
+	// so it is refused unless the host opted in. reparse_only above never decodes.
+	if err := serverdecode.Check("maintenance.transcribe-book-intros"); err != nil {
+		return err
 	}
 
 	// Load the FULL, ordered list of book IDs up front. This is the proven
