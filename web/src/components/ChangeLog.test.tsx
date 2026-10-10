@@ -194,7 +194,7 @@ describe('ChangeLog', () => {
 
       await user.click(await screen.findByRole('button', { name: /revert/i }));
 
-      expect(await screen.findByText(/Revert failed: .*login page/)).toBeInTheDocument();
+      expect(await screen.findByText(/Revert failed: .*session has expired/)).toBeInTheDocument();
       // The write-back must not run after a revert that never reached the server.
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(onRevert).not.toHaveBeenCalled();

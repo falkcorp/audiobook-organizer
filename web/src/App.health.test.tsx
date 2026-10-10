@@ -1,11 +1,12 @@
 // file: web/src/App.health.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1755fd4f-dac4-437d-94d7-ad7d7ae6ed9c
 // last-edited: 2026-10-10
 
-// The post-shutdown reconnect poll runs before any session is trusted. A login
-// page answered for /api/v1/health must count as "not back" (another attempt),
-// never as "server is back" (which reloads the page).
+// The post-shutdown reconnect poll runs before any session is trusted. When the
+// Cloudflare Access session expired during the restart, /api/v1/health is
+// answered with a login page. The poll must reload (to reach the sign-in page)
+// rather than count another failed attempt behind the reconnect overlay forever.
 
 import { act, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
@@ -82,7 +83,7 @@ afterEach(() => {
 });
 
 describe('App reconnect poll', () => {
-  it('counts a login-page health answer as another failed attempt and does not reload', async () => {
+  it('reloads the page when the health poll is answered with a login page', async () => {
     const reload = vi.fn();
     const realLocation = window.location;
     Object.defineProperty(window, 'location', {
@@ -116,6 +117,46 @@ describe('App reconnect poll', () => {
       });
 
       expect(fetchMock).toHaveBeenCalledWith('/api/v1/health', expect.anything());
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('Attempt 1')).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    }
+  });
+
+  it('keeps counting attempts, without reloading, while the server is unreachable', async () => {
+    const reload = vi.fn();
+    const realLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...realLocation, reload },
+    });
+    try {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url === '/api/v1/health') throw new TypeError('network unavailable');
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(
+        <BrowserRouter>
+          <ThemeProvider theme={appTheme}>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </ThemeProvider>
+        </BrowserRouter>
+      );
+      await screen.findByText('Audiobook Organizer');
+
+      vi.useFakeTimers();
+      await act(async () => {
+        listeners.handlers.forEach((h) => h({ type: 'system.shutdown' }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+
       expect(screen.getByText('Attempt 1')).toBeInTheDocument();
       expect(reload).not.toHaveBeenCalled();
     } finally {

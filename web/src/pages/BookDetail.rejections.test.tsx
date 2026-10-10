@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.rejections.test.tsx
-// version: 1.0.0
+// version: 1.2.0
 // guid: 08d30ca0-aa74-4eed-b3f2-8140090d67ca
 // last-edited: 2026-10-10
 
@@ -9,7 +9,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { loginPageResponse } from '../test/loginRedirect';
+import { loginPageWithJsonBody } from '../test/loginRedirect';
 import { BookDetail } from './BookDetail';
 
 // A stable spy: a fresh vi.fn() per render would change the toast identity every
@@ -61,11 +61,13 @@ function renderPage() {
 }
 
 describe('BookDetail rejection history', () => {
-  it('renders the history when the endpoint answers with JSON', async () => {
+  it('renders the history from the { data: { rejections } } envelope', async () => {
     const fetchMock = vi.fn(async (url: string) =>
       url.endsWith('/metadata-rejections')
         ? jsonResponse({
-            rejections: [{ id: 'r1', rejected_at: '2026-01-02T00:00:00Z', source: 'test' }],
+            data: {
+              rejections: [{ id: 'r1', rejected_at: '2026-01-02T00:00:00Z', source: 'test' }],
+            },
           })
         : Promise.reject(new TypeError('network unavailable'))
     );
@@ -81,7 +83,9 @@ describe('BookDetail rejection history', () => {
 
   it('shows no history, and does not crash, when a login page comes back', async () => {
     const fetchMock = vi.fn(async (url: string) =>
-      url.endsWith('/metadata-rejections') ? loginPageResponse() : Promise.reject(new TypeError('network unavailable'))
+      url.endsWith('/metadata-rejections') ? loginPageWithJsonBody({
+            data: { rejections: [{ id: 'r1', rejected_at: '2026-01-02T00:00:00Z', source: 'test' }] },
+          }) : Promise.reject(new TypeError('network unavailable'))
     );
     vi.stubGlobal('fetch', fetchMock);
     renderPage();

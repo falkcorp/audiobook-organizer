@@ -12,6 +12,7 @@ import { fetchActivity } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 import { useToast } from './toast/ToastProvider';
 import { apiFetch } from '../utils/apiFetch';
+import { describeRequestError, responseErrorMessage } from '../utils/apiResponse';
 
 interface ChangeLogProps {
   bookId: string;
@@ -34,20 +35,6 @@ const TYPE_LABELS: Record<string, string> = {
   metadata_apply: 'Metadata Apply',
   import: 'Import',
   transcode: 'Transcode',
-};
-
-// responseErrorMessage reads the server's reason from a failed response: the
-// JSON body's "error" field when there is one, else the raw text, else the
-// HTTP status.
-const responseErrorMessage = async (resp: Response): Promise<string> => {
-  const text = await resp.text().catch(() => '');
-  try {
-    const body = JSON.parse(text) as { error?: unknown };
-    if (typeof body.error === 'string' && body.error) return body.error;
-  } catch {
-    // not JSON; fall through to the raw text
-  }
-  return text.trim() || `HTTP ${resp.status}`;
 };
 
 const formatTimestamp = (ts: string): string => {
@@ -112,21 +99,36 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
       // server refuses (409) or fails (500) before writing tags when the
       // rename cannot be done, so the operator must see why: the revert
       // itself landed, but the files were not updated.
-      const wbResp = await apiFetch(`/api/v1/audiobooks/${bookId}/write-back`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rename: true }),
-      });
-      if (!wbResp.ok) {
+      try {
+        const wbResp = await apiFetch(`/api/v1/audiobooks/${bookId}/write-back`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rename: true }),
+        });
+        if (!wbResp.ok) {
+          toast(
+            `Metadata reverted, but writing it to the files failed: ${await responseErrorMessage(wbResp)}`,
+            'error'
+          );
+        }
+      } catch (wbErr) {
+        // The revert already landed; a write-back that never reached the
+        // server must not be reported as a failed revert.
         toast(
-          `Metadata reverted, but writing it to the files failed: ${await responseErrorMessage(wbResp)}`,
+          `Metadata reverted, but writing it to the files failed: ${describeRequestError(
+            wbErr,
+            wbErr instanceof Error ? wbErr.message : 'request failed'
+          )}`,
           'error'
         );
       }
       loadChangelog();
       onRevert?.();
     } catch (err) {
-      toast(`Revert failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+      toast(
+        `Revert failed: ${describeRequestError(err, err instanceof Error ? err.message : 'request failed')}`,
+        'error'
+      );
     } finally {
       setReverting(null);
     }

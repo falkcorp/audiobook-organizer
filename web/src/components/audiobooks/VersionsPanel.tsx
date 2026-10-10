@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/VersionsPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e3f4a2b-6c7d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 
@@ -21,6 +21,7 @@ import {
   Star as ActiveIcon,
 } from '@mui/icons-material';
 import { apiFetch } from '../../utils/apiFetch';
+import { describeRequestError, unwrapData } from '../../utils/apiResponse';
 import { type BookVersion, trashVersion, restoreVersion } from '../../services/versionApi';
 
 const API_BASE = '/api/v1';
@@ -51,7 +52,7 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
     try {
       const resp = await apiFetch(`${API_BASE}/audiobooks/${bookId}/versions`);
       if (resp.ok) {
-        const data = await resp.json();
+        const data = unwrapData<{ versions?: BookVersion[] }>(await resp.json());
         setVersions(data.versions || []);
       } else {
         setLoadError(`Failed to load versions (HTTP ${resp.status})`);
@@ -59,7 +60,7 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
     } catch (err) {
       // An expired session (ApiAuthRedirectError) lands here too; show it
       // instead of rendering an empty list that looks like "no versions".
-      setLoadError(err instanceof Error ? err.message : 'Failed to load versions');
+      setLoadError(describeRequestError(err, 'Failed to load versions'));
     } finally {
       setLoading(false);
     }

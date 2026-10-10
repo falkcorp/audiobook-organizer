@@ -1,7 +1,7 @@
 // file: web/src/utils/apiFetch.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f4a6c18-9b73-4d51-8e0c-7a5b1d3e9f02
-// last-edited: 2026-08-11
+// last-edited: 2026-10-10
 
 // Guards the auth-redirect detection in apiFetch.
 //
@@ -95,5 +95,30 @@ describe('apiFetch auth-redirect detection', () => {
     await expect(
       apiFetch('https://books.jdfalk.com/api/v1/audiobooks/123')
     ).resolves.toBeDefined();
+  });
+
+  it.each([500, 502, 503])(
+    'passes an HTML %i from an /api/ route through as a server error, not a login bounce',
+    async (status) => {
+      const res = new Response('<html>Bad Gateway</html>', {
+        status,
+        headers: { 'Content-Type': 'text/html' },
+      });
+      global.fetch = vi.fn().mockResolvedValue(res);
+
+      const response = await apiFetch('https://books.jdfalk.com/api/v1/audiobooks');
+      expect(response).toBe(res);
+      expect(response.ok).toBe(false);
+      expect(response.status).toBe(status);
+    }
+  );
+
+  it('still treats an HTML 200 on an /api/ route as a login bounce', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response('<html>login</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })
+    );
+    await expect(apiFetch('https://books.jdfalk.com/api/v1/audiobooks')).rejects.toBeInstanceOf(
+      ApiAuthRedirectError
+    );
   });
 });

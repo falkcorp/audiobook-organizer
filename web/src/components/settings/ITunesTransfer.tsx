@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ITunesTransfer.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-10
 //
@@ -20,14 +20,14 @@ import {
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import { useToast } from '../toast/ToastProvider';
 import { apiFetch } from '../../utils/apiFetch';
+import { describeRequestError, responseErrorMessage } from '../../utils/apiResponse';
 
 const API_BASE = '/api/v1/itunes/library';
 
 async function downloadITL(): Promise<void> {
   const resp = await apiFetch(`${API_BASE}/download`);
   if (!resp.ok) {
-    const body = await resp.json().catch(() => ({ error: resp.statusText }));
-    throw new Error(body.error || `Download failed: ${resp.status}`);
+    throw new Error(await responseErrorMessage(resp));
   }
   const blob = await resp.blob();
   const url = URL.createObjectURL(blob);
@@ -50,7 +50,7 @@ export function ITunesTransfer() {
       await downloadITL();
       toast('ITL file downloaded', 'success');
     } catch (err) {
-      toast(`Download failed: ${err}`, 'error');
+      toast(`Download failed: ${describeRequestError(err, (err as Error).message)}`, 'error');
     } finally {
       setDownloading(false);
     }

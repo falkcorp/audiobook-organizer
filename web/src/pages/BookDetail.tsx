@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.66.0
+// version: 1.67.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
 // last-edited: 2026-10-10
 
@@ -41,6 +41,7 @@ import {
 import { sanitizeReturn } from '../utils/safeReturn';
 import { describeDeleteBookError } from '../utils/deleteBookError';
 import { apiFetch } from '../utils/apiFetch';
+import { unwrapData } from '../utils/apiResponse';
 
 // seriesNumberOf is the series number the edit dialog opens with: the raw
 // position as entered when it parses (it keeps a decimal like 2.5), else the
@@ -308,7 +309,8 @@ export const BookDetail = () => {
     // Load rejection history (META-REJ-1)
     apiFetch(`/api/v1/audiobooks/${id}/metadata-rejections`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r)))
-      .then((data) => {
+      .then((body) => {
+        const data = unwrapData<{ rejections?: MetadataRejection[] }>(body);
         if (!cancelled) setRejections(data.rejections ?? []);
       })
       .catch(() => {});

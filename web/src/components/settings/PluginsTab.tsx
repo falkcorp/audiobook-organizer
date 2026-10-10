@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PluginsTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
 // last-edited: 2026-10-10
 
@@ -32,6 +32,7 @@ import {
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
 import { apiFetch } from '../../utils/apiFetch';
+import { describeRequestError } from '../../utils/apiResponse';
 
 interface PluginInfo {
   id: string;
@@ -107,7 +108,7 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
       await togglePlugin(p.id, !p.enabled);
       onRefresh();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(describeRequestError(e, `Failed to toggle plugin: ${(e as Error).message}`));
     } finally {
       setSaving(false);
     }
@@ -120,7 +121,7 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
       await saveSettings(p.id, settings);
       onRefresh();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(describeRequestError(e, `Failed to save settings: ${(e as Error).message}`));
     } finally {
       setSaving(false);
     }
@@ -262,7 +263,7 @@ export default function PluginsTab() {
     try {
       setPlugins(await fetchPlugins());
     } catch (e: unknown) {
-      setError(String(e));
+      setError(describeRequestError(e, `Failed to load plugins: ${(e as Error).message}`));
     } finally {
       setLoading(false);
     }
