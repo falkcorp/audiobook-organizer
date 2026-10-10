@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-10
 
@@ -499,6 +499,22 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 			return nativeErr
 		}
 		// Native failed; continue with CLI fallback
+	}
+
+	// The CLI writers rewrite the file in place, outside fileops.WriteTagsSafe,
+	// so its KeepBackup never runs for them: take the create_backups backup
+	// here. It must be a COPY (KeepBackupCopy): AtomicParsley --overWrite and
+	// friends may rewrite the same inode, and a hardlink would then hold the
+	// new bytes. A backup that cannot be taken fails the write, as it does on
+	// the native path. On a failed CLI write the backup is kept, not removed:
+	// the writers restore the original from their own copy, but a failed
+	// restore is possible, and then this is the only good copy.
+	if tagger.BackupWanted(context.Background()) {
+		bak, berr := fileops.KeepBackupCopy(target)
+		if berr != nil {
+			return fmt.Errorf("write metadata to %s: backup before CLI write: %w", filePath, berr)
+		}
+		slog.Debug("backup before CLI tag write", "path", logger.SanitizeLogValue(bak))
 	}
 
 	// The CLI writers rewrite the file outside fileops.WriteTagsSafe, so the
