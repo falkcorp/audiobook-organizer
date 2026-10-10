@@ -1,5 +1,5 @@
 // file: internal/aidispatch/metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c8f1e-3a47-4c52-9b6e-72a1f0e4c9d3
 // last-edited: 2026-10-10
 
@@ -70,7 +70,7 @@ func sumPoints(t *testing.T, m metricdata.Metrics) map[string]int64 {
 func renderAttrs(s attribute.Set) string {
 	var parts []string
 	for _, kv := range s.ToSlice() {
-		parts = append(parts, string(kv.Key)+"="+kv.Value.Emit())
+		parts = append(parts, string(kv.Key)+"="+kv.Value.String())
 	}
 	return strings.Join(parts, ",")
 }
