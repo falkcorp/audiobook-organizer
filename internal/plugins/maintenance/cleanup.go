@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-10
 
@@ -142,8 +142,9 @@ const tempFileCleanupProgressTimeout = 1 * time.Hour
 
 func (p *Plugin) runTempFileCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	opID := ctxOpID(ctx)
+	// CleanupOrphanedTempFiles flushes the op's batched entries itself, before
+	// its summary entry, so no ActivityFlushOp call follows it here.
 	removed := p.deps.CleanupOrphanedTempFiles(p.deps.RootDir(), opID)
-	p.deps.ActivityFlushOp(opID)
 	msg := fmt.Sprintf("Removed %d orphaned temp files", removed)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil

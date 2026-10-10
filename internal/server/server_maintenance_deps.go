@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.59.0
+// version: 1.59.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-10
 
@@ -198,6 +198,12 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 	// reads the process config, so resolving here keeps the interface at one
 	// method and the rule at one resolver.
 	removed := sweep.CleanupOrphanedTempFiles(rootDir, appdirs.Current(), s.activityWriter, opID)
+	// Flush the sweep's batched per-file entries BEFORE the summary: both reach
+	// the feed through the writer's one channel, and an unflushed batch is
+	// queued only when its debounce timer fires, so emitting the summary first
+	// shows "Removed N" as older than the entries it summarises. The flush
+	// lives here, not in the caller, so every caller gets the order.
+	activity.FlushOperation(s.activityWriter, opID)
 	// The run's summary entry, NoOp-tagged when nothing was removed. It was
 	// written only by scheduler.temp-file-cleanup, the scheduled twin merged
 	// into maintenance.temp-file-cleanup on 2026-10-10; emitting it here keeps
