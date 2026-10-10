@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.35.1
+// version: 3.35.2
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -91,9 +91,14 @@ type Registry struct {
 	admitLocks sync.Map
 
 	// ops records the OTel run metrics (internal/opsmetrics). Never nil.
-	// inflightUnreg unregisters this registry's ops.inflight callback; set by
-	// Start and cleared by Shutdown, guarded by mu.
-	ops           *opsmetrics.Recorder
+	ops *opsmetrics.Recorder
+	// inflightUnreg unregisters this registry's ops.inflight / ops.progress_age
+	// callback; set by Start and cleared by Shutdown. Guarded by inflightMu,
+	// NOT mu: registering calls into the OTel SDK, which takes its pipeline
+	// lock, and the SDK runs the callback (which takes mu.RLock) under that
+	// same pipeline lock. Holding mu across the registration would be the
+	// inverse lock order.
+	inflightMu    sync.Mutex
 	inflightUnreg func()
 
 	// shuttingDown is flipped at the top of Shutdown so the abandoned-run
@@ -1675,14 +1680,17 @@ func phaseNames(phases []Phase) []string {
 	return names
 }
 
-// registerInflightGauge registers the ops.inflight observable-gauge callback
-// over r.running, the authoritative set of runs holding a slot. The callback
-// reads the map at collection time under r.mu, so there is no counter pair
-// whose missed decrement could leave a permanent false in-flight run (and a
-// false OpStalledV2 alert). Idempotent until unregisterInflightGauge.
+// registerInflightGauge registers the ops.inflight / ops.progress_age
+// callback over r.running, the authoritative set of runs holding a slot. The
+// callback reads the map at collection time under r.mu, so there is no counter
+// pair whose missed decrement could leave a permanent false in-flight run (and
+// a false OpStalledV2 alert). Idempotent until unregisterInflightGauge.
+//
+// Lock order: only inflightMu is held here, never r.mu (see the inflightMu
+// field comment).
 func (r *Registry) registerInflightGauge() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.inflightMu.Lock()
+	defer r.inflightMu.Unlock()
 	if r.inflightUnreg != nil {
 		return
 	}
@@ -1691,22 +1699,38 @@ func (r *Registry) registerInflightGauge() {
 
 // unregisterInflightGauge removes the callback registered by Start.
 func (r *Registry) unregisterInflightGauge() {
-	r.mu.Lock()
-	unreg := r.inflightUnreg
-	r.inflightUnreg = nil
-	r.mu.Unlock()
-	if unreg != nil {
-		unreg()
+	r.inflightMu.Lock()
+	defer r.inflightMu.Unlock()
+	if r.inflightUnreg != nil {
+		r.inflightUnreg()
+		r.inflightUnreg = nil
 	}
 }
 
-// inflightByDef counts the registered runs per (def, plugin).
-func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]int64 {
+// inflightByDef reports, per (def, plugin), the runs holding a slot and the
+// progress age of the most idle executing one. The age uses the watchdog's
+// clock and its order of evidence (watchdog.go): the run's last
+// UpdateProgress stamp, else the start of its attempt. A dispatcher stub
+// handle has neither stamp (no worker has picked the run up), so it counts as
+// in flight but contributes no age; computing now - 0 for it would read as a
+// decades-long stall on every run queued behind a saturated pool.
+func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]opsmetrics.InflightStat {
+	now := r.livenessClock()
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make(map[opsmetrics.InflightKey]int64, len(r.running))
+	out := make(map[opsmetrics.InflightKey]opsmetrics.InflightStat, len(r.running))
 	for _, h := range r.running {
-		out[opsmetrics.InflightKey{DefID: h.defID, Plugin: h.plugin}]++
+		k := opsmetrics.InflightKey{DefID: h.defID, Plugin: h.plugin}
+		st := out[k]
+		st.Runs++
+		ts := h.lastProgressAt.Load()
+		if ts == 0 {
+			ts = h.attemptStartedAt.Load()
+		}
+		if ts != 0 {
+			st.ProgressAge = max(st.ProgressAge, max(0, now.Sub(time.Unix(0, ts))))
+		}
+		out[k] = st
 	}
 	return out
 }

@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
 // last-edited: 2026-10-10
 
@@ -13,6 +13,16 @@
 //	audiobook_organizer.ops.run.duration  histogram  {def_id, outcome}   -> audiobook_organizer_ops_run_duration_seconds
 //	audiobook_organizer.ops.items         counter    {def_id, outcome}   -> audiobook_organizer_ops_items_total
 //	audiobook_organizer.ops.inflight      obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_inflight
+//	audiobook_organizer.ops.progress_age  obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_progress_age_seconds
+//
+// ops.inflight counts runs holding a worker slot. That includes a run the
+// dispatcher has claimed (its stub handle is in the registry's running map)
+// but no worker has picked up yet, so it is "dispatched", not "executing".
+// ops.progress_age is the liveness signal: seconds since the most idle
+// executing run of the key last called UpdateProgress (a same-value heartbeat
+// counts), or since its attempt started when it has not reported yet. Runs not
+// yet picked up by a worker are left out of it. Both gauges come from one
+// collection callback (RegisterInflight).
 //
 // runs outcomes: started, completed, failed, canceled, timed_out, dropped. The
 // registry records started, completed, failed and canceled today. timed_out
@@ -104,6 +114,17 @@ func OutcomeFor(status string) (outcome string, ok bool) {
 // InflightKey groups in-flight runs.
 type InflightKey struct{ DefID, Plugin string }
 
+// InflightStat is one key's in-flight state at collection time.
+type InflightStat struct {
+	// Runs is the number of runs holding a worker slot, including runs
+	// dispatched but not yet picked up by a worker.
+	Runs int64
+	// ProgressAge is how long the key's most idle executing run has gone
+	// without a progress report (since its attempt started when it has not
+	// reported yet). Zero when none of the key's runs is executing.
+	ProgressAge time.Duration
+}
+
 // Recorder holds the instruments of one meter provider.
 type Recorder struct {
 	meter    metric.Meter
@@ -111,6 +132,7 @@ type Recorder struct {
 	duration metric.Float64Histogram
 	items    metric.Int64Counter
 	inflight metric.Int64ObservableGauge
+	progAge  metric.Float64ObservableGauge
 }
 
 // New creates the instruments on mp. The metric API returns a no-op instrument
@@ -129,7 +151,10 @@ func New(mp metric.MeterProvider) *Recorder {
 		metric.WithDescription("Items handled by operation runs, by def_id and outcome. Not the legacy gauge op_items_total."))
 	r.inflight, _ = m.Int64ObservableGauge("audiobook_organizer.ops.inflight",
 		metric.WithUnit("{run}"),
-		metric.WithDescription("Operation runs currently holding a worker slot, by def_id and plugin."))
+		metric.WithDescription("Operation runs currently holding a worker slot, by def_id and plugin. Includes runs dispatched but not yet picked up by a worker, so it is not a count of executing runs."))
+	r.progAge, _ = m.Float64ObservableGauge("audiobook_organizer.ops.progress_age",
+		metric.WithUnit("s"),
+		metric.WithDescription("Seconds since the most idle executing run of a def_id last reported progress (or started its attempt, if it has not reported yet); 0 when none is executing."))
 	return r
 }
 
@@ -180,35 +205,47 @@ var activeCallbacks atomic.Int64
 // not yet unregistered, process-wide. A leak check for tests.
 func ActiveInflightCallbacks() int64 { return activeCallbacks.Load() }
 
-// RegisterInflight registers a callback that reports source() as ops.inflight
-// at every collection and returns the function that unregisters it. source
-// returns the authoritative current count per key (it is called at scrape time,
-// so it must be cheap and take its own locks). A key seen once and absent later
-// is reported as 0 rather than vanishing, so a finished run reads 0 instead of
-// leaving the previous value in place or dropping the series.
-func (r *Recorder) RegisterInflight(source func() map[InflightKey]int64) (unregister func()) {
+// RegisterInflight registers one callback that reports source() as
+// ops.inflight (Runs) and ops.progress_age (ProgressAge) at every collection,
+// and returns the function that unregisters it. source returns the
+// authoritative current state per key (it is called at scrape time, so it must
+// be cheap and take its own locks). Keys that fold to the same label are
+// combined: Runs is summed, ProgressAge is the maximum. A key seen once and
+// absent later is reported as 0 on both gauges rather than vanishing, so a
+// finished run reads 0 instead of leaving the previous value in place or
+// dropping the series.
+//
+// RegisterInflight calls into the SDK (which takes its pipeline lock), and the
+// SDK runs the callback under that same lock, so the caller must not hold a
+// lock here that source also takes.
+func (r *Recorder) RegisterInflight(source func() map[InflightKey]InflightStat) (unregister func()) {
 	var mu sync.Mutex
 	seen := map[InflightKey]struct{}{}
 	reg, err := r.meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		cur := source()
 		mu.Lock()
 		defer mu.Unlock()
-		folded := make(map[InflightKey]int64, len(cur))
-		for k, n := range cur {
-			folded[InflightKey{DefID: labelFor(k.DefID), Plugin: k.Plugin}] += n
+		folded := make(map[InflightKey]InflightStat, len(cur))
+		for k, st := range cur {
+			fk := InflightKey{DefID: labelFor(k.DefID), Plugin: k.Plugin}
+			agg := folded[fk]
+			agg.Runs += st.Runs
+			agg.ProgressAge = max(agg.ProgressAge, st.ProgressAge)
+			folded[fk] = agg
 		}
 		for k := range seen {
 			if _, ok := folded[k]; !ok {
-				folded[k] = 0
+				folded[k] = InflightStat{}
 			}
 		}
-		for k, n := range folded {
+		for k, st := range folded {
 			seen[k] = struct{}{}
-			o.ObserveInt64(r.inflight, n, metric.WithAttributes(
-				telemetry.DefID.String(k.DefID), telemetry.Plugin.String(k.Plugin)))
+			set := metric.WithAttributes(telemetry.DefID.String(k.DefID), telemetry.Plugin.String(k.Plugin))
+			o.ObserveInt64(r.inflight, st.Runs, set)
+			o.ObserveFloat64(r.progAge, st.ProgressAge.Seconds(), set)
 		}
 		return nil
-	}, r.inflight)
+	}, r.inflight, r.progAge)
 	if err != nil {
 		return func() {}
 	}

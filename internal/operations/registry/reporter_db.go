@@ -1,5 +1,5 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -92,12 +92,9 @@ type dbReporter struct {
 	nowFn             func() time.Time     // clock for the throttle; time.Now unless a test replaces it
 	shapeLogsInWindow int                  // shape-change lines written since the last time-based line
 
-	// ops records ops.items; newDBReporter defaults it to the global-provider
-	// recorder and the registry replaces it with its own. reportedItems is the
-	// high-water mark of progress already added to ops.items{outcome=processed}
-	// (atomic: UpdateProgress may be called from several goroutines).
-	ops           *opsmetrics.Recorder
-	reportedItems atomic.Int64
+	// items turns UpdateProgress values into ops.items{outcome=processed}
+	// increments (see processedItems). Nil counts nothing.
+	items *processedItems
 
 	// setCurrentItemFn, if non-nil, updates the runHandle's in-memory label.
 	setCurrentItemFn func(string)
@@ -223,7 +220,7 @@ func NewDBReporterForTest(
 	bus Bus,
 	logger *slog.Logger,
 ) Reporter {
-	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil, nil, 0, true)
+	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil, nil, 0, true, nil)
 }
 
 // NewDBReporterForTestWithTouch creates a reporter with a custom touchFn for
@@ -236,7 +233,7 @@ func NewDBReporterForTestWithTouch(
 	logger *slog.Logger,
 	touchFn func(),
 ) Reporter {
-	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil, touchFn, 0, false)
+	return newDBReporter(runCtx, opID, defID, "", plugin, traceID, spanID, store, bus, nil, logger, nil, touchFn, 0, false, nil)
 }
 
 // newDBReporter creates a DB-backed Reporter.
@@ -247,6 +244,7 @@ func NewDBReporterForTestWithTouch(
 // touchProgressFn, if non-nil, stamps the owning runHandle's atomic clock.
 // flushInterval controls lazy DB flush cadence (0 = disable lazy flush).
 // synchronous = true writes the DB on every UpdateProgress (legacy).
+// items, if non-nil, counts progress into ops.items (newProcessedItems).
 func newDBReporter(
 	runCtx context.Context,
 	opID, defID, displayName, plugin, traceID, spanID string,
@@ -258,6 +256,7 @@ func newDBReporter(
 	touchProgressFn func(),
 	flushInterval time.Duration,
 	synchronous bool,
+	items *processedItems,
 ) Reporter {
 	if displayName == "" {
 		displayName = defID
@@ -279,7 +278,7 @@ func newDBReporter(
 		synchronous:           synchronous,
 		progressFlushInterval: flushInterval,
 		nowFn:                 time.Now,
-		ops:                   opsmetrics.Default(),
+		items:                 items,
 	}
 
 	// Every log line emitted via reporter.Logger() inherits these attrs.
@@ -453,7 +452,7 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	// rather than only by a human watching the UI. Cleared on terminal
 	// transition by registry.publishOpTerminal -> metrics.ClearOpProgress.
 	metrics.SetOpProgress(r.opID, r.defID, current, total)
-	r.countProcessedItems(current)
+	r.items.observe(current, total)
 
 	if r.synchronous {
 		if err := r.store.UpdateOpProgressV2(r.opID, current, total, message); err != nil {
@@ -883,19 +882,75 @@ func attrsToJSON(attrs []slog.Attr) string {
 	return string(b)
 }
 
-// countProcessedItems adds the progress made since the last report to
-// ops.items{outcome=processed}. The count is a high-water mark: a progress
-// value that goes backwards (a phase reset, a re-estimate) adds nothing and
-// does not lower the mark, so the same items are never counted twice.
-func (r *dbReporter) countProcessedItems(current int) {
-	for {
-		last := r.reportedItems.Load()
-		if int64(current) <= last {
-			return
-		}
-		if r.reportedItems.CompareAndSwap(last, int64(current)) {
-			r.ops.Items(r.defID, opsmetrics.ItemsProcessed, int64(current)-last)
-			return
-		}
+// processedItems converts one run attempt's UpdateProgress(current, total)
+// stream into increments of ops.items{outcome=processed}.
+//
+// Progress is not a single climbing number. Three shapes occur in the tree and
+// each needs a different response:
+//
+//   - Phase resets. A multi-phase op restarts current at 0 for each phase,
+//     often over the same or a smaller total (organizer/service.go: metadata
+//     fetch, then scan, then organize; dedup/series_dedup.go). A single
+//     high-water mark for the whole run counts nothing in any phase that does
+//     not climb past the previous phase's peak, which made OpStalledV2 fire on
+//     healthy multi-phase runs. So progress is split into segments: a report
+//     below the mark starts a new segment when current is 0 or the total
+//     changed, and the new segment's mark is that report (it adds nothing).
+//   - Out-of-order reports. registry.RunItems workers report concurrently, so
+//     11 can arrive after 12 with the same total. That is not a new phase: a
+//     decrease with the same total and a non-zero current is ignored, and the
+//     mark stays, so the same items are never counted twice.
+//   - Growing totals. The library scan reports (processed, discovered) and
+//     discovered grows while processed climbs (scanner/scan_progress_owner.go).
+//     A report above the mark therefore always adds current - mark, whether
+//     or not the total changed, and adopts the new total.
+//
+// The mark is seeded from the row's persisted progress when the attempt
+// starts (newProcessedItems), so a resumed attempt whose first report is its
+// checkpoint position does not count the checkpointed items a second time. The
+// persisted value can trail the previous attempt's last report by up to one
+// lazy-flush interval (ProgressFlushInterval, 30s by default), so a resume can
+// still over-count by that much; it is bounded and affects throughput only.
+//
+// A run that skips the 0 report and starts a new phase above the old mark
+// with a different total is read as continuing growth and adds current - mark;
+// the first report of a phase that does start below the mark adds nothing.
+// Both errors are bounded by one report and only affect throughput.
+type processedItems struct {
+	ops   *opsmetrics.Recorder
+	defID string
+
+	mu       sync.Mutex
+	segTotal int // total of the current segment
+	mark     int // highest current already counted in the current segment
+}
+
+// newProcessedItems returns the counter for one attempt of defID, seeded with
+// the attempt's starting progress (0, 0 for a fresh run). A nil ops records
+// into opsmetrics.Default().
+func newProcessedItems(ops *opsmetrics.Recorder, defID string, startCurrent, startTotal int) *processedItems {
+	if ops == nil {
+		ops = opsmetrics.Default()
 	}
+	return &processedItems{ops: ops, defID: defID, segTotal: startTotal, mark: max(0, startCurrent)}
+}
+
+// observe accounts for one UpdateProgress(current, total). Safe for
+// concurrent use; a nil receiver does nothing.
+func (p *processedItems) observe(current, total int) {
+	if p == nil {
+		return
+	}
+	var add int
+	p.mu.Lock()
+	switch {
+	case current > p.mark:
+		add = current - p.mark
+		p.mark, p.segTotal = current, total
+	case current < p.mark && (current <= 0 || total != p.segTotal):
+		// A new phase: start a segment at this report.
+		p.mark, p.segTotal = max(0, current), total
+	}
+	p.mu.Unlock()
+	p.ops.Items(p.defID, opsmetrics.ItemsProcessed, int64(add))
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/metrics_otel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7c1e92-a3b8-4f06-8c5d-9e2f0b61a7d3
 // last-edited: 2026-10-10
 
@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,10 +34,18 @@ type otelRig struct {
 
 func newOtelRig(t *testing.T) *otelRig {
 	t.Helper()
+	return newOtelRigWith(t, registry.Options{})
+}
+
+// newOtelRigWith is newOtelRig with extra registry options; OpsMetrics is
+// always the rig's private recorder.
+func newOtelRigWith(t *testing.T, opts registry.Options) *otelRig {
+	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
 	store := newFakeStore()
-	reg := registry.NewWithOptions(store, slog.Default(), 1, registry.Options{OpsMetrics: opsmetrics.New(mp)})
+	opts.OpsMetrics = opsmetrics.New(mp)
+	reg := registry.NewWithOptions(store, slog.Default(), 1, opts)
 	return &otelRig{reader: reader, reg: reg, store: store}
 }
 
@@ -95,6 +105,25 @@ func (g *otelRig) inflight(t *testing.T, defID string) int64 {
 		}
 	}
 	return 0
+}
+
+// progressAge is the ops.progress_age value for defID, and whether a point exists.
+func (g *otelRig) progressAge(t *testing.T, defID string) (float64, bool) {
+	t.Helper()
+	m, ok := g.collect(t)["audiobook_organizer.ops.progress_age"]
+	if !ok {
+		return 0, false
+	}
+	gauge, ok := m.Data.(metricdata.Gauge[float64])
+	if !ok {
+		t.Fatalf("ops.progress_age is %T, want Gauge[float64]", m.Data)
+	}
+	for _, dp := range gauge.DataPoints {
+		if attrIs(dp.Attributes, "def_id", defID) {
+			return dp.Value, true
+		}
+	}
+	return 0, false
 }
 
 // durationCount is the number of ops.run.duration observations for (defID, outcome).
@@ -200,16 +229,129 @@ func TestOpsMetrics_RunToFailure(t *testing.T) {
 	}
 }
 
-// TestOpsMetrics_ProgressCountsHighWaterMark: progress 10, 25, 25, 20, 25 adds 25
-// items in total; the decrease adds nothing and does not lower the mark, so climbing back to 25 adds nothing.
-func TestOpsMetrics_ProgressCountsHighWaterMark(t *testing.T) {
+type progressReport struct{ current, total int }
+
+// runProgress runs one def that reports seq and returns ops.items{processed}.
+// preset, when non-nil, is written to the row as persisted progress before
+// the registry starts, which is what a resumed or retried row carries.
+func runProgress(t *testing.T, id string, seq []progressReport, preset *progressReport) int64 {
+	t.Helper()
 	g := newOtelRig(t)
-	const id = "test.otel-items"
 	def := makeValidDef(id)
 	def.Run = func(_ context.Context, _ json.RawMessage, rep registry.Reporter) error {
-		for _, cur := range []int{10, 25, 25, 20, 25} {
-			_ = rep.UpdateProgress(cur, 100, "")
+		for _, p := range seq {
+			_ = rep.UpdateProgress(p.current, p.total, "")
 		}
+		return nil
+	}
+	if preset != nil {
+		// A row left queued with progress at startup is resumed by
+		// resumeAfterStartup; ResumeRestart keeps it (ResumeDrop drops it).
+		def.ResumePolicy = registry.ResumeRestart
+	}
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	var opID string
+	if preset != nil {
+		var err error
+		if opID, err = g.reg.EnqueueOp(t.Context(), id, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.store.UpdateOpProgressV2(opID, preset.current, preset.total, ""); err != nil {
+			t.Fatal(err)
+		}
+		g.reg.Start(t.Context())
+	} else {
+		g.reg.Start(t.Context())
+		var err error
+		if opID, err = g.reg.EnqueueOp(t.Context(), id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = g.reg.Shutdown(context.Background()) })
+	awaitStatus(t, g.store, opID, "completed", 5*time.Second)
+	return g.counterValue(t, "audiobook_organizer.ops.items", id, "processed")
+}
+
+// TestOpsMetrics_ProgressToItems pins how UpdateProgress values become
+// ops.items{outcome=processed}. Each case names the progress shape it stands
+// for; see processedItems in reporter_db.go.
+func TestOpsMetrics_ProgressToItems(t *testing.T) {
+	cases := []struct {
+		name string
+		seq  []progressReport
+		want int64
+	}{
+		// A decrease with the same total (a re-estimate or a late report)
+		// adds nothing and does not lower the mark, so climbing back to 25
+		// adds nothing either.
+		{"same-total decrease", []progressReport{{10, 100}, {25, 100}, {25, 100}, {20, 100}, {25, 100}}, 25},
+		// Phase reset to 0 with a new total (organizer: fetch, then scan,
+		// then organize). The second phase's 15 items count even though they
+		// never pass the first phase's 25. A run-wide high-water mark counted
+		// 25 here and 0 for every later phase, which fired OpStalledV2 on
+		// healthy runs.
+		{"phase reset to zero", []progressReport{{10, 100}, {25, 100}, {0, 50}, {5, 50}, {15, 50}}, 40},
+		// Phase reset to 0 over the same total (organizer scan after metadata
+		// fetch over the same books).
+		{"phase reset same total", []progressReport{{0, 30}, {30, 30}, {0, 30}, {12, 30}}, 42},
+		// Concurrent RunItems workers report out of order with one total: 11
+		// after 12 is not a new phase.
+		{"out of order", []progressReport{{10, 100}, {12, 100}, {11, 100}, {13, 100}}, 13},
+		// The library scan reports (processed, discovered): the total grows
+		// while current climbs, and every step counts.
+		{"growing total", []progressReport{{10, 100}, {20, 110}, {30, 120}}, 30},
+		// A new phase that skips the 0 report but has a different total
+		// starts a segment at its first report.
+		{"phase without zero report", []progressReport{{10, 10}, {3, 40}, {8, 40}}, 15},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runProgress(t, fmt.Sprintf("test.otel-items-%d", i), tc.seq, nil)
+			if got != tc.want {
+				t.Errorf("items{processed} = %d, want %d (reports %v)", got, tc.want, tc.seq)
+			}
+		})
+	}
+}
+
+// TestOpsMetrics_ResumedAttemptDoesNotRecountCheckpoint: a row that carries
+// 500/1000 from an earlier attempt, resumed at its checkpoint, counts only the
+// items this attempt adds.
+func TestOpsMetrics_ResumedAttemptDoesNotRecountCheckpoint(t *testing.T) {
+	got := runProgress(t, "test.otel-items-resume",
+		[]progressReport{{500, 1000}, {510, 1000}, {530, 1000}}, &progressReport{500, 1000})
+	if got != 30 {
+		t.Errorf("items{processed} = %d, want 30 (the checkpointed 500 must not count again)", got)
+	}
+}
+
+// TestOpsMetrics_ProgressAge: ops.progress_age measures time since the run's
+// last UpdateProgress on the registry's liveness clock, and a same-value
+// heartbeat resets it. This is the liveness signal OpStalledV2 alerts on: a
+// phase that reports a constant current (a database backup, a hash pass
+// pinned at total/total) is alive as long as it keeps reporting.
+func TestOpsMetrics_ProgressAge(t *testing.T) {
+	var nowNano atomic.Int64
+	nowNano.Store(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano())
+	clock := func() time.Time { return time.Unix(0, nowNano.Load()) }
+	advance := func(d time.Duration) { nowNano.Add(int64(d)) }
+
+	g := newOtelRigWith(t, registry.Options{LivenessNow: clock})
+	const id = "test.otel-age"
+	beat, beaten, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	reported := make(chan struct{})
+	def := makeValidDef(id)
+	// Keep the watchdog away from the jumped clock.
+	def.ProgressTimeout = 24 * time.Hour
+	def.Run = func(_ context.Context, _ json.RawMessage, rep registry.Reporter) error {
+		_ = rep.UpdateProgress(5, 10, "")
+		close(reported)
+		<-beat
+		_ = rep.UpdateProgress(5, 10, "still backing up") // heartbeat, same value
+		close(beaten)
+		<-release
 		return nil
 	}
 	if err := g.reg.RegisterOp(def); err != nil {
@@ -217,15 +359,33 @@ func TestOpsMetrics_ProgressCountsHighWaterMark(t *testing.T) {
 	}
 	g.reg.Start(t.Context())
 	t.Cleanup(func() { _ = g.reg.Shutdown(context.Background()) })
-
 	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitStatus(t, g.store, opID, "completed", 5*time.Second)
-	if got := g.counterValue(t, "audiobook_organizer.ops.items", id, "processed"); got != 25 {
-		t.Errorf("items{processed} = %d, want 25", got)
+	<-reported
+	if age, ok := g.progressAge(t, id); !ok || age != 0 {
+		t.Errorf("progress_age right after a report = %v (point %v), want 0", age, ok)
 	}
+	advance(40 * time.Minute)
+	if age, _ := g.progressAge(t, id); age != 2400 {
+		t.Errorf("progress_age 40m after the last report = %v, want 2400", age)
+	}
+	close(beat)
+	<-beaten
+	if age, _ := g.progressAge(t, id); age != 0 {
+		t.Errorf("progress_age after a same-value heartbeat = %v, want 0", age)
+	}
+	advance(10 * time.Minute)
+	if age, _ := g.progressAge(t, id); age != 600 {
+		t.Errorf("progress_age 10m after the heartbeat = %v, want 600", age)
+	}
+	close(release)
+	awaitStatus(t, g.store, opID, "completed", 5*time.Second)
+	waitForOtel(t, "progress_age back to 0", func() bool {
+		age, ok := g.progressAge(t, id)
+		return ok && age == 0
+	})
 }
 
 // TestShutdownUnregistersInflightCallback: a registry started and shut down 20
