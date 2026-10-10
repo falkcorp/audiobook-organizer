@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -461,6 +461,9 @@ Background operations run with configurable timeout (default 30min, currently se
 - Folder: `{author}/{series}/{title} ({print_year})`
 - File: `{title} - {author} - read by {narrator}`
 - Configurable in settings
+
+### Metrics
+`/metrics` (Prometheus text, default registry) is the primary metrics surface and must stay compatible (owner decision D66). New instruments are OTel: get a meter with `telemetry.Meter("<area>")` (`internal/telemetry/meter.go`); never add a `client_golang` constructor. Naming (spec `docs/proposals/2026-10-holistic/11-metrics-strategy-otel-prometheus.md` §3.1): dotted lowercase names prefixed `audiobook_organizer.` (`ai_dispatch.` and `ai.` are the only unprefixed exceptions); counters never end in `_total` (the exporter adds it); histograms set unit `s` or `By` and need an entry in the views table `internal/telemetry/views.go`; never unit `"1"` (it appends `_ratio`); attribute keys come from `internal/telemetry/attr.go`, with closed, small value sets (no ids, paths or free text). Scope labels are off (`prometheus.WithoutScopeInfo()`). The series contract `internal/telemetry/contract/testdata/series.golden` pins the name, type and label names of every family on `/metrics` (`TestSeriesContract`); adding, renaming or removing a family means editing the golden and the test's `seedingTable` in the same PR, plus a recording rule if a dashboard or alert reads the old name. `series_reserved.txt` holds the AI names reserved for 11-PR7.
 
 ---
 
