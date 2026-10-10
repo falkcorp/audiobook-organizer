@@ -1,5 +1,5 @@
 // file: internal/telemetry/metric_env_isolation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3a71e58-04bd-4f92-9e6a-5d18b2f7a0c4
 // last-edited: 2026-10-10
 
@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/grpc"
@@ -265,15 +266,98 @@ func TestInitSummary_BothHalvesOffKeepsBothMessages(t *testing.T) {
 }
 
 func TestRedactUserinfo(t *testing.T) {
-	for in, want := range map[string]string{
-		"https://u:p@h:4317":                     "https://h:4317",
-		"endpoint \"http://u@h:1\" is bad":       "endpoint \"http://h:1\" is bad",
-		"h:4317":                                 "h:4317",
-		"dns:///h:4317":                          "dns:///h:4317",
-		"parse \"http://a:b@h:1\": invalid port": "parse \"http://h:1\": invalid port",
+	for name, tc := range map[string][2]string{
+		"url":                 {"https://u:p@h:4317", "https://h:4317"},
+		"quoted-in-error":     {"endpoint \"http://u@h:1\" is bad", "endpoint \"http://h:1\" is bad"},
+		"dns-triple-slash":    {"dns:///u:secret@h:4317", "dns:///h:4317"},
+		"password-with-slash": {"https://u:pa/ss@h:4317", "https://h:4317"},
+		"password-with-at":    {"https://u:p@ss@h:4317", "https://h:4317"},
+		"two-occurrences":     {"a https://u:one@h:1 b dns:///v:two@g:2 c", "a https://h:1 b dns:///g:2 c"},
+		"control-bare":        {"h:4317", "h:4317"},
+		"control-dns":         {"dns:///h:4317", "dns:///h:4317"},
+		"control-parse-error": {"parse \"http://h:1\": invalid port", "parse \"http://h:1\": invalid port"},
 	} {
-		if got := redactUserinfo(in); got != want {
-			t.Errorf("redactUserinfo(%q) = %q, want %q", in, got, want)
+		if got := redactUserinfo(tc[0]); got != tc[1] {
+			t.Errorf("%s: redactUserinfo(%q) = %q, want %q", name, tc[0], got, tc[1])
+		}
+	}
+}
+
+func TestStripUserinfo_AtParseTime(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in, want string
+		dropped  bool
+	}{
+		"http":         {"http://u:secret@192.0.2.1:4317", "http://192.0.2.1:4317", true},
+		"https":        {"https://u:secret@192.0.2.1:4317", "https://192.0.2.1:4317", true},
+		"dns":          {"dns:///u:secret@192.0.2.1:4317", "dns:///192.0.2.1:4317", true},
+		"slash-in-pw":  {"dns:///u:se/cret@192.0.2.1:4317", "dns:///192.0.2.1:4317", true},
+		"at-in-pw":     {"http://u:se@cret@192.0.2.1:4317", "http://192.0.2.1:4317", true},
+		"bare":         {"u:secret@192.0.2.1:4317", "192.0.2.1:4317", true},
+		"control-bare": {"192.0.2.1:4317", "192.0.2.1:4317", false},
+		"control-dns":  {"dns:///192.0.2.1:4317", "dns:///192.0.2.1:4317", false},
+	} {
+		got, dropped := stripUserinfo(tc.in)
+		if got != tc.want || dropped != tc.dropped {
+			t.Errorf("%s: stripUserinfo(%q) = %q, %v; want %q, %v", name, tc.in, got, dropped, tc.want, tc.dropped)
+		}
+		if tgt, err := parseOTLPEndpoint(tc.in); err == nil {
+			if strings.Contains(tgt.URL+tgt.Target, "secret") || tgt.DroppedUserinfo != tc.dropped {
+				t.Errorf("%s: parsed target %+v keeps userinfo or has the wrong flag", name, tgt)
+			}
+		}
+	}
+	// A malformed endpoint's error text must not quote the userinfo either.
+	_, err := parseOTLPEndpoint("ftp://u:secret@192.0.2.1:21")
+	if err == nil || strings.Contains(err.Error(), "secret") {
+		t.Errorf("error = %v, want one without the userinfo", err)
+	}
+}
+
+// A dial/export failure for an endpoint with userinfo must never put the
+// secret in what reaches the log func (the process-wide error handler).
+func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
+	var mu sync.Mutex
+	var logged []string
+	h := newRateLimitedErrorHandler(0, time.Now, func(_ slog.Level, msg string, attrs ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, msg)
+		for _, a := range attrs {
+			if s, ok := a.(string); ok {
+				logged = append(logged, s)
+			}
+		}
+	})
+	prev := otel.GetErrorHandler()
+	otel.SetErrorHandler(h)
+	t.Cleanup(func() { otel.SetErrorHandler(prev) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cfg := LoadConfig("test", "", WithMetricsOTLP("dns:///user:secret@192.0.2.1:4317", time.Minute, true))
+	mp, status, err := newMeterProvider(ctx, cfg, privateProm())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Err != nil && strings.Contains(status.Err.Error(), "secret") {
+		t.Fatalf("status error leaks userinfo: %v", status.Err)
+	}
+	c, _ := mp.Meter("dial").Int64Counter("dial_things")
+	c.Add(ctx, 1)
+	sdErr := mp.Shutdown(ctx) // the flush to an unroutable address fails
+	if sdErr != nil && strings.Contains(sdErr.Error(), "secret") {
+		t.Errorf("shutdown error leaks userinfo: %v", sdErr)
+	}
+	// Feed the shutdown error through the real handler path as well.
+	if sdErr != nil {
+		otel.Handle(sdErr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range logged {
+		if strings.Contains(l, "secret") {
+			t.Errorf("log output leaks userinfo: %q", l)
 		}
 	}
 }

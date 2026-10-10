@@ -1,5 +1,5 @@
 // file: internal/telemetry/endpoint.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
 // last-edited: 2026-10-10
 
@@ -22,6 +22,31 @@ type otlpTarget struct {
 	// Bare is true for a bare host:port (the form that needs an explicit
 	// insecure switch for plaintext gRPC). A dns:/// target is not Bare.
 	Bare bool
+	// DroppedUserinfo is true when the configured endpoint carried
+	// "user:pass@" userinfo, which parseOTLPEndpoint removed. gRPC never
+	// authenticates with OTLP endpoint userinfo, so dropping it changes
+	// nothing functionally and keeps it out of exporter errors and logs.
+	DroppedUserinfo bool
+}
+
+// stripUserinfo removes URL userinfo from an endpoint string: everything
+// between the scheme separator (and any slashes after it) and the LAST '@',
+// so a password containing '/' or '@' goes too. It handles "scheme://u:p@h",
+// "dns:///u:p@h" and a scheme-less "u:p@h:4317". A path containing '@' is not
+// a valid OTLP endpoint and would be cut too, which is the safe direction.
+func stripUserinfo(ep string) (string, bool) {
+	at := strings.LastIndex(ep, "@")
+	if at < 0 {
+		return ep, false
+	}
+	start := 0
+	if i := strings.Index(ep, "://"); i >= 0 && i < at {
+		start = i + len("://")
+		for start < at && ep[start] == '/' {
+			start++
+		}
+	}
+	return ep[:start] + ep[at+1:], true
 }
 
 // parseOTLPEndpoint validates an OTLP endpoint. Accepted forms:
@@ -33,7 +58,16 @@ type otlpTarget struct {
 // Everything else is an error. Error messages are stable: the trace path's
 // callers and tests depend on them.
 func parseOTLPEndpoint(endpoint string) (otlpTarget, error) {
-	ep := strings.TrimSpace(endpoint)
+	ep, dropped := stripUserinfo(strings.TrimSpace(endpoint))
+	// From here on the userinfo is gone: the messages in
+	// parseStrippedOTLPEndpoint quote the stripped endpoint only.
+	t, err := parseStrippedOTLPEndpoint(ep)
+	t.DroppedUserinfo = dropped
+	return t, err
+}
+
+func parseStrippedOTLPEndpoint(ep string) (otlpTarget, error) {
+	endpoint := ep
 	if scheme, rest, ok := strings.Cut(ep, "://"); ok {
 		switch strings.ToLower(scheme) {
 		case "http", "https":

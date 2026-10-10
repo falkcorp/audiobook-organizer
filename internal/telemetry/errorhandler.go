@@ -1,5 +1,5 @@
 // file: internal/telemetry/errorhandler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3f6b21-7a48-4c05-b1e9-2f60c8a4d7e3
 // last-edited: 2026-10-10
 
@@ -78,11 +78,15 @@ func installExportErrorHandler() {
 	})
 }
 
-// userinfoRE matches the "user:pass@" of a URL authority.
-var userinfoRE = regexp.MustCompile(`(://)[^/@\s"]*@`)
+// userinfoRE matches a URL authority's userinfo as a backstop: after "://" and
+// any slashes, everything in the token (no whitespace or quote) up to its
+// LAST '@', so "dns:///u:p@h", a password containing '/' or '@', and several
+// occurrences in one string are all covered. The primary defence is
+// stripUserinfo at endpoint parse time.
+var userinfoRE = regexp.MustCompile(`(://+)[^\s"'<>]*@`)
 
-// redactUserinfo removes URL userinfo from a string so an endpoint such as
-// "https://user:secret@host:4317", or an error that quotes it, can be logged.
+// redactUserinfo removes URL userinfo from a string so an endpoint, or an
+// error that quotes it, can be logged.
 func redactUserinfo(s string) string {
 	return userinfoRE.ReplaceAllString(s, "$1")
 }
