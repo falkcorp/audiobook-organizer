@@ -1,19 +1,19 @@
 // file: internal/server/handlers/entities/author_ref_audit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b6f2e91-4a7c-4d18-9f52-6c8a3d0e7b41
-// last-edited: 2026-08-29
+// last-edited: 2026-10-10
 
 package entities_test
 
 import (
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,9 +54,7 @@ type refAuditFixture struct {
 
 func newRefAuditFixture(t *testing.T) *refAuditFixture {
 	t.Helper()
-	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	store := dbtest.NewStore(t)
 
 	mk := func(name string) int {
 		a, err := store.CreateAuthor(name)
