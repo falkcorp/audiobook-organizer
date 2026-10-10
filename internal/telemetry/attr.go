@@ -1,7 +1,7 @@
 // file: internal/telemetry/attr.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f188355-4355-41fd-ac81-763e2e6c74a6
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package telemetry
 
@@ -13,10 +13,17 @@ import (
 )
 
 // Attribute keys allowed on metric instruments (spec 11 §3.5, rule C3). A new
-// key is a reviewed addition to this file: TestAttributeKeysAllowlisted in
-// internal/telemetry/contract fails when any label on the /metrics scrape is
-// not one of these keys (dots compared as underscores, the exporter's
-// translation).
+// key is a reviewed addition to this file. Two lists:
+//
+//   - AttributeKeys: what a NEW instrument created through Meter may use.
+//     TestInstrumentNames in internal/telemetry/contract rejects any other key.
+//   - ScrapeOnlyAttributeKeys: keys that exist on /metrics today but no new
+//     instrument may adopt (the legacy op_id label, and the semconv keys
+//     otelgin sets). Only the golden and scrape checks accept them.
+//
+// TestAttributeKeysAllowlisted fails when any label on the golden or the
+// /metrics scrape is in neither list (dots compared as underscores, the
+// exporter's translation).
 //
 // Cardinality rule C1: a key's value set must be closed and small
 // (enumerations, plugin names, fixer ids, def ids). Never op/run ids, book or
@@ -59,12 +66,12 @@ const (
 	Level   = attribute.Key("level")
 	// OpID breaks rule C1 (one value per operation run). It exists only on
 	// the legacy op_items_processed/op_items_total gauges, which 11-PR4
-	// replaces; no new instrument may use it.
+	// replaces; it is scrape-only, so no new instrument may use it.
 	OpID = attribute.Key("op_id")
 )
 
 // Keys otelgin sets from the OTel HTTP semantic conventions. They are not
-// ours to name, but they reach /metrics, so the allowlist names them.
+// ours to name, but they reach /metrics, so the scrape-only list names them.
 const (
 	HTTPRequestMethod      = attribute.Key("http.request.method")
 	HTTPResponseStatusCode = attribute.Key("http.response.status_code")
@@ -77,18 +84,32 @@ const (
 	ErrorType              = attribute.Key("error.type")
 )
 
-var attributeKeys = []attribute.Key{
+// instrumentKeys may be used by any instrument created through Meter.
+var instrumentKeys = []attribute.Key{
 	Outcome, DefID, Provider, Model, Task, Reason, Direction, Class, Kind, Plugin,
 	State, Phase, Accepted, Capability, Endpoint,
 	Type, Field, Alias, Entry, Cache, Scope, Backend, OpType, Shape, Source, View,
-	Fixer, Store, Level, OpID,
+	Fixer, Store, Level,
+}
+
+// scrapeOnlyKeys are on /metrics today but closed to new instruments.
+var scrapeOnlyKeys = []attribute.Key{
+	OpID,
 	HTTPRequestMethod, HTTPResponseStatusCode, HTTPRoute, NetworkProtocolName,
 	NetworkProtocolVersion, ServerAddress, ServerPort, URLScheme, ErrorType,
 }
 
-// AttributeKeys returns the allowlist, sorted.
+// AttributeKeys returns the keys a new instrument may use, sorted.
 func AttributeKeys() []attribute.Key {
-	out := slices.Clone(attributeKeys)
+	out := slices.Clone(instrumentKeys)
+	slices.Sort(out)
+	return out
+}
+
+// ScrapeOnlyAttributeKeys returns the keys accepted on the golden and the
+// scrape but rejected on a new instrument, sorted.
+func ScrapeOnlyAttributeKeys() []attribute.Key {
+	out := slices.Clone(scrapeOnlyKeys)
 	slices.Sort(out)
 	return out
 }

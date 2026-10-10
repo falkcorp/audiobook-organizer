@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -318,7 +318,9 @@ func seedOtelgin() error {
 	r.Use(otelgin.Middleware("audiobook-organizer"))
 	r.GET("/contract", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/contract", nil))
+	// A host:port target, as production requests carry, so server_port is
+	// pinned in the golden too.
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://example.test:8484/contract", nil))
 	if rec.Code != http.StatusOK {
 		return fmt.Errorf("otelgin seed: status %d", rec.Code)
 	}
@@ -486,9 +488,18 @@ func mustGolden(t *testing.T) []goldenRow {
 // Tests
 
 // TestSeriesContract is the guard for owner decision D66 (Prometheus
-// compatibility): no family the dashboards or alerts may read is renamed,
-// retyped, relabelled or dropped without this test failing, and no new family
-// ships without being written into the golden.
+// compatibility) over the seeded scrape:
+//
+//   - (A) every golden family is on /metrics with its golden type and label
+//     names, so a rename, retype, relabel or removal fails here;
+//   - (B) every in-scope family on /metrics is in the golden.
+//
+// (B) can only see families that export something, i.e. that a seedingTable
+// row touched. A new family nobody seeds is caught statically instead:
+// TestDeclaredFamiliesInGolden (declared_families_test.go) parses every
+// client_golang constructor and OTel instrument call in internal/, pkg/ and
+// cmd/ and fails on any name without a golden row. Families created by
+// third-party code (otelgin) are seen only through seeding.
 func TestSeriesContract(t *testing.T) {
 	rows := mustGolden(t)
 
@@ -631,10 +642,16 @@ func TestNoScopeLabels(t *testing.T) {
 }
 
 // TestAttributeKeysAllowlisted (rule C3): every label in the golden and on the
-// in-scope part of the scrape is a key from internal/telemetry/attr.go.
+// in-scope part of the scrape is a key from internal/telemetry/attr.go, in
+// either the instrument list or the scrape-only list (which must not overlap).
 func TestAttributeKeysAllowlisted(t *testing.T) {
+	for _, k := range telemetry.ScrapeOnlyAttributeKeys() {
+		if slices.Contains(telemetry.AttributeKeys(), k) {
+			t.Errorf("attr.go key %q is in both the instrument and the scrape-only list", k)
+		}
+	}
 	allowed := map[string]attribute.Key{}
-	for _, k := range telemetry.AttributeKeys() {
+	for _, k := range append(telemetry.AttributeKeys(), telemetry.ScrapeOnlyAttributeKeys()...) {
 		pn := telemetry.PrometheusLabelName(k)
 		if prev, dup := allowed[pn]; dup {
 			t.Errorf("attr.go keys %q and %q both export as label %q", prev, k, pn)
@@ -779,6 +796,8 @@ func TestInstrumentNames(t *testing.T) {
 		"counter ending in _total": {name: "audiobook_organizer.books.removed_total", kind: kindCounter, unit: "{book}"},
 		`unit "1"`:                 {name: "audiobook_organizer.books.share", kind: kindGauge, unit: "1"},
 		"key outside attr.go":      {name: "audiobook_organizer.books.removed", kind: kindCounter, keys: []attribute.Key{"book_id"}},
+		"legacy op_id key":         {name: "audiobook_organizer.ops.items", kind: kindGauge, unit: "{item}", keys: []attribute.Key{telemetry.OpID}},
+		"otelgin semconv key":      {name: "audiobook_organizer.http.hits", kind: kindCounter, keys: []attribute.Key{telemetry.HTTPRoute}},
 		"no prefix":                {name: "books.removed", kind: kindCounter},
 		"uppercase":                {name: "audiobook_organizer.Books.removed", kind: kindCounter},
 		"histogram with no view":   {name: "audiobook_organizer.books.scan.duration", kind: kindHistogram, unit: "s"},
@@ -889,32 +908,89 @@ func TestEveryHistogramHasAView(t *testing.T) {
 	}
 }
 
-// TestViewsMatchLiveBuckets: the views table's bounds equal the `le` values
-// every histogram family on the live scrape exposes today, so a family that
-// migrates to OTel keeps identical buckets.
-func TestViewsMatchLiveBuckets(t *testing.T) {
+// TestHistogramBucketsPinned: the `le` text of every histogram family is
+// pinned in testdata/histogram_buckets.golden, a file independent of
+// internal/telemetry/views.go. Both the live scrape and the views table must
+// match it, so neither a constructor edit nor a views.go edit (which is what
+// shapes the otelgin and OTel scrape) can move a bucket without changing the
+// pinned file in the same PR. Dashboards and recording rules select buckets
+// by their `le` string, so the text is compared, not just the value.
+func TestHistogramBucketsPinned(t *testing.T) {
+	pinned, err := readPinnedBuckets()
+	if err != nil {
+		t.Fatalf("read %s: %v", bucketsPath, err)
+	}
 	views := telemetry.HistogramBuckets()
 	fams := scrape(t)
+	histograms := map[string]bool{}
 	for _, r := range mustGolden(t) {
 		if r.typ != "histogram" {
 			continue
+		}
+		histograms[r.name] = true
+		want, ok := pinned[r.name]
+		if !ok {
+			t.Errorf("histogram %s has no row in %s: add its le list", r.name, bucketsPath)
+			continue
+		}
+		if f, ok := fams[r.name]; ok {
+			if got := leText(f); !slices.Equal(got, want) {
+				t.Errorf("histogram %s: /metrics le [%s], %s pins [%s]",
+					r.name, strings.Join(got, ","), bucketsPath, strings.Join(want, ","))
+			}
 		}
 		key, ok := viewKeyFor(r.name, views)
 		if !ok {
 			continue // TestEveryHistogramHasAView reports it
 		}
-		f, ok := fams[r.name]
-		if !ok {
-			continue // TestSeriesContract reports it
-		}
-		live := slices.Sorted(maps.Keys(f.les))
-		if !slices.Equal(live, views[key]) {
-			t.Errorf("histogram %s: /metrics buckets %v, views table %q says %v", r.name, live, key, views[key])
-		}
+		var got []string
 		for _, b := range views[key] {
 			if math.IsInf(b, 0) || math.IsNaN(b) {
 				t.Errorf("views table %q has a non-finite bound %v", key, b)
 			}
+			got = append(got, strconv.FormatFloat(b, 'g', -1, 64))
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("views table %q: [%s], %s pins %s at [%s]",
+				key, strings.Join(got, ","), bucketsPath, r.name, strings.Join(want, ","))
 		}
 	}
+	for name := range pinned {
+		if !histograms[name] {
+			t.Errorf("%s pins %s, which is not a histogram row in %s", bucketsPath, name, goldenPath)
+		}
+	}
+}
+
+const bucketsPath = "testdata/histogram_buckets.golden"
+
+// readPinnedBuckets reads `family<TAB>le,le,...` rows (finite bounds only, in
+// ascending order, exactly as /metrics writes them).
+func readPinnedBuckets() (map[string][]string, error) {
+	b, err := os.ReadFile(bucketsPath)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for i, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		name, les, ok := strings.Cut(line, "\t")
+		if !ok || name == "" || les == "" {
+			return nil, fmt.Errorf("line %d: want family<TAB>le,le,..., got %q", i+1, line)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("line %d: duplicate family %s", i+1, name)
+		}
+		out[name] = strings.Split(les, ",")
+	}
+	return out, nil
+}
+
+// leText returns a family's finite bucket bounds as /metrics wrote them, in
+// ascending order.
+func leText(f *scrapedFamily) []string {
+	var out []string
+	for _, v := range slices.Sorted(maps.Keys(f.les)) {
+		out = append(out, f.les[v])
+	}
+	return out
 }
