@@ -1,9 +1,12 @@
 // file: web/src/test/setup.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
-import '@testing-library/jest-dom';
+// The /vitest entry registers the matchers on Vitest's expect and augments
+// Vitest's Assertion type; the bare import only augments the jest globals,
+// which Vitest 5 no longer folds into Assertion (typecheck lost every matcher).
+import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
