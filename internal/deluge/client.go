@@ -1,6 +1,7 @@
 // file: internal/deluge/client.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9a7b8c6d-0e1f-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-10
 //
 // Deluge Web JSON-RPC client (backlog 6.1).
 //
