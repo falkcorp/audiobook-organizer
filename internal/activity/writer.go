@@ -1,5 +1,5 @@
 // file: internal/activity/writer.go
-// version: 1.8.5
+// version: 1.8.6
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-10-09
 
@@ -448,7 +448,7 @@ var structuralSlogKeys = map[string]struct{}{
 // mean the message is a sentence fragment whose object is the first attr.
 // "cover art saved to" + path=/lib/x.jpg reads correctly as
 // "cover art saved to /lib/x.jpg", where "cover art saved to path=/lib/x.jpg"
-// does not. Any other shape gets plain key=value appending, which is honest
+// does not. Any other shape gets plain key=value appending, which is accurate
 // even when it is not elegant.
 var trailingPrepositions = map[string]struct{}{
 	"to": {}, "for": {}, "from": {}, "at": {}, "in": {},
