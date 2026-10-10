@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_review_bulk_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5f2c8a91-3d6e-4b17-9a40-c7e1b5d3f820
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Owner ruling 2026-09-27: EVERY apply button on the /review page (single
 // row, Apply selected, Apply page, Apply high confidence, group Apply All) is
@@ -65,7 +65,7 @@ func hasReason(reasons []string, want string) bool {
 func TestReviewBulk_FixtureRefusesAndPinlessIsGated(t *testing.T) {
 	books, cand := refusedByAuthorAndTranscription()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 		t.Fatalf("pinless: outcome %+v, want gate_blocked", out)
 	}
@@ -95,7 +95,7 @@ func TestReviewBulk_OverridesCertaintyLegsAndRecordsIt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			books, cand := refusedByAuthorAndTranscription()
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
+			out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
 			if !out.Applied || !out.OwnerReviewed {
 				t.Fatalf("outcome %+v, want applied as owner-reviewed", out)
 			}
@@ -126,7 +126,7 @@ func TestReviewBulk_ASINConflictStillBlocks(t *testing.T) {
 			old := "B00OLDASIN"
 			books["b1"].ASIN = &old
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
+			out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
 			if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 				t.Fatalf("outcome %+v, want gate_blocked", out)
 			}

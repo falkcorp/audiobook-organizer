@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.20.4
+// version: 1.21.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -371,7 +371,10 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			writeBack := config.AppConfig.WriteBackMetadata
 			if sched := mfs.fileWorkScheduler; sched != nil {
 				sched(id, func() {
-					if err := mfs.FinishAutoFetchFileWork(id, pendingCover, writeBack); err != nil {
+					// ctx reaches the pool job for its values only: a bulk
+					// caller (the iTunes import's enrichment) wraps it with
+					// tagger.WithoutBackup; the per-book Fetch button does not.
+					if err := mfs.FinishAutoFetchFileWork(ctx, id, pendingCover, writeBack); err != nil {
 						slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 					}
 				})

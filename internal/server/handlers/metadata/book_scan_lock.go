@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metadatahandler
 
@@ -321,7 +321,9 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 			// once (FinishApplyFileWork). It takes metafetch's own book and
 			// path locks; this job holds none of that table. The response is
 			// already written, so a failure can only be logged.
-			if err := mfs.FinishApplyFileWork(id, pendingCover, true, shouldWriteBack, nil); err != nil {
+			// A single-book apply: ctx carries no backup opt-out, so the
+			// writes keep a .bak-* sibling when create_backups is on.
+			if err := mfs.FinishApplyFileWork(ctx, id, pendingCover, true, shouldWriteBack, nil); err != nil {
 				bookLockLog.Warn("background apply file work failed for book %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
 			}
 		})

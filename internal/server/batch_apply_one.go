@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.37.2
+// version: 1.38.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package server
 
@@ -58,10 +58,10 @@ type cachedApplyService interface {
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
-	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
+	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
 	// FinishApplyFileWorkTimed is FinishApplyFileWork recording its phases
 	// into pt and logging the per-book "apply phase durations" line.
-	FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *metafetch.ApplyPhaseTimings) error
+	FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *metafetch.ApplyPhaseTimings) error
 	// RenamePreflight reports, before anything is written, that the write-back
 	// rename following an apply of candidate is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail). See applySkipFileWorkWouldFail.
@@ -661,7 +661,7 @@ func applyCachedCandidateForBook(
 	writeBack bool,
 	checkpoint func() error,
 ) applyOutcome {
-	return applyCachedCandidateForBookTimed(svc, books, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	return applyCachedCandidateForBookTimed(context.Background(), svc, books, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 }
 
 // applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
@@ -673,6 +673,7 @@ func applyCachedCandidateForBook(
 // "" is fill). It reaches the plan through withBulkMode only, so the dry-run
 // preview, which calls planCachedApply directly, can never honour it.
 func applyCachedCandidateForBookTimed(
+	ctx context.Context,
 	svc cachedApplyService,
 	books bookReader,
 	id string,
@@ -754,7 +755,7 @@ func applyCachedCandidateForBookTimed(
 		// downloaded: ApplyMetadataCandidate kept the previous cover_url until
 		// the image is on disk, and until 2026-09-12 nothing on this path ever
 		// fetched it, so a batch-applied book kept its old cover forever.
-		if err := svc.FinishApplyFileWorkTimed(id, pendingCover, false, false, checkpoint, pt); err != nil {
+		if err := svc.FinishApplyFileWorkTimed(ctx, id, pendingCover, false, false, checkpoint, pt); err != nil {
 			failWriteBack(err)
 		}
 		return out
@@ -770,7 +771,7 @@ func applyCachedCandidateForBookTimed(
 	// WriteBackFailed is separate from !Applied. The core still writes tags
 	// after a rename failure and reports the rename error first, because
 	// "rename failed" localises the fault better than what it causes.
-	if err := svc.FinishApplyFileWorkTimed(id, pendingCover, true, true, checkpoint, pt); err != nil {
+	if err := svc.FinishApplyFileWorkTimed(ctx, id, pendingCover, true, true, checkpoint, pt); err != nil {
 		failWriteBack(err)
 	}
 	return out

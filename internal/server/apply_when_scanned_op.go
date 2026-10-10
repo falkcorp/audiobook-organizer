@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
@@ -22,6 +22,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -282,7 +283,7 @@ func (s *Server) applyOpResultBooks(ctx context.Context, opID string, bookIDs []
 					hold = h
 				}
 				defer hold.Release()
-				outcomes[i] = s.applyOpResultCandidateLocked(books, opID, bookID, byBook, claims)
+				outcomes[i] = s.applyOpResultCandidateLocked(ctx, books, opID, bookID, byBook, claims)
 				return nil
 			})
 		}
@@ -340,7 +341,7 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 	if err != nil {
 		return err
 	}
-	o := s.applyOpResultCandidateLocked(s.store, q.OperationID, q.BookID, byBook, claims)
+	o := s.applyOpResultCandidateLocked(ctx, s.store, q.OperationID, q.BookID, byBook, claims)
 	switch {
 	case o.blocked:
 		return fmt.Errorf("not applied: %s", o.blockMsg)
@@ -354,7 +355,12 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 // holds the book's scan lock; the file work is submitted before this returns,
 // so the pool's pending mark is in place before the lock is released and the
 // scanner cannot read the old tags in between.
-func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) opResultApplyOutcome {
+//
+// Every caller is a batch-apply-candidates request (applied now, or queued as
+// metadata.apply-when-scanned behind a scan), so the file work runs under
+// tagger.WithoutBackup: no .bak-* sibling per file (owner decision D69).
+func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookReader, opID, bookID string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) opResultApplyOutcome {
+	fileCtx := tagger.WithoutBackup(ctx)
 	mfs := s.metadataFetchService
 	opResult, ok := byBook[bookID]
 	if !ok {
@@ -434,7 +440,7 @@ func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID str
 			// Logged, not returned: this runs in the pool after the caller
 			// has already answered. The shared sequel: cover download, file
 			// I/O, and the tags exactly once.
-			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, true, nil); err != nil {
+			if err := mfs.FinishApplyFileWork(fileCtx, bookID, pendingCover, true, true, nil); err != nil {
 				batchApplyCandidatesLog.Warn("background apply file work failed for book %s: %s",
 					logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
 			}

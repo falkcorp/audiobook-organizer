@@ -163,7 +163,7 @@ type MetadataCacheFetchService interface {
 	// rename failed. It does NOT mean nothing happened: rows for renames that
 	// did succeed are already persisted, so callers report the database apply
 	// as successful and flag only the file side.
-	ApplyMetadataFileIO(id string) error
+	ApplyMetadataFileIO(ctx context.Context, id string) error
 	// WriteBackMetadataForBook writes the book's current DB metadata into the
 	// audio files themselves and returns the number of files written.
 	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
