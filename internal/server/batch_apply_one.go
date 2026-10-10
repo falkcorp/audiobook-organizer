@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.37.1
+// version: 1.37.2
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-09
 
@@ -420,12 +420,12 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// ASIN check passes. It joins the identity leg as identity_stale, and no
 	// transcription lifts it: a transcription can explain a stale query, not a
 	// book now identified by another record.
-	if asinErr := metafetch.CandidateIdentityStale(entry, book, &cand); asinErr != nil {
+	if idStaleErr := metafetch.CandidateIdentityStale(entry, book, &cand); idStaleErr != nil {
 		ts.ExplainsStaleIdentity = false
 		if idErr == nil {
-			idErr = asinErr
+			idErr = idStaleErr
 		} else {
-			idErr = fmt.Errorf("%w; %w", asinErr, idErr)
+			idErr = fmt.Errorf("%w; %w", idStaleErr, idErr)
 		}
 	}
 	// The owner-manual-only bypass keys on the PIN, not on the request size.
