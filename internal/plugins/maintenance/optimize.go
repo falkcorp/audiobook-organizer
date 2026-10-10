@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -39,9 +39,11 @@ func (p *Plugin) optimizeDef() sdk.OperationDef {
 		// The sweep reports progress only by relaying what its running child
 		// writes (see relayChildProgress), so its own watchdog budget must be at
 		// least the longest silence a child is allowed. maintenance.temp-file-
-		// cleanup is LivenessNone with a 20-minute budget; 25 minutes covers it
-		// plus a poll interval. The acoustid children report on the 5-minute
-		// default. A hung child is still caught by its own watchdog first.
+		// cleanup is LivenessNone and reports nothing while it walks, so its
+		// whole budget can be silence; optimizeProgressTimeout is derived from
+		// it so the two cannot drift. The acoustid children report on the
+		// 5-minute default. A hung child is still caught by its own watchdog
+		// first.
 		ProgressTimeout: optimizeProgressTimeout,
 		Capabilities: []sdk.Capability{
 			sdk.CapLibraryRead,
@@ -55,8 +57,12 @@ func (p *Plugin) optimizeDef() sdk.OperationDef {
 	}
 }
 
-// optimizeProgressTimeout is maintenance.library-optimize's watchdog budget.
-const optimizeProgressTimeout = 25 * time.Minute
+// optimizeProgressTimeout is maintenance.library-optimize's watchdog budget:
+// the longest silent child budget plus a poll interval. It was a flat 25m
+// while temp-file-cleanup's budget was 20m; that budget became 1h on
+// 2026-10-10, when the scheduled scheduler.temp-file-cleanup (sized at 1h) was
+// merged into it.
+const optimizeProgressTimeout = tempFileCleanupProgressTimeout + 5*time.Minute
 
 // relayChildProgress returns the WaitForOp callback that feeds this op's
 // watchdog from what it observes of child i. Before 2026-09-28 the sweep
