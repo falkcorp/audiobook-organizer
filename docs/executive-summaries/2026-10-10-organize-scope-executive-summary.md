@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-10-organize-scope-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 377482e4-3d85-400d-a2d5-8a4b524c8bea -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -30,6 +30,9 @@ Branch `fix/organize-folder-scope`.
   The same goes for a book with files both inside and outside the folder, and
   for a book that a library scan moves out of the folder while the run is
   under way: each book is checked again right before it is organized.
+- **The limit picks which books, not where they go.** Organized books still
+  land in the library folder as usual, and tidying may remove folders left
+  empty above the chosen folder, never above the library folder itself.
 
 ## Why it mattered
 

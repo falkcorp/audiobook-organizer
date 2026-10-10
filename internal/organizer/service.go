@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.62.1
+// version: 1.62.2
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-10
 
@@ -255,7 +255,10 @@ type Request struct {
 	// with ErrInvalidFolderScope instead of widening it (see newFolderScope).
 	// "/" is accepted and every absolute path is inside it, so "/" means every
 	// book that has a file to organize: the whole library, asked for
-	// explicitly. Combined with BookIDs, both must hold.
+	// explicitly. Combined with BookIDs, both must hold. The scope limits
+	// which books are organized, not where they go: targets are still
+	// written under the library root, and an in-place organize may remove
+	// now-empty folders above the scope folder, up to the library root.
 	FolderPath         *string
 	Priority           *int
 	FetchMetadataFirst bool
@@ -1565,8 +1568,12 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 		if scope != nil {
 			// Re-check the folder scope on the row about to be organized (see
 			// the function comment). Under lockBooks the scan cannot change it
-			// again before OrganizeOneBook runs.
-			rows, rowsErr := orgSvc.db.GetBookFilesForIDsCore([]string{book.ID})
+			// again before OrganizeOneBook runs. Read the rows from the same
+			// store OrganizeOneBook acts on (GetBookFiles, the durable store),
+			// not the batched in-memory read: when memdb is flagged
+			// known-incomplete a missing outside row would read as "every file
+			// is inside" and the outside file would be organized.
+			fullRows, rowsErr := orgSvc.db.GetBookFiles(book.ID)
 			if rowsErr != nil {
 				log.Error("Organize: re-read book_files of %s to re-check the folder scope: %v", book.ID, rowsErr)
 				statsMu.Lock()
@@ -1575,7 +1582,11 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 				progressCounter.Add(1)
 				return
 			}
-			if verdict := scope.admit(book.FilePath, rows[book.ID]); verdict != scopeInside {
+			rows := make([]database.BookFileCore, 0, len(fullRows))
+			for i := range fullRows {
+				rows = append(rows, fullRows[i].Core())
+			}
+			if verdict := scope.admit(book.FilePath, rows); verdict != scopeInside {
 				outcome := verdict.outcome()
 				if outcome == "" {
 					// scopeOutside: nothing it would touch is in the folder
