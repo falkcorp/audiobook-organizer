@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-10-09
 
@@ -133,7 +133,7 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	// automatic trigger for the purposes of the flag and respects it. A direct
 	// EnqueueOp("acoustid.backfill") via the ops API stays ungated — that is the
 	// deliberate opt-in path. Filtering here rather than skipping mid-loop keeps `total`
-	// honest, so progress does not report a child it never intended to run.
+	// accurate, so progress does not report a child it never intended to run.
 	if !config.AppConfig.Maintenance.AcoustIDBackfill {
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {

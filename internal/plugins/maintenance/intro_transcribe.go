@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.32.0
+// version: 3.32.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-09
 
@@ -776,7 +776,7 @@ const selectSampleLimit = 5
 // expose. The two shapes are kept apart because they mean different things.
 // (nil, nil) is index/row drift — a real gap in the library, count it and go
 // on. A non-nil error is the STORE failing (closed DB, I/O, decode), and when
-// it fails for every id the honest answer is not "nothing to transcribe,
+// it fails for every id the correct answer is not "nothing to transcribe,
 // done": that is the run this function refuses to return, because it would
 // be recorded as a success.
 func selectTranscribeWork(ctx context.Context, store transcribeSelectStore, ids []string, sel transcribeSelect) (transcribeSelection, error) {
