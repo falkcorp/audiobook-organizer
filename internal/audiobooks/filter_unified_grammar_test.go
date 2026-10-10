@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_unified_grammar_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2c7e9a14-5b3f-4e81-9d06-a4f1c8b2e753
 // last-edited: 2026-10-10
 
@@ -8,14 +8,15 @@ package audiobooks
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
 // Synthetic titles only (public repo; see feedback_no_real_library_rows).
@@ -256,18 +257,32 @@ func TestUnifiedGrammar_BitrateAndSampleRateUnits(t *testing.T) {
 // limits as the Review query: a value too long or a pattern too large to
 // scan the library with is a 400 naming the token, refused at compile time,
 // not a multi-second (or multi-minute) scan.
+//
+// "At compile time" is asserted by counting, not by the clock: a value over
+// the length limit never reaches the regex compiler, an oversized program is
+// compiled once and refused there, and neither ever runs a match.
 func TestUnifiedGrammar_OversizedPatternsAreRefused(t *testing.T) {
-	for _, f := range []FieldFilter{
-		{Field: "title", Value: `/(.*){1000}/`},
-		{Field: "title", Value: `/(?:.?){1000}zzz/`},
-		{Field: "author", Value: "/" + strings.Repeat("(a|b)", 6000) + "/"},
-		{Field: "series", Value: strings.Repeat("a", 300), Quoted: true},
+	var compiles, matches atomic.Int64
+	defer querygrammar.SetCompileHookForTesting(func(string) { compiles.Add(1) })()
+	defer querygrammar.SetMatchInputHookForTesting(func(int) { matches.Add(1) })()
+	for _, c := range []struct {
+		f        FieldFilter
+		compiles int64
+		reason   string
+	}{
+		{FieldFilter{Field: "title", Value: `/(.*){1000}/`}, 1, "too complex"},
+		{FieldFilter{Field: "title", Value: `/(?:.?){1000}zzz/`}, 1, "too complex"},
+		{FieldFilter{Field: "author", Value: "/" + strings.Repeat("(a|b)", 6000) + "/"}, 0, "the limit is 256"},
+		{FieldFilter{Field: "series", Value: strings.Repeat("a", 300), Quoted: true}, 0, "the limit is 256"},
 	} {
-		start := time.Now()
+		f := c.f
+		compiles.Store(0)
+		matches.Store(0)
 		err := ValidateFilterValue(f)
 		require.Error(t, err, "%s:%.20s must be refused", f.Field, f.Value)
-		assert.Less(t, time.Since(start), 50*time.Millisecond)
-		assert.True(t, strings.Contains(err.Error(), "too complex") || strings.Contains(err.Error(), "the limit is 256"), err.Error())
+		assert.Contains(t, err.Error(), c.reason)
+		assert.Equal(t, c.compiles, compiles.Load(), "%s:%.20s: regex compiles before the refusal", f.Field, f.Value)
 		assert.False(t, matchesFieldFilters(gramBook("anything"), []FieldFilter{f}), "fails closed")
+		assert.Zero(t, matches.Load(), "%s:%.20s: a refused value never runs a match", f.Field, f.Value)
 	}
 }

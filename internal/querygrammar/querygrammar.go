@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
 // last-edited: 2026-10-10
 
@@ -61,6 +61,7 @@ import (
 	"regexp/syntax"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -225,7 +226,7 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 			parts[i] = regexp.QuoteMeta(p)
 		}
 		expr := `(?is)^` + strings.Join(parts, ".*") + `$`
-		re, err := regexp.Compile(expr)
+		re, err := compilePattern(expr)
 		if err != nil { // unreachable: every piece is QuoteMeta'd
 			return nil, fmt.Errorf("invalid wildcard: %s", regexErrorReason(err))
 		}
@@ -237,6 +238,48 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 		return &TextMatcher{Raw: raw, Kind: KindGlob, re: re, endSensitive: !strings.HasSuffix(raw, "*")}, nil
 	}
 	return &TextMatcher{Raw: raw, Kind: KindSubstring, needle: strings.ToLower(raw)}, nil
+}
+
+// Test hooks: unset in production. Atomic, like the slot pool, so a test can
+// install one while another goroutine compiles or matches.
+var (
+	compileHook    atomic.Pointer[func(expr string)]
+	matchInputHook atomic.Pointer[func(n int)]
+)
+
+// compilePattern is regexp.Compile for every user regex and glob, so the
+// compile hook sees each one.
+func compilePattern(expr string) (*regexp.Regexp, error) {
+	if hook := compileHook.Load(); hook != nil {
+		(*hook)(expr)
+	}
+	return regexp.Compile(expr)
+}
+
+// patternInput is the input a regex or glob is about to run over, reported to
+// the match input hook.
+func patternInput(in string) string {
+	if hook := matchInputHook.Load(); hook != nil {
+		(*hook)(len(in))
+	}
+	return in
+}
+
+// SetCompileHookForTesting calls hook with every regex or glob expression
+// CompileText compiles, returning a func that restores the previous hook. A
+// test counts the calls to prove a value was refused before any compile work.
+// Tests only.
+func SetCompileHookForTesting(hook func(expr string)) (restore func()) {
+	prev := compileHook.Swap(&hook)
+	return func() { compileHook.Store(prev) }
+}
+
+// SetMatchInputHookForTesting calls hook with the length of every input a
+// regex or glob match runs over (after the MaxPatternInputBytes cut),
+// returning a func that restores the previous hook. Tests only.
+func SetMatchInputHookForTesting(hook func(n int)) (restore func()) {
+	prev := matchInputHook.Swap(&hook)
+	return func() { matchInputHook.Store(prev) }
 }
 
 // compileRegexForm compiles "/pattern/" as a case-insensitive RE2 regex.
@@ -253,7 +296,7 @@ func compileRegexForm(raw string) (*regexp.Regexp, error) {
 		return nil, errors.New("empty regex //")
 	}
 	expr := "(?i)" + pattern
-	re, err := regexp.Compile(expr)
+	re, err := compilePattern(expr)
 	if err != nil {
 		msg := regexErrorReason(err)
 		if strings.Contains(pattern, "(?=") || strings.Contains(pattern, "(?!") ||
@@ -364,6 +407,7 @@ func (m *TextMatcher) MatchExact(s string) (matched, exact bool) {
 	switch m.Kind {
 	case KindRegex:
 		in, cut := cutPatternInput(s)
+		in = patternInput(in)
 		if cut && m.endSensitive {
 			// Judge by where the leftmost match LANDED, not by the pattern
 			// alone: every assertion RE2 checked for that match sits at or
@@ -378,7 +422,7 @@ func (m *TextMatcher) MatchExact(s string) (matched, exact bool) {
 		return m.re.MatchString(in), true
 	case KindGlob:
 		in, cut := cutPatternInput(strings.TrimSpace(s))
-		matched = m.re.MatchString(in)
+		matched = m.re.MatchString(patternInput(in))
 		return matched, !(cut && matched && m.endSensitive)
 	case KindNonEmpty:
 		return strings.TrimSpace(s) != "", true
