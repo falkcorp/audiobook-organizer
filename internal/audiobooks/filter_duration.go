@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1e5a92-3f04-4d8b-b6e1-0a9d2c47f815
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package audiobooks
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
@@ -27,6 +28,11 @@ import (
 // DurationFilterFields are the filter names evaluated as runtime comparisons.
 // "duration_seconds" is the backend spelling kept for existing callers.
 var durationFilterFields = map[string]bool{"duration": true, "duration_seconds": true}
+
+// durationParseCount counts parseDurationExpr calls. It is a test hook
+// (TestCompiledDuration_ParsedOnce): one atomic add per parse, which happens
+// at compile time only.
+var durationParseCount atomic.Int64
 
 // durationExpr is a parsed duration filter value.
 type durationExpr struct {
@@ -50,6 +56,7 @@ func parseDurationValue(s string) (int, error) {
 //	>20m  >=1200  <1h30m  <=90s  ==600  !=600  20m (equality)
 //	[10m TO 2h]   (inclusive range; "*" leaves a side open)
 func parseDurationExpr(expr string) (durationExpr, error) {
+	durationParseCount.Add(1)
 	e := strings.TrimSpace(expr)
 	if strings.HasPrefix(e, "[") && strings.HasSuffix(e, "]") {
 		inner := strings.TrimSpace(e[1 : len(e)-1])
@@ -188,6 +195,13 @@ func durationMatches(b *database.Book, expr string, rt runtimeFunc) bool {
 	if err != nil {
 		return false
 	}
+	return durationMatchesExpr(b, e, rt)
+}
+
+// durationMatchesExpr is durationMatches for an already-parsed expression, so
+// the per-row path never re-parses the filter value (compileFieldFilter parses
+// it once per request).
+func durationMatchesExpr(b *database.Book, e durationExpr, rt runtimeFunc) bool {
 	if rt == nil {
 		rt = storedRuntime
 	}

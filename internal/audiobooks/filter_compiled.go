@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-09
 
@@ -27,6 +27,7 @@ type compiledFilter struct {
 	FieldFilter
 	text *querygrammar.TextMatcher // text forms (substring/glob/regex)
 	cmp  *querygrammar.Comparison  // numeric comparison / range / equality
+	dur  durationExpr              // parsed duration expression (duration fields only)
 }
 
 // numericFilterFields are evaluated as numbers when the value is a
@@ -82,9 +83,11 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 	wrap := func(err error) error { return fmt.Errorf("%s:%s — %w", f.Field, f.Value, err) }
 	switch {
 	case durationFilterFields[f.Field]:
-		if _, err := parseDurationExpr(f.Value); err != nil {
+		e, err := parseDurationExpr(f.Value)
+		if err != nil {
 			return cf, wrap(err)
 		}
+		cf.dur = e
 		return cf, nil
 	case f.Field == "has_duration":
 		if _, ok := parseYesNo(f.Value); !ok {
@@ -171,14 +174,15 @@ func splitCompiledFilters(filters []compiledFilter) (cheap, stripped []compiledF
 }
 
 // matchesCompiledFilters ANDs every filter (with negation) against book.
-func matchesCompiledFilters(book database.Book, filters []compiledFilter, rt runtimeFunc) bool {
+// It never mutates *book: callers may pass a pointer into memdb-resident data.
+func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt runtimeFunc) bool {
 	for i := range filters {
 		f := &filters[i]
 		// Fail CLOSED on an empty value — see FirstEmptyFilterValue.
 		if f.Value == "" {
 			return false
 		}
-		matches := fieldMatchesCompiled(&book, f, rt)
+		matches := fieldMatchesCompiled(book, f, rt)
 		if f.Negated == matches {
 			return false
 		}
@@ -190,7 +194,7 @@ func matchesCompiledFilters(book database.Book, filters []compiledFilter, rt run
 func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc) bool {
 	switch {
 	case durationFilterFields[f.Field]:
-		return durationMatches(book, f.Value, rt)
+		return durationMatchesExpr(book, f.dur, rt)
 	case f.Field == "has_duration":
 		want, ok := parseYesNo(f.Value)
 		if !ok {

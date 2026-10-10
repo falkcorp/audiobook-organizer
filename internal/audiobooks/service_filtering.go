@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package audiobooks
 
@@ -284,7 +284,7 @@ func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtime
 	if !ok {
 		return false
 	}
-	return matchesCompiledFilters(book, cfs, rt)
+	return matchesCompiledFilters(&book, cfs, rt)
 }
 
 // matchesFieldFiltersWithStrippedFallback evaluates field filters against a
@@ -319,14 +319,14 @@ func matchesFieldFiltersWithStrippedFallback(
 	warnOnce func(id string, err error),
 	authorNames, seriesNames map[int]string,
 	rt runtimeFunc,
+	scratch *database.Book,
 ) bool {
 	if len(cheap) > 0 {
 		cheapBook := memBook
 		if authorNames != nil || seriesNames != nil {
-			hydrated := hydrateAuthorSeriesNames(*memBook, authorNames, seriesNames)
-			cheapBook = &hydrated
+			cheapBook = hydrateAuthorSeriesNames(scratch, memBook, authorNames, seriesNames)
 		}
-		if !matchesCompiledFilters(*cheapBook, cheap, rt) {
+		if !matchesCompiledFilters(cheapBook, cheap, rt) {
 			return false
 		}
 	}
@@ -343,15 +343,18 @@ func matchesFieldFiltersWithStrippedFallback(
 		}
 		return false
 	}
-	return matchesCompiledFilters(*full, stripped, rt)
+	return matchesCompiledFilters(full, stripped, rt)
 }
 
-// hydrateAuthorSeriesNames returns a copy of book with Author/Series
+// hydrateAuthorSeriesNames copies *src into *dst and returns dst, with Author/Series
 // populated from the given id→name maps when the book carries an
 // AuthorID/SeriesID but no already-resolved Author/Series struct. Safe to
 // call with nil maps (no-op) or when the book's Author/Series is already
-// set (left untouched).
-func hydrateAuthorSeriesNames(book database.Book, authorNames, seriesNames map[int]string) database.Book {
+// set (left untouched). It NEVER writes through src, which can point into the
+// memdb-resident row; dst is a caller-owned scratch Book (one per goroutine).
+func hydrateAuthorSeriesNames(dst, src *database.Book, authorNames, seriesNames map[int]string) *database.Book {
+	*dst = *src
+	book := dst
 	if book.Author == nil && book.AuthorID != nil && authorNames != nil {
 		if name, ok := authorNames[*book.AuthorID]; ok {
 			book.Author = &database.Author{ID: *book.AuthorID, Name: name}
@@ -362,7 +365,7 @@ func hydrateAuthorSeriesNames(book database.Book, authorNames, seriesNames map[i
 			book.Series = &database.Series{ID: *book.SeriesID, Name: name}
 		}
 	}
-	return book
+	return dst
 }
 
 // buildAuthorSeriesNameMaps returns authorID→name / seriesID→name maps when
@@ -1044,6 +1047,8 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		// closure is safe. Pointer is returned so the caller can DEBUG-log
 		// the total after the walker returns.
 		pebbleLookups := new(int64)
+		// One scratch Book per predicate (the walker calls it on one goroutine).
+		var scratch database.Book
 		var warnOnce sync.Once
 		warnFn := func(id string, err error) {
 			warnOnce.Do(func() {
@@ -1059,7 +1064,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				return false // fail closed; see mustCompileForPredicate
 			}
 			if len(remainingFF) > 0 {
-				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames, rtFn) {
+				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames, rtFn, &scratch) {
 					return false
 				}
 			}
