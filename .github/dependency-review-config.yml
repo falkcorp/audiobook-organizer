@@ -1,5 +1,5 @@
 # file: .github/dependency-review-config.yml
-# version: 1.4.0
+# version: 1.5.0
 # guid: dep-review-cfg-2025-12-07
 # last-edited: 2026-10-10
 
@@ -54,6 +54,14 @@ allow-dependencies-licenses:
   - pkg:golang/golang.org/x/sys
   - pkg:golang/golang.org/x/text
   - pkg:golang/golang.org/x/time
+  # Added 2026-10-10 with tools/mockery and tools/staticcheck (06-P1): the same
+  # BSD-3-Clause + Go PATENTS pair. x/term first failed the check on #3924;
+  # x/image, x/mod and x/tools are already in the build and would fail on
+  # their next bump.
+  - pkg:golang/golang.org/x/image
+  - pkg:golang/golang.org/x/mod
+  - pkg:golang/golang.org/x/term
+  - pkg:golang/golang.org/x/tools
   # OpenTelemetry Go. Each module's LICENSE is Apache-2.0 followed by a
   # BSD-3-Clause section ("Copyright 2009 The Go Authors") for code copied from
   # the Go standard library. Both licenses are in allow-licenses, but ScanCode
