@@ -1,5 +1,5 @@
 // file: internal/repairs/engine_cancel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e2567da4-edf5-4121-ae72-9a5d4d295154
 // last-edited: 2026-10-10
 
@@ -72,7 +72,11 @@ func (f *partitionFixer) Apply(_ context.Context, w *Writer, fresh Row) error {
 // that row's write lands, and every later row is reported canceled_skipped,
 // written by nobody and not checkpointed (a resume re-checks it).
 //
-// Red on origin/main (before 05-PR3): all 10 rows were applied.
+// Red on origin/main before 05-PR3 (measured 2026-10-10 at c8167316f, in a
+// throwaway worktree, with this test and partitionFixer copied in and
+// OutcomeCanceledSkip replaced by its string value "canceled_skipped" so it
+// compiles there): the first assertion failed with `"10" is not less than or
+// equal to "4"` -- every one of the 10 rows was written after the cancel.
 func TestApply_CancelDuringPartitionStopsAfterInFlightRow(t *testing.T) {
 	s := newMemStore()
 	s.add("shared", "Shared", "/lib/A/shared/x.m4b", nil)
