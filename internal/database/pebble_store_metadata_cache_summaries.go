@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache_summaries.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7b4c90-5d16-4a8f-b3c2-8f1e6a9d0c57
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package database
 
@@ -52,10 +52,11 @@ type metadataCacheSummaryRow struct {
 	BookID     string     `json:"book_id"`
 	Candidates []struct{} `json:"candidates"`
 	FetchedAt  time.Time  `json:"fetched_at"`
+	Stale      bool       `json:"stale,omitempty"`
 }
 
 func (r *metadataCacheSummaryRow) summary() MetadataCacheSummary {
-	return MetadataCacheSummary{BookID: r.BookID, FetchedAt: r.FetchedAt, CandidateCount: len(r.Candidates)}
+	return MetadataCacheSummary{BookID: r.BookID, FetchedAt: r.FetchedAt, CandidateCount: len(r.Candidates), Stale: r.Stale}
 }
 
 // ListMetadataCacheKeys returns one summary per cached entry, ordered by

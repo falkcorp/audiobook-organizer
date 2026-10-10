@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_copy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0f6c2e-9a41-4d7e-8c13-2e7a4f9d0b68
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package metafetch
 
@@ -34,7 +34,7 @@ var ErrNoCandidatesToCopy = errors.New("metadata cache copy: the source book hol
 //     the source gets the target's current fingerprint, a version "1" row
 //     the target's legacy one, and a row stale for the source (or with none)
 //     gets none, which no fetch trusts as a verdict.
-//   - FetchedForASIN is the source's, so ASINReplaced / CandidateASINStale
+//   - FetchedForASIN is the source's, so ASINReplaced / CandidateIdentityStale
 //     still refuse a candidate on a target identified by another ASIN.
 //
 // The copy is checked against the target before it is written: it must pass

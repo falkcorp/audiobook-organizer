@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.210.0
+// version: 1.210.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package database
 
@@ -3383,7 +3383,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// apply gate refuses a kept candidate that does not carry the book's
 	// current ASIN: asin_conflict when it names another ASIN (applygate
 	// CheckEvidenceInBatch), identity_stale when it names none
-	// (metafetch.CandidateASINStale). A candidate equal to the new ASIN --
+	// (metafetch.CandidateIdentityStale). A candidate equal to the new ASIN --
 	// the one just applied -- stays applicable.
 	// cacheRowDeleted: the batch deletes or rewrites the cache row, so the
 	// cache generation moves after the commit.

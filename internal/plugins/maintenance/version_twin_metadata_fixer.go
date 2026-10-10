@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -747,7 +747,7 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		if res := applygate.CheckASIN(&pBook, cand); res.Outcome == applygate.OutcomeBlock {
 			return b.hold(vtHoldASINConflict, "the primary's ASIN conflicts with the twin's record: "+res.Detail), true, nil
 		}
-		if serr := metafetch.CandidateASINStale(t.entry, &tBook, cand); serr != nil {
+		if serr := metafetch.CandidateIdentityStale(t.entry, &tBook, cand); serr != nil {
 			return b.hold(vtHoldIdentityStale, serr.Error()), true, nil
 		}
 		outside, err := vtOutsideGroup(rd, gid, hash)

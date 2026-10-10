@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.29.4
+// version: 1.30.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -38,7 +38,13 @@ import (
 // written. Callers treat a non-nil error as "skip + log" (fail-closed).
 var ErrStaleMetadataCache = errors.New("metadata cache stale: source hash mismatch")
 
-// ErrCandidateASINReplaced is CandidateASINStale's refusal: the book's ASIN
+// ErrCandidateRowStale is CandidateIdentityStale's refusal for a row marked
+// Stale: the book was retitled or re-credited after the row's candidates were
+// fetched, so they answer another question. Like ErrCandidateASINReplaced it
+// does not wrap ErrStaleMetadataCache, so no transcription lifts it.
+var ErrCandidateRowStale = errors.New("metadata cache stale: the book's search identity changed after these candidates were fetched")
+
+// ErrCandidateASINReplaced is CandidateIdentityStale's refusal: the book's ASIN
 // was replaced or cleared after its cached candidates were fetched, and the
 // candidate does not carry the book's current ASIN. It deliberately does NOT
 // wrap ErrStaleMetadataCache: the gate's transcription lift explains a stale
@@ -46,7 +52,11 @@ var ErrStaleMetadataCache = errors.New("metadata cache stale: source hash mismat
 // transcription explains a book now identified by another record.
 var ErrCandidateASINReplaced = errors.New("metadata cache stale: the book's ASIN changed after these candidates were fetched")
 
-// CandidateASINStale reports whether candidate c, cached in entry, was
+// CandidateIdentityStale reports whether candidate c, cached in entry, is for
+// an identity the book no longer has. Two things make it so. The row is marked
+// Stale (MetadataCandidateCache.Stale: the book was retitled or re-credited
+// after the fetch): every candidate of the row is refused with
+// ErrCandidateRowStale, whatever it carries. Otherwise the candidate was
 // fetched for an ASIN book no longer carries (MetadataCandidateCache.
 // ASINReplaced) and does not carry the book's current one. A candidate whose
 // ASIN equals the book's current ASIN is current whatever the row says: it
@@ -54,12 +64,16 @@ var ErrCandidateASINReplaced = errors.New("metadata cache stale: the book's ASIN
 // candidate naming a different ASIN is stale here too; the gate's
 // asin_conflict check refuses it as well.
 //
-// nil when the row records no replacement. Callers: the bulk-apply planner
+// nil when the row is not marked stale and records no replacement. Callers: the bulk-apply planner
 // (identity leg, never lifted by a transcription), the transcription
 // auto-apply, the single-book dialog's candidate flags.
-func CandidateASINStale(entry *MetadataCandidateCache, book *database.Book, c *MetadataCandidate) error {
+func CandidateIdentityStale(entry *MetadataCandidateCache, book *database.Book, c *MetadataCandidate) error {
 	if entry == nil || book == nil || c == nil {
 		return nil
+	}
+	if entry.Stale {
+		return fmt.Errorf("%w: book %s: the book was retitled or re-credited after these candidates were fetched (question %s)",
+			ErrCandidateRowStale, book.ID, entry.StaleQuestionFP)
 	}
 	was, replaced := entry.ASINReplaced(book.ASIN)
 	if !replaced {
@@ -1138,7 +1152,7 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	}
 	// The book's ASIN was replaced or cleared after these candidates were
 	// fetched: the apply gate refuses each of them that does not carry the
-	// new ASIN (CandidateASINStale), so the row is re-asked rather than
+	// new ASIN (CandidateIdentityStale), so the row is re-asked rather than
 	// served as fresh -- unless the current questions were already asked and
 	// came back empty (the row then carries the old candidates under the
 	// current fingerprint with a recent LastEmptyFetchAt), which would only

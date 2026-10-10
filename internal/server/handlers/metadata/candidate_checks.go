@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/candidate_checks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2c5e91-3a8b-4f60-b1e4-9c0f6a2d8e57
-// last-edited: 2026-10-05
+// last-edited: 2026-10-09
 
 package metadatahandler
 
@@ -19,7 +19,7 @@ import (
 // Two of the gate's checks still matter here, because a book's cached
 // candidates now survive an ASIN change: a kept candidate can name another
 // ASIN than the book carries (asin_conflict), or carry none and have been
-// fetched for an ASIN the book no longer has (metafetch.CandidateASINStale).
+// fetched for an ASIN the book no longer has (metafetch.CandidateIdentityStale).
 // The dialog shows both on each candidate, and the apply refuses an
 // asin_conflict unless the person explicitly overrides it for the ASIN they
 // were shown -- the dialog's form of the review lane's hash-checked pin.
@@ -68,7 +68,7 @@ func checkCandidate(book *database.Book, entry *metafetch.MetadataCandidateCache
 		out.ASINConflict = true
 		details = append(details, r.Detail)
 	}
-	if err := metafetch.CandidateASINStale(entry, book, c); err != nil {
+	if err := metafetch.CandidateIdentityStale(entry, book, c); err != nil {
 		out.IdentityStale = true
 		details = append(details, err.Error())
 	}

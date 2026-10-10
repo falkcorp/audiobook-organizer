@@ -1,7 +1,7 @@
 // file: internal/database/iface_metadata.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -96,6 +96,18 @@ type MetadataCandidateCache struct {
 	// empty answer. A deferral (budget spent, throttle hold, 429/5xx/timeout)
 	// is an attempt but never settles.
 	FallbackAttempts map[string]FallbackAttempt `json:"fallback_attempts,omitempty"`
+	// Stale marks a row whose candidates were fetched for a search identity
+	// the book no longer has (it was retitled or re-credited after the fetch).
+	// This is NOT the TTL freshness of IsFresh() (the review page's existing
+	// "stale" chip): it means "the book's search identity changed after these
+	// candidates were fetched". Every apply gate refuses a candidate from such
+	// a row (metafetch.CandidateIdentityStale) and the candidate fetch picks
+	// the book for refetch; a refetch writes a new row, which clears the flag
+	// by replacement. Existing rows decode as false.
+	Stale bool `json:"stale,omitempty"`
+	// StaleQuestionFP is the SearchFingerprint of the question the row was
+	// stale against, for an operator reading a refusal. Empty unless Stale.
+	StaleQuestionFP string `json:"stale_question_fp,omitempty"`
 }
 
 // FallbackDeferred reports whether a fallback provider's last attempt for
@@ -178,6 +190,9 @@ type MetadataCacheSummary struct {
 	BookID         string    `json:"book_id"`
 	FetchedAt      time.Time `json:"fetched_at"`
 	CandidateCount int       `json:"candidate_count"`
+	// Stale mirrors MetadataCandidateCache.Stale so the candidate fetch
+	// selection can pick stale rows without decoding every entry.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // MetadataCacheStore is the persistence layer for the per-book

@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -64,6 +64,9 @@ const MinScoreAudioConfirmed = 0.85
 // Reason vocabulary. Stable strings: they are counted in dry-run summaries and
 // op logs.
 const (
+	// ReasonIdentityStale: the cached identity no longer holds -- the query
+	// drifted, the book's ASIN was replaced, or the candidate row is marked
+	// stale (metafetch.CandidateIdentityStale).
 	ReasonIdentityStale              = "identity_stale"
 	ReasonTranscriptionMismatch      = "transcription_mismatch"
 	ReasonScoreBelowFloor            = "score_below_floor"

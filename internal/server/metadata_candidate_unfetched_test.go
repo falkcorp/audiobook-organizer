@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched_test.go
-// version: 1.0.1
+// version: 1.1.1
 // guid: 6add5bfa-b425-4289-9274-72a2ee56ed84
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package server
 
@@ -120,4 +120,53 @@ func TestCandidateFetch_UnfetchedSelectsNeverFetchedAndNeverApplies(t *testing.T
 	require.NoError(t, json.Unmarshal(rec.states[0], &first))
 	assert.Equal(t, false, first["unfetched"])
 	assert.Len(t, first["book_ids"], 2)
+}
+
+// A row marked Stale holds candidates found for an identity the book no
+// longer has: the selection picks it whatever its candidate count, with a
+// fallback provider enabled and with none (where a row with candidates is
+// otherwise left alone). A non-stale row with the same candidates and no
+// fallback is still skipped.
+func TestUnfetchedSelection_PicksStaleRows(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	store := s.storeForWiring()
+	mk := func(title string) *database.Book {
+		t.Helper()
+		got, err := store.CreateBook(&database.Book{Title: title, FilePath: "/lib/a/" + title + "/book.m4b"})
+		require.NoError(t, err)
+		return got
+	}
+	stale := mk("Title 000201")
+	plain := mk("Title 000202")
+	cands := []json.RawMessage{json.RawMessage(`{"title":"Title 000201"}`), json.RawMessage(`{"title":"Title 000202"}`),
+		json.RawMessage(`{"title":"Title 000203"}`)}
+	for _, b := range []*database.Book{stale, plain} {
+		require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: b.ID, FetchedAt: time.Now(),
+			SourceHash: "h", SearchFingerprint: metafetch.FingerprintPrefix + "0000", Candidates: cands,
+			Stale: b.ID == stale.ID, StaleQuestionFP: "fp-synthetic"}))
+	}
+
+	t.Run("no fallback plan", func(t *testing.T) {
+		mfs := metafetch.NewService(store)
+		mfs.SetOverrideSources([]metadata.MetadataSource{&countingSource{name: "SrcA"}})
+		sel, err := unfetchedCandidateBookIDs(context.Background(), store, mfs, s.newFolderMemo(store), nil, 0)
+		require.NoError(t, err)
+		assert.Equal(t, []string{stale.ID}, sel.IDs, "the stale row is picked; the non-stale row with candidates is not")
+		assert.Equal(t, 1, sel.Stale)
+		assert.Equal(t, 0, sel.NoRow)
+		assert.Equal(t, 0, sel.StaleEmpty)
+	})
+
+	t.Run("with a fallback plan", func(t *testing.T) {
+		mfs := metafetch.NewService(store)
+		mfs.SetOverrideSources([]metadata.MetadataSource{
+			&countingSource{name: "SrcA"},
+			&idSource{id: metadata.SourceIDOpenLibrary, name: "Open Library"},
+		})
+		sel, err := unfetchedCandidateBookIDs(context.Background(), store, mfs, s.newFolderMemo(store), nil, 0)
+		require.NoError(t, err)
+		assert.Contains(t, sel.IDs, stale.ID)
+		assert.Equal(t, 1, sel.Stale)
+	})
 }
