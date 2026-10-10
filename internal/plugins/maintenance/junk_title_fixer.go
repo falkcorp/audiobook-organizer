@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -796,7 +797,13 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	spoken, _ := accept(transcribed, junkSrcTranscribed)
 	candidate, refusedCandidate := "", ""
-	if t, score, ok := f.candidateTitle(b.ID, author, b.ASIN); ok {
+	t, score, ok, candErr := f.candidateTitle(b.ID, author, b.ASIN)
+	if candErr != nil {
+		// Fail closed: with the owner's rejections unreadable, any cached
+		// candidate may be one the owner turned down for this book.
+		return repairs.Row{}, fmt.Errorf("candidate title of %s: %w", b.ID, candErr)
+	}
+	if ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
 			refusedCandidate = t
@@ -1437,14 +1444,31 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 // candidates an earlier search version cached are filtered by the current
 // position rules there, and a raw MetadataCacheStore read would offer a
 // sibling the old ladder pooled as this book's title.
-func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string) (string, float64, bool) {
+//
+// A candidate the owner rejected for the book (metafetch.RejectedSet: its
+// source and title, or an ASIN or ISBN the owner rejected under any source)
+// is skipped inside the loop, so the next trustworthy candidate is the one
+// chosen and a rejected record never becomes evidence. The row's order does
+// not protect this loop: it takes the best candidate wherever it sits, so
+// the re-rank that moves a rejected candidate down is no help here. An
+// unreadable rejection list is returned as err (the caller fails the row
+// closed); no title is chosen then.
+func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string) (string, float64, bool, error) {
 	entry, err := f.p.deps.CachedMetadataCandidates(bookID)
 	if err != nil || entry == nil {
-		return "", 0, false
+		return "", 0, false, nil
 	}
 	a := strings.TrimSpace(author)
 	if a == "" || authorname.IsPlaceholderAuthor(a) {
-		return "", 0, false
+		return "", 0, false, nil
+	}
+	store := f.p.deps.OpsStore()
+	if store == nil {
+		return "", 0, false, fmt.Errorf("read owner rejections: database not initialized")
+	}
+	rejected, err := metafetch.LoadRejectedCandidates(store, bookID)
+	if err != nil {
+		return "", 0, false, err
 	}
 	own := ""
 	if bookASIN != nil {
@@ -1452,14 +1476,11 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string)
 	}
 	best, bestScore, found, bestOwn := "", 0.0, false, false
 	for _, raw := range entry.Candidates {
-		var c struct {
-			Title            string  `json:"title"`
-			Author           string  `json:"author"`
-			ASIN             string  `json:"asin"`
-			Score            float64 `json:"score"`
-			DurationMismatch bool    `json:"duration_mismatch"`
-		}
+		var c metafetch.MetadataCandidate
 		if json.Unmarshal(raw, &c) != nil || c.Score < junkCandidateMinScore || c.DurationMismatch {
+			continue
+		}
+		if rejected.HasCandidate(&c) {
 			continue
 		}
 		if !strings.EqualFold(util.NormalizeAuthor(c.Author), util.NormalizeAuthor(a)) {
@@ -1475,7 +1496,7 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string)
 			best, bestScore, found, bestOwn = c.Title, c.Score, true, isOwn
 		}
 	}
-	return best, bestScore, found
+	return best, bestScore, found, nil
 }
 
 // catalogEditionRe is a bracketed edition marker on a catalog title:
