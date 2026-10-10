@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_copy.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b0f6c2e-9a41-4d7e-8c13-2e7a4f9d0b68
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -59,6 +59,14 @@ func (mfs *Service) CopyCandidateCache(fromID, toID string, check func(target *d
 	}
 	if src == nil || len(src.Candidates) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrNoCandidatesToCopy, fromID)
+	}
+	if src.Stale {
+		// The source was retitled or re-credited after these candidates were
+		// fetched (UpdateBook keeps the row, marked Stale). The copy below
+		// builds a fresh, unmarked row keyed for the target, so copying them
+		// would launder candidates for an identity the source no longer has
+		// into a row the apply gate reads as current.
+		return nil, fmt.Errorf("%w: source book %s", ErrCandidateRowStale, fromID)
 	}
 	from, err := mfs.db.GetBookByID(fromID)
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/database/metadata_cache_keep_on_identifier_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 247c268d-d5c6-4e27-b079-6b3a43dcd85d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package database
 
@@ -17,8 +17,8 @@ import (
 // candidates. Until 2026-10-05 every ASIN/ISBN/series change dropped them, and
 // metafetch.asin-backfill -- filling an EMPTY ASIN, often the cached
 // candidate's own -- wiped the candidates of 1,078 production books. Only a
-// change to what the search asks (title, or the author's name) drops the row
-// now; identifiers are judged by the apply gate against the kept row.
+// change to what the search asks (title, or the author's name) touches the row
+// now, and it marks it Stale rather than deleting it; identifiers are judged by the apply gate against the kept row.
 
 func newKeepCacheStore(t *testing.T) *PebbleStore {
 	t.Helper()
@@ -49,6 +49,17 @@ func requireCandidates(t *testing.T, s *PebbleStore, bookID string, want int, ms
 	}
 	require.NotNil(t, entry, msg)
 	require.Len(t, entry.Candidates, want, msg)
+}
+
+// requireStaleCandidates asserts the row survives with its one candidate and is
+// marked Stale.
+func requireStaleCandidates(t *testing.T, s *PebbleStore, bookID, msg string) {
+	t.Helper()
+	entry, err := s.GetMetadataCache(bookID)
+	require.NoError(t, err)
+	require.NotNil(t, entry, msg)
+	require.Len(t, entry.Candidates, 1, msg)
+	require.True(t, entry.Stale, msg)
 }
 
 // TestUpdateBook_FillingAnEmptyIdentifierKeepsCandidates: an ASIN, ISBN-13 or
@@ -110,11 +121,12 @@ func TestUpdateBook_ReplacedASINKeepsCandidatesForTheGate(t *testing.T) {
 	requireCandidates(t, s, b.ID, 1, "a series change keeps the row")
 }
 
-// TestUpdateBook_TitleOrAuthorNameChangeDropsCandidates: the candidates were
-// fetched for the old title or author; a change to either drops them. An
+// TestUpdateBook_TitleOrAuthorNameChangeMarksCandidatesStale: the candidates were
+// fetched for the old title or author; a change to either keeps the row but
+// marks it Stale (it used to delete it, see stageCacheStaleStamp). An
 // AuthorID change that keeps the author's name (a relink onto a same-named
 // row) searches exactly as before and keeps them.
-func TestUpdateBook_TitleOrAuthorNameChangeDropsCandidates(t *testing.T) {
+func TestUpdateBook_TitleOrAuthorNameChangeMarksCandidatesStale(t *testing.T) {
 	s := newKeepCacheStore(t)
 	a1, err := s.CreateAuthor("Jane Writer")
 	require.NoError(t, err)
@@ -138,16 +150,16 @@ func TestUpdateBook_TitleOrAuthorNameChangeDropsCandidates(t *testing.T) {
 	g := s.MetadataCacheGeneration()
 	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.AuthorID = &a3.ID; return nil })
 	require.NoError(t, err)
-	requireCandidates(t, s, b.ID, 0, "an author name change drops the row")
-	require.Equal(t, g+1, s.MetadataCacheGeneration(), "the dropped row moves the generation")
+	requireStaleCandidates(t, s, b.ID, "an author name change marks the row stale")
+	require.Equal(t, g+1, s.MetadataCacheGeneration(), "the rewritten row moves the generation")
 
 	seedCachedCandidate(t, s, b.ID, "B00CANDID8")
 	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.AuthorID = nil; return nil })
 	require.NoError(t, err)
-	requireCandidates(t, s, b.ID, 0, "removing the author drops the row")
+	requireStaleCandidates(t, s, b.ID, "removing the author marks the row stale")
 
 	seedCachedCandidate(t, s, b.ID, "B00CANDID8")
 	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.Title = "Another Book"; return nil })
 	require.NoError(t, err)
-	requireCandidates(t, s, b.ID, 0, "a title change drops the row")
+	requireStaleCandidates(t, s, b.ID, "a title change marks the row stale")
 }

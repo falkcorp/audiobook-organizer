@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_copy_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c9d4b7e-1a62-4f08-b5e3-8d2f6a0c9e41
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -75,6 +75,21 @@ func TestCopyCandidateCache_RefusesOnCheckAndEmptySource(t *testing.T) {
 
 // ApplyOptions.Guard runs under the write lock: a refusal writes nothing and
 // is returned wrapped; CandidateSourceHash is the hash the apply stamps.
+// A source row marked Stale (its book was retitled after the fetch) is not
+// copied: the copy would be a fresh, unmarked row for the target.
+func TestCopyCandidateCache_RefusesStaleSource(t *testing.T) {
+	st, svc, from, to := copyFixture(t)
+	src, err := st.GetMetadataCache(from)
+	require.NoError(t, err)
+	src.Stale, src.StaleQuestionFP = true, "fp-synthetic"
+	require.NoError(t, st.PutMetadataCache(src))
+	_, err = svc.CopyCandidateCache(from, to, nil)
+	require.ErrorIs(t, err, ErrCandidateRowStale)
+	entry, err := st.GetMetadataCache(to)
+	require.NoError(t, err)
+	require.Nil(t, entry, "nothing is written for a stale source")
+}
+
 func TestApplyOptionsGuard_RefusesCommit(t *testing.T) {
 	st, svc, _, to := copyFixture(t)
 	cand := MetadataCandidate{Title: "Synthetic Saga", Author: "Synthetic Author A", Narrator: "Synthetic Narrator A", ASIN: "B0SYNTH001", Source: "audible"}

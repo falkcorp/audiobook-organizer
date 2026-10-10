@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package database
 
@@ -95,9 +95,8 @@ func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 // (MetadataCacheChangedSince):
 //
 //   - PutMetadataCache and DeleteMetadataCache;
-//   - UpdateBook, when an identity change (title, author, narrator, series,
-//     ISBN, ASIN) deletes the book's cache row in the book's own batch --
-//     an ASIN/ISBN backfill does this on every book it writes;
+//   - UpdateBook, when a retitle or re-credit marks the book's cache row
+//     Stale in the book's own batch, or an ASIN replacement stamps it;
 //   - DeleteBook, which deletes the row with the book's other sidecars;
 //   - SetRaw, DeleteRaw and DeleteRawBatch on a key under the prefix;
 //   - Reset, which wipes everything (and so records no book: a reader behind
@@ -141,19 +140,59 @@ func asinReplacedOnWrite(oldBook, newBook *Book) (old string, replaced bool) {
 // staged reports whether the row was rewritten (the caller then bumps the
 // cache generation after the commit).
 func (p *PebbleStore) stageCacheASINStamp(batch *pebble.Batch, bookID, oldASIN string) (staged bool, err error) {
+	return p.stageCacheRowStamp(batch, bookID, false, oldASIN)
+}
+
+// stageCacheStaleStamp records, in the book write's batch, that the book was
+// retitled or re-credited after its cached candidates were fetched: the row
+// is kept, marked Stale, with StaleQuestionFP set to the SearchFingerprint of
+// the question the candidates answer. Every apply gate then refuses the row
+// (metafetch.CandidateIdentityStale) and the candidate fetch picks the book
+// for refetch. Before this the write deleted the row, which lost 1,180
+// candidate rows on 2026-10-06.
+//
+// A row that is already Stale keeps its OLDEST fingerprint: that is the
+// question the candidates were really fetched for. An absent row writes
+// nothing (no tombstone). When the same write also replaced the book's ASIN,
+// oldASIN is that ASIN and is stamped (FetchedForASIN, if empty) in the same
+// rewrite; pass "" when it was not replaced. A row that cannot be read is
+// dropped, as stageCacheASINStamp does.
+//
+// The caller must hold the book's metadataCacheLock until the batch commits;
+// staged reports whether the row was rewritten or dropped (the caller then
+// bumps the cache generation after the commit).
+func (p *PebbleStore) stageCacheStaleStamp(batch *pebble.Batch, bookID, oldASIN string) (staged bool, err error) {
+	return p.stageCacheRowStamp(batch, bookID, true, oldASIN)
+}
+
+// stageCacheRowStamp is the one read-modify-write both stamps share, so a
+// write that is a retitle and an ASIN replacement rewrites the row once.
+func (p *PebbleStore) stageCacheRowStamp(batch *pebble.Batch, bookID string, markStale bool, oldASIN string) (staged bool, err error) {
 	entry, err := p.GetMetadataCache(bookID)
 	if err != nil {
 		// A row that cannot be read cannot be stamped. Keeping it unstamped
-		// would let candidates fetched for the old ASIN read as current, so
-		// it is dropped instead: the next fetch rewrites it.
-		metadataCacheLog.Warn("metadata_cache:%s unreadable while its book's ASIN was replaced; dropping it: %v",
+		// would let candidates fetched for the old identity read as current,
+		// so it is dropped instead: the next fetch rewrites it.
+		metadataCacheLog.Warn("metadata_cache:%s unreadable while its book's identity changed; dropping it: %v",
 			logger.SanitizeLogValue(bookID), err)
 		return p.stageDeleteIfPresent(batch, metadataCacheKey(bookID))
 	}
-	if entry == nil || strings.TrimSpace(entry.FetchedForASIN) != "" {
+	if entry == nil {
 		return false, nil
 	}
-	entry.FetchedForASIN = oldASIN
+	changed := false
+	if markStale && !entry.Stale {
+		entry.Stale = true
+		entry.StaleQuestionFP = entry.SearchFingerprint
+		changed = true
+	}
+	if oldASIN != "" && strings.TrimSpace(entry.FetchedForASIN) == "" {
+		entry.FetchedForASIN = oldASIN
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return false, fmt.Errorf("encode metadata_cache:%s: %w", bookID, err)

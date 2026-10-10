@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package handlers
 
@@ -645,9 +645,9 @@ func TestReviewSnapshot_IncrementalEqualsFull(t *testing.T) {
 	require.Contains(t, first.orphanIDs, orphanID)
 	_, err = store.CreateBook(&database.Book{ID: orphanID, Title: "Back", FilePath: "/lib/Back/" + orphanID, Format: "mp3"})
 	require.NoError(t, err)
-	// A title change is the identity change that deletes the cache row; an
-	// ASIN fill keeps it (since 2026-10-05), and the book write must still
-	// reach the incremental build.
+	// A title change is the identity change that marks the cache row Stale
+	// (the row is kept); an ASIN fill keeps it untouched (since 2026-10-05),
+	// and the book write must still reach the incremental build.
 	_, err = store.ModifyBook(identityID, func(bk *database.Book) error { bk.Title += " (retitled)"; return nil })
 	require.NoError(t, err)
 	asin := "B00INCR0001"
@@ -668,7 +668,7 @@ func TestReviewSnapshot_IncrementalEqualsFull(t *testing.T) {
 	ids := rowIDs(incr.rows)
 	require.Equal(t, changedID, ids[0], "the refetched row sorts first by FetchedAt")
 	require.NotContains(t, ids, deletedRowID)
-	require.NotContains(t, ids, identityID, "the identity change deleted its cache row")
+	require.Contains(t, ids, identityID, "the identity change keeps its cache row, marked Stale")
 	require.Contains(t, ids, asinFilledID, "an ASIN fill keeps the cache row")
 	require.NotNil(t, incr.books[asinFilledID].ASIN, "the ASIN fill reached the incremental build")
 	require.NotContains(t, ids, deletedBookID)

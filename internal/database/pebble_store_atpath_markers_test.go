@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package database
 
@@ -98,9 +98,9 @@ func TestUpdateBook_NoMarkerWritesNoMarkerDelete(t *testing.T) {
 	}
 }
 
-// TestUpdateBook_ExistingCacheEntryStillDropped: the probe must not skip a
-// delete that is owed.
-func TestUpdateBook_ExistingCacheEntryStillDropped(t *testing.T) {
+// TestUpdateBook_ExistingCacheEntryStillMarkedStale: the probe must not skip
+// the stale stamp that is owed; the row is kept, not deleted.
+func TestUpdateBook_ExistingCacheEntryStillMarkedStale(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"})
@@ -114,8 +114,8 @@ func TestUpdateBook_ExistingCacheEntryStillDropped(t *testing.T) {
 	if _, err := s.UpdateBook(b.ID, b); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.GetMetadataCache(b.ID); err != nil || got != nil {
-		t.Fatalf("cache entry survived a title change: %v %v", got, err)
+	if got, err := s.GetMetadataCache(b.ID); err != nil || got == nil || !got.Stale {
+		t.Fatalf("cache entry not kept as Stale after a title change: %v %v", got, err)
 	}
 }
 
