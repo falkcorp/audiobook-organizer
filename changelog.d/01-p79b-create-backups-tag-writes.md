@@ -1,6 +1,6 @@
 ### Fixed
 
-#### The `create_backups` setting now keeps a backup before each tag write
+#### The `create_backups` setting now keeps a backup before each single-book tag write
 
 The setting was read nowhere, so turning it on did nothing. With it on (it
 defaults to on), a tag or cover write that goes through

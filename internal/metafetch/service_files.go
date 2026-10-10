@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-10-10
 
@@ -67,7 +67,7 @@ type tagWriteResult struct {
 // seam that counts it; nil in production.
 func (mfs *Service) writeTags(ctx context.Context, id, targetID string, pt *ApplyPhaseTimings) (int, error) {
 	if mfs.tagWriter != nil {
-		return mfs.tagWriter(id)
+		return mfs.tagWriter(ctx, id)
 	}
 	return mfs.writeBackForBook(ctx, id, nil, targetID, pt)
 }
