@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-10-owner-rejected-candidates-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 02f9b11f-058a-4b13-81a6-59ff338b29e3 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -37,6 +37,8 @@ added when it merges).
 - A rejected Audible ID or ISBN now counts for every provider. The provider
   tried after Audible (Audnexus) serves the same Audible product, so before
   this a match you rejected from Audible could still be applied from there.
+  Rejecting an Audible match also rejects its ISBN, so another provider's
+  record of that same audiobook edition is refused too.
 - The nightly upgrade job was the worst case: it replaces fields that already
   have values, so a rejected match could overwrite a good title, description
   or publisher.
@@ -82,8 +84,14 @@ step skips a rejected record and tries the provider's next answer, then the
 next provider; when only rejected records match it applies nothing and says
 so. Every route also checks your rejections again at the moment it writes,
 and rejecting a match waits for any write to that book already in progress,
-so a rejection made while a search is running is never missed. The copy-between-copies repair holds the book for review instead of
-applying a rejected record.
+so a rejection made while a search is running is never missed. That
+includes the older bulk metadata fetch, which until this round checked only
+when it picked the match. The copy-between-copies repair holds the book for
+review instead of applying a rejected record.
+
+When a write is refused at that last moment, the author it had already added
+to the book is taken off again. Before, that author stayed on the book with
+no record of where it came from, so "undo last apply" could not remove it.
 
 ## Rejecting only the record you meant
 
@@ -96,20 +104,26 @@ the correct edition everywhere.
 title (abridged and unabridged, different narrators). Turning down the wrong
 one should not also turn down the right one.
 
-**The fix.** A new rejection remembers the rejected record's ASIN, or its
-ISBN when it has no ASIN. A record carrying a different identifier is not
-refused. When either side has no identifier to compare, the rejection still
-covers the whole title, as before.
+**The fix.** A new rejection remembers the rejected record's ASIN and its
+ISBNs. A record carrying a different identifier is not refused, including a
+record of the same title that has a different ISBN and no ASIN. When either
+side has no identifier to compare, the rejection still covers the whole
+title, as before.
 
 An ASIN or ISBN you reject is rejected for that book from every provider,
 not only the one you rejected it from: Audible and Audnexus serve the same
 Audible product under one ASIN, and an ISBN names one edition whoever
-reports it. An ISBN-10 and its ISBN-13 count as the same ISBN.
+reports it. An ISBN-10 and its ISBN-13 count as the same ISBN, and a value
+written as "ISBN 0-306-40615-2" counts as the bare number.
 
-Undo removes that record's ASIN or ISBN from every rejection of the book,
-whichever provider it was rejected from. When the match carries an ASIN or
-ISBN, your other rejections of the same title stay in place. When it
-carries neither, Undo removes the rejection of that provider and title as a
+Undo removes the rejection of that one record. Undoing it from the Audnexus
+row also removes the Audible rejection of the same product, since the two are
+one product. Your other rejections stay in place: other records of the same
+title, and a rejection made from another provider that only shares an ISBN
+with this record. If one of those still covers the match, it stays refused;
+the search window clears its "Rejected by you" mark on Undo today and shows
+it again on the next search, and you undo that other rejection too. When the match carries no
+ASIN or ISBN, Undo removes the rejection of that provider and title as a
 whole, since there is nothing to tell the records apart.
 
 ## A rejected match staying at the top of the list
@@ -144,7 +158,8 @@ search window marks the suggestion "Rejected by you", will not let you pick
 it, and offers Undo, after which the suggestion can be picked and applied
 again. Still to do, in the to-do list: an Undo on the review page's row
 itself (UNREJECT-FROM-REVIEW), putting the older bulk fetch through the full
-safety check (BULK-FETCH-NO-GATE; it only checks rejections today), and
+safety check (BULK-FETCH-NO-GATE; of that check it applies only the
+rejections rule today, at the pick and again at the write), and
 re-sorting a book's list after the repair copies another copy's suggestions
 onto it (VT-COPY-RERANK). None of these can apply a rejected match: every
 route refuses it.

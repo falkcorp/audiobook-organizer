@@ -14,3 +14,12 @@
       reject rewrites it. Every apply still refuses it; re-rank the copied
       row (`metafetch.Service.RerankCachedCandidates` with
       `metabatch.MergeRankerFor` for the receiving book) when it is written.
+- [ ] **UNREJECT-STILL-REJECTED-UI** `POST /metadata/unreject-candidate`
+      returns `still_rejected: true` when another rejection still refuses
+      the candidate (another source's rejection sharing its ISBN, or a
+      legacy title-wide key). The single and bulk metadata search windows
+      (`MetadataSearchDialog.tsx`, `BulkMetadataSearchDialog.tsx`) ignore it
+      and clear the "Rejected by you" chip on every Undo, so the row looks
+      pickable until the next search. Keep the chip (and say why) when
+      `still_rejected` is true, and clear every other row whose ASIN the
+      server un-rejected with it (review round 4, N2).
