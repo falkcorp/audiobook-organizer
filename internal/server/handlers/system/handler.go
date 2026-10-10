@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.21.1
+// version: 1.22.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-10
 
@@ -31,6 +31,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -97,6 +98,19 @@ type Handler struct {
 	// the duplicates domain), which stays in package server. The controller
 	// passes s.filterReviewedAuthorGroups.
 	filterReviewedAuthorGroups func([]dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup
+
+	// getDegraded resolves, at request time, the startup steps that failed
+	// without stopping the process (internal/startup). Lazy because the
+	// server stores its startup runner in Start, after the handlers are
+	// wired. Nil, or a provider yielding nil, means no step is degraded.
+	getDegraded func() DegradedSource
+}
+
+// DegradedSource reports the fixed tokens of startup steps that failed but
+// were classified Degraded (startup.Table), e.g. "metrics_disabled" or
+// "search_index". Implemented by *startup.Steps; the handler sees only this.
+type DegradedSource interface {
+	Tokens() []string
 }
 
 // New constructs a system Handler from its dependencies.
@@ -112,6 +126,7 @@ func New(
 	resetLibrarySizeCache func(),
 	appVersion func() string,
 	filterReviewedAuthorGroups func([]dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup,
+	getDegraded func() DegradedSource,
 ) *Handler {
 	return &Handler{
 		getStore:                   getStore,
@@ -125,6 +140,7 @@ func New(
 		resetLibrarySizeCache:      resetLibrarySizeCache,
 		appVersion:                 appVersion,
 		filterReviewedAuthorGroups: filterReviewedAuthorGroups,
+		getDegraded:                getDegraded,
 	}
 }
 
@@ -216,6 +232,16 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	if !ready {
 		degraded = append(degraded, DegradedMemdbWarming)
 	}
+	// Startup steps classified Degraded that failed (startup.Table): fixed
+	// tokens such as "metrics_disabled", never error text. Merged with
+	// memdb_warming and sorted so the list is stable across probes.
+	if h.getDegraded != nil {
+		if src := h.getDegraded(); src != nil {
+			degraded = append(degraded, src.Tokens()...)
+		}
+	}
+	slices.Sort(degraded)
+	degraded = slices.Compact(degraded)
 	resp["ready"] = ready
 	resp["memdb_ready"] = memReady
 	if warmupDone {

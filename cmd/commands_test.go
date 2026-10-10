@@ -1,7 +1,7 @@
 // file: cmd/commands_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
-// last-edited: 2026-09-11
+// last-edited: 2026-10-10
 
 package cmd
 
@@ -19,6 +19,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
+	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
 func stubCommandDeps(t *testing.T) {
@@ -36,6 +38,7 @@ func stubCommandDeps(t *testing.T) {
 	origNewServer := newServer
 	origDefaultCfg := getDefaultServerConfig
 	origStart := startServer
+	origInitOTEL := initOTEL
 
 	initializeStore = func(dbType, path string) (database.Store, error) {
 		// Command tests only need GlobalStore to be non-nil for the
@@ -92,6 +95,7 @@ func stubCommandDeps(t *testing.T) {
 		newServer = origNewServer
 		getDefaultServerConfig = origDefaultCfg
 		startServer = origStart
+		initOTEL = origInitOTEL
 		database.SetGlobalStore(nil)
 	})
 }
@@ -299,5 +303,84 @@ func sandboxStateDir(t *testing.T) {
 	t.Setenv(config.SecureStateDirEnv, dir)
 	if err := os.WriteFile(database.EncryptionKeyPath(dir), bytes.Repeat([]byte{9}, 32), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// serveWithStubs runs serveCmd against stubbed deps and reports whether
+// startServer (where the listeners are bound) was reached, and with what config.
+func serveWithStubs(t *testing.T) (started bool, cfg server.ServerConfig, err error) {
+	t.Helper()
+	tempDir := t.TempDir()
+	origConfig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = origConfig })
+	config.AppConfig.DatabaseType = "pebble"
+	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.pebble")
+	config.AppConfig.RootDir = tempDir
+	sandboxStateDir(t)
+	startServer = func(_ *server.Server, c server.ServerConfig) error {
+		started, cfg = true, c
+		return nil
+	}
+	err = serveCmd.RunE(serveCmd, nil)
+	return started, cfg, err
+}
+
+// A metrics-init failure is Degraded (startup.Table "InitOTEL"): serve still
+// reaches startServer, and the runner it hands the server carries the
+// metrics_disabled token that /health renders. A nil shutdown alongside the
+// error must not be deferred.
+func TestServe_MetricsInitErrorDegradesAndStillServes(t *testing.T) {
+	stubCommandDeps(t)
+	initOTEL = func(context.Context, *telemetry.Config) (func(context.Context) error, error) {
+		return nil, fmt.Errorf("meter provider failed")
+	}
+
+	started, cfg, err := serveWithStubs(t)
+	if err != nil {
+		t.Fatalf("serve failed on a degraded step: %v", err)
+	}
+	if !started {
+		t.Fatal("serve never reached startServer: a metrics failure must not stop the server")
+	}
+	if cfg.StartupSteps == nil {
+		t.Fatal("serve did not hand its startup runner to the server")
+	}
+	if got := cfg.StartupSteps.Tokens(); len(got) != 1 || got[0] != startup.TokenMetricsDisabled {
+		t.Fatalf("degraded tokens = %v, want [%s]", got, startup.TokenMetricsDisabled)
+	}
+}
+
+// A store-init failure is Fatal: serve returns the error and never reaches
+// startServer, so no listener is bound.
+func TestServe_StoreInitErrorAbortsBeforeAnyListener(t *testing.T) {
+	stubCommandDeps(t)
+	initializeStore = func(string, string) (database.Store, error) {
+		return nil, fmt.Errorf("store init failed")
+	}
+
+	started, _, err := serveWithStubs(t)
+	if err == nil {
+		t.Fatal("serve returned nil after a store-init failure")
+	}
+	if started {
+		t.Fatal("serve reached startServer after a store-init failure")
+	}
+}
+
+// loadConfigFromDB is Fatal: a server on defaults would overwrite the stored
+// config_blob on its first settings save (whole-struct SaveConfigToDatabase).
+// It was a printed warning until 2026-10-10.
+func TestServe_ConfigLoadErrorIsFatal(t *testing.T) {
+	stubCommandDeps(t)
+	loadConfigFromDB = func(database.SettingsStore) error {
+		return fmt.Errorf("read settings: boom")
+	}
+
+	started, _, err := serveWithStubs(t)
+	if err == nil {
+		t.Fatal("serve returned nil after a config-load failure")
+	}
+	if started {
+		t.Fatal("serve reached startServer after a config-load failure")
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_health_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1b9d30-2c85-4e7a-9a43-b0d8e5c71f26
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,10 +34,17 @@ func (w *warmingStore) WarmupStatus() (bool, bool, int64) { return w.ready, w.do
 // object re-encoded with the volatile timestamp removed, plus the HTTP code.
 func healthBody(t *testing.T, store system.SystemStore) (string, int) {
 	t.Helper()
+	return healthBodyWith(t, store, nil)
+}
+
+// healthBodyWith is healthBody with a startup degraded-token provider.
+func healthBodyWith(t *testing.T, store system.SystemStore, getDegraded func() system.DegradedSource) (string, int) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	h := system.New(
 		func() system.SystemStore { return store },
 		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		getDegraded,
 	)
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
 		r.GET("/health", h.HealthCheck)
@@ -106,4 +114,34 @@ func TestHealthCheck_StoreErrorTextNeverAppears(t *testing.T) {
 	for _, leak := range []string{"secret", "permission", "/srv", "open "} {
 		assert.False(t, strings.Contains(body, leak), "body leaked %q: %s", leak, body)
 	}
+}
+
+// A startup step classified Degraded that failed appears as its fixed token,
+// merged with memdb_warming, sorted, once, and with no error text.
+func TestHealthCheck_ReportsDegradedStartupSteps(t *testing.T) {
+	steps := startup.New()
+	_ = steps.Run("InitOTEL", func() error { return errors.New("exporter at /srv/x failed") })
+	_ = steps.Run("searchindex", func() error { return errors.New("bleve: no such file") })
+	_ = steps.Run("searchindex", func() error { return errors.New("again") })
+
+	m := systemmocks.NewMockSystemStore(t)
+	m.EXPECT().CountAuthors().Return(5, nil)
+	body, code := healthBodyWith(t, &warmingStore{MockSystemStore: m, ready: false, done: false},
+		func() system.DegradedSource { return steps })
+
+	assert.Equal(t, http.StatusOK, code, "a degraded step leaves the server serving")
+	assert.JSONEq(t,
+		`{"status":"ok","ready":false,"memdb_ready":false,"degraded":["memdb_warming","metrics_disabled","search_index"]}`, body)
+	for _, leak := range []string{"exporter", "/srv", "bleve", "again"} {
+		assert.NotContains(t, body, leak)
+	}
+}
+
+// Before Start stores the runner the provider yields nil: no tokens, no panic.
+func TestHealthCheck_NilDegradedSource(t *testing.T) {
+	m := systemmocks.NewMockSystemStore(t)
+	m.EXPECT().CountAuthors().Return(5, nil)
+	body, _ := healthBodyWith(t, m, func() system.DegradedSource { return nil })
+
+	assert.JSONEq(t, `{"status":"ok","ready":true,"memdb_ready":true,"degraded":[]}`, body)
 }

@@ -1,0 +1,58 @@
+<!-- file: docs/executive-summaries/2026-10-10-startup-step-classes-executive-summary.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: ffeeeec4-a987-4932-b6d7-c01a304778f4 -->
+<!-- last-edited: 2026-10-10 -->
+
+# Startup: every step either stops the server or is reported
+
+PR: pending (branch `task/07-r3`). Task brief:
+[07-R3](../proposals/2026-10-holistic/tasks/07/07-R3.md).
+
+## Executive Summary
+
+- **One reviewed list.** Every step the server takes while starting up is now
+  in one list that says whether a failure in that step stops the server, or
+  lets it keep running in a reduced ("degraded") mode, and why. Before, the
+  answer depended on how each step happened to be written.
+- **A settings read failure no longer risks wiping your settings.** If the
+  server could not read its saved settings, it used to start anyway on
+  built-in defaults. The next time anyone saved a setting, the server wrote
+  the whole settings record, so those defaults replaced everything that had
+  been saved. It now refuses to start instead.
+- **Monitoring trouble no longer takes the library down.** If the metrics
+  system cannot start, the server keeps serving, and the health check says
+  `metrics_disabled`. Before, the server would not start at all.
+- **A missing search index is visible.** When the search index cannot be
+  opened the server still runs without it, as before, but the health check
+  now says `search_index` instead of saying nothing.
+- **The list cannot quietly go stale.** An automated check fails if a startup
+  step is added without an entry in the list, or if an entry is left behind
+  for a step that no longer exists.
+
+## Settings read failure
+
+- **What it was:** a failure to read saved settings at startup was logged as a
+  note and the server ran on its defaults.
+- **Why it mattered:** saving any setting writes the complete settings record,
+  so the first save from that server would have replaced the saved settings
+  with defaults, silently.
+- **The fix:** the read failure is now reported as an error and the server
+  stops before it serves. An empty settings store (a fresh install) is not a
+  failure and starts normally.
+
+## Metrics start failure
+
+- **What it was:** if the metrics system failed to start, the whole server
+  refused to start.
+- **Why it mattered:** a monitoring problem made the library unavailable.
+- **The fix:** the server starts, logs the failure as an error, and the health
+  check lists `metrics_disabled`.
+
+## Search index failure
+
+- **What it was:** the server already ran without search when the index failed
+  to open, but nothing outside the log said so.
+- **Why it mattered:** search silently worked differently, with nothing to
+  notice from the outside.
+- **The fix:** the health check lists `search_index` while the index is
+  missing.

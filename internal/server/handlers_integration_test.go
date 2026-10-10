@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package server
 
@@ -119,6 +119,8 @@ func newSystemHandler(s *Server) *system.Handler {
 		resetLibrarySizeCache,
 		func() string { return appVersion },
 		s.filterReviewedAuthorGroups,
+		// Lazy: the startup runner is stored in Start, after wiring.
+		s.startupDegradedSource,
 	)
 }
 

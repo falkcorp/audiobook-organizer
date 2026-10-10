@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -81,6 +81,7 @@ func newTestHandler(t *testing.T) (*system.Handler, deps) {
 		func() {},
 		func() string { return "test-version" },
 		func(g []dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup { return g },
+		nil, // getDegraded: no startup runner
 	)
 	return h, d
 }
@@ -480,7 +481,7 @@ func TestHandleEvents_NilHub503(t *testing.T) {
 		func() system.SystemStore { return store },
 		nil, nil, nil,
 		nil, // nil getHub provider -> resolveHub() returns nil -> 503
-		nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil,
 	)
 	w := run(http.MethodGet, "/api/events", "/api/events", nil, func(r *gin.Engine) {
 		r.GET("/api/events", h.HandleEvents)

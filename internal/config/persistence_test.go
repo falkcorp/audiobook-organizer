@@ -1,12 +1,13 @@
 // file: internal/config/persistence_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -41,13 +42,16 @@ func TestLoadConfigFromDatabase(t *testing.T) {
 		}
 	})
 
-	t.Run("returns nil when store GetAllSettings errors", func(t *testing.T) {
+	t.Run("returns the error when store GetAllSettings errors", func(t *testing.T) {
+		// A swallowed read error left the process on defaults, which the next
+		// whole-struct SaveConfigToDatabase would persist over the stored blob.
 		store := mocks.NewMockStore(t)
-		store.EXPECT().GetAllSettings().Return(nil, fmt.Errorf("boom")).Once()
+		boom := fmt.Errorf("boom")
+		store.EXPECT().GetAllSettings().Return(nil, boom).Once()
 
 		err := LoadConfigFromDatabase(store)
-		if err != nil {
-			t.Fatalf("expected nil error when GetAllSettings fails, got %v", err)
+		if !errors.Is(err, boom) {
+			t.Fatalf("expected the GetAllSettings error, got %v", err)
 		}
 	})
 

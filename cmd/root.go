@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-10
 
@@ -17,11 +17,13 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/spf13/cobra"
@@ -76,6 +78,7 @@ var (
 	updateSeriesTags       = tagger.UpdateSeriesTags
 	initEncryption         = database.InitEncryption
 	loadConfigFromDB       = config.LoadConfigFromDatabase
+	initOTEL               = telemetry.InitOTEL
 	syncConfigFromEnv      = config.SyncConfigFromEnv
 	newServer              = server.NewServer
 	getDefaultServerConfig = server.GetDefaultServerConfig
@@ -261,11 +264,26 @@ var serveCmd = &cobra.Command{
 			defer logFile.Close()
 		}
 
+		// Every startup step runs through one *startup.Steps, which applies
+		// the step's reviewed class from startup.Table: a Fatal step's error
+		// is returned and stops the process before it serves; a Degraded
+		// step's error is logged, its token lands in /health's `degraded`
+		// list, and startup continues. The same value is handed to the server
+		// (cfg.StartupSteps) for the steps that run inside Start.
+		steps := startup.New().SetErrorLog(logger.New("startup").Error)
+
 		// Initialize database. Capture the returned Store so we can pass
 		// it explicitly down the call chain (SERVER-GLOBAL-STORE-AUDIT).
-		store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
-		if err != nil {
-			return fmt.Errorf("failed to initialize database: %w", err)
+		var store database.Store
+		if err := steps.Run("initializeStore", func() error {
+			var err error
+			store, err = initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
+			if err != nil {
+				return fmt.Errorf("failed to initialize database: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		defer closeStore()
 
@@ -279,19 +297,26 @@ var serveCmd = &cobra.Command{
 				telemetry.ParseMetricsInterval(appCfg.OTelMetricsOTLPInterval),
 				appCfg.OTelMetricsOTLPInsecure),
 			telemetry.WithEnvironment(appCfg.TelemetryEnvironment))
-		otelShutdown, err := telemetry.InitOTEL(context.Background(), otelCfg)
-		if err != nil {
-			return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
+		// Degraded (token metrics_disabled): observability must not take the
+		// library down. InitOTEL returns a usable shutdown even alongside a
+		// metrics error; the nil check is belt and braces for a stub.
+		var otelShutdown func(context.Context) error
+		_ = steps.Run("InitOTEL", func() error {
+			var err error
+			otelShutdown, err = initOTEL(context.Background(), otelCfg)
+			return err
+		})
+		if otelShutdown != nil {
+			defer func() {
+				// Bounded: the final OTLP flush must not hold the exit hostage
+				// when the collector is unreachable. InitOTEL's shutdown divides
+				// this budget between the tracer and the meter, so a hung tracer
+				// cannot starve the metric flush.
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = otelShutdown(ctx)
+			}()
 		}
-		defer func() {
-			// Bounded: the final OTLP flush must not hold the exit hostage
-			// when the collector is unreachable. InitOTEL's shutdown divides
-			// this budget between the tracer and the meter, so a hung tracer
-			// cannot starve the metric flush.
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = otelShutdown(ctx)
-		}()
 
 		// Initialize encryption for settings.
 		//
@@ -304,38 +329,64 @@ var serveCmd = &cobra.Command{
 		// across this upgrade. InitEncryption reads it there and logs where to
 		// move it; it never copies the file, and it never generates a
 		// replacement for a key it merely failed to read.
-		stateDir, err := config.EnsureSecureStateDir()
-		if err != nil {
-			return fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
-		}
-		legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
-		if err := guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir); err != nil {
+		var stateDir string
+		if err := steps.Run("EnsureSecureStateDir", func() error {
+			var err error
+			stateDir, err = config.EnsureSecureStateDir()
+			if err != nil {
+				return fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
-		if err := initEncryption(stateDir, legacyKeyDir); err != nil {
-			return fmt.Errorf("failed to initialize encryption: %w", err)
+		legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
+		if err := steps.Run("guardAgainstKeyRegeneration", func() error {
+			return guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir)
+		}); err != nil {
+			return err
+		}
+		if err := steps.Run("initEncryption", func() error {
+			if err := initEncryption(stateDir, legacyKeyDir); err != nil {
+				return fmt.Errorf("failed to initialize encryption: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		fmt.Printf("Settings encryption initialized (state dir: %s)\n", stateDir)
 
-		// Load configuration from database (overrides defaults with persisted values)
-		if err := loadConfigFromDB(store); err != nil {
-			fmt.Printf("Warning: Could not load config from database: %v\n", err)
-		} else {
-			fmt.Println("Configuration loaded from database")
-			fmt.Printf("  - Root dir (organize output): %s\n", config.AppConfig.RootDir)
-			fmt.Printf("  - OpenAI API key: %s\n", func() string {
-				if config.AppConfig.OpenAIAPIKey != "" {
-					return "***" + config.AppConfig.OpenAIAPIKey[len(config.AppConfig.OpenAIAPIKey)-4:]
-				}
-				return "(not set)"
-			}())
+		// Load configuration from database (overrides defaults with persisted
+		// values). Fatal, not a warning: SaveConfigToDatabase persists the
+		// whole config struct, so a server running on defaults would write
+		// those defaults over the stored config on its first settings save.
+		if err := steps.Run("loadConfigFromDB", func() error {
+			if err := loadConfigFromDB(store); err != nil {
+				return fmt.Errorf("failed to load config from database: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
+		fmt.Println("Configuration loaded from database")
+		fmt.Printf("  - Root dir (organize output): %s\n", config.AppConfig.RootDir)
+		fmt.Printf("  - OpenAI API key: %s\n", func() string {
+			if config.AppConfig.OpenAIAPIKey != "" {
+				return "***" + config.AppConfig.OpenAIAPIKey[len(config.AppConfig.OpenAIAPIKey)-4:]
+			}
+			return "(not set)"
+		}())
 
 		// Apply env var overrides (command line takes precedence over DB)
 		syncConfigFromEnv()
 
-		if err := config.AppConfig.Validate(); err != nil {
-			return fmt.Errorf("invalid configuration: %w", err)
+		if err := steps.Run("config.Validate", func() error {
+			if err := config.AppConfig.Validate(); err != nil {
+				return fmt.Errorf("invalid configuration: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 
 		// Log import path count
@@ -394,6 +445,11 @@ var serveCmd = &cobra.Command{
 
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
+
+		// The server runs its own steps (op registry gate, container start,
+		// search index, HTTP) through the same set, so /health reports every
+		// degraded step of this process.
+		cfg.StartupSteps = steps
 
 		return startServer(srv, cfg)
 	},

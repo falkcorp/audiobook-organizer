@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -8,6 +8,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -40,7 +41,8 @@ import (
 // OTEL_EXPORTER_OTLP_ENDPOINT -- the production default -- also disabled the
 // meter provider, and no OTel metric instrument ever reached Prometheus.
 //
-// Nothing enabled returns a no-op shutdown.
+// Nothing enabled returns a no-op shutdown. The shutdown is never nil, even
+// alongside a metrics error.
 func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, error) {
 	// Before any exporter is built: the SDK's own logger prints raw env input
 	// (see installSDKLogSink), and it is used while exporters are constructed.
@@ -71,23 +73,37 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	// and, like tracing, is never fatal: initMetrics reports it through
 	// otlpStatus, not through the error, which is reserved for the Prometheus
 	// reader itself.
+	//
+	// A Prometheus-reader failure is returned, but WITH a usable shutdown for
+	// whatever did start (a running tracer). cmd runs this as the Degraded
+	// startup step "InitOTEL" (internal/startup.Table): the server keeps
+	// serving with metrics off and /health reports "metrics_disabled". Until
+	// 2026-10-10 the error came back with a nil shutdown, which dropped the
+	// tracer's shutdown and left the caller a nil func to defer.
 	var otlp otlpStatus
+	var metricsErr error
+	metrics := false
 	if cfg.MetricsEnabled {
 		shutdownMetrics, status, err := initMetrics(ctx, cfg)
 		if err != nil {
-			return nil, err
+			metricsErr = fmt.Errorf("initialize OpenTelemetry metrics: %w", err)
+		} else {
+			metrics = true
+			otlp = status
+			shutdowns = append(shutdowns, shutdownMetrics)
 		}
-		otlp = status
-		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
-	level, msg, attrs := initSummary(cfg, tracing, tracingErr, otlp)
+	// A metrics failure is logged by the caller (the startup step runner),
+	// which owns the decision to continue; the summary line only reports
+	// metrics=false.
+	level, msg, attrs := initSummary(cfg, metrics, tracing, tracingErr, otlp)
 	if otlp.Enabled {
 		installExportErrorHandler()
 	}
 	emit(ctx, level, msg, attrs...)
 
-	return func(shutdownCtx context.Context) error { return runShutdowns(shutdownCtx, shutdowns) }, nil
+	return func(shutdownCtx context.Context) error { return runShutdowns(shutdownCtx, shutdowns) }, metricsErr
 }
 
 // runShutdowns runs fns in order, each with its own share of the caller's
@@ -170,9 +186,9 @@ func traceOptions(t otlpTarget) []otlptracegrpc.Option {
 // message, so a start with both OFF says both. Endpoints are logged in their
 // canonical form only (otlpTarget.Display); error text from third parties is
 // passed through redactEndpointSecrets as a backstop.
-func initSummary(cfg *Config, tracing bool, tracingErr error, otlp otlpStatus) (slog.Level, string, []any) {
+func initSummary(cfg *Config, metrics, tracing bool, tracingErr error, otlp otlpStatus) (slog.Level, string, []any) {
 	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
-		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", displayEndpoint(keyTraceEndpoint, cfg.ExporterEndpoint),
+		"metrics", metrics, "tracing", tracing, "endpoint", displayEndpoint(keyTraceEndpoint, cfg.ExporterEndpoint),
 		"otlp_metrics", otlp.Enabled}
 	if cfg.MetricsOTLPEndpoint != "" {
 		attrs = append(attrs, "otlp_metrics_endpoint", displayEndpoint(keyMetricsEndpoint, cfg.MetricsOTLPEndpoint))
