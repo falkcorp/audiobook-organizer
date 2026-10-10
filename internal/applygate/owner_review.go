@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_review.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package applygate
 
@@ -24,6 +24,9 @@ import "strings"
 //     asin_conflict, and the MinAgreements count (insufficient_evidence).
 //
 // Still blocking (they are not about certainty):
+//   - owner_rejected and owner_rejection_check_failed: the owner already said
+//     no to this candidate (owner_rejected.go). A pin is sent for whatever the
+//     lane showed; only an explicit un-reject lifts a rejection.
 //   - identity_stale: the cache row was fetched for a different title/author,
 //     so the candidate answers a question the book no longer asks;
 //   - partial_book: another folder holds a part of the same book. The owner
@@ -50,7 +53,8 @@ const ReasonOwnerReviewed = "owner_reviewed"
 // false for an allowed verdict: there is nothing to override.
 func (v Verdict) OwnerReviewOverridable() bool {
 	if v.Allowed || v.Reason == ReasonIdentityStale || v.Reason == ReasonOwnerManualOnly ||
-		v.Reason == ReasonOwnerManualCheckFailed {
+		v.Reason == ReasonOwnerManualCheckFailed || v.Reason == ReasonOwnerRejected ||
+		v.Reason == ReasonOwnerRejectionCheckFailed {
 		return false
 	}
 	for _, ch := range v.Evidence.Checks {
@@ -88,6 +92,9 @@ var ownerReviewHardReasons = map[string]bool{
 // leg in Reason; an override record must name all of them.
 func (v Verdict) RefusingReasons() []string {
 	var out []string
+	if v.Reason == ReasonOwnerRejected || v.Reason == ReasonOwnerRejectionCheckFailed {
+		out = append(out, v.Reason)
+	}
 	if v.Reason == ReasonIdentityStale {
 		out = append(out, ReasonIdentityStale)
 	}

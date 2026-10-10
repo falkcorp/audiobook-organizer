@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.15.2
+// version: 1.16.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -16,7 +16,9 @@
 // match does damage in three places. A book that fails this gate is NOT
 // applied; it is reported with a reason so it goes to manual review.
 //
-// The gate has four legs, all required:
+// The gate has four legs, all required, behind two hard refusals no
+// owner-review pin lifts: owner_rejected (owner_rejected.go: the owner
+// rejected this candidate) and owner_manual_only (manual_only.go):
 //
 //  1. score: >= MinScore, or >= MinScoreAudioConfirmed when the book's
 //     transcribed (audio-derived) title/author independently confirm the
@@ -211,16 +213,21 @@ func ScoreGate(book *database.Book, c *metafetch.MetadataCandidate) (ok bool, fl
 // rt is the book's canonical runtime (database.LoadBookRuntime). authors is
 // the book's LIVE author credit (see Authors); the gate never reads
 // book.Author.
+//
+// It reads no rejections: a caller that can read the owner's rejections
+// passes them to EvaluateInBatch.
 func Evaluate(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error) Verdict {
-	return EvaluateInBatch(book, authors, rt, c, identityErr, nil)
+	return EvaluateInBatch(book, authors, rt, c, identityErr, nil, nil)
 }
 
 // EvaluateInBatch is Evaluate for a bulk apply that knows its whole batch:
 // claims (built from every book of the batch before any is applied) lets the
 // evidence leg see a sibling folder holding another part of the same book.
 // nil is the single-book case and skips only that sibling test.
-func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex) Verdict {
-	return EvaluateTranscribed(book, authors, rt, c, identityErr, claims, TranscribedSearch{}, ManualOnlyGuard{})
+// rejections is the book's owner rejections (LoadRejections; nil skips the
+// owner-rejected leg).
+func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex, rejections *Rejections) Verdict {
+	return EvaluateTranscribed(book, authors, rt, c, identityErr, claims, rejections, TranscribedSearch{}, ManualOnlyGuard{})
 }
 
 // EvaluateTranscribed is EvaluateInBatch for a candidate the caller knows was
@@ -249,7 +256,12 @@ func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRunti
 // Torchwood book, found by any of its fields, the query it was searched by
 // or the candidate's title or series, is refused as owner_manual_only before
 // every other leg, and no bulk owner-review pin lifts that.
-func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex, ts TranscribedSearch, guard ManualOnlyGuard) Verdict {
+//
+// rejections is the book's owner rejections (owner_rejected.go). A rejected
+// candidate is refused as owner_rejected -- and an unreadable rejection list
+// as owner_rejection_check_failed -- before every other leg, and no
+// owner-review pin of any origin lifts either. nil skips the leg.
+func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex, rejections *Rejections, ts TranscribedSearch, guard ManualOnlyGuard) Verdict {
 	v := Verdict{Score: c.Score}
 	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
 	v.ScoreFloor, v.AudioConfirmed, v.ScoreReason = floor, audio, scoreReason
@@ -275,8 +287,11 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		used = true
 	}
 	manualReason, manualDetail := ManualOnlyDetail(book, c, ts, guard)
+	rejectReason, rejectDetail := rejections.refusal(c)
 
 	switch {
+	case rejectReason != "":
+		v.Reason, v.Detail = rejectReason, rejectDetail
 	case manualReason != "":
 		v.Reason, v.Detail = manualReason, manualDetail
 	case identityErr != nil && !identityLifted:
@@ -310,7 +325,8 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		v.Allowed = true
 	}
 	if used && v.Reason != ReasonIdentityStale && v.Reason != ReasonOwnerManualOnly &&
-		v.Reason != ReasonOwnerManualCheckFailed {
+		v.Reason != ReasonOwnerManualCheckFailed && v.Reason != ReasonOwnerRejected &&
+		v.Reason != ReasonOwnerRejectionCheckFailed {
 		ev := &metafetch.CandidateIdentityEvidence{
 			Kind:   metafetch.IdentityEvidenceTranscribedTitle,
 			Query:  ts.Query,

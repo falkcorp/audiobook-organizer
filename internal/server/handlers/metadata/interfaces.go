@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -144,6 +144,10 @@ type MetadataStore interface {
 	// The field-lock guard's surface: bulkFetchMetadata consults
 	// database.LockedUserFields so a user-locked field is never overwritten.
 	database.MetadataFieldStateReader
+	// The owner's candidate rejections: the bulk fetch never applies one,
+	// and the search dialog's fetch ranks them last in the cached row
+	// (metabatch.MergeRanker).
+	metafetch.RejectedCandidateReader
 }
 
 // MetadataFetcher fetches and searches metadata for a book.

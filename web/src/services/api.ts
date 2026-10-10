@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.173.1
+// version: 2.174.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3586,6 +3586,9 @@ export interface CandidateApplyCheck {
   /** The candidate was fetched for an ASIN the book no longer carries. A
    *  warning only: the apply is not refused. */
   identity_stale?: boolean;
+  /** The owner rejected this candidate for this book. The apply is refused
+   *  (409, reason owner_rejected) with no override: un-reject it first. */
+  owner_rejected?: boolean;
   /** The book's ASIN the check ran against: the value an override sends back. */
   book_asin?: string;
   detail?: string;
@@ -4277,6 +4280,13 @@ export interface CandidateResult {
    * tell the reviewed record from any other. Absent on non-cache paths.
    */
   candidate_hash?: string;
+  /**
+   * The owner rejected `candidate` for this book (cache review list). A
+   * rejected candidate is never applied, by any button or path: the server
+   * refuses it as `owner_rejected` whatever pin is sent. Un-reject it to
+   * apply it.
+   */
+  owner_rejected?: boolean;
   status:
     | 'matched'
     | 'no_match'

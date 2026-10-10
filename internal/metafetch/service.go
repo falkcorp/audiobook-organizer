@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.51.0
+// version: 5.51.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -1069,12 +1069,8 @@ func truncateActivity(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// bookFileLister and rejectedKeyScanner are the two one-method surfaces the
-// free functions in batch.go need. Each took database.Store.
+// bookFileLister is the one-method surface the free functions in batch.go
+// need. It took database.Store.
 type bookFileLister interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-}
-
-type rejectedKeyScanner interface {
-	ScanPrefix(prefix string) ([]database.KVPair, error)
 }
