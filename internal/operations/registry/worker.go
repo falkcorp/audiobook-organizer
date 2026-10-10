@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.28.0
+// version: 2.29.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -284,8 +284,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		runCtx = r.runContextDecorator(runCtx, qr.opID)
 	}
 	// The attempt's write permit (fence.go). Fenced writers (repairs.Writer)
-	// read it from the run context and refuse every write once it is revoked.
-	fence := newFence(1)
+	// read it from the run context and refuse every write once it is revoked
+	// or runCtx is done (the fence is bound to runCtx.Done(), so a timeout or
+	// parent cancel fences the run at the instant the context ends, before
+	// any revoke below runs).
+	fence := newFence(1, runCtx.Done())
 	runCtx = WithFence(runCtx, fence)
 	// reporterForJoin is assigned once the reporter is built below. The deferred
 	// join must be registered HERE, above every early return between this point
@@ -561,10 +564,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// Timeout firing inside context.WithTimeout, or the parent context
 		// ending. Every other path (Cancel, watchdog, quiesce, shutdown) has
 		// already revoked inside cancelIfActive / cancelWithCause before
-		// canceling. Known gap: on a timeout the run can observe ctx.Done()
-		// and attempt a write in the instant before this goroutine is
-		// scheduled to revoke -- at most one scheduler tick, and only on the
-		// timeout / parent-cancel paths.
+		// canceling. On these two paths the revoke necessarily follows the
+		// cancel, but there is no window: Fence.Check also refuses once
+		// runCtx is done (newFence above binds it), so a run that sees
+		// ctx.Done() already fails Check. The revoke makes Revoked() report
+		// the stop as well.
 		fence.revoke()
 		// Give the goroutine abandonGrace to return cleanly.
 		select {
