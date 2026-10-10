@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.3.1
+# version: 2.4.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
-# last-edited: 2026-10-06
+# last-edited: 2026-10-10
 #
 # The linter gates of `make ci`: staticcheck, the errcheck ratchet and
 # mocks-check, each as its own step so one failure does not hide the others.
@@ -44,9 +44,9 @@ clone:
       depth: 50
 
 variables:
-  - &go_image golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+  - &go_image golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
   - &go_env
-    GOTOOLCHAIN: go1.27.1
+    GOTOOLCHAIN: go1.27.2
     GOFLAGS: -buildvcs=false
     GOCACHE: /ci-cache/go-build
     GOMODCACHE: /ci-cache/gomod
@@ -68,7 +68,7 @@ steps:
       # rewrites a file in GOBIN.
       - go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
-      - go install github.com/vektra/mockery/v3@v3.8.0
+      - go -C tools/mockery install tool   # mockery v3.8.0 on x/tools v0.51.0; see tools/mockery/go.mod
 
   - name: staticcheck
     image: *go_image

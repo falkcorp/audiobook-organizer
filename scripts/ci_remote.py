@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
-# last-edited: 2026-09-26
+# last-edited: 2026-10-09
 
 """Run `make ci` sharded across a pool of remote runner nodes (`make ci-remote`).
 
@@ -73,7 +73,7 @@ from typing import Callable, Iterable
 # Constants
 # ---------------------------------------------------------------------------
 
-GO_TOOLCHAIN = "go1.27.1"  # keep in step with the Makefile's GOTOOLCHAIN pin
+GO_TOOLCHAIN = "go1.27.2"  # keep in step with the Makefile's GOTOOLCHAIN pin
 REMOTE_ROOT = "ci"  # relative to the node user's $HOME
 BARE_REPO = f"{REMOTE_ROOT}/audiobook-organizer.git"
 DECODE_TOOLS = ("ffmpeg", "ffprobe", "fpcalc")

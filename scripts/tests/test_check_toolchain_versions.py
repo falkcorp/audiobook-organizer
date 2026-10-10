@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.2.1
+# version: 1.3.0
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
-# last-edited: 2026-09-29
+# last-edited: 2026-10-09
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
 
 The inline shell check this replaced truncated go.mod to major.minor, read only
@@ -25,6 +25,24 @@ import tempfile
 import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _read_pin() -> str:
+    """The Makefile's GOTOOLCHAIN patch (e.g. ``1.27.2``), read once at import."""
+    text = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    m = re.search(r"^export GOTOOLCHAIN := go(\d+\.\d+\.\d+)$", text, re.MULTILINE)
+    if m is None:
+        raise RuntimeError("Makefile has no 'export GOTOOLCHAIN := goX.Y.Z' line")
+    return m.group(1)
+
+
+PIN = _read_pin()
+_major, _minor, _patch = PIN.split(".")
+# A patch that is one above the pin: wrong in the "drifted past the pin" tests.
+WRONG_PATCH = f"{_major}.{_minor}.{int(_patch) + 1}"
+PIN_RE = re.escape(PIN)
+# A patch below the pin (the pin is never .0 while a security patch is pending).
+LOWER_PATCH = f"{_major}.{_minor}.0"
 SCRIPT = REPO_ROOT / "scripts" / "check_toolchain_versions.py"
 COPIES = (
     "Makefile",
@@ -82,28 +100,28 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         self.assertIn("Toolchain versions consistent", res.stdout)
 
     def test_envrc_patch_drift_fails(self) -> None:
-        self.mutate(".envrc", "GOTOOLCHAIN=go1.27.1", "GOTOOLCHAIN=go1.27.2")
-        self.assertFails("go1.27.2 != Makefile pin")
+        self.mutate(".envrc", f"GOTOOLCHAIN=go{PIN}", f"GOTOOLCHAIN=go{WRONG_PATCH}")
+        self.assertFails(f"go{WRONG_PATCH} != Makefile pin")
 
     def test_vscode_second_pin_drift_fails(self) -> None:
-        self.mutate(".vscode/settings.json", '"go1.27.1"', '"go1.27.0"', occurrence=2)
-        self.assertFails("go1.27.0 != Makefile pin")
+        self.mutate(".vscode/settings.json", f'"go{PIN}"', f'"go{LOWER_PATCH}"', occurrence=2)
+        self.assertFails(f"go{LOWER_PATCH} != Makefile pin")
 
     def test_dockerfile_patch_drift_fails(self) -> None:
-        self.mutate("Dockerfile.build-cgo", "FROM golang:1.27.1-alpine", "FROM golang:1.27.2-alpine")
-        self.assertFails("golang:1.27.2 != Makefile pin")
+        self.mutate("Dockerfile.build-cgo", f"FROM golang:{PIN}-alpine", f"FROM golang:{WRONG_PATCH}-alpine")
+        self.assertFails(f"golang:{WRONG_PATCH} != Makefile pin")
 
     def _dockerfile_digest(self) -> str:
         """The golang stage's current digest, so mutations track dependabot bumps."""
         text = (self.root / "Dockerfile").read_text(encoding="utf-8")
-        found = re.findall(r"FROM golang:1\.27\.1-alpine@sha256:([0-9a-f]{64})", text)
+        found = re.findall(rf"FROM golang:{PIN_RE}-alpine@sha256:([0-9a-f]{{64}})", text)
         self.assertEqual(len(found), 1, "fixture drifted: expected one digest-pinned golang stage in Dockerfile")
         return found[0]
 
     def test_dockerfile_digest_mismatch_fails(self) -> None:
         digest = self._dockerfile_digest()
         other = ("1" if digest[0] == "0" else "0") + digest[1:]
-        self.mutate("Dockerfile", f"golang:1.27.1-alpine@sha256:{digest}", f"golang:1.27.1-alpine@sha256:{other}")
+        self.mutate("Dockerfile", f"golang:{PIN}-alpine@sha256:{digest}", f"golang:{PIN}-alpine@sha256:{other}")
         self.assertFails("digests differ")
 
     def test_dockerfile_unpinned_golang_stage_fails(self) -> None:
@@ -111,11 +129,11 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         # compared the set, so a stage that dropped its @sha256: passed.
         path = self.root / "Dockerfile"
         text = path.read_text(encoding="utf-8")
-        unpinned, n = re.subn(r"(FROM golang:1\.27\.1-alpine)@sha256:[0-9a-f]+", r"\1", text)
+        unpinned, n = re.subn(rf"(FROM golang:{PIN_RE}-alpine)@sha256:[0-9a-f]+", r"\1", text)
         self.assertEqual(n, 1, "fixture drifted: expected one digest-pinned golang stage in Dockerfile")
         path.write_text(unpinned, encoding="utf-8")
-        line = unpinned[: unpinned.index("FROM golang:1.27.1-alpine")].count("\n") + 1
-        self.assertFails(f"::error file=Dockerfile,line={line}::golang:1.27.1 stage has no @sha256: digest")
+        line = unpinned[: unpinned.index(f"FROM golang:{PIN}-alpine")].count("\n") + 1
+        self.assertFails(f"::error file=Dockerfile,line={line}::golang:{PIN} stage has no @sha256: digest")
 
     def test_two_stages_in_one_file_with_different_digests_fails(self) -> None:
         # The old check kept ONE digest per file (the last stage's), so an
@@ -125,8 +143,8 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         other = "0" * 64
         self.mutate(
             "Dockerfile",
-            "FROM golang:1.27.1-alpine@sha256:",
-            f"FROM golang:1.27.1-alpine@sha256:{other} AS early\n\nFROM golang:1.27.1-alpine@sha256:",
+            f"FROM golang:{PIN}-alpine@sha256:",
+            f"FROM golang:{PIN}-alpine@sha256:{other} AS early\n\nFROM golang:{PIN}-alpine@sha256:",
         )
         self.assertFails("digests differ across stages")
         self.assertFails(f"Dockerfile:{self._line_of_first('Dockerfile', other)}={other[:12]}")
@@ -135,7 +153,7 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         # A stage whose reference the strict parser rejects must be an error,
         # not silently skipped (which would also skip its version check).
         digest = self._dockerfile_digest()
-        self.mutate("Dockerfile", f"golang:1.27.1-alpine@sha256:{digest}", f"golang:1.27.1-alpine@sha256:Z{digest[1:]}")
+        self.mutate("Dockerfile", f"golang:{PIN}-alpine@sha256:{digest}", f"golang:{PIN}-alpine@sha256:Z{digest[1:]}")
         self.assertFails("is not 'golang:<version>[-<variant>]@sha256:<64 hex>'")
 
     def _line_of_first(self, rel: str, needle: str) -> int:
@@ -143,11 +161,11 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         return text[: text.index(needle)].count("\n") + 1
 
     def test_gomod_requiring_more_than_pin_fails(self) -> None:
-        self.mutate("go.mod", "\ngo 1.27.0\n", "\ngo 1.27.2\n")
+        self.mutate("go.mod", "\ngo 1.27.0\n", f"\ngo {WRONG_PATCH}\n")
         self.assertFails("requires more than the pin")
 
     def test_gomod_toolchain_directive_fails(self) -> None:
-        self.mutate("go.mod", "\ngo 1.27.0\n", "\ngo 1.27.0\n\ntoolchain go1.27.1\n")
+        self.mutate("go.mod", "\ngo 1.27.0\n", f"\ngo 1.27.0\n\ntoolchain go{PIN}\n")
         self.assertFails("toolchain")
 
     def test_later_ci_go_version_drift_fails(self) -> None:
@@ -156,8 +174,8 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         self.assertFails("go-version '1.28'")
 
     def test_makefile_pin_bump_alone_fails(self) -> None:
-        self.mutate("Makefile", "export GOTOOLCHAIN := go1.27.1", "export GOTOOLCHAIN := go1.27.3")
-        self.assertFails("!= Makefile pin go1.27.3")
+        self.mutate("Makefile", f"export GOTOOLCHAIN := go{PIN}", f"export GOTOOLCHAIN := go{WRONG_PATCH}")
+        self.assertFails(f"!= Makefile pin go{WRONG_PATCH}")
 
     def test_security_yml_node_20x_fails(self) -> None:
         self.mutate(".github/workflows/security.yml", "node-version: '26'", "node-version: '20.x'")
