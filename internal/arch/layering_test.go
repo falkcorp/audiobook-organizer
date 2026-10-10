@@ -255,6 +255,7 @@ var layerOf = map[string]int{
 	"tools/cmd/itunes-group-preview":     6, // family: entry
 	"tools/cmd/merge-split-books":        6, // family: entry
 	"tools/cmd/oplint":                   6, // family: entry
+	"tools/cmd/opsgen":                   6, // family: entry
 	"tools/cmd/orphan-nonprimary-census": 6, // family: entry
 	"tools/cmd/reconcile-book-counts":    6, // family: entry
 	"tools/cmd/reconcile-paths":          6, // family: entry
