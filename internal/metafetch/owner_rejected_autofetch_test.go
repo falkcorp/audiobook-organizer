@@ -1,5 +1,5 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
 // last-edited: 2026-10-10
 
@@ -284,6 +284,55 @@ func TestApplyCandidate_RejectionDuringApplyRefusedAtCommit(t *testing.T) {
 	require.Equal(t, 2, calls, "fixture: the guard must reach the commit")
 	require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
 	require.Nil(t, f.book(id).Description, "the rejection made during the apply was not honoured at the commit")
+}
+
+// S2: the author credit is written before the commit (applyAuthorCredit,
+// under the book_authors lock). A commit refused under the write stripe --
+// the owner's rejection made meanwhile, or the caller's own guard -- takes
+// it back, so the book keeps exactly the credits it had and no credit is
+// left that no history row names.
+func TestApplyCandidate_RefusedCommitLeavesNoAuthorCredit(t *testing.T) {
+	errCallerRefused := errors.New("caller guard refused at the commit")
+	for name, atCommit := range map[string]func(*verdictFixture, string, *MetadataCandidate) error{
+		"owner rejection made during the apply": func(f *verdictFixture, id string, cand *MetadataCandidate) error {
+			key := RejectedCandidateStoreKey(id, cand.Source, cand.Title)
+			require.NoError(t, f.store.SetRaw(key, RejectionValue(nil, CandidateRejectionIdentifiers(cand))))
+			return nil
+		},
+		"caller guard": func(*verdictFixture, string, *MetadataCandidate) error { return errCallerRefused },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, id := rejFetchFixture(t)
+			kept, err := f.store.CreateAuthor("Synthetic Kept Author")
+			require.NoError(t, err)
+			require.NoError(t, f.store.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: kept.ID, Role: "author", Position: 0}}))
+			_, err = f.store.ModifyBook(id, func(b *database.Book) error { b.AuthorID = &kept.ID; return nil })
+			require.NoError(t, err)
+			before, err := f.store.GetBookAuthors(id)
+			require.NoError(t, err)
+
+			cand := MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNCRD01", Author: "Synthetic Added Author", Description: "d"}
+			calls := 0
+			var atGuard []database.BookAuthor
+			guard := func(*database.Book) error {
+				calls++
+				if calls == 2 {
+					atGuard, _ = f.store.GetBookAuthors(id)
+					return atCommit(f, id, &cand)
+				}
+				return nil
+			}
+			_, err = f.mfs.ApplyMetadataCandidateWithOptions(id, cand, nil, ApplyOptions{Guard: guard})
+			require.Error(t, err)
+			require.Equal(t, 2, calls, "fixture: the guard must reach the commit")
+			require.Len(t, atGuard, len(before)+1, "fixture: the credit must be written before the commit for the test to mean anything")
+
+			after, err := f.store.GetBookAuthors(id)
+			require.NoError(t, err)
+			require.True(t, sameAuthorCredits(before, after), "refused apply left author credits: before %+v, after %+v", before, after)
+			require.Nil(t, f.book(id).Description)
+		})
+	}
 }
 
 // An unreadable rejection list refuses the apply.
