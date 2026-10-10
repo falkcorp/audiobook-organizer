@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_rejected.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 92c7d027-0282-4730-a950-0ffe326f0c24
 // last-edited: 2026-10-10
 
@@ -15,12 +15,15 @@ import "github.com/falkcorp/audiobook-organizer/internal/metafetch"
 // applied by a script's batch-apply-cached, by every review-page apply button,
 // by batch-apply-candidates against an older op, and by the nightly upgrade
 // (which overwrites filled fields). To apply a rejected candidate the owner
-// un-rejects it first (POST /metadata/batch-unreject-candidates).
+// un-rejects it first: the metadata search window's "Undo" (POST
+// /metadata/unreject-candidate).
 //
 // The leg is a backstop: the rejection also re-orders the book's cached row
 // so the rejected candidate leaves slot 0 (metafetch.RerankCachedCandidates),
-// and the paths without this gate (the transcription auto-match, the
-// bulk fetch) check the rejection themselves.
+// the paths without this gate (the transcription auto-match, the bulk
+// fetch) check the rejection themselves, and every candidate apply re-reads
+// the rejections just before and under its write
+// (metafetch.Service.ApplyMetadataCandidateWithOptions).
 
 const (
 	// ReasonOwnerRejected: the owner rejected this candidate for this book.
