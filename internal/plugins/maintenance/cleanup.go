@@ -119,7 +119,7 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 		FormerIDs:       []string{"scheduler.temp-file-cleanup"},
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
+		ProgressTimeout: tempFileCleanupProgressTimeout, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean orphaned temp files",
 		Description:     "Removes orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations.",
@@ -134,6 +134,11 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 		Run:             p.runTempFileCleanup,
 	}
 }
+
+// tempFileCleanupProgressTimeout is temp-file-cleanup's LivenessNone budget.
+// maintenance.library-optimize runs this op as a child and derives its own
+// watchdog budget from this value (optimizeProgressTimeout).
+const tempFileCleanupProgressTimeout = 1 * time.Hour
 
 func (p *Plugin) runTempFileCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	opID := ctxOpID(ctx)
