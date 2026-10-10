@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.173.0
+// version: 2.173.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-09
 
@@ -2524,6 +2524,29 @@ export interface SelectionSpec {
   };
 }
 
+// startBulkMetadataFetch enqueues a v2 bulk metadata fetch operation.
+// Pass a SelectionSpec with either book_ids (explicit page-level selection)
+// or filter (cross-page selection, resolved server-side with IsPrimaryVersion=true).
+// Returns the operation ID for polling via the bell.
+export async function startBulkMetadataFetch(
+  selection: SelectionSpec,
+  options?: { prefer_audible?: boolean; skip_cached?: boolean }
+): Promise<{ operation_id: string }> {
+  return wrapTrigger('library.bulk-metadata-fetch', async () => {
+    const response = await apiFetch(`${API_BASE}/operations/v2`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        def_id: 'library.bulk-metadata-fetch',
+        params: { selection, ...options },
+      }),
+    });
+    if (!response.ok) throw await buildApiError(response, 'Failed to start bulk metadata fetch');
+    const body = await response.json();
+    return body?.data ?? { operation_id: '' };
+  });
+}
+
 export async function startLibraryImport(path: string): Promise<{ operation_id: string }> {
   return wrapTrigger('library.import', async () => {
     const response = await apiFetch(`${API_BASE}/operations/v2`, {
@@ -4397,7 +4420,7 @@ export interface CachedMetadataEntry {
 
 // listCachedCandidates returns the list of books that have a cached
 // metadata-candidate set, optionally filtered by review status.
-// METADATA-CACHED-MATCHER replacement for the legacy getPendingReview.
+// METADATA-CACHED-MATCHER (replaced the old pending-review endpoint).
 //
 // `limit` caps the number of ROWS returned; it does not affect `total`, which
 // the server reports as the size of the filtered set either way (see
@@ -4420,7 +4443,7 @@ export async function listCachedCandidates(
 }
 
 // getCachedReviewResults returns a paginated CandidateResult list sourced
-// from the persistent metadata cache. Replaces getOperationResults for the
+// from the persistent metadata cache. Used by the
 // MetadataReviewDialog. Status values: "matched" (pending review),
 // "no_match" (user rejected), "applied" (already applied).
 //
