@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.55.0
+// version: 1.55.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-10
 
@@ -693,6 +693,21 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		return nil, fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 	}
 
+	// The caller's Guard runs once here, on the row as read, before the apply
+	// body: the body resolves or creates a Series row (applyMetadataUnguarded)
+	// before the commit, so a guard that refuses only under the write lock
+	// would leave a Series row created for nothing. A guard that already
+	// refuses the row as read refuses here, before anything is written. It
+	// runs again under the write lock (commitGuard below) on the fresh row,
+	// which is the check that counts; only a change landing between this
+	// read and that commit can still leave such a Series row behind (the
+	// maintenance series cleanup deletes orphan series).
+	if opts.Guard != nil {
+		if gErr := opts.Guard(book); gErr != nil {
+			return nil, gErr
+		}
+	}
+
 	// The owner's rejections: a candidate the owner rejected for this book is
 	// never applied, by any caller and with any options (no pin, no
 	// hand-pick lifts it; the owner un-rejects it first). Every candidate
@@ -700,7 +715,8 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// nightly upgrade, the version-twin fixer, the transcription auto-match,
 	// the single-book dialog, apply-when-scanned -- so this is the backstop
 	// behind each caller's own check (which reports the refusal its own
-	// way), and it covers any caller added later. It reads the list now,
+	// way: it runs after the caller's Guard, here and at the commit), and it
+	// covers any caller added later. It reads the list now,
 	// and again under the book's write stripe (rejectionGuard, below), the
 	// stripe RecordRejection writes under, so a rejection made after the
 	// caller planned its apply still wins. An unreadable list refuses the
@@ -716,21 +732,6 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	}
 	if rErr := rejectionGuard(book); rErr != nil {
 		return nil, rErr
-	}
-
-	// The caller's Guard runs once here, on the row as read, before the apply
-	// body: the body resolves or creates a Series row (applyMetadataUnguarded)
-	// before the commit, so a guard that refuses only under the write lock
-	// would leave a Series row created for nothing. A guard that already
-	// refuses the row as read refuses here, before anything is written. It
-	// runs again under the write lock (commitGuard below) on the fresh row,
-	// which is the check that counts; only a change landing between this
-	// read and that commit can still leave such a Series row behind (the
-	// maintenance series cleanup deletes orphan series).
-	if opts.Guard != nil {
-		if gErr := opts.Guard(book); gErr != nil {
-			return nil, gErr
-		}
 	}
 
 	// Warn when the candidate runtime diverges significantly from the local
@@ -895,11 +896,11 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 			return nil
 		}
 	}
-	// The owner-rejection check runs again here, under the write stripe.
 	// The caller's own under-lock check (ApplyOptions.Guard) runs after the
-	// no_match and rejection ones, on the same fresh row, inside the same
-	// ModifyBook.
-	commitGuard := composeCommitGuards(noMatchGuard, rejectionGuard, opts.Guard)
+	// no_match one, on the same fresh row, inside the same ModifyBook; the
+	// owner-rejection backstop runs last, so a caller that checks the
+	// rejection itself reports the refusal its own way.
+	commitGuard := composeCommitGuards(noMatchGuard, opts.Guard, rejectionGuard)
 	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
 		return nil, updateErr
