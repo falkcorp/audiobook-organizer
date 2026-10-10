@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.62.0
+// version: 1.62.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-10
 
@@ -248,7 +248,9 @@ type Request struct {
 	// book.file_path, since some organize branches act on one and some on the
 	// other (folderScope.admit). Books with some of those inside and some
 	// outside are held back and counted (OutcomeStraddlesFolderScope,
-	// OutcomeFilePathOutsideFolderScope). nil means no folder restriction. A
+	// OutcomeFilePathOutsideFolderScope), and each book is re-checked as it is
+	// just before its organize (OutcomeLeftFolderScope when nothing is inside
+	// any more; see organizeBooksOpts). nil means no folder restriction. A
 	// non-nil value that is empty, relative, or contains ".." fails the run
 	// with ErrInvalidFolderScope instead of widening it (see newFolderScope).
 	// "/" is accepted and every absolute path is inside it, so "/" means every

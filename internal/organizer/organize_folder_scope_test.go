@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_folder_scope_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c41e0d2-93ab-4f58-b6a1-0e5d28c9f347
 // last-edited: 2026-10-10
 
@@ -7,6 +7,7 @@ package organizer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -170,12 +171,21 @@ func (fx *folderScopeFixture) target(t *testing.T, label string) string {
 // rows alone: the stale-column shape, where the two disagree.
 func (fx *folderScopeFixture) repointFilePath(t *testing.T, label, path string) {
 	t.Helper()
+	require.NoError(t, fx.setFilePath(label, path))
+}
+
+// setFilePath is repointFilePath for code off the test goroutine.
+func (fx *folderScopeFixture) setFilePath(label, path string) error {
 	b, err := fx.store.GetBookByID(fx.books[label])
-	require.NoError(t, err)
-	require.NotNil(t, b)
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return fmt.Errorf("book %s not found", fx.books[label])
+	}
 	b.FilePath = path
 	_, err = fx.store.UpdateBook(b.ID, b)
-	require.NoError(t, err)
+	return err
 }
 
 // plantStale writes a file outside the scoped folder with content no fixture
@@ -470,12 +480,14 @@ func (s *mergeOnReadStore) GetBookByID(id string) (*database.Book, error) {
 // folder a, with merge applied to book a the first time the run reads it by
 // ID. FolderPath only: a BookIDs load would call GetBookByID itself, and the
 // merge would land before the scope check rather than after it.
-func (fx *folderScopeFixture) runWithMergeOnRead(t *testing.T, merge func(t *testing.T)) *Stats {
+//
+// merge runs on an organize worker goroutine, not the test's, so it returns an
+// error rather than calling require (t.FailNow there would hang the run). An
+// error fails the re-read, the book counts as Failed, and the caller's
+// Skipped/outcome assertions catch it.
+func (fx *folderScopeFixture) runWithMergeOnRead(t *testing.T, merge func() error) *Stats {
 	t.Helper()
-	wrapped := &mergeOnReadStore{PebbleStore: fx.store, bookID: fx.books["a"], merge: func() error {
-		merge(t)
-		return nil
-	}}
+	wrapped := &mergeOnReadStore{PebbleStore: fx.store, bookID: fx.books["a"], merge: merge}
 	scope := fx.dirs["a"]
 	stats, err := NewService(wrapped).PerformOrganizeStats(context.Background(),
 		&Request{FolderPath: &scope, LockBooksAgainstScan: true}, logger.New("test"))
@@ -491,7 +503,7 @@ func TestOrganizeFolderScope_FreshRowIsRecheckedUnderScanLock(t *testing.T) {
 	fx := newFolderScopeFixture(t, "a", "b")
 	stale := plantStale(t, fx.dirs["b"])
 
-	stats := fx.runWithMergeOnRead(t, func(t *testing.T) { fx.repointFilePath(t, "a", stale) })
+	stats := fx.runWithMergeOnRead(t, func() error { return fx.setFilePath("a", stale) })
 	require.NotContains(t, fx.landedContents(t), staleContent,
 		"the re-read row pointed outside the folder and was organized anyway")
 	require.Empty(t, fx.libraryEntries(t))
@@ -508,14 +520,18 @@ func TestOrganizeFolderScope_BookThatLeftTheFolderIsCountedNotOrganized(t *testi
 	fx := newFolderScopeFixture(t, "a", "b")
 	stale := plantStale(t, fx.dirs["b"])
 
-	stats := fx.runWithMergeOnRead(t, func(t *testing.T) {
+	stats := fx.runWithMergeOnRead(t, func() error {
 		rows, err := fx.store.GetBookFiles(fx.books["a"])
-		require.NoError(t, err)
+		if err != nil {
+			return err
+		}
 		for i := range rows {
 			rows[i].Missing = true
-			require.NoError(t, fx.store.UpdateBookFile(rows[i].ID, &rows[i]))
+			if err := fx.store.UpdateBookFile(rows[i].ID, &rows[i]); err != nil {
+				return err
+			}
 		}
-		fx.repointFilePath(t, "a", stale)
+		return fx.setFilePath("a", stale)
 	})
 	require.Empty(t, fx.libraryEntries(t))
 	require.Equal(t, 1, stats.Skipped)
