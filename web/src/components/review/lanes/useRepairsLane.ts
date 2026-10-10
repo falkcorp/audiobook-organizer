@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -120,6 +120,8 @@ export function summarizeApply(r: RepairApplyResult): string {
   if (guarded > 0) parts.push(`skipped by guard ${guarded}`);
   const ownerRefused = r.by_outcome.owner_apply_refused ?? 0;
   if (ownerRefused > 0) parts.push(`owner apply refused ${ownerRefused}`);
+  const canceled = r.by_outcome.canceled_skipped ?? 0;
+  if (canceled > 0) parts.push(`not applied (canceled) ${canceled}`);
   if (r.not_in_plan && r.not_in_plan.length > 0) parts.push(`not in trial ${r.not_in_plan.length}`);
   let line = parts.join(' · ');
   if (r.dry_run) line = `Preview only, nothing was written: ${line}`;
@@ -130,13 +132,16 @@ export function summarizeApply(r: RepairApplyResult): string {
 /**
  * The severity of an apply result, for the toast and the result banner alike:
  * warning when anything was not written (failed, partly applied, retry later,
- * owner apply refused, stopped early) or when it was only a preview.
+ * owner apply refused, canceled before the row, stopped early) or when it was
+ * only a preview. A canceled apply does not set `aborted` (that is the lost
+ * stand-down lease), so canceled_skipped is checked on its own.
  */
 export function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
   return r.failed > 0 ||
     r.partially_applied > 0 ||
     (r.retry_later ?? 0) > 0 ||
     (r.by_outcome.owner_apply_refused ?? 0) > 0 ||
+    (r.by_outcome.canceled_skipped ?? 0) > 0 ||
     r.aborted ||
     r.dry_run
     ? 'warning'
