@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.38.1
+// version: 3.39.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -73,10 +73,15 @@ type Registry struct {
 	logger         *slog.Logger
 	workers        int
 	abandoned      *abandonedTracker
-	// retryMu serializes the runtime same-row re-queue paths —
-	// RetryInterrupted and resumeQuiescedOp — so both cannot read the same
-	// interrupted row and each flip it to queued (the second flip could land
-	// after the dispatcher already moved it to running).
+	// retryMu serializes the paths that read a persisted non-running row and
+	// then write its next status: the runtime same-row re-queue paths
+	// (RetryInterrupted, resumeQuiescedOp) and the persisted-row branch of
+	// Cancel. Without it two of them could read the same interrupted row and
+	// each write over the other (a re-queue flip landing after a cancel, or the
+	// second flip landing after the dispatcher already moved the row to
+	// running). The dispatcher and the worker do NOT take it: Cancel's queued
+	// case therefore still has to use a compare-and-set (see the comment above
+	// the lock in Cancel).
 	retryMu sync.Mutex
 	// admitLocks holds one *sync.Mutex per def id (see admissionLock). It
 	// serializes every "is another run of this def active?" check with the
@@ -1155,15 +1160,7 @@ func (r *Registry) publishOpTerminal(opID, defID, status string) {
 // Returns ErrOpNotFound for an unknown id or a row that is already terminal;
 // a zombie whose row is already terminal returns nil (it is still stopping).
 func (r *Registry) Cancel(opID string) error {
-	r.mu.Lock()
-	h, running := r.running[opID]
-	if running && h.cancel == nil {
-		// Stub handle: no context to cancel yet. Flag it under the same lock
-		// the worker uses when overwriting the stub (see executeRun), so the
-		// worker is guaranteed to observe the flag and skip the run.
-		h.queuedCancel = true
-	}
-	r.mu.Unlock()
+	h, running := r.handleForCancel(opID)
 
 	// A zombie skips ONLY the handle work below and falls through to the row
 	// paths. Its context is already canceled and its fence revoked, so there
@@ -1187,17 +1184,7 @@ func (r *Registry) Cancel(opID string) error {
 
 	if running && !zombie {
 		if h.cancel != nil {
-			r.logger.Info("registry: canceling running op", "op_id", logger.SanitizeLogValue(opID))
-			// Withdraw the write permit first, so the run cannot write in the
-			// window between seeing ctx.Done() and returning (cancelIfActive
-			// revokes too; the explicit call keeps the order visible here).
-			h.fence.revoke()
-			// Record the INTENT before canceling. The run may take seconds to
-			// notice its context and reach its terminal switch, by which time a
-			// shutdown may already be in progress; without this the run would be
-			// recorded as shutdown-interrupted and resurrected on the next boot.
-			h.userCanceled.Store(true)
-			h.cancelIfActive()
+			r.cancelLiveHandle(opID, h)
 			return nil
 		}
 		// Stub path: the DB row is still "queued" (the worker only marks it
@@ -1251,13 +1238,15 @@ func (r *Registry) Cancel(opID string) error {
 	// the row leaves the resume set for good. Terminal rows and unknown ids
 	// keep the ErrOpNotFound contract: there is nothing left to stop.
 	//
-	// Read-then-write rather than a store-level compare-and-set: the only
-	// concurrent transitions out of these statuses (resumeRestart's flip to
-	// queued, PromoteToQueued, a worker marking "running") all leave the row
-	// canceled if this write lands after them, and if a worker has already
-	// claimed the row the window is the same one the queued path above has
-	// always had (C-1). ListResumableOperationsV2 is consulted only at boot,
-	// before the HTTP server serves, so the boot sweep cannot interleave.
+	// Read-then-write rather than a store-level compare-and-set for the
+	// non-queued statuses: no worker can claim a row in any of them (the
+	// worker's claim is a compare-and-set from "queued"), and the other
+	// concurrent transitions out of them (resumeRestart's flip to queued,
+	// PromoteToQueued) leave the row canceled if this write lands after them.
+	// A row that reads "queued" under the lock IS claimable, and is canceled
+	// with a compare-and-set instead (see below).
+	// ListResumableOperationsV2 is consulted only at boot, before the HTTP
+	// server serves, so the boot sweep cannot interleave.
 	//
 	// The RUNTIME re-queue paths can: resumeQuiescedOp (a stand-down holder
 	// releasing or giving up, possibly while the quiesced scan is still a
@@ -1265,14 +1254,50 @@ func (r *Registry) Cancel(opID string) error {
 	// it to queued. Landing this write between that read and that flip would
 	// lose the cancel -- the row ends queued and the scan runs. retryMu is the
 	// lock both of them hold across their read-then-flip, so taking it here
-	// makes the three mutually exclusive: either the re-queue finished first
-	// (this read sees "queued", which is not terminal, and the write below
-	// cancels it) or it runs after and sees "canceled", which it skips.
+	// makes the three mutually exclusive AMONG THEMSELVES: either the re-queue
+	// finished first (this read sees "queued") or it runs after and sees
+	// "canceled", which it skips.
+	//
+	// It does NOT exclude the dispatcher or a worker, which never take retryMu.
+	// A row this read sees as "queued" can be claimed and marked running by a
+	// worker (SetOperationV2StatusIfQueued) before the write below, and an
+	// unconditional "canceled" write would then overwrite a live run's status
+	// while its context kept running with no userCanceled flag. So a "queued"
+	// row is canceled with the same compare-and-set the first attempt above
+	// used, and when that loses, the run is live: cancel its handle instead.
 	r.retryMu.Lock()
 	defer r.retryMu.Unlock()
 	row, gerr := r.store.GetOperationV2(opID)
 	if gerr != nil || row == nil || row.ID == "" {
 		return ErrOpNotFound
+	}
+	if row.Status == "queued" {
+		updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
+		if err != nil {
+			return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+		}
+		if updated {
+			r.logger.Info("registry: canceled re-queued op", "op_id", logger.SanitizeLogValue(opID))
+			r.publishOpTerminal(opID, row.DefID, "canceled")
+			return nil
+		}
+		// Lost: a worker moved the row on between the read and the write.
+		// Its handle is registered before it makes that write (executeRun), so
+		// it is in r.running by now unless the run already finished.
+		if h2, ok := r.handleForCancel(opID); ok && h2.cancel != nil && !h2.zombie.Load() {
+			r.cancelLiveHandle(opID, h2)
+			return nil
+		} else if ok && h2.cancel == nil {
+			// A stub: the worker will see the flag handleForCancel just set and
+			// drop the run, marking the row canceled itself.
+			return nil
+		}
+		// No live handle: re-read what the row is now (finished, or a zombie
+		// "running" row) and take the ordinary persisted-row path below.
+		row, gerr = r.store.GetOperationV2(opID)
+		if gerr != nil || row == nil || row.ID == "" {
+			return ErrOpNotFound
+		}
 	}
 	if isTerminalStatus(row.Status) {
 		if zombie {
@@ -1294,6 +1319,38 @@ func (r *Registry) Cancel(opID string) error {
 		"op_id", logger.SanitizeLogValue(opID), "def_id", row.DefID, "previous_status", row.Status)
 	r.publishOpTerminal(opID, row.DefID, "canceled")
 	return nil
+}
+
+// handleForCancel looks up opID's in-process handle for Cancel. A dispatcher
+// STUB handle (nil cancel: the op sits in the buffered nextRun channel, no
+// context to cancel yet) is flagged with queuedCancel under the same lock the
+// worker uses when overwriting the stub (see executeRun), so the worker is
+// guaranteed to observe the flag and skip the run.
+func (r *Registry) handleForCancel(opID string) (h *runHandle, running bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, running = r.running[opID]
+	if running && h.cancel == nil {
+		h.queuedCancel = true
+	}
+	return h, running
+}
+
+// cancelLiveHandle stops a live run (non-nil cancel, not a zombie): it
+// withdraws the write permit, records the user's intent, then cancels the
+// run's context.
+func (r *Registry) cancelLiveHandle(opID string, h *runHandle) {
+	r.logger.Info("registry: canceling running op", "op_id", logger.SanitizeLogValue(opID))
+	// Withdraw the write permit first, so the run cannot write in the
+	// window between seeing ctx.Done() and returning (cancelIfActive
+	// revokes too; the explicit call keeps the order visible here).
+	h.fence.revoke()
+	// Record the INTENT before canceling. The run may take seconds to
+	// notice its context and reach its terminal switch, by which time a
+	// shutdown may already be in progress; without this the run would be
+	// recorded as shutdown-interrupted and resurrected on the next boot.
+	h.userCanceled.Store(true)
+	h.cancelIfActive()
 }
 
 // isTerminalStatus reports whether a v2 row status means the op is finished
