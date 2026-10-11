@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-10
 //
@@ -75,6 +75,7 @@ import { useRepairsLane } from './lanes/useRepairsLane';
 import { useDedupPipeline } from './useDedupPipeline';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
+import { isAbortError } from '../../utils/apiFetch';
 
 /**
  * Where an unported lane's surface still lives, so the panel can point at it.
@@ -524,6 +525,9 @@ export function ReviewWorkspace() {
             label: 'Export CSV',
             scope: 'view',
             startsGroup: true,
+            // One export at a time: page mode reads up to ~80 pages for 40k
+            // rows, and a second click would start a second read.
+            disabledReason: metadata.exporting ? 'An export is already running.' : undefined,
             run: () => {
               void (async () => {
                 try {
@@ -532,8 +536,16 @@ export function ReviewWorkspace() {
                   // Says WHAT was exported: "export" reads as "everything", and this
                   // is the filtered set.
                   toast(`Exported ${n.toLocaleString()} filtered row(s) to CSV.`, 'success');
-                } catch {
-                  toast('Could not export the filtered rows.', 'error');
+                } catch (err) {
+                  // An export replaced by a newer one, or cut off by leaving the
+                  // page, is not a failure to report.
+                  if (isAbortError(err)) return;
+                  toast(
+                    err instanceof Error && err.message
+                      ? `Could not export the filtered rows: ${err.message}`
+                      : 'Could not export the filtered rows.',
+                    'error'
+                  );
                 }
               })();
             },
@@ -556,6 +568,7 @@ export function ReviewWorkspace() {
       metadata.applicableSelectedIds,
       metadata.allVisiblePendingIds,
       metadata.exportRows,
+      metadata.exporting,
       metadata.dispatch,
       metadata.bulkApplyMode,
       dedupPipeline.busy,

@@ -2896,8 +2896,15 @@ export async function startOrganize(
 }
 
 // Config
-export async function getConfig(): Promise<Config> {
-  const response = await apiFetch(`${API_BASE}/config`);
+/**
+ * GET /config. `options` bounds the read: without a timeoutMs apiFetch sets no
+ * deadline, so a caller that must not wait on a hung server (the review
+ * lane's mode read) passes one.
+ */
+export async function getConfig(
+  options: { timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<Config> {
+  const response = await apiFetch(`${API_BASE}/config`, options);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch config');
   }
@@ -4704,6 +4711,14 @@ export interface ReviewMatchingIds {
   ids: string[];
   total: number;
   generation: string;
+  /**
+   * Asked for with `pins`: book id to the pin of the candidate the list shows
+   * for it (no origin; the lane sets 'review_bulk'), for every listed book
+   * that has a candidate. Absent when not asked for or when pins_omitted.
+   */
+  pins?: Record<string, Omit<CandidatePin, 'origin'>>;
+  /** The list is longer than the bulk apply cap, so no pins were sent. */
+  pins_omitted?: boolean;
 }
 
 function reviewQueryString(params: ReviewPageParams, extra: Record<string, string> = {}): string {
@@ -4762,15 +4777,20 @@ export async function getReviewPage(
 
 /**
  * Every book id the filters match (view=page&ids=all): ids only, never rows,
- * with the generation they were listed at. "Select all N matching" uses it.
- * limit and offset are not sent; the list is the whole result.
+ * with the generation they were listed at. "Select all N matching" uses it,
+ * with `pins` so every listed book carries the candidate pin a bulk apply
+ * needs (sent only while the list fits under the bulk apply cap). limit and
+ * offset are not sent; the list is the whole result.
  */
 export async function getReviewMatchingIds(
   params: ReviewQueryParams,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: { pins?: boolean } = {}
 ): Promise<ReviewMatchingIds> {
+  const extra: Record<string, string> = { ids: 'all' };
+  if (options.pins) extra.pins = 'true';
   const response = await apiFetch(
-    `${API_BASE}/audiobooks/metadata/cache/review?${reviewQueryString(params, { ids: 'all' })}`,
+    `${API_BASE}/audiobooks/metadata/cache/review?${reviewQueryString(params, extra)}`,
     { timeoutMs: CACHED_REVIEW_TIMEOUT_MS, signal }
   );
   if (!response.ok) throw await buildApiError(response, 'Failed to list the matching books');
