@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
 // last-edited: 2026-10-10
 
@@ -268,20 +268,6 @@ func newOpsFake(t *testing.T) *dbmocks.MockStore {
 			}), nil
 		}).Maybe()
 
-	// The claim. Compare-and-set is what stops two dispatcher workers from
-	// starting the same row, so it must stay atomic under the same lock.
-	m.EXPECT().SetOperationV2StatusIfQueued(mock.Anything, mock.Anything).RunAndReturn(
-		func(id, newStatus string) (bool, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			r, ok := rows[id]
-			if !ok || r.Status != "queued" {
-				return false, nil
-			}
-			r.Status = newStatus
-			return true, nil
-		}).Maybe()
-
 	m.EXPECT().UpdateOperationV2Status(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(id, status string, _, _ *time.Time, _ *string) error {
 			mu.Lock()
@@ -292,8 +278,10 @@ func newOpsFake(t *testing.T) *dbmocks.MockStore {
 			return nil
 		}).Maybe()
 
-	// A run's terminal write (and the pickup gate's) is a compare-and-set
-	// from the status the caller expects, under the same lock as the claim.
+	// Every compare-and-set status write: the claim (queued->running), which
+	// is what stops two dispatcher workers from starting the same row, so it
+	// must stay atomic under this lock; the run's terminal write; the pickup
+	// gate; Cancel.
 	m.EXPECT().UpdateOperationV2StatusIf(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
 		func(id, fromStatus, status string, _, _ *time.Time, _ *string) (bool, error) {
 			mu.Lock()

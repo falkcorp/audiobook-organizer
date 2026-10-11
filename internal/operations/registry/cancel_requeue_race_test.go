@@ -1,5 +1,5 @@
 // file: internal/operations/registry/cancel_requeue_race_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9e61b8-2c47-4d05-8a1b-e0d57c9a4b26
 // last-edited: 2026-10-10
 
@@ -67,7 +67,7 @@ func (s *claimDuringCancelStore) GetOperationV2(id string) (*database.OperationV
 // The user was told the op was canceled and it ran to completion.
 //
 // Mutation check: with an unconditional UpdateOperationV2Status in
-// cancelByRow's queued case (instead of SetOperationV2StatusIfQueued, a re-read
+// cancelByRow's queued case (instead of a compare-and-set from "queued", a re-read
 // on a miss, and canceling the live handle of the "running" row it finds) the
 // run's context is never canceled and the test fails on "the run's context was
 // not canceled".

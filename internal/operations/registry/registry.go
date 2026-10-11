@@ -1206,7 +1206,7 @@ func (r *Registry) Cancel(opID string) error {
 	// row yet. The worker's claim (queued->running) and its stand-down pickup
 	// gate (queued->interrupted_quiesced) are compare-and-sets from "queued"
 	// too, so exactly one of them and this write applies.
-	updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
+	updated, err := r.store.UpdateOperationV2StatusIf(opID, "queued", "canceled", nil, nil, nil)
 	if err != nil {
 		return r.cancelStoreError(opID, in, err)
 	}
@@ -1321,7 +1321,7 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 		}
 		switch row.Status {
 		case "queued":
-			updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
+			updated, err := r.store.UpdateOperationV2StatusIf(opID, "queued", "canceled", nil, nil, nil)
 			if err != nil {
 				return r.cancelStoreError(opID, in, err)
 			}

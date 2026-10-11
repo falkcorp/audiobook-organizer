@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v2_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b41c7de-25a8-4f6c-b0e3-71d84af52c19
 // last-edited: 2026-10-10
 
@@ -37,13 +37,14 @@ func TestOpV2LifecycleStore_MethodSetUnchanged(t *testing.T) {
 		"RepairOpsV2MissingCompletedAt",
 		"ResetOperationV2ForResume",
 		"SetOperationV2Result",
-		"SetOperationV2StatusIfQueued",
 		"UpdateOperationV2Params",
 		"UpdateOperationV2Status",
 		// UpdateOperationV2StatusIf added 2026-10-10: Registry.Cancel and the
 		// worker's scan stand-down pickup gate write a status decided from an
 		// earlier read, so they need a compare-and-set that carries a message
-		// and completed_at. The fakes were widened deliberately.
+		// and completed_at. It REPLACED SetOperationV2StatusIfQueued (now
+		// UpdateOperationV2StatusIf(id, "queued", s, nil, nil, nil)), so
+		// database.Store's flattened width did not grow.
 		"UpdateOperationV2StatusIf",
 	}
 	if !reflect.DeepEqual(got, want) {

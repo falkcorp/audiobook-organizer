@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package registry_test
 
@@ -334,12 +334,12 @@ type refuseRunningStore struct {
 	attempts atomic.Int64
 }
 
-func (s *refuseRunningStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
-	if id == s.refuse && newStatus == "running" {
+func (s *refuseRunningStore) UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
+	if id == s.refuse && fromStatus == "queued" && status == "running" {
 		s.attempts.Add(1)
 		return false, context.DeadlineExceeded
 	}
-	return s.fakeStore.SetOperationV2StatusIfQueued(id, newStatus)
+	return s.fakeStore.UpdateOperationV2StatusIf(id, fromStatus, status, startedAt, completedAt, errMsg)
 }
 
 // TestWorker_DoesNotRunAnOpItCouldNotMarkRunning: an op whose "running" write

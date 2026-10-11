@@ -1,7 +1,7 @@
 // file: internal/operations/registry/terminal_completed_at_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 65ef6402-0192-4d0d-ac5a-0314f463137c
-// last-edited: 2026-09-22
+// last-edited: 2026-10-10
 
 package registry_test
 
@@ -108,8 +108,9 @@ func TestTerminalCompletedAt_CanceledWhileRunning(t *testing.T) {
 
 // TestTerminalCompletedAt_CanceledWhileQueued is the path behind the 73-day
 // zombie: an op canceled before any worker picked it up goes through
-// SetOperationV2StatusIfQueued, which takes no completedAt argument, so the
-// stamp has to come from the store. The fakeStore mirrors PebbleStore there.
+// a compare-and-set from "queued" that passes no completedAt (it was
+// SetOperationV2StatusIfQueued, which took none), so the stamp has to come
+// from the store. The fakeStore mirrors PebbleStore there.
 func TestTerminalCompletedAt_CanceledWhileQueued(t *testing.T) {
 	store := newFakeStore()
 	bus := &t06TermBus{}

@@ -471,7 +471,8 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// Not applied means some other transition owns the row now, so its status is
 	// left alone. A failed write leaves the row as it was: still queued, it is
 	// dispatched again next cycle; anything else, it was not ours to run.
-	started, casErr := r.store.SetOperationV2StatusIfQueued(qr.opID, "running")
+	claimedAt := attemptStartedAt
+	started, casErr := r.store.UpdateOperationV2StatusIf(qr.opID, "queued", "running", &claimedAt, nil, nil)
 	if casErr == nil && started {
 		// Registry.Cancel reads this to tell a run it stopped from a handle
 		// whose run never started (cancelIntent.stopped).
@@ -489,12 +490,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		}
 		return false
 	}
-	// Stamp the attempt's start time. The conditional write above takes no
-	// timestamp; a failure here costs only the displayed start time.
-	now := attemptStartedAt
-	if err := r.store.UpdateOperationV2Status(qr.opID, "running", &now, nil, nil); err != nil {
-		r.logger.Warn("registry: failed to stamp op start time", "op_id", qr.opID, "error", err)
-	}
+	// The claim above also stamped the attempt's start time (started_at).
 
 	r.logger.Info("registry: starting run", "op_id", qr.opID, "def_id", qr.defID)
 

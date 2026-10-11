@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-10-10
 
@@ -500,7 +500,7 @@ func TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility(t *tes
 	require.True(t, found, "reset-for-resume row must appear in the timeline")
 }
 
-// TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus pins the
+// TestUpdateOperationV2StatusIf_FromQueuedStampsCompletedAtOnTerminalStatus pins the
 // invariant that CompletedAt is set whenever a row leaves the live states.
 //
 // CompletedAt is the canonical liveness signal for this store: both
@@ -511,7 +511,7 @@ func TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility(t *tes
 // Active Operations panel for 73 days that way, and no user action could clear
 // it, because "Clear Stale" filters on queued/running/pending and it was none
 // of those.
-func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testing.T) {
+func TestUpdateOperationV2StatusIf_FromQueuedStampsCompletedAtOnTerminalStatus(t *testing.T) {
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 	s := store.(OpsV2Store)
@@ -520,7 +520,7 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 		row := buildTestOpRow("op-cancel", "queued")
 		require.NoError(t, s.InsertOperationV2(row))
 
-		updated, err := s.SetOperationV2StatusIfQueued("op-cancel", "canceled")
+		updated, err := s.UpdateOperationV2StatusIf("op-cancel", "queued", "canceled", nil, nil, nil)
 		require.NoError(t, err)
 		require.True(t, updated)
 
@@ -547,7 +547,7 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 		row := buildTestOpRow("op-future", "queued")
 		require.NoError(t, s.InsertOperationV2(row))
 
-		updated, err := s.SetOperationV2StatusIfQueued("op-future", "invented_by_a_future_feature")
+		updated, err := s.UpdateOperationV2StatusIf("op-future", "queued", "invented_by_a_future_feature", nil, nil, nil)
 		require.NoError(t, err)
 		require.True(t, updated, "the status write itself still happens")
 
@@ -566,7 +566,7 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 			id := "op-live-" + status
 			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
 
-			updated, err := s.SetOperationV2StatusIfQueued(id, status)
+			updated, err := s.UpdateOperationV2StatusIf(id, "queued", status, nil, nil, nil)
 			require.NoError(t, err)
 			require.True(t, updated)
 
@@ -583,7 +583,7 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 		row := buildTestOpRow("op-run", "queued")
 		require.NoError(t, s.InsertOperationV2(row))
 
-		updated, err := s.SetOperationV2StatusIfQueued("op-run", "running")
+		updated, err := s.UpdateOperationV2StatusIf("op-run", "queued", "running", nil, nil, nil)
 		require.NoError(t, err)
 		require.True(t, updated)
 
@@ -602,7 +602,7 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 		row.CompletedAt = &earlier
 		require.NoError(t, s.InsertOperationV2(row))
 
-		updated, err := s.SetOperationV2StatusIfQueued("op-stamped", "canceled")
+		updated, err := s.UpdateOperationV2StatusIf("op-stamped", "queued", "canceled", nil, nil, nil)
 		require.NoError(t, err)
 		require.True(t, updated)
 

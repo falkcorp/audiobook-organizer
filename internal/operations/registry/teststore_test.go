@@ -1,5 +1,5 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
 // last-edited: 2026-10-10
 
@@ -251,29 +251,6 @@ func (f *fakeStore) ResetOperationV2ForResume(id string) error {
 	op.ErrorMessage = nil
 	f.ops[id] = op
 	return nil
-}
-
-func (f *fakeStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	op, ok := f.ops[id]
-	if !ok {
-		return false, nil
-	}
-	if op.Status != "queued" {
-		return false, nil
-	}
-	op.Status = newStatus
-	// Mirror PebbleStore.SetOperationV2StatusIfQueued: this writer takes no
-	// completedAt argument, so the real store stamps a terminal status itself.
-	// Without this a registry test of the queued-cancel path would assert the
-	// fake's gap rather than the store's behaviour.
-	if database.IsTerminalV2Status(newStatus) && op.CompletedAt == nil {
-		now := time.Now().UTC()
-		op.CompletedAt = &now
-	}
-	f.ops[id] = op
-	return true, nil
 }
 
 // RepairOpsV2MissingCompletedAt is a no-op here: the registry never calls it

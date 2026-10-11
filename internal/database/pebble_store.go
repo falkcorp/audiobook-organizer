@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.211.1
+// version: 1.212.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-10
 
@@ -180,7 +180,7 @@ type PebbleStore struct {
 	// ordering argument.
 	memPending               memPendingBuffer
 	counterMu                sync.Mutex           // protects nextID read-modify-write
-	opsMu                    sync.Mutex           // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
+	opsMu                    sync.Mutex           // serializes v2 op status writes, incl. the UpdateOperationV2StatusIf compare-and-set
 	reviewMu                 sync.Mutex           // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
 	nameIdx                  nameIndexLocks       // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
 	apiKeyMu                 sync.Mutex           // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
