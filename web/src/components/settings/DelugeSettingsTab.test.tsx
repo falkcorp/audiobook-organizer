@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DelugeSettingsTab.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 333780a3-eba8-4978-9f00-8866eed4cfa7
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -129,5 +129,69 @@ describe('DelugeSettingsTab', () => {
 
     await user.click(screen.getByRole('button', { name: /import unimported/i }));
     expect(await screen.findByText(/Total: 3/)).toBeInTheDocument();
+  });
+
+  describe('locked settings', () => {
+    it('shows no lock notice and the unlocked help text when nothing is locked', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => configured.clone()));
+      renderWithProviders(<DelugeSettingsTab envLocked={[]} settingLocks={{}} />);
+      await screen.findByText('Configured');
+
+      expect(screen.queryByText(/set by the server and override/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/overrides the saved one and locks this setting/i)).toBeInTheDocument();
+      expect(screen.queryByText(/^Locked:/)).not.toBeInTheDocument();
+    });
+
+    it('names the environment variable that locks the URL and keeps the field read-only', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => configured.clone()));
+      renderWithProviders(
+        <DelugeSettingsTab
+          envLocked={['deluge_web_url']}
+          settingLocks={{ deluge_web_url: 'DELUGE_WEB_URL' }}
+        />
+      );
+      await screen.findByText('Configured');
+
+      expect(screen.getByLabelText('Deluge Web URL')).toBeDisabled();
+      expect(screen.getByText(/set by the server and override/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/the DELUGE_WEB_URL environment variable on the server/i, {
+          selector: 'li p',
+          exact: false,
+        })
+      ).toBeInTheDocument();
+      expect(screen.getByText(/^Locked: set by the DELUGE_WEB_URL environment variable/)).toBeInTheDocument();
+    });
+
+    it('says the config file is the source when it locks a setting', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => configured.clone()));
+      renderWithProviders(
+        <DelugeSettingsTab
+          envLocked={['deluge_web_url', 'deluge_move_enabled']}
+          settingLocks={{ deluge_web_url: 'config file', deluge_move_enabled: 'DELUGE_MOVE_ENABLED' }}
+        />
+      );
+      await screen.findByText('Configured');
+
+      expect(screen.getByText(/^Locked: set by the server's config file/)).toBeInTheDocument();
+      expect(screen.getByText('Move storage enabled')).toBeInTheDocument();
+      expect(screen.queryByText('Discovery label')).not.toBeInTheDocument();
+    });
+
+    it('lists the password lock by name and never renders a value for it', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => configured.clone()));
+      renderWithProviders(
+        <DelugeSettingsTab
+          envLocked={['deluge_web_password']}
+          settingLocks={{ deluge_web_password: 'DELUGE_WEB_PASSWORD' }}
+        />
+      );
+      await screen.findByText('Configured');
+
+      expect(screen.getByText('Web password')).toBeInTheDocument();
+      expect(screen.getByText(/DELUGE_WEB_PASSWORD environment variable/)).toBeInTheDocument();
+      // The URL is not locked here, so its help text stays the unlocked one.
+      expect(screen.queryByText(/^Locked:/)).not.toBeInTheDocument();
+    });
   });
 });

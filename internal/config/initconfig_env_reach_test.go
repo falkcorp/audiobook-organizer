@@ -1,5 +1,5 @@
 // file: internal/config/initconfig_env_reach_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a8e1d37-c4b2-4f96-8e03-71d9b6c2a5f0
 // last-edited: 2026-10-11
 
@@ -56,7 +56,9 @@ func TestInitConfigReadsAcoustIDBackfillFromEnvironment(t *testing.T) {
 // A stored blob that carries the key still wins over the environment, as for
 // every non-environment-authoritative setting. This is what decides prod after
 // deploy: a blob holding acoustid_backfill=false keeps the backfill off even
-// if the host sets MAINTENANCE_ACOUSTID_BACKFILL=true.
+// if the host sets MAINTENANCE_ACOUSTID_BACKFILL=true. The Deluge keys are the
+// exception (owner decision 2026-10-11): the environment beats the blob for
+// them, see deluge_locked_test.go.
 func TestStoredBlobBeatsEnvironmentForAcoustIDBackfill(t *testing.T) {
 	t.Setenv("MAINTENANCE_ACOUSTID_BACKFILL", "true")
 	t.Setenv("DELUGE_WEB_URL", "http://192.0.2.10:8112")
@@ -70,8 +72,8 @@ func TestStoredBlobBeatsEnvironmentForAcoustIDBackfill(t *testing.T) {
 	if c.Maintenance.AcoustIDBackfill {
 		t.Error("stored acoustid_backfill=false must win over the environment")
 	}
-	if c.DelugeWebURL != "http://192.0.2.20:8112" {
-		t.Errorf("stored deluge_web_url must win over the environment, got %q", c.DelugeWebURL)
+	if c.DelugeWebURL != "http://192.0.2.10:8112" {
+		t.Errorf("DELUGE_WEB_URL must win over the stored deluge_web_url, got %q", c.DelugeWebURL)
 	}
 }
 
