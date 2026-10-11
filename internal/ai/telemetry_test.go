@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
@@ -48,9 +50,15 @@ func installAITelemetry(t *testing.T) *aiTelemetry {
 	prevMetrics := aiMetrics.Load()
 	aiMetrics.Store(newAIInstruments(telemetry.MeterFrom(mp, "ai")))
 	aiTracerOverride.Store(&tr)
-	// The admitted-model set is process state like the instruments: a test must
-	// start from an empty one or its model labels depend on test order.
+	// The named-model set is process state like the instruments: a test must
+	// start from a known one or its model labels depend on test order. The
+	// models the site tests send are "configured" here, the way a real run's
+	// come from settings; an unconfigured model would label as "other".
 	modelLabels.reset()
+	modelLabels.setConfigured(
+		modelPair{providerLocal, "test-model"},
+		modelPair{providerLocal, "embed-model"},
+	)
 	t.Cleanup(func() {
 		modelLabels.reset()
 		aiMetrics.Store(prevMetrics)
@@ -1121,15 +1129,18 @@ func TestNoForbiddenLabels(t *testing.T) {
 }
 
 func TestModelLabelFolding(t *testing.T) {
+	long := strings.Repeat("m", 64)
 	for _, c := range []struct{ in, want string }{
 		{"gpt-5-mini", "gpt-5-mini"},
-		{"", "unknown"},
+		// An empty model is "other", not a label of its own: see maxModelLabels.
+		{"", "other"},
 		{"two words", "other"},
 		{"new\nline", "other"},
-		{strings.Repeat("m", 64), strings.Repeat("m", 64)},
+		{long, long},
 		{strings.Repeat("m", 65), "other"},
 	} {
 		modelLabels.reset()
+		modelLabels.setConfigured(modelPair{providerOpenAI, "gpt-5-mini"}, modelPair{providerOpenAI, long})
 		if got := (callMeta{model: c.in}).normalized().model; got != c.want {
 			t.Errorf("model %q folded to %q, want %q", c.in, got, c.want)
 		}
@@ -1138,38 +1149,253 @@ func TestModelLabelFolding(t *testing.T) {
 	t.Cleanup(modelLabels.reset)
 }
 
-// The model label is bounded: the first maxModelLabels distinct (provider,
-// model) pairs keep their names, every later one is "other", and a pair that
-// was admitted keeps its name however many others arrive after it.
-func TestModelLabelIsBounded(t *testing.T) {
-	modelLabels.reset()
+// The model label names the configured models, always, whichever call comes
+// first, and folds every other model to "other" (owner decision 2026-10-11).
+func TestModelLabelNamesConfiguredModels(t *testing.T) {
 	t.Cleanup(modelLabels.reset)
-	for i := range maxModelLabels {
-		name := "model-" + string(rune('a'+i))
-		if got := (callMeta{provider: providerLocal, model: name}).normalized().model; got != name {
-			t.Fatalf("model %d folded to %q before the limit", i, got)
+	configured := []modelPair{
+		{providerOpenAI, "gpt-5-mini"},
+		{providerOpenAI, "text-embedding-3-large"},
+		{providerLocal, "qwen2.5:7b-instruct"},
+		{providerLocal, "bge-m3"},
+		{providerLocal, "gpt-5-mini"},
+	}
+	label := func(p modelPair) string { return (callMeta{provider: p.provider, model: p.model}).normalized().model }
+
+	// Configured models are named in every call order. The unconfigured ones
+	// that arrive before them must not take their slots.
+	for _, order := range [][]int{{0, 1, 2, 3, 4}, {4, 3, 2, 1, 0}, {2, 0, 4, 1, 3}} {
+		modelLabels.reset()
+		modelLabels.setConfigured(configured...)
+		for i := range 20 {
+			if got := label(modelPair{providerLocal, "tried-" + string(rune('a'+i))}); got != modelOther {
+				t.Fatalf("an unconfigured model = %q, want %q", got, modelOther)
+			}
+		}
+		for _, i := range order {
+			if got := label(configured[i]); got != configured[i].model {
+				t.Errorf("order %v: configured %v labelled %q, want its name", order, configured[i], got)
+			}
 		}
 	}
-	if got := (callMeta{provider: providerLocal, model: "model-extra"}).normalized().model; got != modelOther {
-		t.Errorf("model past the limit = %q, want %q", got, modelOther)
-	}
-	if got := (callMeta{provider: providerLocal, model: "model-a"}).normalized().model; got != "model-a" {
-		t.Errorf("an admitted model lost its name after the limit was reached: %q", got)
-	}
-	// The same name under the other provider is a different pair.
-	if got := (callMeta{provider: providerOpenAI, model: "model-a"}).normalized().model; got != modelOther {
-		t.Errorf("a new (provider, model) pair past the limit = %q, want %q", got, modelOther)
+
+	// A configured name is per provider: gpt-5-mini sent by the local backend is
+	// not the OpenAI pair.
+	modelLabels.reset()
+	modelLabels.setConfigured(modelPair{providerOpenAI, "gpt-5-mini"})
+	if got := label(modelPair{providerLocal, "gpt-5-mini"}); got != modelOther {
+		t.Errorf("a configured name under another provider = %q, want %q", got, modelOther)
 	}
 }
 
-// The span carries the real model name: the cap protects metric series, and a
-// trace attribute is not a series. The label still folds.
+// The same settings name the same models on every start, independent of which
+// call arrives first: two fresh label sets over one config, fed the calls in
+// opposite orders, agree on every label.
+func TestModelLabelRestartStability(t *testing.T) {
+	cfg := &config.Config{
+		OpenAIAPIKey:        "k",
+		FilenameParseModel:  "fn-model",
+		MetadataReviewModel: "review-model",
+		CoverArtModel:       "fn-model",
+		Dedup:               config.DedupConfig{ReviewModel: "dedup-model"},
+		Embedding:           config.EmbeddingConfig{Enabled: true, Model: "emb-model"},
+	}
+	calls := []modelPair{
+		{providerOpenAI, "zzz-unconfigured"}, {providerOpenAI, "emb-model"}, {providerOpenAI, "fn-model"},
+		{providerOpenAI, "dedup-model"}, {providerOpenAI, "review-model"}, {providerOpenAI, "aaa-unconfigured"},
+	}
+	run := func(order []modelPair) map[modelPair]string {
+		s := newModelLabelSet()
+		s.source.Store(&modelSource{generation: func() uint64 { return 1 }, configured: func() []modelPair { return configuredModelPairs(cfg) }})
+		got := map[modelPair]string{}
+		for _, p := range order {
+			got[p] = s.admit(p.provider, p.model)
+		}
+		return got
+	}
+	reversed := slices.Clone(calls)
+	slices.Reverse(reversed)
+	a, b := run(calls), run(reversed)
+	for _, p := range calls {
+		if a[p] != b[p] {
+			t.Errorf("%v: %q on one start, %q on another", p, a[p], b[p])
+		}
+	}
+	for _, name := range []string{"fn-model", "review-model", "dedup-model", "emb-model"} {
+		if a[modelPair{providerOpenAI, name}] != name {
+			t.Errorf("configured %q labelled %q", name, a[modelPair{providerOpenAI, name}])
+		}
+	}
+	for _, name := range []string{"zzz-unconfigured", "aaa-unconfigured"} {
+		if a[modelPair{providerOpenAI, name}] != modelOther {
+			t.Errorf("unconfigured %q labelled %q", name, a[modelPair{providerOpenAI, name}])
+		}
+	}
+}
+
+// A settings change names the newly configured model from the next call on,
+// and the one it replaced keeps its name until restart (its series is still
+// exported, see maxModelLabels).
+func TestModelLabelSettingsChange(t *testing.T) {
+	t.Cleanup(modelLabels.reset)
+	modelLabels.reset()
+	old, next := modelPair{providerOpenAI, "model-old"}, modelPair{providerOpenAI, "model-new"}
+	label := func(p modelPair) string { return (callMeta{provider: p.provider, model: p.model}).normalized().model }
+
+	modelLabels.setConfigured(old)
+	if got := label(old); got != old.model {
+		t.Fatalf("configured model = %q", got)
+	}
+	if got := label(next); got != modelOther {
+		t.Fatalf("not yet configured model = %q, want %q", got, modelOther)
+	}
+	modelLabels.setConfigured(next) // the admin saved a different model
+	if got := label(next); got != next.model {
+		t.Errorf("newly configured model = %q, want its name", got)
+	}
+	if got := label(old); got != old.model {
+		t.Errorf("replaced model = %q, want it to keep its name until restart", got)
+	}
+}
+
+// The named set never exceeds maxModelLabels over the process life, even when
+// settings keep changing: a model configured after the cap is full is "other"
+// until restart, and a model that was already named is not displaced for it.
+func TestModelLabelCapHoldsAcrossSettingsChanges(t *testing.T) {
+	t.Cleanup(modelLabels.reset)
+	modelLabels.reset()
+	label := func(m string) string { return (callMeta{provider: providerLocal, model: m}).normalized().model }
+	for i := range maxModelLabels {
+		modelLabels.setConfigured(modelPair{providerLocal, "model-" + string(rune('a'+i))})
+		if got := label("model-" + string(rune('a'+i))); got != "model-"+string(rune('a'+i)) {
+			t.Fatalf("model %d under the cap = %q", i, got)
+		}
+	}
+	modelLabels.setConfigured(modelPair{providerLocal, "model-over"})
+	if got := label("model-over"); got != modelOther {
+		t.Errorf("a configured model past the cap = %q, want %q", got, modelOther)
+	}
+	if got := label("model-a"); got != "model-a" {
+		t.Errorf("a named model lost its name when the cap was exceeded: %q", got)
+	}
+	// More pairs in one config than fit: the first ones in list order win,
+	// whatever order calls arrive in.
+	modelLabels.reset()
+	var many []modelPair
+	for i := range maxModelLabels + 3 {
+		many = append(many, modelPair{providerLocal, "m-" + string(rune('a'+i))})
+	}
+	modelLabels.setConfigured(many...)
+	for i, p := range slices.Backward(many) {
+		want := p.model
+		if i >= maxModelLabels {
+			want = modelOther
+		}
+		if got := label(p.model); got != want {
+			t.Errorf("configured pair %d of %d = %q, want %q", i, len(many), got, want)
+		}
+	}
+}
+
+// Every live-config path that changes a model setting moves config.Generation,
+// which is what makes the set re-sync with no hook at the call sites.
+func TestModelLabelFollowsLiveConfig(t *testing.T) {
+	t.Cleanup(modelLabels.reset)
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+	modelLabels.reset() // the live config is the source again
+
+	config.Mutate(func(c *config.Config) {
+		c.OpenAIAPIKey = "k"
+		c.OpenAIBaseURL = ""
+		c.FilenameParseModel = "live-model-one"
+		c.MetadataReviewModel = "live-model-one"
+		c.CoverArtModel = "live-model-one"
+	})
+	label := func(m string) string { return (callMeta{provider: providerOpenAI, model: m}).normalized().model }
+	if got := label("live-model-one"); got != "live-model-one" {
+		t.Errorf("model in the live config = %q, want its name", got)
+	}
+	if got := label("live-model-two"); got != modelOther {
+		t.Errorf("model not in the live config = %q, want %q", got, modelOther)
+	}
+	config.Mutate(func(c *config.Config) { c.FilenameParseModel = "live-model-two" })
+	if got := label("live-model-two"); got != "live-model-two" {
+		t.Errorf("model saved to the live config = %q, want its name", got)
+	}
+}
+
+// Labels are asked for from many goroutines while settings change; -race checks
+// the set's locking and that a pair is never both named and "other" for the
+// same configuration.
+func TestModelLabelConcurrentUse(t *testing.T) {
+	t.Cleanup(modelLabels.reset)
+	modelLabels.reset()
+	modelLabels.setConfigured(modelPair{providerLocal, "model-a"}, modelPair{providerLocal, "model-b"})
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 200 {
+				if g == 0 && i%50 == 0 {
+					modelLabels.setConfigured(modelPair{providerLocal, "model-a"}, modelPair{providerLocal, "model-b"})
+				}
+				if got := (callMeta{provider: providerLocal, model: "model-a"}).normalized().model; got != "model-a" {
+					t.Errorf("configured model labelled %q", got)
+					return
+				}
+				if got := (callMeta{provider: providerLocal, model: "model-z"}).normalized().model; got != modelOther {
+					t.Errorf("unconfigured model labelled %q", got)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// configuredModelPairs resolves each setting the way its call site does.
+func TestConfiguredModelPairs(t *testing.T) {
+	cfg := &config.Config{
+		OpenAIAPIKey: "k",
+		AIBackend: config.AIBackendConfig{
+			LLMMode: config.AIBackendModeOpenAIFallbackLocal, EmbeddingMode: config.AIBackendModeLocal,
+			LocalBaseURL: "http://192.0.2.10:11434/v1", LocalLLMModel: "local-chat", LocalEmbeddingModel: "local-embed",
+		},
+		FilenameParseModel: "gpt-x",
+		// MetadataReviewModel and CoverArtModel empty: the OpenAI parser falls
+		// back to defaultModel, the local one to local_llm_model.
+		Embedding:          config.EmbeddingConfig{Enabled: true, Model: "emb-model"},
+		AIEndpointsRouting: true,
+		AIEndpoints: []config.AIEndpoint{
+			{ID: "off", Enabled: false, URL: "http://192.0.2.20:11434/v1", ChatModel: "disabled-row-model"},
+			{ID: "on", Enabled: true, URL: "http://192.0.2.21:11434/v1", ChatModel: "row-chat", EmbedModel: "row-embed",
+				CapabilityModels: map[string]string{"llm.b": "row-cap-b", "llm.a": "row-cap-a", "bad": "has space"}},
+		},
+	}
+	want := []modelPair{
+		{providerOpenAI, "gpt-x"}, {providerOpenAI, defaultModel}, // chat, OpenAI side
+		{providerLocal, "gpt-x"}, {providerLocal, "local-chat"}, // chat, local side
+		{providerLocal, "local-embed"}, // embedding is local
+		{providerLocal, "row-chat"}, {providerLocal, "row-embed"}, {providerLocal, "row-cap-a"}, {providerLocal, "row-cap-b"},
+	}
+	// The dedup review model defaults to defaultModel, already listed.
+	if got := configuredModelPairs(cfg); !slices.Equal(got, want) {
+		t.Errorf("configuredModelPairs =\n %v\nwant\n %v", got, want)
+	}
+	cfg.AIEndpointsRouting = false
+	if got := configuredModelPairs(cfg); slices.Contains(got, modelPair{providerLocal, "row-chat"}) {
+		t.Errorf("pool rows named with routing off: %v", got)
+	}
+}
+
+// The span carries the real model name: the label folds unconfigured models,
+// and a trace attribute is not a series.
 func TestSpanModelIsNotCapped(t *testing.T) {
 	modelLabels.reset()
 	t.Cleanup(modelLabels.reset)
-	for i := range maxModelLabels {
-		(callMeta{provider: providerLocal, model: "model-" + string(rune('a'+i))}).normalized()
-	}
+	modelLabels.setConfigured(modelPair{providerLocal, "model-a"})
 	spanModel := func(m callMeta) string {
 		for _, kv := range m.normalized().spanAttributes() {
 			if kv.Key == "ai.model" {
@@ -1179,13 +1405,20 @@ func TestSpanModelIsNotCapped(t *testing.T) {
 		return ""
 	}
 	if got := spanModel(callMeta{provider: providerLocal, model: "model-extra"}); got != "model-extra" {
-		t.Errorf("span ai.model past the cap = %q, want the real name", got)
+		t.Errorf("span ai.model for an unconfigured model = %q, want the real name", got)
 	}
 	if got := (callMeta{provider: providerLocal, model: "model-extra"}).normalized().model; got != modelOther {
-		t.Errorf("label past the cap = %q, want %q", got, modelOther)
+		t.Errorf("label for an unconfigured model = %q, want %q", got, modelOther)
 	}
 	if got := spanModel(callMeta{provider: providerLocal, model: "free text here"}); got != modelOther {
 		t.Errorf("span ai.model for free text = %q, want %q (the whitespace fold still applies)", got, modelOther)
+	}
+	// An empty model is labelled "other" but the span still says it was empty.
+	if got := spanModel(callMeta{provider: providerLocal}); got != modelUnknown {
+		t.Errorf("span ai.model for an empty model = %q, want %q", got, modelUnknown)
+	}
+	if got := (callMeta{provider: providerLocal}).normalized().model; got != modelOther {
+		t.Errorf("label for an empty model = %q, want %q", got, modelOther)
 	}
 }
 
@@ -1228,41 +1461,73 @@ func exportedSeries(m *metricdata.Metrics) int {
 }
 
 // TestSeriesCardinalityBound drives every label combination the product can
-// reach, with far more models than the label admits, and counts the exported
+// reach, with far more models than the label can name, and counts the exported
 // series of each family against C2.
 //
 // Pool routing sends each endpoint's own model, so the number of models is the
-// size of a growable pool, not a constant. The model label therefore admits at
-// most maxModelLabels distinct (provider, model) pairs and folds the rest to
-// "other" (see modelLabelSet); the worst case is (maxModelLabels + 2 "other"
-// pairs) x 9 tasks, and the 15 series per combination of the 12-bucket
-// histogram make that 945. The test fails if the bucket list, the label set or
-// maxModelLabels grows past the cap.
+// size of a growable pool, not a constant. The model label therefore names at
+// most maxModelLabels distinct configured (provider, model) pairs over the
+// process life and folds every other model, including an empty one, to "other"
+// (see modelLabelSet). The worst case is (maxModelLabels named + 2 "other",
+// one per provider) = 7 pairs x 9 tasks, and the 15 series per combination of
+// the 12-bucket histogram make that 945. The test reaches that worst case on
+// purpose: it configures exactly the cap under each provider's turn, then keeps
+// changing settings to push more models in, and sends 40 unconfigured models
+// and the empty model under both providers. It fails if the bucket list, the
+// label set or maxModelLabels grows past the cap, and if anything but the
+// named pairs and "other" ever becomes a label value.
 func TestSeriesCardinalityBound(t *testing.T) {
 	tel := installAITelemetry(t)
 	ins := aiInstrumentsFor()
 	ctx := context.Background()
 	tasks := []string{TaskFilenameParse, TaskAudiobookParse, TaskBatchParse, TaskCoverArt, TaskCoverText,
 		TaskAuthorDedupReview, TaskAuthorDiscovery, TaskMetadataReview, TaskEmbed}
+	// maxModelLabels pairs, split over both providers, then settings changes
+	// that configure more: none of those may add a name.
+	var named []modelPair
+	for i := range maxModelLabels {
+		provider := providerOpenAI
+		if i%2 == 1 {
+			provider = providerLocal
+		}
+		named = append(named, modelPair{provider, "configured-" + string(rune('a'+i))})
+	}
+	modelLabels.setConfigured(named...)
+	for _, p := range named {
+		(callMeta{provider: p.provider, model: p.model}).normalized() // sync: the cap is now full
+	}
+	for i := range 4 {
+		modelLabels.setConfigured(modelPair{providerOpenAI, "configured-later-" + string(rune('a'+i))},
+			modelPair{providerLocal, "configured-later-" + string(rune('a'+i))})
+		for _, provider := range []string{providerOpenAI, providerLocal} {
+			(callMeta{provider: provider, model: "configured-later-" + string(rune('a'+i))}).normalized()
+		}
+	}
 	const modelsOffered = 40 // a pool far larger than any real one
-	for _, provider := range []string{providerOpenAI, providerLocal} {
-		for i := range modelsOffered {
-			model := "model-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-			for _, task := range tasks {
-				m := callMeta{provider: provider, model: model, task: task}
-				ins.duration.Record(ctx, 1, metricWithSet(m))
-				for _, outcome := range []string{outcomeOK, outcomeError, outcomeTimeout, outcomeCanceled} {
-					ins.requests.Add(ctx, 1, metricWithAttrs(m, attrOutcome.String(outcome)))
-				}
-				for _, dir := range []string{"input", "output"} {
-					ins.tokens.Add(ctx, 1, metricWithAttrs(m, attrDirection.String(dir)))
-				}
-				for _, reason := range []string{reasonRateLimit, reasonQuota, reasonUnreachable, reasonTimeout,
-					reasonPermanent, reasonReplyParse, reasonCountMismatch, reasonOther} {
-					ins.failures.Add(ctx, 1, metricWithAttrs(m, attrReason.String(reason)))
-				}
+	record := func(m callMeta) {
+		for _, task := range tasks {
+			m.task = task
+			ins.duration.Record(ctx, 1, metricWithSet(m))
+			for _, outcome := range []string{outcomeOK, outcomeError, outcomeTimeout, outcomeCanceled} {
+				ins.requests.Add(ctx, 1, metricWithAttrs(m, attrOutcome.String(outcome)))
+			}
+			for _, dir := range []string{"input", "output"} {
+				ins.tokens.Add(ctx, 1, metricWithAttrs(m, attrDirection.String(dir)))
+			}
+			for _, reason := range []string{reasonRateLimit, reasonQuota, reasonUnreachable, reasonTimeout,
+				reasonPermanent, reasonReplyParse, reasonCountMismatch, reasonOther} {
+				ins.failures.Add(ctx, 1, metricWithAttrs(m, attrReason.String(reason)))
 			}
 		}
+	}
+	for _, provider := range []string{providerOpenAI, providerLocal} {
+		record(callMeta{provider: provider}) // the empty model
+		for i := range modelsOffered {
+			record(callMeta{provider: provider, model: "model-" + string(rune('a'+i%26)) + string(rune('a'+i/26))})
+		}
+	}
+	for _, p := range named {
+		record(callMeta{provider: p.provider, model: p.model})
 	}
 	rm := tel.collect(t)
 	for _, name := range []string{"ai.requests", "ai.request.duration", "ai.tokens", "ai.failures"} {
@@ -1280,6 +1545,17 @@ func TestSeriesCardinalityBound(t *testing.T) {
 	// label change is a visible diff, not a silent drift towards the cap.
 	if n := exportedSeries(metricByName(rm, "ai.request.duration")); n != (maxModelLabels+2)*len(tasks)*15 {
 		t.Errorf("ai.request.duration exports %d series, want %d", n, (maxModelLabels+2)*len(tasks)*15)
+	}
+	// And the label values themselves: only the configured names that fit, and
+	// "other".
+	allowed := map[string]bool{modelOther: true}
+	for _, p := range named {
+		allowed[p.model] = true
+	}
+	for _, dp := range metricByName(rm, "ai.request.duration").Data.(metricdata.Histogram[float64]).DataPoints {
+		if v, _ := dp.Attributes.Value(attrModel); !allowed[v.AsString()] {
+			t.Errorf("model label value %q is neither a configured name nor %q", v.AsString(), modelOther)
+		}
 	}
 }
 
