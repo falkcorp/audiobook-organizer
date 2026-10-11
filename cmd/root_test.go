@@ -1,7 +1,7 @@
 // file: cmd/root_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package cmd
 
@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/spf13/viper"
 )
 
@@ -179,6 +180,38 @@ database_path: /tmp/test.db
 	// Verify config was loaded
 	if config.AppConfig.RootDir != "/tmp/audiobooks" {
 		t.Fatalf("expected root_dir to be set from config file")
+	}
+}
+
+// enabled_sort_indexes is boot-only, so what GET /api/v1/config reports must
+// be the set the store builds: initConfig writes back the accepted names, with
+// an unknown entry dropped rather than reported as an enabled index.
+func TestInitConfigReportsTheBuiltSortIndexSet(t *testing.T) {
+	tempDir := t.TempDir()
+	configFile := filepath.Join(tempDir, "config.yaml")
+	configContent := "enabled_sort_indexes: [Year, bogus, created_at, year]\n"
+	if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	origCfgFile := cfgFile
+	origConfig := config.Snapshot()
+	t.Cleanup(func() {
+		cfgFile = origCfgFile
+		config.Mutate(func(c *config.Config) { *c = origConfig })
+		viper.Reset()
+		database.SetEnabledSortIndexes(nil)
+	})
+	cfgFile = configFile
+
+	initConfig()
+
+	got := config.Snapshot().EnabledSortIndexes
+	if strings.Join(got, ",") != "year,created_at" {
+		t.Fatalf("AppConfig.EnabledSortIndexes = %#v, want [year created_at] (the built set)", got)
+	}
+	if !database.CanPushDownSort("created_at") || !database.CanPushDownSort("year") {
+		t.Fatal("year and created_at should be push-downable after initConfig")
 	}
 }
 

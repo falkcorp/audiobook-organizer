@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sort_indexers.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 5e7d1b94-08c6-4a32-bf51-9d2e6c0a374b
 // last-edited: 2026-10-11
 //
@@ -268,6 +268,10 @@ func bookUpdatedAtSortValue(b *Book) (int64, bool) {
 var (
 	enabledSortIndexesMu sync.RWMutex
 	enabledSortIndexes   = map[string]bool{}
+	// enabledSortIndexOrder is enabledSortIndexes' keys in the order the
+	// caller supplied them, so EnabledSortIndexFields can report the built
+	// set in the operator's own spelling and order.
+	enabledSortIndexOrder []string
 )
 
 // SetEnabledSortIndexes selects which sort fields get a memdb sorted index.
@@ -280,12 +284,14 @@ var (
 // and the query path would then ask memdb for an index that is not there.
 //
 // Each enabled field costs real memory — see EnabledSortIndexes in
-// internal/config for the measured figures (~146 MB per key at prod scale).
+// internal/config for the measured figures (~19-22 MB per key at ~48.9k
+// books; memdb_sort_index_cost_test.go has the measurement).
 func SetEnabledSortIndexes(fields []string) (unknown []string) {
 	enabledSortIndexesMu.Lock()
 	defer enabledSortIndexesMu.Unlock()
 
 	enabledSortIndexes = make(map[string]bool, len(fields))
+	enabledSortIndexOrder = make([]string, 0, len(fields))
 	for _, f := range fields {
 		f = strings.ToLower(strings.TrimSpace(f))
 		if f == "" {
@@ -295,9 +301,24 @@ func SetEnabledSortIndexes(fields []string) (unknown []string) {
 			unknown = append(unknown, f)
 			continue
 		}
+		if !enabledSortIndexes[f] {
+			enabledSortIndexOrder = append(enabledSortIndexOrder, f)
+		}
 		enabledSortIndexes[f] = true
 	}
 	return unknown
+}
+
+// EnabledSortIndexFields returns the sort fields the last SetEnabledSortIndexes
+// call accepted: normalised (lower-case, trimmed), de-duplicated, unknown names
+// dropped, in the order supplied. Never nil. cmd/root.go writes this back onto
+// config.AppConfig.EnabledSortIndexes so GET /api/v1/config reports the set
+// the store actually builds, not the raw configured list (which can carry a
+// typo, or "year,created_at" as one env token, that built nothing).
+func EnabledSortIndexFields() []string {
+	enabledSortIndexesMu.RLock()
+	defer enabledSortIndexesMu.RUnlock()
+	return append([]string{}, enabledSortIndexOrder...)
 }
 
 // sortIndexEnabled reports whether field's index is registered.

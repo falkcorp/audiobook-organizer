@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.49.1
+// version: 1.50.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -724,6 +724,10 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 
 	slog.Info("Loading configuration from database...")
 
+	// Captured before any stored layer is applied: this is the value
+	// cmd/root.go built the memdb sort indexes from. See pinBootOnlySettings.
+	bootSortIndexes := slices.Clone(Snapshot().EnabledSortIndexes)
+
 	settings, err := store.GetAllSettings()
 	if err != nil {
 		// Returned, not swallowed. This used to log at Info and return nil, so
@@ -1056,6 +1060,7 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// rather than left for the caller's Validate. Every layer above can
 		// carry it, and the blob that produced it is healed on the next save.
 		normalizeChapterConsolidationThreshold(c, "the settings database")
+		pinBootOnlySettings(c, bootSortIndexes)
 	})
 
 	// LAST: re-apply environment-authoritative keys (OAuth / Cloudflare Access /
@@ -1773,18 +1778,24 @@ func SyncConfigFromEnv() {
 // encoding/json treats an ABSENT key as "leave the seeded default alone" (the
 // Snapshot() seeding in LoadConfigFromDatabase) but a PRESENT null as "set the
 // slice to nil". A nil slice is what a settings save writes when the field was
-// nil in memory, so once any save round-tripped a nil, the blob carried
-// "enabled_sort_indexes": null forever and every boot discarded the default.
-// null therefore means "unset" here. An explicit empty list ([]) decodes to a
-// non-nil empty slice and is honored: that is how an operator turns every
-// optional sort index off.
+// nil in memory, so once any save round-tripped a nil, the blob carried that
+// null forever and every boot discarded the default. null therefore means
+// "unset" here. An explicit empty list ([]) decodes to a non-nil empty slice
+// and is honored.
 //
-// Only slices with a NON-EMPTY shipped default are listed; for the others nil
-// and the default are the same value. base is the pre-blob config (viper
-// defaults).
+// Listed: every slice whose shipped default is NON-EMPTY, because for the
+// others nil and the default are the same value. MetadataSources matters most
+// (a null left zero metadata sources); SupportedExtensions is listed for the
+// same reason even though audioext.Resolve also falls back on nil.
+// EnabledSortIndexes is NOT listed: it is boot-only and pinBootOnlySettings
+// overwrites it whatever the blob holds. base is the pre-blob config (viper
+// defaults, config file, env).
 func restoreNilSliceDefaults(loaded *Config, base Config) {
-	if loaded.EnabledSortIndexes == nil {
-		loaded.EnabledSortIndexes = slices.Clone(base.EnabledSortIndexes)
+	if loaded.MetadataSources == nil {
+		loaded.MetadataSources = cloneMetadataSources(base.MetadataSources)
+	}
+	if loaded.SupportedExtensions == nil {
+		loaded.SupportedExtensions = slices.Clone(base.SupportedExtensions)
 	}
 	if loaded.MetadataScoring.DurationTierMultipliers == nil {
 		loaded.MetadataScoring.DurationTierMultipliers = slices.Clone(base.MetadataScoring.DurationTierMultipliers)
@@ -1792,4 +1803,59 @@ func restoreNilSliceDefaults(loaded *Config, base Config) {
 	if loaded.MetadataScoring.DurationTierScores == nil {
 		loaded.MetadataScoring.DurationTierScores = slices.Clone(base.MetadataScoring.DurationTierScores)
 	}
+}
+
+// cloneMetadataSources deep-copies sources: each element's Credentials map is
+// copied too, so the restored list never shares a map with the config it was
+// taken from (the Config.Clone incident class: json.Unmarshal and later
+// writers merge into a shared map in place).
+func cloneMetadataSources(src []MetadataSource) []MetadataSource {
+	if src == nil {
+		return nil
+	}
+	out := slices.Clone(src)
+	for i := range out {
+		out[i].Credentials = maps.Clone(out[i].Credentials)
+	}
+	return out
+}
+
+// pinBootOnlySettings overwrites the settings that only take effect at
+// process start with the value the process actually started with, whatever a
+// stored layer (blob, legacy row) says.
+//
+// enabled_sort_indexes is the one such setting. cmd/root.go hands it to
+// database.SetEnabledSortIndexes before any store opens, because the memdb
+// schema is built once at open, and then writes back the set that was built.
+// The stored blob is read only after the store exists, so before this pin it
+// could make GET /api/v1/config report a list (an operator's PUT, or a list a
+// past save froze into the blob) that was never built. UpdateConfig refuses a
+// PUT that changes it; the config file or the ENABLED_SORT_INDEXES environment
+// variable plus a restart is the only way to change it.
+func pinBootOnlySettings(c *Config, bootSortIndexes []string) {
+	if c.EnabledSortIndexes != nil && !sameSortIndexSet(c.EnabledSortIndexes, bootSortIndexes) {
+		configLog.Warn("config: stored enabled_sort_indexes=%v ignored; this process built %v. "+
+			"It is read once at startup: set it in the config file or the ENABLED_SORT_INDEXES "+
+			"environment variable (space-separated) and restart",
+			c.EnabledSortIndexes, bootSortIndexes)
+	}
+	c.EnabledSortIndexes = slices.Clone(bootSortIndexes)
+}
+
+// sameSortIndexSet compares two enabled_sort_indexes lists as sets of
+// normalised names (lower-case, trimmed, blanks dropped), the way
+// database.SetEnabledSortIndexes reads them.
+func sameSortIndexSet(a, b []string) bool {
+	return slices.Equal(normalizeSortIndexSet(a), normalizeSortIndexSet(b))
+}
+
+func normalizeSortIndexSet(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, f := range in {
+		if f = strings.ToLower(strings.TrimSpace(f)); f != "" {
+			out = append(out, f)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }

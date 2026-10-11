@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.147.2
+// version: 1.148.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -1766,7 +1766,7 @@ type Config struct {
 	// the match set — correct, and it costs no index. See
 	// hydrateSortNames in internal/database/memdb_summaries.go.
 	//
-	// ⚠️ DEFAULT IS EMPTY, AND THAT IS DELIBERATE. Each index costs real
+	// ⚠️ THE DEFAULT IS NARROW, AND THAT IS DELIBERATE. Each index costs real
 	// memory, measured rather than estimated at 100,000 books:
 	//
 	//	all nine enabled: 6,395 B/book vs 2,645 B/book — +142% (+3,750 B)
@@ -1798,13 +1798,16 @@ type Config struct {
 	// deliberately narrow because each index taxes scan insert throughput; see
 	// the SetDefault call for the reasoning.
 	//
-	// Resolution: the value cmd/root.go hands to SetEnabledSortIndexes is the
-	// one InitConfig read from viper (default, config file or env) BEFORE the
-	// store opens; the stored config blob is loaded after the store exists, so
-	// it can change what GET /config reports but not which indexes were built.
-	// A nil list (an absent InitConfig read, or a blob carrying null) means
-	// "unset" and resolves to the default; an explicit empty list means "no
-	// optional indexes" and is honored. See restoreNilSliceDefaults.
+	// BOOT-ONLY. cmd/root.go hands the value InitConfig read from viper
+	// (default, config file or the ENABLED_SORT_INDEXES environment variable,
+	// space-separated) to SetEnabledSortIndexes BEFORE any store opens, then
+	// writes back the set that was actually built (unknown names dropped).
+	// That is the value for the life of the process: LoadConfigFromDatabase
+	// pins it over whatever the stored blob holds (pinBootOnlySettings), and
+	// UpdateConfig refuses a PUT that changes it. So GET /api/v1/config always
+	// reports the built set. To change it, edit the config file or the
+	// environment and restart. An explicit empty list in the config file
+	// means "no optional indexes".
 	//
 	// This setting is a speed/memory tradeoff, not a correctness one — in
 	// BOTH directions, and the second direction had to be fixed to make that
@@ -2354,7 +2357,8 @@ func InitConfig() {
 	// currently being debugged, so speculative indexes are not worth an
 	// unattributable throughput regression. Enabling one later is this line.
 	//
-	// Read at store-open: changing it requires a restart, not a config reload.
+	// Read at store-open and boot-only: changing it requires the config file or
+	// environment plus a restart; PUT /api/v1/config refuses it.
 	// "author" was removed from this default on 2026-08-25. It named an index
 	// that could not be correct: a memdb indexer sees only *Book, and
 	// stripBookForMemdb nils Book.Author, so the index ordered every row in
@@ -3751,6 +3755,10 @@ func ResetToDefaults() {
 			DatabaseType:  "pebble",
 			PlaylistDir:   cur.PlaylistDir,
 			SetupComplete: false,
+
+			// Boot-only: the indexes the store built at open stay built until
+			// restart, so GET must keep reporting them (pinBootOnlySettings).
+			EnabledSortIndexes: slices.Clone(cur.EnabledSortIndexes),
 
 			// Library organization
 			OrganizationStrategy:    "auto",
