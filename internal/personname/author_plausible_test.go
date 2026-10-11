@@ -1,7 +1,7 @@
 // file: internal/personname/author_plausible_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d0c9a8e-6f41-4b7a-9e25-8c1f4b6d2a70
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package personname
 
@@ -71,6 +71,12 @@ func TestIsPlausibleAuthorName_Junk(t *testing.T) {
 		{"Disc 3", RejectTimecode},
 		{"Opening Credits", RejectStructural},
 		{strings.Repeat("Listening-to-Web-Of-Worlds-", 4), RejectTooLong},
+		// Release-post shrapnel (2026-10-11): the shape of a prod author row
+		// the gate used to accept, plus its two halves on their own.
+		{"10 831MB] #SyntheticTag", RejectReleaseTag},
+		{"Synthetic Writer 1.2 GB", RejectReleaseTag},
+		{"700mb", RejectReleaseTag},
+		{"Synthetic Writer #Award", RejectReleaseTag},
 	}
 	for _, tc := range cases {
 		ok, why := IsPlausibleAuthorName(tc.name)
@@ -101,6 +107,9 @@ func TestIsPlausibleAuthorName_RealNames(t *testing.T) {
 		"Chapter House Press Staff", "Parker Part", "Bookman Bishop",
 		"Big Finish Productions", "Brandon Sanderson", "Terry Pratchett",
 		"Stephen King", "Dakota Krout", "Shirtaloon", "Cassius Lange",
+		// Near-miss for the release-tag rule: a # followed by a digit, not a
+		// letter. ("50 Cent" and "Monsoon117" above are the size near-misses.)
+		"Book Club #3 Staff",
 		// A long anthology credit: over the length cap, but every part is a
 		// real name, so it is a composite for the split tooling, not junk.
 		"Greg Bear, Gregory Benford, Ben Bova, David Brin, Neil Gaiman, Harry Harrison, Larry Niven",

@@ -1,7 +1,7 @@
 // file: internal/personname/author_plausible.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b634b40-1fc8-4fcd-bf81-98dd562e7ebe
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package personname
 
@@ -33,6 +33,7 @@ const (
 	RejectPureNumber    AuthorNameRejection = "pure_number"
 	RejectPlaceholder   AuthorNameRejection = "placeholder"
 	RejectPositional    AuthorNameRejection = "positional_artifact"
+	RejectReleaseTag    AuthorNameRejection = "release_tag"
 )
 
 // MaxAuthorNameRunes is the longest author name IsPlausibleAuthorName accepts.
@@ -56,6 +57,13 @@ var (
 	// Timecodes and track numbering embedded anywhere in the string:
 	// "Lords of the Sith_418m_07s_99h", "000m_00s", "12:34", "Track01", "Disc 2 Track 3".
 	timecodeAnyRe = regexp.MustCompile(`(?i)\d+m_?\d+s\b|_\d+m(_|\b)|\b\d{1,3}:\d{2}\b|^(track|trk|disc|disk|cd)\s*\d+`)
+	// Release-post shrapnel from torrent/forum titles: a file size ("831MB",
+	// "1.2 GB", "700mb") or a hashtag after a space ("… #<tag>"). Seen in
+	// prod as an author shaped "10 831MB] #<tag>" (2026-10-11): it starts with a
+	// digit, so the leading-punctuation rule passes it, and no other rule here
+	// matched. A size needs a number glued or spaced to a byte unit, and a
+	// hashtag needs a letter after the #, so "50 Cent" and "Book #3" pass.
+	releaseTagRe = regexp.MustCompile(`(?i)\b\d+(?:[.,]\d+)?\s?[kmgt]i?b\b|(?:^|\s)#\pL`)
 )
 
 // structuralLabels are book-structure words that are never an author on their
@@ -111,6 +119,11 @@ var placeholderNames = map[string]bool{
 // junk. Real single-word pen names (Zogarth, pirateaba, RavensDagger, Radclyffe,
 // Jae) and initial-heavy names ("J. N. Chaney", "M.E. Thorne") pass: the gate
 // rejects known junk SHAPES rather than requiring a person-shaped name.
+//
+// ⚠ EXCEPT release_tag (releaseTagRe, added 2026-10-11): it was checked only
+// against synthetic cases and the repo's fixtures, NOT the production author
+// table. Until someone runs the gate over that table and confirms the rule
+// refuses only junk, treat it as unverified there (todo ABS-JUNK-AUTHOR-NAMES).
 func IsPlausibleAuthorName(name string) (bool, AuthorNameRejection) {
 	s := strings.TrimSpace(name)
 	if s == "" {
@@ -151,6 +164,9 @@ func IsPlausibleAuthorName(name string) (bool, AuthorNameRejection) {
 	}
 	if timecodeAnyRe.MatchString(s) {
 		return false, RejectTimecode
+	}
+	if releaseTagRe.MatchString(s) {
+		return false, RejectReleaseTag
 	}
 	if isPureNumber(s) {
 		return false, RejectPureNumber

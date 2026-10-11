@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package abs_test
 
@@ -340,12 +340,10 @@ func TestPersonalized_ConformsToOracle(t *testing.T) {
 	assertConformantExcept(t, "get_api_libraries_id_personalized.json", body, map[string]allowance{
 		"[].entities[].media.duration":               {Reason: durationReason, Within: 3.0},
 		"[].entities[].media.metadata.publishedYear": {Reason: publishedYearReason},
-		// The authors shelf lists the same two authors in the opposite order. Ordering
-		// within a shelf is not pinned by the fixture format (each entity is compared
-		// positionally), and the seed's author ids drive ours.
-		"[].entities[].name": {Reason: "authors shelf ordering: the oracle lists " +
-			"\"transl. Samuel Butler Homer\" before \"Homer\"; our order follows the " +
-			"seeded author ids. Positional comparison makes this read as two mismatches"},
+		// No authors-shelf ordering allowance: until 2026-10-11 the shelf was in
+		// name order and listed "Homer" before "transl. Samuel Butler Homer",
+		// opposite to the oracle. Ordered newest-first by the author's first
+		// visible book (newestAuthorsOf), it now matches the oracle positionally.
 	})
 }
 
