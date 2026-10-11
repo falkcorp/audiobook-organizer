@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_op_status_internal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e35b0d7-4a91-4c26-bf08-73d9a15c6e42
-// last-edited: 2026-08-16
+// last-edited: 2026-10-10
 
 package registry
 
@@ -80,7 +80,7 @@ func newTestRegistryWithStore(store database.OpsV2Store) *Registry {
 func TestPropagateLegacyOpStatus(t *testing.T) {
 	t.Run("terminal status reaches the legacy row", func(t *testing.T) {
 		s := newLegacyFakeStore()
-		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Params: `{"legacy_op_id":"leg-1"}`}
+		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: "completed", Params: `{"legacy_op_id":"leg-1"}`}
 		s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "pending", Progress: 7, Total: 9, Message: "working"}
 
 		newTestRegistryWithStore(s).propagateLegacyOpStatus("v2-1", "completed")
@@ -94,7 +94,7 @@ func TestPropagateLegacyOpStatus(t *testing.T) {
 
 	t.Run("a completed row with no counters is not left at zero percent", func(t *testing.T) {
 		s := newLegacyFakeStore()
-		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Params: `{"legacy_op_id":"leg-1"}`}
+		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: "completed", Params: `{"legacy_op_id":"leg-1"}`}
 		s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "pending"}
 
 		newTestRegistryWithStore(s).propagateLegacyOpStatus("v2-1", "completed")
@@ -113,7 +113,7 @@ func TestPropagateLegacyOpStatus(t *testing.T) {
 			"interrupted_dropped": "interrupted",
 		} {
 			s := newLegacyFakeStore()
-			s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Params: `{"legacy_op_id":"leg-1"}`}
+			s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: v2Status, Params: `{"legacy_op_id":"leg-1"}`}
 			s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "running"}
 
 			newTestRegistryWithStore(s).propagateLegacyOpStatus("v2-1", v2Status)
@@ -159,10 +159,37 @@ func TestPropagateLegacyOpStatus(t *testing.T) {
 
 	t.Run("a row already at the target status is not rewritten", func(t *testing.T) {
 		s := newLegacyFakeStore()
-		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Params: `{"legacy_op_id":"leg-1"}`}
+		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: "completed", Params: `{"legacy_op_id":"leg-1"}`}
 		s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "completed", Progress: 3, Total: 3}
 
 		newTestRegistryWithStore(s).propagateLegacyOpStatus("v2-1", "completed")
+
+		assert.Empty(t, s.updates)
+	})
+
+	t.Run("the row's status wins over an out-of-order publish", func(t *testing.T) {
+		// Cancel publishes "canceled" for a row it canceled in a run's
+		// handle-released gap; the worker then writes the run's "completed"
+		// over it and publishes that. If Cancel's publish lands last, the
+		// legacy twin must still end at what the v2 row holds.
+		s := newLegacyFakeStore()
+		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: "completed", Params: `{"legacy_op_id":"leg-1"}`}
+		s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "running"}
+
+		newTestRegistryWithStore(s).propagateLegacyOpStatus("v2-1", "canceled")
+
+		require.Len(t, s.updates, 1)
+		assert.Equal(t, "completed", s.updates[0].status)
+	})
+
+	t.Run("a row that is live again is not mirrored", func(t *testing.T) {
+		// A stale terminal publish for a row since re-queued must not close
+		// the legacy twin of an op that is going to run.
+		s := newLegacyFakeStore()
+		s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: "queued", Params: `{"legacy_op_id":"leg-1"}`}
+		s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "running"}
+
+		newTestRegistryWithStore(s).propagateLegacyOpStatus("v2-1", "interrupted_quiesced")
 
 		assert.Empty(t, s.updates)
 	})
@@ -180,7 +207,7 @@ func TestPropagateLegacyOpStatus(t *testing.T) {
 // green while the defect returned intact.
 func TestPublishOpTerminal_PropagatesToLegacyRow(t *testing.T) {
 	s := newLegacyFakeStore()
-	s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Params: `{"legacy_op_id":"leg-1"}`}
+	s.v2["v2-1"] = database.OperationV2Row{ID: "v2-1", Status: "completed", Params: `{"legacy_op_id":"leg-1"}`}
 	s.legacy["leg-1"] = &database.Operation{ID: "leg-1", Status: "pending", Progress: 4, Total: 4}
 
 	// bus is nil: publishOpTerminal returns early on that, so this also pins

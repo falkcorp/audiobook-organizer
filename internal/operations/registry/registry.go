@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.42.0
+// version: 3.43.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -1197,7 +1197,13 @@ func (r *Registry) Cancel(opID string) error {
 		in.live = h
 		// Read AFTER userCanceled is set: a run that claims its row after
 		// this read starts with that flag and a canceled context, and records
-		// "canceled" itself; one that has claimed it is stopped now.
+		// "canceled" itself. true means a run that had claimed its row is
+		// stopped now. false is conservative, not exact: the worker sets
+		// claimed just AFTER its claim's compare-and-set returns, so a run
+		// that claimed a moment ago can still read false here. The only cost
+		// is that a store error in the follow-up is then returned (a failed
+		// cancel) for a run that was in fact stopped and will record
+		// "canceled" itself.
 		in.stopped = h.claimed.Load()
 	}
 
@@ -1689,10 +1695,28 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 				status = "canceled"
 			}
 			now := time.Now().UTC()
-			_, _ = r.store.UpdateOperationV2StatusIf(opID, "running", status, nil, &now, nil)
+			applied, err := r.store.UpdateOperationV2StatusIf(opID, "running", status, nil, &now, nil)
+			switch {
+			case err != nil:
+				r.logger.Warn("registry: shutdown timeout: could not stamp a run that did not drain",
+					"op_id", opID, "status", status, "error", err)
+			case !applied:
+				r.logger.Info("registry: shutdown timeout: run's row is no longer running; left as it is",
+					"op_id", opID, "status", status)
+			default:
+				r.logger.Warn("registry: shutdown timeout: stamped a run that did not drain",
+					"op_id", opID, "status", status)
+				if status == "canceled" {
+					// The run may never write its own terminal status now (a
+					// zombie, or the process exits first), and the legacy twin
+					// and the UI bell follow op.terminal. A second publish by
+					// the worker, if it does return, is harmless.
+					r.publishOpTerminal(opID, h.defID, "canceled")
+				}
+			}
 		}
 		r.mu.Unlock()
-		r.logger.Warn("registry: shutdown timeout; marked remaining ops as interrupted")
+		r.logger.Warn("registry: shutdown timeout; stamped the runs that did not drain")
 		shutdownErr = ctx.Err()
 	}
 

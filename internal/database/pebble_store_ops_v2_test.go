@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-10-10
 
@@ -1089,6 +1089,25 @@ func TestUpdateOperationV2StatusIf_ComparesAndSets(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, updated)
 		require.True(t, activeIDs(t)["op-cas-run"])
+	})
+
+	t.Run("an empty message clears error_message", func(t *testing.T) {
+		// A run that completed over a gap cancel writes "completed" from
+		// "canceled" and must not keep the cancel's message; nil means
+		// "leave unchanged", so the clear is an empty message.
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-clear", "running")))
+		msg := "canceled by user while running (no live run in this process)"
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-clear", "running", "canceled", nil, nil, &msg)
+		require.NoError(t, err)
+		require.True(t, updated)
+		empty := ""
+		updated, err = s.UpdateOperationV2StatusIf("op-cas-clear", "canceled", "completed", nil, nil, &empty)
+		require.NoError(t, err)
+		require.True(t, updated)
+		got, err := s.GetOperationV2("op-cas-clear")
+		require.NoError(t, err)
+		require.Equal(t, "completed", got.Status)
+		require.Nil(t, got.ErrorMessage)
 	})
 
 	t.Run("a missing row is not applied and not an error", func(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.32.0
+// version: 2.33.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -785,9 +785,12 @@ type terminalOutcome struct {
 	// status is the row's final status as far as this worker knows: what the
 	// caller counts, logs and hands to the deps scheduler.
 	status string
-	// publish is false when another writer (Registry.Cancel) put status on
-	// the row and already published op.terminal for it, so the worker must
-	// not publish again -- or, for a stale interrupted_* status, at all.
+	// publish is false only when the worker would otherwise publish a STALE
+	// interrupted_* status after a cancel moved its row to "canceled" (Cancel
+	// published that). A "canceled" the worker found and kept is published
+	// again: not every writer of "canceled" publishes (Shutdown's timeout
+	// stamp does not), and a duplicate op.terminal is harmless where a missing
+	// one leaves the legacy twin and the UI bell showing the op as running.
 	publish bool
 }
 
@@ -846,8 +849,15 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status st
 		if row.Status == "canceled" && keepsUserCancel(status) {
 			r.logger.Info("registry: run stopped after its row was canceled; keeping canceled",
 				"op_id", qr.opID, "def_id", qr.defID, "run_status", status)
-			// Cancel wrote and published it.
-			return terminalOutcome{status: "canceled", publish: false}
+			// Published even though Cancel may already have: Shutdown's
+			// timeout stamp also writes "canceled" and publishes nothing.
+			return terminalOutcome{status: "canceled", publish: true}
+		}
+		if row.Status == "canceled" && errMsg == nil {
+			// The run completed: its row must not keep the cancel's message.
+			// An empty message clears it (a nil one leaves it unchanged).
+			cleared := ""
+			errMsg = &cleared
 		}
 		if row.Status == "canceled" {
 			r.logger.Info("registry: run finished before the cancel could stop it; recording its outcome over canceled",

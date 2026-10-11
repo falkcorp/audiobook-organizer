@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-10
 
@@ -237,7 +237,8 @@ type OpV2RunStore interface {
 // row that is dead to the worker and alive to every reader.
 type OpV2StatusStore interface {
 	// UpdateOperationV2Status sets the status (and optional timestamps).
-	// startedAt / completedAt are set when non-nil.
+	// startedAt / completedAt / errMsg are set when non-nil; a non-nil empty
+	// errMsg clears the stored message.
 	UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error
 	// UpdateOperationV2StatusIf is UpdateOperationV2Status as a compare-and-set:
 	// it writes only when the row's current status is fromStatus, and reports
