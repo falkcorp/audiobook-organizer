@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.29.1
+// version: 2.30.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -399,11 +399,31 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// exit above): released first, the row still read "queued" with no
 		// claim, so a stand-down ending in that gap let the scan be dispatched
 		// and run, and this write then landed on top of the live run.
+		//
+		// A compare-and-set from "queued", like the claim below. The row is not
+		// this worker's until one of the two applies: Registry.Cancel can have
+		// written "canceled" since the dispatcher's re-read (it found no handle
+		// yet, or found this one), and an unconditional write turned that back
+		// into a resumable interrupted_quiesced, which the stand-down release
+		// then re-queued -- the scan the user had canceled ran.
 		quiescedAt := time.Now().UTC()
 		status := interruptedStatus(qr.resumePolicy)
 		msg := "quiesced before start: scan gate held by a maintenance op"
-		if err := r.store.UpdateOperationV2Status(qr.opID, status, nil, &quiescedAt, &msg); err != nil {
-			r.logger.Warn("registry: failed to mark scan quiesced-before-start", "op_id", qr.opID, "error", err)
+		quiesced, qErr := r.store.UpdateOperationV2StatusIf(qr.opID, "queued", status, nil, &quiescedAt, &msg)
+		if qErr != nil || !quiesced {
+			r.releaseRunHandle(qr.opID)
+			if qErr != nil {
+				// The row is as it was. Still queued, Gate 3.5 holds it while the
+				// scan gate is up and it is dispatched once the gate clears.
+				r.logger.Warn("registry: failed to mark scan quiesced-before-start; not running it",
+					"op_id", qr.opID, "error", qErr)
+			} else {
+				// Some other transition (a cancel) owns the row: no status to
+				// publish and nothing to resume.
+				r.logger.Info("registry: scan not quiesced before start; the row is no longer queued",
+					"op_id", qr.opID, "def_id", qr.defID)
+			}
+			return false
 		}
 		r.releaseRunHandle(qr.opID)
 		r.publishOpTerminal(qr.opID, qr.defID, status)

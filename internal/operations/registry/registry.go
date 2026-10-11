@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.39.0
+// version: 3.40.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -73,15 +73,15 @@ type Registry struct {
 	logger         *slog.Logger
 	workers        int
 	abandoned      *abandonedTracker
-	// retryMu serializes the paths that read a persisted non-running row and
-	// then write its next status: the runtime same-row re-queue paths
-	// (RetryInterrupted, resumeQuiescedOp) and the persisted-row branch of
-	// Cancel. Without it two of them could read the same interrupted row and
-	// each write over the other (a re-queue flip landing after a cancel, or the
-	// second flip landing after the dispatcher already moved the row to
-	// running). The dispatcher and the worker do NOT take it: Cancel's queued
-	// case therefore still has to use a compare-and-set (see the comment above
-	// the lock in Cancel).
+	// retryMu serializes the paths that read a persisted row and then write
+	// its next status: the runtime same-row re-queue paths (RetryInterrupted,
+	// resumeQuiescedOp) and Cancel's row loop (cancelByRow). Without it two of
+	// them could read the same interrupted row and each write over the other
+	// (a re-queue flip landing after a cancel, or the second flip landing
+	// after the dispatcher already moved the row to running). The dispatcher,
+	// the workers and the deps scheduler do NOT take it, so every write
+	// cancelByRow makes is a compare-and-set from the status it read (see
+	// cancelByRow).
 	retryMu sync.Mutex
 	// admitLocks holds one *sync.Mutex per def id (see admissionLock). It
 	// serializes every "is another run of this def active?" check with the
@@ -1141,32 +1141,38 @@ func (r *Registry) publishOpTerminal(opID, defID, status string) {
 	})
 }
 
-// Cancel cancels an operation by id.
-// If the op is queued, it is marked canceled in the DB.
-// If the op is running, its context is canceled.
-// If the op has been claimed by the dispatcher but not yet picked up by a
-// worker (a stub handle with nil cancel, the op sitting in the buffered
-// nextRun channel), it is flagged so the worker drops it before Run and its
-// DB row is marked canceled (C-1 — this case used to be a silent no-op and
-// the op ran anyway).
-// If the op is not running in-process but its row is still in a live
-// persisted status (interrupted_quiesced, waiting_deps, interrupted_ask, or a
-// zombie "running" row with no handle), the row is moved to "canceled" so the
-// startup resume sweep never picks it up again.
-// If the op is a zombie (its goroutine outlived the abandon grace, so its
-// handle stays in r.running until the goroutine exits), its run was already
-// stopped -- fence revoked, context canceled -- and only the row is left to
-// cancel: see the zombie note in the body.
-// Returns ErrOpNotFound for an unknown id or a row that is already terminal;
-// a zombie whose row is already terminal returns nil (it is still stopping).
+// Cancel cancels an operation by id. The ROW decides the outcome; an
+// in-process handle only records the user's intent on the way:
+//
+//   - a running op (full handle) has its write permit revoked, userCanceled
+//     set and its context canceled;
+//   - an op claimed by the dispatcher but not yet picked up by a worker (a
+//     stub handle with nil cancel, sitting in the buffered nextRun channel) is
+//     flagged so the worker drops it before Run (C-1: this used to be a silent
+//     no-op and the op ran anyway);
+//   - a zombie (its goroutine outlived the abandon grace, so its handle stays
+//     in r.running until the goroutine exits) was already stopped -- fence
+//     revoked, context canceled -- and only its row is left to cancel.
+//
+// Then the row is moved to "canceled" with a compare-and-set from the status
+// Cancel read, so no concurrent writer's status is ever overwritten: first
+// lock-free from "queued", then by cancelByRow under retryMu for every other
+// live status (interrupted_quiesced, waiting_deps, interrupted_ask, "running"
+// with no live handle), so the startup resume sweep never picks the row up
+// again. See cancelByRow for why the handle alone cannot decide.
+//
+// Returns ErrOpNotFound for an unknown id or a row that is already terminal,
+// except when this call stopped a live run, flagged a stub whose row then
+// reads canceled, or found a zombie: those return nil (the run finished, or is
+// still stopping, while it was being canceled).
 func (r *Registry) Cancel(opID string) error {
 	h, running := r.handleForCancel(opID)
 
-	// A zombie skips ONLY the handle work below and falls through to the row
-	// paths. Its context is already canceled and its fence revoked, so there
-	// is nothing to stop, and userCanceled must not be touched: it already
-	// decided the terminal status written at abandonment. But its row is not
-	// always terminal, so the row paths still have to run:
+	// A zombie skips ONLY the handle work below and goes on to the row. Its
+	// context is already canceled and its fence revoked, so there is nothing
+	// to stop, and userCanceled must not be touched: it already decided the
+	// terminal status written at abandonment. But its row is not always
+	// terminal, so the row still has to be canceled:
 	//   - a scan stand-down quiesce writes interrupted_quiesced
 	//     (finalStatusForCanceledRun), a live, resumable status;
 	//   - a holder that stops waiting re-queues that row IN PLACE, under the
@@ -1181,144 +1187,167 @@ func (r *Registry) Cancel(opID string) error {
 		r.logger.Info("registry: cancel of an op already stopping (goroutine has not exited yet); canceling its row",
 			"op_id", logger.SanitizeLogValue(opID))
 	}
-
-	if running && !zombie {
-		if h.cancel != nil {
-			r.cancelLiveHandle(opID, h)
-			return nil
-		}
-		// Stub path: the DB row is still "queued" (the worker only marks it
-		// running on pickup) — mark it canceled now so the UI reflects the
-		// cancel immediately instead of after worker pickup.
-		updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
-		if err != nil {
-			return fmt.Errorf("registry: cancel op %s: %w", opID, err)
-		}
-		r.logger.Info("registry: canceled op awaiting worker pickup", "op_id", logger.SanitizeLogValue(opID), "db_updated", updated)
-		return nil
+	in := cancelIntent{
+		zombie:      zombie,
+		flaggedStub: running && h.cancel == nil,
+	}
+	if running && !zombie && h.cancel != nil {
+		r.cancelLiveHandle(opID, h)
+		in.live = h
 	}
 
-	// Try to mark it canceled if it's still queued.
+	// Lock-free first attempt: a queued row, including the row of a flagged
+	// stub and of a worker that registered its handle but has not claimed the
+	// row yet. The worker's claim (queued->running) and its stand-down pickup
+	// gate (queued->interrupted_quiesced) are compare-and-sets from "queued"
+	// too, so exactly one of them and this write applies.
 	updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
 	if err != nil {
 		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 	}
 	if updated {
-		r.logger.Info("registry: canceled queued op", "op_id", logger.SanitizeLogValue(opID))
-		// R-1: a purely-queued op is never picked up by a worker once canceled,
-		// so no worker-path op.terminal fires — publish it here or the UI bell
-		// leaves the op phantom-"running". def_id is best-effort (the FE only
-		// needs op_id); an empty def_id on a lookup miss is harmless.
-		defID := ""
-		if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
-			defID = row.DefID
+		r.logger.Info("registry: canceled queued op", "op_id", logger.SanitizeLogValue(opID),
+			"stub_flagged", in.flaggedStub)
+		// R-1: a queued op that loses its claim is never run, so no worker-path
+		// op.terminal fires -- publish it here or the UI bell leaves the op
+		// phantom-"running". A flagged stub is the exception: the worker that
+		// drops it publishes its own. def_id is best-effort (the FE only needs
+		// op_id); an empty def_id on a lookup miss is harmless.
+		if !in.flaggedStub {
+			defID := ""
+			if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
+				defID = row.DefID
+			}
+			r.publishOpTerminal(opID, defID, "canceled")
 		}
-		r.publishOpTerminal(opID, defID, "canceled")
 		return nil
 	}
+	return r.cancelByRow(opID, in)
+}
 
-	// Not running in-process and not queued. The row may still be in a LIVE
-	// persisted status that nothing in this process owns:
-	//
-	//   - interrupted_quiesced: a shutdown stamped it and the row is waiting for
-	//     the next boot's resume sweep (ListResumableOperationsV2). This is the
-	//     "why can't I remove it from the resume pile" case: until 2026-09-10
-	//     this function only knew how to flip a "queued" row and answered
-	//     ErrOpNotFound for a quiesced one, so DELETE /operations/v2/:id
-	//     returned 404, the row was never touched, and every restart resumed
-	//     the scan the user had just cancelled.
-	//   - waiting_deps: parked by the dependency scheduler, promoted later.
-	//   - interrupted_ask: waiting on a user decision — a cancel IS one.
-	//   - running with no live handle: a zombie left by a crash window; the
-	//     resume sweep would treat it as unfinished business on the next boot.
-	//
-	// All of these are cancelled by writing a terminal "canceled" through the
-	// store's normal status path, which maintains the queue/active indexes and
-	// stamps completed_at, and which ListResumableOperationsV2 filters on — so
-	// the row leaves the resume set for good. Terminal rows and unknown ids
-	// keep the ErrOpNotFound contract: there is nothing left to stop.
-	//
-	// Read-then-write rather than a store-level compare-and-set for the
-	// non-queued statuses: no worker can claim a row in any of them (the
-	// worker's claim is a compare-and-set from "queued"), and the other
-	// concurrent transitions out of them (resumeRestart's flip to queued,
-	// PromoteToQueued) leave the row canceled if this write lands after them.
-	// A row that reads "queued" under the lock IS claimable, and is canceled
-	// with a compare-and-set instead (see below).
-	// ListResumableOperationsV2 is consulted only at boot, before the HTTP
-	// server serves, so the boot sweep cannot interleave.
-	//
-	// The RUNTIME re-queue paths can: resumeQuiescedOp (a stand-down holder
-	// releasing or giving up, possibly while the quiesced scan is still a
-	// zombie) and RetryInterrupted each read an interrupted row and then flip
-	// it to queued. Landing this write between that read and that flip would
-	// lose the cancel -- the row ends queued and the scan runs. retryMu is the
-	// lock both of them hold across their read-then-flip, so taking it here
-	// makes the three mutually exclusive AMONG THEMSELVES: either the re-queue
-	// finished first (this read sees "queued") or it runs after and sees
-	// "canceled", which it skips.
-	//
-	// It does NOT exclude the dispatcher or a worker, which never take retryMu.
-	// A row this read sees as "queued" can be claimed and marked running by a
-	// worker (SetOperationV2StatusIfQueued) before the write below, and an
-	// unconditional "canceled" write would then overwrite a live run's status
-	// while its context kept running with no userCanceled flag. So a "queued"
-	// row is canceled with the same compare-and-set the first attempt above
-	// used, and when that loses, the run is live: cancel its handle instead.
+// cancelIntent is what Cancel did to an in-process handle before it turned to
+// the row, which cancelByRow needs to answer a row it finds terminal.
+type cancelIntent struct {
+	// live is the full handle Cancel stopped (cancelLiveHandle), if any.
+	live *runHandle
+	// zombie: the handle found was a zombie; its run was already stopped.
+	zombie bool
+	// flaggedStub: the handle found was a dispatcher stub, now flagged so the
+	// worker drops the run and writes "canceled" itself.
+	flaggedStub bool
+}
+
+// cancelRowAttempts bounds cancelByRow's read-then-compare-and-set loop.
+// Under retryMu every transition out of a live status that Cancel can read is
+// one-way -- waiting_deps->queued (deps scheduler), queued->running or
+// queued->interrupted_quiesced (a worker), anything->terminal -- so a row can
+// change under the loop only a few times before it settles.
+const cancelRowAttempts = 4
+
+// cancelByRow cancels opID by its persisted row, deciding by the row's
+// CURRENT status rather than by which handle is registered. Each attempt reads
+// the row and then writes "canceled" only with a compare-and-set from the
+// status it read; a miss means another writer moved the row in between, so it
+// reads again and decides again.
+//
+// Why the row and not the handle. A worker registers its full handle (with a
+// cancel func) BEFORE either of the two status writes it can make from
+// "queued": the claim to "running", or the scan stand-down pickup gate's write
+// of interrupted_quiesced. So "a full handle is registered" does not mean "the
+// op is running". Answering a lost compare-and-set by canceling the handle,
+// as Cancel did, canceled a context nobody waited on when the gate had won:
+// the row stayed interrupted_quiesced and the stand-down release resumed the
+// scan the user had just canceled.
+//
+// Why a compare-and-set for every status. The live statuses Cancel can read
+// are not stable while it holds retryMu: the deps scheduler promotes
+// waiting_deps to queued (PromoteToQueued does not take retryMu) and a worker
+// can then claim and start the row. An unconditional "canceled" written after
+// that overwrote a live run's status while the run kept going with no
+// userCanceled flag, and the run's own terminal write later replaced
+// "canceled". The compare-and-set misses instead, the re-read sees "running",
+// and the live handle is canceled.
+//
+// Why retryMu. The runtime re-queue paths -- resumeQuiescedOp (a stand-down
+// holder releasing or giving up, possibly while the quiesced scan is still a
+// zombie) and RetryInterrupted -- read an interrupted row and then flip it to
+// queued with an unconditional write. A cancel landing between that read and
+// that flip would be overwritten: the row ends queued and the scan runs.
+// Holding retryMu, which both of them hold across their read-then-flip, makes
+// the three mutually exclusive: either the re-queue finished first (this read
+// sees "queued") or it runs after and sees "canceled", which it skips. The
+// boot resume sweep (ListResumableOperationsV2) runs before the HTTP server
+// serves, so it cannot interleave. The dispatcher and the workers never take
+// retryMu; the compare-and-sets above are what make them safe.
+func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 	r.retryMu.Lock()
 	defer r.retryMu.Unlock()
-	row, gerr := r.store.GetOperationV2(opID)
-	if gerr != nil || row == nil || row.ID == "" {
-		return ErrOpNotFound
-	}
-	if row.Status == "queued" {
-		updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
+	for attempt := 0; attempt < cancelRowAttempts; attempt++ {
+		row, gerr := r.store.GetOperationV2(opID)
+		if gerr != nil || row == nil || row.ID == "" {
+			return ErrOpNotFound
+		}
+		if isTerminalStatus(row.Status) {
+			switch {
+			case in.live != nil, in.zombie:
+				// The run this call stopped (or found already stopping)
+				// finished meanwhile: a cancel racing completion is not a 404.
+				return nil
+			case in.flaggedStub && row.Status == "canceled":
+				// The worker honored the flag, or a concurrent cancel won.
+				return nil
+			}
+			// Includes a flagged stub whose row the worker's restart-strike
+			// check already dropped (interrupted_dropped is written before
+			// the worker looks at the flag): nothing runs, but the row is not
+			// canceled, so the cancel did not take.
+			return ErrOpNotFound
+		}
+		switch row.Status {
+		case "queued":
+			updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
+			if err != nil {
+				return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+			}
+			if updated {
+				r.logger.Info("registry: canceled re-queued op", "op_id", logger.SanitizeLogValue(opID))
+				if !in.flaggedStub {
+					r.publishOpTerminal(opID, row.DefID, "canceled")
+				}
+				return nil
+			}
+			continue
+		case "running":
+			// A worker claimed the row: its handle is registered before the
+			// claim and released after the run's terminal write, so a running
+			// row with a live handle is that run. Stop it; its terminal write
+			// records "canceled" (userCanceled is checked first).
+			if h, ok := r.handleForCancel(opID); ok && h.cancel != nil && !h.zombie.Load() {
+				if h != in.live {
+					r.cancelLiveHandle(opID, h)
+				}
+				return nil
+			}
+			// No live handle: a "running" row nothing in this process owns
+			// (left by a crash window), or a zombie's. Cancel the row.
+		}
+		now := time.Now().UTC()
+		msg := fmt.Sprintf("canceled by user while %s (not running)", row.Status)
+		if in.zombie {
+			msg = fmt.Sprintf("canceled by user while %s (run already stopped; its goroutine had not exited yet)", row.Status)
+		}
+		updated, err := r.store.UpdateOperationV2StatusIf(opID, row.Status, "canceled", nil, &now, &msg)
 		if err != nil {
 			return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 		}
 		if updated {
-			r.logger.Info("registry: canceled re-queued op", "op_id", logger.SanitizeLogValue(opID))
+			r.logger.Info("registry: canceled persisted non-running op",
+				"op_id", logger.SanitizeLogValue(opID), "def_id", row.DefID, "previous_status", row.Status)
 			r.publishOpTerminal(opID, row.DefID, "canceled")
 			return nil
 		}
-		// Lost: a worker moved the row on between the read and the write.
-		// Its handle is registered before it makes that write (executeRun), so
-		// it is in r.running by now unless the run already finished.
-		if h2, ok := r.handleForCancel(opID); ok && h2.cancel != nil && !h2.zombie.Load() {
-			r.cancelLiveHandle(opID, h2)
-			return nil
-		} else if ok && h2.cancel == nil {
-			// A stub: the worker will see the flag handleForCancel just set and
-			// drop the run, marking the row canceled itself.
-			return nil
-		}
-		// No live handle: re-read what the row is now (finished, or a zombie
-		// "running" row) and take the ordinary persisted-row path below.
-		row, gerr = r.store.GetOperationV2(opID)
-		if gerr != nil || row == nil || row.ID == "" {
-			return ErrOpNotFound
-		}
 	}
-	if isTerminalStatus(row.Status) {
-		if zombie {
-			// Already stopped and already terminal: a repeat cancel of a run
-			// whose goroutine has not exited yet is a no-op, not an error.
-			return nil
-		}
-		return ErrOpNotFound
-	}
-	now := time.Now().UTC()
-	msg := fmt.Sprintf("canceled by user while %s (not running)", row.Status)
-	if zombie {
-		msg = fmt.Sprintf("canceled by user while %s (run already stopped; its goroutine had not exited yet)", row.Status)
-	}
-	if err := r.store.UpdateOperationV2Status(opID, "canceled", nil, &now, &msg); err != nil {
-		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
-	}
-	r.logger.Info("registry: canceled persisted non-running op",
-		"op_id", logger.SanitizeLogValue(opID), "def_id", row.DefID, "previous_status", row.Status)
-	r.publishOpTerminal(opID, row.DefID, "canceled")
-	return nil
+	return fmt.Errorf("registry: cancel op %s: its status kept changing; gave up after %d attempts", opID, cancelRowAttempts)
 }
 
 // handleForCancel looks up opID's in-process handle for Cancel. A dispatcher
