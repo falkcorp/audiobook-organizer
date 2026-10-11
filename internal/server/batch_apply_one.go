@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.39.0
+// version: 1.39.1
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-10
 
@@ -69,6 +69,20 @@ type cachedApplyService interface {
 	RenamePreflightWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) error
 }
 
+// searchQueryResolverReader is what metabatch.ResolveCandidateSearchQuery
+// reads besides the book itself.
+type searchQueryResolverReader interface {
+	// BookDirLister: the resolver reads the other rows in a book's folder
+	// (metabatch.SkipKindSiblingPart).
+	database.BookDirLister
+	// ImportPathReader: the resolver reads the import roots from this same
+	// store, so an import root is never listed for sibling rows.
+	metabatch.ImportPathReader
+	// authority.Reader: the resolver refuses a title that is a known
+	// person's name (the authority lists).
+	authority.Reader
+}
+
 // bookReader reads the book the gate judges the candidate against, its file
 // rows and its author credits: the gate's runtime check compares the
 // canonical runtime (database.LoadBookRuntime, the sum over the files), never
@@ -83,15 +97,7 @@ type bookReader interface {
 	// GetBookTagsDetailed feeds it the book's franchise tags.
 	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 	database.BookAuthorReader
-	// BookDirLister: metabatch.ResolveCandidateSearchQuery reads the other
-	// rows in a book's folder (metabatch.SkipKindSiblingPart).
-	database.BookDirLister
-	// ImportPathReader: the resolver reads the import roots from this same
-	// store, so an import root is never listed for sibling rows.
-	metabatch.ImportPathReader
-	// authority.Reader: the resolver refuses a title that is a known
-	// person's name (the authority lists).
-	authority.Reader
+	searchQueryResolverReader
 	// RejectedCandidateReader feeds the gate's owner-rejected leg
 	// (applygate.LoadRejections): the same store the reject handler writes.
 	metafetch.RejectedCandidateReader
