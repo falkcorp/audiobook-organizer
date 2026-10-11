@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.40.0
+# version: 2.41.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-11
 
@@ -57,7 +57,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mockery-install mocks-check staticcheck staticcheck-install oplint sdkguard bench-check fmt-check \
+        vet mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check fmt-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -867,8 +867,16 @@ lint-errcheck-full: ## Same, with a count — use this to verify a new exclusion
 lint-errcheck-ratchet: ## Ratchet gate: fails if errcheck findings went up (or down without lowering .errcheck-baseline)
 	@bash scripts/check-errcheck-ratchet.sh
 
-lint-deadcode-ratchet: ## Ratchet gate: fails if a NEW production function becomes unreachable from every main (deadcode)
-	@python3 scripts/deadcode-ratchet.py
+## deadcode-install: Build the pinned deadcode (x/tools v0.51.0) into GOBIN from
+## tools/deadcode/go.mod. go.sum-verified, so it builds offline from a warm
+## module cache, like staticcheck-install and mockery-install.
+DEADCODE := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)/deadcode
+
+deadcode-install:
+	@go -C tools/deadcode install tool
+
+lint-deadcode-ratchet: deadcode-install ## Ratchet gate: fails if a NEW production function becomes unreachable from every main (deadcode)
+	@DEADCODE_BIN="$${DEADCODE_BIN:-$(DEADCODE)}" python3 scripts/deadcode-ratchet.py
 
 lint-width: ## Interface-width gate (interfacebloat + nolintlint), same selector CI uses
 	golangci-lint run --enable-only interfacebloat,nolintlint ./...
