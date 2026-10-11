@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics_models_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c6e1b94-52a7-4d0f-8e13-9b4a7f2d6c58
 // last-edited: 2026-10-11
 
@@ -298,5 +298,116 @@ func TestConfiguredModelPairs_EmbeddingOutsideLocalModeIsNotPooled(t *testing.T)
 	}
 	if slices.Contains(got, modelPair{providerLocal, "bge-m3"}) {
 		t.Errorf("a pool embed row named although embedding is not local: %v", got)
+	}
+}
+
+// Explicit openai mode is never routed by the scanner, so a pool row ticked
+// for filename parsing only is not named, with routing on or off. The cover
+// text rows are routed in every llm_mode and stay named.
+func TestConfiguredModelPairs_OpenAIModeDoesNotNameFilenameOnlyPoolRows(t *testing.T) {
+	cfg := probeConfig(config.AIBackendModeOpenAI)
+	filenameOnly := config.AIEndpoint{
+		ID: "filename-only", Protocol: string(aidispatch.ProtocolOpenAICompat), URL: testLocalURL,
+		ChatModel: "filename-only-model", Priority: 1, Enabled: true,
+		Capabilities: caps(aidispatch.LLMFilenameParse),
+	}
+	cfg.AIEndpoints = append([]config.AIEndpoint{filenameOnly}, cfg.AIEndpoints...)
+	got := configuredModelPairs(cfg)
+	for _, m := range []string{"filename-only-model", "qwen3:8b", "qwen3:14b"} {
+		if slices.Contains(got, modelPair{providerLocal, m}) {
+			t.Errorf("llm_mode openai named the filename-parse-only pool model %q: %v", m, got)
+		}
+	}
+	if !slices.Contains(got, modelPair{providerLocal, "qwen2.5vl:7b"}) {
+		t.Errorf("the cover-text vision row is routed in every llm_mode but was not named: %v", got)
+	}
+}
+
+// The named set is a pure function of the settings: a pool row that the live
+// dispatcher health has benched is still named, or a transient outage at the
+// first use would decide what the process names for its whole life.
+func TestConfiguredModelPairs_IgnoresLiveEndpointHealth(t *testing.T) {
+	cfg := probeConfig(config.AIBackendModeLocal)
+	want := configuredModelPairs(cfg)
+	h := aidispatch.DefaultHealth()
+	h.MarkFailure("llm1")
+	h.MarkFailure(config.AIEndpointIDLocalLLM)
+	t.Cleanup(func() {
+		h.MarkSuccess("llm1")
+		h.MarkSuccess(config.AIEndpointIDLocalLLM)
+	})
+	if !h.InCooldown("llm1") {
+		t.Fatal("test setup: the row was not benched")
+	}
+	got := configuredModelPairs(cfg)
+	if !slices.Equal(got, want) {
+		t.Errorf("benched rows changed the derivation:\n got %v\nwant %v", got, want)
+	}
+	if !slices.Contains(got, modelPair{providerLocal, "qwen3:14b"}) {
+		t.Errorf("a benched row's model is not named: %v", got)
+	}
+}
+
+// llm_mode local with routing on: the scanner goes through the pool, but the
+// llmparser service still sends metadata_review_model, which falls back to
+// local_llm_model and then to the parser default.
+func TestConfiguredModelPairs_RoutedLocalMetadataReviewFallsBackToParserDefault(t *testing.T) {
+	cfg := &config.Config{
+		AIBackend:          config.AIBackendConfig{LLMMode: config.AIBackendModeLocal, LocalBaseURL: testLocalURL},
+		AIEndpointsRouting: true,
+	}
+	want := []modelPair{{providerLocal, defaultModel}}
+	if got := configuredModelPairs(cfg); !slices.Equal(got, want) {
+		t.Errorf("configuredModelPairs = %v, want %v", got, want)
+	}
+}
+
+// An empty embedding.model sends the constructor's default; the OpenAI client
+// has no other source, so openai mode names it (and never reads
+// local_embedding_model).
+func TestConfiguredModelPairs_EmptyEmbeddingModelFallsBackToDefault(t *testing.T) {
+	cfg := probeConfig(config.AIBackendModeLocal)
+	cfg.AIBackend.EmbeddingMode = config.AIBackendModeOpenAI
+	cfg.Embedding.Model = ""
+	got := configuredModelPairs(cfg)
+	if len(got) == 0 || got[0] != (modelPair{providerOpenAI, defaultEmbeddingModel}) {
+		t.Errorf("empty embedding.model did not fall back to %q: %v", defaultEmbeddingModel, got)
+	}
+	if slices.Contains(got, modelPair{providerOpenAI, "bge-m3"}) || slices.Contains(got, modelPair{providerLocal, "bge-m3"}) {
+		t.Errorf("openai embedding mode read local_embedding_model: %v", got)
+	}
+}
+
+// Local embedding is local-only even with routing on: a cloud row ticked for
+// embed.text with the pinned model must not be named.
+func TestConfiguredModelPairs_LocalEmbeddingSkipsCloudEmbedRows(t *testing.T) {
+	cfg := probeConfig(config.AIBackendModeLocal)
+	cfg.AIEndpoints = append(cfg.AIEndpoints, config.AIEndpoint{
+		ID: "cloud-embed", Protocol: string(aidispatch.ProtocolOpenAICompat), URL: testOpenAIURL,
+		EmbedModel: "bge-m3", Priority: 1, Enabled: true, AuthRef: "openai_api_key",
+		Capabilities: caps(aidispatch.EmbedText),
+	})
+	got := configuredModelPairs(cfg)
+	if slices.Contains(got, modelPair{providerOpenAI, "bge-m3"}) {
+		t.Errorf("local embedding named a cloud embed row: %v", got)
+	}
+	if !slices.Contains(got, modelPair{providerLocal, "bge-m3"}) {
+		t.Errorf("the local embed row is not named: %v", got)
+	}
+}
+
+// setConfigured must force the next label to re-sync even when the new
+// source's generation equals the one the last sync ran at.
+func TestModelLabelSet_SetConfiguredForcesResyncAtSameGeneration(t *testing.T) {
+	s := newModelLabelSet()
+	a, b := modelPair{providerOpenAI, "model-a"}, modelPair{providerOpenAI, "model-b"}
+	// Generation 1 + 1 is what setConfigured's first call will produce.
+	s.source.Store(&modelSource{generation: func() uint64 { return 1 }, configured: func() []modelPair { return []modelPair{a} }})
+	if got := s.admit(a.provider, a.model); got != a.model {
+		t.Fatalf("setup: %v labelled %q", a, got)
+	}
+	s.setConfigured(b)
+	if got := s.admit(b.provider, b.model); got != b.model {
+		t.Errorf("after setConfigured %v labelled %q, want it named", b, got)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics_models.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d720f86-7e84-4490-9507-66a96a2fc61a
 // last-edited: 2026-10-11
 
@@ -46,9 +46,10 @@ import (
 // capability_models entries are named only for a capability that has a routed
 // call site (llm.filename_parse, embed.text and llm.cover_art_vision: routing
 // a further capability means adding it below, with the dispatcher options its
-// call site builds) and only when the dispatcher would hand that row the call: enabled, ticked for the capability (default-deny), protocol
-// and required features, GPU label, a model for the kind, locality for the
-// call, and a secret for its auth_ref. Anything else on a row is never sent.
+// call site builds) and only when the dispatcher would hand that row the
+// call: enabled, ticked for the capability (default-deny), protocol and
+// required features, GPU label, a model for the kind, locality for the call,
+// and a secret for its auth_ref. Anything else on a row is never sent.
 //
 // Not derived from llm_mode alone and not gated on enable_ai_parsing: several
 // callers build their parser enabled whatever that flag says (handlers/ai.go),
