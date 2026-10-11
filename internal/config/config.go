@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.147.1
+// version: 1.147.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -1798,6 +1798,14 @@ type Config struct {
 	// deliberately narrow because each index taxes scan insert throughput; see
 	// the SetDefault call for the reasoning.
 	//
+	// Resolution: the value cmd/root.go hands to SetEnabledSortIndexes is the
+	// one InitConfig read from viper (default, config file or env) BEFORE the
+	// store opens; the stored config blob is loaded after the store exists, so
+	// it can change what GET /config reports but not which indexes were built.
+	// A nil list (an absent InitConfig read, or a blob carrying null) means
+	// "unset" and resolves to the default; an explicit empty list means "no
+	// optional indexes" and is honored. See restoreNilSliceDefaults.
+	//
 	// This setting is a speed/memory tradeoff, not a correctness one — in
 	// BOTH directions, and the second direction had to be fixed to make that
 	// sentence true. An absent index is fine: the store materialises the match
@@ -2953,6 +2961,11 @@ func InitConfig() {
 
 			// Google Books
 			GoogleBooksAPIKey: viper.GetString("google_books_api_key"),
+
+			// Read explicitly: this literal is the ONLY place viper values reach
+			// AppConfig, and omitting the key left it nil even on an install
+			// with no stored blob, so the shipped default never took effect.
+			EnabledSortIndexes: viper.GetStringSlice("enabled_sort_indexes"),
 
 			// AI parsing
 			EnableAIParsing:    viper.GetBool("enable_ai_parsing"),

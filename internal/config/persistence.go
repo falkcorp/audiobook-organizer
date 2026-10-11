@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.49.0
+// version: 1.49.1
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package config
 
@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -937,6 +938,7 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			return fmt.Errorf("stored config_blob does not match the config schema; refusing to run "+
 				"on defaults because the next settings save would overwrite it: %w", err)
 		}
+		restoreNilSliceDefaults(&loaded, Snapshot())
 		// WHY Mutate: whole-struct assignment races with HTTP readers.
 		Mutate(func(c *Config) {
 			*c = loaded
@@ -1763,4 +1765,31 @@ func SyncConfigFromEnv() {
 			}
 		}
 	})
+}
+
+// restoreNilSliceDefaults puts a shipped default back on every slice field
+// whose stored value is JSON null.
+//
+// encoding/json treats an ABSENT key as "leave the seeded default alone" (the
+// Snapshot() seeding in LoadConfigFromDatabase) but a PRESENT null as "set the
+// slice to nil". A nil slice is what a settings save writes when the field was
+// nil in memory, so once any save round-tripped a nil, the blob carried
+// "enabled_sort_indexes": null forever and every boot discarded the default.
+// null therefore means "unset" here. An explicit empty list ([]) decodes to a
+// non-nil empty slice and is honored: that is how an operator turns every
+// optional sort index off.
+//
+// Only slices with a NON-EMPTY shipped default are listed; for the others nil
+// and the default are the same value. base is the pre-blob config (viper
+// defaults).
+func restoreNilSliceDefaults(loaded *Config, base Config) {
+	if loaded.EnabledSortIndexes == nil {
+		loaded.EnabledSortIndexes = slices.Clone(base.EnabledSortIndexes)
+	}
+	if loaded.MetadataScoring.DurationTierMultipliers == nil {
+		loaded.MetadataScoring.DurationTierMultipliers = slices.Clone(base.MetadataScoring.DurationTierMultipliers)
+	}
+	if loaded.MetadataScoring.DurationTierScores == nil {
+		loaded.MetadataScoring.DurationTierScores = slices.Clone(base.MetadataScoring.DurationTierScores)
+	}
 }
