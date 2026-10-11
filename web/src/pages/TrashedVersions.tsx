@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 
@@ -37,6 +37,14 @@ import {
 } from '../components/common/ConfigurableTable';
 
 const API_BASE = '/api/v1';
+
+// versionDate is the date a row is listed under: when it was purged, else when
+// it was trashed. Undefined for a trash row with no trashed_at.
+function versionDate(v: BookVersion): string | undefined {
+  if (v.purged_date) return v.purged_date;
+  if (v.trashed_at) return v.trashed_at;
+  return v.status === 'trash' ? undefined : v.created_at;
+}
 
 const COLUMNS: ColumnDef<BookVersion>[] = [
   {
@@ -88,9 +96,17 @@ const COLUMNS: ColumnDef<BookVersion>[] = [
     defaultWidth: 110,
     sortable: true,
     // Trash rows show when they were trashed -- the date the 14-day purge
-    // window counts from -- not when the version was created.
-    render: (v) => new Date(v.purged_date || v.trashed_at || v.created_at).toLocaleDateString(),
-    sortValue: (v) => new Date(v.purged_date || v.trashed_at || v.created_at).getTime(),
+    // window counts from -- not when the version was created. A row trashed
+    // before trashed_at was tracked has none until the first cleanup run
+    // stamps it, so it shows a dash rather than a misleading created date.
+    render: (v) => {
+      const at = versionDate(v);
+      return at ? new Date(at).toLocaleDateString() : '\u2014';
+    },
+    sortValue: (v) => {
+      const at = versionDate(v);
+      return at ? new Date(at).getTime() : 0;
+    },
   },
 ];
 

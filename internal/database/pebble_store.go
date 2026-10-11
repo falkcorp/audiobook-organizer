@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.212.0
+// version: 1.213.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 
@@ -5069,10 +5069,15 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 //     whatever the caller passed. A stale stamp is the dangerous direction:
 //     trash, restore, then trash again with the first stamp still on the row
 //     would make the cleanup purge it at once.
-//   - staying in the trash keeps the caller's stamp, falling back to the
-//     stored one, so a write that loaded an older copy cannot erase it. Both
-//     may be nil for a row trashed before the field existed; the cleanup
-//     stamps those itself.
+//   - staying in the trash never moves the stamp: the stored one wins
+//     whenever it is set, older or newer than the caller's. A writer that
+//     loaded the row before a restore and re-trash still holds the first
+//     stamp; letting it overwrite the second would make the cleanup purge a
+//     version the user trashed minutes ago -- the same failure as counting the
+//     window from CreatedAt, reached by another road. The caller's stamp is
+//     accepted only when the stored one is nil (a row trashed before the field
+//     existed, which the cleanup stamps itself, or one created directly in the
+//     trash).
 //   - any status other than trash clears it (restore, a swap that pulls a
 //     trashed version back in, purge).
 func maintainTrashedAt(prev, v *BookVersion, now time.Time) {
@@ -5082,8 +5087,9 @@ func maintainTrashedAt(prev, v *BookVersion, now time.Time) {
 	case prev.Status != BookVersionStatusTrash:
 		stamp := now
 		v.TrashedAt = &stamp
-	case v.TrashedAt == nil:
-		v.TrashedAt = prev.TrashedAt
+	case prev.TrashedAt != nil:
+		stamp := *prev.TrashedAt
+		v.TrashedAt = &stamp
 	}
 }
 

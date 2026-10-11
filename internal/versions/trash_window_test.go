@@ -1,5 +1,5 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
 // last-edited: 2026-10-11
 
@@ -35,6 +35,16 @@ type trashFixture struct {
 // in its .versions/{vid}/ slot and is linked by a book_file row.
 func newTrashFixture(t *testing.T, createdAt time.Time, status string) *trashFixture {
 	t.Helper()
+	return newTrashFixtureStamped(t, createdAt, status, nil)
+}
+
+// newTrashFixtureStamped is newTrashFixture with a caller-chosen TrashedAt.
+// The store never moves the stamp of a row that stays in the trash, so a past
+// stamp can only arrive the way a real one does: on a row created in the
+// trash (CreateBookVersion keeps a trash-status caller stamp). trashedAt is
+// ignored for any other status.
+func newTrashFixtureStamped(t *testing.T, createdAt time.Time, status string, trashedAt *time.Time) *trashFixture {
+	t.Helper()
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -47,7 +57,7 @@ func newTrashFixture(t *testing.T, createdAt time.Time, status string) *trashFix
 	}
 	ver, err := store.CreateBookVersion(&database.BookVersion{
 		BookID: "b1", Status: status, Format: "m4b", Source: "imported",
-		CreatedAt: createdAt, IngestDate: createdAt,
+		CreatedAt: createdAt, IngestDate: createdAt, TrashedAt: trashedAt,
 	})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
@@ -84,20 +94,6 @@ func (f *trashFixture) trash(t *testing.T, now time.Time) {
 	MarkTrashed(v, now)
 	if err := f.store.UpdateBookVersion(v); err != nil {
 		t.Fatalf("trash: %v", err)
-	}
-}
-
-// backdate moves an already-trashed version's stamp into the past. Staying in
-// the trash keeps the caller's stamp, so this is a plain write.
-func (f *trashFixture) backdate(t *testing.T, at time.Time) {
-	t.Helper()
-	v := f.reread(t)
-	v.TrashedAt = &at
-	if err := f.store.UpdateBookVersion(v); err != nil {
-		t.Fatalf("backdate: %v", err)
-	}
-	if got := f.reread(t); got.TrashedAt == nil || !got.TrashedAt.Equal(at) {
-		t.Fatalf("backdate did not stick: %v", got.TrashedAt)
 	}
 }
 
@@ -156,9 +152,8 @@ func TestCleanupTrashed_WindowCountsFromTrashedAt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Created yesterday: an old CreatedAt must not be what purges it,
 			// and a new one must not be what saves it.
-			f := newTrashFixture(t, now.Add(-1*day), database.BookVersionStatusAlt)
-			f.trash(t, now)
-			f.backdate(t, now.Add(-tc.trashedAgo))
+			trashedAt := now.Add(-tc.trashedAgo)
+			f := newTrashFixtureStamped(t, now.Add(-1*day), database.BookVersionStatusTrash, &trashedAt)
 
 			if n := cleanupTrashedVersionsAt(f.store, now); n != tc.wantPurged {
 				t.Fatalf("purged %d, want %d", n, tc.wantPurged)
@@ -253,9 +248,8 @@ func (s staleListStore) ListTrashedBookVersions() ([]database.BookVersion, error
 
 func TestCleanupTrashed_RestoreAfterListingWins(t *testing.T) {
 	now := time.Now()
-	f := newTrashFixture(t, now.Add(-30*day), database.BookVersionStatusAlt)
-	f.trash(t, now)
-	f.backdate(t, now.Add(-30*day))
+	trashedAt := now.Add(-30 * day)
+	f := newTrashFixtureStamped(t, now.Add(-30*day), database.BookVersionStatusTrash, &trashedAt)
 	snapshot, err := f.store.ListTrashedBookVersions()
 	if err != nil || len(snapshot) != 1 {
 		t.Fatalf("list trashed: %v (%d)", err, len(snapshot))
@@ -280,9 +274,8 @@ func TestCleanupTrashed_RestoreAfterListingWins(t *testing.T) {
 // when the caller hands the store a stale stamp.
 func TestTrashedAt_RestoreClearsAndRetrashRestamps(t *testing.T) {
 	now := time.Now()
-	f := newTrashFixture(t, now.Add(-30*day), database.BookVersionStatusAlt)
-	f.trash(t, now.Add(-20*day))
-	f.backdate(t, now.Add(-20*day))
+	trashedAt := now.Add(-20 * day)
+	f := newTrashFixtureStamped(t, now.Add(-30*day), database.BookVersionStatusTrash, &trashedAt)
 
 	v := f.reread(t)
 	MarkRestored(v)
@@ -313,6 +306,85 @@ func TestTrashedAt_RestoreClearsAndRetrashRestamps(t *testing.T) {
 		t.Fatalf("purged %d re-trashed version(s), want 0", n)
 	}
 	f.requireFile(t, true)
+}
+
+// While a row stays in the trash the store never moves its stamp, in either
+// direction. The race: a writer loads a trashed row (stamp T1, 20 days old);
+// the user restores it and trashes it again (stamp T2 = now); the stale writer
+// then writes its copy back, still trash + T1. The store used to take the
+// caller's stamp, so the next cleanup purged a version trashed minutes ago.
+func TestTrashedAt_StaleWriteWhileStillTrashedKeepsLaterStamp(t *testing.T) {
+	now := time.Now()
+	t1 := now.Add(-20 * day)
+	f := newTrashFixtureStamped(t, now.Add(-30*day), database.BookVersionStatusTrash, &t1)
+
+	stale := f.reread(t) // trash + T1
+	if stale.TrashedAt == nil || !stale.TrashedAt.Equal(t1) {
+		t.Fatalf("fixture: stale copy TrashedAt = %v, want %v", stale.TrashedAt, t1)
+	}
+
+	restored := f.reread(t)
+	MarkRestored(restored)
+	if err := f.store.UpdateBookVersion(restored); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	f.trash(t, now) // T2
+	t2 := f.reread(t).TrashedAt
+	if t2 == nil || !t2.After(t1) {
+		t.Fatalf("fixture: re-trash stamp %v, want after %v", t2, t1)
+	}
+
+	// The stale writer lands.
+	if err := f.store.UpdateBookVersion(stale); err != nil {
+		t.Fatalf("stale write: %v", err)
+	}
+	got := f.reread(t)
+	if got.Status != database.BookVersionStatusTrash || got.TrashedAt == nil || !got.TrashedAt.Equal(*t2) {
+		t.Fatalf("status=%s TrashedAt=%v, want trash with the later stamp %v", got.Status, got.TrashedAt, *t2)
+	}
+	if n := cleanupTrashedVersionsAt(f.store, now); n != 0 {
+		t.Fatalf("purged %d version(s), want 0: a stale write moved the stamp back and the cleanup purged a version trashed just now", n)
+	}
+	f.requireFile(t, true)
+}
+
+// The stored stamp wins over a newer caller stamp too: staying in the trash
+// does not restart the window. Only a nil stored stamp (a legacy row) accepts
+// the caller's.
+func TestTrashedAt_StaysPutWhileTrashed(t *testing.T) {
+	now := time.Now()
+	orig := now.Add(-5 * day)
+	f := newTrashFixtureStamped(t, now.Add(-30*day), database.BookVersionStatusTrash, &orig)
+
+	v := f.reread(t)
+	newer := now
+	v.TrashedAt = &newer
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reread(t); got.TrashedAt == nil || !got.TrashedAt.Equal(orig) {
+		t.Fatalf("TrashedAt = %v after a newer caller stamp, want unchanged %v", got.TrashedAt, orig)
+	}
+
+	v = f.reread(t)
+	v.TrashedAt = nil
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reread(t); got.TrashedAt == nil || !got.TrashedAt.Equal(orig) {
+		t.Fatalf("TrashedAt = %v after a nil caller stamp, want unchanged %v", got.TrashedAt, orig)
+	}
+
+	// Legacy row: stored nil, so the caller's stamp is accepted.
+	legacy := newTrashFixture(t, now.Add(-30*day), database.BookVersionStatusTrash)
+	v = legacy.reread(t)
+	v.TrashedAt = &newer
+	if err := legacy.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.reread(t); got.TrashedAt == nil || !got.TrashedAt.Equal(newer) {
+		t.Fatalf("legacy TrashedAt = %v, want the caller's %v", got.TrashedAt, newer)
+	}
 }
 
 // Every way into the trash stamps TrashedAt and every way out clears it.

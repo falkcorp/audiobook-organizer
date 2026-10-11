@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -19,7 +19,6 @@ package versions
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"time"
 
@@ -100,7 +99,7 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 
 	if bookDir != "" {
 		if err := RemoveVersionSlot(bookDir, ver.ID); err != nil {
-			slog.Warn("remove version slot", "ver", ver.ID, "err", err)
+			lifecycleLog.Warn("remove version slot for %s failed: %v", ver.ID, err)
 		}
 		_ = PruneEmptyVersionsDir(bookDir)
 	}
@@ -146,7 +145,7 @@ func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
 func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purged int) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
-		slog.Warn("list trashed versions", "error", err)
+		lifecycleLog.Warn("trash cleanup: list trashed versions failed: %v", err)
 		return 0
 	}
 
@@ -180,7 +179,7 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			continue
 		}
 		if err := PurgeVersion(store, v); err != nil {
-			slog.Warn("purge trashed", "v", v.ID, "err", err)
+			lifecycleLog.Warn("trash cleanup: purging version %s failed: %v", v.ID, err)
 			continue
 		}
 		purged++
