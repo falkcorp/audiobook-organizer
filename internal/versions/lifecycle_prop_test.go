@@ -1,6 +1,7 @@
 // file: internal/versions/lifecycle_prop_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d4c4cd2b-c578-4a11-8229-83a516271b1b
+// last-edited: 2026-10-11
 
 // Property-based tests for BookVersion lifecycle transitions (spec 4.5 task 6).
 //
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/rapidgen"
@@ -63,7 +65,7 @@ func newPropLifecycleStore(t *rapid.T) database.Store {
 // and auto-promotes an alt if the trashed version was active.
 func trashVersion(store database.Store, ver *database.BookVersion) error {
 	wasActive := ver.Status == database.BookVersionStatusActive
-	ver.Status = database.BookVersionStatusTrash
+	MarkTrashed(ver, time.Now())
 	if err := store.UpdateBookVersion(ver); err != nil {
 		return err
 	}
@@ -78,7 +80,7 @@ func restoreVersion(store database.Store, ver *database.BookVersion) error {
 	if ver.Status != database.BookVersionStatusTrash {
 		return fmt.Errorf("version is not in trash (status=%s)", ver.Status)
 	}
-	ver.Status = database.BookVersionStatusAlt
+	MarkRestored(ver)
 	return store.UpdateBookVersion(ver)
 }
 

@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.109.0
+// version: 2.110.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package database
 
@@ -757,10 +757,17 @@ type BookVersion struct {
 	TorrentHash        string     `json:"torrent_hash,omitempty"` // infohash, fast-path fingerprint match
 	IngestDate         time.Time  `json:"ingest_date"`
 	PurgedDate         *time.Time `json:"purged_date,omitempty"`
-	MetadataJSON       string     `json:"metadata_json,omitempty"` // source-specific catch-all
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	Version            int        `json:"version"`
+	// TrashedAt is when the version last entered the trash; nil whenever
+	// Status is not BookVersionStatusTrash. The 14-day trash window is
+	// counted from here (versions.CleanupTrashedVersions), never from
+	// CreatedAt. Rows trashed before this field existed decode as nil; the
+	// cleanup stamps them on first sight instead of purging them. Maintained
+	// by PebbleStore.UpdateBookVersion -- see the comment there.
+	TrashedAt    *time.Time `json:"trashed_at,omitempty"`
+	MetadataJSON string     `json:"metadata_json,omitempty"` // source-specific catch-all
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	Version      int        `json:"version"`
 }
 
 // BookVersionStatus values. See spec 3.1 for the full state

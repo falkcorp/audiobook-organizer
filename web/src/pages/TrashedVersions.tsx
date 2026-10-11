@@ -1,7 +1,7 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -87,8 +87,10 @@ const COLUMNS: ColumnDef<BookVersion>[] = [
     label: 'Date',
     defaultWidth: 110,
     sortable: true,
-    render: (v) => new Date(v.purged_date || v.created_at).toLocaleDateString(),
-    sortValue: (v) => new Date(v.purged_date || v.created_at).getTime(),
+    // Trash rows show when they were trashed -- the date the 14-day purge
+    // window counts from -- not when the version was created.
+    render: (v) => new Date(v.purged_date || v.trashed_at || v.created_at).toLocaleDateString(),
+    sortValue: (v) => new Date(v.purged_date || v.trashed_at || v.created_at).getTime(),
   },
 ];
 
