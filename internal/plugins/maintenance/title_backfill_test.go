@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-11
 
@@ -65,6 +65,8 @@ type fakeDeps struct {
 	root string
 	// labels backs DedupVerdictReader; nil means the server has no verdict store.
 	labels DedupVerdictReader
+	// purgeCtx, when non-nil, records the ctx RunAutoPurgeSoftDeleted receives.
+	purgeCtx *context.Context
 }
 
 func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
@@ -212,7 +214,11 @@ func (d fakeDeps) RunMetadataRefreshScan(_ context.Context, _ operations.Progres
 func (d fakeDeps) RunBulkWriteBack(_ context.Context, _ string, _ []string, _ bool, _ int, _ operations.ProgressReporter) error {
 	return nil
 }
-func (d fakeDeps) RunAutoPurgeSoftDeleted(_ context.Context, _ string) {}
+func (d fakeDeps) RunAutoPurgeSoftDeleted(ctx context.Context, _ string) {
+	if d.purgeCtx != nil {
+		*d.purgeCtx = ctx
+	}
+}
 func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error  { return nil }
 func (d fakeDeps) StripMovementAtoms(_ context.Context)                {}
 func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {
@@ -442,5 +448,24 @@ func TestTitleBackfill_NilParamsDefaultsDryRun(t *testing.T) {
 	}
 	if len(*written) != 0 {
 		t.Errorf("nil params must default to dryRun=true, got %d writes", len(*written))
+	}
+}
+
+// The purge must run on the op's own context: the def's Timeout, shutdown and
+// the watchdog all reach it only through that ctx. A body that swapped in
+// context.Background() would purge past every one of them.
+func TestRunPurgeDeleted_PassesOpContext(t *testing.T) {
+	var got context.Context
+	p := New(fakeDeps{purgeCtx: &got})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := p.runPurgeDeleted(ctx, nil, &fakeReporter{}); err != nil {
+		t.Fatalf("runPurgeDeleted: %v", err)
+	}
+	if got == nil {
+		t.Fatal("RunAutoPurgeSoftDeleted was not called")
+	}
+	if got.Err() == nil {
+		t.Fatal("purge must receive the op ctx, which is already cancelled")
 	}
 }

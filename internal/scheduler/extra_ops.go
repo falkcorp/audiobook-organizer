@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-11
 
@@ -27,7 +27,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -51,7 +50,6 @@ type ExtraOpsDeps struct {
 	DedupCache           *cache.Cache[gin.H]
 	DedupEngine          *dedup.Engine
 	MetadataFetchService *metafetch.Service
-	AudiobookService     *audiobookspkg.AudiobookService
 	// ScanStandDown is the scan stand-down gate the metadata refresh/upgrade ops
 	// hold while they apply (metadata is never applied during a library scan).
 	// Nil = ungated (tests).
@@ -765,23 +763,4 @@ func (r *ExtraOpsRegistrar) runMetadataRefreshScan(ctx context.Context, progress
 	_ = progress.Log("info", resultMsg, nil)
 	_ = progress.UpdateProgress(denom, denom, fmt.Sprintf("%s (%d/%d) (100.00%%)", resultMsg, denom, denom))
 	return nil
-}
-
-// activityOpID returns the id to tag this run's activity-log entries with.
-//
-// Activity entries are grouped by an operation id so the UI can show what a run
-// did. These ops used to be handed the id of a legacy operations row created
-// alongside them; the scheduler no longer creates one, so the run's own v2 id is
-// both available and better — the entries now point at an operation that can
-// actually be looked up, which the legacy id stopped being able to promise once
-// the row went away.
-//
-// LegacyOpID remains the fallback for runs still in flight from before the
-// change, whose params were serialised with it. Both empty means uncorrelated
-// entries, which is a degradation in grouping and not a failure.
-func activityOpID(reporter opsregistry.Reporter, p schedulerExtraOpParams) string {
-	if id := opsregistry.ReporterOpID(reporter); id != "" {
-		return id
-	}
-	return p.LegacyOpID
 }

@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.21.6
+// version: 1.21.7
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-11
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 290
-	slogRatchetCallCeiling = 1657
+	slogRatchetFileCeiling = 289
+	slogRatchetCallCeiling = 1651
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called

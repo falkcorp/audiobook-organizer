@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-11
 
@@ -26,6 +26,12 @@ import (
 
 // --- purge-deleted ---
 
+// purgeDeletedDef is the only registration of the soft-deleted-book purge.
+// scheduler.purge-deleted ran a second copy of the same body under its own ID
+// and ConcurrencyKey until 2026-10-11 (04-P4b); it resolves here as a FormerID,
+// and the purge_deleted scheduler task enqueues this def. Permissions and the 2h
+// Timeout are the stricter gate and longer budget the merged defs carried: the
+// purge deletes books and files, so the alias must not widen who can run it.
 func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 	sched := "0 3 * * *" // 03:00 daily
 	return sdk.OperationDef{
@@ -55,6 +61,14 @@ func (p *Plugin) runPurgeDeleted(ctx context.Context, _ json.RawMessage, reporte
 	opID := ctxOpID(ctx)
 	p.deps.RunAutoPurgeSoftDeleted(ctx, opID)
 	p.deps.ActivityFlushOp(opID)
+	if ctx.Err() != nil {
+		// Timeout, shutdown, watchdog or quiesce stopped the purge between
+		// books; what is left will be picked up by the next run.
+		msg := "Purge stopped early: " + ctx.Err().Error()
+		_ = reporter.Log(slog.LevelWarn, msg)
+		prog.Done(msg)
+		return nil
+	}
 	_ = reporter.Log(slog.LevelInfo, "Purge complete")
 	prog.Done("Purge complete")
 	return nil

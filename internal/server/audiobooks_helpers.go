@@ -1,5 +1,5 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
 // last-edited: 2026-10-11
 
@@ -276,8 +276,9 @@ func (s *Server) warmFacetsCache() {
 // retention window, emitting activity log entries. Invoked from the maintenance
 // plugin (server_maintenance_deps.go RunAutoPurgeSoftDeleted), which is the
 // only copy of this body: scheduler.purge-deleted carried a second one until
-// 04-P4b. ctx is the op's own context, so the def's Timeout and a cancel both
-// stop the purge between books.
+// 04-P4b. ctx is the op's own context, so the def's Timeout, shutdown, the watchdog
+// and a quiesce all stop the purge between books. The def is not Cancellable,
+// so a user cancel cannot reach it.
 func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) {
 	if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 {
 		return
