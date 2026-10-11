@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.28.0
+// version: 4.28.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-10
 //
@@ -1093,10 +1093,14 @@ func (s *Server) handleUnrejectCandidate(c *gin.Context) {
 		httputil.RespondWithError(c, http.StatusNotFound, "audiobook not found", "NOT_FOUND")
 		return
 	}
-	changed, err := metafetch.RemoveRejection(store, req.BookID, req.Candidate)
+	// Everything below acts on book.ID, the id of the row the store returned,
+	// never on the request's own book_id string: the id that keys the
+	// rejection reads and writes, the book write lock and the re-rank is then
+	// one the store vouched for, not text the client typed.
+	changed, err := metafetch.RemoveRejection(store, book.ID, req.Candidate)
 	if changed {
 		// Re-rank whatever was removed, even when a later key failed.
-		s.rerankAfterRejection(c, "unreject", []string{req.BookID})
+		s.rerankAfterRejection(c, "unreject", []string{book.ID})
 	}
 	if err != nil {
 		httputil.InternalError(c, "failed to remove rejection", err)
@@ -1105,7 +1109,7 @@ func (s *Server) handleUnrejectCandidate(c *gin.Context) {
 	// Re-read after the write: another rejection can still refuse the
 	// candidate (see above). Read outside the write lock; a rejection made
 	// in between is the owner's newer decision either way.
-	after, err := metafetch.LoadRejectedCandidates(store, req.BookID)
+	after, err := metafetch.LoadRejectedCandidates(store, book.ID)
 	if err != nil {
 		httputil.InternalError(c, "rejection removed; failed to re-read the remaining rejections", err)
 		return
