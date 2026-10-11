@@ -1,5 +1,5 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
 // last-edited: 2026-10-11
 
@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -689,25 +690,90 @@ func TestSaveConfigToFile_WritesAtomicallyAndKeepsMode(t *testing.T) {
 	}
 }
 
-// When the temp file cannot be created, the original is untouched. A plain
-// os.WriteFile would have rewritten it in place.
+// When neither the file nor its directory is writable, the save fails and the
+// original is untouched.
 func TestSaveConfigToFile_FailureLeavesTheOriginalIntact(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("directory permissions do not bind root")
+		t.Skip("file permissions do not bind root")
 	}
 	prior := "deluge_web_url: " + delugeFileURL + "\nroot_dir: /old\n"
 	path := saveFileFixture(t, prior)
 	dir := filepath.Dir(path)
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
 	if err := SaveConfigToFile(); err == nil {
-		t.Fatal("expected an error when the directory is not writable")
+		t.Fatal("expected an error when neither the file nor its directory is writable")
 	}
 	if got, _ := os.ReadFile(path); string(got) != prior {
 		t.Errorf("the original was modified by a failed save:\n%s", got)
+	}
+}
+
+// A config file the process can write but whose directory it cannot (a symlink into
+// a root-owned directory, say) used to save fine. The temp-file-and-rename path needs
+// the directory, so it falls back to writing the file in place, keeps the inode and
+// mode, and warns that the write was not atomic.
+func TestSaveConfigToFile_WritesInPlaceWhenTheDirectoryIsReadOnly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not bind root")
+	}
+	logs := logtest.Capture(t, slog.LevelWarn)
+	path := saveFileFixture(t, "deluge_web_url: "+delugeFileURL+"\nroot_dir: /old\n")
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatalf("SaveConfigToFile with a read-only directory: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	out := string(data)
+	if !strings.Contains(out, "root_dir: /srv/library") || !strings.Contains(out, "deluge_web_url: "+delugeFileURL) {
+		t.Errorf("the in-place write did not merge and update:\n%s", out)
+	}
+	after, _ := os.Stat(path)
+	if !os.SameFile(before, after) || after.Mode().Perm() != 0o640 {
+		t.Errorf("in-place write must keep the inode and mode (same file=%v, mode=%v)",
+			os.SameFile(before, after), after.Mode().Perm())
+	}
+	if !strings.Contains(logs.String(), path) || !strings.Contains(logs.String(), "not atomic") {
+		t.Errorf("no warning naming the file and the non-atomic write; log output: %q", logs.String())
+	}
+}
+
+// A symlink whose target does not exist is not replaced by a regular file: the save
+// fails, names the path, and leaves the link as it was.
+func TestSaveConfigToFile_DanglingSymlinkIsNotReplaced(t *testing.T) {
+	path := saveFileFixture(t, "")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "missing", "real.yaml")
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := SaveConfigToFile()
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("SaveConfigToFile = %v, want an error naming %s", err, path)
+	}
+	if info, lerr := os.Lstat(path); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the dangling symlink was replaced (err=%v)", lerr)
+	}
+	if _, serr := os.Stat(target); serr == nil {
+		t.Error("the symlink target was created")
 	}
 }
 
@@ -787,6 +853,93 @@ func (s *slowStore) DeleteSetting(k string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.inner.DeleteSetting(k)
+}
+
+// gatedStore holds the first config_blob write until the second one begins (or a
+// timeout passes), so a stale first write lands last whenever nothing orders the two
+// saves. With saves serialised the second save cannot begin until the first returns,
+// so the first just waits out the timeout.
+type gatedStore struct {
+	mu          sync.Mutex
+	inner       *mockSettingsStore
+	blobWrites  atomic.Int32
+	firstInside chan struct{}
+	secondBegan chan struct{}
+}
+
+func (g *gatedStore) GetSetting(k string) (*database.Setting, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.inner.GetSetting(k)
+}
+
+func (g *gatedStore) SetSetting(k, v, typ string, secret bool) error {
+	if k == "config_blob" {
+		switch g.blobWrites.Add(1) {
+		case 1:
+			close(g.firstInside)
+			select {
+			case <-g.secondBegan:
+			case <-time.After(150 * time.Millisecond):
+			}
+		case 2:
+			close(g.secondBegan)
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.inner.SetSetting(k, v, typ, secret)
+}
+
+func (g *gatedStore) GetAllSettings() ([]database.Setting, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.inner.GetAllSettings()
+}
+
+func (g *gatedStore) DeleteSetting(k string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.inner.DeleteSetting(k)
+}
+
+// Deterministic: save 1 is parked inside its config_blob write; the config then
+// changes and save 2 starts. If nothing serialises them, save 2 writes the newer
+// blob first and save 1's older one lands last -- every run. With configBlobSaveMu,
+// save 2 waits for save 1 and the newer blob is the last one written.
+func TestSaveConfigToDatabase_SecondSaveNeverLosesToTheFirst(t *testing.T) {
+	clearDelugeEnv(t)
+	delugeInitConfig(t, "")
+	Mutate(func(c *Config) { c.DatabasePath = ""; c.RootDir = "/lib/first" })
+	store := &gatedStore{
+		inner:       newMockSettingsStore(),
+		firstInside: make(chan struct{}),
+		secondBegan: make(chan struct{}),
+	}
+
+	var wg sync.WaitGroup
+	save := func(name string) {
+		defer wg.Done()
+		if err := SaveConfigToDatabase(store); err != nil {
+			t.Errorf("%s save: %v", name, err)
+		}
+	}
+	wg.Add(1)
+	go save("first")
+	<-store.firstInside
+
+	Mutate(func(c *Config) { c.RootDir = "/lib/second" })
+	wg.Add(1)
+	go save("second")
+	wg.Wait()
+
+	row, err := store.GetSetting("config_blob")
+	if err != nil || row == nil {
+		t.Fatalf("no blob: %v", err)
+	}
+	if !strings.Contains(row.Value, `"root_dir":"/lib/second"`) {
+		t.Errorf("the older save's blob landed last: %s", row.Value[:min(len(row.Value), 200)])
+	}
 }
 
 // Concurrent saves of different values: the blob left behind must be the final

@@ -1,5 +1,5 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -93,7 +93,12 @@ manage (the Deluge keys among them), updates the ones it does, removes a secret
 that has become empty, and removes any retired setting. Keys are matched without
 regard to case, so `ROOT_DIR` is replaced by `root_dir`. The rewrite does not keep
 comments and writes the keys in sorted order. It is written to a temporary file and
-renamed over the original, keeping the file's permissions. If the file exists but
+renamed over the original, keeping the file's permissions (and its owner and group
+when the server is allowed to set them; ACLs and extended attributes are not carried
+over). If the server can write the file but not its directory, the file is written in
+place instead, which keeps its owner but is not atomic, and a warning says so. A
+symlinked config file is followed; one whose target does not exist is left alone and
+the save reports an error. If the file exists but
 cannot be read or is not valid YAML, the server leaves it exactly as it is and logs
 a warning naming it; the settings are still saved to the database.
 
