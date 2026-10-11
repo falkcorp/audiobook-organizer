@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -232,20 +233,42 @@ func deleteConfigKeyFold(m map[string]any, key string) {
 
 // writeFileAtomic replaces path with data without ever exposing a partial file: it
 // writes a temp file in the same directory (so the rename stays on one filesystem),
-// fsyncs it, gives it the existing file's mode (perm for a new file), renames it
-// over path and fsyncs the directory. A symlink at path is followed, so the link
-// survives and its target is replaced. On any failure the original is untouched and
-// the temp file is removed.
+// fsyncs it, gives it the existing file's mode (perm for a new file) and, where the
+// process is allowed to, its owner and group, renames it over path and fsyncs the
+// directory. A symlink at path is followed, so the link survives and its target is
+// replaced; a symlink whose target does not exist is an error, not something to
+// replace with a regular file. On any failure the original is untouched and the temp
+// file is removed. ACLs and extended attributes on the original are not carried over
+// by the rename.
+//
+// The rename needs a writable DIRECTORY. When the process can write the file but not
+// its directory (a symlink into a root-owned directory, say) creating the temp file
+// fails with a permission error; the data is then written into the existing file in
+// place, which keeps its owner and mode but is not atomic, and a Warn says so.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
-	if resolved, rerr := filepath.EvalSymlinks(path); rerr == nil {
+	if linfo, lerr := os.Lstat(path); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		resolved, rerr := filepath.EvalSymlinks(path)
+		if rerr != nil {
+			return fmt.Errorf("config file %s is a symlink whose target cannot be resolved; left unchanged: %w", path, rerr)
+		}
 		path = resolved
 	}
+	var origUID, origGID int
+	haveOwner := false
+	exists := false
 	if info, serr := os.Stat(path); serr == nil {
+		exists = true
 		perm = info.Mode().Perm()
+		origUID, origGID, haveOwner = fileOwner(info)
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
+		if exists && errors.Is(err, fs.ErrPermission) {
+			configLog.Warn("config file %s: cannot create a temporary file in %s (%v); writing the file in place, which is not atomic",
+				path, dir, err)
+			return writeFileInPlace(path, data)
+		}
 		return err
 	}
 	closed := false
@@ -273,6 +296,9 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	if err = tmp.Chmod(perm); err != nil {
 		return err
 	}
+	if haveOwner {
+		keepOwner(tmp, origUID, origGID)
+	}
 	closed = true
 	if err = tmp.Close(); err != nil {
 		return err
@@ -291,6 +317,42 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 		}
 	}
 	return nil
+}
+
+// keepOwner gives the temp file the original's owner and group so the rename does
+// not change who owns the config file. It is skipped when they already match and
+// when the process is not permitted (a non-root process cannot chown to another
+// user), which is expected and only logged at Debug.
+func keepOwner(f *os.File, uid, gid int) {
+	info, err := f.Stat()
+	if err != nil {
+		configLog.Debug("stat temp config file %s: %v", f.Name(), err)
+		return
+	}
+	if curUID, curGID, ok := fileOwner(info); ok && curUID == uid && curGID == gid {
+		return
+	}
+	if err := f.Chown(uid, gid); err != nil {
+		configLog.Debug("keep owner %d:%d on %s: %v", uid, gid, f.Name(), err)
+	}
+}
+
+// writeFileInPlace truncates and rewrites an existing file. It keeps the file's
+// owner, mode and inode but is not atomic: a crash part way leaves it truncated.
+func writeFileInPlace(path string, data []byte) (err error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close %s: %w", path, cerr))
+		}
+	}()
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // migrateEmbeddingBlob rewrites a flat-format config blob to the nested EmbeddingConfig
