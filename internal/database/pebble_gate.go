@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-10-11
 
@@ -345,26 +345,64 @@ func NewGatedDB(db *pebble.DB) *GatedDB {
 // is not final: the gate stays closing, so nothing new gets in, and a later
 // call retries from the wait, closing the engine as soon as the straggler has
 // released. A close that succeeded is idempotent: later calls return its
-// result. Concurrent calls run one at a time, each waiting its own turn.
+// result.
+//
+// Concurrent calls share ONE attempt. A caller that arrives while an attempt
+// is running does not start its own wait: it waits for that attempt and
+// returns its result, so N callers against a held straggler cost one bound
+// (the first caller's timeout plus syncGrace), not N of them. Its own timeout
+// is not used; the attempt in flight is the one that answers it. A call made
+// after an attempt has finished is a new attempt, so a failed close is still
+// retried by the next call.
 func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error) {
 	d := NewGatedDB(db)
-	var mu sync.Mutex
+	var mu sync.Mutex // guards the three fields below
 	var closed bool
 	var result error
+	var inflight *closeAttempt
 	return d, func(timeout time.Duration) error {
 		mu.Lock()
-		defer mu.Unlock()
 		if closed {
+			defer mu.Unlock()
 			return result
 		}
-		sealed, err := d.drainAndSeal(timeout)
-		if !sealed {
-			return err
+		if a := inflight; a != nil {
+			mu.Unlock()
+			<-a.done
+			return a.err
 		}
-		closed = true
-		result = errors.Join(err, d.closeEngine())
-		return result
+		a := &closeAttempt{done: make(chan struct{})}
+		inflight = a
+		mu.Unlock()
+
+		// Finish the attempt however it ends, a panic included: waiters are
+		// released and the next call can start a fresh one.
+		var err error
+		sealed := false
+		defer func() {
+			mu.Lock()
+			if sealed {
+				closed = true
+				result = err
+			}
+			inflight = nil
+			a.err = err
+			mu.Unlock()
+			close(a.done)
+		}()
+		sealed, err = d.drainAndSeal(timeout)
+		if sealed {
+			err = errors.Join(err, d.closeEngine())
+		}
+		return err
 	}
+}
+
+// closeAttempt is one run of an owned close, shared by every caller that
+// arrived while it ran. err is written before done closes.
+type closeAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 // Get reads key. The returned closer holds a lease until it is closed.
