@@ -1,5 +1,5 @@
 // file: internal/config/viper_decode_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d063ec75-bbf1-4354-9e52-32ede9ef23ec
 // last-edited: 2026-10-11
 
@@ -11,12 +11,16 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // fileInitConfig runs InitConfig with the given YAML as the config file, the
@@ -42,9 +46,35 @@ func fileInitConfig(t *testing.T, yamlText string, before func()) {
 	InitConfig()
 }
 
-// An environment variable reaches viper as a string; before 2026-10-11 it was
-// marshalled as a JSON string and failed to decode into the list or map, so
-// AI_ENDPOINTS and PLUGINS were silently ignored.
+// defaultFileInitConfig runs InitConfig with the config file loaded exactly
+// the way cmd/root.go's initConfig does when no --config flag is given:
+// AddConfigPath(dir) + SetConfigType("yaml") + SetConfigName(".audiobook-organizer"),
+// so the file is extensionless as far as filepath.Ext is concerned
+// (Ext returns ".audiobook-organizer").
+func defaultFileInitConfig(t *testing.T, yamlText string) {
+	t.Helper()
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".audiobook-organizer"), []byte(yamlText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viper.AddConfigPath(dir)
+	viper.SetConfigType("yaml")
+	viper.SetConfigName(".audiobook-organizer")
+	viper.AutomaticEnv()
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("ReadInConfig: %v", err)
+	}
+	if got := filepath.Base(viper.ConfigFileUsed()); got != ".audiobook-organizer" {
+		t.Fatalf("ConfigFileUsed = %q, want the extensionless default file", got)
+	}
+	InitConfig()
+}
+
+// An environment variable reaches viper as a string, which is read as JSON
+// text for a list or map setting (AI_ENDPOINTS, PLUGINS).
 func TestViperDecodeJSON_EnvironmentJSONList(t *testing.T) {
 	t.Setenv("AI_ENDPOINTS", `[{"id":"Box1","label":"GPU box","protocol":"openai","url":"http://192.0.2.5:8080"}]`)
 	envInitConfig(t)
@@ -205,5 +235,158 @@ func TestLowerMapKeys_LowerCaseSpellingWinsAFold(t *testing.T) {
 	}
 	if lowerMapKeys[int](nil) != nil {
 		t.Fatal("lowerMapKeys(nil) must stay nil")
+	}
+}
+
+// With no lower-case spelling among the colliders, the byte-wise first key
+// wins ("EXACT_FILE" < "Exact_File" < "exact_File"), whatever order the map
+// is iterated in. Go randomises that order, so repeat enough to catch a
+// regression to last-writer-wins.
+func TestLowerMapKeys_CollisionWithoutLowerCaseKeyIsDeterministic(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		got := lowerMapKeys(map[string]int{"Exact_File": 1, "EXACT_FILE": 2, "exact_File": 3, "Other": 4})
+		if want := map[string]int{"exact_file": 2, "other": 4}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("iteration %d: lowerMapKeys = %v, want %v", i, got, want)
+		}
+	}
+}
+
+// cmd/root.go's default config file is ~/.audiobook-organizer, read with
+// SetConfigType("yaml"). filepath.Ext of that returns ".audiobook-organizer",
+// so an extension switch alone sent it down the "other format" path: map keys
+// came out lower-cased, with a Warn telling the operator to use a YAML file.
+func TestViperDecodeJSON_DefaultConfigFileKeepsMapKeyCase(t *testing.T) {
+	buf := logtest.Capture(t, slog.LevelWarn)
+	defaultFileInitConfig(t, `
+plugins:
+  MyPlugin:
+    enabled: true
+    settings:
+      ApiKey: abc
+dedup:
+  embedding_thresholds_by_model:
+    BAAI/bge-M3.v1.5:
+      high: 0.91
+      low: 0.8
+`)
+	c := Snapshot()
+	wantPlugins := map[string]PluginConfig{"MyPlugin": {Enabled: true, Settings: map[string]string{"ApiKey": "abc"}}}
+	if !reflect.DeepEqual(c.Plugins, wantPlugins) {
+		t.Errorf("Plugins = %+v, want %+v (the default config file must keep map-key case)", c.Plugins, wantPlugins)
+	}
+	wantModels := map[string]EmbeddingModelThresholds{"BAAI/bge-M3.v1.5": {High: 0.91, Low: 0.8}}
+	if !reflect.DeepEqual(c.Dedup.EmbeddingThresholdsByModel, wantModels) {
+		t.Errorf("EmbeddingThresholdsByModel = %+v, want %+v", c.Dedup.EmbeddingThresholdsByModel, wantModels)
+	}
+	if lines := buf.Lines("config: "); len(lines) != 0 {
+		t.Errorf("a YAML config file must not draw a config Warn, got %q", lines)
+	}
+}
+
+// A config file in a format this cannot re-read still warns, once per map
+// setting, and still loads viper's lower-cased value.
+func TestViperDecodeJSON_NonYAMLConfigFileWarnsAndLowerCases(t *testing.T) {
+	buf := logtest.Capture(t, slog.LevelWarn)
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[plugins.MyPlugin]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(path)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("ReadInConfig: %v", err)
+	}
+	InitConfig()
+	if _, ok := Snapshot().Plugins["myplugin"]; !ok {
+		t.Errorf("Plugins = %+v, want viper's lower-cased myplugin", Snapshot().Plugins)
+	}
+	if lines := buf.Lines("lower-cased"); len(lines) != 1 || !strings.Contains(lines[0], "plugins") {
+		t.Errorf("want exactly one lower-case Warn naming plugins, got %q", lines)
+	}
+}
+
+// PluginConfig.Settings is map[string]string. YAML's natural `Port: 8080` and
+// `Enabled: true` are a number and a bool; strict JSON refused them and the
+// whole plugins map was discarded, every other plugin included. viper's own
+// decoder converted scalars, so this does too.
+func TestViperDecodeJSON_ScalarPluginSettingsAreStringified(t *testing.T) {
+	fileInitConfig(t, `
+plugins:
+  Alpha:
+    enabled: true
+    settings:
+      Port: 8080
+      Enabled: true
+      Ratio: 0.5
+      Name: plain
+  Beta:
+    enabled: false
+`, nil)
+	want := map[string]PluginConfig{
+		"Alpha": {Enabled: true, Settings: map[string]string{"Port": "8080", "Enabled": "true", "Ratio": "0.5", "Name": "plain"}},
+		"Beta":  {Enabled: false},
+	}
+	if got := Snapshot().Plugins; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Plugins = %+v, want %+v", got, want)
+	}
+}
+
+// The same tolerance applies to an environment JSON value.
+func TestViperDecodeJSON_EnvironmentScalarPluginSettingsAreStringified(t *testing.T) {
+	t.Setenv("PLUGINS", `{"Alpha":{"enabled":true,"settings":{"Port":8080,"Debug":false}},"Beta":{"enabled":true}}`)
+	envInitConfig(t)
+	want := map[string]PluginConfig{
+		"Alpha": {Enabled: true, Settings: map[string]string{"Port": "8080", "Debug": "false"}},
+		"Beta":  {Enabled: true},
+	}
+	if got := Snapshot().Plugins; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Plugins = %+v, want %+v", got, want)
+	}
+}
+
+// A value that no weak conversion can fix is still dropped and logged.
+func TestViperDecodeJSON_UnfixableTypeStillWarnsAndKeepsDefault(t *testing.T) {
+	buf := logtest.Capture(t, slog.LevelWarn)
+	t.Setenv("PLUGINS", `{"Alpha":{"enabled":{"nested":true}}}`)
+	envInitConfig(t)
+	if got := Snapshot().Plugins; len(got) != 0 {
+		t.Fatalf("Plugins = %+v, want the empty default", got)
+	}
+	if lines := buf.Lines("ignoring plugins"); len(lines) != 1 {
+		t.Fatalf("want one 'ignoring plugins' Warn, got %q", lines)
+	}
+}
+
+// A flat dotted top-level key is a valid spelling viper finds by prefix. Its
+// map keys keep their case too: the lookup tries the dotted remainder as one key.
+func TestViperDecodeJSON_FlatDottedConfigKeyKeepsMapKeyCase(t *testing.T) {
+	fileInitConfig(t, `
+dedup.embedding_thresholds_by_model:
+  BAAI/Bge:
+    high: 0.9
+    low: 0.7
+`, nil)
+	want := map[string]EmbeddingModelThresholds{"BAAI/Bge": {High: 0.9, Low: 0.7}}
+	if got := Snapshot().Dedup.EmbeddingThresholdsByModel; !reflect.DeepEqual(got, want) {
+		t.Fatalf("EmbeddingThresholdsByModel = %+v, want %+v", got, want)
+	}
+}
+
+// Half flat, half nested: dedup.signals: {confidence: ...} under a flat "dedup" prefix.
+func TestWalkConfigKey_PrefersLongestKeyAndFallsBack(t *testing.T) {
+	root := map[string]any{
+		"a.b": map[string]any{"c": 1},
+		"A":   map[string]any{"b": map[string]any{"c": 2}, "x": 3},
+	}
+	if v, ok := walkConfigKey(root, []string{"a", "b", "c"}); !ok || v != 1 {
+		t.Errorf("a.b.c = %v, %v; want the flat a.b key's 1 (longest prefix first)", v, ok)
+	}
+	if v, ok := walkConfigKey(root, []string{"a", "x"}); !ok || v != 3 {
+		t.Errorf("a.x = %v, %v; want 3 via the nested A map after the flat prefix misses", v, ok)
+	}
+	if _, ok := walkConfigKey(root, []string{"a", "nope"}); ok {
+		t.Error("a.nope must not be found")
 	}
 }

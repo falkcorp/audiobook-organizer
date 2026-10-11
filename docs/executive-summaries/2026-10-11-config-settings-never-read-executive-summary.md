@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-config-settings-never-read-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3b9d7e52-1f6a-4c08-9e24-a7c5d1f0b863 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -43,13 +43,20 @@ Branch `fix/config-literal-missing-fields`. Follows the review of
   seven settings were filled with fixed values that ignored the config
   file. A setting someone set only in the config file or environment is now
   honoured. Settings saved through the app were never affected.
-- **List and map settings now work from every source.** Some settings are
-  lists or tables, such as AI endpoints, plugins and protected paths. Set
-  through an environment variable, they were silently thrown away.
-  Protected paths written as `/a,/b` became one path that matched nothing,
-  so neither folder was protected. Names inside these settings that use
-  capital letters, such as a plugin called `MyPlugin`, were turned into
-  lower case when read from the config file. All three problems are fixed.
+- **List and map settings are read too.** Some of the 29 settings are lists
+  or tables, such as AI endpoints, plugins and protected paths. They are now
+  read in the form each source can carry:
+  - from the environment, the AI endpoints, plugins and path aliases are
+    written as JSON text, and protected paths as a comma-separated list
+    (`/a,/b`) or a JSON array. A path with a space in it stays one path;
+  - from the config file, names written with capital letters, such as a
+    plugin called `MyPlugin`, keep their capitals, including in the default
+    config file in the home folder. A plugin setting written as a bare
+    number or `true` is read as text instead of making the server ignore
+    every plugin.
+
+  A config file in a format other than YAML or JSON still loses the
+  capitals, and the server logs a warning saying so.
 - **This cannot quietly happen again.** An automated test now lists every
   setting the server has. It fails if startup does not read a setting, or
   reads it from the wrong place. It also fails if a default is set for a
