@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.26.0
+# version: 3.27.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-11
 
@@ -298,19 +298,23 @@ jobs:
 
   # Ratchet on production functions unreachable from every main (01-P9, D18).
   # One-way like errcheck-ratchet (D47): only a NEW unreachable identifier
-  # fails. The tool is pinned inside scripts/deadcode-ratchet.py; see its
-  # header for why GOOS/GOARCH are pinned and how the bot lowers the baseline.
+  # fails. The tool is pinned in tools/deadcode/go.mod and built from it (as
+  # staticcheck and mockery are); scripts/deadcode-ratchet.py's header says why
+  # GOOS/GOARCH/CGO_ENABLED are pinned and how the bot prunes the baseline.
+  # No cgo, so no libtag1-dev; no submodule is read.
   deadcode-ratchet:
     name: Deadcode Ratchet
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: recursive
+          persist-credentials: false
 
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -329,8 +333,10 @@ jobs:
             ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
-      - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+      - name: Install deadcode (pinned, tools/deadcode/go.mod)
+        run: |
+          go -C tools/deadcode install tool
+          echo "DEADCODE_BIN=$(go env GOPATH)/bin/deadcode" >> "$GITHUB_ENV"
 
       - name: Check unreachable functions against baseline
         run: make --no-print-directory lint-deadcode-ratchet
@@ -344,9 +350,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: true
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -359,7 +369,7 @@ jobs:
       - name: Knip (production, files and exports)
         continue-on-error: true
         working-directory: web
-        run: npx knip@5 --production --include files,exports
+        run: npx --no-install knip --production --include files,exports
 
   # Project-specific: the checks that nothing was running.
   #
