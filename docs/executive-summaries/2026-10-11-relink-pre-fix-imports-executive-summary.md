@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-relink-pre-fix-imports-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: c8b260fc-3025-4657-b8a0-573cbea538a5 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -24,12 +24,13 @@ Branch `feat/relink-pre-fix-imports`.
     imported since 10-10 already works this way.
     - "Purge now" deletes it immediately, whether the version was trashed or
       not.
-    - **Trashing one of these versions deletes its file at the next daily
-      cleanup (06:00), not 14 days later.** The cleanup counts its 14 days
-      from when the version was created, not from when it was trashed, and
-      every one of these versions is older than that. A separate fix for that
-      is pending; until it lands, trashing one of these versions is as good
-      as purging it.
+    - **Trashing one of these versions does not give 14 days to change your
+      mind.** The daily cleanup (06:00) counts its 14 days from when the
+      version was created, not from when it was trashed. For anything
+      imported more than two weeks ago, the file is deleted at the next
+      cleanup; for a newer import, at the first cleanup after the version
+      turns 14 days old. A separate fix for that is pending; until it lands,
+      trashing one of these versions is nearly as final as purging it.
 - **A new repair does the attaching, and the owner reviews it first.** "Link
   pre-fix imports to their versions" is in the Repairs tab of the review page.
   Running a trial changes nothing. It lists every file of every book that has
@@ -76,7 +77,8 @@ Branch `feat/relink-pre-fix-imports`.
   at the same moment (a track number, a missing mark) is kept, not undone.
   One race is left: trashing the version in the same instant as the write can
   still win, and until the cleanup fix above lands, that file is then deleted
-  at the next 06:00 cleanup. The same
+  by the daily cleanup as described above (for most of these files, the next
+  one). The same
   protection now covers the importer's own linking step. Running the repair
   again finds nothing new to link.
 - **Missing checksums are filled in on the way.** A linked file with no

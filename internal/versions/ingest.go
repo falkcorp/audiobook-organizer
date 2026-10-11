@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -196,15 +196,18 @@ func LockTorrent(hash string) (unlock func()) {
 // takes no lock, and a link landing on a trashed version would let a purge of
 // it delete the file. That purge can come at the very next daily trash
 // cleanup, because CleanupTrashedVersions counts its 14 days from the
-// version's creation, not from the trash (a separate fix is pending). This
+// version's creation, not from the trash (a separate fix is pending): any
+// version older than 14 days is purged at the first cleanup after its trash. This
 // narrows the race to the commit itself; it does not close it, because
 // UpdateBookVersion takes no lock this function can hold: a trash committed
 // in the same instant as the link can still win.
 //
-// It is idempotent per row: when the target row already carries a VersionID
-// naming a version of this book, that version is returned (linked=true) and
-// nothing is created, so a repair that re-runs ingest over a row never mints a
-// second version. A row left without a VersionID is linked on the next run:
+// Outside adopt-only mode it is idempotent per row: when the target row
+// already carries a VersionID naming a version of this book, that version is
+// returned (linked=true) and nothing is created, so a repair that re-runs
+// ingest over a row never mints a second version. An adopt-only call
+// (AdoptVersionID) refuses such a row with ErrBookFileChanged instead: its
+// caller planned the row unlinked. A row left without a VersionID is linked on the next run:
 // after a failed version create a version is created then; after a failed
 // link write (or an import from before 2026-10-10, which never linked) the
 // stranded version is adopted rather than duplicated (see strandedVersion).
