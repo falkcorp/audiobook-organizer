@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -15,12 +15,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/keyedmutex"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
@@ -63,45 +63,7 @@ func sameContent(a, b string) (bool, error) {
 // the copy import A made and was about to remove on its failure path -- B's
 // row then named a file A deleted. Process-local, which covers every caller:
 // all imports into the library run in this process.
-var destLocks keyedMutex
-
-// keyedMutex is a set of mutexes, one per key, created on first use and
-// dropped when nobody holds or waits on it.
-type keyedMutex struct {
-	mu    sync.Mutex
-	locks map[string]*refMutex
-}
-
-type refMutex struct {
-	sync.Mutex
-	refs int // holders + waiters; guarded by keyedMutex.mu
-}
-
-// lock blocks until key is free and returns the matching unlock.
-func (k *keyedMutex) lock(key string) (unlock func()) {
-	k.mu.Lock()
-	if k.locks == nil {
-		k.locks = make(map[string]*refMutex)
-	}
-	m := k.locks[key]
-	if m == nil {
-		m = &refMutex{}
-		k.locks[key] = m
-	}
-	m.refs++
-	k.mu.Unlock()
-
-	m.Lock()
-	return func() {
-		m.Unlock()
-		k.mu.Lock()
-		m.refs--
-		if m.refs == 0 {
-			delete(k.locks, key)
-		}
-		k.mu.Unlock()
-	}
-}
+var destLocks keyedmutex.Mutex
 
 // ImportOptions configures ImportToLibraryWith.
 type ImportOptions struct {
@@ -276,7 +238,7 @@ func ImportToLibraryWith(
 	// Everything from here to the end touches dest: hold its lock throughout
 	// (see destLocks), including the Deluge move, which only serializes
 	// imports into this one path.
-	unlock := destLocks.lock(dest)
+	unlock := destLocks.Lock(dest)
 	defer unlock()
 
 	// A destination some other book_file row already names is that row's

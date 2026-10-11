@@ -1,5 +1,5 @@
 // file: internal/versions/ingest_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 
@@ -543,5 +543,86 @@ func TestCreateIngestVersion_RerunAdoptsVersionStrandedByFailedLink(t *testing.T
 	}
 	if idx, _ := pebble.GetBookVersionByTorrentHash(torrent); idx == nil || idx.ID != first.ID {
 		t.Errorf("torrent index must still name %q, got %+v", first.ID, idx)
+	}
+}
+
+// A row whose VersionID names ANOTHER book's live version (merged rows keep
+// the absorbed book's VersionID) is stale for this book, but the torrent that
+// version holds is not up for grabs: relinking with that hash would move the
+// one-to-one torrent index off a version that is still live, which is the
+// theft the importer's already-linked guard exists to prevent. The function
+// must refuse rather than rely on every caller to have checked first.
+func TestCreateIngestVersion_ForeignVersionIDDoesNotTakeLiveTorrent(t *testing.T) {
+	const torrent = "0123456789abcdef0123456789abcdef01234567"
+	store, keeper, filePath := ingestFixture(t, database.BookFile{})
+
+	absorbed, err := store.CreateBook(&database.Book{Title: "Absorbed", FilePath: filePath, Format: "m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	held, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: absorbed.ID, Status: database.BookVersionStatusActive, Format: "m4b", Source: "deluge", TorrentHash: torrent,
+	})
+	if err != nil {
+		t.Fatalf("CreateBookVersion: %v", err)
+	}
+	row := storedRow(t, store, keeper.ID, "f1")
+	row.VersionID = held.ID
+	if err := store.UpdateBookFile(row.ID, &row); err != nil {
+		t.Fatalf("UpdateBookFile: %v", err)
+	}
+
+	_, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: keeper.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "deluge", TorrentHash: torrent,
+	})
+	if !errors.Is(err, ErrTorrentLinkedElsewhere) {
+		t.Errorf("err = %v, want ErrTorrentLinkedElsewhere", err)
+	}
+	if linked {
+		t.Error("reported linked")
+	}
+	if idx, _ := store.GetBookVersionByTorrentHash(torrent); idx == nil || idx.ID != held.ID {
+		t.Errorf("torrent index must still name the absorbed book's live version %q, got %+v", held.ID, idx)
+	}
+	if vers, _ := store.GetBookVersionsByBookID(keeper.ID); len(vers) != 0 {
+		t.Errorf("no version may be created for the keeper, got %d", len(vers))
+	}
+	if got := storedRow(t, store, keeper.ID, "f1"); got.DelugeHash != "" {
+		t.Errorf("row must not claim the torrent: DelugeHash = %q", got.DelugeHash)
+	}
+}
+
+// Two live, unreferenced versions with the same torrent hash is not the simple
+// failed-link case, so adoption must not pick one: a new version is created
+// and linked, and both candidates are left as they were.
+func TestCreateIngestVersion_TwoStrandedCandidatesAreNotAdopted(t *testing.T) {
+	store, book, filePath := ingestFixture(t, database.BookFile{})
+	var candidates []string
+	for range 2 {
+		v, err := store.CreateBookVersion(&database.BookVersion{
+			BookID: book.ID, Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
+		})
+		if err != nil {
+			t.Fatalf("CreateBookVersion: %v", err)
+		}
+		candidates = append(candidates, v.ID)
+	}
+
+	ver, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "imported",
+	})
+	if err != nil || !linked {
+		t.Fatalf("ingest: linked=%v err=%v", linked, err)
+	}
+	for _, id := range candidates {
+		if ver.ID == id {
+			t.Fatalf("adopted candidate %q although two were eligible", id)
+		}
+	}
+	if vers, _ := store.GetBookVersionsByBookID(book.ID); len(vers) != 3 {
+		t.Errorf("want the 2 candidates plus 1 new version, got %d", len(vers))
+	}
+	if got := storedRow(t, store, book.ID, "f1"); got.VersionID != ver.ID {
+		t.Errorf("row VersionID = %q, want the new version %q", got.VersionID, ver.ID)
 	}
 }

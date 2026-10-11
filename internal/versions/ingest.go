@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 //
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/keyedmutex"
 )
 
 // IngestVersionParams describes the provenance of a newly-ingested file.
@@ -50,7 +51,47 @@ type IngestVersionParams struct {
 	// book_file row's DelugeHash is written in the same update that sets its
 	// VersionID, so the row carries the hash only when it is linked to the
 	// version carrying it -- never one half of the link without the other.
+	// A hash a live version already holds is refused with
+	// ErrTorrentLinkedElsewhere; see CreateIngestVersion.
 	TorrentHash string
+	// NewBook tells CreateIngestVersion the caller created BookID moments ago
+	// (the importer does), so no earlier run can have stranded a version of
+	// it and the stranded-version lookup is skipped. Besides saving a read,
+	// that keeps a failed lookup from aborting the version create, and with it
+	// the torrent index entry that turns a retried discover import into a 409
+	// instead of a second book.
+	NewBook bool
+}
+
+// ErrTorrentLinkedElsewhere is returned by CreateIngestVersion when
+// TorrentHash is held by another live version (see LiveTorrentHolder).
+// Linking it would move the one-to-one torrent index off that version, and
+// writing it onto the row would make the row claim a torrent another version
+// owns. Nothing is created or written.
+var ErrTorrentLinkedElsewhere = errors.New("torrent already linked to another live version")
+
+// torrentLocks serializes torrent links per hash; see LockTorrent.
+var torrentLocks keyedmutex.Mutex
+
+// LockTorrent blocks until no other goroutine in this process holds the
+// per-torrent link lock for hash, takes it, and returns the matching unlock.
+// An empty hash takes no lock (the returned unlock is a no-op).
+//
+// A caller that may link a torrent holds it from its own already-linked check
+// through CreateIngestVersion's return. That check, the version create, and
+// the index write are otherwise a check-then-act sequence: two concurrent
+// imports of one torrent (a double click, a proxy retry) both pass the check,
+// both create a version carrying the hash, and the index ends up on whichever
+// wrote last while the other book's row still claims the torrent.
+// Process-local is enough: the store is single-process and
+// CreateIngestVersion is the only creator of book versions. CreateIngestVersion
+// does not take the lock itself, because the caller's guard has to sit inside
+// the same critical section and the lock is not reentrant.
+func LockTorrent(hash string) (unlock func()) {
+	if hash == "" {
+		return func() {}
+	}
+	return torrentLocks.Lock(hash)
 }
 
 // CreateIngestVersion creates a BookVersion for a newly-ingested file and
@@ -70,6 +111,13 @@ type IngestVersionParams struct {
 // link write (or an import from before 2026-10-10, which never linked) the
 // stranded version is adopted rather than duplicated (see strandedVersion).
 // Nothing is deleted on any path.
+//
+// It refuses (ErrTorrentLinkedElsewhere) to link a TorrentHash that a live
+// version other than the one it would link already holds, whether it is
+// creating a version or adopting a stranded one. A row whose VersionID names
+// another book's version (merged rows keep the absorbed book's VersionID) is
+// relinked for this book, but never by taking that version's torrent. Callers
+// linking a torrent hold LockTorrent(params.TorrentHash) across the call.
 //
 // It also stores the file's identity hash on the linked row when the row does
 // not carry one yet. A caller that has already hashed the file (the importer
@@ -132,15 +180,28 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		// repointed), is stale: fall through and relink the row to a new one.
 	}
 
+	// Who holds the torrent now. Checked here and not only by the importer,
+	// so no caller -- a relink pass over merged rows included -- can move the
+	// one-to-one index off a version that is still live.
+	var holder *database.BookVersion
+	if params.TorrentHash != "" {
+		h, holdErr := LiveTorrentHolder(store, params.TorrentHash)
+		if holdErr != nil {
+			return nil, false, fmt.Errorf("read torrent index for %s: %w", params.TorrentHash, holdErr)
+		}
+		holder = h
+	}
+
 	// Adopt a version stranded by an earlier run, before creating one. A run
 	// whose link write failed (or an import from before 2026-10-10, which
 	// never linked) leaves a version no row points at and a row with no
 	// VersionID. Creating again would leave the first orphaned and ACTIVE and
 	// make the new one an alt that takes over the torrent index; adopting it
 	// makes a re-run the repair. Only when there is a row to link and the
-	// rows were read, so "unreferenced" is known.
+	// rows were read, so "unreferenced" is known, and never for a book the
+	// caller just created (NewBook), which has nothing to strand.
 	var ver *database.BookVersion
-	if target >= 0 && filesErr == nil {
+	if target >= 0 && filesErr == nil && !params.NewBook {
 		stranded, strandErr := strandedVersion(store, params, files)
 		if strandErr != nil {
 			// Cannot tell whether a stranded version exists; creating could
@@ -148,6 +209,11 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			return nil, false, fmt.Errorf("list versions of book %s: %w", params.BookID, strandErr)
 		}
 		ver = stranded
+	}
+
+	if holder != nil && (ver == nil || holder.ID != ver.ID) {
+		return nil, false, fmt.Errorf("%w: torrent %s is held by version %s of book %s",
+			ErrTorrentLinkedElsewhere, params.TorrentHash, holder.ID, holder.BookID)
 	}
 
 	if ver == nil {
