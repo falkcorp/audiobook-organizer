@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 04249a9d-8f2e-44f4-9652-258511aae768
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -34,7 +34,7 @@ func TestDetectChapterGroups_PrimaryIsLowestChapterNumber(t *testing.T) {
 	for _, n := range []int{3, 10, 1, 7, 2, 9, 4, 8, 6, 5} {
 		books = append(books, chBook(fmt.Sprintf("id-%02d", 11-n), fmt.Sprintf("/lib/A/Book/%d - My Book.mp3", n), chIntPtr(300)))
 	}
-	groups := DetectChapterGroups(books, 2, 600)
+	groups := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 2, MaxPerFileDuration: 600}).Groups
 	if len(groups) != 1 {
 		t.Fatalf("want 1 group, got %d", len(groups))
 	}

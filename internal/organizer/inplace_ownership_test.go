@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_ownership_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1e5bf761-ee82-4110-865a-948c137494ee
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -126,7 +126,7 @@ func TestOrganizeBooks_OwnedChapterIsSkippedNotFailed(t *testing.T) {
 	}
 	frag := addInPlaceBook(t, store, "frag", "02", ch, nil, nil, 0)
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*frag}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*frag}, nil, &noopLogger{}, "", false, nil)
 	if stats.Collisions[OutcomeOwnedByOtherBook] != 1 || stats.Failed != 0 {
 		t.Fatalf("want one owned_by_other_book skip and no failure, got %+v", stats)
 	}
@@ -304,7 +304,7 @@ func TestReOrganizeInPlace_OwnershipUnverifiedDuringWarmup(t *testing.T) {
 	b := addInPlaceBook(t, store, "solo", "Solo", src, filled(150, 6), nil, 0)
 	store.UseMemDB = false // memdb not serving: the warmup window
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", false, nil)
 	if stats.Collisions[OutcomeOwnershipUnverified] != 1 || stats.Failed != 0 || stats.Skipped != 1 {
 		t.Fatalf("want one ownership_unverified skip, got %+v", stats)
 	}

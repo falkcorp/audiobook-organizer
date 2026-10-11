@@ -1,7 +1,7 @@
 // file: internal/server/organize_service_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package server
 
@@ -69,7 +69,7 @@ func TestOrganizeService_PerformOrganize_NoBooksToOrganize(t *testing.T) {
 // would still pass every test in this file.
 func TestOrganizeService_PerformOrganize_WithBooks(t *testing.T) {
 	// Pin the filesystem: PerformOrganize's non-BookIDs branch reaches
-	// orgSvc.organizeBooks, which does real file I/O under
+	// orgSvc.organizeBooksOpts, which does real file I/O under
 	// config.AppConfig.RootDir. An unsandboxed run would write outside the
 	// test. config.AppConfig is process-global and shared across every test
 	// in this binary, so it must be snapshotted and restored — otherwise
@@ -146,7 +146,7 @@ func TestOrganizeService_PerformOrganize_WithBooks(t *testing.T) {
 			}
 			return &database.Book{ID: "book-1", Title: "Test Book", AuthorID: &authorID, FilePath: srcFile, Format: "mp3"}, nil
 		},
-		// The book is outside RootDir, so organizeBooks routes it through
+		// The book is outside RootDir, so organizeBooksOpts routes it through
 		// CreateOrganizedVersion, which persists the organized copy via
 		// CreateBook.
 		CreateBookFunc: func(book *database.Book) (*database.Book, error) {

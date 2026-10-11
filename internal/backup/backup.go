@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-09-22
+// last-edited: 2026-10-11
 
 package backup
 
@@ -717,15 +717,6 @@ func verifyChecksumSidecar(archivePath, sidecarPath string) error {
 	return nil
 }
 
-// RestoreBackup restores a database from a backup file. It is a thin wrapper
-// over RestoreBackupIn for existing callers/tests that already have a full
-// path; new callers handling caller-supplied filenames (e.g. the HTTP
-// handler) should call RestoreBackupIn directly with an untainted backupDir
-// and the raw filename -- see RestoreBackupIn's doc comment.
-func RestoreBackup(backupPath, targetPath string, verify bool) error {
-	return RestoreBackupIn(filepath.Dir(backupPath), filepath.Base(backupPath), targetPath, verify)
-}
-
 // RestoreBackupIn restores the backup named filename found in backupDir.
 //
 // filename is used only as a LOOKUP KEY against a directory listing, never
@@ -980,14 +971,6 @@ func listBackups(backupDir string, withChecksums bool) ([]BackupInfo, error) {
 	}
 
 	return backups, nil
-}
-
-// DeleteBackup deletes a specific backup file and its checksum sidecar. It is
-// a thin wrapper over DeleteBackupIn for existing callers/tests that already
-// have a full path; new callers handling caller-supplied filenames (e.g. the
-// HTTP handler) should call DeleteBackupIn directly -- see its doc comment.
-func DeleteBackup(backupPath string) error {
-	return DeleteBackupIn(filepath.Dir(backupPath), filepath.Base(backupPath))
 }
 
 // DeleteBackupIn deletes the backup named filename found in backupDir, plus
@@ -1309,32 +1292,4 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-// ScheduleBackup schedules automatic backups (placeholder for future implementation)
-func ScheduleBackup(interval time.Duration, config BackupConfig) error {
-	// TODO: Implement scheduled backups using a ticker
-	// This would run in a goroutine and create backups at regular intervals
-	return fmt.Errorf("scheduled backups not yet implemented")
-}
-
-// BackupDatabase is a convenience function that backs up the database
-// referenced by the supplied store. Currently a stub — kept around because
-// tests exercise the nil-store error path, and a future implementation
-// will add Path()/Type() accessors to the Store interface.
-//
-// Signature takes an explicit database.Store (SERVER-GLOBAL-STORE-AUDIT
-// phase 2). Pass nil to exercise the "database not initialized" path.
-// The store parameter is `any` because this stub only nil-checks it. It took
-// database.Store -- 398 methods -- to call none of them. Give it the interface
-// it actually needs if the real implementation lands.
-func BackupDatabase(store any, config BackupConfig) (*BackupInfo, error) {
-	if store == nil {
-		return nil, fmt.Errorf("database not initialized")
-	}
-
-	// TODO: Add methods to Store interface to get database path and type.
-	// For now, we'll need to pass these as parameters via BackupConfig.
-
-	return nil, fmt.Errorf("backup requires database path and type information")
 }

@@ -1,7 +1,7 @@
 // file: internal/backup/backup_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-10
+// last-edited: 2026-10-11
 
 package backup
 
@@ -16,8 +16,6 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // assertNothingEscaped fails the test if restoring into restoreDir created any
@@ -1113,46 +1111,6 @@ func TestBackupDifferentCompressionLevels(t *testing.T) {
 	}
 }
 
-// TestScheduleBackupNotImplemented tests that ScheduleBackup returns error
-func TestScheduleBackupNotImplemented(t *testing.T) {
-	// Arrange
-	config := DefaultBackupConfig()
-	interval := 1 * time.Hour
-
-	// Act
-	err := ScheduleBackup(interval, config)
-
-	// Assert
-	if err == nil {
-		t.Error("Expected error for unimplemented ScheduleBackup")
-	}
-	expectedMsg := "scheduled backups not yet implemented"
-	if err.Error() != expectedMsg {
-		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
-	}
-}
-
-// TestBackupDatabaseNilStore tests BackupDatabase with nil database
-func TestBackupDatabaseNilStore(t *testing.T) {
-	// Arrange
-	config := DefaultBackupConfig()
-
-	// Act
-	info, err := BackupDatabase(nil, config)
-
-	// Assert
-	if err == nil {
-		t.Error("Expected error for nil database")
-	}
-	if info != nil {
-		t.Error("Expected nil BackupInfo on error")
-	}
-	expectedMsg := "database not initialized"
-	if err.Error() != expectedMsg {
-		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
-	}
-}
-
 // TestRestoreBackupWithVerification tests restore with checksum verification enabled
 // TestCreateBackupWritesChecksumSidecar is the TASK-306 regression test for
 // CreateBackup's half of the fix: every archive it writes must get a
@@ -1974,83 +1932,6 @@ func TestCreateBackupLowCompression(t *testing.T) {
 
 	if info.Size == 0 {
 		t.Error("Backup size should not be zero")
-	}
-}
-
-// TestBackupDatabaseNotInitialized tests BackupDatabase with nil GlobalStore
-func TestBackupDatabaseNotInitialized(t *testing.T) {
-	// Save original GlobalStore and defer restore
-	originalStore := database.GetGlobalStore()
-	defer func() {
-		database.SetGlobalStore(originalStore)
-	}()
-
-	// Set GlobalStore to nil
-	database.SetGlobalStore(nil)
-
-	config := BackupConfig{
-		BackupDir:        t.TempDir(),
-		MaxBackups:       10,
-		CompressionLevel: 5,
-	}
-
-	// Act
-	info, err := BackupDatabase(nil, config)
-
-	// Assert
-	if err == nil {
-		t.Fatal("Expected error when database not initialized, got nil")
-	}
-
-	if info != nil {
-		t.Error("Expected nil BackupInfo on error")
-	}
-
-	if !strings.Contains(err.Error(), "database not initialized") {
-		t.Errorf("Expected 'database not initialized' error, got: %v", err)
-	}
-}
-
-// TestBackupDatabaseMissingInfo tests BackupDatabase with missing path/type info
-func TestBackupDatabaseMissingInfo(t *testing.T) {
-	// This test verifies that BackupDatabase returns an error about missing
-	// database path and type information. Whether GlobalStore is nil or not,
-	// one of the two error paths should be hit.
-
-	config := BackupConfig{
-		BackupDir:        t.TempDir(),
-		MaxBackups:       10,
-		CompressionLevel: 5,
-	}
-
-	// Act
-	info, err := BackupDatabase(nil, config)
-
-	// Assert - Should get an error (either "not initialized" or "requires path/type")
-	if err == nil {
-		t.Fatal("Expected error from BackupDatabase, got nil")
-	}
-
-	if info != nil {
-		t.Error("Expected nil BackupInfo on error")
-	}
-
-	// Either error message is acceptable since we're testing error paths
-	validErrors := []string{
-		"database not initialized",
-		"backup requires database path and type information",
-	}
-
-	foundValid := false
-	for _, validErr := range validErrors {
-		if strings.Contains(err.Error(), validErr) {
-			foundValid = true
-			break
-		}
-	}
-
-	if !foundValid {
-		t.Errorf("Expected one of %v in error, got: %v", validErrors, err)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package undo
 
@@ -215,16 +215,6 @@ func (p *RevertPlan) FieldLocksOf(c *database.OperationChange) []*database.Opera
 	}
 	return p.fieldLocks[c.BookID+"\x00"+c.FieldName]
 }
-
-// HandedOff reports whether this operation recorded handing bookID's version
-// group to another member after retiring it (ChangeTypeBookPrimaryHandoff).
-// That row is written only after the hand-off, so it is evidence the
-// operation changed the group's flags. Only then may an already-restored
-// primary demote of bookID re-crown its group (a retry whose earlier Crown
-// failed). Without it the group is not the operation's to change: a retire
-// cut off before it wrote, whatever an earlier revert pass counted already
-// restored, or a flag a user set since.
-func (p *RevertPlan) HandedOff(bookID string) bool { return p.handedOff[bookID] }
 
 // ChangedPrimary reports whether this operation journaled a primary demote
 // or a hand-off for bookID: evidence it set out to change the primary of the

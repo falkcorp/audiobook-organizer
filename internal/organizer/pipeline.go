@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -514,42 +514,6 @@ func (o *Organizer) ComputeTargetPaths(book *database.Book, files []database.Boo
 		o.pathVars(book, 0, 0, ""),
 		o.buildOpts(),
 	)
-}
-
-// ComputeTargetPathsFromSegments is a backward-compatible wrapper that accepts
-// BookSegment slices and converts them to BookFile before computing paths.
-// Deprecated: callers should use ComputeTargetPaths with []BookFile directly.
-func ComputeTargetPathsFromSegments(rootDir, folderPattern, filePattern string, segments []database.BookSegment, vars PathVars, opts BuildOpts) ([]FileRenameEntry, error) {
-	files := make([]database.BookFile, 0, len(segments))
-	for _, seg := range segments {
-		trackNum := 0
-		if seg.TrackNumber != nil {
-			trackNum = *seg.TrackNumber
-		}
-		trackCount := 0
-		if seg.TotalTracks != nil {
-			trackCount = *seg.TotalTracks
-		}
-		bf := database.BookFile{
-			ID:          seg.ID,
-			BookID:      fmt.Sprintf("%d", seg.BookID),
-			FilePath:    seg.FilePath,
-			Format:      seg.Format,
-			FileSize:    seg.SizeBytes,
-			Duration:    seg.DurationSec * 1000, // seconds to milliseconds
-			TrackNumber: trackNum,
-			TrackCount:  trackCount,
-			Missing:     !seg.Active,
-		}
-		if seg.FileHash != nil {
-			bf.FileHash = *seg.FileHash
-		}
-		if seg.SegmentTitle != nil {
-			bf.Title = *seg.SegmentTitle
-		}
-		files = append(files, bf)
-	}
-	return ComputeTargetPaths(rootDir, folderPattern, filePattern, files, vars, opts)
 }
 
 // RenameFilesResult holds the outcome of a rename operation.

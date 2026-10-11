@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -192,15 +192,6 @@ func looksLikeDuplicateCopies(members []database.BookCore) bool {
 		}
 	}
 	return lo > 0 && float64(hi) <= float64(lo)*1.10
-}
-
-// DetectChapterGroups is DetectChapterGroupsWithOptions without a path
-// filter, returning only the mergeable groups.
-func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration int) []ChapterGroup {
-	return DetectChapterGroupsWithOptions(books, ChapterDetectOptions{
-		MinFiles:           minFiles,
-		MaxPerFileDuration: maxPerFileDuration,
-	}).Groups
 }
 
 // pathUnderPrefix reports whether p is prefix or lies beneath it.

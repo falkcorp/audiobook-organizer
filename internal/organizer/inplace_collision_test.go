@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 99027475-b084-4603-adf4-4061987f30b0
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -305,7 +305,7 @@ func TestInPlace_FragmentCollapse_NotMoved(t *testing.T) {
 	b1 := addInPlaceBook(t, store, "frag-1", "Frag Title", filepath.Join(dir, "Frag - 01.mp3"), filled(3000, 0x31), nil, 0)
 	b2 := addInPlaceBook(t, store, "frag-2", "Frag Title", filepath.Join(dir, "Frag - 02.mp3"), filled(3300, 0x32), nil, 0)
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "", false, nil)
 	if got := stats.Collisions[OutcomeFragmentCollapse]; got != 2 {
 		t.Fatalf("want 2 fragment_collapse, got %d (stats %+v)", got, stats)
 	}
@@ -439,7 +439,7 @@ func TestInPlace_SameTargetDifferentDirs_NotFragmentCollapse(t *testing.T) {
 	b1 := addInPlaceBook(t, store, "dir-1", "Same Title", filepath.Join(root, "incoming", "one", "x.mp3"), filled(3000, 0x41), nil, 0)
 	b2 := addInPlaceBook(t, store, "dir-2", "Same Title", filepath.Join(root, "incoming", "two", "x.mp3"), filled(3300, 0x42), nil, 0)
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "", false, nil)
 	if got := stats.Collisions[OutcomeFragmentCollapse]; got != 0 {
 		t.Fatalf("books from different directories must not be fragment_collapse, got %d", got)
 	}
@@ -527,7 +527,7 @@ func TestInPlace_ChapterPerFolder_NeverMoved(t *testing.T) {
 	svc, store, root := setupInPlace(t)
 	b1, b2, target := chapterFolderBooks(t, svc, store, root)
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "", false, nil)
 	if got := stats.Collisions[OutcomeFragmentCollapse]; got != 2 || stats.Failed != 0 {
 		t.Fatalf("want 2 fragment_collapse and no failures, got %+v", stats)
 	}
@@ -543,7 +543,7 @@ func TestInPlace_ChapterPerFolder_BatchSplit(t *testing.T) {
 	b1, b2, target := chapterFolderBooks(t, svc, store, root)
 
 	for _, b := range []*database.Book{b1, b2} {
-		stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+		stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", false, nil)
 		if got := stats.Collisions[OutcomeFragmentCollapse]; got != 1 || stats.Failed != 0 {
 			t.Fatalf("%s: want fragment_collapse, got %+v", b.ID, stats)
 		}
@@ -564,7 +564,7 @@ func TestInPlace_ChapterPerFolder_NonLatin_NeverMoved(t *testing.T) {
 			svc, store, root := setupInPlace(t)
 			b1, b2, target := chapterFolderBooksTitled(t, svc, store, root, title)
 
-			stats := svc.organizeBooks(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "")
+			stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "", false, nil)
 			if got := stats.Collisions[OutcomeFragmentCollapse]; got != 2 || stats.Failed != 0 {
 				t.Fatalf("want 2 fragment_collapse and no failures, got %+v", stats)
 			}
@@ -573,7 +573,7 @@ func TestInPlace_ChapterPerFolder_NonLatin_NeverMoved(t *testing.T) {
 			// Split across batches, chapter 1 meets a free target and must
 			// still stay where it is.
 			for _, b := range []*database.Book{b1, b2} {
-				stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+				stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", false, nil)
 				if got := stats.Collisions[OutcomeFragmentCollapse]; got != 1 || stats.Failed != 0 {
 					t.Fatalf("%s: want fragment_collapse, got %+v", b.ID, stats)
 				}

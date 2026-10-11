@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.131.0
+// version: 1.131.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -178,11 +178,6 @@ var activeScanner Scanner
 // Set by ScanService before starting a scan.
 var activeEmbeddingStore *database.EmbeddingStore
 
-// SetScanner overrides the default scanner implementation for testing.
-func SetScanner(s Scanner) {
-	activeScanner = s
-}
-
 // setActiveEmbeddingStore sets the embedding store for dedup detection.
 func setActiveEmbeddingStore(es *database.EmbeddingStore) {
 	activeEmbeddingStore = es
@@ -282,27 +277,12 @@ func getStore() scannerStore {
 
 // globalScanCache is set before a scan and used inside ProcessBooksParallel to
 // skip files whose mtime+size are unchanged since the last successful scan.
-// Protected by globalScanCacheMu because SetScanCache and ProcessBooksParallel
-// may be called from different goroutines in tests.
+// Protected by globalScanCacheMu because AcquireScanCache and
+// ProcessBooksParallel may be called from different goroutines in tests.
 var (
 	globalScanCache   map[string]database.ScanCacheEntry
 	globalScanCacheMu sync.RWMutex
 )
-
-// SetScanCache installs a pre-loaded scan-cache map before a scan run.
-// Pass nil to disable incremental skip behaviour (full scan).
-func SetScanCache(cache map[string]database.ScanCacheEntry) {
-	globalScanCacheMu.Lock()
-	defer globalScanCacheMu.Unlock()
-	globalScanCache = cache
-}
-
-// ClearScanCache removes the cached map after a scan completes.
-// Test/legacy direct-clear; production scan runs use AcquireScanCache's
-// release func so concurrent runs don't clear each other's cache.
-func ClearScanCache() {
-	SetScanCache(nil)
-}
 
 // scanCacheRefs / scanCacheFullRuns reference-count concurrent scan runs that
 // share globalScanCache (audit 2026-07-17 R-4): library.scan and
@@ -406,7 +386,7 @@ func AcquireScanCache(cache map[string]database.ScanCacheEntry) func() {
 // ScanService.performScanInternal. Protected by worksLookupMu.
 var (
 	worksLookupCache map[string]string // key = normalizedTitle + "|" + authorID(or "nil")
-	worksLookupReady bool              // true while the map is live for lookups (a run holds it, or InitWorksLookupCache)
+	worksLookupReady bool              // true while the map is live for lookups (a run holds it)
 	worksLookupMu    sync.RWMutex
 
 	// worksLookupReusable is true when the map was fully loaded from the
@@ -436,20 +416,6 @@ func worksLookupKey(normalizedTitle string, authorID *int) string {
 		return normalizedTitle + "|nil"
 	}
 	return normalizedTitle + "|" + strconv.Itoa(*authorID)
-}
-
-// InitWorksLookupCache builds the (normalizedTitle|authorID) → workID map by
-// loading every work once. Test/legacy direct-init; production scan runs use
-// AcquireWorksLookupCache / ReleaseWorksLookupCache so concurrent runs don't
-// clear each other's cache (audit 2026-07-17 R-4).
-// If the load fails, the cache is left empty but enabled — saveBookToDatabase
-// will fall through to a direct CreateWork (which is the same fallback path as
-// when nothing matched).
-func InitWorksLookupCache() {
-	worksLookupMu.Lock()
-	defer worksLookupMu.Unlock()
-	stopWorksLookupDropTimerLocked()
-	_ = initWorksLookupCacheLocked(context.Background())
 }
 
 // initWorksLookupCacheLocked loads the works map; callers must hold
@@ -494,18 +460,6 @@ func initWorksLookupCacheLocked(ctx context.Context) error {
 	defaultLog.Info("InitWorksLookupCache: loaded %d works in %s",
 		len(m), time.Since(start).Round(time.Millisecond))
 	return nil
-}
-
-// ClearWorksLookupCache drops the works lookup map. Test/legacy direct-clear
-// counterpart of InitWorksLookupCache; production scan runs use
-// ReleaseWorksLookupCache.
-func ClearWorksLookupCache() {
-	worksLookupMu.Lock()
-	defer worksLookupMu.Unlock()
-	stopWorksLookupDropTimerLocked()
-	worksLookupCache = nil
-	worksLookupReady = false
-	worksLookupReusable = false
 }
 
 // invalidateWorksLookupCache marks any retained map unusable for a later run.
@@ -2703,27 +2657,20 @@ const (
 	maxDirectoryBookFiles = 250
 )
 
-func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes ...map[string]string) string {
-	var hashes map[string]string
-	if len(knownHashes) > 0 {
-		hashes = knownHashes[0]
-	}
-	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, hashes, nil, maxDirectoryBookFiles, nil)
-}
-
-// noBookFileLimit lifts createBookFilesForBook's maxDirectoryBookFiles
+// noBookFileLimit lifts createBookFilesForBookWithAudio's maxDirectoryBookFiles
 // backstop, for a book already proven to be one chapter sequence.
 const noBookFileLimit = -1
 
-// createBookFilesForBookLimited is createBookFilesForBook with an explicit
-// file ceiling (noBookFileLimit for none) and the run's counters, which count
-// a ceiling refusal for the run summary (nil: not counted).
+// createBookFilesForBookLimited is createBookFilesForBookWithAudio without
+// known media info: it takes an explicit file ceiling (noBookFileLimit for
+// none) and the run's counters, which count a ceiling refusal for the run
+// summary (nil: not counted).
 func createBookFilesForBookLimited(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes map[string]string, maxFiles int, rc *scanRunCounters) string {
 	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, knownHashes, nil, maxFiles, rc)
 }
 
-// createBookFilesForBookWithAudio is createBookFilesForBook plus knownInfo:
-// filePath → media info this scan ALREADY read for that file. A row whose file
+// createBookFilesForBookWithAudio creates the book_file rows of one book,
+// taking knownInfo: filePath → media info this scan ALREADY read for that file. A row whose file
 // is in knownInfo takes its duration and codec from there (see
 // bookfileaudio.EnsureDuration) instead of being probed again or written with
 // Duration 0. Only single-file books have such a value today: ProcessFile reads
@@ -4373,15 +4320,6 @@ func rescanMayCreditAuthors(locked map[string]bool, locksOK bool) bool {
 // bookAuthorsModifier is the junction write creditScannedAuthors needs.
 type bookAuthorsModifier interface {
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
-}
-
-// resolveAuthorID is resolveAuthorIDs' primary author alone, nil for none.
-func resolveAuthorID(authorName string) (*int, error) {
-	ids, err := resolveAuthorIDs(authorName)
-	if err != nil || len(ids) == 0 {
-		return nil, err
-	}
-	return &ids[0], nil
 }
 
 // creditScannedAuthors records a multi-author credit's co-authors in the

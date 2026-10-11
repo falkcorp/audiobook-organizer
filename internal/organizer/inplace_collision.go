@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-10-02
+// last-edited: 2026-10-11
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -155,7 +155,7 @@ func (r *InPlaceResolution) adopted() bool {
 // (link(2)/EEXIST) stays the backstop against writers outside organize.
 //
 // Striped rather than a map of per-path mutexes so memory stays fixed over a
-// library-scale run. This is a NEW lock, deliberately not organizeBooks'
+// library-scale run. This is a NEW lock, deliberately not organizeBooksOpts'
 // pathMu, which guards the detection-only DEC-11 claim map and must not start
 // serializing file I/O.
 const inPlaceDestStripes = 256

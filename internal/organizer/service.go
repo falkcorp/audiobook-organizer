@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.63.0
+// version: 1.63.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -1250,7 +1250,7 @@ func (orgSvc *Service) stampOrganizeMetadata(bookID, operationID string, when ti
 	})
 }
 
-// stampAlreadyCorrectWorkers bounds the bulk stamp. It matches organizeBooks'
+// stampAlreadyCorrectWorkers bounds the bulk stamp. It matches organizeBooksOpts'
 // own numWorkers: the work is one Pebble read plus one write per book, and both
 // loops hit the same store.
 const stampAlreadyCorrectWorkers = 8
@@ -1350,7 +1350,7 @@ const (
 // write, so an operation's summary and its change log cannot disagree.
 //
 // It is THE row-writing step after OrganizeOneBook, for every caller.
-// organizeBooks, the batch-save op and metafetch's library copy all go
+// organizeBooksOpts, the batch-save op and metafetch's library copy all go
 // through it; until 2026-09-02 each had its own copy of this branch and three
 // of the copies wrote no book_file rows at all -- files moved, rows still
 // naming the source. A caller that needs to act on the outcome (a handler's
@@ -1441,7 +1441,7 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 	createdBook, createErr := orgSvc.CreateOrganizedVersion(book, landing, operationID, log)
 	if createErr != nil {
 		// Record the failure against the operation, the same way the
-		// file-operation failure path in organizeBooks does. This used to be
+		// file-operation failure path in organizeBooksOpts does. This used to be
 		// skipped: the op's summary said N failed and the change log held
 		// fewer than N organize_failed rows, and the gap looked like clean
 		// books rather than unrecorded failures.
@@ -1474,10 +1474,6 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 	return LandingVersioned, createdBook, nil
 }
 
-func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string) *Stats {
-	return orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, operationID, false, nil)
-}
-
 // organizeBookLockWait bounds, in total, the second pass's wait for books a
 // library scan was reading on the first pass (lockBooks only). A var so tests
 // can shorten it.
@@ -1490,7 +1486,7 @@ const OutcomeScanBusy = "scan_busy"
 // sameIntPtr reports whether a and b are both nil or point at equal values.
 func sameIntPtr(a, b *int) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
 
-// organizeBooksOpts is organizeBooks with per-book scan locking (lockBooks).
+// organizeBooksOpts organizes the given books. With lockBooks it takes per-book scan locks (below).
 //
 // With lockBooks each book is organized under its scan lock, in two passes
 // like batch-apply-candidates: pass 1 only TRIES each lock, so a book the scan
@@ -1516,7 +1512,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 	var progressCounter atomic.Int64
 
 	// pathMu/claimedPaths back a run-scoped, detection-only check for two
-	// different books computing the SAME target path in one organizeBooks
+	// different books computing the SAME target path in one organizeBooksOpts
 	// call (DEC-11). Purely observational — it never changes which path a
 	// book organizes to; the fix (deduping the collision) is deferred. See
 	// docs/plans/DECISIONS-PENDING.md row 11.
@@ -1928,7 +1924,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 // this decides it the same way as the other two callers so it never arises.
 //
 // WHY THIS IS A METHOD AND NOT AN INLINE `if`: this branch used to live only
-// inside organizeBooks' worker loop. The post-scan auto-organize hook in
+// inside organizeBooksOpts' worker loop. The post-scan auto-organize hook in
 // package server called Organizer.OrganizeBook directly, so every multi-file
 // book it touched failed with
 //

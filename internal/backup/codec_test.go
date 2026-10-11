@@ -1,7 +1,7 @@
 // file: internal/backup/codec_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d41f6a2-58bc-4e07-b3d9-1a6c082e4f75
-// last-edited: 2026-08-29
+// last-edited: 2026-10-11
 
 package backup
 
@@ -68,7 +68,7 @@ func TestResolveCodecUnknownIsAnError(t *testing.T) {
 // through SniffCodec -- i.e. the real restore path, which never consults
 // configuration.
 func TestRoundTripEveryCodec(t *testing.T) {
-	for _, name := range SupportedCompression() {
+	for _, name := range []string{CompressionGzip, CompressionZstd, CompressionNone} {
 		t.Run(name, func(t *testing.T) {
 			codec, err := ResolveCodec(name)
 			if err != nil {

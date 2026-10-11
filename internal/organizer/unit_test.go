@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -393,54 +393,6 @@ func TestComputeTargetPaths(t *testing.T) {
 			t.Error("expected an error for an unresolvable pattern, got nil")
 		}
 	})
-}
-
-// ---------------------------------------------------------------------------
-// ComputeTargetPathsFromSegments
-// ---------------------------------------------------------------------------
-
-func TestComputeTargetPathsFromSegments(t *testing.T) {
-	vars := PathVars{Author: "Auth", Title: "Test"}
-
-	trackNum := 1
-	totalTracks := 2
-	hash := "abc123"
-	segTitle := "Chapter 1"
-
-	segments := []database.BookSegment{
-		{
-			ID:           "seg-1",
-			BookID:       42,
-			FilePath:     "/old/ch1.m4b",
-			Format:       "m4b",
-			SizeBytes:    1000,
-			DurationSec:  300,
-			TrackNumber:  &trackNum,
-			TotalTracks:  &totalTracks,
-			SegmentTitle: &segTitle,
-			FileHash:     &hash,
-			Active:       true,
-		},
-		{
-			ID:       "seg-2",
-			BookID:   42,
-			FilePath: "/old/ch2.m4b",
-			Format:   "m4b",
-			Active:   false, // inactive = Missing
-		},
-	}
-
-	result, err := ComputeTargetPathsFromSegments("/root", utFolder, utFile, segments, vars, BuildOpts{})
-	if err != nil {
-		t.Fatalf("ComputeTargetPathsFromSegments: %v", err)
-	}
-	// seg-2 is inactive (Missing=true), should be skipped
-	if len(result) != 1 {
-		t.Fatalf("expected 1 entry (inactive skipped), got %d", len(result))
-	}
-	if result[0].SegmentID != "seg-1" {
-		t.Errorf("expected seg-1, got %q", result[0].SegmentID)
-	}
 }
 
 // ---------------------------------------------------------------------------
