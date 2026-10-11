@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_close_drain_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e9b14-5d3a-4f8e-9a61-2b0c4d8e7f35
 // last-edited: 2026-10-11
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 // Close must never run pebble's db.Close while a reader still holds a
@@ -136,6 +137,28 @@ func TestPebbleStoreClose_WaitsForInFlightReaders(t *testing.T) {
 				}
 				return serr
 			}), nil
+		})
+	})
+	t.Run("bare snapshot", func(t *testing.T) {
+		runCloseDrainCase(t, func(p *PebbleStore) (io.Closer, error) {
+			return p.db.NewSnapshot(), nil
+		})
+	})
+	t.Run("snapshot iterator outliving its snapshot", func(t *testing.T) {
+		// The iterator's own lease, not the snapshot's, must hold Close.
+		runCloseDrainCase(t, func(p *PebbleStore) (io.Closer, error) {
+			snap := p.db.NewSnapshot()
+			it, err := snap.NewIter(&pebble.IterOptions{})
+			if err != nil {
+				_ = snap.Close()
+				return nil, err
+			}
+			it.First()
+			if err := snap.Close(); err != nil {
+				_ = it.Close()
+				return nil, err
+			}
+			return it, nil
 		})
 	})
 	t.Run("get closer", func(t *testing.T) {
@@ -302,6 +325,267 @@ func TestDBGate_ConcurrentAcquireRelease(t *testing.T) {
 		close(done)
 		if g.acquire() == nil {
 			t.Fatal("acquire succeeded after beginClose")
+		}
+	}
+}
+
+// A releaser preempted between its decrement and its drain check must not
+// signal the drain on a stale count. The interleaving: R drops the last lease
+// and parks; L acquires (Close not begun); Close begins and sees L; R resumes.
+// R's decrement happened before Close began, so it must not signal, and the
+// drain must wait for L.
+func TestDBGate_StaleReleaseDoesNotSignalDrain(t *testing.T) {
+	g := newDBGate()
+	if err := g.acquire(); err != nil { // R's lease
+		t.Fatal(err)
+	}
+	paused, resume := make(chan struct{}), make(chan struct{})
+	g.releaseHook = func(int64) {
+		close(paused)
+		<-resume
+	}
+	rDone := make(chan struct{})
+	go func() { defer close(rDone); g.release() }() // R parks after its decrement
+	<-paused
+	g.releaseHook = nil // R already read the hook; L's release must not park
+	if err := g.acquire(); err != nil {
+		t.Fatalf("L acquire before Close began: %v", err)
+	}
+	g.beginClose()
+	close(resume)
+	<-rDone
+	if g.waitDrained(100 * time.Millisecond) {
+		t.Fatalf("drain signalled while L still holds a lease (in flight %d)", g.inFlight())
+	}
+	g.release()
+	if !g.waitDrained(5 * time.Second) {
+		t.Fatal("drain not signalled after L released")
+	}
+}
+
+// crashCloneHasKey opens a store on a crash image of fs (only synced data
+// survives) and reports whether key is there.
+func crashCloneHasKey(t *testing.T, fs *vfs.MemFS, key []byte) bool {
+	t.Helper()
+	img := fs.CrashClone(vfs.CrashCloneCfg{UnsyncedDataPercent: 0})
+	p, err := newPebbleStore("db", img)
+	if err != nil {
+		t.Fatalf("reopen crash image: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	_, closer, err := p.db.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("read crash image: %v", err)
+	}
+	_ = closer.Close()
+	return true
+}
+
+// pebble v2.1.7 keeps a NoSync WAL record in a process buffer until a sync, a
+// full block, or engine close. A Close whose drain times out leaves the
+// engine open, so without an explicit sync a row committed NoSync before
+// shutdown never reaches disk. Close must sync the WAL on that path.
+func TestPebbleStoreClose_DrainTimeoutStillSyncsCommittedRows(t *testing.T) {
+	fs := vfs.NewCrashableMem()
+	p, err := newPebbleStore("db", fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("closedrain:durable")
+	if err := p.db.Set(key, []byte("v"), pebble.NoSync); err != nil {
+		t.Fatal(err)
+	}
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("closedrain:"), UpperBound: []byte("closedrain;")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.closeDrainTimeout = 50 * time.Millisecond
+	if err := p.Close(); err == nil {
+		t.Fatal("Close with a held reader returned nil; want the drain timeout error")
+	}
+	durable := crashCloneHasKey(t, fs, key)
+	_ = it.Close()
+	_ = p.db.closeEngine()
+	if !durable {
+		t.Fatal("a row committed NoSync before Close was lost by a crash after a timed-out Close")
+	}
+}
+
+// A writer whose commit landed before Close began, and whose own WAL sync
+// runs while Close is draining, must get that sync (it is what makes its
+// already-visible rows durable), not a "closing" refusal.
+func TestPebbleStoreClose_WriterSyncDuringDrainSucceeds(t *testing.T) {
+	fs := vfs.NewCrashableMem()
+	p, err := newPebbleStore("db", fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("closedrain:writer")
+	if err := p.db.Set(key, []byte("v"), pebble.NoSync); err != nil {
+		t.Fatal(err)
+	}
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("closedrain:"), UpperBound: []byte("closedrain;")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- p.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !probeRefusesNewWork(p) {
+		if time.Now().After(deadline) {
+			t.Fatal("store never started refusing new work after Close began")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := p.syncBookFileWAL(); err != nil {
+		t.Fatalf("book_file WAL sync while Close drains: %v", err)
+	}
+	if !crashCloneHasKey(t, fs, key) {
+		t.Fatal("row not durable after the writer's sync during the drain")
+	}
+	_ = it.Close()
+	if err := <-closeErr; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// A WAL sync admitted while Close drains holds a lease too: the engine must
+// not close until it finishes, even if every ordinary lease has drained.
+// After Close, SyncWAL is refused with an ErrClosed error, not a panic.
+func TestPebbleStoreClose_WaitsForSyncAdmittedDuringDrain(t *testing.T) {
+	p := seedCloseDrainStore(t)
+	it, err := p.db.NewIter(&pebble.IterOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- p.Close() }()
+	for !p.db.gate.closing() {
+		runtime.Gosched()
+	}
+	// Stand-in for a SyncWAL caught mid-fsync: its lease, taken while
+	// closing, outlives the last ordinary lease.
+	if err := p.db.gate.acquireSync(); err != nil {
+		t.Fatalf("sync lease refused while draining: %v", err)
+	}
+	if err := releaseNoPanic(it.Close); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-closeErr:
+		t.Fatalf("Close returned (%v) while a WAL sync still held its lease", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	p.db.gate.release()
+	if err := <-closeErr; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.db.SyncWAL(); !errors.Is(err, pebble.ErrClosed) {
+		t.Fatalf("SyncWAL after Close returned %v; want an error wrapping pebble.ErrClosed", err)
+	}
+}
+
+// A second Close, concurrent or later, returns the first one's result
+// instead of panicking on pebble's double close.
+func TestPebbleStoreClose_Idempotent(t *testing.T) {
+	p := seedCloseDrainStore(t)
+	errs := make(chan error, 4)
+	for range 4 {
+		go func() { errs <- releaseNoPanic(p.Close) }()
+	}
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent Close: %v", err)
+		}
+	}
+	if err := releaseNoPanic(p.Close); err != nil {
+		t.Fatalf("Close after Close: %v", err)
+	}
+}
+
+// Every engine call takes and returns a lease, so Close's drain can see it.
+// Short calls (a write, a commit, a metrics read) finish too fast to hold
+// open from a test, so this checks the accounting directly: each call must
+// release exactly the leases it took, at least one, and leave none held.
+func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
+	p := seedCloseDrainStore(t)
+	if p.warmupCancel != nil {
+		p.warmupCancel()
+	}
+	if p.warmupDone != nil {
+		<-p.warmupDone // no background gate traffic while the hook counts
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	g := p.db.gate
+	calls := map[string]func() error{
+		"Set":         func() error { return p.db.Set([]byte("lease:a"), []byte("v"), pebble.NoSync) },
+		"Delete":      func() error { return p.db.Delete([]byte("lease:a"), pebble.NoSync) },
+		"DeleteRange": func() error { return p.db.DeleteRange([]byte("lease:a"), []byte("lease:b"), pebble.NoSync) },
+		"LogData":     func() error { return p.db.LogData([]byte("x"), pebble.NoSync) },
+		"SyncWAL":     p.db.SyncWAL,
+		"Flush":       p.db.Flush,
+		"Metrics":     func() error { _, err := p.db.Metrics(); return err },
+		"EstimateDiskUsage": func() error {
+			_, err := p.db.EstimateDiskUsage([]byte("a"), []byte("z"))
+			return err
+		},
+		"SSTables": func() error { _, err := p.db.SSTables(); return err },
+		"Batch.Commit": func() error {
+			b := p.db.NewBatch()
+			defer func() { _ = b.Close() }()
+			if err := b.Set([]byte("lease:b"), []byte("v"), nil); err != nil {
+				return err
+			}
+			return b.Commit(pebble.NoSync)
+		},
+		"IndexedBatch.Get": func() error {
+			b := p.db.NewIndexedBatch()
+			defer func() { _ = b.Close() }()
+			_, c, err := b.Get([]byte("closedrain:000"))
+			if err != nil {
+				return err
+			}
+			return c.Close()
+		},
+		"IndexedBatch.NewIter": func() error {
+			b := p.db.NewIndexedBatch()
+			defer func() { _ = b.Close() }()
+			it, err := b.NewIter(&pebble.IterOptions{})
+			if err != nil {
+				return err
+			}
+			return it.Close()
+		},
+		"Iter.Clone": func() error {
+			it, err := p.db.NewIter(&pebble.IterOptions{})
+			if err != nil {
+				return err
+			}
+			c, err := it.Clone(pebble.CloneOptions{})
+			if err != nil {
+				_ = it.Close()
+				return err
+			}
+			return errors.Join(c.Close(), it.Close())
+		},
+	}
+	for name, call := range calls {
+		releases := 0
+		g.releaseHook = func(int64) { releases++ }
+		err := call()
+		g.releaseHook = nil
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if releases == 0 {
+			t.Errorf("%s took no lease, so Close's drain cannot see it", name)
+		}
+		if n := g.inFlight(); n != 0 {
+			t.Errorf("%s left %d leases held", name, n)
 		}
 	}
 }

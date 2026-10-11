@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-10-11
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -50,8 +51,34 @@ import (
 //     batch Commit, Flush, Compact, Checkpoint, Metrics, SSTables,
 //     EstimateDiskUsage): the duration of the call. A commit past pebble's
 //     prepare step is still applying to a memtable when Close could run.
+//   - SyncWAL (a sync-only WAL record): the duration of the call, and it is
+//     the one access still admitted while Close drains. See DURABILITY.
 //   - A plain batch holds NO lease while it is only being built: batches are
 //     process memory, and an unclosed batch (common) must not stall Close.
+//
+// NOTHING EMBEDS A PEBBLE TYPE. GatedDB, GatedIter, GatedSnapshot and
+// GatedBatch each hold their pebble value in an unexported field and forward
+// only the methods the codebase uses. Embedding would promote every pebble
+// method, including ones that open engine state (Batch.NewIterWithContext,
+// Iterator.CloneWithContext), past the gate; without it, a new engine path
+// does not compile until it is added here with its lease.
+//
+// DURABILITY AT SHUTDOWN
+// pebble v2.1.7 keeps a NoSync WAL record in an in-process buffer until a
+// later sync, a full WAL block, or engine close (record.LogWriter). Rows
+// committed NoSync are made durable either by their writer's own sync
+// (syncBookFileWAL) or by the engine close. Two shutdown paths broke that:
+// a refused writer sync during the drain, and a timed-out drain that leaves
+// the engine open, so the close-time flush never happens. So:
+//   - SyncWAL is admitted while closing (still leased, so the drain waits for
+//     it) and refused only once the gate is sealed, right before the engine
+//     closes. A writer whose commit landed before Close began still gets the
+//     sync its already-visible rows depend on.
+//   - drainAndSeal syncs the WAL itself: once right after refusing new work
+//     (everything committed so far), and again after the drain, on both the
+//     success and the timeout path (everything the in-flight writers
+//     committed meanwhile). On the timeout path the engine is left open but
+//     every row committed before the timeout is on disk.
 //
 // WHY A COUNTER AND NOT A LOCK
 //   - Acquire never blocks, so nested leases (an op holding an iterator that
@@ -63,16 +90,17 @@ import (
 //     normal error path (all existing ErrClosed handling keeps working), and
 //     the lease they already hold is released by their deferred Close.
 //   - Close's wait is bounded (PebbleStore.closeDrainTimeout). On timeout the
-//     engine is deliberately NOT closed: leaking an open engine at process
-//     exit is recoverable (WAL replay on next open), corrupting refcounts is a
-//     crash. Close returns an error naming the in-flight count.
+//     engine is deliberately NOT closed, after the WAL is synced (see
+//     DURABILITY): an engine left open at process exit replays its synced WAL
+//     on the next open, while closing under a held lease crashes. Close
+//     returns an error naming the in-flight count.
 //   - A lease already held is never revoked: a held iterator keeps iterating
 //     the live engine to the end. Making it report !Valid() once Close begins
 //     would silently truncate scans whose loops do not check iter.Error(), and
 //     some of those drive deletes. Long scans that should stop early take the
 //     store's closing context instead (PebbleStore.closingCtx).
 //
-// DEADLOCK RULES FOR CALLERS OF beginClose/waitDrained
+// DEADLOCK RULES FOR CALLERS OF drainAndSeal
 //   - Never wait for the drain while holding a mutex an in-flight op may take
 //     (opsMu, counterMu, metadata stripes, sampleMu): the op cannot finish and
 //     release its lease. PebbleStore.Close drains first and only then takes
@@ -86,68 +114,99 @@ import (
 // same as a closed engine.
 var errStoreClosing = fmt.Errorf("pebble store is closing: %w", pebble.ErrClosed)
 
+// Gate state bits. The lease count and both flags live in ONE atomic word, so
+// every transition reads the count and the flags it changes together.
+const (
+	// gateClosingBit: Close has begun; ordinary acquires are refused.
+	gateClosingBit = int64(1) << 62
+	// gateSealedBit: the drain finished and the engine is about to close;
+	// SyncWAL acquires are refused too.
+	gateSealedBit = int64(1) << 61
+	// gateCountMask selects the lease count.
+	gateCountMask = gateSealedBit - 1
+)
+
 // dbGate counts held leases on one pebble.DB and lets Close wait for them.
 //
-// acquire increments active, then loads closing; beginClose stores closing,
-// then loads active. Go's atomics are sequentially consistent, so at least
-// one side sees the other: either beginClose sees the lease (and waits for
-// its release) or acquire sees closing (and backs out without touching the
-// engine).
+// Why one word: with the count and the closing flag in separate atomics, a
+// releaser can decrement to zero BEFORE Close begins, be preempted, and then
+// read the flag AFTER Close began. Meanwhile a new lease was taken and Close
+// counted it. The releaser then signals the drain on a stale zero and the
+// engine closes under the new lease. With one word, release decides from the
+// value its own decrement produced: it signals only if that value is
+// "closing, zero leases", which is a state no later acquire can be hidden
+// from (an acquire after closing sees the bit in its own Add result and backs
+// out; an acquire before closing is counted in the word beginClose ORs).
 type dbGate struct {
-	active    atomic.Int64
-	isClosing atomic.Bool
+	state     atomic.Int64
 	drained   chan struct{}
 	drainOnce sync.Once
+	// releaseHook, nil outside tests, runs inside release between the
+	// decrement and the drain check: a preemption point for the
+	// interleaving test.
+	releaseHook func(n int64)
 }
 
 func newDBGate() *dbGate {
 	return &dbGate{drained: make(chan struct{})}
 }
 
-// acquire takes one lease, or refuses with errStoreClosing once Close began.
-// It never blocks.
+// acquire takes one ordinary lease, or refuses with errStoreClosing once
+// Close began. It never blocks.
 func (g *dbGate) acquire() error {
-	g.active.Add(1)
-	if g.isClosing.Load() {
+	if g.state.Add(1)&(gateClosingBit|gateSealedBit) != 0 {
 		g.release()
 		return errStoreClosing
 	}
 	return nil
 }
 
-// release returns one lease. The last release after Close began signals the
-// drain.
+// acquireSync takes a lease for a sync-only WAL write. It is admitted while
+// Close drains and refused only once the gate is sealed.
+func (g *dbGate) acquireSync() error {
+	if g.state.Add(1)&gateSealedBit != 0 {
+		g.release()
+		return errStoreClosing
+	}
+	return nil
+}
+
+// release returns one lease. The release that leaves a closing gate with no
+// leases signals the drain.
 func (g *dbGate) release() {
-	n := g.active.Add(-1)
-	if n < 0 {
+	n := g.state.Add(-1)
+	if n < 0 || n&gateCountMask == gateCountMask {
 		panic("pebble gate: lease released more times than acquired")
 	}
-	if n == 0 && g.isClosing.Load() {
+	if h := g.releaseHook; h != nil {
+		h(n)
+	}
+	if n&gateCountMask == 0 && n&gateClosingBit != 0 {
 		g.drainOnce.Do(func() { close(g.drained) })
 	}
 }
 
-// beginClose refuses every later acquire. Leases already held stay valid.
-// Safe to call more than once.
+// beginClose refuses every later ordinary acquire. Leases already held stay
+// valid. Safe to call more than once.
 func (g *dbGate) beginClose() {
-	g.isClosing.Store(true)
-	if g.active.Load() == 0 {
+	if g.state.Or(gateClosingBit)&gateCountMask == 0 {
 		g.drainOnce.Do(func() { close(g.drained) })
 	}
 }
 
 // closing reports whether beginClose has run.
 func (g *dbGate) closing() bool {
-	return g.isClosing.Load()
+	return g.state.Load()&gateClosingBit != 0
 }
 
 // inFlight reports the number of held leases.
 func (g *dbGate) inFlight() int64 {
-	return g.active.Load()
+	return g.state.Load() & gateCountMask
 }
 
-// waitDrained waits until every lease held when beginClose ran is released,
-// or timeout passes. beginClose must have run. A timeout <= 0 waits forever.
+// waitDrained waits until every ordinary lease held when beginClose ran is
+// released, or timeout passes. beginClose must have run. A timeout <= 0 waits
+// forever.
 func (g *dbGate) waitDrained(timeout time.Duration) bool {
 	if timeout <= 0 {
 		<-g.drained
@@ -163,6 +222,25 @@ func (g *dbGate) waitDrained(timeout time.Duration) bool {
 	}
 }
 
+// seal moves a drained gate to sealed, refusing SyncWAL too. A SyncWAL
+// admitted after the drain may still hold a lease; seal waits for it (a WAL
+// fsync, milliseconds) until deadline. It reports whether the gate is sealed
+// with no leases, the only state in which the engine may close.
+func (g *dbGate) seal(deadline time.Time) bool {
+	for {
+		if g.state.CompareAndSwap(gateClosingBit, gateClosingBit|gateSealedBit) {
+			return true
+		}
+		if s := g.state.Load(); s&gateSealedBit != 0 && s&gateCountMask == 0 {
+			return true // sealed by an earlier Close
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+}
+
 // gatedReader is what GatedDB, GatedSnapshot and an indexed GatedBatch all
 // provide: the gated replacement for pebble.Reader's read half.
 type gatedReader interface {
@@ -172,22 +250,42 @@ type gatedReader interface {
 
 // GatedDB is the only handle to a store's pebble engine. It exposes the
 // subset of *pebble.DB the codebase uses, with every call leased against the
-// gate so Close can wait for it. It deliberately does not embed *pebble.DB:
-// a new engine method must be added here, with its lease, before it can be
-// called. See the file comment for the invariant.
+// gate so Close can wait for it. See the file comment for the invariant.
 type GatedDB struct {
 	db   *pebble.DB
 	gate *dbGate
 }
 
-// NewGatedDB wraps an engine the caller opened. Stores in this package close
-// what they wrap through PebbleStore.Close / closeOwned, which drain first.
-// A caller outside the package (a test fixture, an offline tool) that wraps
-// its own raw engine still owns that engine's Close and must not call it
-// while anything it handed this wrapper to is still running: the gate cannot
-// see a Close it is not asked to perform.
+// NewGatedDB wraps an engine the caller opened, for a caller that keeps the
+// engine's lifecycle itself (a test fixture, an offline tool): it still owns
+// the raw engine's Close and must not call it while anything it handed this
+// wrapper to is running, because the gate cannot see a Close it is not asked
+// to perform. A store that owns its engine uses NewOwnedGatedDB instead.
 func NewGatedDB(db *pebble.DB) *GatedDB {
 	return &GatedDB{db: db, gate: newDBGate()}
+}
+
+// NewOwnedGatedDB wraps an engine its caller owns and returns the only
+// function that closes it: drain (bounded by timeout), sync, then close; on
+// timeout it syncs, leaves the engine open and returns an error. The close
+// function is separate from the handle on purpose: borrowers get the
+// *GatedDB, and only the owner can close what they borrowed. It is
+// idempotent: later calls return the first call's result.
+func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error) {
+	d := NewGatedDB(db)
+	var once sync.Once
+	var result error
+	return d, func(timeout time.Duration) error {
+		once.Do(func() {
+			sealed, err := d.drainAndSeal(timeout)
+			if !sealed {
+				result = err
+				return
+			}
+			result = errors.Join(err, d.closeEngine())
+		})
+		return result
+	}
 }
 
 // Get reads key. The returned closer holds a lease until it is closed.
@@ -239,13 +337,28 @@ func (d *GatedDB) Merge(key, value []byte, opts *pebble.WriteOptions) error {
 	return d.db.Merge(key, value, opts)
 }
 
-// LogData writes data to the WAL only.
+// LogData writes data to the WAL only. For a sync-only record use SyncWAL,
+// which is admitted while Close drains.
 func (d *GatedDB) LogData(data []byte, opts *pebble.WriteOptions) error {
 	if err := d.gate.acquire(); err != nil {
 		return err
 	}
 	defer d.gate.release()
 	return d.db.LogData(data, opts)
+}
+
+// SyncWAL makes every record committed so far durable (an fsync'd empty WAL
+// record; the sequential WAL cannot persist it before the NoSync records
+// ahead of it). It is admitted while Close drains, so a writer whose commit
+// landed before Close began still gets its sync; it is refused only once the
+// gate is sealed, right before the engine closes (which flushes the WAL
+// itself).
+func (d *GatedDB) SyncWAL() error {
+	if err := d.gate.acquireSync(); err != nil {
+		return err
+	}
+	defer d.gate.release()
+	return d.db.LogData(nil, pebble.Sync)
 }
 
 // Flush flushes the memtable.
@@ -318,7 +431,7 @@ func (d *GatedDB) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
 		d.gate.release()
 		return nil, err
 	}
-	return &GatedIter{Iterator: it, gate: d.gate}, nil
+	return &GatedIter{it: it, gate: d.gate}, nil
 }
 
 // NewSnapshot opens a snapshot that holds a lease until it is closed. Once
@@ -335,38 +448,70 @@ func (d *GatedDB) NewSnapshot() *GatedSnapshot {
 // NewBatch returns a write-only batch. Building it holds no lease; Commit
 // does.
 func (d *GatedDB) NewBatch(opts ...pebble.BatchOption) *GatedBatch {
-	return &GatedBatch{Batch: d.db.NewBatch(opts...), gate: d.gate}
+	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate}
 }
 
 // NewIndexedBatch returns a batch that can also be read. Building it holds no
 // lease; Commit, Get and each iterator do.
 func (d *GatedDB) NewIndexedBatch() *GatedBatch {
-	return &GatedBatch{Batch: d.db.NewIndexedBatch(), gate: d.gate}
+	return &GatedBatch{b: d.db.NewIndexedBatch(), gate: d.gate}
 }
 
-// beginClose refuses every later lease. See dbGate.beginClose.
-func (d *GatedDB) beginClose() { d.gate.beginClose() }
-
-// waitDrained waits for held leases. See dbGate.waitDrained.
-func (d *GatedDB) waitDrained(timeout time.Duration) bool { return d.gate.waitDrained(timeout) }
-
-// inFlight reports held leases.
-func (d *GatedDB) inFlight() int64 { return d.gate.inFlight() }
-
-// closeEngine closes the engine. Only after waitDrained returned true.
-func (d *GatedDB) closeEngine() error { return d.db.Close() }
-
-// closeOwned is Close for a store that owns its engine and has no ordering of
-// its own to interleave (AIScanStore, an owning EmbeddingStore): refuse new
-// leases, wait for held ones, then close. On timeout the engine is left open
-// and an error returned, for the reason PebbleStore.Close gives.
-func (d *GatedDB) closeOwned(timeout time.Duration) error {
-	d.beginClose()
-	if !d.waitDrained(timeout) {
-		return fmt.Errorf("pebble close: %d engine accesses still in flight after %s: %w", d.inFlight(), timeout, errStoreClosing)
+// syncWALForShutdown fsyncs the WAL on the raw engine, outside the gate.
+// Only drainAndSeal calls it, while the engine is known to be open (it closes
+// the engine only after the last such call).
+func (d *GatedDB) syncWALForShutdown(stage string) error {
+	if err := d.db.LogData(nil, pebble.Sync); err != nil {
+		pebbleCloseLog.Error("pebble close: WAL sync %s failed: %s", stage, err.Error())
+		return fmt.Errorf("pebble close: WAL sync %s: %w", stage, err)
 	}
-	return d.closeEngine()
+	return nil
 }
+
+// drainAndSeal is every step of an engine close except the close itself:
+//
+//  1. Refuse new ordinary leases.
+//  2. Sync the WAL: every row committed before Close began is durable even
+//     if the process is killed during the drain.
+//  3. Wait for held leases, up to timeout.
+//  4. Sync the WAL again: rows the in-flight writers committed meanwhile.
+//     On timeout, return an error here; the engine stays open.
+//  5. Seal (refuse SyncWAL too), waiting out any sync admitted after the
+//     drain.
+//
+// sealed reports whether the engine may close: true only when no lease is
+// held and none can be taken. err carries a timeout (sealed false) or a WAL
+// sync failure (sealed may be true: the caller still closes the engine,
+// which flushes the WAL itself, and reports the error alongside). Nothing
+// here takes a store mutex, so in-flight ops can always finish.
+func (d *GatedDB) drainAndSeal(timeout time.Duration) (sealed bool, err error) {
+	d.gate.beginClose()
+	syncErr := d.syncWALForShutdown("after refusing new work")
+	if timeout <= 0 {
+		timeout = DefaultCloseDrainTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	if !d.gate.waitDrained(timeout) {
+		n := d.gate.inFlight()
+		lateSyncErr := d.syncWALForShutdown("after a timed-out drain")
+		pebbleCloseLog.Error("pebble close: %d engine accesses still in flight after %s; leaving the engine open rather than closing it under them", n, timeout)
+		return false, errors.Join(
+			fmt.Errorf("pebble close: %d engine accesses still in flight after %s: %w", n, timeout, errStoreClosing),
+			lateSyncErr)
+	}
+	if err := d.syncWALForShutdown("after the drain"); err != nil && syncErr == nil {
+		syncErr = err
+	}
+	if !d.gate.seal(deadline.Add(time.Second)) {
+		n := d.gate.inFlight()
+		pebbleCloseLog.Error("pebble close: %d WAL syncs still in flight after the drain; leaving the engine open", n)
+		return false, fmt.Errorf("pebble close: %d WAL syncs still in flight after the drain: %w", n, errStoreClosing)
+	}
+	return true, syncErr
+}
+
+// closeEngine closes the engine. Only after drainAndSeal, and never twice.
+func (d *GatedDB) closeEngine() error { return d.db.Close() }
 
 // gatedCloser releases a Get's lease after the engine closer runs.
 type gatedCloser struct {
@@ -384,11 +529,11 @@ func (g *gatedCloser) Close() error {
 	return err
 }
 
-// GatedIter is a pebble iterator holding a gate lease. Every positioning and
-// read method is pebble's, unchanged; Close releases the lease after the
-// engine iterator is closed, at most once however many times Close runs.
+// GatedIter is a pebble iterator holding a gate lease. Its positioning and
+// read methods forward to pebble unchanged; Close releases the lease after
+// the engine iterator is closed, at most once however many times Close runs.
 type GatedIter struct {
-	*pebble.Iterator
+	it   *pebble.Iterator
 	gate *dbGate
 	done atomic.Bool
 }
@@ -398,7 +543,7 @@ func (it *GatedIter) Close() error {
 	if !it.done.CompareAndSwap(false, true) {
 		return nil
 	}
-	err := it.Iterator.Close()
+	err := it.it.Close()
 	it.gate.release()
 	return err
 }
@@ -409,13 +554,32 @@ func (it *GatedIter) Clone(opts pebble.CloneOptions) (*GatedIter, error) {
 	if err := it.gate.acquire(); err != nil {
 		return nil, err
 	}
-	c, err := it.Iterator.Clone(opts)
+	c, err := it.it.Clone(opts)
 	if err != nil {
 		it.gate.release()
 		return nil, err
 	}
-	return &GatedIter{Iterator: c, gate: it.gate}, nil
+	return &GatedIter{it: c, gate: it.gate}, nil
 }
+
+// First, Last, Next, Prev, SeekGE, SeekLT, SeekPrefixGE, Valid, Key, Value,
+// ValueAndErr, Error, SetBounds, Stats and ResetStats forward to pebble.
+
+func (it *GatedIter) First() bool                   { return it.it.First() }
+func (it *GatedIter) Last() bool                    { return it.it.Last() }
+func (it *GatedIter) Next() bool                    { return it.it.Next() }
+func (it *GatedIter) Prev() bool                    { return it.it.Prev() }
+func (it *GatedIter) SeekGE(key []byte) bool        { return it.it.SeekGE(key) }
+func (it *GatedIter) SeekLT(key []byte) bool        { return it.it.SeekLT(key) }
+func (it *GatedIter) SeekPrefixGE(key []byte) bool  { return it.it.SeekPrefixGE(key) }
+func (it *GatedIter) Valid() bool                   { return it.it.Valid() }
+func (it *GatedIter) Key() []byte                   { return it.it.Key() }
+func (it *GatedIter) Value() []byte                 { return it.it.Value() }
+func (it *GatedIter) ValueAndErr() ([]byte, error)  { return it.it.ValueAndErr() }
+func (it *GatedIter) Error() error                  { return it.it.Error() }
+func (it *GatedIter) SetBounds(lower, upper []byte) { it.it.SetBounds(lower, upper) }
+func (it *GatedIter) Stats() pebble.IteratorStats   { return it.it.Stats() }
+func (it *GatedIter) ResetStats()                   { it.it.ResetStats() }
 
 // GatedSnapshot is a pebble snapshot holding a gate lease until Close. Its
 // iterators and Gets take leases of their own.
@@ -455,7 +619,7 @@ func (s *GatedSnapshot) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
 		s.gate.release()
 		return nil, err
 	}
-	return &GatedIter{Iterator: it, gate: s.gate}, nil
+	return &GatedIter{it: it, gate: s.gate}, nil
 }
 
 // Close closes the snapshot, then releases its lease. Idempotent.
@@ -468,12 +632,11 @@ func (s *GatedSnapshot) Close() error {
 	return err
 }
 
-// GatedBatch is a pebble batch whose engine-touching methods (Commit, and
-// Get / NewIter on an indexed batch) hold a gate lease for their duration.
-// The embedded *pebble.Batch's build methods (Set, Delete, DeleteRange, Len,
-// Reset, Close, ...) are process memory only and pass through unchanged.
+// GatedBatch is a pebble batch. Its engine-touching methods (Commit, and Get
+// / NewIter on an indexed batch) hold a gate lease for their duration; its
+// build methods are process memory and forward to pebble without one.
 type GatedBatch struct {
-	*pebble.Batch
+	b    *pebble.Batch
 	gate *dbGate
 }
 
@@ -483,7 +646,7 @@ func (b *GatedBatch) Commit(o *pebble.WriteOptions) error {
 		return err
 	}
 	defer b.gate.release()
-	return b.Batch.Commit(o)
+	return b.b.Commit(o)
 }
 
 // Get reads key through an indexed batch: the batch's own writes over the
@@ -492,7 +655,7 @@ func (b *GatedBatch) Get(key []byte) ([]byte, io.Closer, error) {
 	if err := b.gate.acquire(); err != nil {
 		return nil, nil, err
 	}
-	v, c, err := b.Batch.Get(key)
+	v, c, err := b.b.Get(key)
 	if err != nil {
 		b.gate.release()
 		return nil, nil, err
@@ -505,15 +668,37 @@ func (b *GatedBatch) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
 	if err := b.gate.acquire(); err != nil {
 		return nil, err
 	}
-	it, err := b.Batch.NewIter(o)
+	it, err := b.b.NewIter(o)
 	if err != nil {
 		b.gate.release()
 		return nil, err
 	}
-	return &GatedIter{Iterator: it, gate: b.gate}, nil
+	return &GatedIter{it: it, gate: b.gate}, nil
 }
 
 // Apply appends other's operations to b (process memory only, no lease).
 func (b *GatedBatch) Apply(other *GatedBatch, opts *pebble.WriteOptions) error {
-	return b.Batch.Apply(other.Batch, opts)
+	return b.b.Apply(other.b, opts)
 }
+
+// Set, Delete, DeleteRange, Merge, Close, Reset, Len, Count, Empty and
+// Indexed are process memory and forward to pebble.
+
+func (b *GatedBatch) Set(key, value []byte, opts *pebble.WriteOptions) error {
+	return b.b.Set(key, value, opts)
+}
+func (b *GatedBatch) Delete(key []byte, opts *pebble.WriteOptions) error {
+	return b.b.Delete(key, opts)
+}
+func (b *GatedBatch) DeleteRange(start, end []byte, opts *pebble.WriteOptions) error {
+	return b.b.DeleteRange(start, end, opts)
+}
+func (b *GatedBatch) Merge(key, value []byte, opts *pebble.WriteOptions) error {
+	return b.b.Merge(key, value, opts)
+}
+func (b *GatedBatch) Close() error  { return b.b.Close() }
+func (b *GatedBatch) Reset()        { b.b.Reset() }
+func (b *GatedBatch) Len() int      { return b.b.Len() }
+func (b *GatedBatch) Count() uint32 { return b.b.Count() }
+func (b *GatedBatch) Empty() bool   { return b.b.Empty() }
+func (b *GatedBatch) Indexed() bool { return b.b.Indexed() }

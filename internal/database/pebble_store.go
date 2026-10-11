@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.214.0
+// version: 1.215.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 
@@ -107,7 +107,7 @@ type PebbleStore struct {
 	// lease that Close waits for before closing the engine (pebble_gate.go).
 	db *GatedDB
 	// closeDrainTimeout bounds how long Close waits for in-flight engine
-	// accesses to finish; zero means defaultCloseDrainTimeout. Tests shorten it.
+	// accesses to finish; zero means DefaultCloseDrainTimeout. Tests shorten it.
 	closeDrainTimeout time.Duration
 	// closingCtx is cancelled when Close begins, so long scans that take it
 	// (ReconcileOpsV2TimelineIndex) stop early instead of making Close wait
@@ -116,6 +116,10 @@ type PebbleStore struct {
 	// closingContext().
 	closingCtx    context.Context
 	closingCancel context.CancelFunc
+	// closeOnce makes Close idempotent, concurrent calls included: pebble
+	// panics on a second engine close. closeErr is the first call's result.
+	closeOnce sync.Once
+	closeErr  error
 	// metadataCacheLocks serialise writes of one book's metadata_cache row
 	// (striped by book id, metadataCacheLock): PutMetadataCache and
 	// DeleteMetadataCache, and the book write that re-stamps a kept row's
@@ -781,10 +785,10 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	return store, nil
 }
 
-// defaultCloseDrainTimeout bounds Close's wait for in-flight engine accesses.
+// DefaultCloseDrainTimeout bounds Close's wait for in-flight engine accesses.
 // The unit's TimeoutStopSec is 30s and the HTTP drain and ops registry spend
 // part of it before the store closes, so this leaves room for both.
-const defaultCloseDrainTimeout = 10 * time.Second
+const DefaultCloseDrainTimeout = 10 * time.Second
 
 var pebbleCloseLog = logger.New("database.pebble-close")
 
@@ -807,15 +811,25 @@ func (p *PebbleStore) closingContext() context.Context {
 //     cancel closingCtx so cooperative long scans unwind.
 //  2. Mark the timeline index closed BEFORE the drain, so a reconcile that
 //     finishes while Close waits is refused trust.
-//  3. Refuse new leases and wait for held ones, holding NO store mutex: an
-//     in-flight op may need opsMu, counterMu, a metadata stripe or sampleMu
-//     to finish and release its lease.
+//  3. Refuse new leases, sync the WAL, wait for held ones, sync again
+//     (GatedDB.drainAndSeal), holding NO store mutex: an in-flight op may
+//     need opsMu, counterMu, a metadata stripe or sampleMu to finish and
+//     release its lease.
 //  4. Only then take sampleMu and close the engine.
 //
 // If the drain times out, the engine is left open and Close returns an
-// error: an engine left open at process exit replays its WAL on the next
-// open, while closing under a held lease crashes the process.
+// error. Every row committed before the timeout has been synced to the WAL
+// by then, so it survives the process exiting; closing under a held lease
+// would crash the process instead.
+//
+// Close is idempotent: a second call, concurrent or later, returns the first
+// call's result.
 func (p *PebbleStore) Close() error {
+	p.closeOnce.Do(func() { p.closeErr = p.closeStore() })
+	return p.closeErr
+}
+
+func (p *PebbleStore) closeStore() error {
 	if p.closingCancel != nil {
 		p.closingCancel()
 	}
@@ -844,22 +858,17 @@ func (p *PebbleStore) Close() error {
 	// later flip to trusted (markOpsV2TimelineClosed).
 	p.markOpsV2TimelineClosed()
 
-	p.db.beginClose()
-	timeout := p.closeDrainTimeout
-	if timeout <= 0 {
-		timeout = defaultCloseDrainTimeout
-	}
-	if !p.db.waitDrained(timeout) {
-		n := p.db.inFlight()
-		pebbleCloseLog.Error("pebble close: %d engine accesses still in flight after %s; leaving the engine open rather than closing it under them", n, timeout)
+	sealed, syncErr := p.db.drainAndSeal(p.closeDrainTimeout)
+	if !sealed {
+		// The drain timed out: the WAL is synced, the engine stays open.
 		p.dbClosed.Store(true)
-		return fmt.Errorf("pebble close: %d engine accesses still in flight after %s: %w", n, timeout, errStoreClosing)
+		return syncErr
 	}
 
 	p.sampleMu.Lock()
 	defer p.sampleMu.Unlock()
 	p.dbClosed.Store(true)
-	return p.db.closeEngine()
+	return errors.Join(syncErr, p.db.closeEngine())
 }
 
 // Checkpoint writes a consistent point-in-time snapshot of the PebbleDB to
@@ -5981,7 +5990,7 @@ func (p *PebbleStore) Optimize(ctx context.Context) error {
 // compactionStatsFromMetrics (compaction_stats.go) so the AI-scan and
 // OpenLibrary stores report the same shape.
 func (p *PebbleStore) CompactionStats() CompactionStats {
-	return collectGatedCompactionStats(p.db)
+	return CollectCompactionStats(p.db)
 }
 
 // derefInt64 safely dereferences a *int64, returning 0 for nil.

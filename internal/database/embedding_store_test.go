@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store_test.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-11
 
@@ -20,11 +20,18 @@ import (
 // The database lives on vfs.NewMem: these writes pass pebble.Sync, and on a
 // real filesystem each one is an fsync, which dominated this package's run time.
 // Nothing here reopens the database, so no on-disk state is needed.
+// newOwnedEmbeddingStoreForTest wraps a raw engine the store then owns: its
+// Close drains, syncs and closes the engine.
+func newOwnedEmbeddingStoreForTest(db *pebble.DB) *EmbeddingStore {
+	gated, closeDB := NewOwnedGatedDB(db)
+	return &EmbeddingStore{db: gated, closeDB: closeDB}
+}
+
 func newTestEmbeddingStore(t *testing.T) *EmbeddingStore {
 	t.Helper()
 	db, err := pebble.Open("embeddings.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
-	store := &EmbeddingStore{db: NewGatedDB(db), owned: true}
+	store := newOwnedEmbeddingStoreForTest(db)
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }

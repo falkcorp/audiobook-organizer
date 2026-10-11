@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.26.0
+// version: 2.27.0
 // last-edited: 2026-10-11
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -267,8 +267,11 @@ type EmbeddingHealthStats struct {
 // EmbeddingStore is a PebbleDB-backed store for vector embeddings, text-hash
 // cache, and dedup candidates. It replaces the former SQLite sidecar (embeddings.db).
 type EmbeddingStore struct {
-	db    *GatedDB
-	owned bool // if true, Close() shuts down the DB
+	db *GatedDB
+	// closeDB, non-nil only for a store that owns its engine (tests), closes
+	// it: drain, sync, close (NewOwnedGatedDB). A shared store's Close is a
+	// no-op.
+	closeDB func(timeout time.Duration) error
 	// closeMu serialises every DB-touching operation against Close. Operations
 	// hold RLock for their whole duration; Close takes the write lock, so it
 	// cannot begin until the last in-flight operation has returned.
@@ -289,13 +292,13 @@ type EmbeddingStore struct {
 // NewEmbeddingStore creates an EmbeddingStore backed by the given PebbleDB.
 // The DB is shared with the main store; Close() is a no-op.
 func NewEmbeddingStore(db *GatedDB) *EmbeddingStore {
-	return &EmbeddingStore{db: db, owned: false}
+	return &EmbeddingStore{db: db}
 }
 
-// Close releases resources. A no-op when the DB is shared (owned=false).
+// Close releases resources. A no-op when the DB is shared (closeDB nil).
 // Safe to call more than once when owned — subsequent calls are no-ops.
 func (s *EmbeddingStore) Close() error {
-	if !s.owned {
+	if s.closeDB == nil {
 		return nil
 	}
 	var closeErr error
@@ -310,7 +313,7 @@ func (s *EmbeddingStore) Close() error {
 		s.closeMu.Lock()
 		defer s.closeMu.Unlock()
 		s.closed.Store(true)
-		closeErr = s.db.closeOwned(defaultCloseDrainTimeout)
+		closeErr = s.closeDB(DefaultCloseDrainTimeout)
 	})
 	return closeErr
 }
@@ -1782,7 +1785,7 @@ func (s *EmbeddingStore) SyncCandidateWrites() error {
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
-	return s.db.LogData(nil, pebble.Sync)
+	return s.db.SyncWAL()
 }
 
 // updateCandidateIf is the single-row read-modify-write behind

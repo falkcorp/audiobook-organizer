@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-10-11
 
@@ -326,7 +326,7 @@ func (p *PebbleStore) syncBookFileWAL() error {
 		err = bookFileWALSyncHook()
 	}
 	if err == nil {
-		err = p.db.LogData(nil, pebble.Sync)
+		err = p.db.SyncWAL()
 	}
 	if err != nil {
 		// Called only after an apply: the rows are already visible.
