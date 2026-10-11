@@ -1,5 +1,5 @@
 // file: internal/diagnosis/probe.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
 // last-edited: 2026-10-11
 
@@ -58,23 +58,6 @@ type FileDiagnostic struct {
 	ToolsUsed  []string `json:"tools_used"`
 	ProbeError string   `json:"probe_error,omitempty"`
 }
-
-// FailureReason is the canonical short label stored in
-// BookFile.FingerprintFailureReason.
-type FailureReason string
-
-const (
-	ReasonEmptyFile          FailureReason = "empty_file"
-	ReasonIncompleteDownload FailureReason = "incomplete_download"
-	ReasonWrongFormat        FailureReason = "wrong_format"
-	ReasonCorruptAudio       FailureReason = "corrupt_audio"
-	ReasonActiveDRM          FailureReason = "active_drm"
-	ReasonOriginallyDRM      FailureReason = "originally_drm"
-	ReasonUnsupportedCodec   FailureReason = "unsupported_codec"
-	ReasonTooShort           FailureReason = "too_short"
-	ReasonMissingFile        FailureReason = "missing_file"
-	ReasonFpcalcError        FailureReason = "fpcalc_error"
-)
 
 // tools caches which executables are available. Populated once.
 var (
