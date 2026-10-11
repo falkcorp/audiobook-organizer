@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-11
 
@@ -12,7 +12,7 @@
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (SystemStore, SystemService, ConfigUpdateService,
 // PluginHealthChecker, EventStreamer, OperationLogsProvider) plus the concrete
-// *metafetch.OpenLibraryService (factoryReset reaches its .Mu / .OLStore fields,
+// *metafetch.OpenLibraryService (factoryReset takes its .Mu and calls CloseStoreLocked,
 // which an interface cannot abstract) and three injected funcs (getDiskStats,
 // resetLibrarySizeCache, appVersion, filterReviewedAuthorGroups) that wrap
 // server-package helpers / build-tagged functions / mutable package vars that
@@ -74,8 +74,8 @@ type Handler struct {
 	getHub func() EventStreamer
 
 	// olService is taken as a concrete pointer (not an interface) because
-	// factoryReset reaches its .Mu (mutex) and .OLStore fields directly; field
-	// access cannot go through an interface. A nil concrete pointer is fine — the
+	// factoryReset takes its .Mu (mutex) field and calls CloseStoreLocked under
+	// it; field access cannot go through an interface. A nil concrete pointer is fine — the
 	// handler nil-checks h.olService exactly as the original nil-checked
 	// s.olService.
 	olService *metafetch.OpenLibraryService
@@ -466,11 +466,7 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 	// Delete OL data (pebble store + dump files)
 	if h.olService != nil {
 		h.olService.Mu.Lock()
-		var olCloseErr error
-		if h.olService.OLStore != nil {
-			olCloseErr = h.olService.OLStore.Close()
-			h.olService.OLStore = nil
-		}
+		olCloseErr := h.olService.CloseStoreLocked()
 		h.olService.Mu.Unlock()
 
 		targetDir := metafetch.GetOLDumpDir()
@@ -478,7 +474,9 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 			// A failed Close may have left the engine open (an in-flight
 			// lookup or import outlived the drain timeout). Removing its
 			// directory would pull files out from under a live engine, so
-			// the OL data is kept and the rest of the reset goes on.
+			// the OL data is kept and the rest of the reset goes on. The
+			// service keeps the half-closed store, so the next delete or
+			// import retries the close.
 			systemLog.Warn("Factory reset kept OL data: the OL store did not close: %v", olCloseErr)
 		} else if targetDir != "" {
 			if err := os.RemoveAll(targetDir); err != nil {

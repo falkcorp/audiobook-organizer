@@ -1,5 +1,5 @@
 // file: internal/openlibrary/store.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -32,7 +32,9 @@ type OLStore struct {
 	// or Get closer (pebble then panics "inconsistent reference count"), and
 	// refuses later ones with an error wrapping pebble.ErrClosed.
 	db *database.GatedDB
-	// closeDB drains, syncs and closes the engine; idempotent.
+	// closeDB drains, syncs and closes the engine. A close that times out
+	// leaves the engine open and can be called again; a successful one is
+	// idempotent (database.NewOwnedGatedDB).
 	closeDB func(timeout time.Duration) error
 }
 
@@ -46,13 +48,31 @@ func NewOLStore(path string) (*OLStore, error) {
 	}
 	slog.Info("OL PebbleDB opened", "path", path, "formatVersion", db.FormatMajorVersion())
 	gated, closeDB := database.NewOwnedGatedDB(db)
-	return &OLStore{db: gated, closeDB: closeDB}, nil
+	return NewOLStoreOnEngine(gated, closeDB), nil
+}
+
+// NewOLStoreOnEngine wraps an engine its caller already opened and gated:
+// gated and closeDB are the pair database.NewOwnedGatedDB returns. NewOLStore
+// is the production path; this one lets a caller that must hold the engine
+// itself (a test that needs an access in flight while the store closes) build
+// a store on it.
+func NewOLStoreOnEngine(gated *database.GatedDB, closeDB func(timeout time.Duration) error) *OLStore {
+	return &OLStore{db: gated, closeDB: closeDB}
 }
 
 // Close closes the underlying PebbleDB once in-flight lookups finish (bounded
-// by database.DefaultCloseDrainTimeout). Safe to call more than once.
+// by database.DefaultCloseDrainTimeout). If an access outlives that wait the
+// engine is left open and Close returns an error; the store then refuses all
+// work, and calling Close again retries the close. Safe to call more than
+// once.
 func (s *OLStore) Close() error {
-	return s.closeDB(database.DefaultCloseDrainTimeout)
+	return s.CloseWithin(database.DefaultCloseDrainTimeout)
+}
+
+// CloseWithin is Close with an explicit bound on the wait for in-flight
+// accesses.
+func (s *OLStore) CloseWithin(timeout time.Duration) error {
+	return s.closeDB(timeout)
 }
 
 // Optimize compacts the PebbleDB database to reclaim space.
