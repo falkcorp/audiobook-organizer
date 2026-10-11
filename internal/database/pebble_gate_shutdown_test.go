@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate_shutdown_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b3e5d70-2c1a-4f68-8e47-d5a0c6b1f293
 // last-edited: 2026-10-11
 
@@ -272,6 +272,85 @@ func TestOwnedGatedDB_ConcurrentClosersShareOneAttempt(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("%d total attempts; want 3 (a close after success must not run another)", got)
+	}
+}
+
+// A panic inside a shared close attempt must reach the caller that ran it, and
+// must not hand a caller that joined the attempt a nil error: nil reads as
+// "closed", and deleteOLData and factory reset would then RemoveAll the data
+// directory under an engine that is still open.
+func TestOwnedGatedDB_PanickingAttemptFailsJoinedWaitersAndLeavesEngineOpen(t *testing.T) {
+	g, closeDB := openOwnedMem(t, vfs.NewMem())
+	seedOwned(t, g, 8)
+	it, err := g.NewIter(&pebble.IterOptions{LowerBound: []byte("owned:"), UpperBound: []byte("owned;")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	g.gate.setShutdownHook(func(st shutdownStage) {
+		if st == stageRefusedAndSynced {
+			once.Do(func() {
+				close(entered)
+				<-release
+				panic("injected close failure")
+			})
+		}
+	})
+	t.Cleanup(func() { g.gate.setShutdownHook(nil) })
+
+	attemptPanic := make(chan any, 1)
+	go func() {
+		defer func() { attemptPanic <- recover() }()
+		_ = closeDB(10 * time.Second)
+	}()
+	<-entered
+
+	// The waiter joins the attempt that is parked in the hook. Nothing else
+	// can finish that attempt, so a waiter still blocked after the window is
+	// waiting on it; release only then.
+	waiterErr := make(chan error, 1)
+	go func() { waiterErr <- closeDB(10 * time.Second) }()
+	select {
+	case e := <-waiterErr:
+		t.Fatalf("a caller arriving mid-attempt returned %v before the attempt finished; it must wait for it", e)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+
+	if rec := <-attemptPanic; rec == nil {
+		t.Fatal("the panic did not propagate to the caller that ran the attempt")
+	}
+	werr := <-waiterErr
+	if werr == nil {
+		t.Fatal("a waiter that joined a panicking attempt got a nil error: it would read the engine as closed")
+	}
+	if errors.Is(werr, pebble.ErrClosed) {
+		t.Fatalf("waiter error %v wraps pebble.ErrClosed, but the engine is not closed", werr)
+	}
+
+	// The engine is still open under the straggler.
+	n, ierr := countRows(it)
+	if ierr != nil || n != 8 {
+		t.Fatalf("held iterator after the panicking attempt: %d rows, err %v; want 8 rows (the engine must still be open)", n, ierr)
+	}
+
+	// A later call is a fresh attempt: it closes cleanly once the straggler
+	// has released, and is idempotent after that.
+	g.gate.setShutdownHook(nil)
+	if e := closeDB(50 * time.Millisecond); e == nil {
+		t.Fatal("a close with the straggler still held returned nil")
+	}
+	if e := releaseNoPanic(it.Close); e != nil {
+		t.Fatalf("releasing the iterator: %v", e)
+	}
+	if e := closeDB(10 * time.Second); e != nil {
+		t.Fatalf("close after the straggler released: %v", e)
+	}
+	if e := closeDB(time.Second); e != nil {
+		t.Fatalf("close after a successful close: %v", e)
 	}
 }
 
