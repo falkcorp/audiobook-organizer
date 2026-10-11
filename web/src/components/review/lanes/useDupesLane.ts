@@ -60,7 +60,7 @@ export const FIRST_PAINT_ROWS = 20;
  * the two BOOKS behind a candidate, so the endpoint cannot express it. Sending
  * the rest of the filter without it would merge a strictly larger set than the
  * reviewer is looking at, and merges are the hardest operation in this system
- * to undo. Refusing is the only honest option -- silently widening a
+ * to undo. Refusing is the only safe option -- silently widening a
  * destructive action is the exact failure this whole filter-parity thread
  * exists to prevent.
  */
