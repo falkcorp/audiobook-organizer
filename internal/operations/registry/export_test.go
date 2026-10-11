@@ -1,5 +1,5 @@
 // file: internal/operations/registry/export_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c45952c-3393-4f33-9784-efd565ec8c49
 // last-edited: 2026-10-10
 
@@ -7,7 +7,6 @@ package registry
 
 import (
 	"context"
-	"sort"
 	"time"
 )
 
@@ -35,14 +34,16 @@ const ScanStandDownDefIDForTest = scanStandDownDefID
 // DispatchCycleForTest runs one dispatcher pass synchronously.
 func (r *Registry) DispatchCycleForTest(ctx context.Context) { r.dispatchCycle(ctx) }
 
-// HeldConcurrencyKeysForTest lists the ConcurrencyKeys currently held, sorted.
-func (r *Registry) HeldConcurrencyKeysForTest() []string {
+// HeldConcurrencyKeysForTest returns a copy of the held ConcurrencyKeys,
+// mapped to the op id holding each. The holder matters: a key can be released
+// by one op and claimed by the next between two reads, so a test that asks
+// "does op X still hold a key" must check the holder, not only the key set.
+func (r *Registry) HeldConcurrencyKeysForTest() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	keys := make([]string, 0, len(r.concurrencyKeys))
-	for k := range r.concurrencyKeys {
-		keys = append(keys, k)
+	held := make(map[string]string, len(r.concurrencyKeys))
+	for k, holder := range r.concurrencyKeys {
+		held[k] = holder
 	}
-	sort.Strings(keys)
-	return keys
+	return held
 }
