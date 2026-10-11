@@ -1,5 +1,5 @@
 // file: internal/personname/author_plausible.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b634b40-1fc8-4fcd-bf81-98dd562e7ebe
 // last-edited: 2026-10-11
 
@@ -57,12 +57,14 @@ var (
 	// Timecodes and track numbering embedded anywhere in the string:
 	// "Lords of the Sith_418m_07s_99h", "000m_00s", "12:34", "Track01", "Disc 2 Track 3".
 	timecodeAnyRe = regexp.MustCompile(`(?i)\d+m_?\d+s\b|_\d+m(_|\b)|\b\d{1,3}:\d{2}\b|^(track|trk|disc|disk|cd)\s*\d+`)
-	// Release-post shrapnel from torrent/forum titles: a file size ("831MB",
-	// "1.2 GB", "700mb") or a hashtag after a space ("… #<tag>"). Seen in
-	// prod as an author shaped "10 831MB] #<tag>" (2026-10-11): it starts with a
+	// Release-post shrapnel from torrent/forum titles: a file size ("<n>MB",
+	// "1.2 GB", "<n>mb") or a hashtag after a space ("… #<tag>"). Seen in
+	// prod as an author shaped "<digits> <size>] #<tag>" (2026-10-11): it starts with a
 	// digit, so the leading-punctuation rule passes it, and no other rule here
 	// matched. A size needs a number glued or spaced to a byte unit, and a
 	// hashtag needs a letter after the #, so "50 Cent" and "Book #3" pass.
+	// Accepted risk: a hashtag stage name such as "DJ #Fresh" is refused at
+	// creation by design (the prod dry run found none).
 	// The space before the unit or the # is any Unicode space (\p{Z}: no-break
 	// space, ideographic space, ...) as well as ASCII whitespace: RE2's \s is
 	// ASCII-only, and a tag pasted from a web page carries U+00A0 as often as
@@ -75,7 +77,7 @@ var (
 	// (RE2 has no backreference) and that the content is a release tag.
 	// Group content is judged WITH its opening mark in front, so it is a
 	// release tag exactly when IsPlausibleAuthorName would refuse the name for
-	// it: "[#Winner]" is not a hashtag after a space, "[64k #Winner]" is.
+	// it: "[#Tag]" is not a hashtag after a space, "[64k #Tag]" is.
 	trailingTagGroupRe = regexp.MustCompile(`^(.*?\S)[\s\p{Z}]*([\[{(])([^\[\]{}()]*)([\]})])[\s\p{Z}]*$`)
 )
 
@@ -85,8 +87,8 @@ var tagGroupClose = map[string]string{"[": "]", "{": "}", "(": ")"}
 // StripTrailingReleaseTag removes release-post decoration from the end of a
 // name: a trailing bracketed, braced or parenthesised group whose content is a
 // release tag by the same rule the creation gate refuses (a file size or a
-// hashtag), such as "Name [32k 08;53;59 122MB]", "Name {497mb}" or
-// "Name (120 MB)". It returns the head left once every such group is gone and
+// hashtag), such as "Name [32k 01;02;03 250MB]", "Name {300mb}" or
+// "Name (150 MB)". It returns the head left once every such group is gone and
 // true, or "" and false when the name has no such group or nothing is left of
 // the head. It judges only the decoration; the caller decides whether the head
 // is a person (authorjunk.CleanedName does). A group whose content is not a

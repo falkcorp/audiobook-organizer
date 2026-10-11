@@ -24,7 +24,7 @@
       (`IsDirtyAuthorName`, then `IsPlausibleAuthorName` in `PebbleStore.CreateAuthor`).
       The HTML-entity row matches the known `;`-split of an HTML-escaped copyright line in an
       artist tag (`metadata.splitMultipleAuthors`, entity-protected since 04066efbc; still open in the
-      "Author table: copyright text and HTML entities" section above, author id 46583). The
+      "Author table: copyright text and HTML entities" section above). The
       size/hashtag shape (a torrent/forum release title in a tag) passed every gate until the
       `release_tag` rule. No author path HTML-unescapes; the 2026-09-10 decision was "reject,
       do not unescape", and that still holds — decoding a copyright entity yields the

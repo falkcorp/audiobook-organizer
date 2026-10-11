@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.36.0
+// version: 1.36.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-10-11
 
@@ -1784,8 +1784,8 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 // 🔴 UNTIL 2026-10-11 THE SHELF WAS THE FIRST TEN AUTHORS BY NAME. Personalized
 // copied the name-sorted index and kept the first ten, with every addedAt set to
 // the build time. Names starting with punctuation or a digit sort before letters,
-// so the shelf on prod was "&#169", "(c) 2001 …", "10 831MB] …", "13 short
-// stories" — all "added today". Nothing about it was "newest".
+// so the shelf on prod was "&#<code>", "(c) <year> …", "<digits> <size>] …" and
+// "<n> short <plural noun>" — all "added today". Nothing about it was "newest".
 //
 // The order key is the author's addedAt: the EARLIEST CreatedAt among the
 // author's visible books. database.Author carries no timestamp, so a book date
