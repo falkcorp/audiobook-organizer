@@ -1,12 +1,16 @@
 // file: web/src/utils/settingLocks.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1f9e24-8a3d-4b75-9d02-5e7a1c8b3f46
 // last-edited: 2026-10-11
 
 /**
  * What GET /api/v1/config reports in `setting_locks` for a key the server's
- * config file locks. Mirrors config.LockedByConfigFile in internal/config; it is
- * not an environment variable name (it has a space) and does not start with `--`.
+ * config file locks: this text, followed by " <path>" when the server knows which
+ * file it read. Mirrors config.LockedByConfigFile in internal/config; it is not an
+ * environment variable name (it has a space) and does not start with `--`.
+ *
+ * The file is the one the server was started with (`--config`, by default
+ * `~/.audiobook-organizer.yaml`), not the `config.yaml` kept next to the database.
  */
 export const LOCKED_BY_CONFIG_FILE = 'config file';
 
@@ -20,6 +24,9 @@ export const LOCKED_BY_CONFIG_FILE = 'config file';
 export function describeLock(mechanism: string | undefined): string {
   if (!mechanism) return 'the server configuration';
   if (mechanism === LOCKED_BY_CONFIG_FILE) return "the server's config file";
+  if (mechanism.startsWith(`${LOCKED_BY_CONFIG_FILE} `)) {
+    return `the server's config file (${mechanism.slice(LOCKED_BY_CONFIG_FILE.length + 1)})`;
+  }
   return mechanism.startsWith('--')
     ? `the ${mechanism} flag on the server's start-up command`
     : `the ${mechanism} environment variable on the server`;

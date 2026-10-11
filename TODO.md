@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.8 -->
+<!-- version: 10.76.9 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -330,8 +330,8 @@ into one of the curated sections below, is a normal direct edit.
       password into the stored blob in plaintext and later env rotations are
       ignored; decide whether it becomes a real secret row or env-authoritative.
       Done 2026-10-11: env-authoritative. The five `deluge_*` settings are locked by
-      `DELUGE_*` or the config file (`SettingLockedBy`), and a locked password is no
-      longer written to the blob.
+      `DELUGE_*` or the config file (`SettingLockedBy`), and a save under that lock
+      keeps the previously stored blob password instead of writing the live one.
 
 - [ ] **CONFIG-TEST-ISOLATION** `TestUpdateConfig_WithoutRemovedKeyUnaffected`
       (`internal/config`) returns 403 under `go test -shuffle` (7 of 8 seeds
