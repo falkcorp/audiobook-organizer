@@ -945,6 +945,47 @@ describe('page mode requests', () => {
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('hidden as rejected'), 'warning');
   });
 
+  it('a single-row Apply of a page row with no candidate hash is refused, not sent unpinned', async () => {
+    armApply();
+    const page = pageOf(['a1'], 1, 'g1');
+    delete (page.results[0] as { candidate_hash?: string }).candidate_hash;
+    vi.mocked(api.getReviewPage).mockResolvedValue(page);
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    act(() => result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'a1' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^This book has no candidate the page can pin/),
+      'warning'
+    );
+  });
+
+  it("a group's Reject right after a filter change is refused until the new page lands", async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValueOnce(pageOf(['a1', 'a2'], 2, 'g1'));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    vi.mocked(api.getReviewPage).mockImplementationOnce(
+      () => new Promise<api.ReviewPageResponse>(() => {})
+    );
+    act(() => result.current.setFilters({ confidenceThreshold: 999 }));
+    toast.mockClear();
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'rejectGroup', ids: ['a1', 'a2'] })
+    );
+    expect(api.markNoMatch).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^The list has not caught up with the new filters/),
+      'warning'
+    );
+    // Let the debounced request go out, so the one-shot never-answering mock
+    // is used here and not by the next test's first page.
+    await waitFor(() => expect(api.getReviewPage).toHaveBeenCalledTimes(2));
+  });
+
   it('does not send a Title pattern its own compiler rejects', async () => {
     vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
     const { result } = renderHook(() => useMetadataLane(toast));
