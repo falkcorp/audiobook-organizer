@@ -1,6 +1,6 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.4.0
-// last-edited: 2026-10-06
+// version: 1.5.0
+// last-edited: 2026-10-11
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
 /**
@@ -44,6 +44,10 @@ export const SEARCH_FIELDS: readonly string[] = [
   'duration',
   'has_duration',
   'metadata',
+  // Identification state (server: internal/audiobooks/filter_ident.go):
+  // unasked, asked_empty, has_candidates, applied, held, or missing
+  // (unasked + asked_empty, the metadata goal number).
+  'ident',
   'file_size',
   'bitrate',
   'codec',
@@ -56,6 +60,7 @@ export const SEARCH_FIELDS: readonly string[] = [
   'updated_at',
   'isbn10',
   'isbn13',
+  'asin',
   'work_id',
   'tag',
   'review',

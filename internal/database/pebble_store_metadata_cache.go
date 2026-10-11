@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
 // last-edited: 2026-10-11
 
@@ -28,11 +28,19 @@ func metadataCacheKey(bookID string) []byte {
 // metadataCacheLog is the process log of the metadata_cache keyspace.
 var metadataCacheLog = logger.New("database.metadata-cache")
 
-// metadataCacheLock is bookID's stripe of PebbleStore.metadataCacheLocks.
+// metadataCacheLock is bookID's stripe of PebbleStore.metadataCacheLocks. It
+// is also the book's identification lock (ident_state.go): every write of an
+// identification input holds it from the read of the old state row through
+// the commit.
 func (p *PebbleStore) metadataCacheLock(bookID string) *sync.Mutex {
+	return &p.metadataCacheLocks[p.metadataCacheStripe(bookID)]
+}
+
+// metadataCacheStripe is the index of bookID's stripe.
+func (p *PebbleStore) metadataCacheStripe(bookID string) int {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(bookID))
-	return &p.metadataCacheLocks[h.Sum32()%uint32(len(p.metadataCacheLocks))]
+	return int(h.Sum32() % uint32(len(p.metadataCacheLocks)))
 }
 
 // GetMetadataCache reads the cache entry for bookID, or returns
@@ -55,6 +63,10 @@ func (p *PebbleStore) GetMetadataCache(bookID string) (*MetadataCandidateCache, 
 }
 
 // PutMetadataCache writes (or replaces) the cache entry for entry.BookID.
+//
+// The row and the book's identification state (ident_state.go) are written
+// in ONE batch, under the book's cache stripe, so the state can never
+// describe a row that was not written (or miss one that was).
 func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 	if entry == nil || entry.BookID == "" {
 		return fmt.Errorf("PutMetadataCache: nil entry or empty BookID")
@@ -66,7 +78,7 @@ func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 	mu := p.metadataCacheLock(entry.BookID)
 	mu.Lock()
 	defer mu.Unlock()
-	if err := p.db.Set(metadataCacheKey(entry.BookID), data, pebble.Sync); err != nil {
+	if err := p.commitMetadataCacheWrite(entry.BookID, data, entry); err != nil {
 		return fmt.Errorf("pebble set metadata_cache:%s: %w", entry.BookID, err)
 	}
 	p.bumpMetadataCacheGeneration(entry.BookID)
@@ -74,15 +86,52 @@ func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 }
 
 // DeleteMetadataCache removes the cache entry for bookID. Missing
-// keys are not an error.
+// keys are not an error. The removal and the book's identification state
+// commit in one batch, as in PutMetadataCache.
 func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 	mu := p.metadataCacheLock(bookID)
 	mu.Lock()
 	defer mu.Unlock()
-	if err := p.db.Delete(metadataCacheKey(bookID), pebble.Sync); err != nil {
+	if err := p.commitMetadataCacheWrite(bookID, nil, nil); err != nil {
 		return fmt.Errorf("pebble delete metadata_cache:%s: %w", bookID, err)
 	}
 	p.bumpMetadataCacheGeneration(bookID)
+	return nil
+}
+
+// commitMetadataCacheWrite sets (data non-nil) or deletes bookID's cache row
+// and stages the book's identification state derived from entry (nil: no
+// row) and the book as stored, in one synced batch. The caller holds the
+// book's cache stripe. A book write that changes an identification input
+// holds the same stripe through its commit, so the book read here is the
+// committed one.
+func (p *PebbleStore) commitMetadataCacheWrite(bookID string, data []byte, entry *MetadataCandidateCache) error {
+	book, err := p.GetBookByID(bookID)
+	if err != nil {
+		return fmt.Errorf("read book for identification state: %w", err)
+	}
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	if data != nil {
+		err = batch.Set(metadataCacheKey(bookID), data, nil)
+	} else {
+		err = batch.Delete(metadataCacheKey(bookID), nil)
+	}
+	if err != nil {
+		return err
+	}
+	t := p.beginIdent(batch)
+	defer t.end(false)
+	if err := t.stage(bookID, book, entry); err != nil {
+		return err
+	}
+	if err := t.prepare(); err != nil {
+		return err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+	t.end(true)
 	return nil
 }
 
@@ -101,6 +150,13 @@ func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 //   - SetRaw, DeleteRaw and DeleteRawBatch on a key under the prefix;
 //   - Reset, which wipes everything (and so records no book: a reader behind
 //     it is told to rebuild).
+//
+// Each of them also keeps the book identification index (ident_state.go)
+// current in the same batch, under the book's cache stripe: Put and Delete
+// through commitMetadataCacheWrite, UpdateBook/CreateBook/DeleteBook through
+// their identTxn, the raw writers through stageIdentForRawCacheWrites, and
+// Reset by stamping an empty built index. WipeByPrefixes over the prefix
+// rebuilds the index.
 //
 // A reader holding something derived from the cache -- the review listing's
 // snapshot -- compares it to the value it read when it began building, to
@@ -139,7 +195,7 @@ func asinReplacedOnWrite(oldBook, newBook *Book) (old string, replaced bool) {
 // The caller must hold the book's metadataCacheLock until the batch commits;
 // staged reports whether the row was rewritten (the caller then bumps the
 // cache generation after the commit).
-func (p *PebbleStore) stageCacheASINStamp(batch *GatedBatch, bookID, oldASIN string) (staged bool, err error) {
+func (p *PebbleStore) stageCacheASINStamp(batch *GatedBatch, bookID, oldASIN string) (staged bool, after *MetadataCandidateCache, err error) {
 	return p.stageCacheRowStamp(batch, bookID, false, oldASIN)
 }
 
@@ -161,13 +217,15 @@ func (p *PebbleStore) stageCacheASINStamp(batch *GatedBatch, bookID, oldASIN str
 // The caller must hold the book's metadataCacheLock until the batch commits;
 // staged reports whether the row was rewritten or dropped (the caller then
 // bumps the cache generation after the commit).
-func (p *PebbleStore) stageCacheStaleStamp(batch *GatedBatch, bookID, oldASIN string) (staged bool, err error) {
+func (p *PebbleStore) stageCacheStaleStamp(batch *GatedBatch, bookID, oldASIN string) (staged bool, after *MetadataCandidateCache, err error) {
 	return p.stageCacheRowStamp(batch, bookID, true, oldASIN)
 }
 
 // stageCacheRowStamp is the one read-modify-write both stamps share, so a
 // write that is a retitle and an ASIN replacement rewrites the row once.
-func (p *PebbleStore) stageCacheRowStamp(batch *GatedBatch, bookID string, markStale bool, oldASIN string) (staged bool, err error) {
+// after is the row as the batch leaves it (nil: no row), which the book
+// write derives the identification state from.
+func (p *PebbleStore) stageCacheRowStamp(batch *GatedBatch, bookID string, markStale bool, oldASIN string) (staged bool, after *MetadataCandidateCache, err error) {
 	entry, err := p.GetMetadataCache(bookID)
 	if err != nil {
 		// A row that cannot be read cannot be stamped. Keeping it unstamped
@@ -175,10 +233,11 @@ func (p *PebbleStore) stageCacheRowStamp(batch *GatedBatch, bookID string, markS
 		// so it is dropped instead: the next fetch rewrites it.
 		metadataCacheLog.Warn("metadata_cache:%s unreadable while its book's identity changed; dropping it: %v",
 			logger.SanitizeLogValue(bookID), err)
-		return p.stageDeleteIfPresent(batch, metadataCacheKey(bookID))
+		staged, err := p.stageDeleteIfPresent(batch, metadataCacheKey(bookID))
+		return staged, nil, err
 	}
 	if entry == nil {
-		return false, nil
+		return false, nil, nil
 	}
 	changed := false
 	if markStale && !entry.Stale {
@@ -191,14 +250,14 @@ func (p *PebbleStore) stageCacheRowStamp(batch *GatedBatch, bookID string, markS
 		changed = true
 	}
 	if !changed {
-		return false, nil
+		return false, entry, nil
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
-		return false, fmt.Errorf("encode metadata_cache:%s: %w", bookID, err)
+		return false, nil, fmt.Errorf("encode metadata_cache:%s: %w", bookID, err)
 	}
 	if err := batch.Set(metadataCacheKey(bookID), data, nil); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return true, nil
+	return true, entry, nil
 }

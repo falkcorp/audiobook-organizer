@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tag_facets.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e9a6c1d-7b2f-4d85-a0c4-8f1e2b6d9a73
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 // Scoped tag facets: the Library's Browse-by-Tag chips counted over the
 // CURRENT result set instead of the whole library. The match set comes from
@@ -75,6 +75,10 @@ func (svc *AudiobookService) MatchingBookIDs(ctx context.Context, search string,
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
+	f, err := svc.resolveIdentFilters(f)
+	if err != nil {
+		return nil, err
+	}
 	if key, ok := svc.searchCacheKey(search, authorID, seriesID, f); ok {
 		ev := &listSearchEvaluator{svc: svc, search: search, authorID: authorID, seriesID: seriesID, f: f, substring: !svc.bleveSearchable()}
 		res, err := svc.resultCache.Lookup(ctx, key, ev, searchcache.LookupOptions{})
@@ -106,6 +110,13 @@ func (svc *AudiobookService) MatchingBookIDs(ctx context.Context, search string,
 // request's result depends only on book rows; concurrent identical misses
 // share one computation, cancelled when its last waiter leaves.
 func (svc *AudiobookService) ScopedTagFacets(ctx context.Context, search string, authorID, seriesID *int, f ListFilters) (ScopedTagFacets, error) {
+	// Resolved before the key: the id restriction keeps an ident: request
+	// out of the facets cache, whose generation an identification-state
+	// change does not move.
+	f, err := svc.resolveIdentFilters(f)
+	if err != nil {
+		return ScopedTagFacets{}, err
+	}
 	key, cacheable := svc.scopedTagFacetsKey(search, authorID, seriesID, f)
 	if !cacheable || svc.tagFacets == nil {
 		return svc.computeScopedTagFacets(ctx, search, authorID, seriesID, f)

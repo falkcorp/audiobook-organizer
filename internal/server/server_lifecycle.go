@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.31.1
+// version: 4.32.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-11
 
@@ -1121,6 +1121,32 @@ func (s *Server) startBackfills() {
 		}
 	})
 
+	// Book identification index (database/ident_state.go): rebuilt from
+	// scratch when its marker is absent or old -- ident: queries answer 503
+	// and the review summary reports ready=false until it finishes -- and
+	// otherwise reconciled in place while it keeps serving, which repairs
+	// rows a build that predates the index wrote. Waits for memdb warmup so
+	// its full book scan does not compete with warmup's; never blocks startup.
+	s.bgWG.Go("ident-index", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		b, ok := database.AsCapability[identIndexBuilder](s.Ops())
+		if !ok {
+			return
+		}
+		warm := make(chan struct{})
+		go func() { b.WaitForWarmup(); close(warm) }()
+		select {
+		case <-warm:
+		case <-s.bgCtx.Done():
+			return
+		}
+		if err := b.EnsureIdentIndex(s.bgCtx); err != nil && s.bgCtx.Err() == nil {
+			lifecycleLog.Warn("identification index build failed; ident: queries stay unavailable until the next boot: %v", err)
+		}
+	})
+
 	// opv2 timeline index (pebble_store_ops_v2_timeline.go): opv2:open: and
 	// opv2:done: keys that let ListOperationsV2Since skip decoding every
 	// operation row. Same trust model as opchange_by_book below: the index
@@ -1801,6 +1827,13 @@ type bookAtPathBackfiller interface {
 // exercise the production resolution path.
 func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
 	return database.AsCapability[bookAtPathBackfiller](s)
+}
+
+// identIndexBuilder is the identification index's boot build plus the
+// warmup gate it waits on (*PebbleStore methods outside database.Store).
+type identIndexBuilder interface {
+	WaitForWarmup()
+	EnsureIdentIndex(ctx context.Context) error
 }
 
 // opsV2TimelineReconciler is the opv2 timeline index boot reconcile plus the

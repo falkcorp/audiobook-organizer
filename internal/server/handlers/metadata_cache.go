@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -669,6 +669,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	unreviewableRows := derived.unreviewable
 	freshCutoff := derived.freshCutoff
 	summary := derived.summary(&set)
+	summary["ident_counts"] = identCountsSummary(h.store)
 
 	if wantUnreviewable {
 		start := min(offset, len(unreviewableRows))
@@ -771,6 +772,26 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	summary["truncated"] = truncated
 	summary["limit"] = limit
 	respond(summary, len(reviewable), len(results))
+}
+
+// identCountsSummary is the review summary's ident_counts block: the
+// identification index's primary-scope counters (the books the Library lists
+// by default), O(1), with missing = unasked + asked_empty -- the goal number,
+// the same count the Library shows for ident:missing. While the index is
+// being built ready is false and every count is 0; a store without the index
+// reports the same, so the block's shape never changes.
+func identCountsSummary(store any) gin.H {
+	out := gin.H{"ready": false}
+	var c database.IdentCounts
+	if r, ok := database.AsCapability[database.IdentIndexReader](store); ok {
+		c = r.IdentCounts()
+	}
+	for _, s := range database.AllIdentStates {
+		out[string(s)] = c.Primary[s]
+	}
+	out["missing"] = database.IdentMissing(c.Primary)
+	out["ready"] = c.Ready
+	return out
 }
 
 // Review row statuses. "matched" is the PENDING-review default, not a verdict:
