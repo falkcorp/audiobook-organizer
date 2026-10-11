@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
 // last-edited: 2026-10-11
 
@@ -260,6 +260,11 @@ func (s *modelLabelSet) setConfigured(pairs ...modelPair) {
 		generation: func() uint64 { return gen },
 		configured: func() []modelPair { return pairs },
 	})
+	// Forget the generation the last sync ran at: a test source's counter
+	// starts at 1 and the live config's can be any value, so without this a
+	// stale syncedGen could equal the new source's generation and skip the
+	// re-sync this call exists to force.
+	s.syncedGen.Store(0)
 	s.mu.Unlock()
 }
 

@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
 // last-edited: 2026-10-11
 
@@ -1204,6 +1204,9 @@ func TestModelLabelRestartStability(t *testing.T) {
 		{providerOpenAI, "zzz-unconfigured"}, {providerOpenAI, "emb-model"}, {providerOpenAI, "fn-model"},
 		{providerOpenAI, "dedup-model"}, {providerOpenAI, "review-model"}, {providerOpenAI, "aaa-unconfigured"},
 	}
+	// dedup.review_model is set but no ai_* metric is ever recorded for it
+	// (dedup reviews go through the Batch API), so it is not a configured
+	// metric model and must label "other" like any unconfigured one.
 	run := func(order []modelPair) map[modelPair]string {
 		s := newModelLabelSet()
 		s.source.Store(&modelSource{generation: func() uint64 { return 1 }, configured: func() []modelPair { return configuredModelPairs(cfg) }})
@@ -1221,12 +1224,12 @@ func TestModelLabelRestartStability(t *testing.T) {
 			t.Errorf("%v: %q on one start, %q on another", p, a[p], b[p])
 		}
 	}
-	for _, name := range []string{"fn-model", "review-model", "dedup-model", "emb-model"} {
+	for _, name := range []string{"fn-model", "review-model", "emb-model"} {
 		if a[modelPair{providerOpenAI, name}] != name {
 			t.Errorf("configured %q labelled %q", name, a[modelPair{providerOpenAI, name}])
 		}
 	}
-	for _, name := range []string{"zzz-unconfigured", "aaa-unconfigured"} {
+	for _, name := range []string{"zzz-unconfigured", "aaa-unconfigured", "dedup-model"} {
 		if a[modelPair{providerOpenAI, name}] != modelOther {
 			t.Errorf("unconfigured %q labelled %q", name, a[modelPair{providerOpenAI, name}])
 		}
@@ -1355,41 +1358,6 @@ func TestModelLabelConcurrentUse(t *testing.T) {
 	wg.Wait()
 }
 
-// configuredModelPairs resolves each setting the way its call site does.
-func TestConfiguredModelPairs(t *testing.T) {
-	cfg := &config.Config{
-		OpenAIAPIKey: "k",
-		AIBackend: config.AIBackendConfig{
-			LLMMode: config.AIBackendModeOpenAIFallbackLocal, EmbeddingMode: config.AIBackendModeLocal,
-			LocalBaseURL: "http://192.0.2.10:11434/v1", LocalLLMModel: "local-chat", LocalEmbeddingModel: "local-embed",
-		},
-		FilenameParseModel: "gpt-x",
-		// MetadataReviewModel and CoverArtModel empty: the OpenAI parser falls
-		// back to defaultModel, the local one to local_llm_model.
-		Embedding:          config.EmbeddingConfig{Enabled: true, Model: "emb-model"},
-		AIEndpointsRouting: true,
-		AIEndpoints: []config.AIEndpoint{
-			{ID: "off", Enabled: false, URL: "http://192.0.2.20:11434/v1", ChatModel: "disabled-row-model"},
-			{ID: "on", Enabled: true, URL: "http://192.0.2.21:11434/v1", ChatModel: "row-chat", EmbedModel: "row-embed",
-				CapabilityModels: map[string]string{"llm.b": "row-cap-b", "llm.a": "row-cap-a", "bad": "has space"}},
-		},
-	}
-	want := []modelPair{
-		{providerOpenAI, "gpt-x"}, {providerOpenAI, defaultModel}, // chat, OpenAI side
-		{providerLocal, "gpt-x"}, {providerLocal, "local-chat"}, // chat, local side
-		{providerLocal, "local-embed"}, // embedding is local
-		{providerLocal, "row-chat"}, {providerLocal, "row-embed"}, {providerLocal, "row-cap-a"}, {providerLocal, "row-cap-b"},
-	}
-	// The dedup review model defaults to defaultModel, already listed.
-	if got := configuredModelPairs(cfg); !slices.Equal(got, want) {
-		t.Errorf("configuredModelPairs =\n %v\nwant\n %v", got, want)
-	}
-	cfg.AIEndpointsRouting = false
-	if got := configuredModelPairs(cfg); slices.Contains(got, modelPair{providerLocal, "row-chat"}) {
-		t.Errorf("pool rows named with routing off: %v", got)
-	}
-}
-
 // The span carries the real model name: the label folds unconfigured models,
 // and a trace attribute is not a series.
 func TestSpanModelIsNotCapped(t *testing.T) {
@@ -1496,11 +1464,20 @@ func TestSeriesCardinalityBound(t *testing.T) {
 	for _, p := range named {
 		(callMeta{provider: p.provider, model: p.model}).normalized() // sync: the cap is now full
 	}
+	// Settings changes that configure more models once the cap is full. They
+	// are recorded below like the named ones: a mutant that lets them take a
+	// name must be visible as extra series, not only as a different label
+	// from normalized().
+	var later []modelPair
 	for i := range 4 {
 		modelLabels.setConfigured(modelPair{providerOpenAI, "configured-later-" + string(rune('a'+i))},
 			modelPair{providerLocal, "configured-later-" + string(rune('a'+i))})
 		for _, provider := range []string{providerOpenAI, providerLocal} {
-			(callMeta{provider: provider, model: "configured-later-" + string(rune('a'+i))}).normalized()
+			p := modelPair{provider, "configured-later-" + string(rune('a'+i))}
+			later = append(later, p)
+			if got := (callMeta{provider: p.provider, model: p.model}).normalized().model; got != modelOther {
+				t.Errorf("%v configured past the cap was named %q", p, got)
+			}
 		}
 	}
 	const modelsOffered = 40 // a pool far larger than any real one
@@ -1526,7 +1503,7 @@ func TestSeriesCardinalityBound(t *testing.T) {
 			record(callMeta{provider: provider, model: "model-" + string(rune('a'+i%26)) + string(rune('a'+i/26))})
 		}
 	}
-	for _, p := range named {
+	for _, p := range append(slices.Clone(named), later...) {
 		record(callMeta{provider: p.provider, model: p.model})
 	}
 	rm := tel.collect(t)

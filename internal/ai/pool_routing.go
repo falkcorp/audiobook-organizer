@@ -1,7 +1,7 @@
 // file: internal/ai/pool_routing.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 146b51bb-eb0a-45ab-953b-1cc0c095646e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package ai
 
@@ -60,12 +60,21 @@ func ConfigPool() *PoolSource {
 			return config.DispatchEndpoints(config.Snapshot().AIEndpoints)
 		},
 		Secret: func(authRef string) string {
-			if authRef == "openai_api_key" {
-				return config.Snapshot().OpenAIAPIKey
-			}
-			return ""
+			cfg := config.Snapshot()
+			return poolSecret(&cfg, authRef)
 		},
 	}
+}
+
+// poolSecret resolves an endpoint's auth_ref against cfg: "openai_api_key" is
+// the OpenAI key, any other name has no secret. It is shared with the AI
+// metrics' model-label set (configuredModelPairs), which must agree with the
+// call path on which rows can authenticate at all.
+func poolSecret(cfg *config.Config, authRef string) string {
+	if authRef == "openai_api_key" {
+		return cfg.OpenAIAPIKey
+	}
+	return ""
 }
 
 // IsActive reports whether routing is on. A nil source is never active.
