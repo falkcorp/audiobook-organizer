@@ -1,0 +1,1 @@
+- Cleared the nine `errcheck` findings that had slipped onto main: child mode now reports a failed store close after a settings-load failure, the OTel AI instruments log constructor errors instead of blanking them, `replyFailureReason` uses `errors.As`, and the CLI tag-write backup logs a failed pre-write stat.

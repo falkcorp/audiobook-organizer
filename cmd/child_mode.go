@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package cmd
 
@@ -86,7 +86,9 @@ func RunOperationRunner() {
 	// install) is not an error: LoadConfigFromDatabase returns nil for it.
 	if err := loadConfigFromDB(store); err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: failed to load config from database: %v\n", err)
-		_ = closeStore()
+		if cerr := closeStore(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "child mode: close store: %v\n", cerr)
+		}
 		os.Exit(2)
 	}
 	if config.Snapshot().RootDir == "" {

@@ -1,13 +1,14 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package ai
 
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -164,21 +165,33 @@ func aiInstrumentsFor() *aiInstruments {
 // annotations, never "1".
 func newAIInstruments(m metric.Meter) *aiInstruments {
 	ins := &aiInstruments{}
-	ins.requests, _ = m.Int64Counter("ai.requests",
+	// A constructor error leaves a usable no-op instrument in place; collect
+	// the errors and log them once so a missing series has a stated reason.
+	var errs []error
+	var err error
+	ins.requests, err = m.Int64Counter("ai.requests",
 		metric.WithUnit("{request}"),
 		metric.WithDescription("Direct AI requests that reached the SDK, by provider, model, task and outcome. A retry is a new attempt."))
-	ins.duration, _ = m.Float64Histogram("ai.request.duration",
+	errs = append(errs, err)
+	ins.duration, err = m.Float64Histogram("ai.request.duration",
 		metric.WithUnit("s"),
 		metric.WithDescription("Wall time of the SDK call, by provider, model and task."))
-	ins.tokens, _ = m.Int64Counter("ai.tokens",
+	errs = append(errs, err)
+	ins.tokens, err = m.Int64Counter("ai.tokens",
 		metric.WithUnit("{token}"),
 		metric.WithDescription("Tokens the provider reported for direct AI requests (batch-API tokens are not recorded)."))
-	ins.failures, _ = m.Int64Counter("ai.failures",
+	errs = append(errs, err)
+	ins.failures, err = m.Int64Counter("ai.failures",
 		metric.WithUnit("{failure}"),
 		metric.WithDescription("Failed AI requests and unusable replies, by reason."))
-	ins.parseResults, _ = m.Int64Counter("ai.parse_results",
+	errs = append(errs, err)
+	ins.parseResults, err = m.Int64Counter("ai.parse_results",
 		metric.WithUnit("{result}"),
 		metric.WithDescription("Scan-phase AI parse results per item: accepted (usable) or not."))
+	errs = append(errs, err)
+	if joined := errors.Join(errs...); joined != nil {
+		slog.Warn("ai metrics: some instruments could not be created; those series will be missing", "err", joined)
+	}
 	return ins
 }
 

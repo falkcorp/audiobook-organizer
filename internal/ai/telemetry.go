@@ -1,7 +1,7 @@
 // file: internal/ai/telemetry.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: c3d4e5f6-a7b8-0004-cdef-000000000004
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package ai
 
@@ -136,10 +136,12 @@ func replyFailureReason(err error) string {
 	if err == nil {
 		return ""
 	}
-	if _, ok := errors.AsType[*ResultCountError](err); ok {
+	var countErr *ResultCountError
+	if errors.As(err, &countErr) {
 		return reasonCountMismatch
 	}
-	if _, ok := errors.AsType[*ReplyParseError](err); ok {
+	var parseErr *ReplyParseError
+	if errors.As(err, &parseErr) {
 		return reasonReplyParse
 	}
 	return ""
