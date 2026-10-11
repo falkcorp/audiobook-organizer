@@ -1,5 +1,5 @@
 // file: internal/config/log_retention.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2c9e14-7b3a-4d58-a0e1-3c8b5d7f2a96
 // last-edited: 2026-10-11
 
@@ -11,9 +11,10 @@ import (
 )
 
 // DefaultLogRetentionDays is the shipped value of log_retention_days: the
-// purge_old_logs task deletes operation logs, operation changes and system
-// activity log rows older than this many days. viper's default, the load and
-// Validate normalization and every consumer's fallback read it from here.
+// purge_old_logs task deletes system log rows (syslog:) and legacy operation
+// log rows (operationlog:) older than this many days. It never deletes undo
+// history (opchange: rows). viper's default, the load and Validate
+// normalization and every consumer's fallback read it from here.
 const DefaultLogRetentionDays = 90
 
 // LogRetentionKeepForever is the documented value that turns the log purge
@@ -74,11 +75,17 @@ const logRetentionZeroMigratedKey = "log_retention_zero_migrated"
 // a config-file/environment value) applies. Run exactly once per install; the
 // caller gates it on logRetentionZeroMigratedKey and persists the result.
 //
-// No stored 0 can be an operator choice to keep logs forever: before
-// 2026-10-11 InitConfig never read the key, so AppConfig.LogRetentionDays was
-// 0 on every boot and every settings save serialised that 0 into the blob. No
-// UI ever wrote the key. A stored non-zero value, and an absent key, are left
-// alone.
+// A stored 0 is almost certainly not an operator's choice to keep logs
+// forever: before 2026-10-11 InitConfig never read the key, so
+// AppConfig.LogRetentionDays was 0 on every boot and every settings save
+// serialised that 0 into the blob, and no UI ever wrote the key. It cannot be
+// ruled out, though: from 2026-08-22 (1f66acfc7) the scheduler admin API's
+// purge_old_logs hint told operators "set that key via PUT /config, 0 disables
+// the purge", so an operator could have PUT a deliberate 0, which looks
+// exactly like the accidental one. The owner-approved intent is that logs
+// purge at the default window, so the 0 is dropped anyway, and the caller logs
+// it at Warn saying what 0 used to mean and that -1 now keeps logs forever.
+// A stored non-zero value, and an absent key, are left alone.
 func migrateLogRetentionBlob(blob string) (string, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
