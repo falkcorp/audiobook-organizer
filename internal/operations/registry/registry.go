@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.40.1
+// version: 3.41.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -1164,7 +1164,8 @@ func (r *Registry) publishOpTerminal(opID, defID, status string) {
 // Returns ErrOpNotFound for an unknown id or a row that is already terminal,
 // except when this call stopped a live run, flagged a stub whose row then
 // reads canceled, or found a zombie: those return nil (the run finished, or is
-// still stopping, while it was being canceled).
+// still stopping, while it was being canceled). A store error after this call
+// stopped a live run is logged and answered with nil (cancelStoreError).
 func (r *Registry) Cancel(opID string) error {
 	h, running := r.handleForCancel(opID)
 
@@ -1203,7 +1204,7 @@ func (r *Registry) Cancel(opID string) error {
 	// too, so exactly one of them and this write applies.
 	updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
 	if err != nil {
-		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+		return r.cancelStoreError(opID, in, err)
 	}
 	if updated {
 		r.logger.Info("registry: canceled queued op", "op_id", logger.SanitizeLogValue(opID),
@@ -1285,6 +1286,10 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 	for attempt := 0; attempt < cancelRowAttempts; attempt++ {
 		row, gerr := r.store.GetOperationV2(opID)
 		if gerr != nil || row == nil || row.ID == "" {
+			if in.live != nil {
+				// The run is already stopped; see cancelStoreError.
+				return r.cancelStoreError(opID, in, fmt.Errorf("row unreadable after stopping the run: %v", gerr))
+			}
 			return ErrOpNotFound
 		}
 		if isTerminalStatus(row.Status) {
@@ -1307,7 +1312,7 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 		case "queued":
 			updated, err := r.store.SetOperationV2StatusIfQueued(opID, "canceled")
 			if err != nil {
-				return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+				return r.cancelStoreError(opID, in, err)
 			}
 			if updated {
 				r.logger.Info("registry: canceled re-queued op", "op_id", logger.SanitizeLogValue(opID))
@@ -1318,23 +1323,25 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 			}
 			continue
 		case "running":
-			// A worker claimed the row: its handle is registered before the
-			// claim and released after the run's terminal write, so a running
-			// row with a live handle is that run. Stop it. Its terminal write
-			// records "canceled" if the run decides its final status after
-			// this (finalStatusForCanceledRun checks userCanceled first). It
-			// does NOT if the run already decided interrupted_quiesced (a
-			// stand-down quiesce) or a shutdown status and has not written it
-			// yet: that write then lands after this returns and the row stays
-			// resumable. That window is not closed here.
+			// A worker claimed the row (its handle is registered before the
+			// claim), so a running row with a live handle is that run: stop
+			// it. userCanceled is set before this returns, and the worker
+			// honors it whenever it decides or writes the final status after
+			// that: finalStatusForCanceledRun checks it first, and
+			// writeRunTerminalStatus turns an interrupted_* status it has just
+			// written into "canceled" when it is set.
 			if h, ok := r.handleForCancel(opID); ok && h.cancel != nil && !h.zombie.Load() {
 				if h != in.live {
 					r.cancelLiveHandle(opID, h)
 				}
 				return nil
 			}
-			// No live handle: a "running" row nothing in this process owns
-			// (left by a crash window), or a zombie's. Cancel the row.
+			// No live handle. Either nothing in this process owns the row
+			// (a crash left it "running"), it is a zombie's, or the run has
+			// finished and released its handle but not yet written its final
+			// status (the worker releases first). Cancel the row: the worker's
+			// final write is a compare-and-set from "running" that keeps a
+			// "canceled" row (writeRunTerminalStatus).
 		}
 		now := time.Now().UTC()
 		msg := fmt.Sprintf("canceled by user while %s (not running)", row.Status)
@@ -1343,7 +1350,7 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 		}
 		updated, err := r.store.UpdateOperationV2StatusIf(opID, row.Status, "canceled", nil, &now, &msg)
 		if err != nil {
-			return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+			return r.cancelStoreError(opID, in, err)
 		}
 		if updated {
 			r.logger.Info("registry: canceled persisted non-running op",
@@ -1352,7 +1359,24 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("registry: cancel op %s: its status kept changing; gave up after %d attempts", opID, cancelRowAttempts)
+	return r.cancelStoreError(opID, in,
+		fmt.Errorf("its status kept changing; gave up after %d attempts", cancelRowAttempts))
+}
+
+// cancelStoreError answers a store failure in Cancel's row follow-up. When
+// this call already stopped a live run (cancelLiveHandle: fence revoked,
+// userCanceled set, context canceled), the cancel has happened and the run
+// records "canceled" itself when it ends, so the failure is logged and Cancel
+// succeeds: reporting it as a failed cancel, or a 404 for an unreadable row,
+// would tell the user a stopped run is still going. Otherwise it is the
+// cancel's error.
+func (r *Registry) cancelStoreError(opID string, in cancelIntent, err error) error {
+	if in.live != nil {
+		r.logger.Warn("registry: canceled a running op, but the row follow-up failed; the run records its own canceled status",
+			"op_id", logger.SanitizeLogValue(opID), "error", err)
+		return nil
+	}
+	return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 }
 
 // handleForCancel looks up opID's in-process handle for Cancel. A dispatcher

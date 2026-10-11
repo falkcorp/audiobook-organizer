@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
-// last-edited: 2026-09-02
+// last-edited: 2026-10-10
 
 package server
 
@@ -290,6 +290,20 @@ func newOpsFake(t *testing.T) *dbmocks.MockStore {
 				r.Status = status
 			}
 			return nil
+		}).Maybe()
+
+	// A run's terminal write (and the pickup gate's) is a compare-and-set
+	// from the status the caller expects, under the same lock as the claim.
+	m.EXPECT().UpdateOperationV2StatusIf(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(id, fromStatus, status string, _, _ *time.Time, _ *string) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			r, ok := rows[id]
+			if !ok || r.Status != fromStatus {
+				return false, nil
+			}
+			r.Status = status
+			return true, nil
 		}).Maybe()
 
 	// Observability and state writes the run path touches; irrelevant here.

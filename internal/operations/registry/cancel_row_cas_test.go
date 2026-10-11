@@ -1,5 +1,5 @@
 // file: internal/operations/registry/cancel_row_cas_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 90197191-b0f8-4979-823d-4e5265a1c1c4
 // last-edited: 2026-10-10
 
@@ -68,7 +68,20 @@ type interleaveStore struct {
 	gateArrived chan struct{}
 	gateProceed chan struct{}
 	proceedOnce sync.Once
+
+	// onGateWrite, if set, runs once just before the first write of
+	// interrupted_quiesced to the target, on the writing goroutine (instead
+	// of the gateMode hold).
+	onGateWrite     func()
+	onGateWriteOnce sync.Once
+
+	// failCancelCAS / failRead make the next SetOperationV2StatusIfQueued(target,
+	// "canceled") / GetOperationV2(target) fail with errStoreFlake.
+	failCancelCAS atomic.Bool
+	failRead      atomic.Bool
 }
+
+var errStoreFlake = errors.New("store flake (injected)")
 
 // proceed releases a held pickup-gate write. Idempotent.
 func (s *interleaveStore) proceed() { s.proceedOnce.Do(func() { close(s.gateProceed) }) }
@@ -84,6 +97,9 @@ func newInterleaveStore(target string) *interleaveStore {
 }
 
 func (s *interleaveStore) GetOperationV2(id string) (*database.OperationV2Row, error) {
+	if id == s.target && s.failRead.CompareAndSwap(true, false) {
+		return nil, errStoreFlake
+	}
 	if id == s.target && s.armRead.CompareAndSwap(true, false) {
 		return s.onRead()
 	}
@@ -99,6 +115,9 @@ func (s *interleaveStore) GetOperationV2(id string) (*database.OperationV2Row, e
 }
 
 func (s *interleaveStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
+	if id == s.target && newStatus == "canceled" && s.failCancelCAS.CompareAndSwap(true, false) {
+		return false, errStoreFlake
+	}
 	if id == s.target && newStatus == "canceled" && s.armCancelCAS.CompareAndSwap(true, false) {
 		if s.beforeCAS != nil {
 			s.beforeCAS()
@@ -115,6 +134,11 @@ func (s *interleaveStore) SetOperationV2StatusIfQueued(id, newStatus string) (bo
 // holdGateWrite wraps the worker's pickup-gate write (the only writer of
 // interrupted_quiesced to the target in these tests).
 func (s *interleaveStore) holdGateWrite(id, status string, write func()) {
+	if id == s.target && status == "interrupted_quiesced" && s.onGateWrite != nil {
+		s.onGateWriteOnce.Do(s.onGateWrite)
+		write()
+		return
+	}
 	if id != s.target || status != "interrupted_quiesced" || s.gateMode == gateWriteFree {
 		write()
 		return
@@ -492,4 +516,159 @@ func TestCancel_StubAlongsideANonQueuedRow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCancel_BetweenTheRunsFinalStatusAndItsWriteKeepsTheRowCanceled covers
+// the window between a run deciding its final status and writing it. A scan
+// quiesced by a stand-down returns, its worker releases the handle and decides
+// interrupted_quiesced; a cancel landing then finds no handle, reads "running"
+// and writes "canceled". The worker's terminal write was unconditional, so it
+// replaced "canceled" with interrupted_quiesced and the stand-down release
+// re-queued the scan the user had canceled.
+func TestCancel_BetweenTheRunsFinalStatusAndItsWriteKeepsTheRowCanceled(t *testing.T) {
+	h := newCancelHarness(t, registry.ScanStandDownDefIDForTest, registry.ResumeRestart)
+	s := h.store
+	var cancelErr error
+	canceled := make(chan struct{})
+	s.onGateWrite = func() {
+		cancelErr = h.r.Cancel(s.target)
+		close(canceled)
+	}
+	h.insert("queued")
+	h.r.DispatchCycleForTest(t.Context())
+	recv(t, h.runStarted, "the scan to start")
+
+	release, err := h.r.AcquireScanStandDown(t.Context(), "holder-test", "test")
+	if err != nil {
+		t.Fatalf("AcquireScanStandDown: %v", err)
+	}
+	recv(t, canceled, "the cancel inside the worker's terminal write")
+	if cancelErr != nil {
+		t.Fatalf("Cancel: %v", cancelErr)
+	}
+	h.awaitReleased(t)
+	awaitStatus(t, s.fakeStore, s.target, "canceled", 5*time.Second)
+	release()
+	h.r.DispatchCycleForTest(t.Context())
+	time.Sleep(300 * time.Millisecond)
+	if got := h.runs.Load(); got != 1 {
+		t.Fatalf("Run called %d times, want 1: the canceled scan was resumed (status %q)", got, s.statusOf(s.target))
+	}
+	if got := s.statusOf(s.target); got != "canceled" {
+		t.Fatalf("final status = %q, want canceled", got)
+	}
+}
+
+// TestCancel_StoppedLiveRunSucceedsDespiteAStoreError: once Cancel has stopped
+// a live run (revoked its fence, set userCanceled, canceled its context), the
+// cancel has happened. A transient store error on the row follow-up must not
+// turn that into a failed cancel or a 404.
+func TestCancel_StoppedLiveRunSucceedsDespiteAStoreError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		arm  func(s *interleaveStore)
+	}{
+		{name: "compare-and-set fails", arm: func(s *interleaveStore) { s.failCancelCAS.Store(true) }},
+		{name: "row read fails", arm: func(s *interleaveStore) { s.failRead.Store(true) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCancelHarness(t, "test.cancel.store-error", registry.ResumeDrop)
+			s := h.store
+			h.insert("queued")
+			h.r.DispatchCycleForTest(t.Context())
+			recv(t, h.runStarted, "the run to start")
+			awaitStatus(t, s.fakeStore, s.target, "running", 5*time.Second)
+
+			tc.arm(s)
+			if err := h.r.Cancel(s.target); err != nil {
+				t.Fatalf("Cancel = %v, want nil: the live run was already stopped", err)
+			}
+			recv(t, h.ctxDone, "the run's context to be canceled")
+			awaitStatus(t, s.fakeStore, s.target, "canceled", 5*time.Second)
+		})
+	}
+}
+
+// TestCancel_StubDroppedByTheDispatcherPublishesOpTerminal: Cancel flags a
+// dispatcher stub and cancels its queued row, and leaves op.terminal to the
+// worker that drops the stub. If the dispatcher's post-claim re-read sees the
+// canceled row first, it releases the claim and no worker ever sees the run,
+// so nobody published: the UI bell showed the op as running.
+func TestCancel_StubDroppedByTheDispatcherPublishesOpTerminal(t *testing.T) {
+	store := newInterleaveStore("op-stub-drop")
+	bus := &recordingBus{}
+	// Not started: the dispatcher pass below is the only one.
+	r := registry.New(store, slog.Default(), 1, nil)
+	r.SetBus(bus)
+	def := makeValidDef("test.cancel.stub-drop")
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	store.insertQueuedAtomic(database.OperationV2Row{
+		ID: store.target, DefID: def.ID, Plugin: def.Plugin,
+		Status: "queued", QueuedAt: time.Now().UTC(),
+	})
+	// The dispatcher's re-read is the first read of the row: cancel there,
+	// after the stub is published and before the re-read returns.
+	var cancelErr error
+	store.onRead = func() (*database.OperationV2Row, error) {
+		cancelErr = r.Cancel(store.target)
+		return store.fakeStore.GetOperationV2(store.target)
+	}
+	store.armRead.Store(true)
+
+	r.DispatchCycleForTest(t.Context())
+	if cancelErr != nil {
+		t.Fatalf("Cancel: %v", cancelErr)
+	}
+	if r.IsRunning(store.target) {
+		t.Fatal("the dispatcher kept its claim on a canceled row")
+	}
+	if got := store.statusOf(store.target); got != "canceled" {
+		t.Fatalf("status = %q, want canceled", got)
+	}
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	n := 0
+	for _, ev := range bus.events {
+		if p, ok := ev.payload.(map[string]any); ok && ev.name == "op.terminal" && p["op_id"] == store.target {
+			if p["status"] != "canceled" {
+				t.Fatalf("op.terminal status = %v, want canceled", p["status"])
+			}
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("op.terminal published %d times for the dropped stub, want 1", n)
+	}
+}
+
+// TestCancel_PickupGateHonorsAUserCancelItsOwnWriteRaced pins the worker's
+// userCanceled re-check after an interrupted_* write. The pickup gate has
+// written interrupted_quiesced with its full handle registered; Cancel takes
+// that handle for a live run (sets userCanceled) and its row follow-up fails,
+// so Cancel does not write the row. The worker must still record "canceled"
+// from the flag, and the stand-down release must not resume the scan.
+//
+// Mutation check: drop the cancelInterruptedIfUserCanceled call in the pickup
+// gate and the row stays interrupted_quiesced and the scan runs.
+func TestCancel_PickupGateHonorsAUserCancelItsOwnWriteRaced(t *testing.T) {
+	h := newCancelHarness(t, registry.ScanStandDownDefIDForTest, registry.ResumeRestart)
+	s := h.store
+	s.gateMode = gateWriteAfter
+	s.raiseGate.Store(true)
+	h.insert("queued")
+	h.r.DispatchCycleForTest(t.Context())
+	recv(t, s.gateArrived, "the pickup gate's write")
+
+	s.failRead.Store(true)
+	err := h.r.Cancel(s.target)
+	s.proceed()
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got := s.statusOf(s.target); got == "canceled" {
+		t.Fatal("Cancel wrote the row itself; the store flake did not happen, so the worker's re-check is untested")
+	}
+	h.assertStaysCanceledAfterGateRelease(t)
 }
