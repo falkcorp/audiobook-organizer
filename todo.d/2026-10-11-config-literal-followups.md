@@ -9,10 +9,3 @@
       the viper defaults (the same reads InitConfig does) instead of copying values
       by hand, and extend `initconfig_reads_every_key_test.go`'s enumeration to it.
       `log_retention_days` and `enabled_sort_indexes` are already safe there.
-- [ ] **LOG-PURGE-UNBOUNDED-BATCH** `PruneOperationLogs` and `PruneSystemActivityLogs`
-      (internal/database/pebble_store_activity.go) each delete every expired row in
-      ONE Pebble batch and one commit. The purge never ran before 2026-10-11
-      (`log_retention_days` was never read), so the first run on an old install
-      deletes the whole backlog in a single batch under the op's 30-minute,
-      non-cancellable budget. Chunk them like `PruneOperationChanges`
-      (`opChangePruneChunk`, commit every 5,000 rows).

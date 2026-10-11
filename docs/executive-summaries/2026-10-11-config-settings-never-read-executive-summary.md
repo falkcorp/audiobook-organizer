@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-config-settings-never-read-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3b9d7e52-1f6a-4c08-9e24-a7c5d1f0b863 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -46,6 +46,9 @@ Branch `fix/config-literal-missing-fields`. Follows the review of
   dropped (once), and `GET /api/v1/config` should show
   `log_retention_days: 90`.
 - The first log cleanup runs in the next maintenance window, or within a
-  week. It deletes everything older than 90 days in one pass, so expect
-  that first run to take longer than later ones. Splitting that first big
-  delete into smaller pieces is filed as a follow-up.
+  week. It has months of old entries to remove, so it deletes them in
+  chunks of 5,000 and saves its work after each chunk, rather than in one
+  huge delete. Expect that first run to take longer than later ones and to
+  show its progress as it goes. If it is stopped, or runs out of its
+  30-minute budget, everything already deleted stays deleted and the next
+  run carries on from there.

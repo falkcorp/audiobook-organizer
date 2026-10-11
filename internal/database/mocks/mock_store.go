@@ -1288,8 +1288,8 @@ func (_c *MockOperationStore_MarkOperationChangesReverted_Call) RunAndReturn(run
 }
 
 // PruneOperationChanges provides a mock function for the type MockOperationStore
-func (_mock *MockOperationStore) PruneOperationChanges(olderThan time.Time) (int, error) {
-	ret := _mock.Called(olderThan)
+func (_mock *MockOperationStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onChunk)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneOperationChanges")
@@ -1297,16 +1297,16 @@ func (_mock *MockOperationStore) PruneOperationChanges(olderThan time.Time) (int
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(time.Time) (int, error)); ok {
-		return returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onChunk)
 	}
-	if returnFunc, ok := ret.Get(0).(func(time.Time) int); ok {
-		r0 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) int); ok {
+		r0 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(time.Time) error); ok {
-		r1 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, database.PruneChunkFunc) error); ok {
+		r1 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1319,19 +1319,31 @@ type MockOperationStore_PruneOperationChanges_Call struct {
 }
 
 // PruneOperationChanges is a helper method to define mock.On call
+//   - ctx context.Context
 //   - olderThan time.Time
-func (_e *MockOperationStore_Expecter) PruneOperationChanges(olderThan any) *MockOperationStore_PruneOperationChanges_Call {
-	return &MockOperationStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", olderThan)}
+//   - onChunk database.PruneChunkFunc
+func (_e *MockOperationStore_Expecter) PruneOperationChanges(ctx any, olderThan any, onChunk any) *MockOperationStore_PruneOperationChanges_Call {
+	return &MockOperationStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", ctx, olderThan, onChunk)}
 }
 
-func (_c *MockOperationStore_PruneOperationChanges_Call) Run(run func(olderThan time.Time)) *MockOperationStore_PruneOperationChanges_Call {
+func (_c *MockOperationStore_PruneOperationChanges_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc)) *MockOperationStore_PruneOperationChanges_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 time.Time
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(time.Time)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		var arg2 database.PruneChunkFunc
+		if args[2] != nil {
+			arg2 = args[2].(database.PruneChunkFunc)
 		}
 		run(
 			arg0,
+			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -1342,14 +1354,14 @@ func (_c *MockOperationStore_PruneOperationChanges_Call) Return(n int, err error
 	return _c
 }
 
-func (_c *MockOperationStore_PruneOperationChanges_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockOperationStore_PruneOperationChanges_Call {
+func (_c *MockOperationStore_PruneOperationChanges_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error)) *MockOperationStore_PruneOperationChanges_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // PruneOperationLogs provides a mock function for the type MockOperationStore
-func (_mock *MockOperationStore) PruneOperationLogs(olderThan time.Time) (int, error) {
-	ret := _mock.Called(olderThan)
+func (_mock *MockOperationStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onChunk)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneOperationLogs")
@@ -1357,16 +1369,16 @@ func (_mock *MockOperationStore) PruneOperationLogs(olderThan time.Time) (int, e
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(time.Time) (int, error)); ok {
-		return returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onChunk)
 	}
-	if returnFunc, ok := ret.Get(0).(func(time.Time) int); ok {
-		r0 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) int); ok {
+		r0 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(time.Time) error); ok {
-		r1 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, database.PruneChunkFunc) error); ok {
+		r1 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1379,19 +1391,31 @@ type MockOperationStore_PruneOperationLogs_Call struct {
 }
 
 // PruneOperationLogs is a helper method to define mock.On call
+//   - ctx context.Context
 //   - olderThan time.Time
-func (_e *MockOperationStore_Expecter) PruneOperationLogs(olderThan any) *MockOperationStore_PruneOperationLogs_Call {
-	return &MockOperationStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", olderThan)}
+//   - onChunk database.PruneChunkFunc
+func (_e *MockOperationStore_Expecter) PruneOperationLogs(ctx any, olderThan any, onChunk any) *MockOperationStore_PruneOperationLogs_Call {
+	return &MockOperationStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", ctx, olderThan, onChunk)}
 }
 
-func (_c *MockOperationStore_PruneOperationLogs_Call) Run(run func(olderThan time.Time)) *MockOperationStore_PruneOperationLogs_Call {
+func (_c *MockOperationStore_PruneOperationLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc)) *MockOperationStore_PruneOperationLogs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 time.Time
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(time.Time)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		var arg2 database.PruneChunkFunc
+		if args[2] != nil {
+			arg2 = args[2].(database.PruneChunkFunc)
 		}
 		run(
 			arg0,
+			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -1402,7 +1426,7 @@ func (_c *MockOperationStore_PruneOperationLogs_Call) Return(n int, err error) *
 	return _c
 }
 
-func (_c *MockOperationStore_PruneOperationLogs_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockOperationStore_PruneOperationLogs_Call {
+func (_c *MockOperationStore_PruneOperationLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error)) *MockOperationStore_PruneOperationLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -26136,8 +26160,8 @@ func (_c *MockStore_PruneBookSnapshots_Call) RunAndReturn(run func(id string, ke
 }
 
 // PruneOperationChanges provides a mock function for the type MockStore
-func (_mock *MockStore) PruneOperationChanges(olderThan time.Time) (int, error) {
-	ret := _mock.Called(olderThan)
+func (_mock *MockStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onChunk)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneOperationChanges")
@@ -26145,16 +26169,16 @@ func (_mock *MockStore) PruneOperationChanges(olderThan time.Time) (int, error) 
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(time.Time) (int, error)); ok {
-		return returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onChunk)
 	}
-	if returnFunc, ok := ret.Get(0).(func(time.Time) int); ok {
-		r0 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) int); ok {
+		r0 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(time.Time) error); ok {
-		r1 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, database.PruneChunkFunc) error); ok {
+		r1 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -26167,19 +26191,31 @@ type MockStore_PruneOperationChanges_Call struct {
 }
 
 // PruneOperationChanges is a helper method to define mock.On call
+//   - ctx context.Context
 //   - olderThan time.Time
-func (_e *MockStore_Expecter) PruneOperationChanges(olderThan any) *MockStore_PruneOperationChanges_Call {
-	return &MockStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", olderThan)}
+//   - onChunk database.PruneChunkFunc
+func (_e *MockStore_Expecter) PruneOperationChanges(ctx any, olderThan any, onChunk any) *MockStore_PruneOperationChanges_Call {
+	return &MockStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", ctx, olderThan, onChunk)}
 }
 
-func (_c *MockStore_PruneOperationChanges_Call) Run(run func(olderThan time.Time)) *MockStore_PruneOperationChanges_Call {
+func (_c *MockStore_PruneOperationChanges_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc)) *MockStore_PruneOperationChanges_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 time.Time
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(time.Time)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		var arg2 database.PruneChunkFunc
+		if args[2] != nil {
+			arg2 = args[2].(database.PruneChunkFunc)
 		}
 		run(
 			arg0,
+			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -26190,14 +26226,14 @@ func (_c *MockStore_PruneOperationChanges_Call) Return(n int, err error) *MockSt
 	return _c
 }
 
-func (_c *MockStore_PruneOperationChanges_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockStore_PruneOperationChanges_Call {
+func (_c *MockStore_PruneOperationChanges_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error)) *MockStore_PruneOperationChanges_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // PruneOperationLogs provides a mock function for the type MockStore
-func (_mock *MockStore) PruneOperationLogs(olderThan time.Time) (int, error) {
-	ret := _mock.Called(olderThan)
+func (_mock *MockStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onChunk)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneOperationLogs")
@@ -26205,16 +26241,16 @@ func (_mock *MockStore) PruneOperationLogs(olderThan time.Time) (int, error) {
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(time.Time) (int, error)); ok {
-		return returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onChunk)
 	}
-	if returnFunc, ok := ret.Get(0).(func(time.Time) int); ok {
-		r0 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) int); ok {
+		r0 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(time.Time) error); ok {
-		r1 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, database.PruneChunkFunc) error); ok {
+		r1 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -26227,19 +26263,31 @@ type MockStore_PruneOperationLogs_Call struct {
 }
 
 // PruneOperationLogs is a helper method to define mock.On call
+//   - ctx context.Context
 //   - olderThan time.Time
-func (_e *MockStore_Expecter) PruneOperationLogs(olderThan any) *MockStore_PruneOperationLogs_Call {
-	return &MockStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", olderThan)}
+//   - onChunk database.PruneChunkFunc
+func (_e *MockStore_Expecter) PruneOperationLogs(ctx any, olderThan any, onChunk any) *MockStore_PruneOperationLogs_Call {
+	return &MockStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", ctx, olderThan, onChunk)}
 }
 
-func (_c *MockStore_PruneOperationLogs_Call) Run(run func(olderThan time.Time)) *MockStore_PruneOperationLogs_Call {
+func (_c *MockStore_PruneOperationLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc)) *MockStore_PruneOperationLogs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 time.Time
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(time.Time)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		var arg2 database.PruneChunkFunc
+		if args[2] != nil {
+			arg2 = args[2].(database.PruneChunkFunc)
 		}
 		run(
 			arg0,
+			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -26250,14 +26298,14 @@ func (_c *MockStore_PruneOperationLogs_Call) Return(n int, err error) *MockStore
 	return _c
 }
 
-func (_c *MockStore_PruneOperationLogs_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockStore_PruneOperationLogs_Call {
+func (_c *MockStore_PruneOperationLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error)) *MockStore_PruneOperationLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // PruneSystemActivityLogs provides a mock function for the type MockStore
-func (_mock *MockStore) PruneSystemActivityLogs(olderThan time.Time) (int, error) {
-	ret := _mock.Called(olderThan)
+func (_mock *MockStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onChunk)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneSystemActivityLogs")
@@ -26265,16 +26313,16 @@ func (_mock *MockStore) PruneSystemActivityLogs(olderThan time.Time) (int, error
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(time.Time) (int, error)); ok {
-		return returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onChunk)
 	}
-	if returnFunc, ok := ret.Get(0).(func(time.Time) int); ok {
-		r0 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, database.PruneChunkFunc) int); ok {
+		r0 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(time.Time) error); ok {
-		r1 = returnFunc(olderThan)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, database.PruneChunkFunc) error); ok {
+		r1 = returnFunc(ctx, olderThan, onChunk)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -26287,19 +26335,31 @@ type MockStore_PruneSystemActivityLogs_Call struct {
 }
 
 // PruneSystemActivityLogs is a helper method to define mock.On call
+//   - ctx context.Context
 //   - olderThan time.Time
-func (_e *MockStore_Expecter) PruneSystemActivityLogs(olderThan any) *MockStore_PruneSystemActivityLogs_Call {
-	return &MockStore_PruneSystemActivityLogs_Call{Call: _e.mock.On("PruneSystemActivityLogs", olderThan)}
+//   - onChunk database.PruneChunkFunc
+func (_e *MockStore_Expecter) PruneSystemActivityLogs(ctx any, olderThan any, onChunk any) *MockStore_PruneSystemActivityLogs_Call {
+	return &MockStore_PruneSystemActivityLogs_Call{Call: _e.mock.On("PruneSystemActivityLogs", ctx, olderThan, onChunk)}
 }
 
-func (_c *MockStore_PruneSystemActivityLogs_Call) Run(run func(olderThan time.Time)) *MockStore_PruneSystemActivityLogs_Call {
+func (_c *MockStore_PruneSystemActivityLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc)) *MockStore_PruneSystemActivityLogs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 time.Time
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(time.Time)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 time.Time
+		if args[1] != nil {
+			arg1 = args[1].(time.Time)
+		}
+		var arg2 database.PruneChunkFunc
+		if args[2] != nil {
+			arg2 = args[2].(database.PruneChunkFunc)
 		}
 		run(
 			arg0,
+			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -26310,7 +26370,7 @@ func (_c *MockStore_PruneSystemActivityLogs_Call) Return(n int, err error) *Mock
 	return _c
 }
 
-func (_c *MockStore_PruneSystemActivityLogs_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockStore_PruneSystemActivityLogs_Call {
+func (_c *MockStore_PruneSystemActivityLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk database.PruneChunkFunc) (int, error)) *MockStore_PruneSystemActivityLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }

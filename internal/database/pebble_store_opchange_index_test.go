@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -220,7 +220,7 @@ func TestOpchangeIndex_PruneDeletesEntry(t *testing.T) {
 	if err := p.CreateOperationChange(keep); err != nil {
 		t.Fatal(err)
 	}
-	n, err := p.PruneOperationChanges(cut)
+	n, err := p.PruneOperationChanges(context.Background(), cut, nil)
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1", n, err)
 	}
@@ -487,7 +487,7 @@ func TestOpchangeIndex_PropertyMatchesScan(t *testing.T) {
 				}
 			}
 			assertIndexedMatchesScan(t, p, books)
-			if _, err := p.PruneOperationChanges(cut); err != nil {
+			if _, err := p.PruneOperationChanges(context.Background(), cut, nil); err != nil {
 				t.Fatal(err)
 			}
 			assertIndexedMatchesScan(t, p, books)
@@ -546,7 +546,7 @@ func TestOpchangeIndex_BackfillRacesLiveWrites(t *testing.T) {
 					return
 				}
 				if i%50 == 0 {
-					if _, err := p.PruneOperationChanges(time.Now().Add(-30 * time.Minute)); err != nil {
+					if _, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-30*time.Minute), nil); err != nil {
 						t.Error(err)
 						return
 					}
@@ -757,7 +757,7 @@ func TestOpchangeIndex_PruneLeavesNoOrphans(t *testing.T) {
 	if n := countOpChangeIndexKeys(t, p); n != 50 {
 		t.Fatalf("index keys before prune = %d, want 50", n)
 	}
-	n, err := p.PruneOperationChanges(time.Now().Add(time.Second))
+	n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(time.Second), nil)
 	if err != nil || n != 50 {
 		t.Fatalf("prune = %d, %v; want 50", n, err)
 	}
@@ -885,7 +885,7 @@ func TestOpchangeIndex_ColonBookIDNotIndexed(t *testing.T) {
 		t.Fatalf("index keys = %d, want 1 (only book a's row)", n)
 	}
 	rawPutOpChange(t, p, &OperationChange{ID: "op1:c1", OperationID: "b", BookID: "a", CreatedAt: old})
-	if n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour)); err != nil || n != 1 {
+	if n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-time.Hour), nil); err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1", n, err)
 	}
 	got, err := p.GetBookChanges("a:b")
@@ -961,7 +961,7 @@ func TestOpchangeIndex_PruneChunksLeaveNoOrphans(t *testing.T) {
 	if err := p.CreateOperationChange(keep); err != nil {
 		t.Fatal(err)
 	}
-	n, err := p.PruneOperationChanges(cut)
+	n, err := p.PruneOperationChanges(context.Background(), cut, nil)
 	if err != nil || n != rows {
 		t.Fatalf("prune = %d, %v; want %d", n, err, rows)
 	}
@@ -991,7 +991,7 @@ func TestOpchangeIndex_PruneSparesRowRewrittenMidPrune(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour))
+	n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-time.Hour), nil)
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1 (only the untouched old row)", n, err)
 	}
@@ -1032,7 +1032,7 @@ func TestOpchangeIndex_JournalLockBlocksRewriteDuringPruneCommit(t *testing.T) {
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
-	n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour))
+	n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-time.Hour), nil)
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1 (the stale view of c1)", n, err)
 	}
@@ -1072,7 +1072,7 @@ func TestOpchangeIndex_MarkRevertedSkipsRowPrunedAfterScan(t *testing.T) {
 	mustTrustOpChange(t, p)
 	opChangeMarkAfterScan = func() {
 		opChangeMarkAfterScan = nil
-		if n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour)); err != nil || n != 1 {
+		if n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-time.Hour), nil); err != nil || n != 1 {
 			t.Errorf("prune = %d, %v; want 1 (c1)", n, err)
 		}
 	}

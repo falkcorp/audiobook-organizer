@@ -1,11 +1,12 @@
 // file: internal/logger/logger_coverage_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: dbb463d6-f89b-4dee-8f50-b9ea2a790f2e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package logger
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -254,9 +255,9 @@ type retentionStoreConfig struct {
 func newRetentionStoreMock(t *testing.T, cfg retentionStoreConfig) *mocks.MockRetentionStore {
 	t.Helper()
 	m := mocks.NewMockRetentionStore(t)
-	m.EXPECT().PruneOperationLogs(mock.Anything).Return(cfg.logsCount, cfg.logErr).Maybe()
-	m.EXPECT().PruneOperationChanges(mock.Anything).Return(cfg.changesCount, cfg.changeErr).Maybe()
-	m.EXPECT().PruneSystemActivityLogs(mock.Anything).Return(cfg.activityCount, cfg.activityErr).Maybe()
+	m.EXPECT().PruneOperationLogs(mock.Anything, mock.Anything, mock.Anything).Return(cfg.logsCount, cfg.logErr).Maybe()
+	m.EXPECT().PruneOperationChanges(mock.Anything, mock.Anything, mock.Anything).Return(cfg.changesCount, cfg.changeErr).Maybe()
+	m.EXPECT().PruneSystemActivityLogs(mock.Anything, mock.Anything, mock.Anything).Return(cfg.activityCount, cfg.activityErr).Maybe()
 	return m
 }
 
@@ -264,7 +265,7 @@ func TestCoverage_PruneOldLogs(t *testing.T) {
 	t.Run("disabled when 0 days", func(t *testing.T) {
 		log := New("test")
 		store := newRetentionStoreMock(t, retentionStoreConfig{})
-		n, err := PruneOldLogs(store, 0, log)
+		n, err := PruneOldLogs(context.Background(), store, 0, log, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -280,7 +281,7 @@ func TestCoverage_PruneOldLogs(t *testing.T) {
 			changesCount:  5,
 			activityCount: 3,
 		})
-		n, err := PruneOldLogs(store, 30, log)
+		n, err := PruneOldLogs(context.Background(), store, 30, log, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -292,7 +293,7 @@ func TestCoverage_PruneOldLogs(t *testing.T) {
 	t.Run("handles log prune error", func(t *testing.T) {
 		log := New("test")
 		store := newRetentionStoreMock(t, retentionStoreConfig{logErr: errMock})
-		_, err := PruneOldLogs(store, 30, log)
+		_, err := PruneOldLogs(context.Background(), store, 30, log, nil)
 		if err == nil {
 			t.Error("expected error")
 		}
@@ -301,7 +302,7 @@ func TestCoverage_PruneOldLogs(t *testing.T) {
 	t.Run("handles change prune error", func(t *testing.T) {
 		log := New("test")
 		store := newRetentionStoreMock(t, retentionStoreConfig{changeErr: errMock})
-		_, err := PruneOldLogs(store, 30, log)
+		_, err := PruneOldLogs(context.Background(), store, 30, log, nil)
 		if err == nil {
 			t.Error("expected error")
 		}
@@ -310,7 +311,7 @@ func TestCoverage_PruneOldLogs(t *testing.T) {
 	t.Run("handles activity prune error", func(t *testing.T) {
 		log := New("test")
 		store := newRetentionStoreMock(t, retentionStoreConfig{activityErr: errMock})
-		_, err := PruneOldLogs(store, 30, log)
+		_, err := PruneOldLogs(context.Background(), store, 30, log, nil)
 		if err == nil {
 			t.Error("expected error")
 		}

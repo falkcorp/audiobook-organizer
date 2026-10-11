@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review8_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2dc36c12-0ba5-4ca9-90b1-ea5c5c5b27c9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -207,7 +207,7 @@ func TestFragmentFixer_PruneThenRevertRefuses(t *testing.T) {
 	w := f.fragWriter(t, "op-cut")
 	f.journalPlanRecord(t, w, planned)
 	f.moveAndRetire(t, w, fragFixerID, survivor, others, otherRows, 1)
-	_, err := f.s.PruneOperationChanges(time.Now().Add(time.Hour))
+	_, err := f.s.PruneOperationChanges(context.Background(), time.Now().Add(time.Hour), nil)
 	require.NoError(t, err)
 	res, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut")
 	require.Error(t, err)
@@ -230,7 +230,7 @@ func TestFragmentFixer_PrunedRunStillContinues(t *testing.T) {
 	w := f.fragWriter(t, "op-cut")
 	f.journalPlanRecord(t, w, planned)
 	f.moveAndRetire(t, w, fragFixerID, survivor, others, otherRows, 1)
-	_, err := f.s.PruneOperationChanges(time.Now().Add(time.Hour))
+	_, err := f.s.PruneOperationChanges(context.Background(), time.Now().Add(time.Hour), nil)
 	require.NoError(t, err)
 	row := findRow(t, f.plan(t, "op-plan2"), planned.RowID)
 	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)

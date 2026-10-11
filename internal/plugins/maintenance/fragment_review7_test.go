@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review7_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 05f9ce23-f920-4f23-9612-af3d87fce747
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -255,7 +255,7 @@ func TestFragmentFixer_PlanRecordSurvivesThePrune(t *testing.T) {
 	w := f.fragWriter(t, "op-cut")
 	f.journalPlanRecord(t, w, planned)
 	f.moveAndRetire(t, w, fragFixerID, survivor, others, otherRows, 1)
-	n, err := f.s.PruneOperationChanges(time.Now().Add(time.Hour))
+	n, err := f.s.PruneOperationChanges(context.Background(), time.Now().Add(time.Hour), nil)
 	require.NoError(t, err)
 	require.Positive(t, n, "the run's other rows aged out")
 	require.True(t, f.cutRunRecorded(t, "op-cut"), "the plan record is kept")
