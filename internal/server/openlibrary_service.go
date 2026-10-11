@@ -1,7 +1,7 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.10.1
+// version: 2.10.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-13
+// last-edited: 2026-10-11
 
 package server
 
@@ -202,8 +202,18 @@ func (s *Server) deleteOLData(c *gin.Context) {
 	defer svc.Mu.Unlock()
 
 	if svc.OLStore != nil {
-		svc.OLStore.Close()
+		closeErr := svc.OLStore.Close()
+		// The store refuses all work once Close has begun, so drop it
+		// either way. But a Close that failed may have left the engine
+		// open (a lookup or import outlived the drain timeout): deleting
+		// its directory now would pull files out from under a live engine,
+		// so keep the data and report the failure. A reopen at the same
+		// path fails on the engine's lock file until the process exits.
 		svc.OLStore = nil
+		if closeErr != nil {
+			httputil.InternalError(c, "failed to close the Open Library store; data not deleted", closeErr)
+			return
+		}
 	}
 
 	targetDir := metafetch.GetOLDumpDir()

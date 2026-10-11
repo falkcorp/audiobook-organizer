@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -41,6 +41,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
@@ -439,6 +440,8 @@ func (h *Handler) ResetSystem(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "System reset successfully"})
 }
 
+var systemLog = logger.New("handlers.system")
+
 // FactoryReset implements POST /system/factory-reset.
 func (h *Handler) FactoryReset(c *gin.Context) {
 	var req struct {
@@ -463,14 +466,21 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 	// Delete OL data (pebble store + dump files)
 	if h.olService != nil {
 		h.olService.Mu.Lock()
+		var olCloseErr error
 		if h.olService.OLStore != nil {
-			h.olService.OLStore.Close()
+			olCloseErr = h.olService.OLStore.Close()
 			h.olService.OLStore = nil
 		}
 		h.olService.Mu.Unlock()
 
 		targetDir := metafetch.GetOLDumpDir()
-		if targetDir != "" {
+		if olCloseErr != nil {
+			// A failed Close may have left the engine open (an in-flight
+			// lookup or import outlived the drain timeout). Removing its
+			// directory would pull files out from under a live engine, so
+			// the OL data is kept and the rest of the reset goes on.
+			systemLog.Warn("Factory reset kept OL data: the OL store did not close: %v", olCloseErr)
+		} else if targetDir != "" {
 			if err := os.RemoveAll(targetDir); err != nil {
 				slog.Warn("Factory reset failed to remove OL data dir", "err", err)
 			} else {
