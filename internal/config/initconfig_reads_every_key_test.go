@@ -9,7 +9,8 @@
 // boot whatever the operator configures: on 2026-10-11 the #3952 review found
 // 29 Config fields missing from the literal (among them log_retention_days,
 // default 90, so the purge_old_logs task had never been enabled on
-// production), plus the tools.* block, which was assigned constants.
+// production), plus the 7 leaves of the tools.* block, which were assigned
+// constants instead of read.
 //
 // These tests enumerate the keys automatically, from the Config type's tags
 // and from viper's own key list, so a new field or a new default is covered
