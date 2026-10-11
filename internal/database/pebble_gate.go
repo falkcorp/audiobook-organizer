@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-10-11
 
@@ -79,6 +79,17 @@ import (
 //     success and the timeout path (everything the in-flight writers
 //     committed meanwhile). On the timeout path the engine is left open but
 //     every row committed before the timeout is on disk.
+//   - Every one of those syncs is BOUNDED and LEASED. A WAL fsync can stall
+//     for as long as the disk does (a pebble write stall, a hung volume), and
+//     Close must still return. Each sync therefore runs in its own goroutine
+//     under a sync lease and drainAndSeal stops waiting for it at its
+//     deadline. The lease is what keeps that safe: a sync still in flight
+//     keeps the lease count above zero, so the drain, seal and the engine's
+//     Close all refuse to proceed under it, and the engine stays open. The
+//     lease is released by the sync's own goroutine when the disk finally
+//     answers. So the worst case on a stalled disk is Close returning an
+//     error after the drain timeout plus syncGrace, with the engine open,
+//     never an unbounded wait and never a close under a running fsync.
 //
 // WHY A COUNTER AND NOT A LOCK
 //   - Acquire never blocks, so nested leases (an op holding an iterator that
@@ -89,8 +100,9 @@ import (
 //     pebble.ErrClosed instead of blocking, so callers unwind through their
 //     normal error path (all existing ErrClosed handling keeps working), and
 //     the lease they already hold is released by their deferred Close.
-//   - Close's wait is bounded (PebbleStore.closeDrainTimeout). On timeout the
-//     engine is deliberately NOT closed, after the WAL is synced (see
+//   - Close's wait is bounded (PebbleStore.closeDrainTimeout, plus syncGrace
+//     for the WAL syncs that follow it). On timeout the engine is
+//     deliberately NOT closed, after the WAL sync is attempted (see
 //     DURABILITY): an engine left open at process exit replays its synced WAL
 //     on the next open, while closing under a held lease crashes. Close
 //     returns an error naming the in-flight count.
@@ -142,11 +154,33 @@ type dbGate struct {
 	state     atomic.Int64
 	drained   chan struct{}
 	drainOnce sync.Once
-	// releaseHook, nil outside tests, runs inside release between the
+	// releaseHook, unset outside tests, runs inside release between the
 	// decrement and the drain check: a preemption point for the
-	// interleaving test.
-	releaseHook func(n int64)
+	// interleaving test. Atomic so a test can install or clear it while the
+	// store is live (background goroutines release leases) without a race.
+	releaseHook atomic.Pointer[func(n int64)]
+	// shutdownHook, unset outside tests, runs inside drainAndSeal at the
+	// shutdownStage points: where a test lands a commit or takes a sync
+	// lease at an exact moment of the shutdown. Atomic for the same reason.
+	shutdownHook atomic.Pointer[func(shutdownStage)]
 }
+
+// shutdownStage names a point in drainAndSeal where shutdownHook runs.
+type shutdownStage int
+
+const (
+	// stageRefusedAndSynced: new work is refused and the first WAL sync has
+	// returned; the wait for held leases has not started.
+	stageRefusedAndSynced shutdownStage = iota + 1
+	// stageDrained: the drain finished and the post-drain sync returned; the
+	// gate is not sealed yet, so a SyncWAL can still be admitted.
+	stageDrained
+)
+
+// syncGrace is how long past the drain deadline the WAL syncs that follow the
+// wait, and seal's wait for a sync lease, may take. A WAL fsync is
+// milliseconds on a healthy disk; this only bounds a stalled one.
+const syncGrace = time.Second
 
 func newDBGate() *dbGate {
 	return &dbGate{drained: make(chan struct{})}
@@ -191,8 +225,8 @@ func (g *dbGate) release() {
 	if n < 0 || n&gateCountMask == gateCountMask {
 		panic("pebble gate: lease released more times than acquired")
 	}
-	if h := g.releaseHook; h != nil {
-		h(n)
+	if h := g.releaseHook.Load(); h != nil {
+		(*h)(n)
 	}
 	if n&gateCountMask == 0 && n&gateClosingBit != 0 {
 		g.drainOnce.Do(func() { close(g.drained) })
@@ -235,11 +269,27 @@ func (g *dbGate) waitDrained(timeout time.Duration) bool {
 	}
 }
 
+// waitDrainedUntil is waitDrained with an absolute deadline. A deadline that
+// has already passed does not wait: it reports whether the drain had already
+// fired.
+func (g *dbGate) waitDrainedUntil(deadline time.Time) bool {
+	select {
+	case <-g.drained:
+		return true
+	default:
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	return g.waitDrained(remaining)
+}
+
 // seal moves a drained gate to sealed, refusing SyncWAL too. A SyncWAL
 // admitted after the drain may still hold a lease; seal waits for it (a WAL
 // fsync, milliseconds) until deadline. Refused acquires never touch the
-// count, so only such a sync can make it wait. It reports whether the gate is sealed
-// with no leases, the only state in which the engine may close.
+// count, so only such a sync can make it wait. It reports whether the gate is
+// sealed with no leases, the only state in which the engine may close.
 func (g *dbGate) seal(deadline time.Time) bool {
 	for {
 		if g.state.CompareAndSwap(gateClosingBit, gateClosingBit|gateSealedBit) {
@@ -280,24 +330,33 @@ func NewGatedDB(db *pebble.DB) *GatedDB {
 }
 
 // NewOwnedGatedDB wraps an engine its caller owns and returns the only
-// function that closes it: drain (bounded by timeout), sync, then close; on
-// timeout it syncs, leaves the engine open and returns an error. The close
-// function is separate from the handle on purpose: borrowers get the
-// *GatedDB, and only the owner can close what they borrowed. It is
-// idempotent: later calls return the first call's result.
+// function that closes it: drain (bounded by timeout), sync, then close. The
+// close function is separate from the handle on purpose: borrowers get the
+// *GatedDB, and only the owner can close what they borrowed.
+//
+// A close that times out (an access outlived the drain, or a WAL sync is
+// stuck) syncs what it can, leaves the engine OPEN and returns an error. That
+// is not final: the gate stays closing, so nothing new gets in, and a later
+// call retries from the wait, closing the engine as soon as the straggler has
+// released. A close that succeeded is idempotent: later calls return its
+// result. Concurrent calls run one at a time, each waiting its own turn.
 func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error) {
 	d := NewGatedDB(db)
-	var once sync.Once
+	var mu sync.Mutex
+	var closed bool
 	var result error
 	return d, func(timeout time.Duration) error {
-		once.Do(func() {
-			sealed, err := d.drainAndSeal(timeout)
-			if !sealed {
-				result = err
-				return
-			}
-			result = errors.Join(err, d.closeEngine())
-		})
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
+			return result
+		}
+		sealed, err := d.drainAndSeal(timeout)
+		if !sealed {
+			return err
+		}
+		closed = true
+		result = errors.Join(err, d.closeEngine())
 		return result
 	}
 }
@@ -471,15 +530,37 @@ func (d *GatedDB) NewIndexedBatch() *GatedBatch {
 	return &GatedBatch{b: d.db.NewIndexedBatch(), gate: d.gate}
 }
 
-// syncWALForShutdown fsyncs the WAL on the raw engine, outside the gate.
-// Only drainAndSeal calls it, while the engine is known to be open (it closes
-// the engine only after the last such call).
-func (d *GatedDB) syncWALForShutdown(stage string) error {
-	if err := d.db.LogData(nil, pebble.Sync); err != nil {
-		pebbleCloseLog.Error("pebble close: WAL sync %s failed: %s", stage, err.Error())
+// syncWALForShutdown fsyncs the WAL, waiting no longer than deadline. Only
+// drainAndSeal calls it, while the engine is known to be open (it closes the
+// engine only after the last such call).
+//
+// The fsync runs in its own goroutine under a sync lease, so an fsync that
+// outlives the deadline (a stalled disk) neither hangs the caller nor lets the
+// engine close under it: the lease stays held until the fsync returns, and
+// the drain, seal and the engine's Close all wait on the lease count. See
+// DURABILITY AT SHUTDOWN.
+func (d *GatedDB) syncWALForShutdown(stage string, deadline time.Time) error {
+	if err := d.gate.acquireSync(); err != nil {
 		return fmt.Errorf("pebble close: WAL sync %s: %w", stage, err)
 	}
-	return nil
+	res := make(chan error, 1)
+	go func() {
+		defer d.gate.release()
+		res <- d.db.LogData(nil, pebble.Sync)
+	}()
+	t := time.NewTimer(max(time.Until(deadline), 0))
+	defer t.Stop()
+	select {
+	case err := <-res:
+		if err != nil {
+			pebbleCloseLog.Error("pebble close: WAL sync %s failed: %s", stage, err.Error())
+			return fmt.Errorf("pebble close: WAL sync %s: %w", stage, err)
+		}
+		return nil
+	case <-t.C:
+		pebbleCloseLog.Error("pebble close: WAL sync %s still running at its deadline; not waiting for it, and the engine will stay open while it runs", stage)
+		return fmt.Errorf("pebble close: WAL sync %s did not return in time: %w", stage, errStoreClosing)
+	}
 }
 
 // drainAndSeal is every step of an engine close except the close itself:
@@ -487,41 +568,60 @@ func (d *GatedDB) syncWALForShutdown(stage string) error {
 //  1. Refuse new ordinary leases.
 //  2. Sync the WAL: every row committed before Close began is durable even
 //     if the process is killed during the drain.
-//  3. Wait for held leases, up to timeout.
+//  3. Wait for held leases, up to timeout from the start of the call.
 //  4. Sync the WAL again: rows the in-flight writers committed meanwhile.
 //     On timeout, return an error here; the engine stays open.
 //  5. Seal (refuse SyncWAL too), waiting out any sync admitted after the
 //     drain.
+//
+// Every sync is bounded (syncWALForShutdown); the first by the drain
+// deadline, the later ones and seal by that deadline plus syncGrace.
 //
 // sealed reports whether the engine may close: true only when no lease is
 // held and none can be taken. err carries a timeout (sealed false) or a WAL
 // sync failure (sealed may be true: the caller still closes the engine,
 // which flushes the WAL itself, and reports the error alongside). Nothing
 // here takes a store mutex, so in-flight ops can always finish.
+//
+// It may be called again after a timeout: beginClose is idempotent, the wait
+// resumes on the same drain signal and a lease that has since been released
+// no longer holds anything up.
 func (d *GatedDB) drainAndSeal(timeout time.Duration) (sealed bool, err error) {
 	d.gate.beginClose()
-	syncErr := d.syncWALForShutdown("after refusing new work")
 	if timeout <= 0 {
 		timeout = DefaultCloseDrainTimeout
 	}
 	deadline := time.Now().Add(timeout)
-	if !d.gate.waitDrained(timeout) {
+	limit := deadline.Add(syncGrace)
+	syncErr := d.syncWALForShutdown("after refusing new work", deadline)
+	d.runShutdownHook(stageRefusedAndSynced)
+	if !d.gate.waitDrainedUntil(deadline) {
 		n := d.gate.inFlight()
-		lateSyncErr := d.syncWALForShutdown("after a timed-out drain")
+		lateSyncErr := d.syncWALForShutdown("after a timed-out drain", limit)
 		pebbleCloseLog.Error("pebble close: %d engine accesses still in flight after %s; leaving the engine open rather than closing it under them", n, timeout)
 		return false, errors.Join(
 			fmt.Errorf("pebble close: %d engine accesses still in flight after %s: %w", n, timeout, errStoreClosing),
 			lateSyncErr)
 	}
-	if err := d.syncWALForShutdown("after the drain"); err != nil && syncErr == nil {
+	if err := d.syncWALForShutdown("after the drain", limit); err != nil && syncErr == nil {
 		syncErr = err
 	}
-	if !d.gate.seal(deadline.Add(time.Second)) {
+	d.runShutdownHook(stageDrained)
+	if !d.gate.seal(limit) {
 		n := d.gate.inFlight()
 		pebbleCloseLog.Error("pebble close: %d WAL syncs still in flight after the drain; leaving the engine open", n)
-		return false, fmt.Errorf("pebble close: %d WAL syncs still in flight after the drain: %w", n, errStoreClosing)
+		return false, errors.Join(
+			fmt.Errorf("pebble close: %d WAL syncs still in flight after the drain: %w", n, errStoreClosing),
+			syncErr)
 	}
 	return true, syncErr
+}
+
+// runShutdownHook runs the test hook for stage, if one is installed.
+func (d *GatedDB) runShutdownHook(stage shutdownStage) {
+	if h := d.gate.shutdownHook.Load(); h != nil {
+		(*h)(stage)
+	}
 }
 
 // closeEngine closes the engine. Only after drainAndSeal, and never twice.

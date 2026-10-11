@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.215.0
+// version: 1.215.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 
@@ -820,7 +820,10 @@ func (p *PebbleStore) closingContext() context.Context {
 // If the drain times out, the engine is left open and Close returns an
 // error. Every row committed before the timeout has been synced to the WAL
 // by then, so it survives the process exiting; closing under a held lease
-// would crash the process instead.
+// would crash the process instead. The WAL syncs are bounded too (a stalled
+// disk can hold an fsync arbitrarily long): Close stops waiting for one at
+// its deadline, at most DefaultCloseDrainTimeout plus a second in total, and
+// the sync keeps a lease, so the engine stays open for as long as it runs.
 //
 // Close is idempotent: a second call, concurrent or later, returns the first
 // call's result.
