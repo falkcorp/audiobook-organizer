@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.150.0
+// version: 1.151.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -3273,7 +3273,11 @@ func InitConfig() {
 					BandHighMin:    viper.GetFloat64("dedup.signals.band_high_min"),
 					BandMediumMin:  viper.GetFloat64("dedup.signals.band_medium_min"),
 					BandReviewMin:  viper.GetFloat64("dedup.signals.band_review_min"),
-					Confidence:     viperDecodeJSON[map[string]DedupKindConfidence]("dedup.signals.confidence"),
+					// Keyed by signal kind, a lower-case identifier (not a
+					// name whose case matters), so the keys are folded the
+					// way viper folds every other dedup.signals.* key: a
+					// config-file "Exact_File:" still names exact_file.
+					Confidence: lowerMapKeys(viperDecodeJSON[map[string]DedupKindConfidence]("dedup.signals.confidence")),
 				},
 			},
 

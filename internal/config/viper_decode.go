@@ -34,7 +34,9 @@ import (
 //     because viper lower-cases every map key it loads, including keys of maps
 //     nested inside the value: a plugin ID "MyPlugin", a plugin setting
 //     "ApiKey" or an embedding model name with capitals would otherwise come
-//     out lower-cased and match nothing. Struct field names survive either way
+//     out lower-cased and match nothing. (A map keyed by a case-free
+//     identifier, dedup.signals.confidence's signal kinds, is folded back to
+//     lower case by its caller with lowerMapKeys.) Struct field names survive either way
 //     (encoding/json matches them case-insensitively); map keys do not.
 //   - Anything else (viper.Set, a default) is decoded from viper's value as is.
 //
@@ -209,6 +211,28 @@ func lowerKeys(v any) any {
 	default:
 		return t
 	}
+}
+
+// lowerMapKeys returns m with its keys lower-cased, for maps keyed by an
+// identifier whose case carries no meaning (signal kinds). When two keys fold
+// to the same one, the key already spelled in lower case wins, so the result
+// does not depend on map iteration order. nil stays nil.
+func lowerMapKeys[V any](m map[string]V) map[string]V {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		if lk := strings.ToLower(k); lk != k {
+			out[lk] = v
+		}
+	}
+	for k, v := range m {
+		if strings.ToLower(k) == k {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // containsMap reports whether v is or holds a map.

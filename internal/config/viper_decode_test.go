@@ -178,3 +178,32 @@ protected_paths:
 		t.Fatalf("ProtectedPaths = %q, want %q", got, want)
 	}
 }
+
+// dedup.signals.confidence is keyed by signal kind, a lower-case identifier
+// that unified.LoadScoreConfig looks up exactly (an unknown kind refuses
+// startup). Keeping the file's case there would turn "Exact_File:" into a
+// fatal unknown kind, so its keys are folded, like every other
+// dedup.signals.* key viper reads.
+func TestViperDecodeJSON_SignalKindConfidenceKeysAreFolded(t *testing.T) {
+	fileInitConfig(t, `
+dedup:
+  signals:
+    confidence:
+      Exact_File:
+        min_confidence: 0.3
+`, nil)
+	got := Snapshot().Dedup.Signals.Confidence
+	if len(got) != 1 || got["exact_file"].MinConfidence != 0.3 {
+		t.Fatalf("Confidence = %+v, want the one override under exact_file", got)
+	}
+}
+
+func TestLowerMapKeys_LowerCaseSpellingWinsAFold(t *testing.T) {
+	got := lowerMapKeys(map[string]int{"Exact_File": 1, "exact_file": 2, "Duration": 3})
+	if want := map[string]int{"exact_file": 2, "duration": 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("lowerMapKeys = %v, want %v", got, want)
+	}
+	if lowerMapKeys[int](nil) != nil {
+		t.Fatal("lowerMapKeys(nil) must stay nil")
+	}
+}

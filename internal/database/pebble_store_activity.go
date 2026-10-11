@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
 // last-edited: 2026-10-11
 
@@ -85,9 +85,10 @@ var pruneScanTick = 10_000
 // logPruneChunk is how many rows one PruneOperationLogs or
 // PruneSystemActivityLogs commit deletes. It matches opChangePruneChunk: a
 // log or syslog row costs one delete (an opchange row costs two, itself and its
-// opchange_by_book: entry), so 5,000 is the same order of batch size the opchange
-// prune already runs in prod without growing the memtable or stalling a
-// concurrent writer. A var only so tests can exercise multi-chunk prunes; never
+// opchange_by_book: entry). 5,000 point deletes is a batch of a few hundred KB,
+// small next to Pebble's memtable, so one commit neither stalls a concurrent
+// writer nor forces a flush, while a backlog of millions of rows still clears
+// in a few hundred synced commits. A var only so tests can exercise multi-chunk prunes; never
 // reassign in prod code.
 var logPruneChunk = 5_000
 
