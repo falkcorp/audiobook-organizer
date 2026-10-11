@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -26,6 +28,16 @@ type OpenLibraryService struct {
 	Tracker   *openlibrary.DownloadTracker
 	Mu        sync.Mutex
 	Importing map[string]bool
+
+	// pendingClose is a store whose Close timed out: a lookup or import
+	// outlived the drain, so its engine is still open (and holds the
+	// directory's lock file) while the store itself already refuses all
+	// work. It is kept, not dropped, so the close can be finished once the
+	// straggler lets go; see CloseStoreLocked. Guarded by Mu.
+	pendingClose *openlibrary.OLStore
+	// CloseTimeout bounds each close attempt's wait for in-flight accesses.
+	// Zero means database.DefaultCloseDrainTimeout; tests shorten it.
+	CloseTimeout time.Duration
 }
 
 // GetOLDumpDir returns the configured dump directory, falling back to {RootDir}/openlibrary-dumps.
@@ -106,19 +118,64 @@ func (svc *OpenLibraryService) PebbleMetricsSample() (metrics.PebbleSample, bool
 	return svc.OLStore.PebbleMetricsSample()
 }
 
-// Close closes the underlying store.
-func (svc *OpenLibraryService) Close() {
-	if svc.OLStore != nil {
-		svc.OLStore.Close()
+// closeTimeout is the wait for in-flight accesses per close attempt.
+func (svc *OpenLibraryService) closeTimeout() time.Duration {
+	if svc.CloseTimeout > 0 {
+		return svc.CloseTimeout
 	}
+	return database.DefaultCloseDrainTimeout
+}
+
+// CloseStoreLocked closes the live store, if any, and finishes any close an
+// earlier call timed out on. The caller holds Mu. It returns nil only when no
+// Open Library engine is left open, which is the only state in which the
+// data directory may be deleted or the store reopened.
+//
+// A store whose Close times out (a lookup or import outlived the drain) has
+// already begun refusing work and its engine is still open. It moves to
+// pendingClose, svc.OLStore becomes nil, and the error is returned. Dropping
+// it there would strand the engine: it holds the directory's lock file, so
+// EnsureStore could never reopen the store and a retried delete would remove
+// files under a live engine. Keeping it lets the next call (a retried
+// delete, an EnsureStore for the next import, or shutdown) retry the close,
+// which succeeds as soon as the straggler has released.
+func (svc *OpenLibraryService) CloseStoreLocked() error {
+	if svc.OLStore != nil {
+		svc.pendingClose, svc.OLStore = svc.OLStore, nil
+	}
+	if svc.pendingClose == nil {
+		return nil
+	}
+	if err := svc.pendingClose.CloseWithin(svc.closeTimeout()); err != nil {
+		return err
+	}
+	svc.pendingClose = nil
+	return nil
+}
+
+// Close closes the underlying store. A close that times out is left for the
+// process exit (the WAL is synced; see database.NewOwnedGatedDB).
+func (svc *OpenLibraryService) Close() {
+	svc.Mu.Lock()
+	defer svc.Mu.Unlock()
+	_ = svc.CloseStoreLocked()
 }
 
 // EnsureStore opens or creates the OL store if not already open.
-// Returns an error if the store cannot be opened.
+// Returns an error if the store cannot be opened. If an earlier close of the
+// store timed out, it first finishes that close, and fails with an error
+// saying so while the straggler still holds the engine, rather than a
+// confusing "lock held by current process" from opening a second engine on
+// the same directory.
 func (svc *OpenLibraryService) EnsureStore(targetDir string) error {
 	svc.Mu.Lock()
 	defer svc.Mu.Unlock()
 	if svc.OLStore == nil {
+		if svc.pendingClose != nil {
+			if err := svc.CloseStoreLocked(); err != nil {
+				return fmt.Errorf("the previous Open Library store has not finished closing: %w", err)
+			}
+		}
 		storePath := filepath.Join(targetDir, "oldb")
 		store, err := openlibrary.NewOLStore(storePath)
 		if err != nil {

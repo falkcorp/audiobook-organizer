@@ -1,5 +1,5 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.10.2
+// version: 2.11.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-11
 
@@ -201,19 +201,15 @@ func (s *Server) deleteOLData(c *gin.Context) {
 	svc.Mu.Lock()
 	defer svc.Mu.Unlock()
 
-	if svc.OLStore != nil {
-		closeErr := svc.OLStore.Close()
-		// The store refuses all work once Close has begun, so drop it
-		// either way. But a Close that failed may have left the engine
-		// open (a lookup or import outlived the drain timeout): deleting
-		// its directory now would pull files out from under a live engine,
-		// so keep the data and report the failure. A reopen at the same
-		// path fails on the engine's lock file until the process exits.
-		svc.OLStore = nil
-		if closeErr != nil {
-			httputil.InternalError(c, "failed to close the Open Library store; data not deleted", closeErr)
-			return
-		}
+	// The store refuses all work once its Close has begun. But a Close that
+	// timed out (a lookup or import outlived the drain) leaves the engine
+	// open, and deleting its directory would pull files out from under it, so
+	// the data is kept and the failure reported. The service holds on to the
+	// half-closed store, so deleting again retries the close, and so does the
+	// next import (EnsureStore); either succeeds once the straggler is done.
+	if closeErr := svc.CloseStoreLocked(); closeErr != nil {
+		httputil.InternalError(c, "failed to close the Open Library store; data not deleted", closeErr)
+		return
 	}
 
 	targetDir := metafetch.GetOLDumpDir()
