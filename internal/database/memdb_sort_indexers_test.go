@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sort_indexers_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 2c8a6f31-9b07-4de5-a142-70e3d95cb864
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 //
 // Tests for the sorted secondary indexes.
 //
@@ -23,6 +23,7 @@ package database
 
 import (
 	"bytes"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -171,6 +172,27 @@ func TestCanPushDownSort_FollowsEnabledSet(t *testing.T) {
 	}
 	if CanPushDownSort("author") {
 		t.Error("enabling duration must not enable author")
+	}
+}
+
+// EnabledSortIndexFields is what cmd/root.go writes back onto
+// config.AppConfig.EnabledSortIndexes, so GET /api/v1/config reports the set
+// that was built: normalised, de-duplicated, unknown names (a typo, or
+// "year,created_at" arriving as one env token) dropped, operator order kept.
+func TestEnabledSortIndexFields_ReportsTheBuiltSet(t *testing.T) {
+	t.Cleanup(func() { SetEnabledSortIndexes(nil) })
+
+	unknown := SetEnabledSortIndexes([]string{" Created_At ", "year,created_at", "year", "created_at", ""})
+	if !slices.Equal(unknown, []string{"year,created_at"}) {
+		t.Fatalf("unknown = %v, want [year,created_at]", unknown)
+	}
+	if got := EnabledSortIndexFields(); !slices.Equal(got, []string{"created_at", "year"}) {
+		t.Fatalf("EnabledSortIndexFields() = %#v, want [created_at year]", got)
+	}
+
+	SetEnabledSortIndexes([]string{})
+	if got := EnabledSortIndexFields(); got == nil || len(got) != 0 {
+		t.Fatalf("EnabledSortIndexFields() after [] = %#v, want a non-nil empty list (GET reports [], not null)", got)
 	}
 }
 

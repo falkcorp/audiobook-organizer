@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.28.4
+// version: 1.28.5
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package cmd
 
@@ -664,8 +664,17 @@ func initConfig() {
 	// would otherwise silently leave a sort on the slow path with no
 	// indication why.
 	if unknown := database.SetEnabledSortIndexes(config.AppConfig.EnabledSortIndexes); len(unknown) > 0 {
-		fmt.Printf("Warning: unknown enabled_sort_indexes entries ignored: %v\n", unknown)
+		fmt.Printf("Warning: unknown enabled_sort_indexes entries ignored: %v "+
+			"(the environment form is space-separated: ENABLED_SORT_INDEXES=\"year created_at\")\n", unknown)
 	}
+	// Report what was BUILT, not what was asked for. enabled_sort_indexes is
+	// boot-only: this is the value GET /api/v1/config shows for the life of
+	// the process, LoadConfigFromDatabase pins it over whatever the stored
+	// blob holds, and UpdateConfig refuses a PUT that changes it. Writing the
+	// accepted set back drops unknown names, so a typo is not reported as an
+	// enabled index.
+	builtSortIndexes := database.EnabledSortIndexFields()
+	config.Mutate(func(c *config.Config) { c.EnabledSortIndexes = builtSortIndexes })
 
 	// Same import-cycle constraint as SetEnabledSortIndexes above:
 	// internal/database can't import internal/config directly.

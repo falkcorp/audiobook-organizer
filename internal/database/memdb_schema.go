@@ -1,7 +1,7 @@
 // file: internal/database/memdb_schema.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000002
-// last-edited: 2026-10-01
+// last-edited: 2026-10-11
 
 package database
 
@@ -75,7 +75,7 @@ const (
 func memdbSchema() *memdb.DBSchema {
 	s := baseMemdbSchema()
 	// Sorted secondary indexes are attached conditionally: each costs real
-	// memory (~146 MB per key at prod scale — see config.EnabledSortIndexes),
+	// memory (~19-22 MB per key at ~48.9k books — see config.EnabledSortIndexes),
 	// so they are opt-in rather than always-on. With none enabled this is a
 	// no-op and the schema is byte-for-byte what it was before they existed.
 	attachEnabledSortIndexes(s)

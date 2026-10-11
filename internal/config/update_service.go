@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.29.0
+// version: 3.30.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package config
 
@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -380,6 +381,13 @@ var secretFieldKeys = []string{
 	"basic_auth_password",
 }
 
+// EnabledSortIndexesBootOnlyMessage is the refusal for a PUT that changes
+// enabled_sort_indexes. See pinBootOnlySettings.
+const EnabledSortIndexesBootOnlyMessage = "enabled_sort_indexes is read once at startup, when the store builds its " +
+	"sort indexes, and cannot be changed through the API: set it in the config file " +
+	"(enabled_sort_indexes: [year, created_at]) or the ENABLED_SORT_INDEXES environment variable " +
+	"(space-separated, e.g. ENABLED_SORT_INDEXES=\"year created_at\") and restart"
+
 // immutableFieldKeys cannot be changed at runtime and are rejected if present.
 var immutableFieldKeys = []string{"database_type"}
 
@@ -540,6 +548,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	_, hasEndpoints := filtered["ai_endpoints"]
 	var (
 		unmarshalErr error
+		bootOnlyErr  error
 		endpointsErr error
 		ladderErr    error
 		validateErr  error
@@ -619,6 +628,17 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		}
 		restoreMaskedCredentials(candidate.MetadataSources, priorCreds)
 		restoreRoundTripSecrets(candidate, priorRoundTrip)
+		// enabled_sort_indexes is boot-only (pinBootOnlySettings): the store
+		// built its indexes at open and nothing rebuilds them. A PUT that
+		// carries the running set back (a GET-then-PUT round trip) is a no-op;
+		// one that changes it is refused rather than saved, because a saved
+		// value would be reported by GET while a different set is built.
+		if !sameSortIndexSet(candidate.EnabledSortIndexes, prior.EnabledSortIndexes) {
+			bootOnlyErr = fmt.Errorf("%s (running set: %v, requested: %v)",
+				EnabledSortIndexesBootOnlyMessage, prior.EnabledSortIndexes, candidate.EnabledSortIndexes)
+			return
+		}
+		candidate.EnabledSortIndexes = slices.Clone(prior.EnabledSortIndexes)
 		// Post-process: trim root_dir whitespace, derive setup_complete
 		candidate.RootDir = strings.TrimSpace(candidate.RootDir)
 		candidate.SetupComplete = candidate.RootDir != ""
@@ -693,6 +713,13 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	})
 	if unmarshalErr != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
+	}
+	if bootOnlyErr != nil {
+		updateServiceLog.Warn("config update rejected: enabled_sort_indexes is boot-only; nothing persisted: %v", bootOnlyErr)
+		return http.StatusBadRequest, map[string]any{
+			"error":        bootOnlyErr.Error() + " — nothing was saved",
+			"refused_keys": []string{"enabled_sort_indexes"},
+		}
 	}
 	if len(ownerRefused) > 0 {
 		updateServiceLog.Warn("config update refused: owner trust-root settings; nothing persisted: method=%s access_email=%v refused_keys=%v why=%s",

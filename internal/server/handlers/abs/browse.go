@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.33.0
+// version: 1.33.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-26
+// last-edited: 2026-10-11
 
 package abs
 
@@ -327,7 +327,7 @@ func warnUnindexedSort(field, raw string) {
 	slog.Warn("abs: sort has no memdb index; the store must materialise the match set to order it (results are correct, but this costs more per request)",
 		"sort_param", logger.SanitizeLogValue(absTruncateForLog(raw, absSortRawLogMax)),
 		"sort_field", field,
-		"remediation", "add it to enabled_sort_indexes and restart ONLY if this sort is hot enough to justify the index's memory and insert-throughput cost")
+		"remediation", "ONLY if this sort is hot enough to justify the index's memory and insert-throughput cost: add it to enabled_sort_indexes in the config file (or the space-separated ENABLED_SORT_INDEXES environment variable) and restart; the setting is boot-only and PUT /api/v1/config refuses it")
 }
 
 // absUnsupportedSortLastWarn holds the unix second at which this warning last
