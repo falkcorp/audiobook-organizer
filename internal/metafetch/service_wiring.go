@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -41,9 +41,32 @@ func (mfs *Service) SetSafeWriteDeps(deps tagger.SafeWriteDeps) {
 	mfs.safeWriteDeps = deps
 }
 
-// SetOLStore sets the Open Library dump store for local-first lookups.
-func (mfs *Service) SetOLStore(store *openlibrary.OLStore) {
-	mfs.olStore = store
+// SetOLStoreSource sets where local-first Open Library lookups get the dump
+// store from. src is called on every lookup and returns nil while there is no
+// usable store; it must not block. A nil src means no local store.
+func (mfs *Service) SetOLStoreSource(src func() *openlibrary.OLStore) {
+	if src == nil {
+		mfs.olStoreSource.Store(nil)
+		return
+	}
+	mfs.olStoreSource.Store(&src)
+}
+
+// liveOLStore is the current Open Library dump store, or nil. The memoized
+// source chain holds this method, not a store, so a store that is closed and
+// reopened is picked up without rebuilding the chain.
+func (mfs *Service) liveOLStore() *openlibrary.OLStore {
+	if src := mfs.olStoreSource.Load(); src != nil {
+		return (*src)()
+	}
+	return nil
+}
+
+// wireOpenLibrary points local-first lookups at the Open Library service's
+// live store, whatever store that is when a lookup runs: none at start-up and
+// one after the first import, or a reopened one after a delete.
+func (mfs *Service) wireOpenLibrary(ol *OpenLibraryService) {
+	mfs.SetOLStoreSource(ol.LiveStore)
 }
 
 // SetDedupEngine sets the dedup engine for post-apply dedup checks.

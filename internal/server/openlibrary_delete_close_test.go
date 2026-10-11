@@ -1,5 +1,5 @@
 // file: internal/server/openlibrary_delete_close_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c7f4d52-3a8e-4b19-b6d1-7e92a5c3f860
 // last-edited: 2026-10-11
 
@@ -70,6 +70,11 @@ func TestDeleteOLData_NeverRemovesDataUnderAnOpenEngine(t *testing.T) {
 	if err := it.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// The 50 ms that forced the timeouts is shorter than a real fsync on a
+	// loaded disk; the close with nothing left to wait for gets the default.
+	svc.Mu.Lock()
+	svc.CloseTimeout = 0
+	svc.Mu.Unlock()
 	if code := del(); code != http.StatusOK {
 		t.Fatalf("delete after the lookup released returned %d; want 200", code)
 	}

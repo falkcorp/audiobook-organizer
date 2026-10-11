@@ -1,6 +1,6 @@
 // file: internal/metafetch/lifecycle.go
-// version: 1.6.0
-// last-edited: 2026-10-07
+// version: 1.7.0
+// last-edited: 2026-10-11
 
 // Lifecycle methods on *metafetch.Service that the serviceregistry
 // container picks up via interface satisfaction. PostInit wires the
@@ -33,7 +33,7 @@ import (
 //   - SetMetadataLLMScorer (W4 metadatallmscorer, config-gated)
 //   - SetActivityService (W2 activity, DatabasePath-gated)
 //
-// Several other SetX calls (SetOLStore, SetSafeWriteDeps)
+// Several other SetX calls (SetSafeWriteDeps)
 // still live inline in NewServer because they depend
 // on server-local state (olService, protectedPathCache) that isn't in
 // the container yet. Those move when their underlying services migrate.
@@ -67,13 +67,11 @@ func (mfs *Service) PostInit(ctx context.Context, c *serviceregistry.Container) 
 	}
 
 	// OL dump store — local-first lookups. olservice opens the store
-	// lazily on first EnsureStore; if nothing has called that yet,
-	// Store() returns nil and we skip wiring (the chain reverts to
-	// network-only).
+	// lazily on first EnsureStore, and reopens it after a delete, so what is
+	// wired is the service's live-store accessor, not a store: lookups go to
+	// whichever store is open when they run, and to the network while none is.
 	if ol, ok := serviceregistry.TryGet[*OpenLibraryService](c, "olservice"); ok && ol != nil {
-		if store := ol.Store(); store != nil {
-			mfs.SetOLStore(store)
-		}
+		mfs.wireOpenLibrary(ol)
 	}
 
 	return nil

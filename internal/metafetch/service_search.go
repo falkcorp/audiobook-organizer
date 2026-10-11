@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.40.6
+// version: 1.40.7
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -109,7 +109,7 @@ func (mfs *Service) BuildSourceChain() []metadata.MetadataSource {
 	if mfs.cachedChain != nil && mfs.cachedChainFP == fp {
 		return mfs.cachedChain
 	}
-	chain := buildSourceChainFromConfig(mfs.olStore)
+	chain := buildSourceChainFromConfig(mfs.liveOLStore)
 	mfs.cachedChain = chain
 	mfs.cachedChainFP = fp
 	return chain
@@ -278,8 +278,9 @@ func effectiveProviderLimits(src config.MetadataSource) providerhttp.Limits {
 
 // buildSourceChainFromConfig constructs a fresh source chain from the current
 // config. Extracted from BuildSourceChain so the memoization wrapper stays small;
-// olStore is passed explicitly (rather than reading mfs) to keep it a pure builder.
-func buildSourceChainFromConfig(olStore *openlibrary.OLStore) []metadata.MetadataSource {
+// olStore, the source of the local Open Library store, is passed explicitly
+// (rather than reading mfs) to keep it a pure builder.
+func buildSourceChainFromConfig(olStore func() *openlibrary.OLStore) []metadata.MetadataSource {
 	// Copy and sort by priority
 	sources := make([]config.MetadataSource, len(config.AppConfig.MetadataSources))
 	copy(sources, config.AppConfig.MetadataSources)
@@ -302,7 +303,7 @@ func buildSourceChainFromConfig(olStore *openlibrary.OLStore) []metadata.Metadat
 		case "openlibrary":
 			client := metadata.NewOpenLibraryClient()
 			if olStore != nil {
-				client.SetOLStore(olStore)
+				client.SetOLStoreSource(olStore)
 			}
 			rawSource = client
 		case "google-books":

@@ -1,5 +1,5 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-11
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
@@ -35,6 +36,11 @@ type OpenLibraryService struct {
 	// work. It is kept, not dropped, so the close can be finished once the
 	// straggler lets go; see CloseStoreLocked. Guarded by Mu.
 	pendingClose *openlibrary.OLStore
+	// live is OLStore published for readers that must not take Mu (a
+	// metadata lookup: Mu is held across a Pebble open and across RemoveAll).
+	// Written only by setStoreLocked, so it follows every change to OLStore;
+	// nil whenever OLStore is nil, which includes while a close is pending.
+	live atomic.Pointer[openlibrary.OLStore]
 	// CloseTimeout bounds each close attempt's wait for in-flight accesses.
 	// Zero means database.DefaultCloseDrainTimeout; tests shorten it.
 	CloseTimeout time.Duration
@@ -70,11 +76,27 @@ func NewOpenLibraryService() *OpenLibraryService {
 		if err != nil {
 			slog.Warn("Failed to open OL dump store", "error", err)
 		} else {
-			svc.OLStore = store
+			svc.setStoreLocked(store)
 		}
 	}
 
 	return svc
+}
+
+// setStoreLocked replaces the live store and publishes it to LiveStore. The
+// caller holds Mu (or is the constructor).
+func (svc *OpenLibraryService) setStoreLocked(store *openlibrary.OLStore) {
+	svc.OLStore = store
+	svc.live.Store(store)
+}
+
+// LiveStore returns the store a lookup should use right now, or nil when there
+// is none (never opened, deleted, or closed and not yet reopened). It never
+// blocks. Metadata lookups call it on every request instead of holding a
+// store: the store is replaced at runtime, and a holder of the old pointer
+// would keep asking one that refuses all work.
+func (svc *OpenLibraryService) LiveStore() *openlibrary.OLStore {
+	return svc.live.Load()
 }
 
 // Store returns the underlying OLStore (may be nil).
@@ -141,7 +163,8 @@ func (svc *OpenLibraryService) closeTimeout() time.Duration {
 // which succeeds as soon as the straggler has released.
 func (svc *OpenLibraryService) CloseStoreLocked() error {
 	if svc.OLStore != nil {
-		svc.pendingClose, svc.OLStore = svc.OLStore, nil
+		svc.pendingClose = svc.OLStore
+		svc.setStoreLocked(nil)
 	}
 	if svc.pendingClose == nil {
 		return nil
@@ -181,7 +204,7 @@ func (svc *OpenLibraryService) EnsureStore(targetDir string) error {
 		if err != nil {
 			return err
 		}
-		svc.OLStore = store
+		svc.setStoreLocked(store)
 	}
 	return nil
 }
