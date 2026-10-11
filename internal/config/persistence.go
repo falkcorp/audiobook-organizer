@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -106,6 +106,18 @@ func LoadConfigFromFile() error {
 
 // SaveConfigToFile writes key settings to a YAML config file next to the database.
 // Secrets are stored in plaintext here — file permissions restrict access.
+//
+// The file is merged, not replaced: keys this function does not manage are kept
+// (an operator may point --config at it, and the Deluge keys in it lock those
+// settings). Comments are not kept and keys come out sorted. A retired key
+// (removedConfigKeys) is dropped, and a key is matched case-insensitively, so an
+// operator's "ROOT_DIR" does not survive beside the managed "root_dir".
+//
+// A file that exists but cannot be read or parsed is left untouched and an error
+// naming it is returned: overwriting it would destroy whatever the operator wrote.
+// The caller (SaveConfigToDatabase) treats a file error as a logged warning and has
+// already saved the database, so nothing is lost by declining. The write itself
+// is atomic (temp file in the same directory, fsync, rename).
 func SaveConfigToFile() error {
 	path := ConfigFilePath()
 	if path == "" {
@@ -115,17 +127,25 @@ func SaveConfigToFile() error {
 	// WHY Snapshot: consistent read of many fields under a single read lock.
 	c := Snapshot()
 
-	// Start from what is already in the file, so keys this function does not manage
-	// survive the rewrite. This path is <database dir>/config.yaml, and an operator
-	// may also point --config at it: rewriting it from scratch would silently drop
-	// every other key in it, including the Deluge keys that lock those settings.
-	// A missing or unparseable file starts empty, as before.
 	fileConfig := map[string]any{}
-	if existing, err := os.ReadFile(path); err == nil {
+	existing, err := os.ReadFile(path)
+	switch {
+	case err == nil:
 		var prior map[string]any
-		if yaml.Unmarshal(existing, &prior) == nil && prior != nil {
+		if err := yaml.Unmarshal(existing, &prior); err != nil {
+			return fmt.Errorf("config file %s exists but is not valid YAML; left unchanged: %w", path, err)
+		}
+		if prior != nil {
 			fileConfig = prior
 		}
+	case errors.Is(err, os.ErrNotExist):
+		// A new file.
+	default:
+		return fmt.Errorf("config file %s cannot be read; left unchanged: %w", path, err)
+	}
+
+	for _, rk := range removedConfigKeys {
+		deleteConfigKeyFold(fileConfig, rk.key)
 	}
 	for k, v := range map[string]any{
 		"root_dir":              c.RootDir,
@@ -142,6 +162,7 @@ func SaveConfigToFile() error {
 		"concurrent_scans":      c.ConcurrentScans,
 		"log_level":             c.LogLevel,
 	} {
+		deleteConfigKeyFold(fileConfig, k)
 		fileConfig[k] = v
 	}
 
@@ -152,10 +173,9 @@ func SaveConfigToFile() error {
 		"google_books_api_key": c.GoogleBooksAPIKey,
 		"hardcover_api_token":  c.HardcoverAPIToken,
 	} {
+		deleteConfigKeyFold(fileConfig, k)
 		if v != "" {
 			fileConfig[k] = v
-		} else {
-			delete(fileConfig, k)
 		}
 	}
 
@@ -168,12 +188,93 @@ func SaveConfigToFile() error {
 		return fmt.Errorf("failed to create config dir: %w", err)
 	}
 
-	// Write with restrictive permissions since it may contain secrets
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writeFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	slog.Info("Configuration saved to file", "path", path)
+	return nil
+}
+
+// deleteConfigKeyFold removes key from m, matching every path segment
+// case-insensitively. A dotted key ("a.b") removes the literal top-level key
+// "a.b" and the nested path a -> b; a map left empty by the removal is removed too.
+func deleteConfigKeyFold(m map[string]any, key string) {
+	for k := range m {
+		if strings.EqualFold(k, key) {
+			delete(m, k)
+		}
+	}
+	parts := strings.Split(key, ".")
+	if len(parts) < 2 {
+		return
+	}
+	var walk func(cur map[string]any, parts []string)
+	walk = func(cur map[string]any, parts []string) {
+		for k, v := range cur {
+			if !strings.EqualFold(k, parts[0]) {
+				continue
+			}
+			if len(parts) == 1 {
+				delete(cur, k)
+				continue
+			}
+			if child, ok := v.(map[string]any); ok {
+				walk(child, parts[1:])
+				if len(child) == 0 {
+					delete(cur, k)
+				}
+			}
+		}
+	}
+	walk(m, parts)
+}
+
+// writeFileAtomic replaces path with data without ever exposing a partial file: it
+// writes a temp file in the same directory (so the rename stays on one filesystem),
+// fsyncs it, gives it the existing file's mode (perm for a new file), renames it
+// over path and fsyncs the directory. A symlink at path is followed, so the link
+// survives and its target is replaced. On any failure the original is untouched and
+// the temp file is removed.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	if resolved, rerr := filepath.EvalSymlinks(path); rerr == nil {
+		path = resolved
+	}
+	if info, serr := os.Stat(path); serr == nil {
+		perm = info.Mode().Perm()
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	// Make the rename itself durable. Best effort: some filesystems cannot fsync a
+	// directory, and the file content is already safe by now.
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 
@@ -1712,8 +1813,13 @@ func applySetting(key, value, typ string) error {
 	return applyErr
 }
 
-// configBlobSaveMu serialises SaveConfigToDatabase's read-modify-write of the
-// config_blob row.
+// configBlobSaveMu makes SaveConfigToDatabase calls in this process run one at a
+// time, snapshot to file write. It guarantees that (1) the blob a later save writes
+// comes from a snapshot taken after every earlier save finished, so an older
+// snapshot never overwrites a newer blob, and (2) the stored Deluge password a save
+// carries forward is the one the previous save left. It does not order a save
+// against a concurrent Mutate (a Mutate that lands after the snapshot is picked up
+// by the next save), and it does not cover another process writing the same store.
 var configBlobSaveMu sync.Mutex
 
 // storedDelugeWebPassword returns the deluge_web_password held in the stored
@@ -1756,6 +1862,13 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 
 	slog.Info("Saving configuration to database...")
 
+	// Held from before the snapshot until the file step is done, so that saves run
+	// one at a time: the snapshot below is newer than any earlier save's, the
+	// stored Deluge password read below is the one the previous save left, and a
+	// slow older save cannot land its blob after a newer one's. See configBlobSaveMu.
+	configBlobSaveMu.Lock()
+	defer configBlobSaveMu.Unlock()
+
 	// WHY Snapshot: consistent read of all fields under a read lock before we
 	// build the blob; a concurrent Mutate could otherwise see a torn read.
 	// Build a safe copy with secrets zeroed — they are saved separately (encrypted).
@@ -1769,10 +1882,6 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	safeConfig.GoogleBooksAPIKey = ""
 	safeConfig.HardcoverAPIToken = ""
 	safeConfig.BasicAuthPassword = ""
-	// The blob is read-then-written below; serialise concurrent saves so the stored
-	// password this carries forward is never one a racing save is replacing.
-	configBlobSaveMu.Lock()
-	defer configBlobSaveMu.Unlock()
 	// A Deluge password the environment or config file supplies is re-applied over
 	// the blob on every load (applyEnvAuthoritativeConfig), so the live value must
 	// not be frozen into the blob in plaintext. But writing "" instead would destroy

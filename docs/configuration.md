@@ -1,5 +1,5 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -89,8 +89,13 @@ flag, by default `$HOME/.audiobook-organizer.yaml`. The Settings note and the
 `config.yaml` the server keeps next to the database; that file never locks a
 setting. If you point `--config` at the `config.yaml` next to the database, the
 server rewrites that file when settings are saved. It keeps the keys it does not
-manage (the Deluge keys among them), updates the ones it does, and removes a
-secret that has become empty.
+manage (the Deluge keys among them), updates the ones it does, removes a secret
+that has become empty, and removes any retired setting. Keys are matched without
+regard to case, so `ROOT_DIR` is replaced by `root_dir`. The rewrite does not keep
+comments and writes the keys in sorted order. It is written to a temporary file and
+renamed over the original, keeping the file's permissions. If the file exists but
+cannot be read or is not valid YAML, the server leaves it exactly as it is and logs
+a warning naming it; the settings are still saved to the database.
 
 A Deluge boolean that does not parse (the accepted spellings are those of Go's
 `strconv.ParseBool`: `1`, `t`, `true`, `0`, `f`, `false` and their capitalised forms) is

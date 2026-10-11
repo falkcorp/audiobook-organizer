@@ -1,5 +1,5 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
 // last-edited: 2026-10-11
 
@@ -16,17 +16,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
@@ -560,6 +564,269 @@ func TestSaveConfigToFile_KeepsKeysItDoesNotManage(t *testing.T) {
 	}
 	if strings.Contains(out, "old-key") {
 		t.Errorf("a secret that is now empty was left behind:\n%s", out)
+	}
+}
+
+// saveFileFixture points the config at a temp database dir, writes prior to the
+// <db dir>/config.yaml that SaveConfigToFile rewrites, and returns its path.
+func saveFileFixture(t *testing.T, prior string) string {
+	t.Helper()
+	clearDelugeEnv(t)
+	delugeInitConfig(t, "")
+	dir := t.TempDir()
+	Mutate(func(c *Config) {
+		c.DatabasePath = filepath.Join(dir, "db.pebble")
+		c.RootDir = "/srv/library"
+		c.OpenAIAPIKey = ""
+	})
+	path := ConfigFilePath()
+	if err := os.WriteFile(path, []byte(prior), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A file the merge cannot parse is left exactly as it is, and the failure names it.
+// Starting from an empty map and writing would have dropped the operator's Deluge
+// lock and password, silently.
+func TestSaveConfigToFile_CorruptFileIsNeverOverwritten(t *testing.T) {
+	corrupt := "deluge_web_password: pw-keep-me\nroot_dir: [unterminated\n  bad: : line\n"
+	path := saveFileFixture(t, corrupt)
+
+	err := SaveConfigToFile()
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("SaveConfigToFile = %v, want an error naming %s", err, path)
+	}
+	got, rerr := os.ReadFile(path)
+	if rerr != nil || string(got) != corrupt {
+		t.Errorf("the unparseable file was modified:\n%s", got)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+// The database save is not lost when the file step declines, and the warning
+// names the file.
+func TestSaveConfigToDatabase_StillSavesWhenTheFileIsCorrupt(t *testing.T) {
+	logs := logtest.Capture(t, slog.LevelWarn)
+	path := saveFileFixture(t, "root_dir: [unterminated\n")
+	store := newMockSettingsStore()
+
+	if err := SaveConfigToDatabase(store); err != nil {
+		t.Fatalf("SaveConfigToDatabase: %v", err)
+	}
+	if !strings.Contains(delugeSavedBlob(t, store), "/srv/library") {
+		t.Error("the database blob was not saved")
+	}
+	if !strings.Contains(logs.String(), path) {
+		t.Errorf("no warning naming %s; log output: %q", path, logs.String())
+	}
+}
+
+// The write goes through a temp file and a rename: no temp file is left, an
+// existing file's mode is kept, a new file is 0600, and a symlink survives.
+func TestSaveConfigToFile_WritesAtomicallyAndKeepsMode(t *testing.T) {
+	path := saveFileFixture(t, "deluge_web_url: "+delugeFileURL+"\n")
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %v, want the existing 0640 kept", after.Mode().Perm())
+	}
+	if os.SameFile(before, after) {
+		t.Error("the file was rewritten in place; want a temp file renamed over it")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+
+	// A new file is private.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Errorf("new file mode = %v, want 0600", info.Mode().Perm())
+	}
+
+	// A symlinked config file stays a symlink; its target is what changes.
+	target := filepath.Join(t.TempDir(), "real.yaml")
+	if err := os.WriteFile(target, []byte("deluge_move_enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Lstat(path); info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the symlink was replaced by a regular file")
+	}
+	if data, _ := os.ReadFile(target); !strings.Contains(string(data), "deluge_move_enabled: false") ||
+		!strings.Contains(string(data), "root_dir: /srv/library") {
+		t.Errorf("the symlink target was not merged and updated:\n%s", data)
+	}
+}
+
+// When the temp file cannot be created, the original is untouched. A plain
+// os.WriteFile would have rewritten it in place.
+func TestSaveConfigToFile_FailureLeavesTheOriginalIntact(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not bind root")
+	}
+	prior := "deluge_web_url: " + delugeFileURL + "\nroot_dir: /old\n"
+	path := saveFileFixture(t, prior)
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if err := SaveConfigToFile(); err == nil {
+		t.Fatal("expected an error when the directory is not writable")
+	}
+	if got, _ := os.ReadFile(path); string(got) != prior {
+		t.Errorf("the original was modified by a failed save:\n%s", got)
+	}
+}
+
+// A retired key does not survive a save (a save used to drop it; the merge must
+// too, or LoadConfigFromFile warns about it on every boot), including a nested one.
+func TestSaveConfigToFile_DropsRetiredKeys(t *testing.T) {
+	path := saveFileFixture(t, "auto_fetch_metadata: true\nAuto_Fetch_Metadata: true\n"+
+		"metadata_scoring:\n  write_backup_before: true\n  keep_me: 7\nenable_sqlite:\n  nested: 1\n"+
+		"deluge_web_url: "+delugeFileURL+"\n")
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	out := string(data)
+	for _, gone := range []string{"auto_fetch_metadata", "Auto_Fetch_Metadata", "write_backup_before", "enable_sqlite"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("retired key %q survived the save:\n%s", gone, out)
+		}
+	}
+	if !strings.Contains(out, "keep_me: 7") || !strings.Contains(out, "deluge_web_url: "+delugeFileURL) {
+		t.Errorf("an unrelated key was lost:\n%s", out)
+	}
+}
+
+// Keys fold case-insensitively: an operator's ROOT_DIR must not survive beside the
+// managed root_dir, and an empty secret is removed whatever its case.
+func TestSaveConfigToFile_FoldsKeyCase(t *testing.T) {
+	path := saveFileFixture(t, "ROOT_DIR: /old\nOpenAI_API_Key: stale-key\nDELUGE_WEB_URL: "+delugeFileURL+"\n")
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	out := string(data)
+	if strings.Contains(out, "ROOT_DIR") || strings.Contains(out, "/old") {
+		t.Errorf("a differently-cased managed key survived:\n%s", out)
+	}
+	if !strings.Contains(out, "root_dir: /srv/library") {
+		t.Errorf("the managed key is missing:\n%s", out)
+	}
+	if strings.Contains(out, "stale-key") {
+		t.Errorf("an empty secret was left behind under another case:\n%s", out)
+	}
+	if !strings.Contains(out, "DELUGE_WEB_URL: "+delugeFileURL) {
+		t.Errorf("an unmanaged key was changed:\n%s", out)
+	}
+}
+
+// slowStore is a settings store safe for concurrent use whose config_blob write is
+// slow, so a save that snapshotted earlier can land its blob after a newer one's.
+type slowStore struct {
+	mu    sync.Mutex
+	inner *mockSettingsStore
+}
+
+func (s *slowStore) GetSetting(k string) (*database.Setting, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.GetSetting(k)
+}
+
+func (s *slowStore) SetSetting(k, v, typ string, secret bool) error {
+	if k == "config_blob" {
+		time.Sleep(time.Millisecond)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.SetSetting(k, v, typ, secret)
+}
+
+func (s *slowStore) GetAllSettings() ([]database.Setting, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.GetAllSettings()
+}
+
+func (s *slowStore) DeleteSetting(k string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DeleteSetting(k)
+}
+
+// Concurrent saves of different values: the blob left behind must be the final
+// in-memory config, never an older snapshot that landed last. Run under -race with
+// a high -count; it fails if configBlobSaveMu is removed or the snapshot is taken
+// before taking it.
+func TestSaveConfigToDatabase_ConcurrentSavesLeaveTheNewestBlob(t *testing.T) {
+	clearDelugeEnv(t)
+	t.Setenv("ACTIVITY_DB_PATH", "")
+	delugeInitConfig(t, "")
+	Mutate(func(c *Config) { c.DatabasePath = ""; c.RootDir = "" })
+	store := &slowStore{inner: newMockSettingsStore()}
+
+	const writers = 8
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			Mutate(func(c *Config) { c.RootDir = fmt.Sprintf("/lib/%d", i) })
+			if err := SaveConfigToDatabase(store); err != nil {
+				t.Errorf("save %d: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	want := Snapshot().RootDir
+	row, err := store.GetSetting("config_blob")
+	if err != nil || row == nil {
+		t.Fatalf("no blob: %v", err)
+	}
+	var blob struct {
+		RootDir string `json:"root_dir"`
+	}
+	if err := json.Unmarshal([]byte(row.Value), &blob); err != nil {
+		t.Fatal(err)
+	}
+	if blob.RootDir != want {
+		t.Errorf("stored root_dir = %q, but the final config is %q: an older save landed last", blob.RootDir, want)
 	}
 }
 
