@@ -1,7 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -290,8 +290,9 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		if errors.Is(updateErr, database.ErrBookFileDurabilityUnknown) {
 			// The write was applied; only its fsync is in doubt. The row IS
 			// linked as far as every reader can see.
-			slog.Warn("versions.CreateIngestVersion: book file link applied but not confirmed durable",
-				"book_id", logger.SanitizeLogValue(params.BookID), "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
+			logger.New("versions").Warn("CreateIngestVersion: book file %s link to version %s (book %s) applied but not confirmed durable: %s",
+				logger.SanitizeLogValue(f.ID), logger.SanitizeLogValue(ver.ID), logger.SanitizeLogValue(params.BookID),
+				logger.SanitizeLogValue(updateErr.Error()))
 			return ver, true, nil
 		}
 		slog.Warn("versions.CreateIngestVersion: book file update failed; version created but NOT linked",
