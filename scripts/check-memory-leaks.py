@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/check-memory-leaks.py
-# version: 1.3.0
+# version: 1.3.1
 """
 Detects common memory leak patterns in React/TypeScript code.
 Scans for:
@@ -95,7 +95,7 @@ class MemoryLeakDetector:
 
             # Check if it's being assigned to a ref or variable
             if re.search(
-                r"(Ref\.current\s*=|\.current\s*=|const\s+\w*[Rr]ef\s*=|\w*[Ii]d\s*=|const\s+\w*interval\s*=|const\s+\w*timeout\s*=|\w+[Tt]imer\s*=|\w+[Tt]imeout\s*=)",
+                r"(Ref\.current\s*=|\.current\s*=|const\s+\w*[Rr]ef\s*=|\w*[Ii]d\s*=|const\s+\w*interval\s*=|const\s+\w*timeout\s*=|\b\w*[Tt]imer\s*=|\b\w*[Tt]imeout\s*=)",
                 line,
             ):
                 continue  # Already tracked in variable
