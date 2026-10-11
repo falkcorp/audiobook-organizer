@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.2
+// version: 1.22.3
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-11
 
@@ -442,6 +442,38 @@ func (h *Handler) ResetSystem(c *gin.Context) {
 
 var systemLog = logger.New("handlers.system")
 
+// deleteOLDataLocked closes the Open Library store and removes its data
+// directory, holding the service's Mu from the close through the RemoveAll.
+// Releasing Mu between the two let an import's EnsureStore open a new engine
+// in the directory this was about to delete. Holding it across the RemoveAll
+// is what the delete-OL-data handler does too.
+func (h *Handler) deleteOLDataLocked() {
+	svc := h.olService
+	svc.Mu.Lock()
+	defer svc.Mu.Unlock()
+
+	olCloseErr := svc.CloseStoreLocked()
+	targetDir := metafetch.GetOLDumpDir()
+	if olCloseErr != nil {
+		// A failed Close may have left the engine open (an in-flight
+		// lookup or import outlived the drain timeout). Removing its
+		// directory would pull files out from under a live engine, so
+		// the OL data is kept and the rest of the reset goes on. The
+		// service keeps the half-closed store, so the next delete or
+		// import retries the close.
+		systemLog.Warn("Factory reset kept OL data: the OL store did not close: %v", olCloseErr)
+		return
+	}
+	if targetDir == "" {
+		return
+	}
+	if err := os.RemoveAll(targetDir); err != nil {
+		systemLog.Warn("Factory reset failed to remove OL data dir: %v", err)
+		return
+	}
+	systemLog.Info("Factory reset OL data deleted")
+}
+
 // FactoryReset implements POST /system/factory-reset.
 func (h *Handler) FactoryReset(c *gin.Context) {
 	var req struct {
@@ -465,26 +497,7 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 
 	// Delete OL data (pebble store + dump files)
 	if h.olService != nil {
-		h.olService.Mu.Lock()
-		olCloseErr := h.olService.CloseStoreLocked()
-		h.olService.Mu.Unlock()
-
-		targetDir := metafetch.GetOLDumpDir()
-		if olCloseErr != nil {
-			// A failed Close may have left the engine open (an in-flight
-			// lookup or import outlived the drain timeout). Removing its
-			// directory would pull files out from under a live engine, so
-			// the OL data is kept and the rest of the reset goes on. The
-			// service keeps the half-closed store, so the next delete or
-			// import retries the close.
-			systemLog.Warn("Factory reset kept OL data: the OL store did not close: %v", olCloseErr)
-		} else if targetDir != "" {
-			if err := os.RemoveAll(targetDir); err != nil {
-				slog.Warn("Factory reset failed to remove OL data dir", "err", err)
-			} else {
-				slog.Info("Factory reset OL data deleted")
-			}
-		}
+		h.deleteOLDataLocked()
 	}
 
 	// Clear library folder contents (organized audiobooks)
