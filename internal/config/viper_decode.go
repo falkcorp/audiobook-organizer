@@ -1,17 +1,21 @@
 // file: internal/config/viper_decode.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b431724a-2f0b-413b-8704-45a5807bee77
 // last-edited: 2026-10-11
 
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +43,12 @@ import (
 //     lower case by its caller with lowerMapKeys.) Struct field names survive either way
 //     (encoding/json matches them case-insensitively); map keys do not.
 //   - Anything else (viper.Set, a default) is decoded from viper's value as is.
+//
+// The decode is strict JSON first. If that fails on a type mismatch, it is
+// retried weakly typed (decodeWeakly), the way viper's own decoder treats
+// scalars: PluginConfig.Settings is map[string]string, and YAML's natural
+// `Port: 8080` or `Enabled: true` is a number or bool, which strict JSON
+// refuses and which would otherwise discard EVERY plugin, not just that one.
 //
 // A value that does not decode is logged at Warn, once per load, naming the
 // key and the error, and yields the zero T (the field keeps its default)
@@ -71,6 +81,9 @@ func viperDecodeJSON[T any](key string) T {
 		raw = b
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
+		if weak, werr := decodeWeakly[T](raw); werr == nil {
+			return weak
+		}
 		configLog.Warn("config: ignoring %s: not valid JSON for this setting (%v); the setting keeps its default. "+
 			"An environment value must be JSON text, e.g. %s='[...]' for a list or '{...}' for a map",
 			key, err, strings.ToUpper(key))
@@ -78,6 +91,45 @@ func viperDecodeJSON[T any](key string) T {
 		return zero
 	}
 	return out
+}
+
+// decodeWeakly decodes the JSON text raw into a T the way viper's own decoder
+// would have: a scalar of the wrong kind is converted rather than refused. A
+// number becomes its decimal text for a string target ("8080"), a bool becomes
+// "true"/"false" (mapstructure's own weak rule would give "1"/"0"), and a
+// numeric string fills a number. Struct fields are matched by their json tag,
+// case-insensitively, the same as encoding/json, and map keys keep their case.
+// Numbers are kept as json.Number, so a large integer is not rounded through
+// float64.
+func decodeWeakly[T any](raw []byte) (T, error) {
+	var out, zero T
+	var generic any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&generic); err != nil {
+		return zero, err
+	}
+	d, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result:           &out,
+		TagName:          "json",
+		WeaklyTypedInput: true,
+		DecodeHook:       mapstructure.ComposeDecodeHookFunc(boolToStringHook),
+	})
+	if err != nil {
+		return zero, err
+	}
+	if err := d.Decode(generic); err != nil {
+		return zero, err
+	}
+	return out, nil
+}
+
+// boolToStringHook renders a bool headed for a string as "true"/"false".
+func boolToStringHook(from, to reflect.Type, data any) (any, error) {
+	if from.Kind() == reflect.Bool && to.Kind() == reflect.String {
+		return strconv.FormatBool(reflect.ValueOf(data).Bool()), nil
+	}
+	return data, nil
 }
 
 // configFileValue returns the value at key exactly as the config file spells
@@ -91,23 +143,32 @@ func viperDecodeJSON[T any](key string) T {
 // replaced is never swapped for the file's. That keeps viper's precedence
 // without having to know which layer won.
 //
-// For a config file in another format (TOML, HCL, INI...) map keys stay
-// lower-cased and this logs a Warn when the value holds a map, naming the
-// key, so the operator knows to set it through the settings API instead.
+// Which files are read as YAML: everything except the viper formats known to
+// be something else (nonYAMLConfigExt). The extension cannot be trusted to
+// name the format: cmd/root.go's default config file is `~/.audiobook-organizer`
+// read with SetConfigType("yaml"), and filepath.Ext of that returns the whole
+// ".audiobook-organizer". Viper does not expose the type it was given, so a
+// file with an unknown or missing extension is tried as YAML. A wrong guess is
+// harmless: it either fails to parse or fails the equality check below.
+//
+// For a config file in another format (TOML, HCL, INI...), or one that does
+// not parse as YAML, map keys stay lower-cased and this logs a Warn when the
+// value holds a map, naming the key, so the operator knows to set it through
+// the settings API instead.
 func configFileValue(key string, viperVal any) (any, bool) {
 	path := viper.ConfigFileUsed()
 	if path == "" {
 		return nil, false
 	}
-	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(path), ".")) {
-	case "yaml", "yml", "json", "":
-		// "" is cmd/root.go's ".audiobook-organizer", read with SetConfigType("yaml").
-	default:
+	warnLowerCased := func(why string) {
 		if containsMap(viperVal) {
-			configLog.Warn("config: %s in %s: map keys from this config file format are read lower-cased; "+
+			configLog.Warn("config: %s in %s: map keys from this config file are read lower-cased (%s); "+
 				"use a YAML or JSON config file, or set %s through the settings API, to keep key case",
-				key, filepath.Base(path), key)
+				key, filepath.Base(path), why, key)
 		}
+	}
+	if nonYAMLConfigExt[strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))] {
+		warnLowerCased("format is not YAML or JSON")
 		return nil, false
 	}
 	data, err := os.ReadFile(path)
@@ -116,19 +177,12 @@ func configFileValue(key string, viperVal any) (any, bool) {
 	}
 	var root any
 	if err := yaml.Unmarshal(data, &root); err != nil {
+		warnLowerCased("file does not parse as YAML or JSON")
 		return nil, false
 	}
-	cur := stringKeyed(root)
-	for _, seg := range strings.Split(key, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		k, ok := lookupFold(m, seg)
-		if !ok {
-			return nil, false
-		}
-		cur = m[k]
+	cur, ok := walkConfigKey(stringKeyed(root), strings.Split(key, "."))
+	if !ok {
+		return nil, false
 	}
 	fileJSON, err1 := json.Marshal(lowerKeys(cur))
 	viperJSON, err2 := json.Marshal(lowerKeys(viperVal))
@@ -136,6 +190,40 @@ func configFileValue(key string, viperVal any) (any, bool) {
 		return nil, false
 	}
 	return cur, true
+}
+
+// nonYAMLConfigExt is the viper config formats (viper.SupportedExts) that are
+// not YAML or JSON, spelled as filepath.Ext gives them, lower-cased.
+var nonYAMLConfigExt = map[string]bool{
+	"toml": true, "hcl": true, "tfvars": true,
+	"ini": true, "properties": true, "props": true, "prop": true,
+	"dotenv": true, "env": true,
+}
+
+// walkConfigKey finds the value at the dotted path segs under cur, matching
+// each key case-insensitively like viper. At every level it tries the longest
+// run of remaining segments joined with "." as a single key first, the way
+// viper's searchIndexableWithPathPrefixes does, so a flat top-level key such as
+// `dedup.embedding_thresholds_by_model:` is found as well as the nested
+// `dedup:` / `embedding_thresholds_by_model:` spelling.
+func walkConfigKey(cur any, segs []string) (any, bool) {
+	m, ok := cur.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	for n := len(segs); n >= 1; n-- {
+		k, found := lookupFold(m, strings.Join(segs[:n], "."))
+		if !found {
+			continue
+		}
+		if n == len(segs) {
+			return m[k], true
+		}
+		if v, ok := walkConfigKey(m[k], segs[n:]); ok {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 // lookupFold finds the key of m equal to seg ignoring case, preferring an
@@ -214,22 +302,31 @@ func lowerKeys(v any) any {
 }
 
 // lowerMapKeys returns m with its keys lower-cased, for maps keyed by an
-// identifier whose case carries no meaning (signal kinds). When two keys fold
-// to the same one, the key already spelled in lower case wins, so the result
-// does not depend on map iteration order. nil stays nil.
+// identifier whose case carries no meaning (signal kinds). When several keys
+// fold to the same one the winner does not depend on map iteration order: a
+// key already spelled in lower case beats every other spelling, and among the
+// others the byte-wise first one (so "EXACT_FILE" beats "Exact_File") wins.
+// nil stays nil.
 func lowerMapKeys[V any](m map[string]V) map[string]V {
 	if m == nil {
 		return nil
 	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	out := make(map[string]V, len(m))
-	for k, v := range m {
-		if lk := strings.ToLower(k); lk != k {
-			out[lk] = v
+	for _, k := range keys {
+		if strings.ToLower(k) == k {
+			out[k] = m[k]
 		}
 	}
-	for k, v := range m {
-		if strings.ToLower(k) == k {
-			out[k] = v
+	for _, k := range keys {
+		if lk := strings.ToLower(k); lk != k {
+			if _, taken := out[lk]; !taken {
+				out[lk] = m[k]
+			}
 		}
 	}
 	return out
