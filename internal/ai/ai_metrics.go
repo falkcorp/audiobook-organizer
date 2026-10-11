@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
 // last-edited: 2026-10-11
 
@@ -8,7 +8,6 @@ package ai
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -16,8 +15,12 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
+
+// aiMetricsLog reports instrument-construction failures (internal/logger, printf-style).
+var aiMetricsLog = logger.New("ai.metrics")
 
 // The five ai_* families (spec 11 §3.9, D55/D66/D67) are OTel instruments from
 // telemetry.Meter("ai"); the Prometheus exporter turns the dotted names into
@@ -190,7 +193,7 @@ func newAIInstruments(m metric.Meter) *aiInstruments {
 		metric.WithDescription("Scan-phase AI parse results per item: accepted (usable) or not."))
 	errs = append(errs, err)
 	if joined := errors.Join(errs...); joined != nil {
-		slog.Warn("ai metrics: some instruments could not be created; those series will be missing", "err", joined)
+		aiMetricsLog.Warn("ai metrics: some instruments could not be created; those series will be missing: %v", joined)
 	}
 	return ins
 }
