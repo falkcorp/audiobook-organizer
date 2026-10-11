@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate_shutdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b3e5d70-2c1a-4f68-8e47-d5a0c6b1f293
 // last-edited: 2026-10-11
 
@@ -397,4 +397,37 @@ func TestOwnedGatedDB_StalledSyncThenRetryCloses(t *testing.T) {
 	waitFor(t, "a retried close to succeed once the disk answers", func() bool {
 		return closeDB(time.Second) == nil
 	})
+}
+
+// The test hooks are atomic: a test can install and clear them while the
+// store is live and goroutines are taking and releasing leases (under -race,
+// a plain field read in release would be a data race with the writes here).
+func TestDBGate_HooksSettableWhileLive(t *testing.T) {
+	g := newDBGate()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if g.acquire() == nil {
+					g.release()
+				}
+			}
+		})
+	}
+	var fired atomic.Int64
+	for range 2000 {
+		g.setReleaseHook(func(int64) { fired.Add(1) })
+		g.setShutdownHook(func(shutdownStage) {})
+		g.setReleaseHook(nil)
+		g.setShutdownHook(nil)
+	}
+	close(stop)
+	wg.Wait()
+	_ = fired.Load()
 }

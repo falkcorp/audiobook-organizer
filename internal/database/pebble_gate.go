@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-10-11
 
@@ -87,9 +87,15 @@ import (
 //     keeps the lease count above zero, so the drain, seal and the engine's
 //     Close all refuse to proceed under it, and the engine stays open. The
 //     lease is released by the sync's own goroutine when the disk finally
-//     answers. So the worst case on a stalled disk is Close returning an
-//     error after the drain timeout plus syncGrace, with the engine open,
-//     never an unbounded wait and never a close under a running fsync.
+//     answers. So a disk that stalls BEFORE the gate is sealed costs Close
+//     at most the drain timeout plus syncGrace, ending in an error with the
+//     engine open, and never a close under a running fsync.
+//   - What that bound does NOT cover: pebble's own DB.Close, which runs after
+//     seal. It waits for running flushes and compactions and closes the WAL
+//     (a final sync), so a disk that stalls after seal, or a long compaction
+//     already in progress, can still hold Close beyond the bound. Bounding
+//     that would mean abandoning pebble's Close mid-way, which leaves the
+//     engine in a state nothing here can reason about; the gate does not try.
 //
 // WHY A COUNTER AND NOT A LOCK
 //   - Acquire never blocks, so nested leases (an op holding an iterator that
