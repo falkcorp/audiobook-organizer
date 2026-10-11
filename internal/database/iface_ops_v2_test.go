@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b41c7de-25a8-4f6c-b0e3-71d84af52c19
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package database
 
@@ -40,6 +40,11 @@ func TestOpV2LifecycleStore_MethodSetUnchanged(t *testing.T) {
 		"SetOperationV2StatusIfQueued",
 		"UpdateOperationV2Params",
 		"UpdateOperationV2Status",
+		// UpdateOperationV2StatusIf added 2026-10-10: Registry.Cancel and the
+		// worker's scan stand-down pickup gate write a status decided from an
+		// earlier read, so they need a compare-and-set that carries a message
+		// and completed_at. The fakes were widened deliberately.
+		"UpdateOperationV2StatusIf",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("method set drifted\n got: %v\nwant: %v", got, want)

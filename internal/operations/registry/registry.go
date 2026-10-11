@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.40.0
+// version: 3.40.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -1320,8 +1320,13 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 		case "running":
 			// A worker claimed the row: its handle is registered before the
 			// claim and released after the run's terminal write, so a running
-			// row with a live handle is that run. Stop it; its terminal write
-			// records "canceled" (userCanceled is checked first).
+			// row with a live handle is that run. Stop it. Its terminal write
+			// records "canceled" if the run decides its final status after
+			// this (finalStatusForCanceledRun checks userCanceled first). It
+			// does NOT if the run already decided interrupted_quiesced (a
+			// stand-down quiesce) or a shutdown status and has not written it
+			// yet: that write then lands after this returns and the row stays
+			// resumable. That window is not closed here.
 			if h, ok := r.handleForCancel(opID); ok && h.cancel != nil && !h.zombie.Load() {
 				if h != in.live {
 					r.cancelLiveHandle(opID, h)
