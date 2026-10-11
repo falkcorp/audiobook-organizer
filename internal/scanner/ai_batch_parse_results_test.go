@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_parse_results_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a3c9e51-2d84-4b06-b1f7-5e0a9c63d842
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -89,6 +89,11 @@ func TestParseResults_Disposition(t *testing.T) {
 		callDelay time.Duration
 		// wantConcurrent asserts more than one call was in flight at once.
 		wantConcurrent bool
+		// maxElapsed, when set, bounds how long runAIBatchPhase may take. The
+		// failed-batch back-off is five seconds; a case that ends the phase
+		// during it uses this to pin that the wait ends with the phase's
+		// context instead of running out.
+		maxElapsed time.Duration
 	}{
 		{
 			name:  "result merged into an empty book",
@@ -156,9 +161,11 @@ func TestParseResults_Disposition(t *testing.T) {
 		},
 		{
 			// The phase context is really cancelled by the first call, which then
-			// returns the cancellation, so the phase takes its stopped path (and
-			// does not back off) rather than the retry-later path of a backend
-			// that merely failed.
+			// returns the cancellation. The call still failed, so the phase takes
+			// its failed-batch path, including the five-second back-off; the
+			// back-off ends at once because the phase context is done
+			// (aiGroupCtx.Done()). maxElapsed pins that: a back-off that
+			// ignored the cancellation would run the full five seconds.
 			name:  "first call cancelled: every item unresolved with no error of its own",
 			books: []Book{{FilePath: "/x/a.m4b"}, {FilePath: "/x/b.m4b"}, {FilePath: "/x/c.m4b"}},
 			parser: func(n []string) ([]*ai.ParsedMetadata, error) {
@@ -166,6 +173,7 @@ func TestParseResults_Disposition(t *testing.T) {
 			},
 			cancelAfterCalls: 1,
 			wantFalse:        3,
+			maxElapsed:       2 * time.Second,
 		},
 		{
 			// The same situation as the case above reached the other way: the
@@ -271,7 +279,13 @@ func TestParseResults_Disposition(t *testing.T) {
 			for i := range cands {
 				cands[i] = i
 			}
+			phaseStart := time.Now()
 			runAIBatchPhase(ctx, parser, c.books, cands, logger.New("test"), saveBookAndReportPath)
+			if c.maxElapsed > 0 {
+				if took := time.Since(phaseStart); took > c.maxElapsed {
+					t.Errorf("runAIBatchPhase took %s, want under %s (the failed-batch back-off must end when the phase is cancelled)", took, c.maxElapsed)
+				}
+			}
 
 			mu.Lock()
 			defer mu.Unlock()

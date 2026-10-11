@@ -1,7 +1,7 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package ai
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
@@ -834,8 +836,218 @@ func TestContextEndedDuringSDKBackoffStillCountsTheThrottle(t *testing.T) {
 				if got["ai.outcome"] != outcomeError || got["ai.failure_reason"] != reasonRateLimit {
 					t.Errorf("span classification = %v, want outcome=error reason=rate_limit", got)
 				}
+				if got["http.response.status_code"] != "429" {
+					t.Errorf("span http.response.status_code = %q, want 429 (the attempt the call ended in)", got["http.response.status_code"])
+				}
 			}
 		})
+	}
+}
+
+// spanAttrsFor returns the attributes of the one ended span named name.
+func spanAttrsFor(t *testing.T, tel *aiTelemetry, name string) map[string]string {
+	t.Helper()
+	var found []map[string]string
+	for _, sp := range tel.spans.Ended() {
+		if sp.Name() != name {
+			continue
+		}
+		got := map[string]string{}
+		for _, kv := range sp.Attributes() {
+			got[string(kv.Key)] = kv.Value.String()
+		}
+		found = append(found, got)
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d spans named %s, want 1", len(found), name)
+	}
+	return found[0]
+}
+
+// stalledResponse answers with status, the given headers and the first bytes
+// of a body that promises more, then holds the connection until release is
+// closed or the client goes away. The SDK is left reading the body when the
+// caller's context ends.
+func stalledResponse(release <-chan struct{}, started func(), status int, hdr map[string]string) func(int64, http.ResponseWriter) bool {
+	return func(_ int64, w http.ResponseWriter) bool {
+		for k, v := range hdr {
+			w.Header().Set(k, v)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "100000")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"error":{"message":"par`))
+		w.(http.Flusher).Flush()
+		started()
+		<-release
+		return true
+	}
+}
+
+// onceSignal returns a func that closes a channel the first time it is called,
+// and the channel.
+func onceSignal() (func(), <-chan struct{}) {
+	ch := make(chan struct{})
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }, ch
+}
+
+// A request cut off by a context that was cancelled with a cause that is not a
+// context error is still the caller giving up: canceled, no failure. net/http
+// returns context.Cause(ctx) for such a request, so the transport error the
+// attempt records is not a context error even though the SDK's own error is.
+// errgroup.WithContext cancels with the first failing callback's error as the
+// cause, so a sibling failure takes exactly this path.
+func TestCancelWithNonContextCauseIsStillCanceled(t *testing.T) {
+	cause := errors.New("scan stand-down lease lost")
+	for name, run := range map[string]func(t *testing.T, p *OpenAIParser, arrived <-chan struct{}) error{
+		"WithCancelCause": func(t *testing.T, p *OpenAIParser, arrived <-chan struct{}) error {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			go func() {
+				<-arrived
+				time.Sleep(100 * time.Millisecond)
+				cancel(cause)
+			}()
+			_, err := p.ParseFilename(ctx, "x")
+			return err
+		},
+		"errgroup sibling fails": func(t *testing.T, p *OpenAIParser, arrived <-chan struct{}) error {
+			g, gctx := errgroup.WithContext(context.Background())
+			var callErr error
+			g.Go(func() error {
+				_, callErr = p.ParseFilename(gctx, "x")
+				return nil
+			})
+			g.Go(func() error {
+				<-arrived
+				time.Sleep(100 * time.Millisecond)
+				return errors.New("sibling failed")
+			})
+			_ = g.Wait()
+			return callErr
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tel := installAITelemetry(t)
+			started, arrived := onceSignal()
+			release := make(chan struct{})
+			srv := newStubEndpoint(t, "", func(_ int64, w http.ResponseWriter) bool {
+				started()
+				<-release
+				return true
+			})
+			t.Cleanup(func() { close(release) })
+
+			if err := run(t, newTestParser(t, srv), arrived); err == nil {
+				t.Fatal("ParseFilename succeeded though its context was cancelled")
+			}
+			if got := srv.requests.Load(); got != 1 {
+				t.Fatalf("server saw %d requests, want 1", got)
+			}
+			rm := tel.collect(t)
+			task := map[string]string{"task": TaskFilenameParse}
+			if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskFilenameParse, "outcome": "canceled"}); got != 1 {
+				t.Errorf("ai.requests{outcome=canceled} = %d, want 1", got)
+			}
+			if got := counterSum(rm, "ai.requests", task); got != 1 {
+				t.Errorf("ai.requests = %d in total, want 1", got)
+			}
+			if got := counterSum(rm, "ai.failures", task); got != 0 {
+				t.Errorf("ai.failures = %d, want 0 (the caller gave up, the backend did nothing wrong)", got)
+			}
+			if attrs := spanAttrsFor(t, tel, "ai."+TaskFilenameParse); attrs["ai.outcome"] != outcomeCanceled {
+				t.Errorf("span ai.outcome = %q, want %q", attrs["ai.outcome"], outcomeCanceled)
+			}
+		})
+	}
+}
+
+// A context that ends while the SDK is reading a response it does not retry is
+// not a backoff: the call is a timeout (or cancellation), counted once, and the
+// response's status is not mistaken for a throttle the SDK was waiting out.
+// Covers a 2xx, a 4xx the SDK does not retry, and (mirroring the SDK, which
+// lets x-should-retry decide over the status) a 429 marked x-should-retry:false.
+func TestContextEndedReadingAnUnretriedResponseIsATimeout(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		hdr    map[string]string
+	}{
+		{"200", http.StatusOK, nil},
+		{"400", http.StatusBadRequest, nil},
+		{"429 with x-should-retry false", http.StatusTooManyRequests, map[string]string{"x-should-retry": "false", "Retry-After-Ms": "10000"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tel := installAITelemetry(t)
+			started, _ := onceSignal()
+			release := make(chan struct{})
+			srv := newStubEndpoint(t, "", stalledResponse(release, started, c.status, c.hdr))
+			t.Cleanup(func() { close(release) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+			defer cancel()
+			if _, err := newTestParser(t, srv).ParseFilename(ctx, "x"); err == nil {
+				t.Fatal("ParseFilename succeeded against a stalled body")
+			}
+			if got := srv.requests.Load(); got != 1 {
+				t.Fatalf("server saw %d requests, want 1", got)
+			}
+			rm := tel.collect(t)
+			task := map[string]string{"task": TaskFilenameParse}
+			if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskFilenameParse, "outcome": "timeout"}); got != 1 {
+				t.Errorf("ai.requests{outcome=timeout} = %d, want 1", got)
+			}
+			if got := counterSum(rm, "ai.requests", task); got != 1 {
+				t.Errorf("ai.requests = %d in total, want 1", got)
+			}
+			if got := counterSum(rm, "ai.failures", map[string]string{"task": TaskFilenameParse, "reason": "timeout"}); got != 1 {
+				t.Errorf("ai.failures{reason=timeout} = %d, want 1", got)
+			}
+			if got := counterSum(rm, "ai.failures", task); got != 1 {
+				t.Errorf("ai.failures = %d in total, want 1", got)
+			}
+			if sum := histogramSum(rm, "ai.request.duration", task); sum < 0.3 {
+				t.Errorf("duration = %.3fs, want the time spent reading until the deadline (about 0.4s)", sum)
+			}
+		})
+	}
+}
+
+// The SDK retries any response marked x-should-retry:true, whatever its status,
+// so a context that ends while it waits is a backoff on that attempt: one error
+// request with the response's reason and status on the span, not a timeout.
+// A 400 is used because its status alone is never retried.
+func TestContextEndedInBackoffOfAnXShouldRetryResponse(t *testing.T) {
+	tel := installAITelemetry(t)
+	srv := newStubEndpoint(t, "", func(_ int64, w http.ResponseWriter) bool {
+		w.Header().Set("x-should-retry", "true")
+		w.Header().Set("Retry-After-Ms", "10000")
+		http.Error(w, `{"error":{"message":"try again","type":"invalid_request_error"}}`, http.StatusBadRequest)
+		return true
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	if _, err := newTestParser(t, srv).ParseFilename(ctx, "x"); err == nil {
+		t.Fatal("ParseFilename succeeded against a 400 and a dead context")
+	}
+	if got := srv.requests.Load(); got != 1 {
+		t.Fatalf("server saw %d requests, want 1 (the context ended in the SDK's backoff)", got)
+	}
+	rm := tel.collect(t)
+	task := map[string]string{"task": TaskFilenameParse}
+	if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskFilenameParse, "outcome": "error"}); got != 1 {
+		t.Errorf("ai.requests{outcome=error} = %d, want 1 (the 400 the SDK was retrying)", got)
+	}
+	if got := counterSum(rm, "ai.requests", task); got != 1 {
+		t.Errorf("ai.requests = %d in total, want 1", got)
+	}
+	if got := counterSum(rm, "ai.failures", task); got != 1 {
+		t.Errorf("ai.failures = %d in total, want 1 (no timeout failure)", got)
+	}
+	attrs := spanAttrsFor(t, tel, "ai."+TaskFilenameParse)
+	if attrs["ai.outcome"] != outcomeError || attrs["http.response.status_code"] != "400" {
+		t.Errorf("span = %v, want outcome=error with http.response.status_code=400", attrs)
 	}
 }
 

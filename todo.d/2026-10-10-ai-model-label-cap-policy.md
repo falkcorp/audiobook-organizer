@@ -1,22 +1,14 @@
-- [ ] **AI-MODEL-LABEL-CAP-POLICY** Decide how the `model` label cap admits
-      models (SF3 of PR #3948 round 1; OWNER DECISION, behavior unchanged for
-      now). `modelLabelSet` in `internal/ai/ai_metrics.go` admits the first
-      five distinct (provider, model) pairs that reach `observe` or
-      `recordReplyFailure` and folds every later pair to `other` until the
-      process restarts. Three consequences: a settings experiment (trying
-      three names in `filename_parse_model` or `metadata_review_model`, or
-      editing a pool row's `chat_model` twice) uses slots for good, so the
-      model that ends up serving traffic can fold to `other`; the `unknown`
-      label takes a slot though only `other` is exempt in `admit`; and which
-      models are named depends on which task runs first after boot, so a
-      "p95 by model" panel can show a model named before a deploy and folded
-      after it with no config change. The 1,000-series bound itself holds.
-      Option A, pre-admit the configured models at startup
-      (`filename_parse_model`, `metadata_review_model`, the embedding model
-      and every pool row's `chat_model` at load) so the named set is
-      deterministic; also exempt `unknown` from admission. Option B, keep the
-      first-seen behavior and document in `docs/AI-REFERENCE.md` that the
-      named set is per boot and order-dependent. Option A costs a startup hook
-      that must also run when a pool row is added or edited; option B costs
-      nothing but leaves the dashboard's model breakdown unstable once the
-      pool grows past five models.
+- [ ] **AI-MODEL-LABEL-CAP-POLICY** Land the `model` label policy for the AI
+      metrics (SF3 of PR #3948 round 1). The owner decided on 2026-10-11:
+      always name the configured models, so the label no longer depends on
+      which task ran first after boot. Before that decision `modelLabelSet` in
+      `internal/ai/ai_metrics.go` admitted the first five distinct
+      (provider, model) pairs that reached `observe` or `recordReplyFailure`
+      and folded every later pair to `other` until the process restarted, so a
+      settings experiment could leave the serving model folded to `other`, the
+      `unknown` label took a slot though only `other` is exempt in `admit`, and
+      the named set was order-dependent. The change is implemented in the
+      stacked branch `fix/ai-model-label-configured`, not in this PR; the
+      1,000-series bound is unchanged. Check this entry off when that branch
+      merges (and grep `TODO.md` for the title first, per `todo.d/README.md`:
+      the daily assembly may have folded this fragment in already).
