@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.5 -->
+<!-- version: 10.76.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -13,6 +13,396 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AI-METRICS-UNTYPED-REPLY-FAILURES** Untyped bad replies are not counted
+      in `ai_failures_total` (N2 of PR #3938 round 1). Only `*ReplyParseError`
+      and `*ResultCountError` reach `recordReplyFailure`. Four of the nine
+      tasks turn a bad reply into a plain `fmt.Errorf` inside the
+      `DoWithRetry` closure: `reviewAuthorBatch` and `discoverAuthorBatch`
+      ("failed to parse response" in `internal/ai/openai_parser.go`) and
+      `scoreMetadataBatch` (`internal/ai/metadata_llm_review.go`), so an
+      unparseable reply is two `ok` requests and no failure. The empty-choices
+      error ("no response from OpenAI", six sites in `openai_parser.go` and one
+      in `metadata_llm_review.go`, plus `errNoCoverTextChoices` in
+      `cover_text.go`) is uncounted for the same reason. Net effect: the
+      "Reply-quality failures by task" panel is structurally zero for those
+      tasks. Fix: return `newReplyParseError` from those sites (empty choices
+      as `reply_parse`), call `recordReplyFailure` where each is returned, and
+      add one test per site. It changes the error type those callers see, so
+      check the retry predicates (`isPermanentAIError`, `DoWithRetry`) still
+      treat them as retryable.
+
+- [ ] **CHROMEM-LIVE-VS-HYDRATED-VECTORS** The batch-embed path mirrors the raw
+      API vector into chromem (`internal/dedup/engine.go:2957`), while the
+      Pebble store keeps the float16 round trip and the startup hydrate
+      (`engine.go:649`) mirrors that decoded vector. So the live index and a
+      freshly hydrated one hold slightly different vectors (float16 drift,
+      documented as under 1e-3 at 3072 dims). That is negligible at the
+      0.85/0.95 dedup thresholds, but a candidate scored right at a threshold
+      can flip after a restart. Fix: mirror the decoded vector on the embed path
+      too, so both indexes hold exactly what the store holds. Found while fixing
+      PROP-CHROMEM-FLAKE (2026-10-10).
+
+- [x] **IMPORT-ORPHANED-VERSIONS** Every `ImportFile` orphans its version
+      (round-1 S1 of PR #3928). `CreateIngestVersion` runs before
+      `CreateBookFile` in `internal/importer/service.go`, so when it looks for
+      the book_file row to link (`internal/versions/ingest.go`) none exists:
+      it logs `no book_file row matched the ingest path; version is orphaned`,
+      the file row's `VersionID` stays unset and `FileHash` stays empty, so
+      imported rows are `unverifiable` for the torrent cleanup fixer until a
+      hash backfill runs. Fix: create the book_file row (with `FileHash`)
+      before `CreateIngestVersion`. It changes every import, not only torrent
+      ones. Must land before 10-PR2.
+- [ ] **DELUGE-LOGIN-GATE** `deluge.Client.LoginContext`
+      (`internal/deluge/client.go`) holds `c.mu` across the `auth.login` HTTP
+      round trip, and `sync.Mutex.Lock` ignores ctx (SF-2 of PR #3928 round 2).
+      While `authed` is false and Deluge black-holes packets, a background
+      login with no deadline (e.g. the `*/30` protected-paths refresh via
+      `ListTorrents` → `Login`) holds the mutex for the 5-minute transport
+      timeout, so the discover import's 15 s verification can wait up to 5
+      minutes. Fix: a context-aware 1-slot login gate (`loginSem chan
+      struct{}` acquired with `select` on `ctx.Done()`), recheck `authed`
+      under `c.mu` after acquiring, and keep `c.mu` only for `authed` and
+      `loginGen`, never across I/O. Keep
+      `TestCall_ConcurrentExpiredSessionLogsInOnce` green and add a test: with
+      a login in flight against a hanging server, a second
+      `GetTorrentDetailContext` with a 200 ms deadline returns within ~1 s.
+
+- [ ] **UNREJECT-FROM-REVIEW** The review rail marks a row whose candidate
+      the owner rejected (`owner_rejected`), and no apply button applies it,
+      but the row has no way back: undoing a rejection takes the book's
+      metadata search window ("Rejected by you", Undo, which calls
+      `POST /metadata/unreject-candidate`). Add the same Undo to the review
+      row (`web/src/components/review/QueueRail.tsx`), calling that endpoint
+      with the book and the row's candidate, then refresh the row.
+- [ ] **VT-COPY-RERANK** The version-twin metadata fixer copies another copy's
+      cached candidates onto the primary
+      (`metafetch.Service.CopyCandidateCache`, called from
+      `version_twin_metadata_fixer.go`) without re-ranking the copy against the
+      receiving book's own rejections, so a candidate the owner rejected for
+      that book can sit first in its copied row until the next search or
+      reject rewrites it. Every apply still refuses it; re-rank the copied
+      row (`metafetch.Service.RerankCachedCandidates` with
+      `metabatch.MergeRankerFor` for the receiving book) when it is written.
+- [ ] **UNREJECT-STILL-REJECTED-UI** `POST /metadata/unreject-candidate`
+      returns `still_rejected: true` when another rejection still refuses
+      the candidate (another source's rejection sharing its ISBN, or a
+      legacy title-wide key). The single and bulk metadata search windows
+      (`MetadataSearchDialog.tsx`, `BulkMetadataSearchDialog.tsx`) ignore it
+      and clear the "Rejected by you" chip on every Undo, so the row looks
+      pickable until the next search. Keep the chip (and say why) when
+      `still_rejected` is true, and clear every other row whose ASIN the
+      server un-rejected with it (review round 4, N2).
+
+- [ ] **CI-NATIVE-TAGLIB** Add a CI job that builds and vets `-tags native_taglib`
+      (needs the TagLib C library on the runner). Today the cgo writer
+      `internal/metadata/taglib_cgo.go` is only vetted by hand, so a change to
+      its signatures or its create_backups handling can break that build
+      unnoticed (found in the PR #3919 review, N5).
+- [ ] **ORGANIZE-FETCH-REFETCH** `organizer.PerformOrganizeStats` with
+      `fetch_metadata_first` re-reads the WHOLE library (`GetAllBooksCore`
+      pages) after the fetch even when the request named specific `BookIDs`,
+      so a fetch-first organize of a few books goes on to organize every book.
+      Re-read only the requested IDs.
+- [ ] **BACKUP-SWEEP-CONSOLIDATE** Three "delete old backups" implementations
+      exist: `maintenance.cleanup-old-backups`, `scheduler.cleanup-old-backups`
+      (both age by `fileops.BackupTime`) and the manual `cleanup-backups` job,
+      whose regex does not match the `.bak-<unix>[-N]` names create_backups
+      now writes. Consolidate on one predicate.
+
+- [ ] **PATTERN-LAST-16KB** Also run end-anchored search patterns over the last
+      16 KB of a long field. A regex or `*` pattern only sees the first 16 KB
+      (`querygrammar.MaxPatternInputBytes`), so a `$`, `\z` or leading-`*`
+      pattern (`*the end`) can never match a field over 16 KB, and a negated
+      filter such as `-description:*the end` keeps every such row
+      (`internal/querygrammar/querygrammar.go`, `TextMatcher.MatchExact`).
+      Fix: for `$`/`\z`-anchored regexes and globs with a leading `*`, run a
+      second bounded match over the field's last 16 KB under the same
+      `Budget`. Cost: one extra match per long row, only for those patterns.
+
+- [ ] **RELINK-PRE-FIX-IMPORTS** (owner decision) Files imported before the
+      IMPORT-ORPHANED-VERSIONS fix each have an orphaned active version and a
+      book_file row with no `VersionID` and, unless the hash backfill reached
+      them since, no `FileHash`. That leaves them invisible to exact-duplicate
+      matching and `unverifiable` for torrent cleanup.
+      `versions.CreateIngestVersion` adopts a stranded version (exactly one
+      live, unreferenced version of the book with the same torrent hash) and
+      refuses (`ErrTorrentLinkedElsewhere`) to link a torrent a different live
+      version holds, so a relink pass can be built on it. The pass must hold
+      `versions.LockTorrent(hash)` across the call, and a row whose
+      `VersionID` names another book's version (merged rows keep the absorbed
+      book's) needs a decision of its own: the function relinks it for the
+      keeper but will not take that version's torrent. The refusal says
+      "linked elsewhere" even when the holder is a version of the SAME book:
+      with several `book_file` rows on one book, row 1 already linked to
+      version V (which holds the hash) and row 2 passed the same hash is
+      refused as held by V of this very book, although linking row 2 to V is
+      arguably the right outcome. A pass over multi-file rows has to decide
+      that case itself (compare `holder.BookID` with the book being relinked);
+      single-file rows, which are all the pre-fix imports, cannot hit it. None
+      exists yet, and running one in prod needs the owner's go-ahead.
+
+- [ ] **OPSMETRICS-SOAK-CLEANUP** After the soak ends on 2026-11-09, delete the legacy
+      per-run gauges `op_items_processed` / `op_items_total` and their
+      `metrics.SetOpProgress` / `metrics.ClearOpProgress` helpers
+      (`internal/metrics/metrics.go`), the old alerts
+      `AudiobookOrganizerOpFailuresHigh` and `AudiobookOrganizerOpStalled`
+      (`deploy/prometheus/alert-rules.yml`), and the first target of the
+      "In-flight op progress" panel in the overnight dashboard. First run
+      `grep -rn 'op_items_processed\|op_items_total' deploy internal` and
+      confirm nothing else reads them. Replacement series (11-PR4):
+      `audiobook_organizer_ops_items_total`, `audiobook_organizer_ops_runs_total`.
+
+- [ ] **TS7-TYPECHECK-DOCS** After 06-P9 (#3933), plain `tsc` in `web/` can resolve to
+      TypeScript 6: `@typescript/typescript6` pulls in `npm:typescript@^6`, whose `tsc` bin
+      an incremental `npm install` was seen to link over TS 7's. Point every instruction that
+      says `npx tsc --noEmit` at `npm --prefix web run typecheck` (or `make web-typecheck`):
+      `.claude/agents/code-reviewer.md`, `.claude/agents/typescript-specialist.md`,
+      `docs/proposals/2026-10-holistic/tasks/00-TEMPLATE.md` and the 31 task briefs that copy
+      it (`grep -rln 'npx tsc' .claude docs/proposals`). The `Bash(npx tsc *)` allow entry in
+      `.claude/settings.json` is a permission setting: the owner decides whether to add one
+      for the new command.
+- [ ] **TS6-PIN-OVERRIDE** typescript-eslint's `<6.1.0` peer range is checked against the
+      `@typescript/typescript6` wrapper's own version (6.0.2), while the compiler it loads
+      comes from `@typescript/old` (`npm:typescript@^6`). A lockfile refresh could pull a
+      6.1 that typescript-eslint does not support, and npm would not warn. Add an
+      `overrides` entry pinning `@typescript/old` to `~6.0.3` in `web/package.json`.
+- [ ] **WOODPECKER-TYPECHECK** Woodpecker's `web-test` step runs only vitest and has never
+      type-checked. Add `npm run typecheck` (about 2 s on TS 7) to that step in
+      `.woodpecker/checks-build.yaml`.
+
+- [ ] **WINDOW-QUIESCED-SCAN-OVERLAP** A maintenance window
+      (`internal/server/scheduler_maintenance_window_op.go:186`) stops waiting
+      on a child as soon as it reads `interrupted_quiesced`
+      (`scheduler.WaitForOperation`, `internal/scheduler/scheduler.go:607`; the
+      same holds for `childop.Follow`). But an `interrupted_quiesced` scan can
+      run again under the same id while the process is up: the worker pickup
+      gate calls `resumeDroppedScanOnRelease`
+      (`internal/operations/registry/worker.go:367` →
+      `scan_standdown.go:429`) → `resumeQuiescedOp` (`resume.go:414`) →
+      `ResetOperationV2ForResume`. So the window can move on to its next task
+      while the scan it stopped waiting on comes back and runs alongside it.
+      This is old behaviour: the hand-written list before 05-PR1 also ended
+      the wait on `interrupted_quiesced`. Decide whether a window should keep
+      waiting on a quiesced scan, or re-check it before starting the next
+      task.
+
+- [ ] **ZOMBIE-FOLLOWUPS-05PR3** Follow-ups from the PR #3935 (05-PR3) review
+      that were left out of that PR:
+  - [ ] **N4: Shutdown waits out its whole context while a genuine zombie
+        lives.** The drain poll in `Registry.Shutdown`
+        (`internal/operations/registry/registry.go`) counts `len(r.running)`,
+        and a zombie stays there until its goroutine exits. So server shutdown
+        (`server_lifecycle.go`, 10 s context) always burns the full 10 s,
+        returns `ctx.Err()`, and logs "shutdown timeout; marked remaining ops
+        as interrupted" even though it skipped the zombie. Before 05-PR3 it
+        drained at once. Options: exclude `slotReleased` handles from the drain
+        count (`goroutineWG.Wait` still bounds them), or fix the log line.
+  - [ ] **N5: The watchdog relies on row status to skip zombies.** If the
+        abandonment terminal write fails ("failed to mark abandoned op
+        interrupted" in `worker.go`), the row stays `running` while the zombie
+        handle stays in `r.running`. The watchdog then writes a `stuck` strike
+        every cycle and cancels again, and the EnqueueOp key dedupe returns the
+        zombie's id. Add an explicit `h.zombie.Load()` (or `slotReleased`) skip
+        to the watchdog loop (`watchdog.go`).
+  - [ ] **N6: Rows in unstarted partitions get no RowResult on cancel.**
+        `runItemsPar` stops handing out partitions once the context is done, so
+        rows in partitions that never started are missing from `res.Rows`.
+        Rows in started partitions are reported `canceled_skipped`, so the
+        counts understate what was skipped. After `RunItems` in `RunApply`
+        (`internal/repairs/engine.go`), settle `canceled_skipped` for every
+        selected row that has no result.
+  - [ ] **A user cancel of a shutdown-branch zombie is stamped over.** Cancel
+        now writes `canceled` to the zombie's still-`running` row, but the
+        timeout loop in `Shutdown` then stamps `interrupted_*` over it. That
+        loop skips only `slotReleased` handles and ignores `userCanceled`. The
+        same was true before 05-PR3 for any handle the user canceled during a
+        shutdown. Decide whether a user cancel should win against the shutdown
+        stamp.
+
+- [ ] **ABS-CREATED-AT-SORT-INDEX** Owner decision: enable the memdb `created_at` sort
+      index (`enabled_sort_indexes`; the default enabled set is `{year}`). Today the ABS
+      Recently Added shelf and the Library tab's `sort=addedAt&desc=1` both materialise the
+      whole visible set and sort it before cutting the page: measured on a 68k-row / ~17k
+      visible library, one call is ~30-39 ms and allocates ~78 MB per home-page load. With
+      the index, a reverse walk to the 40 newest visible rows measured ~7 us and ~10 KB.
+      Cost: roughly 19 MB of memory per indexed key and slower inserts. The change is
+      configuration only (no code), but it trades memory and write speed for read speed, so
+      it is the owner's call. A store-side alternative that needs no index: collect `*Book`
+      pointers (memdb objects are read-only) or keep a bounded top-(offset+limit) heap
+      instead of copying every match (976 B each), which would cut the unindexed sort from
+      ~78 MB to ~130 KB; the author and series sorts mutate rows in `hydrateSortNames`, so
+      they would need to stay on the copying path.
+
+- [ ] **ABS-JUNK-AUTHOR-NAMES** Owner review: trial and apply the junk-author repair for the
+      tag-shrapnel author rows the ABS Newest Authors shelf exposed on 2026-10-10 (an HTML
+      entity, a copyright line with a year, `<digits> <size>] #<tag>`, a story-count phrase).
+      They ARE credited on visible books (the ABS author list is built from visible books only), so the shelf fix in
+      `fix/abs-newest-authors-shelf` hides them only while their books are old; a junk row
+      on a recent import still shows. No rows were changed by that PR.
+      **What the classifier does with them:** `authorjunk.ClassifyName` flags all four as strong
+      `other_non_person` through the creation gate (`personname.IsPlausibleAuthorName`:
+      `html_entity`, `copyright`, `story_count`, and the new `release_tag`). The size/hashtag
+      shape used to be caught by `filename_shape`, a rule the repair treats like any other
+      unlink-eligible one; from that PR on the gate's `release_tag` rule fires first, so the
+      verdict's rule is `author_creation_gate` (the label changes, the strength does not). The
+      same rule now also refuses names it never refused before: a real name with a release-post
+      group appended (`<name> [<bitrate> <timecode> <size>]`, `<name> {<size>}`,
+      `<name> (<size>)`, `<name> #<tag>`). Those are junk rows with a real author inside, and
+      they are unlink-eligible, so `authorjunk.CleanedName` strips a trailing group that holds
+      a size or a hashtag and the repair proposes RELINK to the cleaned name (source
+      `cleaned_name`) when an author of that name with books exists. `<name> #<tag>` (a hashtag
+      outside a group) is NOT cleaned: it is refused by the gate and, with no evidence of the
+      real author, planned as UNLINK, so step (2) must check each such row for an embedded name.
+      The fixer is `maintenance.repair-junk-authors` in /review Repairs; with no evidence of the
+      real author it plans an UNLINK at `RiskReview`, so every row needs the owner's approval.
+      **Where they came from:** rows created before the 2026-08-14 / 2026-09-25 creation gates
+      (`IsDirtyAuthorName`, then `IsPlausibleAuthorName` in `PebbleStore.CreateAuthor`).
+      The HTML-entity row matches the known `;`-split of an HTML-escaped copyright line in an
+      artist tag (`metadata.splitMultipleAuthors`, entity-protected since 04066efbc; still open in the
+      "Author table: copyright text and HTML entities" section above). The
+      size/hashtag shape (a torrent/forum release title in a tag) passed every gate until the
+      `release_tag` rule. No author path HTML-unescapes; the 2026-09-10 decision was "reject,
+      do not unescape", and that still holds — decoding a copyright entity yields the
+      copyright sign, which is no more an author.
+      **Steps:** (0) BEFORE deploying the `release_tag` gate rule, dry-run
+      `personname.IsPlausibleAuthorName` over the whole prod author table and confirm every
+      `release_tag` refusal is junk — the rule was only checked on synthetic names, and the
+      gate runs inside `PebbleStore.CreateAuthor` before the existing-row lookup, so a false
+      positive would drop a real author's credit on every re-import, not just new mints;
+      DONE 2026-10-11 02:25 against the live author list (15,690 authors via
+      GET /api/v1/authors): 18 `release_tag` refusals, all junk (strings of the shapes
+      `<bitrate> <timecode> <size>`, `<digits> <size>] #<tag>` and
+      `<name> [<bitrate> <timecode> <size>]`), zero real names. All checks together flag 776
+      existing rows (leading_punctuation 177, edition_marker 151, read_by 114,
+      timecode_or_track 93, too_long 40, structural_word 30, release_tag 18,
+      pure_number 17, placeholder 11, era_tag 10, story_count 8, html_entity 5,
+      copyright 2) — counts only; step (1) still decides per row;
+      (1) get counts by pattern from a prod Plan run of the fixer (preview only, bulk-apply
+      gate rules apply); (2) owner approves per row in /review Repairs; (3) after apply,
+      confirm the ABS Authors tab and Newest Authors shelf no longer list them.
+      Note: Newest Authors refreshes on the author index's 5-minute timer, not on each import, so
+      a cleaned row can take up to about 5 minutes to leave the shelf and a new author up to about
+      5 minutes to appear.
+      Remaining gap: `metadata.splitMultipleAuthors` only protects entities that still end
+      in `;`; an already-truncated `<entity> <year> <name>` in a tag is now refused by the gate rather
+      than repaired.
+
+- [ ] **ABS-UNDATED-BOOKS-SORT-FIRST** A book with no `CreatedAt` sorts FIRST on every
+      newest-first sort in the store, not just in the ABS home shelf. `compareSortInts`
+      (`internal/database/book_sort.go`) puts a missing key (`missingSortKey`) after every
+      present value ascending, and `SortBooks` / the memdb `GetReverse` walk negate that, so
+      a descending walk serves the undated rows at the head. The Recently Added shelf now
+      excludes them with a `Predicate` (`internal/server/handlers/abs/browse.go`,
+      `recentlyAddedIDs`), but the Library tab's `sort=addedAt&desc=1` and every other
+      descending sort on a nullable field (year, narrator, duration, ...) still lead with
+      them. First count the undated visible rows in prod (primary, organized, not
+      quarantined, `created_at` nil or zero): `CreateBook` always stamps the date, so the
+      number may be ~0 and the problem moot. If it is not, pick: (a) backfill `CreatedAt` on
+      those rows (from `UpdatedAt` or the first `book_file.CreatedAt`), which fixes both
+      surfaces without touching sort semantics and is the lower-risk option; or (b) change
+      `SortBooks` to sort missing values last in both directions, which also needs the memdb
+      reverse walk (skip the missing-key prefix, emit it after), the Pebble fallback, the
+      `"~"` title sentinel and the sort tests (`memdb_summaries_sorted_page_test.go`,
+      `pebble_summaries_fallback_sort_test.go`, `sort_every_field_test.go`,
+      `sort_indexed_path_test.go`) to move together, and is a user-visible change to every
+      descending sort on the web and ABS Library tabs.
+
+- [ ] **RESET-TO-DEFAULTS-MISSING-LEAVES** `ResetToDefaults` (internal/config/config.go)
+      is a second hand-written `Config{...}` literal and the #3952 review found 131
+      leaves missing from it; FactoryReset persists the result, so the stored blob
+      gets zero/null for, among others, `search.result_cache.*`,
+      `library_counts_cache_min_interval_seconds`, `list_warmer_*`,
+      `fp_parallel_workers`, `fingerprint_length_sec`, `telemetry_environment`,
+      `backup_compression`, `activity_backend`, `oauth_default_role`, the ABS
+      auth/TTL keys and several `scheduled.*.interval` values. Fix: derive it from
+      the viper defaults (the same reads InitConfig does) instead of copying values
+      by hand, and extend `initconfig_reads_every_key_test.go`'s enumeration to it.
+      `log_retention_days` and `enabled_sort_indexes` are already safe there.
+- [ ] **DELUGE-PASSWORD-ENV-VS-BLOB** (owner decision) `DELUGE_WEB_PASSWORD` now
+      reaches `AppConfig` from the environment, but `SaveConfigToDatabase` does not
+      blank it like the other secrets, so the first settings save freezes the env
+      password into the stored blob in plaintext and later env rotations are
+      ignored; decide whether it becomes a real secret row or env-authoritative.
+
+- [ ] **CONFIG-TEST-ISOLATION** `TestUpdateConfig_WithoutRemovedKeyUnaffected`
+      (`internal/config`) returns 403 under `go test -shuffle` (7 of 8 seeds
+      tried) on main: `enable_auth` defaults to true and 20+ tests call
+      `InitConfig` without restoring the config afterwards, so whether the test
+      sees auth on or off depends on test order. Proposed fix: a baseline-config
+      test helper (restores `AppConfig` and the viper state, with auth off
+      unless a test opts in) that those tests use instead of bare `InitConfig`.
+      Found reviewing the `enabled_sort_indexes` boot-only change (2026-10-11);
+      not fixed there.
+
+- [ ] **COPY-ORGANIZE-DROPS-SYNC-IDENTITY** The copy-organize path does not carry the
+      user's ABS sync identity or listening progress to the new primary book.
+      `Service.CreateOrganizedVersion` (`internal/organizer/service.go:2239`) creates the
+      organized copy with `CreateBook` (`:2467`), which mints a new book id, and then demotes
+      the original (the version-group handover). Nothing in `internal/organizer` references
+      `merge.FollowBookIDChange`, `RepointSyncItem`, the sync-id store or the per-user
+      position / book-state rows (`grep -rn 'internal/merge\|SyncItem\|UserPosition'
+      internal/organizer` finds nothing outside tests); the only caller of
+      `FollowBookIDChange` is the scanner's untagged-move path
+      (`internal/scanner/scanner.go:4145`, `followSyncIdentityOnVersionLink`). So if a book
+      the user is partway through is re-organized by COPY, the sync id and the position stay
+      on the demoted, now-invisible original: the book drops off Continue Listening and
+      `/api/me` keeps reporting the progress under the old id, while the visible copy starts
+      at zero with a new sync id. Callers: `internal/organizer/service.go:1434`,
+      `internal/server/handlers/organize.go:337`, `internal/server/server_library_clone.go:134`,
+      `internal/metafetch/service_apply.go:603`. First check whether copy-organize can reach
+      a book that already has a sync id or progress (a first organize of an imported book
+      normally has neither); if it can, call `merge.FollowBookIDChange` (a repoint, since both
+      rows survive) after `CreateBook` succeeds, best-effort like the scanner's call.
+
+- [ ] **ENV-LIST-SPLIT-CONSISTENCY** The string-list settings in `InitConfig` are read
+      with `viper.GetStringSlice`, which splits an environment string on whitespace only,
+      so the comma form that `PROTECTED_PATHS` now accepts does not work for its siblings.
+      `SUPPORTED_EXTENSIONS=".m4b,.mp3"` becomes ONE entry `".m4b,.mp3"`, and because
+      `len(configured) > 0` (`config.go` extension resolution) that entry replaces the
+      default list, so a scan matches no files. `EXCLUDE_PATTERNS` and
+      `FINGERPRINT_WORKER_TOOL_VERSIONS` have the same shape (`EXCLUDE_PATTERNS` also cannot
+      hold a pattern with a space). `ENABLED_SORT_INDEXES` is documented as space-separated
+      in `cmd/root.go`, `update_service.go`, `persistence.go` and `abs/browse.go`, so it
+      must stay whitespace-split. Proposed fix, not implemented: a `viperStringList(key,
+      sep)` helper beside `viperPathList` that takes the separator per key (comma for
+      `SUPPORTED_EXTENSIONS`, `EXCLUDE_PATTERNS` and the tool-version list; whitespace for
+      `ENABLED_SORT_INDEXES`) and trims entries. Also log a Warn when an entry of a
+      whitespace-split list contains a comma (almost certainly a comma list written for the
+      wrong key), and when a `PROTECTED_PATHS` entry contains ` /` (two absolute paths
+      joined by a space, copied from the sibling key's documented form). Add a test per key
+      with a comma list that must produce one entry per element. This predates #3955 (all
+      of these were `GetStringSlice` on main), so it is its own change.
+
+- [ ] **TRASH-PURGE-FOLLOWUPS** Four known gaps around purging trashed book
+      versions, left open by the trash-window fix (PR #3957):
+      (1) Claim the row atomically before any file is deleted. Today
+      `CleanupTrashedVersions` re-reads the row and then calls `PurgeVersion`,
+      so a restore that lands between the re-read and the purge still loses the
+      version's files.
+      (2) `handleTrashVersion` accepts rows in `inactive_purged`,
+      `blocked_for_redownload` and `swapping_*`; it should refuse them (or
+      define what trashing each means) instead of writing them into the trash.
+      (3) After a purge the version's `book_file` rows are kept on purpose but
+      their `file_path` still points at the deleted files; repoint or mark
+      them so nothing reads a path that no longer exists.
+      (4) `PurgeVersion` derives the version folder from `book.FilePath`, which
+      can be stale; derive it from the version's own `book_file` rows.
+
+- [ ] **UNDO-WINDOW-PRUNE** Give the undo journal (`opchange:` rows) its own
+      retention, the "undo window" of
+      `docs/design/2026-10-03-storage-efficiency-design.md` section 7 ("Separate
+      settings", about line 839). Nothing prunes the journal today: on
+      2026-10-11 the `PruneOperationChanges` step was taken out of the log
+      purge (`logger.PruneOldLogs`) before it ever ran on prod, so no log
+      setting can shorten undo. `PebbleStore.PruneOperationChanges` (chunked,
+      cancellable, with a scan heartbeat) is kept, unwired, for this. Before
+      anything calls it: owner sign-off on the window; the first run is a dry
+      run that only counts and summarises for the owner; every run is capped;
+      `book_file_delete` / `book_file_repoint` rows are never deleted until the
+      release C ledger scan (section 9) has stored their signal bytes; and the
+      Repairs fixers that read old journal rows (fragment `scanPlanJournal`,
+      `resumeHandOff`, the version-twin fixer) are checked against the window.
 
 - [ ] **DOCS-ACTIVITY-BACKEND** Rewrite the live system docs that still describe
       the activity log as NutsDB with SQLite "disabled by default for
