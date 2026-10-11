@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.21.4
+// version: 1.21.6
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package logger
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 292
-	slogRatchetCallCeiling = 1671
+	slogRatchetFileCeiling = 290
+	slogRatchetCallCeiling = 1657
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -26,7 +26,6 @@ const (
 // around slog.SetDefault, and it leaves the ratchet when those move onto the
 // logger package.
 var slogRatchet = map[string]int{
-	"cmd/child_mode.go":                                          1,
 	"cmd/dedup_bench.go":                                         26,
 	"cmd/dedup_bench_batch.go":                                   4,
 	"cmd/dedup_bench_crossval.go":                                5,
@@ -59,7 +58,7 @@ var slogRatchet = map[string]int{
 	"internal/backup/backup.go":                                  9,
 	"internal/config/ai_endpoints.go":                            4,
 	"internal/config/blob_default_audit.go":                      1,
-	"internal/config/persistence.go":                             47,
+	"internal/config/persistence.go":                             45,
 	"internal/config/removed_keys.go":                            1,
 	"internal/config/state_dir.go":                               1,
 	"internal/config/update_service.go":                          10,
@@ -176,7 +175,7 @@ var slogRatchet = map[string]int{
 	"internal/metafetch/service.go":                              11,
 	"internal/metafetch/service_apply.go":                        27,
 	"internal/metafetch/service_fetch.go":                        10,
-	"internal/metafetch/service_files.go":                        7,
+	"internal/metafetch/service_files.go":                        5,
 	"internal/metafetch/service_normalize.go":                    2,
 	"internal/metafetch/service_scoring.go":                      9,
 	"internal/metafetch/service_search.go":                       4,
@@ -216,7 +215,7 @@ var slogRatchet = map[string]int{
 	"internal/reconcile/reconcile.go":                            15,
 	"internal/remux/remux.go":                                    5,
 	"internal/remux/transcode.go":                                7,
-	"internal/scheduler/extra_ops.go":                            6,
+	"internal/scheduler/extra_ops.go":                            2,
 	"internal/scheduler/full_sweep.go":                           2,
 	"internal/scheduler/interval_clock.go":                       3,
 	"internal/scheduler/scheduler.go":                            12,
@@ -264,7 +263,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/reading.go":                        1,
 	"internal/server/handlers/review/handler.go":                 1,
 	"internal/server/handlers/scheduler_admin.go":                1,
-	"internal/server/handlers/system/handler.go":                 11,
+	"internal/server/handlers/system/handler.go":                 9,
 	"internal/server/indexed_store.go":                           1,
 	"internal/server/itl_pid.go":                                 1,
 	"internal/server/library_list_warmer.go":                     18,
@@ -312,7 +311,6 @@ var slogRatchet = map[string]int{
 	"internal/updater/scheduler.go":                              9,
 	"internal/updater/updater.go":                                3,
 	"internal/versions/ingest.go":                                4,
-	"internal/versions/lifecycle.go":                             3,
 	"internal/versions/swap.go":                                  4,
 	"internal/watcher/supervisor.go":                             5,
 	"internal/watcher/watcher.go":                                3,
