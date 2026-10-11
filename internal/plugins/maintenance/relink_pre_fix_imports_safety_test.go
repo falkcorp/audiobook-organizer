@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_safety_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 17b88502-dcdd-4723-9e9b-a13d2548dac6
 // last-edited: 2026-10-11
 
@@ -170,6 +170,54 @@ func TestRelinkPreFixImports_SameBookRefusesMovedRow(t *testing.T) {
 	err = pfrSameBook(f.s, d, "")
 	require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "err=%v", err)
 	require.Empty(t, f.bookFile(t, "s2").VersionID)
+}
+
+// pfrSameBook re-reads its target inside the write: a holder trashed after
+// the decision (the trash handler takes no lock) is refused, not linked --
+// once linked, purging the trashed version would delete this file too.
+func TestRelinkPreFixImports_SameBookRefusesTrashedHolder(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	same := f.book(t, "t1", "Placeholder Trashed Holder", f.path("imports/t1.m4b"), nil)
+	sv := f.version(t, same, pfrHashSame)
+	f.importRow(t, "t1", same, pfrHashSame, sv.ID)
+	f.importRow(t, "t2", same, pfrHashSame, "")
+	f.ids["t2"] = same
+	_, d := pfrFreshDecision(t, f, "t2")
+	require.Equal(t, pfrClassSameBook, d.class)
+
+	sv.Status = database.BookVersionStatusTrash
+	require.NoError(t, f.s.UpdateBookVersion(sv))
+	err := pfrSameBook(f.s, d, "")
+	require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "err=%v", err)
+	require.Contains(t, err.Error(), database.BookVersionStatusTrash)
+	require.Empty(t, f.bookFile(t, "t2").VersionID)
+}
+
+// N5: a hashed row whose book's version of that torrent is already linked to
+// a sibling row, while the torrent index names no live holder, is
+// no_candidate with a reason naming that version, not "every live version is
+// already linked".
+func TestRelinkPreFixImports_NoCandidateNamesLinkedSameTorrentVersion(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	book := f.book(t, "n1", "Placeholder Index Elsewhere", f.path("imports/n1.m4b"), nil)
+	v := f.version(t, book, pfrHashMulti)
+	f.importRow(t, "n1", book, pfrHashMulti, v.ID)
+	f.importRow(t, "n2", book, pfrHashMulti, "")
+	f.ids["n2"] = book
+	// Another book's version took the torrent index and was then trashed, so
+	// the index names no live holder.
+	other := f.book(t, "other", "Placeholder Other", f.path("imports/other.m4b"), nil)
+	ov := f.version(t, other, pfrHashMulti)
+	ov.Status = database.BookVersionStatusTrash
+	require.NoError(t, f.s.UpdateBookVersion(ov))
+
+	res := f.fixerPlan(t, relinkPreFixFixerID, "op-plan", nil)
+	r := findRow(t, res, f.rowIDs["n2"])
+	require.Equal(t, pfrClassNoCandidate, r.Class, r.Reason)
+	require.Contains(t, r.SkipReason, v.ID)
+	require.Contains(t, r.SkipReason, "torrent index does not name it")
 }
 
 // M10: a same-book torrent holder that is not live for files (a version

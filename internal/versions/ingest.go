@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -404,7 +404,7 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			if getErr != nil {
 				return fmt.Errorf("re-read version %s: %w", ver.ID, getErr)
 			}
-			if why := notAdoptableNow(cur, params); why != "" {
+			if why := WhyNotLinkable(cur, params.BookID, params.TorrentHash); why != "" {
 				refused = why
 				return errVersionMoved
 			}
@@ -443,22 +443,27 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 }
 
 // errVersionMoved is the link write's internal signal that the adopted version
-// stopped being adoptable (notAdoptableNow) inside the compare-and-set.
+// stopped being linkable (WhyNotLinkable) inside the compare-and-set.
 var errVersionMoved = errors.New("adopted version is no longer adoptable")
 
-// notAdoptableNow says why cur, the adopted version re-read inside the link
-// write, may no longer be linked to the row, or "" when it still may: it must
-// still exist, belong to params.BookID, be live (active or alt) and carry
-// params.TorrentHash -- what strandedVersion selected it on.
-func notAdoptableNow(cur *database.BookVersion, params IngestVersionParams) string {
+// WhyNotLinkable says why cur, a version re-read inside a link write, may not
+// be linked to a row of bookID carrying torrentHash, or "" when it may: it
+// must exist, belong to bookID, be live for files (active or alt; not trashed,
+// purged or mid-swap) and carry torrentHash ("" matches ""). A link writer
+// calls it inside its compare-and-set on the row, so a version trashed after
+// the writer chose it is refused rather than linked -- once linked, purging
+// the version deletes the row's file. Exported for the relink pass's
+// same-book link (maintenance.relink-pre-fix-imports), which writes the link
+// itself.
+func WhyNotLinkable(cur *database.BookVersion, bookID, torrentHash string) string {
 	switch {
 	case cur == nil:
 		return "the version no longer exists"
-	case cur.BookID != params.BookID:
+	case cur.BookID != bookID:
 		return "the version now belongs to book " + cur.BookID
 	case cur.Status != database.BookVersionStatusActive && cur.Status != database.BookVersionStatusAlt:
 		return "the version is now " + cur.Status
-	case cur.TorrentHash != params.TorrentHash:
+	case cur.TorrentHash != torrentHash:
 		return "the version's torrent hash changed"
 	}
 	return ""

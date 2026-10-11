@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -752,7 +752,7 @@ func pfrRow(d *pfrDecision) repairs.Row {
 // Apply links one fresh would_link or same_book_version row (see the type
 // comment for the order of the hash, the locks and the write).
 func (f *relinkPreFixFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	store, vs, err := f.pfrStores()
+	_, vs, err := f.pfrStores()
 	if err != nil {
 		return err
 	}
@@ -820,7 +820,7 @@ func (f *relinkPreFixFixer) Apply(ctx context.Context, w *repairs.Writer, fresh 
 	entry := repairs.UndoEntry{ChangeType: undo.ChangeTypeBookFileVersionLink, Field: "book_file:" + fileID, Old: "", New: target.ID}
 	return w.JournalStep(bookID, entry, func() error {
 		if ld.class == pfrClassSameBook {
-			return pfrSameBook(store, ld, hash)
+			return pfrSameBook(vs, ld, hash)
 		}
 		return pfrAdopt(vs, ld, hash)
 	})
@@ -863,15 +863,26 @@ func pfrAdopt(vs versions.IngestStore, d *pfrDecision, hash string) error {
 
 // pfrSameBook links the row to the version of its own book that holds its
 // torrent, in one compare-and-set: the row must still name no version, still
-// belong to the book and still carry the planned torrent hash and path. The
+// belong to the book and still carry the planned torrent hash and path, and
+// the version, re-read inside the write, must still be a live version of the
+// book carrying that torrent (versions.WhyNotLinkable: the trash handler takes
+// no lock, and once linked, purging the version deletes this file too). The
 // identity hash computed before the locks is stored in the same write when
-// the row still has none.
-func pfrSameBook(store OpsStore, d *pfrDecision, hash string) error {
+// the row still has none. Both reads are on the IngestStore view, which
+// carries ModifyBookFile and GetBookVersion; OpsStore has no version reads.
+func pfrSameBook(vs versions.IngestStore, d *pfrDecision, hash string) error {
 	fl := d.file
-	moved := false
-	row, err := store.ModifyBookFile(fl.BookID, fl.ID, func(r *database.BookFile) error {
+	moved, versionWhy := false, ""
+	row, err := vs.ModifyBookFile(fl.BookID, fl.ID, func(r *database.BookFile) error {
 		if r.VersionID != "" || r.DelugeHash != fl.DelugeHash || r.FilePath != fl.FilePath {
 			moved = true
+			return database.ErrSkipBookFileWrite
+		}
+		cur, gerr := vs.GetBookVersion(d.target.ID)
+		if gerr != nil {
+			return fmt.Errorf("re-read version %s: %w", d.target.ID, gerr)
+		}
+		if versionWhy = versions.WhyNotLinkable(cur, fl.BookID, fl.DelugeHash); versionWhy != "" {
 			return database.ErrSkipBookFileWrite
 		}
 		r.VersionID = d.target.ID
@@ -888,6 +899,9 @@ func pfrSameBook(store OpsStore, d *pfrDecision, hash string) error {
 	}
 	if moved {
 		return fmt.Errorf("%w: %w", repairs.ErrChangedSincePlan, errPreFixRowMoved)
+	}
+	if versionWhy != "" {
+		return fmt.Errorf("%w: version %s: %s", repairs.ErrChangedSincePlan, d.target.ID, versionWhy)
 	}
 	return nil
 }
