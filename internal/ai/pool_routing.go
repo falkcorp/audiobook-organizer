@@ -1,5 +1,5 @@
 // file: internal/ai/pool_routing.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 146b51bb-eb0a-45ab-953b-1cc0c095646e
 // last-edited: 2026-10-11
 
@@ -17,7 +17,7 @@ import (
 
 // Pool routing (design doc 2026-08-28, rollout step 2).
 //
-// When config.AIEndpointsRouting is on, two call sites stop resolving their
+// When config.AIEndpointsRouting is on, these call sites stop resolving their
 // backend from the legacy scalars and select an ai_endpoints row through
 // internal/aidispatch instead:
 //
@@ -25,6 +25,8 @@ import (
 //     library.ai-parse op (internal/scanner newAIParser).
 //   - embed.text: EmbeddingClient.WithPoolRouting, installed by the
 //     embedclient service in local embedding mode.
+//   - llm.cover_art_vision: RoutedCoverTextReader (cover_text.go), which
+//     reads cover text on local rows first and cloud rows as a fallback.
 //
 // Selection is the dispatcher's: enabled rows that tick the capability
 // (default-deny), priority order, free-slot assignment under each row's
