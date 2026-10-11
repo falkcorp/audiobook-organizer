@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.7.1
+// version: 1.8.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -42,6 +42,8 @@ import { dupesLane } from './lanes/dupes';
 import {
   DEDUP_SHORTCUTS,
   PAGE_SIZE_OPTIONS,
+  DEDUP_LAYERS,
+  type DedupLayer,
   type DedupStatusFilter,
   type DupesLane,
 } from './lanes/useDupesLane';
@@ -55,8 +57,23 @@ const STATUSES: { value: DedupStatusFilter; label: string }[] = [
   { value: '', label: 'All' },
 ];
 
+const LAYER_LABELS: Record<DedupLayer, string> = {
+  exact: 'Exact',
+  acoustid: 'Acoustic',
+  embedding: 'Embedding',
+};
+
 /** A filter-scoped bulk action awaiting confirmation. */
-type PendingBulk = 'mergeAllFiltered' | 'dismissAllFiltered';
+type PendingBulk =
+  | 'mergeAllFiltered'
+  | 'keepAAllFiltered'
+  | 'keepBAllFiltered'
+  | 'dismissAllFiltered';
+
+/** Side A is the older record (smaller ULID); B is the newer. */
+function keepSideNoun(type: PendingBulk): 'older' | 'newer' {
+  return type === 'keepAAllFiltered' ? 'older' : 'newer';
+}
 
 export interface DupesPanelProps {
   dupes: DupesLane;
@@ -188,6 +205,36 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
                       else next.set('band', b);
                       setSearchParams(next, { replace: true });
                     }}
+                  />
+                ))}
+              </Stack>
+            </Box>
+
+            <Box>
+              <Typography variant="overline" color="text.secondary">
+                Layer
+              </Typography>
+              <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap', mt: 0.5 }}>
+                <Chip
+                  label="All layers"
+                  size="small"
+                  data-testid="layer-chip-all"
+                  color={dupes.filters.layer === null ? 'primary' : 'default'}
+                  variant={dupes.filters.layer === null ? 'filled' : 'outlined'}
+                  onClick={() => dupes.setFilters({ layer: null })}
+                />
+                {DEDUP_LAYERS.map((l) => (
+                  // The count is the pending number from the stats the lane
+                  // already fetched; clicking the chip opens exactly those
+                  // rows, and clicking the active chip clears the filter.
+                  <Chip
+                    key={l}
+                    label={`${LAYER_LABELS[l]} (${dupes.pendingByLayer[l].toLocaleString()})`}
+                    size="small"
+                    data-testid={`layer-chip-${l}`}
+                    color={dupes.filters.layer === l ? 'primary' : 'default'}
+                    variant={dupes.filters.layer === l ? 'filled' : 'outlined'}
+                    onClick={() => dupes.setFilters({ layer: dupes.filters.layer === l ? null : l })}
                   />
                 ))}
               </Stack>
@@ -390,6 +437,26 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
           </Button>
         )}
 
+        {/* Bulk keep-side over the whole filter. Pending only: the buttons are
+            absent under any other status because the server refuses them, and
+            the dispatch guard refuses too. A is the older record. */}
+        {dupes.filters.status === 'pending' &&
+          (['keepAAllFiltered', 'keepBAllFiltered'] as const).map((type) => (
+            <Tooltip key={type} title={dupes.mergeAllFilteredDisabledReason ?? ''}>
+              <span>
+                <Button
+                  size="small"
+                  color="warning"
+                  data-testid={type === 'keepAAllFiltered' ? 'keep-older-all' : 'keep-newer-all'}
+                  disabled={Boolean(dupes.mergeAllFilteredDisabledReason) || dupes.busy}
+                  onClick={() => setPendingBulk(type)}
+                >
+                  {dupes.verbs[type]} (all {dupes.total.toLocaleString()})
+                </Button>
+              </span>
+            </Tooltip>
+          ))}
+
         <Box sx={{ ml: 'auto' }}>
           {/* Disabled controls do not fire pointer events, so the tooltip needs
               a wrapper to have something to attach to -- same pattern the
@@ -421,13 +488,17 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
         <DialogTitle>
           {pendingBulk === 'dismissAllFiltered'
             ? `Dismiss all ${bulkCountLabel}matching pairs?`
-            : `Merge all ${bulkCountLabel}matching pairs?`}
+            : pendingBulk === 'keepAAllFiltered' || pendingBulk === 'keepBAllFiltered'
+              ? `Keep the ${keepSideNoun(pendingBulk)} record of all ${bulkCountLabel}matching pairs?`
+              : `Merge all ${bulkCountLabel}matching pairs?`}
         </DialogTitle>
         <DialogContent>
           <DialogContentText>
             {pendingBulk === 'dismissAllFiltered'
               ? 'Every pending pair matching the current filter, on every page, is marked "not a duplicate".'
-              : 'Every pair matching the current filter, on every page, is linked into a version group. This cannot be undone.'}{' '}
+              : pendingBulk === 'keepAAllFiltered' || pendingBulk === 'keepBAllFiltered'
+                ? `Keeps the ${keepSideNoun(pendingBulk)} record of every one of the ${confirmedN !== null ? confirmedN.toLocaleString() : '…'} matching pairs and links the other as a version. This cannot be undone.`
+                : 'Every pair matching the current filter, on every page, is linked into a version group. This cannot be undone.'}{' '}
             The server re-evaluates the filter when it runs and reports how many it actually
             changed; hand-pinned pairs are skipped and listed as failures. If the number of matching
             pairs changes before it runs, nothing is changed and you are asked again.
@@ -457,7 +528,13 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               }
             }}
           >
-            {pendingBulk === 'dismissAllFiltered' ? 'Dismiss' : 'Merge'}
+            {pendingBulk === 'dismissAllFiltered'
+              ? 'Dismiss'
+              : pendingBulk === 'keepAAllFiltered'
+                ? 'Keep older'
+                : pendingBulk === 'keepBAllFiltered'
+                  ? 'Keep newer'
+                  : 'Merge'}
             {confirmedN !== null ? ` ${confirmedN.toLocaleString()}` : ''}
           </Button>
         </DialogActions>

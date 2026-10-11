@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 import {
   startTransition,
@@ -103,9 +103,29 @@ export function filterChangedMessage(matched: number): string {
 
 export type DedupStatusFilter = 'pending' | 'merged' | 'dismissed' | '';
 
+/**
+ * The candidate layers the lane can filter to: the three the retired Exact,
+ * Acoustic and Embedding tabs each showed. Sent verbatim as the `layer` query
+ * parameter of the list and bulk endpoints (and matched against the stats
+ * rows' `layer`), so these are the server's own strings.
+ */
+export type DedupLayer = 'exact' | 'acoustid' | 'embedding';
+export const DEDUP_LAYERS: readonly DedupLayer[] = ['exact', 'acoustid', 'embedding'];
+
+/** A URL value as a layer: anything that is not a known layer is null, never passed on. */
+export function parseDedupLayer(value: string | null | undefined): DedupLayer | null {
+  return DEDUP_LAYERS.find((l) => l === value) ?? null;
+}
+
 export interface DupesFilters {
   /** Server-side. */
   band: DedupBand | null;
+  /**
+   * Server-side, and sent to the bulk endpoints too. Seeded from `?layer=` once
+   * (see DupesUrlFilters) and then owned by this hook: clicking a layer chip
+   * does not write the URL.
+   */
+  layer: DedupLayer | null;
   /** Server-side. */
   status: DedupStatusFilter;
   /** Server-side, but NOT expressible to the bulk endpoint -- see above. */
@@ -146,11 +166,18 @@ export type LocalDupesFilters = Omit<DupesFilters, 'band' | 'entityId'>;
 export interface DupesUrlFilters {
   band: DedupBand | null;
   entityId: string | null;
+  /**
+   * A SEED, unlike the two above: read once, on the hook's first render, to
+   * start the layer filter. It is never mirrored -- a later change to this value
+   * is ignored and the layer chips never write it back to the URL.
+   */
+  layer?: DedupLayer | null;
 }
 
-const NO_URL_FILTERS: DupesUrlFilters = { band: null, entityId: null };
+const NO_URL_FILTERS: DupesUrlFilters = { band: null, entityId: null, layer: null };
 
 const INITIAL_FILTERS: LocalDupesFilters = {
+  layer: null,
   status: 'pending',
   bothUnmatched: false,
   search: '',
@@ -189,6 +216,12 @@ export interface DupesLane {
    * promises counts it cannot contain.
    */
   pendingTotal: number;
+  /**
+   * Pending BOOK pairs per layer, from the same stats the hook already fetches
+   * (no extra request). Unfiltered by every other control, like `pendingTotal`;
+   * each count is what the matching layer chip opens.
+   */
+  pendingByLayer: Record<DedupLayer, number>;
 
   /**
    * The explicit selection. EMPTY in all-matching mode -- read
@@ -271,7 +304,12 @@ export function useDupesLane(
   const [stats, setStats] = useState<DedupStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [localFilters, setFiltersState] = useState<LocalDupesFilters>(INITIAL_FILTERS);
+  // `layer` is seeded from the URL here, once, and never mirrored: the lazy
+  // initialiser runs on the first render only.
+  const [localFilters, setFiltersState] = useState<LocalDupesFilters>(() => ({
+    ...INITIAL_FILTERS,
+    layer: urlFilters.layer ?? null,
+  }));
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(DEFAULT_PAGE_SIZE);
   const [focusedIndexState, setFocusedIndex] = useState(0);
@@ -367,6 +405,7 @@ export function useDupesLane(
       include_books: true,
     };
     if (filters.band) params.band = filters.band;
+    if (filters.layer) params.layer = filters.layer;
     if (filters.bothUnmatched) params.both_unmatched = true;
     if (filters.entityId) params.entity_id = filters.entityId;
     if (debouncedSearch.trim()) params.q = debouncedSearch.trim();
@@ -424,6 +463,7 @@ export function useDupesLane(
     active,
     filters.status,
     filters.band,
+    filters.layer,
     filters.bothUnmatched,
     filters.entityId,
     debouncedSearch,
@@ -628,6 +668,16 @@ export function useDupesLane(
     [stats]
   );
 
+  const pendingByLayer = useMemo(() => {
+    const counts: Record<DedupLayer, number> = { exact: 0, acoustid: 0, embedding: 0 };
+    for (const s of stats) {
+      if (s.entity_type !== 'book' || s.status !== 'pending') continue;
+      const layer = parseDedupLayer(s.layer);
+      if (layer) counts[layer] += s.count;
+    }
+    return counts;
+  }, [stats]);
+
   const mergeAllFilteredDisabledReason = filters.bothUnmatched
     ? MERGE_ALL_BLOCKED_REASON
     : filters.status !== 'pending'
@@ -671,13 +721,16 @@ export function useDupesLane(
       // Filter parity with what is on screen. Omitting either of these
       // is what made this action merge the whole library.
       band: filters.band ?? undefined,
+      // Without this the bulk actions would act on every layer while the
+      // reviewer is looking at one -- the same failure `band` once caused.
+      layer: filters.layer ?? undefined,
       entity_id: filters.entityId ?? undefined,
       // The SETTLED term -- the one the visible rows were fetched with.
       // Sending filters.search could transmit a term the reviewer typed
       // but has not seen results for.
       q: appliedSearch.trim() || undefined,
     }),
-    [filters.band, filters.entityId, appliedSearch]
+    [filters.band, filters.layer, filters.entityId, appliedSearch]
   );
 
   /**
@@ -704,6 +757,7 @@ export function useDupesLane(
     totalMatching: matchingCount.totalOr(total),
     resetKey: [
       filters.status,
+      filters.layer ?? '',
       urlFilterKey,
       filters.bothUnmatched ? '1' : '0',
       debouncedSearch,
@@ -939,6 +993,17 @@ export function useDupesLane(
           return;
 
         case 'mergeAllFiltered':
+        case 'keepAAllFiltered':
+        case 'keepBAllFiltered': {
+          // keepA/keepB are the same endpoint as mergeAllFiltered with an
+          // explicit side, so they share its guard and its expected_total check.
+          // Side A is the older record (smaller ULID, embedding_store.go).
+          const keepSide =
+            action.type === 'keepAAllFiltered'
+              ? ('a' as const)
+              : action.type === 'keepBAllFiltered'
+                ? ('b' as const)
+                : undefined;
           // The guard lives HERE, not only on the button. A disabled control is
           // a UI affordance; this is the invariant. Anything that can dispatch
           // -- a command menu, a shortcut, a future keybinding -- has to hit the
@@ -953,6 +1018,7 @@ export function useDupesLane(
             try {
               const result = await api.bulkLinkDedupCandidates({
                 ...bulkFilter,
+                ...(keepSide ? { keep_side: keepSide } : {}),
                 // The count the reviewer confirmed: 409 if the filter moved.
                 expected_total: action.expectedTotal,
               });
@@ -969,6 +1035,7 @@ export function useDupesLane(
             }
           })();
           return;
+        }
 
         case 'dismissAllFiltered':
           // Same rule as mergeAllFiltered: the guard is the invariant, the
@@ -1168,6 +1235,7 @@ export function useDupesLane(
     filters,
     setFilters,
     pendingTotal,
+    pendingByLayer,
     selectedIds,
     selection,
     selectAllMatchingDisabledReason,

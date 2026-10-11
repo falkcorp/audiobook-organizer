@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -68,7 +68,7 @@ import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
 import { MetadataPanel } from './MetadataPanel';
 import { ReplaceConfirmDialog } from './ReplaceConfirmDialog';
-import { useDupesLane } from './lanes/useDupesLane';
+import { parseDedupLayer, useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
 import { useRepairsLane } from './lanes/useRepairsLane';
@@ -189,6 +189,9 @@ export function ReviewWorkspace() {
     () => ({
       band: searchParams.get('band') as DedupBand | null,
       entityId: searchParams.get('book'),
+      // A seed: the hook reads it on its first render and never mirrors it. An
+      // unknown value becomes null rather than reaching the server.
+      layer: parseDedupLayer(searchParams.get('layer')),
     }),
     [searchParams],
   );

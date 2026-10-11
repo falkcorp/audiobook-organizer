@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 2.2.0
+// version: 2.3.0
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
-// last-edited: 2026-09-01
+// last-edited: 2026-10-11
 //
 // Covers the signal chips on a dupes row, plus (Task 8) the dual-path display
 // wired into BookSide.
@@ -267,5 +267,50 @@ describe('hover hints that replaced MUI Tooltips', () => {
     // One per side of the pair.
     const chips = screen.getAllByTitle('Show files in this book');
     expect(chips).toHaveLength(2);
+  });
+});
+
+describe('side chips', () => {
+  it('iTunes chip renders for an iTunes book', () => {
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', itunes_persistent_id: 'PID0001' },
+        book_b: { id: 'b1', title: 'Book B', file_path: '/lib/books/itunes/Author A/Book B.m4b' },
+      } as Partial<DedupCandidate>),
+    ]);
+    // Both sides qualify: one by persistent id, one by living under books/itunes.
+    expect(screen.getAllByTestId('itunes-chip')).toHaveLength(2);
+  });
+
+  it('iTunes chip is absent for an ordinary book', () => {
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', file_path: '/lib/books/Author A/Book A.m4b' },
+        book_b: { id: 'b1', title: 'Book B', file_path: '/lib/books/itunes-notes/Book B.m4b' },
+      } as Partial<DedupCandidate>),
+    ]);
+    expect(screen.queryByTestId('itunes-chip')).toBeNull();
+  });
+
+  it('partial fp chip renders below 100', () => {
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', book_sig_coverage_pct: 62 },
+        book_b: { id: 'b1', title: 'Book B', book_sig_coverage_pct: 100 },
+      } as Partial<DedupCandidate>),
+    ]);
+    const chips = screen.getAllByTestId('partial-fp-chip');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent('partial fp 62%');
+  });
+
+  it('partial fp chip is absent at full or unknown coverage', () => {
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', book_sig_coverage_pct: null },
+        book_b: { id: 'b1', title: 'Book B' },
+      } as Partial<DedupCandidate>),
+    ]);
+    expect(screen.queryByTestId('partial-fp-chip')).toBeNull();
   });
 });

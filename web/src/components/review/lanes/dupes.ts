@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/dupes.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b1d4e93-2c05-48a6-b39f-0e6a2c85f174
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 import type { LaneDescriptor } from './types';
 
@@ -33,6 +33,11 @@ export const dupesLane = {
     // narrowed to one author must not think it is about to touch the library.
     mergeAllFiltered: 'Merge everything matching this filter',
     dismissAllFiltered: 'Dismiss everything matching this filter',
+    // Side A is the older record: the pair is canonicalised with the smaller
+    // ULID as A (internal/database/embedding_store.go). Owner decision D22: the
+    // bulk keep-side is labelled older/newer; a server `recommended` is later.
+    keepAAllFiltered: 'Keep the older record',
+    keepBAllFiltered: 'Keep the newer record',
   },
   emptyMessage: 'No duplicate candidates. Run a scan from the Dedup menu to look for more.',
 } satisfies LaneDescriptor<'dupes'>;

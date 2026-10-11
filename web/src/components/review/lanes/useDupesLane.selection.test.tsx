@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 //
 // Select-page, "Select all N matching" across pages, and shift-range selection
 // on the dedup review lane (owner request 2026-10-06), through the lane hook
@@ -20,6 +20,7 @@ import {
   MERGE_ALL_BLOCKED_REASON,
   SELECT_ALL_MATCHING_PENDING_ONLY_REASON,
   useDupesLane,
+  type DedupLayer,
   type DupesUrlFilters,
 } from './useDupesLane';
 
@@ -196,17 +197,17 @@ describe('useDupesLane selection', () => {
   });
 });
 
-function Harness() {
-  const dupes = useDupesLane(toast, true, { band: null, entityId: null });
+function Harness({ layer = null }: { layer?: DedupLayer | null }) {
+  const dupes = useDupesLane(toast, true, { band: null, entityId: null, layer });
   return (
     <DupesPanel dupes={dupes} viewMode="compact" expandedId={null} onToggleExpand={() => {}} />
   );
 }
 
-function renderPanel() {
+function renderPanel(layer: DedupLayer | null = null) {
   return render(
     <MemoryRouter>
-      <Harness />
+      <Harness layer={layer} />
     </MemoryRouter>
   );
 }
@@ -394,5 +395,88 @@ describe('DupesPanel select-all integration', () => {
     await user.keyboard('{Shift>}[Space]{/Shift}');
     expect(screen.getByTestId('dupes-selected-count')).toHaveTextContent('5 selected');
     expect(box(4)).toBeChecked();
+  });
+
+  it('cross-page selection under layer=acoustid counts, confirms and sends that layer', async () => {
+    const user = userEvent.setup();
+    renderPanel('acoustid');
+    await screen.findByTestId('dupes-row-5');
+    expect(screen.getByTestId('layer-chip-acoustid')).toHaveClass('MuiChip-filled');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all 5 on this page' }));
+    await user.click(await screen.findByTestId('dupes-select-all-matching'));
+    await user.click(screen.getByTestId('merge-selected'));
+    const dialog = await screen.findByTestId('dupes-bulk-confirm');
+    await waitFor(() => expect(dialog).toHaveTextContent(`Merge all ${COUNT} matching pairs?`));
+    await user.click(within(dialog).getByTestId('dupes-bulk-confirm-btn'));
+
+    await waitFor(() => expect(api.bulkLinkDedupCandidates).toHaveBeenCalledTimes(1));
+    expect(api.countBulkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ layer: 'acoustid' }),
+      expect.anything()
+    );
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ layer: 'acoustid', expected_total: COUNT })
+    );
+  });
+
+  it('layer chips show pending counts and a click filters the list and returns to page 1', async () => {
+    vi.mocked(api.getDedupStats).mockResolvedValue({
+      stats: [
+        { entity_type: 'book', layer: 'acoustid', status: 'pending', count: 12 },
+        { entity_type: 'book', layer: 'exact', status: 'pending', count: 4 },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    expect(await screen.findByTestId('layer-chip-acoustid')).toHaveTextContent('Acoustic (12)');
+    expect(screen.getByTestId('layer-chip-exact')).toHaveTextContent('Exact (4)');
+    expect(screen.getByTestId('layer-chip-embedding')).toHaveTextContent('Embedding (0)');
+    expect(screen.getByTestId('layer-chip-all')).toHaveTextContent('All layers');
+
+    await user.click(screen.getByTestId('layer-chip-acoustid'));
+    await waitFor(() =>
+      expect(api.getDedupCandidates).toHaveBeenLastCalledWith(
+        expect.objectContaining({ layer: 'acoustid', offset: 0 }),
+        expect.anything()
+      )
+    );
+    // Clicking the active chip clears the filter.
+    await user.click(screen.getByTestId('layer-chip-acoustid'));
+    await waitFor(() =>
+      expect(vi.mocked(api.getDedupCandidates).mock.calls.at(-1)?.[0]).not.toHaveProperty('layer')
+    );
+  });
+
+  it('keep-older and keep-newer are offered under Pending only, and the dialog states N', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    expect(screen.getByTestId('keep-older-all')).toHaveTextContent(
+      `Keep the older record (all ${TOTAL})`
+    );
+    expect(screen.getByTestId('keep-newer-all')).toHaveTextContent(
+      `Keep the newer record (all ${TOTAL})`
+    );
+
+    await user.click(screen.getByTestId('keep-older-all'));
+    const dialog = await screen.findByTestId('dupes-bulk-confirm');
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(
+        `Keeps the older record of every one of the ${COUNT} matching pairs and links the other as a version. This cannot be undone.`
+      )
+    );
+    await user.click(within(dialog).getByTestId('dupes-bulk-confirm-btn'));
+    await waitFor(() => expect(api.bulkLinkDedupCandidates).toHaveBeenCalledTimes(1));
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ keep_side: 'a', expected_total: COUNT })
+    );
+
+    // Under Merged they are absent (the dialog's close transition hides the page first).
+    await user.click(await screen.findByRole('combobox', { name: 'Status' }));
+    await user.click(await screen.findByRole('option', { name: 'Merged' }));
+    await waitFor(() => expect(screen.queryByTestId('keep-older-all')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('keep-newer-all')).not.toBeInTheDocument();
   });
 });

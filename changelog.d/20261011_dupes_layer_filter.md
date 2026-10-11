@@ -1,0 +1,3 @@
+- The Duplicates lane now has a layer filter: All layers, Exact, Acoustic and Embedding chips, each showing its pending count, replacing what the Acoustic, Embedding and Version Groups tabs offered. `?layer=acoustid` (or `exact` / `embedding`) opens the lane already filtered; the chips never write the address back.
+- New bulk buttons "Keep the older record (all N)" and "Keep the newer record (all N)" act on everything the current filter matches (Pending only), with a confirm dialog that states N and that it cannot be undone. Side A is the older record.
+- Each side of a pair now shows an "iTunes" chip for iTunes copies and a "partial fp N%" chip when the book's audio fingerprint covers less than the whole book.

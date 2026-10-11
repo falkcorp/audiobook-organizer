@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-08
+// last-edited: 2026-10-11
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -203,6 +203,28 @@ describe('the lane comes from the URL', () => {
   it('infers dupes from a ?band= deep link', async () => {
     renderWorkspace(['/review?band=HIGH']);
     expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+  });
+
+  it('?layer=acoustid seeds the filter', async () => {
+    renderWorkspace(['/review?lane=dupes&layer=acoustid']);
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.getDedupCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ layer: 'acoustid' }),
+        expect.anything()
+      )
+    );
+    // Seeded on the first render: one fetch, not an unfiltered one then a corrected one.
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('layer-chip-acoustid')).toHaveClass('MuiChip-filled');
+  });
+
+  it('an unknown ?layer= is dropped rather than sent to the server', async () => {
+    renderWorkspace(['/review?lane=dupes&layer=bogus']);
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    await waitFor(() => expect(api.getDedupCandidates).toHaveBeenCalled());
+    expect(vi.mocked(api.getDedupCandidates).mock.calls[0][0]).not.toHaveProperty('layer');
+    expect(screen.getByTestId('layer-chip-all')).toHaveClass('MuiChip-filled');
   });
 
   it('falls back to metadata when ?lane= names something that is not a lane', async () => {
