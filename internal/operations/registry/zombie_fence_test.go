@@ -1,5 +1,5 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
 // last-edited: 2026-10-10
 
@@ -223,8 +223,15 @@ func TestZombie_HoldsKeyUntilGoroutineExits(t *testing.T) {
 	if n := h.r.ZombieCount(); n != 0 {
 		t.Fatalf("ZombieCount = %d after exit, want 0", n)
 	}
-	if keys := h.r.HeldConcurrencyKeysForTest(); len(keys) != 0 && h.store.statusOf(second) == "queued" {
-		t.Fatalf("key still held after the zombie exited: %v", keys)
+	// Ask who holds k, not whether k is held: the background dispatcher can
+	// claim second (and with it k) the moment the zombie frees it, while
+	// second's row still reads "queued" until its worker's compare-and-set.
+	// A key-set check could not tell that fresh claim from the zombie still
+	// holding k, and failed about 1 run in 20.
+	for key, holder := range h.r.HeldConcurrencyKeysForTest() {
+		if holder == first {
+			t.Fatalf("key %q still held by the zombie %s after its goroutine exited", key, first)
+		}
 	}
 	h.r.DispatchCycleForTest(t.Context())
 	if !h.r.IsRunning(second) && h.store.statusOf(second) == "queued" {
@@ -291,15 +298,15 @@ func TestZombie_ScanKeyUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.start(t, s.releaseRun)
-	h.zombify(t, def.ID, s)
+	zombieID := h.zombify(t, def.ID, s)
 	resumed, err := h.r.EnqueueOp(t.Context(), def.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.stayQueued(t, resumed, 20)
-	keys := h.r.HeldConcurrencyKeysForTest()
-	if len(keys) != 1 || keys[0] != registry.ScanStandDownDefIDForTest {
-		t.Fatalf("held keys = %v, want exactly [%s]", keys, registry.ScanStandDownDefIDForTest)
+	held := h.r.HeldConcurrencyKeysForTest()
+	if len(held) != 1 || held[registry.ScanStandDownDefIDForTest] != zombieID {
+		t.Fatalf("held keys = %v, want exactly {%s: %s} (the zombie)", held, registry.ScanStandDownDefIDForTest, zombieID)
 	}
 	s.releaseRun()
 	awaitStatus(t, h.store, resumed, "completed", 5*time.Second)
