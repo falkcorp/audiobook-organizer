@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.38.0
+// version: 1.39.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-10
 //
@@ -120,6 +120,28 @@ export function unpinnedRefusalMessage(count: number): string {
     'changed since. Nothing was applied: select all again with fewer matching books (at most ' +
     'the bulk apply limit), or apply from the pages the books are on.'
   );
+}
+
+/** The toast after a refused action re-listed "select all": what changed in the selection. */
+export function relistSummary(left: number, joined: number): string {
+  const parts: string[] = [];
+  if (left > 0) {
+    parts.push(
+      left === 1
+        ? '1 selected book left the queue and was unselected'
+        : `${left.toLocaleString()} selected books left the queue and were unselected`
+    );
+  }
+  if (joined > 0) {
+    parts.push(
+      joined === 1
+        ? '1 book joined the queue and was not selected'
+        : `${joined.toLocaleString()} books joined the queue and were not selected`
+    );
+  }
+  return parts.length === 0
+    ? 'The matching books were listed again; your selection is unchanged. Apply again when ready.'
+    : `The matching books were listed again: ${parts.join('; ')}. Apply again when ready.`;
 }
 
 export function chunk<T>(items: T[], size: number): T[][] {
@@ -1623,6 +1645,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // debounce, the request, or a request that failed), and a bulk action over
   // them is refused (refuseUnsettled).
   const landedKeyRef = useRef<string | null>(null);
+  // The filterQueryKey whose page request failed (null after a success), so a
+  // refused bulk action can say the page did not load rather than "has not
+  // caught up".
+  const failedKeyRef = useRef<string | null>(null);
   // TODO(02-PR15): docs/audits/2026-10-09-review-tab-heap-snapshot.md is the
   // Review tab heap-snapshot note this effect chain was to be checked against
   // for a closure retaining an old results array. Its Findings section is
@@ -1690,6 +1716,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           }
           setPageRows(rows);
           landedKeyRef.current = filterQueryKey;
+          failedKeyRef.current = null;
           setServerTitleError(null);
           setLoading(false);
         })
@@ -1708,6 +1735,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           // a skipped list the server will not take) is a page error: showing
           // it under the Title box would send the reviewer to edit the wrong
           // thing.
+          failedKeyRef.current = filterQueryKey;
           const refused = err as { status?: number; data?: { field?: unknown } } | null;
           if (refused?.status === 400 && refused.data?.field === 'q') {
             setServerTitleError(message);
@@ -2119,9 +2147,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const applyPinsRef = useRef<Map<string, CandidatePin>>(new Map());
 
   // The rows the lane can pin from and look up by id: every row in index mode,
-  // the current page in page mode. A book selected across pages with "Select
-  // all N matching" is not among them in page mode, so a bulk apply pins it
-  // with the hashless owner marker (see bulkPinsFor).
+  // the current page in page mode. In page mode a bulk apply does not read
+  // them for books off the page: it takes each pin from pagePinsFor (the page
+  // row, the pin captured on screen, or the select-all list's pin) and refuses
+  // a book with none, so page mode never sends the hashless owner marker.
   const knownRows = pageMode ? pageRows : results;
 
   // The pin for the candidate one row is showing right now. A row with no
@@ -2472,71 +2501,127 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     ids: string[];
     pins: Record<string, Omit<CandidatePin, 'origin'>> | null;
     pageGeneration: string | null;
+    /** A refused action asked for the list again and the answer is not back. */
+    relisting?: boolean;
   } | null>(null);
   const matchingIdSet = useMemo(
     () => (matchingIds ? new Set(matchingIds.ids) : null),
     [matchingIds]
   );
 
+  // Page mode: the pin of every selected book seen on screen (see the effect
+  // that fills it, below).
+  const tickedPinsRef = useRef<Map<string, CandidatePin | null>>(new Map());
+
   // Page mode: lists every id the current filters match, with pins, and adds
   // them to the selection. A filter change while the request is out discards
   // it: its ids answer a question the reviewer no longer asked.
+  //
+  // 'add' is the reviewer's own "Select all N matching": every listed id is
+  // added. 'intersect' is the re-list after a refusal (refuseStaleSelectAll):
+  // it NEVER widens the selection. A book the reviewer unticked after
+  // selecting all stays unticked, a book that joined the queue since is not
+  // added, and a book of the old list that left the queue is unselected; the
+  // toast counts the last two. Hand-picked books outside the old list are
+  // kept as they are.
   const selectAllSeqRef = useRef(0);
-  const listAllMatching = useCallback(() => {
-    const seq = ++selectAllSeqRef.current;
-    const { params } = latestQueryRef.current;
-    const key = latestQueryKeyRef.current;
-    api
-      .getReviewMatchingIds(params, undefined, { pins: true })
-      .then((data) => {
-        if (seq !== selectAllSeqRef.current || key !== latestQueryKeyRef.current) return;
-        setMatchingIds({
-          key,
-          ids: data.ids,
-          // No pins field and no pins_omitted is a server that does not serve
-          // pins: treated as "no pin for any of them", so an apply is refused
-          // rather than sent hashless.
-          pins: data.pins_omitted ? null : (data.pins ?? null),
-          pageGeneration: generationRef.current,
+  const listAllMatching = useCallback(
+    (mode: 'add' | 'intersect' = 'add', previous?: ReadonlySet<string>) => {
+      const seq = ++selectAllSeqRef.current;
+      const { params } = latestQueryRef.current;
+      const key = latestQueryKeyRef.current;
+      api
+        .getReviewMatchingIds(params, undefined, { pins: true })
+        .then((data) => {
+          if (seq !== selectAllSeqRef.current) return;
+          if (key !== latestQueryKeyRef.current) {
+            // The filters changed while a re-list was out: drop the old list
+            // rather than keep refusing on it. Its books then have no list pin
+            // and are refused as unpinned, never sent without one.
+            if (mode === 'intersect') setMatchingIds(null);
+            return;
+          }
+          setMatchingIds({
+            key,
+            ids: data.ids,
+            // No pins field and no pins_omitted is a server that does not serve
+            // pins: treated as "no pin for any of them", so an apply is refused
+            // rather than sent hashless.
+            pins: data.pins_omitted ? null : (data.pins ?? null),
+            pageGeneration: generationRef.current,
+          });
+          if (mode === 'add') {
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              data.ids.forEach((id) => next.add(id));
+              return next;
+            });
+            return;
+          }
+          const old = previous ?? new Set<string>();
+          const listed = new Set(data.ids);
+          let left = 0;
+          selectedIdsRef.current.forEach((id) => {
+            if (old.has(id) && !listed.has(id)) left += 1;
+          });
+          let joined = 0;
+          data.ids.forEach((id) => {
+            if (!old.has(id)) joined += 1;
+          });
+          setSelectedIds((prev) => {
+            const next = new Set([...prev].filter((id) => !old.has(id) || listed.has(id)));
+            return next.size === prev.size ? prev : next;
+          });
+          toast(relistSummary(left, joined), 'info');
+        })
+        .catch(() => {
+          if (seq !== selectAllSeqRef.current) return;
+          if (mode === 'intersect') setMatchingIds(null);
+          toast('Could not list the matching books.', 'error');
         });
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          data.ids.forEach((id) => next.add(id));
-          return next;
-        });
-      })
-      .catch(() => {
-        if (seq !== selectAllSeqRef.current) return;
-        toast('Could not list the matching books.', 'error');
-      });
-  }, [toast]);
+    },
+    [toast]
+  );
 
   // A "select all" list is a statement about the queue as the page showed it
   // when the list arrived. If a page of another generation has landed since
   // (a refresh, a page turn after background writes), the list may name books
-  // that left the queue or miss ones that joined it, so an action over it is
-  // refused ONCE: the old list's books leave the selection (hand-picked ones
-  // stay), the list is fetched again for the current queue, and the next click
-  // goes through. This is about membership only. Staleness of each book's
-  // candidate is the pins' job: every applied book carries the pin it was
-  // listed or shown with, and the server refuses a pin whose candidate changed
+  // that left the queue or miss ones that joined it. So an action that relies
+  // on the list -- it holds a book that is in the list, is not on the page and
+  // was never on screen while selected (tickedPinsRef), i.e. whose only pin
+  // is the list's -- is refused ONCE while the list is fetched again and the
+  // selection narrowed to it (listAllMatching 'intersect', never widened); the
+  // next click goes through. Apply page, Apply high confidence and a group's
+  // Apply All send rows on the page, which carry fresh pins, so they never
+  // trip this. Membership only: each book's candidate staleness is the pins'
+  // job, and the server refuses a pin whose candidate changed
   // (stale_candidate), including after writes later than any page fetch.
   const refuseStaleSelectAll = useCallback(
     (ids: string[]): boolean => {
       if (!pageMode || !matchingIds || !matchingIdSet) return false;
+      const onPage = new Set(pageRows.map((r) => r.book.id));
+      const seen = tickedPinsRef.current;
+      const relies = ids.some((id) => matchingIdSet.has(id) && !onPage.has(id) && !seen.has(id));
+      if (!relies) return false;
+      if (matchingIds.relisting) {
+        toast(
+          'The matching books are still being listed again for the current queue; apply again in a moment.',
+          'warning'
+        );
+        return true;
+      }
       if (matchingIds.pageGeneration === generationRef.current) return false;
-      if (!ids.some((id) => matchingIdSet.has(id))) return false;
-      setMatchingIds(null);
-      setSelectedIds((prev) => new Set([...prev].filter((id) => !matchingIdSet.has(id))));
-      listAllMatching();
+      setMatchingIds({ ...matchingIds, relisting: true });
+      listAllMatching('intersect', matchingIdSet);
       toast(
         'The queue changed after you selected all, so the matching books are being listed again ' +
-          'for the current queue. Check the count, then apply again.',
+          'for the current queue. Your selection is only narrowed, never added to. Check it, then ' +
+          'apply again.',
         'warning'
       );
       return true;
     },
-    [pageMode, matchingIds, matchingIdSet, listAllMatching, toast]
+    [pageMode, matchingIds, matchingIdSet, pageRows, listAllMatching, toast]
   );
   // The remembered list belongs to a selection; an emptied selection (Clear,
   // an apply, a search) forgets it.
@@ -2565,6 +2650,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return true;
     }
     if (landedKeyRef.current !== filterQueryKey) {
+      if (failedKeyRef.current === filterQueryKey) {
+        toast(
+          'The page for the current filters did not load, so there is nothing current to act on. ' +
+            'Retry, or change the filters.',
+          'warning'
+        );
+        return true;
+      }
       toast(
         'The list has not caught up with the new filters yet; apply again once it has.',
         'warning'
@@ -2574,13 +2667,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     return false;
   }, [pageMode, filtersKey, filterQueryKey, toast]);
 
-  // Page mode: the pin of every book ticked while its row was on screen,
-  // captured then (null: the row had no candidate to pin). A bulk apply of a
+  // Page mode: the pin of every book that was selected while its row was on
+  // screen, as last shown (null: the row had no candidate to pin). A bulk apply of a
   // book on another page sends this pin, so the server still refuses it as
   // stale if its candidate has changed since; the index-mode equivalent is
   // bulkPinsFor reading `results`. Only this effect writes the map, and it is
   // bounded by the rows visited, not the selection.
-  const tickedPinsRef = useRef<Map<string, CandidatePin | null>>(new Map());
   useEffect(() => {
     if (!pageMode) return;
     const ticked = tickedPinsRef.current;
@@ -2591,9 +2683,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     for (const id of [...ticked.keys()]) {
       if (!selectedIds.has(id)) ticked.delete(id);
     }
+    // Every selected row on screen is (re)captured, so the pin is the
+    // candidate the reviewer saw LAST: a refresh that replaces a row's
+    // candidate while it is on the page replaces its pin too.
     for (const r of pageRows) {
       const id = r.book.id;
-      if (!selectedIds.has(id) || ticked.has(id)) continue;
+      if (!selectedIds.has(id)) continue;
       ticked.set(
         id,
         r.candidate && r.candidate_hash
