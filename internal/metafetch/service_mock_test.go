@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 )
 
 // ---------------------------------------------------------------------------
@@ -1078,10 +1079,12 @@ func TestServiceSetterEdgeCases(t *testing.T) {
 		assert.Nil(t, svc.dedupEngine)
 	})
 
-	t.Run("set_ol_store", func(t *testing.T) {
-		assert.Nil(t, svc.olStore)
-		svc.SetOLStore(nil)
-		assert.Nil(t, svc.olStore)
+	t.Run("set_ol_store_source", func(t *testing.T) {
+		assert.Nil(t, svc.liveOLStore())
+		svc.SetOLStoreSource(func() *openlibrary.OLStore { return nil })
+		assert.Nil(t, svc.liveOLStore())
+		svc.SetOLStoreSource(nil)
+		assert.Nil(t, svc.liveOLStore())
 	})
 
 	t.Run("set_activity_service", func(t *testing.T) {

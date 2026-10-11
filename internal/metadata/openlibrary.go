@@ -1,7 +1,7 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-13
+// last-edited: 2026-10-11
 
 package metadata
 
@@ -22,11 +22,17 @@ import (
 )
 
 // OpenLibraryClient handles metadata fetching from Open Library API.
-// When olStore is set, local dump data is checked before hitting the API.
+// When an Open Library store source is set, local dump data is checked before
+// hitting the API.
 type OpenLibraryClient struct {
 	httpClient *http.Client
 	baseURL    string
-	olStore    *openlibrary.OLStore
+	// olStoreSource returns the current local dump store, or nil when there is
+	// none. It is called on every lookup rather than the store being captured
+	// once: the store is closed and reopened at runtime (delete, factory reset,
+	// a close that timed out and recovered), and a client holding the old
+	// pointer would keep asking a store that refuses everything.
+	olStoreSource func() *openlibrary.OLStore
 }
 
 // NewOpenLibraryClient creates a new Open Library API client
@@ -52,9 +58,19 @@ func (c *OpenLibraryClient) Name() string {
 	return "Open Library"
 }
 
-// SetOLStore attaches a local Open Library dump store for local-first lookups.
-func (c *OpenLibraryClient) SetOLStore(store *openlibrary.OLStore) {
-	c.olStore = store
+// SetOLStoreSource attaches the source of the local Open Library dump store
+// used for local-first lookups. src is called on every lookup and returns nil
+// while there is no usable store; it must not block.
+func (c *OpenLibraryClient) SetOLStoreSource(src func() *openlibrary.OLStore) {
+	c.olStoreSource = src
+}
+
+// localStore is the dump store to try first, or nil.
+func (c *OpenLibraryClient) localStore() *openlibrary.OLStore {
+	if c.olStoreSource == nil {
+		return nil
+	}
+	return c.olStoreSource()
 }
 
 // editionToMetadata converts an OLEdition to BookMetadata.
@@ -231,12 +247,12 @@ func unambiguousValue(vals []string) string {
 
 // SearchByTitle searches for books by title. Checks local dump store first if available.
 func (c *OpenLibraryClient) SearchByTitle(ctx context.Context, title string) ([]BookMetadata, error) {
-	if c.olStore != nil {
-		editions, err := c.olStore.SearchByTitle(title)
+	if store := c.localStore(); store != nil {
+		editions, err := store.SearchByTitle(title)
 		if err == nil && len(editions) > 0 {
 			results := make([]BookMetadata, 0, len(editions))
 			for i := range editions {
-				results = append(results, editionToMetadata(&editions[i], c.olStore))
+				results = append(results, editionToMetadata(&editions[i], store))
 			}
 			slog.Debug("SearchByTitle found results from local dump", "resultsCount", len(results), "title", title)
 			return results, nil
@@ -306,10 +322,10 @@ func (c *OpenLibraryClient) SearchByTitleAndAuthor(ctx context.Context, title, a
 
 // GetBookByISBN fetches book details by ISBN. Checks local dump store first if available.
 func (c *OpenLibraryClient) GetBookByISBN(ctx context.Context, isbn string) (*BookMetadata, error) {
-	if c.olStore != nil {
-		ed, err := c.olStore.LookupByISBN(isbn)
+	if store := c.localStore(); store != nil {
+		ed, err := store.LookupByISBN(isbn)
 		if err == nil && ed != nil {
-			meta := editionToMetadata(ed, c.olStore)
+			meta := editionToMetadata(ed, store)
 			slog.Debug("GetBookByISBN found ISBN in local dump", "isbn", isbn)
 			return &meta, nil
 		}

@@ -1,6 +1,6 @@
 // file: internal/metafetch/register.go
-// version: 1.3.0
-// last-edited: 2026-08-19
+// version: 1.3.1
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -31,7 +31,7 @@ func init() {
 
 	// olservice — Open Library data-dump lifecycle wrapper. No build-time
 	// deps; the underlying OL store is opened lazily on first EnsureStore.
-	// metafetch.Service.PostInit pulls this to wire SetOLStore.
+	// metafetch.Service.PostInit pulls this to wire SetOLStoreSource.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "olservice",
 		Needs:  []string{},

@@ -1,11 +1,14 @@
 // file: internal/metafetch/openlibrary_close_recovery_test.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: 5e1c7a39-84d2-4b06-9f3a-c2d8e60b1a47
 // last-edited: 2026-10-11
 
 package metafetch
 
 import (
+	"compress/gzip"
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +17,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 )
 
@@ -39,6 +43,16 @@ func openStoreWithHeldIterator(t *testing.T, dir string) (*openlibrary.OLStore, 
 	return openlibrary.NewOLStoreOnEngine(gated, closeDB), it
 }
 
+// afterStragglerReleased gives the service the production drain timeout back
+// once the straggler is gone. The 50 ms used to force a timeout is shorter than
+// a real fsync on a loaded disk, which would fail a close that has nothing left
+// to wait for.
+func afterStragglerReleased(svc *OpenLibraryService) {
+	svc.Mu.Lock()
+	svc.CloseTimeout = 0
+	svc.Mu.Unlock()
+}
+
 // A store whose Close times out refuses all work but still holds its engine
 // and the directory's lock file. The service must keep it, so that a retried
 // close (delete, factory reset) cannot report success while the engine is
@@ -48,7 +62,8 @@ func openStoreWithHeldIterator(t *testing.T, dir string) (*openlibrary.OLStore, 
 func TestOpenLibraryService_TimedOutCloseRecoversOnceTheStragglerReleases(t *testing.T) {
 	dir := t.TempDir()
 	store, held := openStoreWithHeldIterator(t, dir)
-	svc := &OpenLibraryService{OLStore: store, CloseTimeout: 50 * time.Millisecond}
+	svc := &OpenLibraryService{CloseTimeout: 50 * time.Millisecond}
+	svc.setStoreLocked(store)
 
 	svc.Mu.Lock()
 	err := svc.CloseStoreLocked()
@@ -81,6 +96,7 @@ func TestOpenLibraryService_TimedOutCloseRecoversOnceTheStragglerReleases(t *tes
 	if err := held.Close(); err != nil {
 		t.Fatalf("releasing the straggler: %v", err)
 	}
+	afterStragglerReleased(svc)
 	if err := svc.EnsureStore(dir); err != nil {
 		t.Fatalf("EnsureStore after the straggler released: %v", err)
 	}
@@ -110,6 +126,7 @@ func TestOpenLibraryService_RetriedCloseSucceedsAfterStragglerReleases(t *testin
 	if err := held.Close(); err != nil {
 		t.Fatal(err)
 	}
+	svc.CloseTimeout = 0
 	if err := svc.CloseStoreLocked(); err != nil {
 		t.Fatalf("retried close after the straggler released: %v", err)
 	}
@@ -125,5 +142,80 @@ func TestOpenLibraryService_CloseStoreLockedWithNoStore(t *testing.T) {
 	defer svc.Mu.Unlock()
 	if err := svc.CloseStoreLocked(); err != nil {
 		t.Fatalf("CloseStoreLocked on an empty service: %v", err)
+	}
+}
+
+// The metadata lookup path must follow the store through a timed-out close and
+// its recovery. Consumers used to be handed the store once at start-up (and
+// not at all when there was none then), and the memoized source chain kept
+// that pointer: after the old store was closed and a new one opened, every
+// local lookup still went to the old, refusing store and fell back to the
+// network until the process restarted.
+func TestOpenLibraryService_MetadataLookupFollowsRecoveredStore(t *testing.T) {
+	dir := t.TempDir()
+	store, held := openStoreWithHeldIterator(t, dir)
+	svc := &OpenLibraryService{CloseTimeout: 50 * time.Millisecond}
+	svc.setStoreLocked(store)
+
+	mfs := &Service{}
+	mfs.wireOpenLibrary(svc)
+	// A client the way buildSourceChainFromConfig builds it. Its base URL is
+	// unroutable, so a lookup that is not answered locally fails.
+	client := metadata.NewOpenLibraryClientWithBaseURL("http://127.0.0.1:1")
+	client.SetOLStoreSource(mfs.liveOLStore)
+
+	if mfs.liveOLStore() != store {
+		t.Fatal("the metadata service is not looking at the Open Library service's store")
+	}
+
+	svc.Mu.Lock()
+	err := svc.CloseStoreLocked()
+	svc.Mu.Unlock()
+	if err == nil {
+		t.Fatal("close with a lookup in flight returned nil")
+	}
+	if mfs.liveOLStore() != nil {
+		t.Fatal("lookups are still sent to a store that is closing")
+	}
+
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	afterStragglerReleased(svc)
+	if err := svc.EnsureStore(dir); err != nil {
+		t.Fatalf("EnsureStore after the straggler released: %v", err)
+	}
+	t.Cleanup(svc.Close)
+	fresh := mfs.liveOLStore()
+	if fresh == nil || fresh == store {
+		t.Fatalf("lookups were not pointed at the reopened store (got %p, old %p)", fresh, store)
+	}
+
+	dump := filepath.Join(dir, "editions.txt.gz")
+	f, err := os.Create(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	line := "/type/edition\t/books/OL1M\t5\t2024-01-01\t{\"key\":\"/books/OL1M\",\"title\":\"Recovered Book\",\"isbn_13\":[\"9780000000001\"]}\n"
+	if _, err := gz.Write([]byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.OLStore.ImportDump("editions", dump, nil); err != nil {
+		t.Fatalf("import into the reopened store: %v", err)
+	}
+
+	meta, err := client.GetBookByISBN(context.Background(), "9780000000001")
+	if err != nil {
+		t.Fatalf("lookup through the metadata client after recovery: %v", err)
+	}
+	if meta == nil || meta.Title != "Recovered Book" {
+		t.Fatalf("lookup returned %+v; want the edition from the reopened store", meta)
 	}
 }

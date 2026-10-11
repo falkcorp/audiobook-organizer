@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.54.0
+// version: 5.55.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -189,8 +189,11 @@ type Store interface {
 }
 
 type Service struct {
-	db              Store
-	olStore         *openlibrary.OLStore
+	db Store
+	// olStoreSource, set by SetOLStoreSource, yields the Open Library dump
+	// store to look up locally, or nil. A source, not a store: the store is
+	// reopened at runtime and the memoized source chain outlives any one store.
+	olStoreSource   atomic.Pointer[func() *openlibrary.OLStore]
 	overrideSources []metadata.MetadataSource // for testing
 	// asinLookupOverride replaces the live Audible/Audnexus ASIN clients in
 	// lookupASIN (tests only; nil in production).
