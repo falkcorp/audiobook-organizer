@@ -39,7 +39,8 @@ the context (`tagger.WithoutBackup`):
 - batch metadata apply, apply-when-scanned and the file-I/O pool's replays
 - the iTunes import's metadata enrichment
 - `RevertOperation`'s tag writes. A revert writes one tag row at a time, so it
-  used to make one full backup per row. The revert journal is its safety net.
+  would otherwise make one full backup per row. The revert journal is its
+  safety net.
 
 Single-book edits keep a backup when the setting is on: a book edit's
 write-back and a per-book write-back, fetch or apply.

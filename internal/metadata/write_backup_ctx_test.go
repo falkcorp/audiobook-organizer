@@ -1,12 +1,13 @@
 // file: internal/metadata/write_backup_ctx_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f385b95-1f2d-4e61-9a15-32b784f3abc7
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metadata
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,6 +51,103 @@ func TestWriteSingleTagContext_BackupFollowsContext(t *testing.T) {
 			raw, err := readTagsWithTaglib(path)
 			require.NoError(t, err)
 			require.Equal(t, []string{"New Value"}, raw["COMPOSER"])
+		})
+	}
+}
+
+// WriteMetadataToFileContext carries the caller's ctx to the native writer's
+// create_backups decision: on a real file, a bulk-style ctx (WithoutBackup)
+// leaves no .bak-* sibling and a plain one leaves exactly one.
+func TestWriteMetadataToFileContext_NativeBackupFollowsContext(t *testing.T) {
+	if !taglibAvailable {
+		t.Skip("native tag writer not available")
+	}
+	prevDeps := packageSafeWriteDeps
+	t.Cleanup(func() { packageSafeWriteDeps = prevDeps })
+	packageSafeWriteDeps = tagger.SafeWriteDeps{}
+	prev := config.Snapshot().CreateBackups
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
+	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
+
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		wantBaks int
+	}{
+		{"bulk-style ctx (WithoutBackup)", tagger.WithoutBackup(context.Background()), 0},
+		{"single-book ctx", context.Background(), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := makeTestAudioExt(t, "m4a", nil)
+			require.NoError(t, WriteMetadataToFileContext(tc.ctx, path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{}))
+			baks, err := filepath.Glob(path + ".bak-*")
+			require.NoError(t, err)
+			require.Len(t, baks, tc.wantBaks, "backup siblings: %v", baks)
+		})
+	}
+}
+
+type ctxProbeKey struct{}
+
+// ctxRecordingImporter records the ctx the protected-path guard hands it and
+// refuses the import, so the write stops there.
+type ctxRecordingImporter struct{ got context.Context }
+
+func (r *ctxRecordingImporter) ImportPath(ctx context.Context, _, _ string) (string, error) {
+	r.got = ctx
+	return "", errors.New("synthetic import refusal")
+}
+
+// WriteMetadataToFileContext hands the caller's ctx to the protected-path
+// guard's importer, whose contract takes it for cancellation.
+func TestWriteMetadataToFileContext_ProtectedGuardGetsCallerContext(t *testing.T) {
+	prevDeps := packageSafeWriteDeps
+	t.Cleanup(func() { packageSafeWriteDeps = prevDeps })
+	seeding := filepath.Join(t.TempDir(), "seeding")
+	require.NoError(t, os.MkdirAll(seeding, 0o755))
+	importer := &ctxRecordingImporter{}
+	packageSafeWriteDeps = tagger.SafeWriteDeps{ProtectedCache: dirProtected{dir: seeding}, Importer: importer}
+
+	path := filepath.Join(seeding, "synthetic.m4b")
+	require.NoError(t, os.WriteFile(path, []byte("synthetic bytes"), 0o644))
+	ctx := context.WithValue(context.Background(), ctxProbeKey{}, "caller")
+	require.Error(t, WriteMetadataToFileContext(ctx, path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{}))
+	require.NotNil(t, importer.got, "the protected-path guard must call the importer")
+	require.Equal(t, "caller", importer.got.Value(ctxProbeKey{}), "the importer must get the caller's ctx")
+}
+
+// The same for the CLI fallback, whose backup WriteMetadataToFileContext
+// takes itself before the CLI writer runs. The native path is switched off
+// and a fake AtomicParsley on PATH rewrites the file in place.
+func TestWriteMetadataToFileContext_CLIBackupFollowsContext(t *testing.T) {
+	prevDeps := packageSafeWriteDeps
+	prevTaglib := taglibAvailable
+	t.Cleanup(func() { packageSafeWriteDeps, taglibAvailable = prevDeps, prevTaglib })
+	packageSafeWriteDeps = tagger.SafeWriteDeps{}
+	taglibAvailable = false
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "AtomicParsley"),
+		[]byte("#!/bin/sh\nprintf ' tagged' >> \"$1\"\n"), 0o755))
+	t.Setenv("PATH", bin)
+	prev := config.Snapshot().CreateBackups
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
+	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
+
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		wantBaks int
+	}{
+		{"bulk-style ctx (WithoutBackup)", tagger.WithoutBackup(context.Background()), 0},
+		{"single-book ctx", context.Background(), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "synthetic.m4b")
+			require.NoError(t, os.WriteFile(path, []byte("synthetic pre-write bytes"), 0o644))
+			require.NoError(t, WriteMetadataToFileContext(tc.ctx, path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{}))
+			baks, err := filepath.Glob(path + ".bak-*")
+			require.NoError(t, err)
+			require.Len(t, baks, tc.wantBaks, "backup siblings: %v", baks)
 		})
 	}
 }
