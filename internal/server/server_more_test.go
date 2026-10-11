@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.13.2
+// version: 1.14.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 //go:build !windows
 
@@ -816,7 +816,7 @@ func TestRunAutoPurgeSoftDeleted(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	server.runAutoPurgeSoftDeleted("")
+	server.runAutoPurgeSoftDeleted(t.Context(), "")
 
 	if got, err := database.GetGlobalStore().GetBookByID(book.ID); err == nil && got != nil {
 		t.Fatal("expected book to be purged")

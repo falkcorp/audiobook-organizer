@@ -1,11 +1,12 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,7 +71,7 @@ func TestRunAutoPurgeSoftDeleted_DeletesOldEntries(t *testing.T) {
 	_, err = database.GetGlobalStore().UpdateBook(book.ID, book)
 	require.NoError(t, err)
 
-	server.runAutoPurgeSoftDeleted("")
+	server.runAutoPurgeSoftDeleted(t.Context(), "")
 
 	// Book removed.
 	fetched, err := database.GetGlobalStore().GetBookByID(book.ID)
@@ -108,4 +109,78 @@ func TestDiscardProgressAndPurge_RouteRefusesLiveBook(t *testing.T) {
 	st, err := store.GetUserBookState(u.ID, book.ID)
 	require.NoError(t, err)
 	require.Equal(t, 30, st.ProgressPct)
+}
+
+// seedOldSoftDeletedBook creates a book under the library root, soft-deleted
+// two days ago, with no book_file rows (so the purge may take it).
+func seedOldSoftDeletedBook(t *testing.T, name string) *database.Book {
+	t.Helper()
+	filePath := filepath.Join(config.AppConfig.RootDir, name+".m4b")
+	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
+	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: name, FilePath: filePath, Format: "m4b"})
+	require.NoError(t, err)
+	marked := true
+	deletedAt := time.Now().AddDate(0, 0, -2)
+	book.MarkedForDeletion = &marked
+	book.MarkedForDeletionAt = &deletedAt
+	book.LibraryState = new("deleted")
+	_, err = database.GetGlobalStore().UpdateBook(book.ID, book)
+	require.NoError(t, err)
+	return book
+}
+
+// The merged maintenance.purge-deleted op hands its own context to the purge,
+// so the def's Timeout and a cancel stop it. Before 04-P4b the server copy
+// passed context.Background() and neither could reach PurgeSoftDeletedBooks.
+func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	config.AppConfig.PurgeSoftDeletedAfterDays = 1
+	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	books := []*database.Book{
+		seedOldSoftDeletedBook(t, "cancel-a"),
+		seedOldSoftDeletedBook(t, "cancel-b"),
+		seedOldSoftDeletedBook(t, "cancel-c"),
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.runAutoPurgeSoftDeleted(ctx, "")
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runAutoPurgeSoftDeleted did not return after its context was cancelled")
+	}
+
+	for _, b := range books {
+		got, err := database.GetGlobalStore().GetBookByID(b.ID)
+		require.NoError(t, err)
+		assert.NotNil(t, got, "book %q must survive a purge whose context was already cancelled", b.Title)
+		_, statErr := os.Stat(b.FilePath)
+		assert.NoError(t, statErr, "file of %q must not be deleted after cancel", b.Title)
+	}
+}
+
+// PurgeSoftDeletedAfterDays <= 0 is the op's safety valve: it returns before
+// touching the audiobook service, so nothing is purged however old.
+func TestRunAutoPurgeSoftDeleted_DisabledPurgesNothing(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	config.AppConfig.PurgeSoftDeletedAfterDays = 0
+	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	book := seedOldSoftDeletedBook(t, "disabled-purge")
+
+	server.runAutoPurgeSoftDeleted(t.Context(), "")
+
+	got, err := database.GetGlobalStore().GetBookByID(book.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	_, statErr := os.Stat(book.FilePath)
+	assert.NoError(t, statErr)
 }

@@ -1,9 +1,9 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
-// extra_ops registers OperationDefs for 7 scheduler tasks that previously
+// extra_ops registers OperationDefs for 6 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
 // extracts the closure logic into a typed Run func so the UOS v2 dispatcher
 // can manage lifecycle, cancellation, and concurrency without the old
@@ -58,7 +58,7 @@ type ExtraOpsDeps struct {
 	ScanStandDown opsregistry.ScanStandDownGate
 }
 
-// ExtraOpsStore is everything the 7 scheduler OperationDefs need from the
+// ExtraOpsStore is everything the 6 scheduler OperationDefs need from the
 // store: metabatch.Store, which the metadata upgrade forwards into its
 // service, plus the author, author-link and book methods the author and
 // metadata-refresh ops call directly. Was database.Store (398 methods) until
@@ -102,7 +102,7 @@ type extraOpsAuthorLinkStore interface {
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
-// ExtraOpsRegistrar holds a Store reference and typed Deps so the 7 scheduler
+// ExtraOpsRegistrar holds a Store reference and typed Deps so the 6 scheduler
 // OperationDefs can be registered without a *Server pointer.
 type ExtraOpsRegistrar struct {
 	Deps  ExtraOpsDeps
@@ -590,43 +590,6 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	return err
 }
 
-// --- purge-deleted ---
-
-// RegisterPurgeDeletedOp registers the scheduler.purge-deleted OperationDef.
-func (r *ExtraOpsRegistrar) RegisterPurgeDeletedOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.purge-deleted",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "scheduler",
-		DisplayName:     "Purge Soft-Deleted",
-		Description:     "Purge soft-deleted books past their retention period.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.purge-deleted",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p schedulerExtraOpParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("purge-deleted: decode params: %w", err)
-			}
-			progress := extraOpsProgressAdapter{r: reporter}
-			prog := sdk.NewProgress(reporter, 0)
-			prog.Start("Starting purge of soft-deleted books")
-			_ = progress.Log("info", "Starting purge of soft-deleted books", nil)
-			actID := activityOpID(reporter, p)
-			r.runAutoPurgeSoftDeleted(ctx, actID)
-			activity.FlushOperation(r.Deps.ActivityWriter, actID)
-			_ = progress.Log("info", "Purge complete", nil)
-			prog.Done("Purge complete")
-			return nil
-		},
-	})
-}
-
 // --- resolve-production-authors ---
 
 // RegisterResolveProductionAuthorsOp registers the scheduler.resolve-production-authors OperationDef.
@@ -762,42 +725,6 @@ func (r *ExtraOpsRegistrar) RegisterMetadataRefreshOp(reg *opsregistry.Registry)
 }
 
 // --- helper methods (extracted from server/metadata_handlers.go and server/audiobooks_handlers.go) ---
-
-// runAutoPurgeSoftDeleted purges soft-deleted books past the retention period.
-func (r *ExtraOpsRegistrar) runAutoPurgeSoftDeleted(ctx context.Context, opID string) {
-	if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 {
-		return
-	}
-	if r.Store == nil {
-		slog.Debug("Auto-purge skipped database not initialized")
-		return
-	}
-	if r.Deps.AudiobookService == nil {
-		slog.Debug("Auto-purge skipped audiobook service not initialized")
-		return
-	}
-
-	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	result, err := r.Deps.AudiobookService.PurgeSoftDeletedBooks(ctx, config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
-	if err != nil {
-		slog.Warn("Auto-purge failed", "error", err)
-		return
-	}
-
-	// Books that still own book_file rows are skipped on every run (a merge
-	// loser keeps its files for good), so they are summarized as one count per
-	// run rather than one activity line per book per run; only real errors
-	// are itemized below.
-	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, carried_to_sibling=%d, kept_has_progress=%d, carry_failed=%d, %d errors)",
-		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, result.CarriedToSibling, result.KeptHasProgress, result.CarryFailed, len(result.Errors))
-	slog.Info("Auto-purge", "msg", msg)
-	activity.EmitInfo(r.Deps.ActivityWriter, opID, "purge-deleted", "purge-deleted", msg,
-		activity.TagsIf(result.Purged == 0, activity.NoOpTag)...)
-	for _, e := range result.Errors {
-		activity.LogBatch(r.Deps.ActivityWriter, opID, "purge-deleted", "purge-deleted",
-			activity.BatchItem{Name: e, Detail: "error"})
-	}
-}
 
 // runMetadataRefreshScan reports books with incomplete metadata. Read-only,
 // safe to re-run on restart with no state.

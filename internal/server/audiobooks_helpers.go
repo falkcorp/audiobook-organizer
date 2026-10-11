@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -274,18 +274,21 @@ func (s *Server) warmFacetsCache() {
 
 // runAutoPurgeSoftDeleted purges soft-deleted books older than the configured
 // retention window, emitting activity log entries. Invoked from the maintenance
-// scheduler (server_maintenance_deps.go RunAutoPurgeSoftDeleted).
-func (s *Server) runAutoPurgeSoftDeleted(opID string) {
+// plugin (server_maintenance_deps.go RunAutoPurgeSoftDeleted), which is the
+// only copy of this body: scheduler.purge-deleted carried a second one until
+// 04-P4b. ctx is the op's own context, so the def's Timeout and a cancel both
+// stop the purge between books.
+func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) {
 	if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 {
 		return
 	}
-	if s.Ops() == nil {
-		slog.Debug("Auto-purge skipped database not initialized")
+	if s.Ops() == nil || s.audiobookService == nil {
+		slog.Debug("Auto-purge skipped database or audiobook service not initialized")
 		return
 	}
 
 	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	result, err := s.audiobookService.PurgeSoftDeletedBooks(context.Background(), config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
+	result, err := s.audiobookService.PurgeSoftDeletedBooks(ctx, config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
 	if err != nil {
 		slog.Warn("Auto-purge failed", "err", err)
 		return
