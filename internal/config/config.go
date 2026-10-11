@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.149.0
+// version: 1.150.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -1473,9 +1473,11 @@ type Config struct {
 	// outright so the gate is never consulted. Set to -1 to disable.
 	// Defaults to 144 (6 days).
 	MinRescanAgeHours int `json:"min_rescan_age_hours"`
-	// LogRetentionDays is the purge_old_logs window: operation logs, operation
-	// changes and system activity log rows older than this many days are
-	// deleted. Default 90 (DefaultLogRetentionDays). -1 (any negative value)
+	// LogRetentionDays is the purge_old_logs window: system log rows (syslog:)
+	// and legacy operation log rows (operationlog:) older than this many days
+	// are deleted. It never shortens undo history: the undo journal (opchange:)
+	// is not pruned by this or any log setting (see todo.d UNDO-WINDOW-PRUNE).
+	// Default 90 (DefaultLogRetentionDays). -1 (any negative value)
 	// keeps logs forever. 0 means the default, NOT "keep forever": until
 	// 2026-10-11 InitConfig never read this key, so every install ran with 0
 	// and the purge never ran; see ResolveLogRetentionDays. Consumers must call
@@ -1701,6 +1703,9 @@ type Config struct {
 	// ProtectedPaths is an explicit list of filesystem path prefixes that must
 	// never be edited in-place (tag writes, renames, deletes). These are merged
 	// with the Deluge save_path set at runtime. iTunes media paths belong here.
+	// In a config file it is a list. In the environment, PROTECTED_PATHS is a
+	// comma-separated list (/a,/b) or a JSON array ('["/a","/b"]'); whitespace
+	// is not a separator, since paths contain spaces (see viperPathList).
 	ProtectedPaths []string `json:"protected_paths"` // default: empty
 
 	// Auto-update
@@ -2013,30 +2018,7 @@ func ParseWhisperEndpoints(s string) []WhisperEndpoint {
 	return endpoints
 }
 
-// viperDecodeJSON decodes the viper value at key into a T through its JSON
-// form, so the config file uses the same field names as the stored blob and
-// the settings API (the json tags; several of these element types carry no
-// mapstructure tags, so viper.UnmarshalKey would silently drop snake_case
-// fields). An unset key yields the zero T. A value that does not decode is
-// reported on stderr and yields the zero T rather than failing startup, the
-// same rule as ParseWhisperEndpoints: the stored blob, which normally owns
-// these UI-managed lists, still loads on top.
-func viperDecodeJSON[T any](key string) T {
-	var out T
-	if !viper.IsSet(key) {
-		return out
-	}
-	raw, err := json.Marshal(viper.Get(key))
-	if err == nil {
-		err = json.Unmarshal(raw, &out)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config: ignoring malformed %s (%v)\n", key, err)
-		var zero T
-		return zero
-	}
-	return out
-}
+// viperDecodeJSON and viperPathList live in viper_decode.go.
 
 // ActivityDBDirName is the dot-directory that holds the activity database under
 // the library root. Dot-prefixed so the scanner skips it: pathutil.ShouldSkipDir
@@ -3253,7 +3235,7 @@ func InitConfig() {
 			DelugeDiscoveryLabel:   viper.GetString("deluge_discovery_label"),
 			DelugeDiscoveryEnabled: viper.GetBool("deluge_discovery_enabled"),
 			DelugeMoveEnabled:      viper.GetBool("deluge_move_enabled"),
-			ProtectedPaths:         viper.GetStringSlice("protected_paths"),
+			ProtectedPaths:         viperPathList("protected_paths"),
 
 			// Usually UI-managed through the stored blob, which wins on load;
 			// read here so a config-file value is not silently dropped.

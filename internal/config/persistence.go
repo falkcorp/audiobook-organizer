@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -882,17 +882,23 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 				"on defaults because the next settings save would overwrite it: %w", err)
 		}
 
-		// One-shot: a stored log_retention_days=0 is the value every install
-		// ran with while InitConfig never read the key (it disabled the log
-		// purge everywhere), not an operator choice. Drop it so the startup
-		// value (default 90) applies. Same marker discipline as embed_cover_art:
+		// One-shot: a stored log_retention_days=0 is, almost certainly, the
+		// value every install ran with while InitConfig never read the key (it
+		// disabled the log purge everywhere), not an operator choice; but the
+		// scheduler admin hint did say "0 disables the purge" from 2026-08-22,
+		// so the drop is logged at Warn with the old meaning and the new
+		// keep-forever value (see migrateLogRetentionBlob). Drop it so the
+		// startup value (default 90) applies. Same marker discipline as embed_cover_art:
 		// the marker is written only when the rewrite persisted (or none was
 		// needed), so a failed save is retried on the next boot.
 		if _, done := settingsMap[logRetentionZeroMigratedKey]; !done {
 			persisted := true
 			if migrated, changed := migrateLogRetentionBlob(blobStr); changed {
-				configLog.Info("dropped stale log_retention_days=0 from the stored blob; the startup value (default %d days) now applies to the log purge (set %d to keep logs forever)",
-					DefaultLogRetentionDays, LogRetentionKeepForever)
+				configLog.Warn("dropped stored log_retention_days=0 from the config blob: 0 used to mean "+
+					"\"keep logs forever, never purge\" and now means the default. The log purge now deletes "+
+					"system logs and legacy operation logs older than the startup value (default %d days); "+
+					"undo history is not affected. To keep logs forever, set log_retention_days to %d "+
+					"(PUT /api/v1/config)", DefaultLogRetentionDays, LogRetentionKeepForever)
 				blobStr = migrated
 				if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 					persisted = false

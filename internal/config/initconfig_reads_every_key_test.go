@@ -1,5 +1,5 @@
 // file: internal/config/initconfig_reads_every_key_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3f6a21-5c87-4e0b-b2d4-8f1a7c6e0b39
 // last-edited: 2026-10-11
 
@@ -7,8 +7,9 @@
 // literal is the ONLY place a viper value (shipped default, config file, env)
 // reaches AppConfig. A Config field left out of it is silently zero at every
 // boot whatever the operator configures: on 2026-10-11 the #3952 review found
-// 30 such fields, among them log_retention_days (default 90), so the
-// purge_old_logs task had never been enabled on production.
+// 29 Config fields missing from the literal (among them log_retention_days,
+// default 90, so the purge_old_logs task had never been enabled on
+// production), plus the tools.* block, which was assigned constants.
 //
 // These tests enumerate the keys automatically, from the Config type's tags
 // and from viper's own key list, so a new field or a new default is covered
@@ -38,20 +39,31 @@ type configLeaf struct {
 
 // configKeyName is the viper key segment for a struct field: the mapstructure
 // tag, else the json tag, else the lower-cased field name (viper's own rule).
-// "" means the field is not configurable (tag "-").
-func configKeyName(f reflect.StructField) string {
-	for _, tag := range []string{"mapstructure", "json"} {
-		if v, ok := f.Tag.Lookup(tag); ok {
-			name, _, _ := strings.Cut(v, ",")
-			if name == "-" {
-				return ""
-			}
-			if name != "" {
-				return strings.ToLower(name)
-			}
+// "" means the field is not configurable. hidden reports a field whose only
+// opt-out is json:"-" (no mapstructure tag): it is invisible to the stored
+// blob and the API, but viper could still feed it, so whether InitConfig must
+// read it is a choice the author has to make explicitly (see
+// jsonHiddenFieldExemptions).
+func configKeyName(f reflect.StructField) (name string, hidden bool) {
+	if v, ok := f.Tag.Lookup("mapstructure"); ok {
+		n, _, _ := strings.Cut(v, ",")
+		if n == "-" {
+			return "", false // explicit: not a viper key
+		}
+		if n != "" {
+			return strings.ToLower(n), false
 		}
 	}
-	return strings.ToLower(f.Name)
+	if v, ok := f.Tag.Lookup("json"); ok {
+		n, _, _ := strings.Cut(v, ",")
+		if n == "-" {
+			return "", true
+		}
+		if n != "" {
+			return strings.ToLower(n), false
+		}
+	}
+	return strings.ToLower(f.Name), false
 }
 
 // isLeafType reports whether a field of type t is set as one value rather
@@ -67,9 +79,9 @@ func isLeafType(t reflect.Type) bool {
 	return reflect.PointerTo(t).Implements(reflect.TypeFor[interface{ UnmarshalJSON([]byte) error }]())
 }
 
-// configLeaves walks Config and returns every settable leaf.
-func configLeaves() []configLeaf {
-	var out []configLeaf
+// configLeaves walks Config and returns every settable leaf, plus the Go path
+// (Type.Field) of every json:"-" field without a mapstructure tag.
+func configLeaves() (leaves []configLeaf, hidden []string) {
 	var walk func(t reflect.Type, prefix string, index []int)
 	walk = func(t reflect.Type, prefix string, index []int) {
 		for i := range t.NumField() {
@@ -77,7 +89,10 @@ func configLeaves() []configLeaf {
 			if !f.IsExported() {
 				continue
 			}
-			name := configKeyName(f)
+			name, isHidden := configKeyName(f)
+			if isHidden {
+				hidden = append(hidden, t.Name()+"."+f.Name)
+			}
 			if name == "" {
 				continue
 			}
@@ -91,51 +106,65 @@ func configLeaves() []configLeaf {
 				continue
 			}
 			if isLeafType(f.Type) {
-				out = append(out, configLeaf{key: key, index: idx, typ: f.Type})
+				leaves = append(leaves, configLeaf{key: key, index: idx, typ: f.Type})
 				continue
 			}
 			walk(f.Type, key, idx)
 		}
 	}
 	walk(reflect.TypeFor[Config](), "", nil)
-	return out
+	return leaves, hidden
 }
 
-// sentinelFor returns a non-zero viper value that decodes into t. Composite
-// values are built the way a config file would spell them (maps of maps,
-// lists of maps), so they go through the same decode path InitConfig uses.
-func sentinelFor(t reflect.Type) any {
+// jsonHiddenFieldExemptions are Config fields tagged json:"-" without a
+// mapstructure tag (Type.Field) that InitConfig deliberately does not read,
+// with the reason. Such a field is skipped by the leaf walk, so without this
+// table a future env-only json:"-" field that InitConfig never reads would
+// slip through: tag it mapstructure:"<key>" (then it is a leaf and must be
+// read) or mapstructure:"-" (not configurable), or list it here.
+var jsonHiddenFieldExemptions = map[string]string{}
+
+// sentinelFor returns a viper value that decodes into t, distinct per leaf:
+// strings are the key itself, numbers derive from the leaf's index, durations
+// from the index in minutes, so a field filled from the WRONG key (a
+// copy-paste of the neighbouring line in the literal) comes out with another
+// leaf's value and fails the equality check. Bools cannot be distinct in one
+// run; TestInitConfigReadsEachBoolFromItsOwnKey covers them. Composite values
+// are built the way a config file would spell them (maps of maps, lists of
+// maps), with key-derived scalars inside, so they go through the same decode
+// path InitConfig uses.
+func sentinelFor(t reflect.Type, key string, i int) any {
 	switch t.Kind() {
 	case reflect.String:
-		return "sentinel"
+		return key
 	case reflect.Bool:
 		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if t == reflect.TypeFor[time.Duration]() {
-			return "7m"
+			return fmt.Sprintf("%dm", i+1)
 		}
-		return 7
+		return 1000 + i
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return 7
+		return 1000 + i
 	case reflect.Float32, reflect.Float64:
-		return 0.25
+		return 0.25 + float64(i)/10000
 	case reflect.Slice:
-		return []any{sentinelFor(t.Elem())}
+		return []any{sentinelFor(t.Elem(), key, i)}
 	case reflect.Map:
-		return map[string]any{"sentinel": sentinelFor(t.Elem())}
+		return map[string]any{"sentinel": sentinelFor(t.Elem(), key, i)}
 	case reflect.Pointer:
-		return sentinelFor(t.Elem())
+		return sentinelFor(t.Elem(), key, i)
 	case reflect.Struct:
 		m := map[string]any{}
-		for i := range t.NumField() {
-			f := t.Field(i)
-			if name := configKeyName(f); f.IsExported() && name != "" {
-				m[name] = sentinelFor(f.Type)
+		for j := range t.NumField() {
+			f := t.Field(j)
+			if name, _ := configKeyName(f); f.IsExported() && name != "" {
+				m[name] = sentinelFor(f.Type, key+"."+name, i)
 			}
 		}
 		return m
 	}
-	return "sentinel"
+	return key
 }
 
 // sentinelOverrides are keys whose configured form is not the field's Go
@@ -148,22 +177,22 @@ var sentinelOverrides = map[string]any{
 
 // scalarSentinelValue is the Go value sentinelFor's input must decode to for
 // a scalar type, or ok=false for composite types (checked for non-zero only).
-func scalarSentinelValue(t reflect.Type) (any, bool) {
+func scalarSentinelValue(t reflect.Type, key string, i int) (any, bool) {
 	var v reflect.Value
 	switch t.Kind() {
 	case reflect.String:
-		v = reflect.ValueOf("sentinel")
+		v = reflect.ValueOf(key)
 	case reflect.Bool:
 		v = reflect.ValueOf(true)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if t == reflect.TypeFor[time.Duration]() {
-			return 7 * time.Minute, true
+			return time.Duration(i+1) * time.Minute, true
 		}
-		v = reflect.ValueOf(int64(7))
+		v = reflect.ValueOf(int64(1000 + i))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v = reflect.ValueOf(uint64(7))
+		v = reflect.ValueOf(uint64(1000 + i))
 	case reflect.Float32, reflect.Float64:
-		v = reflect.ValueOf(0.25)
+		v = reflect.ValueOf(0.25 + float64(i)/10000)
 	default:
 		return nil, false
 	}
@@ -176,38 +205,46 @@ func scalarSentinelValue(t reflect.Type) (any, bool) {
 // exists to catch, and "the consumer falls back on zero" is NOT a reason.
 var initConfigLeafExemptions = map[string]string{}
 
-// TestInitConfigReadsEveryConfigKey sets a non-zero value for every Config
-// leaf's key, as a config file or environment variable would, runs
-// InitConfig, and requires every leaf to come out non-zero. A field InitConfig
-// never reads stays zero and fails here by name.
+// setSentinels sets every leaf's key to its distinct sentinel (or its
+// sentinelOverrides form), as a config file or environment variable would.
+func setSentinels(leaves []configLeaf) {
+	for i, l := range leaves {
+		if v, ok := sentinelOverrides[l.key]; ok {
+			viper.Set(l.key, v)
+			continue
+		}
+		viper.Set(l.key, sentinelFor(l.typ, l.key, i))
+	}
+}
+
+// TestInitConfigReadsEveryConfigKey sets a distinct non-zero value for every
+// Config leaf's key, runs InitConfig, and requires every leaf to come out
+// non-zero, and every scalar leaf to come out as exactly its own key's value.
+// A field InitConfig never reads stays zero and fails here by name; a field
+// read from the wrong key (or assigned a constant) carries another value and
+// fails as "wrong".
 //
-// Non-zero rather than equal on purpose: InitConfig legitimately passes some
-// values through wrappers (label parsing, float-slice parsing, enum
-// normalisation, minimum clamps), and an equality check would need an
-// exception per wrapper. A field that is not read at all is always zero, which
-// is the failure this guards.
+// Composite leaves (lists, maps) are checked for non-zero only: InitConfig
+// legitimately passes some through wrappers (label parsing, float-slice
+// parsing), and an equality check would need an exception per wrapper. A
+// field that is not read at all is always zero, which is the failure this
+// guards for them.
 func TestInitConfigReadsEveryConfigKey(t *testing.T) {
 	restoreAppConfig(t)
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 
-	leaves := configLeaves()
+	leaves, _ := configLeaves()
 	if len(leaves) < 300 {
 		t.Fatalf("walked only %d Config leaves; the walker is broken, not the config", len(leaves))
 	}
-	for _, l := range leaves {
-		if v, ok := sentinelOverrides[l.key]; ok {
-			viper.Set(l.key, v)
-			continue
-		}
-		viper.Set(l.key, sentinelFor(l.typ))
-	}
+	setSentinels(leaves)
 
 	InitConfig()
 
 	cfg := reflect.ValueOf(Snapshot())
 	var missing, wrong []string
-	for _, l := range leaves {
+	for i, l := range leaves {
 		if _, ok := initConfigLeafExemptions[l.key]; ok {
 			continue
 		}
@@ -216,10 +253,14 @@ func TestInitConfigReadsEveryConfigKey(t *testing.T) {
 			missing = append(missing, l.key)
 			continue
 		}
-		// A scalar must come out as exactly the configured value: a constant
-		// assigned in InitConfig (the tools.* block was one) is non-zero but
-		// ignores the operator just as completely.
-		if want, ok := scalarSentinelValue(l.typ); ok && got.Interface() != want {
+		if _, overridden := sentinelOverrides[l.key]; overridden {
+			continue
+		}
+		// A scalar must come out as exactly its own key's value: a constant
+		// assigned in InitConfig (the tools.* block was one) or a read of a
+		// neighbouring key is non-zero but ignores the operator just as
+		// completely.
+		if want, ok := scalarSentinelValue(l.typ, l.key, i); ok && got.Interface() != want {
 			wrong = append(wrong, fmt.Sprintf("%s = %v, configured %v", l.key, got.Interface(), want))
 		}
 	}
@@ -232,8 +273,8 @@ func TestInitConfigReadsEveryConfigKey(t *testing.T) {
 			"with the reason):\n  %s", len(missing), strings.Join(missing, "\n  "))
 	}
 	if len(wrong) > 0 {
-		t.Errorf("%d Config field(s) ignore the configured value (InitConfig assigns something else):\n  %s",
-			len(wrong), strings.Join(wrong, "\n  "))
+		t.Errorf("%d Config field(s) do not hold their own key's configured value (InitConfig assigns "+
+			"something else, or reads another key):\n  %s", len(wrong), strings.Join(wrong, "\n  "))
 	}
 
 	// The exemption table must not rot: an exempt key that no longer names a
@@ -249,14 +290,78 @@ func TestInitConfigReadsEveryConfigKey(t *testing.T) {
 	}
 }
 
+// TestInitConfigReadsEachBoolFromItsOwnKey is the wrong-key check for bools,
+// which cannot carry a distinct value in one run. For each bool leaf it sets
+// every bool key false and that one key true, and requires that field to come
+// out true. A field read from any other key comes out false; a field another
+// field's key feeds is caught in that other field's own pass.
+func TestInitConfigReadsEachBoolFromItsOwnKey(t *testing.T) {
+	restoreAppConfig(t)
+	t.Cleanup(viper.Reset)
+
+	leaves, _ := configLeaves()
+	var bools []configLeaf
+	for _, l := range leaves {
+		if l.typ.Kind() == reflect.Bool {
+			if _, ok := initConfigLeafExemptions[l.key]; !ok {
+				bools = append(bools, l)
+			}
+		}
+	}
+	if len(bools) < 50 {
+		t.Fatalf("found only %d bool leaves; the walker is broken, not the config", len(bools))
+	}
+	var wrong []string
+	for _, target := range bools {
+		viper.Reset()
+		for _, l := range bools {
+			viper.Set(l.key, l.key == target.key)
+		}
+		InitConfig()
+		if !reflect.ValueOf(Snapshot()).FieldByIndex(target.index).Bool() {
+			wrong = append(wrong, target.key)
+		}
+	}
+	sort.Strings(wrong)
+	if len(wrong) > 0 {
+		t.Errorf("%d bool Config field(s) stayed false with only their own key set true, so InitConfig "+
+			"reads them from another key (or assigns a constant):\n  %s", len(wrong), strings.Join(wrong, "\n  "))
+	}
+}
+
+// A json:"-" field without a mapstructure tag is skipped by the leaf walk.
+// Fail on one rather than let it slip past both tests above: the author tags
+// it mapstructure:"<key>" (a leaf InitConfig must read), mapstructure:"-"
+// (not configurable), or lists it in jsonHiddenFieldExemptions with a reason.
+func TestNoUnreviewedJSONHiddenConfigFields(t *testing.T) {
+	_, hidden := configLeaves()
+	var unreviewed []string
+	for _, h := range hidden {
+		if _, ok := jsonHiddenFieldExemptions[h]; !ok {
+			unreviewed = append(unreviewed, h)
+		}
+	}
+	if len(unreviewed) > 0 {
+		t.Errorf("%d Config field(s) are tagged json:\"-\" with no mapstructure tag, so neither guard test "+
+			"checks whether InitConfig reads them. Tag each mapstructure:\"<key>\" or mapstructure:\"-\", "+
+			"or add it to jsonHiddenFieldExemptions with the reason:\n  %s",
+			len(unreviewed), strings.Join(unreviewed, "\n  "))
+	}
+	for k := range jsonHiddenFieldExemptions {
+		if !slices.Contains(hidden, k) {
+			t.Errorf("jsonHiddenFieldExemptions names %q, which is not a json:\"-\" field without a mapstructure tag; remove it", k)
+		}
+	}
+}
+
 // viperKeysReadOutsideConfig are viper keys that carry a default (or BindEnv)
 // but deliberately have no Config field, because something reads them from
 // viper directly. Each must say who reads it.
 var viperKeysReadOutsideConfig = map[string]string{
-	"audible_base_url":                "metadata clients read viper directly (provider base URL override)",
-	"openlibrary_base_url":            "metadata clients read viper directly (provider base URL override)",
-	"audnexus_base_url":               "metadata clients read viper directly (provider base URL override)",
-	"google_books_base_url":           "read after the literal in InitConfig to build the google-books source",
+	"audible_base_url":                "read after the literal in InitConfig to backfill MetadataSources[].BaseURL",
+	"openlibrary_base_url":            "read after the literal in InitConfig to backfill MetadataSources[].BaseURL",
+	"audnexus_base_url":               "read after the literal in InitConfig to backfill MetadataSources[].BaseURL",
+	"google_books_base_url":           "read after the literal in InitConfig to backfill MetadataSources[].BaseURL",
 	"dedup.signals.duration.boost":    "read by unified.LoadScoreConfig via viper",
 	"dedup.signals.folder_path.boost": "read by unified.LoadScoreConfig via viper",
 }
@@ -272,7 +377,7 @@ func TestEveryViperDefaultHasAConfigField(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	InitConfig()
 
-	leaves := configLeaves()
+	leaves, _ := configLeaves()
 	leafKeys := make(map[string]bool, len(leaves))
 	for _, l := range leaves {
 		leafKeys[l.key] = true
