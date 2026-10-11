@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-08-29
+// last-edited: 2026-10-11
 
 package jobs
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -204,7 +205,7 @@ func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store 
 
 	var destDir string
 	rel, relErr := filepath.Rel(cfg.RootDir, filepath.Dir(src))
-	if relErr == nil && !filepath.IsAbs(rel) && !bdi_isParentTraversal(rel) {
+	if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
 		var joinErr error
 		destDir, joinErr = util.SafeJoin(cfg.RootDir, rel)
 		if joinErr != nil {
@@ -250,10 +251,6 @@ func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store 
 	}
 
 	return dest, nil
-}
-
-func bdi_isParentTraversal(rel string) bool {
-	return len(rel) >= 2 && rel[:2] == ".."
 }
 
 func bdi_ioCopy(src, dest string) error {
