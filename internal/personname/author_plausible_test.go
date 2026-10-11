@@ -1,5 +1,5 @@
 // file: internal/personname/author_plausible_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d0c9a8e-6f41-4b7a-9e25-8c1f4b6d2a70
 // last-edited: 2026-10-11
 
@@ -154,6 +154,57 @@ func TestCleanAuthorNameForCreationNowRefusesTheReportedJunk(t *testing.T) {
 	} {
 		if got, ok := CleanAuthorNameForCreation(in); ok {
 			t.Errorf("CleanAuthorNameForCreation(%q) = %q, true; want refused", in, got)
+		}
+	}
+}
+
+// The space before a size unit or a hashtag is any Unicode space: RE2's \s is
+// ASCII-only, so a no-break space (U+00A0) or an ideographic space (U+3000)
+// used to slip a release tag past the gate.
+func TestIsPlausibleAuthorName_ReleaseTagUnicodeSpace(t *testing.T) {
+	for _, name := range []string{
+		"Synthetic Writer\u00a0#Tag",  // no-break space, hashtag
+		"Synthetic Writer\u3000#Tag",  // ideographic (full-width) space, hashtag
+		"Synthetic Writer\u2009#Tag",  // thin space, hashtag
+		"Synthetic Writer 12\u00a0MB", // no-break space before a unit
+		"Synthetic Writer 12\u3000MB", // ideographic space before a unit
+		"Synthetic Writer #Tag",       // ASCII space: still refused
+		"Synthetic Writer\t#Tag",
+	} {
+		if ok, why := IsPlausibleAuthorName(name); ok || why != RejectReleaseTag {
+			t.Errorf("IsPlausibleAuthorName(%q) = %v, %q; want refused as %s", name, ok, why, RejectReleaseTag)
+		}
+	}
+	// A Unicode space does not turn a digit-led hashtag or a bare name into one.
+	for _, name := range []string{"Synthetic\u00a0Writer", "Synthetic Writer\u00a0#3", "Synthetic\u3000Writer"} {
+		if ok, why := IsPlausibleAuthorName(name); !ok {
+			t.Errorf("IsPlausibleAuthorName(%q) refused (%s); want accepted", name, why)
+		}
+	}
+}
+
+func TestStripTrailingReleaseTag(t *testing.T) {
+	for in, want := range map[string]string{
+		"Synthetic Writer [32k 08;53;59 122MB]": "Synthetic Writer",
+		"Synthetic Writer {497mb}":              "Synthetic Writer",
+		"Synthetic Writer (120 MB)":             "Synthetic Writer",
+		"Synthetic Writer\u00a0(120\u00a0MB)":   "Synthetic Writer",
+		"Synthetic Writer [32k 122MB] {497mb}":  "Synthetic Writer",
+		"  Synthetic Writer [64k #Winner]  ":    "Synthetic Writer",
+	} {
+		if got, ok := StripTrailingReleaseTag(in); !ok || got != want {
+			t.Errorf("StripTrailingReleaseTag(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{
+		"", "Synthetic Writer", "[32k 122MB]", "{497mb}", " (120 MB) ",
+		"Synthetic Writer (Some Series)", "Synthetic Writer [#Winner]",
+		"Synthetic Writer [122MB}",       // mismatched marks
+		"Synthetic Writer [32k 122MB] x", // the group is not at the end
+		"Synthetic Writer 122MB",         // no group
+	} {
+		if got, ok := StripTrailingReleaseTag(in); ok {
+			t.Errorf("StripTrailingReleaseTag(%q) = %q, true; want no strip", in, got)
 		}
 	}
 }

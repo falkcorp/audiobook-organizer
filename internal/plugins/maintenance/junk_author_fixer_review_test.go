@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
-// last-edited: 2026-09-29
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -914,4 +914,37 @@ func TestJunkAuthorFixer_RelinkOnlyNeedsIndependentKinds(t *testing.T) {
 		require.Equal(t, 1, res.Applied, "by outcome: %v", res.ByOutcome)
 		require.Equal(t, []int{f.authors["Hunter Davies"]}, f.credits(id))
 	})
+}
+
+// A real name with a release-post group after it ("Name [32k 08;53;59 122MB]")
+// is refused by the creation gate (release_tag), which makes it a junk row. The
+// repair reads the name out of it: with a real author row of that name it
+// RELINKS to it (source cleaned_name) rather than unlinking; a row with no
+// plausible name left in it keeps the unlink path. Synthetic names only.
+func TestJunkAuthorFixer_ReleaseTaggedNameRelinksToCleanedName(t *testing.T) {
+	f := newJunkFixture(t)
+	f.book(junkBookSpec{title: "Synthetic Saga", path: "/lib/r/real", author: "Synthetic Writer"})
+	tagged := f.book(junkBookSpec{title: "Synthetic Sequel", path: "/lib/r/tagged", author: "Synthetic Writer [32k 08;53;59 122MB]"})
+	braced := f.book(junkBookSpec{title: "Synthetic Third", path: "/lib/r/braced", author: "Synthetic Writer {497mb}"})
+	bare := f.book(junkBookSpec{title: "Synthetic Fourth", path: "/lib/r/bare", author: "64k 01;02;03 100MB"})
+	plan := f.plan()
+
+	for _, c := range []struct{ author, book string }{
+		{"Synthetic Writer [32k 08;53;59 122MB]", tagged},
+		{"Synthetic Writer {497mb}", braced},
+	} {
+		r := f.row(plan, c.author, c.book)
+		require.NotNil(t, r, c.author)
+		require.Empty(t, r.Skipped, r.SkipReason)
+		require.Equal(t, junkAuthorDecRelink, r.Proposed["decision"], "%s: %s", c.author, r.Reason)
+		require.Equal(t, "Synthetic Writer", r.Proposed["author"], r.Reason)
+		require.Equal(t, junkAuthorSrcCleaned, r.Proposed["source"], r.Reason)
+	}
+	r := f.row(plan, "64k 01;02;03 100MB", bare)
+	require.NotNil(t, r)
+	require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], "no name survives the clean: %s", r.Reason)
+
+	res := f.apply(plan, []string{f.row(plan, "Synthetic Writer [32k 08;53;59 122MB]", tagged).RowID})
+	require.Equal(t, 1, res.Applied, "by outcome: %v", res.ByOutcome)
+	require.Equal(t, []int{f.authors["Synthetic Writer"]}, f.credits(tagged))
 }

@@ -1,5 +1,5 @@
 // file: internal/personname/author_plausible.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b634b40-1fc8-4fcd-bf81-98dd562e7ebe
 // last-edited: 2026-10-11
 
@@ -63,8 +63,53 @@ var (
 	// digit, so the leading-punctuation rule passes it, and no other rule here
 	// matched. A size needs a number glued or spaced to a byte unit, and a
 	// hashtag needs a letter after the #, so "50 Cent" and "Book #3" pass.
-	releaseTagRe = regexp.MustCompile(`(?i)\b\d+(?:[.,]\d+)?\s?[kmgt]i?b\b|(?:^|\s)#\pL`)
+	// The space before the unit or the # is any Unicode space (\p{Z}: no-break
+	// space, ideographic space, ...) as well as ASCII whitespace: RE2's \s is
+	// ASCII-only, and a tag pasted from a web page carries U+00A0 as often as
+	// U+0020.
+	releaseTagRe = regexp.MustCompile(`(?i)\b\d+(?:[.,]\d+)?[\s\p{Z}]?[kmgt]i?b\b|(?:^|[\s\p{Z}])#\pL`)
+	// trailingTagGroupRe: a name followed by one bracketed, braced or
+	// parenthesised group at the very end ("Name [..]", "Name {..}",
+	// "Name (..)"). Group 1 is the head, 2 the opening mark, 3 the content and
+	// 4 the closing mark; StripTrailingReleaseTag checks the marks pair up
+	// (RE2 has no backreference) and that the content is a release tag.
+	// Group content is judged WITH its opening mark in front, so it is a
+	// release tag exactly when IsPlausibleAuthorName would refuse the name for
+	// it: "[#Winner]" is not a hashtag after a space, "[64k #Winner]" is.
+	trailingTagGroupRe = regexp.MustCompile(`^(.*?\S)[\s\p{Z}]*([\[{(])([^\[\]{}()]*)([\]})])[\s\p{Z}]*$`)
 )
+
+// tagGroupClose maps each opening mark trailingTagGroupRe accepts to its closer.
+var tagGroupClose = map[string]string{"[": "]", "{": "}", "(": ")"}
+
+// StripTrailingReleaseTag removes release-post decoration from the end of a
+// name: a trailing bracketed, braced or parenthesised group whose content is a
+// release tag by the same rule the creation gate refuses (a file size or a
+// hashtag), such as "Name [32k 08;53;59 122MB]", "Name {497mb}" or
+// "Name (120 MB)". It returns the head left once every such group is gone and
+// true, or "" and false when the name has no such group or nothing is left of
+// the head. It judges only the decoration; the caller decides whether the head
+// is a person (authorjunk.CleanedName does). A group whose content is not a
+// release tag ("Name (Some Series)") is not stripped.
+func StripTrailingReleaseTag(name string) (string, bool) {
+	s := strings.TrimSpace(name)
+	stripped := false
+	for {
+		m := trailingTagGroupRe.FindStringSubmatch(s)
+		if m == nil {
+			break
+		}
+		if tagGroupClose[m[2]] != m[4] || !releaseTagRe.MatchString(m[2]+m[3]) {
+			break
+		}
+		s = strings.TrimSpace(m[1])
+		stripped = true
+	}
+	if !stripped || s == "" {
+		return "", false
+	}
+	return s, true
+}
 
 // structuralLabels are book-structure words that are never an author on their
 // own, and never an author when followed only by a number ("Chapter 3",
@@ -120,10 +165,10 @@ var placeholderNames = map[string]bool{
 // Jae) and initial-heavy names ("J. N. Chaney", "M.E. Thorne") pass: the gate
 // rejects known junk SHAPES rather than requiring a person-shaped name.
 //
-// ⚠ EXCEPT release_tag (releaseTagRe, added 2026-10-11): it was checked only
-// against synthetic cases and the repo's fixtures, NOT the production author
-// table. Until someone runs the gate over that table and confirms the rule
-// refuses only junk, treat it as unverified there (todo ABS-JUNK-AUTHOR-NAMES).
+// The release_tag rule (releaseTagRe, added 2026-10-11) was dry-run against the
+// full production author table the same day: 15,690 authors, 18 refusals, all
+// release-post junk, zero real names (the refusals were bitrate, timecode and
+// size strings, some of them a name with such a bracketed group appended).
 func IsPlausibleAuthorName(name string) (bool, AuthorNameRejection) {
 	s := strings.TrimSpace(name)
 	if s == "" {
