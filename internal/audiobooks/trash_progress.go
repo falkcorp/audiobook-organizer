@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -247,7 +247,7 @@ func (svc *AudiobookService) fillCarryOutlook(id string, info *TrashProgressInfo
 	info.ListedCopyID = sib
 }
 
-// purgeEligible reports whether the nightly purge (runAutoPurgeSoftDeleted:
+// purgeEligible reports whether the nightly purge (server.runAutoPurgeSoftDeleted:
 // on when PurgeSoftDeletedAfterDays > 0, taking books trashed longer ago
 // than that) would take book at now.
 func purgeEligible(book *database.Book, now time.Time) bool {

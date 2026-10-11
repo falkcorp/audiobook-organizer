@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-11
 
@@ -628,7 +628,7 @@ type MediaFileRunners interface {
 // CleanupRunners runs the retention and reclamation operations.
 type CleanupRunners interface {
 	// RunAutoPurgeSoftDeleted delegates to server.runAutoPurgeSoftDeleted.
-	RunAutoPurgeSoftDeleted(opID string)
+	RunAutoPurgeSoftDeleted(ctx context.Context, opID string)
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
 	CleanupTrashedVersions() int
 	// PruneOldLogs prunes legacy operation log rows and system log rows older

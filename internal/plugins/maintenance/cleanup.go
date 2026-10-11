@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-11
 
@@ -30,6 +30,8 @@ func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 	sched := "0 3 * * *" // 03:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.purge-deleted",
+		FormerIDs:       []string{"scheduler.purge-deleted"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Purge soft-deleted books",
@@ -39,7 +41,7 @@ func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.purge-deleted",
 		Cancellable:     false,
 		Isolate:         false,
-		Timeout:         30 * time.Minute,
+		Timeout:         2 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesWrite},
 		Run:             p.runPurgeDeleted,
@@ -51,7 +53,7 @@ func (p *Plugin) runPurgeDeleted(ctx context.Context, _ json.RawMessage, reporte
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Purging soft-deleted books...")
 	opID := ctxOpID(ctx)
-	p.deps.RunAutoPurgeSoftDeleted(opID)
+	p.deps.RunAutoPurgeSoftDeleted(ctx, opID)
 	p.deps.ActivityFlushOp(opID)
 	_ = reporter.Log(slog.LevelInfo, "Purge complete")
 	prog.Done("Purge complete")

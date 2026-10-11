@@ -1,7 +1,7 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package server
 
@@ -43,6 +43,8 @@ var twinMergeRows = []struct {
 	{"scheduler.trash-cleanup", "maintenance.trash-cleanup", []auth.Permission{auth.PermSettingsManage}, 1 * time.Hour},
 	{"scheduler.tombstone-cleanup", "maintenance.tombstone-cleanup", []auth.Permission{auth.PermSettingsManage}, 1 * time.Hour},
 	{"scheduler.db-optimize", "maintenance.db-optimize", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
+	// 04-P4b: scheduler.purge-deleted merged into maintenance.purge-deleted.
+	{"scheduler.purge-deleted", "maintenance.purge-deleted", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
 }
 
 func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {
