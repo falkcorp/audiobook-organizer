@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_filters.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bb2cd357-d7f1-4d95-a61d-676c82fdc680
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package abs
 
@@ -303,12 +303,51 @@ func (h *Handler) visibleTaggedBooks(tag string) ([]string, filterGroupStatus, e
 	return keepIDs(visible, func(id string) bool { _, ok := set[id]; return ok }), filterResolved, nil
 }
 
-// progressFilterRow is the subset of a mediaProgress row the filter reads.
+// progressFilterRow is the subset of a mediaProgress row the server-side
+// progress readers (the progress filter, the Continue Listening shelf) read.
 type progressFilterRow struct {
-	LibraryItemID string  `json:"libraryItemId"`
-	IsFinished    bool    `json:"isFinished"`
-	CurrentTime   float64 `json:"currentTime"`
-	Progress      float64 `json:"progress"`
+	LibraryItemID             string  `json:"libraryItemId"`
+	IsFinished                bool    `json:"isFinished"`
+	HideFromContinueListening bool    `json:"hideFromContinueListening"`
+	CurrentTime               float64 `json:"currentTime"`
+	Progress                  float64 `json:"progress"`
+	LastUpdate                int64   `json:"lastUpdate"`
+
+	// storedBookID is the book the row was rendered from, when the provider
+	// carries it (mediaProgressDTO.bookID). "" means only LibraryItemID names
+	// the book, and the caller must resolve it.
+	storedBookID string
+}
+
+// started reports a row the user has begun and not finished: ABS's
+// "in-progress" (currentTime or progress > 0, and not finished).
+func (r progressFilterRow) started() bool {
+	return !r.IsFinished && (r.CurrentTime > 0 || r.Progress > 0)
+}
+
+// decodeProgressRow reads one row of UserDataProvider.MediaProgress. The
+// production provider's rows are mediaProgressDTOs and carry the book they were
+// rendered from, so no JSON round trip and no sync-keyspace lookup is needed;
+// any other provider's row is decoded from its wire shape and leaves
+// storedBookID empty. ok=false is a row with no usable libraryItemId.
+func decodeProgressRow(raw any) (progressFilterRow, bool) {
+	if dto, typed := raw.(mediaProgressDTO); typed && dto.bookID != "" {
+		return progressFilterRow{
+			LibraryItemID: dto.LibraryItemID, IsFinished: dto.IsFinished,
+			HideFromContinueListening: dto.HideFromContinueListening,
+			CurrentTime:               dto.CurrentTime, Progress: dto.Progress,
+			LastUpdate: dto.LastUpdate, storedBookID: dto.bookID,
+		}, true
+	}
+	buf, err := json.Marshal(raw)
+	if err != nil {
+		return progressFilterRow{}, false
+	}
+	var row progressFilterRow
+	if err := json.Unmarshal(buf, &row); err != nil || row.LibraryItemID == "" {
+		return progressFilterRow{}, false
+	}
+	return row, true
 }
 
 // progressFilterBookIDs implements ABS's per-user progress filter:
@@ -340,23 +379,12 @@ func (h *Handler) progressFilterBookIDs(c *gin.Context, state string) ([]string,
 			return nil, filterResolved, err
 		}
 		for _, raw := range rows {
-			var row progressFilterRow
-			bookID := ""
-			if dto, typed := raw.(mediaProgressDTO); typed && dto.bookID != "" {
-				// The production provider's rows carry the book they were
-				// rendered from: no JSON round trip, no sync-keyspace lookup.
-				row = progressFilterRow{LibraryItemID: dto.LibraryItemID, IsFinished: dto.IsFinished,
-					CurrentTime: dto.CurrentTime, Progress: dto.Progress}
-				bookID = dto.bookID
-			} else {
-				// Any other provider: decode the wire shape and resolve the id.
-				buf, merr := json.Marshal(raw)
-				if merr != nil {
-					continue
-				}
-				if uerr := json.Unmarshal(buf, &row); uerr != nil || row.LibraryItemID == "" {
-					continue
-				}
+			row, ok := decodeProgressRow(raw)
+			if !ok {
+				continue
+			}
+			bookID := row.storedBookID
+			if bookID == "" {
 				id, rerr := h.bookIDForSyncID(row.LibraryItemID)
 				if rerr != nil {
 					return nil, filterResolved, rerr
@@ -368,7 +396,7 @@ func (h *Handler) progressFilterBookIDs(c *gin.Context, state string) ([]string,
 			}
 			if row.IsFinished {
 				finished[bookID] = struct{}{}
-			} else if row.CurrentTime > 0 || row.Progress > 0 {
+			} else if row.started() {
 				started[bookID] = struct{}{}
 			}
 		}
