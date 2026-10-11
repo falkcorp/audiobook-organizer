@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
 // last-edited: 2026-10-11
 
@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
@@ -35,7 +36,8 @@ var aiMetricsLog = logger.New("ai.metrics")
 // on the existing /metrics scrape. "endpoint" and "node" are deliberately not
 // labels (rule C5: the pool is growable, and the histogram multiplies every
 // label by its bucket count); the endpoint id is a span attribute only. The
-// model label is bounded for the same reason, see modelLabelSet.
+// model label is bounded for the same reason: it names the configured models
+// and folds the rest to "other", see modelLabelSet.
 //
 // This file must not import openai-go: aidispatch's
 // TestGuard_NoAIBackendCallsOutsideTheDispatcher treats any file that does as
@@ -94,58 +96,178 @@ var (
 // maxModelLabelLen bounds a model label value; see callMeta.normalized.
 const maxModelLabelLen = 64
 
-// maxModelLabels is how many distinct (provider, model) pairs the process
-// labels by name before folding further models to "other". It is the cardinality
-// guard of rule C2 for a growable pool: every routed parser sends its own
-// endpoint's model, so the number of models is not a constant of the product.
+// maxModelLabels is how many distinct (provider, model) pairs the process names
+// in the model label over its whole life; every other model is "other". It is
+// the cardinality guard of rule C2 for a growable pool: every routed parser
+// sends its own endpoint's model, so the number of models is not a constant of
+// the product.
 //
 // The arithmetic: the duration histogram exports 15 series (12 buckets, +Inf,
-// _sum, _count) per (provider, model, task), the widest family. Past the limit
-// a model folds to "other", one more pair per provider, so at most
-// maxModelLabels + 2 pairs exist: (5 + 2) x 9 tasks x 15 = 945, under the
-// 1,000-series cap. Raising this by one costs 135 series and breaks the cap, so
-// TestSeriesCardinalityBound fails first.
+// _sum, _count) per (provider, model, task), the widest family. "other" is one
+// more value per provider and nothing else is reserved (an empty model is
+// folded to "other" too, see normalized), so at most maxModelLabels + 2 pairs
+// exist: (5 + 2) x 9 tasks x 15 = 945, under the 1,000-series cap. Raising this
+// by one costs 135 series and breaks the cap, so TestSeriesCardinalityBound
+// fails first. Keeping "unknown" as a label of its own would be two more pairs
+// (one per provider) and cap this at 3.
+//
+// "Over its whole life" matters: the OTel instruments are cumulative, so a
+// series stays on /metrics until restart even after nothing records to it, and
+// a pair dropped from the named set would still count against C2. A name is
+// therefore never revoked.
 const maxModelLabels = 5
 
-// modelLabelSet admits the first maxModelLabels distinct (provider, model) pairs
-// seen by the process and folds the rest to "other". Admission is sticky for the
-// life of the process, so one pair always gets the same label in all four
-// families: a model rotated in after the limit is reached stays "other" until
-// restart rather than evicting a name already in dashboards.
+// modelPair is the admission key: the same model name served by a local backend
+// and by OpenAI are two label values of two providers.
+type modelPair struct{ provider, model string }
+
+// modelLabelSet decides which models the model label names (owner decision
+// 2026-10-11, AI-MODEL-LABEL-CAP-POLICY): the models configured in settings,
+// always, and nothing else; every other model is "other".
+//
+// The named set is derived from the config, never from the order calls arrive
+// in. It is filled from config.Snapshot the first time a label is needed and
+// again whenever config.Generation moves, which covers the startup load,
+// PUT /config and the update service's rollback alike. So a restart with the
+// same settings names the same models whatever runs first, a model an admin
+// merely tried while it was not saved costs nothing, and a model saved in
+// settings is named from the next call on.
+//
+// Names are sticky: a model that was configured and is then replaced stays
+// named until restart, because its series stays exported until then (see
+// maxModelLabels) and renaming it would split one series in two. The price is
+// that the named set can hold at most maxModelLabels pairs per process life: a
+// model configured after that many others were, which does not fit, is
+// "other" until restart and logs a warning saying so. Which pairs a config
+// names when it holds more than the cap is configuredModelPairs' priority
+// order, not call order.
 type modelLabelSet struct {
-	mu       sync.Mutex
-	admitted map[string]struct{}
+	mu    sync.RWMutex
+	named map[modelPair]struct{}
+	// warned records pairs already reported as not fitting, so the warning is
+	// once per pair per process rather than once per settings write.
+	warned map[modelPair]struct{}
+	// syncedGen is the source generation + 1 that named was last filled at;
+	// zero means never. Atomic so the common case (nothing changed) is one load.
+	syncedGen atomic.Uint64
+	// source is atomic because syncIfStale reads it before taking mu; only
+	// tests ever replace it.
+	source atomic.Pointer[modelSource]
+	// fixedGen numbers setConfigured calls, tests only.
+	fixedGen uint64
 }
 
-var modelLabels = &modelLabelSet{admitted: map[string]struct{}{}}
+// modelSource is where the configured models come from. Production reads the
+// live config; tests substitute a fixed list.
+type modelSource struct {
+	generation func() uint64
+	configured func() []modelPair
+}
 
+func configModelSource() modelSource {
+	return modelSource{
+		generation: config.Generation,
+		configured: func() []modelPair {
+			cfg := config.Snapshot()
+			return configuredModelPairs(&cfg)
+		},
+	}
+}
+
+var modelLabels = newModelLabelSet()
+
+func newModelLabelSet() *modelLabelSet {
+	s := &modelLabelSet{
+		named:  map[modelPair]struct{}{},
+		warned: map[modelPair]struct{}{},
+	}
+	src := configModelSource()
+	s.source.Store(&src)
+	return s
+}
+
+// admit returns the label for model: its own name when (provider, model) is a
+// configured pair that fits, "other" otherwise.
 func (s *modelLabelSet) admit(provider, model string) string {
 	if model == modelOther {
 		return model
 	}
-	key := provider + "\x00" + model
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.admitted[key]; ok {
+	s.syncIfStale()
+	s.mu.RLock()
+	_, ok := s.named[modelPair{provider, model}]
+	s.mu.RUnlock()
+	if ok {
 		return model
 	}
-	if len(s.admitted) >= maxModelLabels {
-		return modelOther
-	}
-	s.admitted[key] = struct{}{}
-	return model
+	return modelOther
 }
 
-// reset forgets every admitted pair; tests only.
+// syncIfStale names the configured pairs the set does not name yet, when the
+// source has changed since the last sync.
+func (s *modelLabelSet) syncIfStale() {
+	src := s.source.Load()
+	gen := src.generation() + 1
+	if s.syncedGen.Load() == gen {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.syncedGen.Load() == gen {
+		return
+	}
+	// Read under s.mu so two racing syncs cannot interleave, and after the
+	// generation was read, so what is named is at least that generation's
+	// state. config.Snapshot takes config's read lock; nothing holds that lock
+	// while calling into this package, so there is no lock-order cycle.
+	for _, p := range src.configured() {
+		if _, ok := s.named[p]; ok {
+			continue
+		}
+		if len(s.named) >= maxModelLabels {
+			if _, seen := s.warned[p]; !seen {
+				s.warned[p] = struct{}{}
+				aiMetricsLog.Warn("ai metrics: configured model cannot be named in the model label; "+
+					"it is reported as \"other\" until the process restarts (provider=%q model=%q named_models_cap=%d)",
+					p.provider, p.model, maxModelLabels)
+			}
+			continue
+		}
+		s.named[p] = struct{}{}
+	}
+	s.syncedGen.Store(gen)
+}
+
+// reset forgets every named pair and goes back to the live config as the
+// source; tests only.
 func (s *modelLabelSet) reset() {
 	s.mu.Lock()
-	s.admitted = map[string]struct{}{}
+	s.named = map[modelPair]struct{}{}
+	s.warned = map[modelPair]struct{}{}
+	src := configModelSource()
+	s.source.Store(&src)
+	s.syncedGen.Store(0)
+	s.mu.Unlock()
+}
+
+// setConfigured replaces the source with a fixed list of configured pairs and
+// marks it changed, so the next label re-syncs: a test calls it again to
+// simulate a settings change. Tests only.
+func (s *modelLabelSet) setConfigured(pairs ...modelPair) {
+	s.mu.Lock()
+	s.fixedGen++
+	gen := s.fixedGen
+	s.source.Store(&modelSource{
+		generation: func() uint64 { return gen },
+		configured: func() []modelPair { return pairs },
+	})
 	s.mu.Unlock()
 }
 
 // Model label values that are not a model name.
 const (
-	modelOther   = "other"
+	modelOther = "other"
+	// modelUnknown is the span's ai.model for a call that sent no model. The
+	// metric label folds it to modelOther (see callMeta.normalized).
 	modelUnknown = "unknown"
 )
 
@@ -166,18 +288,25 @@ type callMeta struct {
 }
 
 // normalized folds a model string that would make a poor label value to a
-// fixed one: empty is "unknown"; longer than 64 characters or containing
-// whitespace (free text leaking into the model field) is "other"; and past the
-// first maxModelLabels distinct (provider, model) pairs the process has seen, a
-// model is "other" too (see modelLabelSet). Only the metric label is capped:
-// spanModel keeps the name that survived the first two folds.
+// fixed one: empty or longer than 64 characters or containing whitespace (free
+// text leaking into the model field) is "other"; and a model that is not one of
+// the configured models is "other" too (see modelLabelSet). Only the metric
+// label is folded this far: spanModel keeps the name that survived the length
+// and whitespace folds, and "unknown" for an empty one, so a span still says
+// what a label cannot.
 func (m callMeta) normalized() callMeta {
 	if m.provider == "" {
 		m.provider = providerOpenAI
 	}
 	switch {
 	case m.model == "":
-		m.model = modelUnknown
+		// Not "unknown" as a label of its own: that is one more value per
+		// provider on every family, which the series cap has no room for (see
+		// maxModelLabels).
+		if m.spanModel == "" {
+			m.spanModel = modelUnknown
+		}
+		m.model = modelOther
 	case len(m.model) > maxModelLabelLen || strings.ContainsAny(m.model, " \t\r\n"):
 		m.model = modelOther
 	}

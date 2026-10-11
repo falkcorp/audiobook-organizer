@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.151.0
+// version: 1.152.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
@@ -1924,8 +1925,28 @@ func AuthorityEvidenceEnabled() bool {
 func Mutate(fn func(*Config)) {
 	mu.Lock()
 	defer mu.Unlock()
+	// Deferred after the Unlock defer so it runs first, still under the lock:
+	// a reader that sees the new generation and then calls Snapshot is
+	// guaranteed to see the write. It also fires when fn panics, because fn may
+	// have changed the config before it did.
+	defer generation.Add(1)
 	fn(&AppConfig)
 }
+
+// generation counts completed Mutate calls; see Generation.
+var generation atomic.Uint64
+
+// Generation returns a counter that changes whenever Mutate has changed the
+// config. A consumer that derives state from the config (internal/ai derives
+// its metric model-label set) compares it to the value it last synced at, one
+// atomic load per use, and re-reads Snapshot only when it moved. That covers
+// every write path (startup load, PUT /config, the update service's rollback)
+// without each of them having to know about the consumer, and without
+// internal/config importing it. It counts calls, not changed values, so a
+// no-op Mutate also moves it; consumers must treat a move as "re-derive".
+// Writes that bypass Mutate (direct AppConfig assignments, which the Mutate
+// convention forbids) are not seen.
+func Generation() uint64 { return generation.Load() }
 
 // applyEnvAuthoritativeConfig re-applies the environment-authoritative config keys on
 // top of an already-populated Config, so a systemd Environment= value wins over a
