@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
 // last-edited: 2026-10-11
 
@@ -62,11 +62,25 @@ func (p *PebbleStore) GetSystemActivityLogs(source string, limit int) ([]SystemA
 	return logs, nil
 }
 
-// PruneChunkFunc is called after each committed prune chunk with the number of
-// rows that chunk deleted. A nil PruneChunkFunc is allowed everywhere one is
-// accepted. It runs on the pruning goroutine between chunks, so it must be
-// quick and must not call back into the store.
-type PruneChunkFunc = func(deleted int)
+// PruneProgressFunc reports a prune's progress: scanned is how many rows under
+// the prune's prefix it has examined so far and deleted how many it has
+// deleted (committed) so far, both running totals for this call. It is called
+// after each committed chunk AND every pruneScanTick rows scanned, so a long
+// scan that finds nothing to delete still reports (the purge op's watchdog
+// reads that as liveness). A nil PruneProgressFunc is allowed everywhere one
+// is accepted. It runs on the pruning goroutine, so it must be quick and must
+// not call back into the store.
+type PruneProgressFunc = func(scanned, deleted int)
+
+// pruneScanTick is how many scanned rows pass between two progress reports
+// and ctx checks during a prune's scan. Without it the scan between two
+// commits was silent and blind to a cancel: after the first purge clears the
+// backlog, every later run is a few deletions followed by a scan of every
+// unexpired row, with nothing to commit and therefore nothing to report.
+// Decoding 10,000 rows takes milliseconds, so the tick is frequent enough for
+// any watchdog and cheap enough to be invisible. A var only so tests can
+// exercise ticks on small fixtures; never reassign in prod code.
+var pruneScanTick = 10_000
 
 // logPruneChunk is how many rows one PruneOperationLogs or
 // PruneSystemActivityLogs commit deletes. It matches opChangePruneChunk: a
@@ -82,12 +96,14 @@ var logPruneChunk = 5_000
 // whole backlog in one batch. A row whose value expired() cannot judge (it
 // returns ok=false) is skipped, never deleted.
 //
-// ctx is checked before each chunk's commit and once on entry, so a cancelled
-// context stops between chunks: every chunk already committed stays committed,
-// the staged-but-uncommitted remainder is dropped, and the returned count is
+// ctx is checked once on entry, before each chunk's commit and every
+// pruneScanTick scanned rows, so a cancelled context stops the prune between
+// chunks or mid-scan: every chunk already committed stays committed, the
+// staged-but-uncommitted remainder is dropped, and the returned count is
 // exactly the rows deleted by committed chunks, alongside ctx.Err() (a
-// cancellation is reported, never turned into a nil error). onChunk, when
-// non-nil, runs after each successful commit.
+// cancellation is reported, never turned into a nil error). onProgress, when
+// non-nil, runs after each successful commit and every pruneScanTick scanned
+// rows (see PruneProgressFunc).
 //
 // Concurrency note: this is deliberately one sequential pass. Every chunk is
 // disjoint from the next by construction (the iterator walks each key once), so
@@ -100,7 +116,7 @@ var logPruneChunk = 5_000
 // committed.
 func (p *PebbleStore) pruneExpiredChunked(
 	ctx context.Context, prefix, label string,
-	expired func(value []byte) (isExpired bool, ok bool), onChunk PruneChunkFunc,
+	expired func(value []byte) (isExpired bool, ok bool), onProgress PruneProgressFunc,
 ) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -119,11 +135,16 @@ func (p *PebbleStore) pruneExpiredChunked(
 	if chunk < 1 {
 		chunk = 1
 	}
+	tick := max(pruneScanTick, 1)
 	batch := p.db.NewBatch()
 	defer func() { batch.Close() }()
 
-	deleted := 0
-	staged := 0
+	scanned, deleted, staged := 0, 0, 0
+	report := func() {
+		if onProgress != nil {
+			onProgress(scanned, deleted)
+		}
+	}
 	commit := func() error {
 		if staged == 0 {
 			return nil
@@ -135,27 +156,34 @@ func (p *PebbleStore) pruneExpiredChunked(
 			return fmt.Errorf("commit %s prune chunk: %w", label, err)
 		}
 		deleted += staged
-		if onChunk != nil {
-			onChunk(staged)
-		}
 		staged = 0
+		report()
 		batch.Close()
 		batch = p.db.NewBatch()
 		return nil
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
+		scanned++
 		isExpired, ok := expired(iter.Value())
-		if !ok || !isExpired {
-			continue
+		if ok && isExpired {
+			if bErr := batch.Delete(iter.Key(), nil); bErr != nil {
+				return deleted, fmt.Errorf("pebble batch delete %s: %w", label, bErr)
+			}
+			staged++
+			if staged >= chunk {
+				if err := commit(); err != nil {
+					return deleted, err
+				}
+			}
 		}
-		if bErr := batch.Delete(iter.Key(), nil); bErr != nil {
-			return deleted, fmt.Errorf("pebble batch delete %s: %w", label, bErr)
-		}
-		staged++
-		if staged >= chunk {
-			if err := commit(); err != nil {
+		if scanned%tick == 0 {
+			// Scan heartbeat: stop on a cancel even when nothing is staged
+			// (the staged rows are dropped, as on any cancel), and report so
+			// a long scan with nothing to delete does not look dead.
+			if err := ctx.Err(); err != nil {
 				return deleted, err
 			}
+			report()
 		}
 	}
 	if err := iter.Error(); err != nil {
@@ -171,7 +199,7 @@ func (p *PebbleStore) pruneExpiredChunked(
 // in chunks of logPruneChunk (see pruneExpiredChunked for the commit,
 // cancellation and progress contract).
 // Key format: operationlog:<operation_id>:<timestamp_nanos>:<seq>
-func (p *PebbleStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error) {
+func (p *PebbleStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error) {
 	olderThanNanos := olderThan.UnixNano()
 	return p.pruneExpiredChunked(ctx, "operationlog:", "operationlog", func(v []byte) (bool, bool) {
 		// The key's timestamp is not the entry's CreatedAt; parse the value.
@@ -180,7 +208,7 @@ func (p *PebbleStore) PruneOperationLogs(ctx context.Context, olderThan time.Tim
 			return false, false
 		}
 		return logEntry.CreatedAt.UnixNano() < olderThanNanos, true
-	}, onChunk)
+	}, onProgress)
 }
 
 // opChangePruneChunk is how many journal rows one PruneOperationChanges commit
@@ -225,10 +253,22 @@ var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true, "repa
 // entry of the BookID it has NOW. A row rewritten under the same id after the
 // iterator read it (CreateOperationChange with a supplied id, which holds the
 // read side from its read to its commit) therefore survives with its entry.
-// On a failure, or when ctx is cancelled (checked before each chunk; ctx.Err()
-// is returned, never swallowed), it returns the rows deleted by the chunks
-// already committed. onChunk, when non-nil, runs after each committed chunk.
-func (p *PebbleStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error) {
+// On a failure, or when ctx is cancelled (checked before each chunk and every
+// pruneScanTick scanned rows; ctx.Err() is returned, never swallowed), it
+// returns the rows deleted by the chunks already committed. onProgress, when
+// non-nil, runs after each committed chunk and every pruneScanTick scanned
+// rows (see PruneProgressFunc).
+//
+// NOTHING CALLS THIS IN PRODUCTION. Until 2026-10-11 it was a step of
+// logger.PruneOldLogs, driven by log_retention_days; that wiring never ran on
+// prod (the setting was never read) and was removed before it could, because
+// the approved storage design (docs/design/2026-10-03-storage-efficiency-design.md
+// section 7, "Separate settings") gives the undo journal its own undo window so
+// no log setting can shorten undo, keeps book_file_delete / book_file_repoint
+// rows until the release C ledger scan has run, and requires a dry-run-first,
+// capped first run. It is kept, with its chunking and tests, for that
+// undo-window op (todo.d UNDO-WINDOW-PRUNE); wire it only through that op.
+func (p *PebbleStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -246,7 +286,13 @@ func (p *PebbleStore) PruneOperationChanges(ctx context.Context, olderThan time.
 	if chunk < 1 {
 		chunk = 1
 	}
-	deleted := 0
+	tick := max(pruneScanTick, 1)
+	scanned, deleted := 0, 0
+	report := func() {
+		if onProgress != nil {
+			onProgress(scanned, deleted)
+		}
+	}
 	cands := make([][]byte, 0, chunk)
 	flush := func() error {
 		if len(cands) == 0 {
@@ -260,24 +306,29 @@ func (p *PebbleStore) PruneOperationChanges(ctx context.Context, olderThan time.
 		n, err := p.pruneOpChangeChunk(cands, olderThan)
 		deleted += n
 		cands = cands[:0]
-		if err == nil && n > 0 && onChunk != nil {
-			onChunk(n)
+		if err == nil && n > 0 {
+			report()
 		}
 		return err
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
+		scanned++
 		var change OperationChange
-		if jsonErr := json.Unmarshal(iter.Value(), &change); jsonErr != nil {
-			continue
+		if jsonErr := json.Unmarshal(iter.Value(), &change); jsonErr == nil &&
+			change.CreatedAt.Before(olderThan) && !OpChangeTypesKeptByPrune[change.ChangeType] {
+			cands = append(cands, bytes.Clone(iter.Key()))
+			if len(cands) >= chunk {
+				if err := flush(); err != nil {
+					return deleted, err
+				}
+			}
 		}
-		if !change.CreatedAt.Before(olderThan) || OpChangeTypesKeptByPrune[change.ChangeType] {
-			continue
-		}
-		cands = append(cands, bytes.Clone(iter.Key()))
-		if len(cands) >= chunk {
-			if err := flush(); err != nil {
+		if scanned%tick == 0 {
+			// Scan heartbeat; see pruneExpiredChunked.
+			if err := ctx.Err(); err != nil {
 				return deleted, err
 			}
+			report()
 		}
 	}
 	if err := iter.Error(); err != nil {
@@ -343,7 +394,7 @@ func (p *PebbleStore) pruneOpChangeChunk(keys [][]byte, olderThan time.Time) (in
 // commit, cancellation and progress contract). syslog: rows have no other
 // cleanup, so the first prune on an old install walks a months-long backlog.
 // Key format: syslog:<RFC3339Nano>:<source>
-func (p *PebbleStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error) {
+func (p *PebbleStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error) {
 	// RFC3339Nano contains colons (e.g. "2006-01-02T15:04:05.999999999Z07:00"),
 	// so we parse the JSON value to get CreatedAt rather than parsing the key.
 	return p.pruneExpiredChunked(ctx, "syslog:", "syslog", func(v []byte) (bool, bool) {
@@ -354,5 +405,5 @@ func (p *PebbleStore) PruneSystemActivityLogs(ctx context.Context, olderThan tim
 			return false, false
 		}
 		return entry.CreatedAt.Before(olderThan), true
-	}, onChunk)
+	}, onProgress)
 }

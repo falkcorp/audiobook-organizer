@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_log_prune_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e8b41d7-6c2a-4f93-a5d0-7b3c9e14f2a8
 // last-edited: 2026-10-11
 
@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // logPruneKinds drives the same behavioural tests against both log prunes, which
@@ -24,7 +26,7 @@ type logPruneKind struct {
 	name   string
 	prefix string
 	seed   func(t *testing.T, p *PebbleStore, n int, at time.Time, tag string)
-	prune  func(p *PebbleStore, ctx context.Context, cut time.Time, onChunk PruneChunkFunc) (int, error)
+	prune  func(p *PebbleStore, ctx context.Context, cut time.Time, onProgress PruneProgressFunc) (int, error)
 }
 
 var logPruneKinds = []logPruneKind{
@@ -99,6 +101,26 @@ func containsTag(key, tag string) bool {
 	return false
 }
 
+// chunkSizes returns a PruneProgressFunc that appends the size of each
+// committed chunk (the growth of the running deleted total) to *chunks. A
+// report that deletes nothing (a scan heartbeat) appends nothing.
+func chunkSizes(chunks *[]int) PruneProgressFunc {
+	last := 0
+	return func(_, deleted int) {
+		if deleted > last {
+			*chunks = append(*chunks, deleted-last)
+			last = deleted
+		}
+	}
+}
+
+func setPruneScanTick(t *testing.T, n int) {
+	t.Helper()
+	old := pruneScanTick
+	pruneScanTick = n
+	t.Cleanup(func() { pruneScanTick = old })
+}
+
 func setLogPruneChunk(t *testing.T, n int) {
 	t.Helper()
 	old := logPruneChunk
@@ -121,7 +143,7 @@ func TestLogPrune_MultiChunkDeletesAllExpiredAndOnlyExpired(t *testing.T) {
 			k.seed(t, p, 10, fresh, "new")
 
 			var chunks []int
-			n, err := k.prune(p, context.Background(), cut, func(d int) { chunks = append(chunks, d) })
+			n, err := k.prune(p, context.Background(), cut, chunkSizes(&chunks))
 			if err != nil || n != 50 {
 				t.Fatalf("prune = %d, %v; want 50, nil", n, err)
 			}
@@ -137,9 +159,9 @@ func TestLogPrune_MultiChunkDeletesAllExpiredAndOnlyExpired(t *testing.T) {
 			}
 
 			// Idempotent: nothing expired is left, so no chunk and no change.
-			calls := 0
-			n, err = k.prune(p, context.Background(), cut, func(int) { calls++ })
-			if err != nil || n != 0 || calls != 0 {
+			var calls []int
+			n, err = k.prune(p, context.Background(), cut, chunkSizes(&calls))
+			if err != nil || n != 0 || len(calls) != 0 {
 				t.Fatalf("re-run = %d, %v with %d chunks; want 0, nil, 0", n, err, calls)
 			}
 			if got := countPrefix(t, p, k.prefix, ""); got != 10 {
@@ -158,7 +180,7 @@ func TestLogPrune_ExactMultipleOfChunk(t *testing.T) {
 			setLogPruneChunk(t, 10)
 			k.seed(t, p, 30, time.Now().Add(-48*time.Hour), "old")
 			var chunks []int
-			n, err := k.prune(p, context.Background(), time.Now().Add(-time.Hour), func(d int) { chunks = append(chunks, d) })
+			n, err := k.prune(p, context.Background(), time.Now().Add(-time.Hour), chunkSizes(&chunks))
 			if err != nil || n != 30 || fmt.Sprint(chunks) != "[10 10 10]" {
 				t.Fatalf("prune = %d, %v, chunks %v; want 30, nil, [10 10 10]", n, err, chunks)
 			}
@@ -182,8 +204,8 @@ func TestLogPrune_CancelStopsBetweenChunksKeepingCommittedWork(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			chunks := 0
-			n, err := k.prune(p, ctx, cut, func(int) {
-				chunks++
+			n, err := k.prune(p, ctx, cut, func(_, deleted int) {
+				chunks = deleted / 10
 				if chunks == 2 {
 					cancel()
 				}
@@ -274,8 +296,9 @@ func TestOpChangePrune_CancelStopsBetweenChunks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var chunks []int
-	n, err := p.PruneOperationChanges(ctx, time.Now().Add(-time.Hour), func(d int) {
-		chunks = append(chunks, d)
+	record := chunkSizes(&chunks)
+	n, err := p.PruneOperationChanges(ctx, time.Now().Add(-time.Hour), func(scanned, deleted int) {
+		record(scanned, deleted)
 		if len(chunks) == 2 {
 			cancel()
 		}
@@ -293,5 +316,140 @@ func TestOpChangePrune_CancelStopsBetweenChunks(t *testing.T) {
 	}
 	if k := countOpChangeIndexKeys(t, p); k != 0 {
 		t.Fatalf("index keys after resume = %d, want 0", k)
+	}
+}
+
+// A scan with nothing to delete still reports every pruneScanTick rows, with
+// running scanned totals and deleted still 0: after the backlog is gone every
+// weekly purge is mostly such a scan, and without the heartbeat it was silent
+// for its whole length (the purge op's watchdog read that as stuck).
+func TestPrune_ScanHeartbeatReportsWithNothingToDelete(t *testing.T) {
+	for _, k := range logPruneKinds {
+		t.Run(k.name, func(t *testing.T) {
+			p := newOpChangeTestStore(t)
+			setPruneScanTick(t, 5)
+			k.seed(t, p, 23, time.Now(), "new")
+			var seen [][2]int
+			n, err := k.prune(p, context.Background(), time.Now().Add(-time.Hour), func(scanned, deleted int) {
+				seen = append(seen, [2]int{scanned, deleted})
+			})
+			if err != nil || n != 0 {
+				t.Fatalf("prune = %d, %v; want 0, nil", n, err)
+			}
+			if fmt.Sprint(seen) != "[[5 0] [10 0] [15 0] [20 0]]" {
+				t.Fatalf("progress = %v, want a heartbeat every 5 scanned rows with nothing deleted", seen)
+			}
+		})
+	}
+	t.Run("opchange", func(t *testing.T) {
+		p := newOpChangeTestStore(t)
+		setPruneScanTick(t, 5)
+		mustTrustOpChange(t, p)
+		for i := 0; i < 12; i++ {
+			rawPutOpChange(t, p, &OperationChange{ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: "b", CreatedAt: time.Now()})
+		}
+		var seen [][2]int
+		n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-time.Hour), func(scanned, deleted int) {
+			seen = append(seen, [2]int{scanned, deleted})
+		})
+		if err != nil || n != 0 || fmt.Sprint(seen) != "[[5 0] [10 0]]" {
+			t.Fatalf("prune = %d, %v, progress %v; want 0, nil, [[5 0] [10 0]]", n, err, seen)
+		}
+	})
+}
+
+// A cancel during the scan stops it at the next heartbeat even when no chunk
+// is due: the cancel is returned, the staged rows are not committed, and the
+// scan does not run on to the end of the prefix.
+func TestPrune_CancelDuringScanStopsAtTheNextHeartbeat(t *testing.T) {
+	for _, k := range logPruneKinds {
+		t.Run(k.name, func(t *testing.T) {
+			p := newOpChangeTestStore(t)
+			setPruneScanTick(t, 5)
+			setLogPruneChunk(t, 1000) // no chunk commits during this scan
+			k.seed(t, p, 30, time.Now().Add(-48*time.Hour), "old")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var seen []int
+			n, err := k.prune(p, ctx, time.Now().Add(-time.Hour), func(scanned, _ int) {
+				seen = append(seen, scanned)
+				cancel()
+			})
+			if !errors.Is(err, context.Canceled) || n != 0 {
+				t.Fatalf("prune = %d, %v; want 0, context.Canceled", n, err)
+			}
+			if fmt.Sprint(seen) != "[5]" {
+				t.Fatalf("heartbeats = %v, want the scan to stop at the first one after the cancel ([5])", seen)
+			}
+			if got := countPrefix(t, p, k.prefix, ""); got != 30 {
+				t.Fatalf("rows left = %d, want all 30 (staged rows are never committed on a cancel)", got)
+			}
+		})
+	}
+	t.Run("opchange", func(t *testing.T) {
+		p := newOpChangeTestStore(t)
+		setPruneScanTick(t, 5)
+		old := opChangePruneChunk
+		opChangePruneChunk = 1000
+		t.Cleanup(func() { opChangePruneChunk = old })
+		mustTrustOpChange(t, p)
+		for i := 0; i < 12; i++ {
+			rawPutOpChange(t, p, &OperationChange{ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: "b", CreatedAt: time.Now().Add(-48 * time.Hour)})
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		calls := 0
+		n, err := p.PruneOperationChanges(ctx, time.Now().Add(-time.Hour), func(int, int) { calls++; cancel() })
+		if !errors.Is(err, context.Canceled) || n != 0 || calls != 1 {
+			t.Fatalf("prune = %d, %v after %d heartbeats; want 0, context.Canceled, 1", n, err, calls)
+		}
+		if got := countPrefix(t, p, opChangeKeyPrefix, ""); got != 12 {
+			t.Fatalf("opchange rows = %d, want all 12", got)
+		}
+	})
+}
+
+// The log purge (logger.PruneOldLogs, what maintenance.purge-old-logs runs)
+// must never touch the undo journal. opchange: rows are undo history: the
+// approved storage design (docs/design/2026-10-03-storage-efficiency-design.md
+// section 7) gives them their own undo window so no log setting can shorten
+// undo, and keeps book_file_delete / book_file_repoint rows until the release C
+// ledger scan. Old journal rows of every type, and their opchange_by_book:
+// entries, survive a purge that does delete the old log rows around them.
+func TestPruneOldLogs_LeavesTheUndoJournalUntouched(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustTrustOpChange(t, p)
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	types := []string{"book_file_delete", "book_file_repoint", "file_move", "metadata_update", "repair_plan_record"}
+	for i, ct := range types {
+		rawPutOpChange(t, p, &OperationChange{
+			ID: fmt.Sprintf("c%02d", i), OperationID: "op-old", BookID: fmt.Sprintf("b%d", i), ChangeType: ct, CreatedAt: old,
+		})
+	}
+	mustTrustOpChange(t, p)
+	rowsBefore := countPrefix(t, p, opChangeKeyPrefix, "")
+	indexBefore := countOpChangeIndexKeys(t, p)
+	if rowsBefore != len(types) || indexBefore != len(types) {
+		t.Fatalf("fixture: %d rows, %d index entries; want %d of each", rowsBefore, indexBefore, len(types))
+	}
+	for _, k := range logPruneKinds {
+		k.seed(t, p, 20, old, "old")
+		k.seed(t, p, 3, time.Now(), "new")
+	}
+
+	n, err := logger.PruneOldLogs(context.Background(), p, 90, logger.New("test"), nil)
+	if err != nil || n != 40 {
+		t.Fatalf("PruneOldLogs = %d, %v; want the 40 old log rows, nil", n, err)
+	}
+	for _, k := range logPruneKinds {
+		if got := countPrefix(t, p, k.prefix, ""); got != 3 {
+			t.Errorf("%s rows left = %d, want the 3 recent ones (the purge must still purge logs)", k.name, got)
+		}
+	}
+	if got := countPrefix(t, p, opChangeKeyPrefix, ""); got != rowsBefore {
+		t.Errorf("opchange rows = %d after the log purge, want all %d: the log purge deleted undo history", got, rowsBefore)
+	}
+	if got := countOpChangeIndexKeys(t, p); got != indexBefore {
+		t.Errorf("opchange_by_book entries = %d after the log purge, want all %d", got, indexBefore)
 	}
 }

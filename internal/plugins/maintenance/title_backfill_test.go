@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-11
 
@@ -235,7 +235,7 @@ func (d fakeDeps) AIScanStoreCompactionStats() (compactprogress.Stats, bool) {
 func (d fakeDeps) OLStoreCompactionStats() (compactprogress.Stats, bool) {
 	return compactprogress.Stats{}, false
 }
-func (d fakeDeps) PruneOldLogs(_ context.Context, _ int, _ func(string, int)) (int, error) {
+func (d fakeDeps) PruneOldLogs(_ context.Context, _ int, _ func(string, int, int)) (int, error) {
 	return 0, nil
 }
 func (d fakeDeps) MaintainActivityLog(_ context.Context, _, _ int) (int, int, int64, error) {

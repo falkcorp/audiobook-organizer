@@ -1,5 +1,5 @@
 // file: internal/database/iface_system.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 92c85d7d-c1fb-43c0-a0a4-2ef742107420
 // last-edited: 2026-10-11
 
@@ -45,8 +45,8 @@ type SystemActivityStore interface {
 	AddSystemActivityLog(source, level, message string) error
 	GetSystemActivityLogs(source string, limit int) ([]SystemActivityLog, error)
 	// PruneSystemActivityLogs deletes in bounded chunks with the same ctx and
-	// onChunk contract as OperationPruner.PruneOperationLogs.
-	PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
+	// onProgress contract as OperationPruner.PruneOperationLogs.
+	PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error)
 }
 
 // MaintenanceStore covers database maintenance and scan-cache.
