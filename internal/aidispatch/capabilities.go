@@ -1,7 +1,7 @@
 // file: internal/aidispatch/capabilities.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0db30d05-394d-4291-bc11-e466dd168c73
-// last-edited: 2026-09-13
+// last-edited: 2026-10-11
 
 // Package aidispatch routes every kind of AI work to the endpoints that are
 // explicitly allowed to do it.
@@ -42,9 +42,6 @@ const (
 	// it in OptionalFeatures, and delivery falls back to upload without it.
 	FeatureSharedFSPrefix = "shared_fs:"
 )
-
-// SharedFSFeature returns the feature string for one library root.
-func SharedFSFeature(rootID string) string { return FeatureSharedFSPrefix + rootID }
 
 // Capability identifies one kind of AI work.
 //

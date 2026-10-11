@@ -1,6 +1,7 @@
 // file: internal/ai/llm_scorer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3d9f21-a4b8-4e15-92f6-0d5c8b1e6a3f
+// last-edited: 2026-10-11
 
 package ai
 
@@ -37,11 +38,6 @@ func NewLLMScorer(parser *OpenAIParser) *LLMScorer {
 		return &LLMScorer{backend: nil}
 	}
 	return &LLMScorer{backend: parser}
-}
-
-// NewLLMScorerWithBackend is the test seam. Do not call from production.
-func NewLLMScorerWithBackend(backend metadataLLMBackend) *LLMScorer {
-	return &LLMScorer{backend: backend}
 }
 
 // Name implements MetadataCandidateScorer.

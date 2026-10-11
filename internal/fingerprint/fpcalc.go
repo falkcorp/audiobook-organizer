@@ -1,7 +1,7 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.8.1
+// version: 3.8.2
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 // Package fingerprint generates AcoustID-compatible acoustic fingerprints for
 // audio files. It supports two backends:
@@ -135,24 +135,6 @@ func Available() bool {
 	}
 	_, err := exec.LookPath("ffmpeg")
 	return err == nil
-}
-
-// File generates an AcoustID fingerprint for the first segment of an audio
-// file (backward compatibility wrapper). Returns ErrNotAvailable if no
-// backend is on PATH.
-func File(path string) (*Result, error) {
-	segs, err := FileSegments(path, 0)
-	if err != nil {
-		return nil, err
-	}
-	dur, err := probeDuration(path)
-	if err != nil {
-		dur = 0
-	}
-	return &Result{
-		Duration:    dur,
-		Fingerprint: segs[0],
-	}, nil
 }
 
 // FileHeadSegment returns only segment [0] of FileSegments: SegmentSeconds

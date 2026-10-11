@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_prop_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 864889b2-5529-4d23-9220-2f17e11fab35
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 // Property-based tests for the library-list sort, filter, and pagination
 // code paths in internal/server/audiobook_service.go. These properties
@@ -80,7 +80,7 @@ var sortableFields = []string{
 
 // filterableFields enumerates the FieldFilter.Field values the partition
 // property will test against. Each corresponds to a branch of
-// fieldMatchesValue in audiobook_service.go.
+// fieldMatchesCompiled in filter_compiled.go.
 var filterableFields = []string{
 	"title", "author", "narrator", "series", "genre",
 	"language", "publisher", "edition", "format", "codec",

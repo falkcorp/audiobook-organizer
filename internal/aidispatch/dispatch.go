@@ -1,5 +1,5 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
 // last-edited: 2026-10-11
 
@@ -133,12 +133,6 @@ func WithPinnedModel(c Capability, model string) Option {
 // (whisper_requires). RequireGPU on an endpoint adds "gpu" on top.
 func WithRequiredLabels(c Capability, labels ...string) Option {
 	return func(d *Dispatcher) { d.requiredLabels[c.id] = slices.Clone(labels) }
-}
-
-// WithTotalCap caps simultaneous requests across all endpoints for one kind.
-// A Limit < 1 means unlimited.
-func WithTotalCap(k Kind, total TotalCap) Option {
-	return func(d *Dispatcher) { d.totals[k] = total }
 }
 
 // WithAttemptTimeout sets a per-attempt deadline for c. The clock starts only

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_service_organize_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4f8c2a1d-5e9b-4f70-a3c6-8d1e0f2b9a47
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -46,8 +46,8 @@ func TestRevertChange_OrganizeRename(t *testing.T) {
 		NewValue:   newPath,
 	}
 
-	if err := rs.revertChange(change); err != nil {
-		t.Fatalf("revertChange failed: %v", err)
+	if err := rs.revertChangeIn(change, nil); err != nil {
+		t.Fatalf("revertChangeIn failed: %v", err)
 	}
 
 	// File moved back
@@ -76,8 +76,8 @@ func TestRevertChange_OrganizeNonMutating(t *testing.T) {
 	rs := NewRevertService(nil)
 	for _, ct := range []string{"organize_failed", "organize_skipped", "organize_summary"} {
 		change := &database.OperationChange{ChangeType: ct}
-		if err := rs.revertChange(change); err != nil {
-			t.Errorf("revertChange(%s) returned error %v, want nil", ct, err)
+		if err := rs.revertChangeIn(change, nil); err != nil {
+			t.Errorf("revertChangeIn(%s) returned error %v, want nil", ct, err)
 		}
 	}
 }
