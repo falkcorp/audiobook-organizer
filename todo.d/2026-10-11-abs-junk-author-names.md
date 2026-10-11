@@ -25,6 +25,14 @@
       `release_tag` refusal is junk — the rule was only checked on synthetic names, and the
       gate runs inside `PebbleStore.CreateAuthor` before the existing-row lookup, so a false
       positive would drop a real author's credit on every re-import, not just new mints;
+      DONE 2026-10-11 02:25 against the live author list (15,690 authors via
+      GET /api/v1/authors): 18 `release_tag` refusals, all junk (bitrate/timecode/size
+      strings such as `48k 23;45;11 489MB`, `10 831MB] #HugoWinner`,
+      `C. L. Polk [32k 08;53;59 122MB]`), zero real names. All checks together flag 776
+      existing rows (leading_punctuation 177, edition_marker 151, read_by 114,
+      timecode_or_track 93, too_long 40, structural_word 30, release_tag 18,
+      pure_number 17, placeholder 11, era_tag 10, story_count 8, html_entity 5,
+      copyright 2) — counts only; step (1) still decides per row;
       (1) get counts by pattern from a prod Plan run of the fixer (preview only, bulk-apply
       gate rules apply); (2) owner approves per row in /review Repairs; (3) after apply,
       confirm the ABS Authors tab and Newest Authors shelf no longer list them.
