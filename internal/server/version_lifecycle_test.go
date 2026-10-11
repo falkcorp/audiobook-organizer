@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -168,11 +169,169 @@ func TestHandleTrashRestoreVersion_CanonicalAudiobooksPath(t *testing.T) {
 		t.Errorf("expected status alt, got %s", updated.Status)
 	}
 
+	// purge-now only takes a trashed version, so trash the restored alt first.
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+ver.ID, nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE versions (re-trash): expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
 	w = httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST purge-now: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleTrashVersion_StampsTrashedAt: the trash handler is the one path
+// into the trash, and the 14-day window counts from the stamp it leaves.
+// Restore must clear it.
+func TestHandleTrashVersion_StampsTrashedAt(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+
+	_, _ = store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1.m4b"})
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
+		// Created long before it is trashed: the window must not count from here.
+		CreatedAt: time.Now().Add(-30 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	before := time.Now()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+ver.ID, nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	after := time.Now()
+
+	got, _ := store.GetBookVersion(ver.ID)
+	if got.TrashedAt == nil {
+		t.Fatal("trashed version has no TrashedAt")
+	}
+	if got.TrashedAt.Before(before) || got.TrashedAt.After(after) {
+		t.Errorf("TrashedAt = %v, want within [%v, %v]", got.TrashedAt, before, after)
+	}
+
+	// The daily cleanup must leave it alone: it was trashed seconds ago.
+	if n := CleanupTrashedVersions(store); n != 0 {
+		t.Fatalf("cleanup purged %d version(s) trashed seconds ago", n)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("restore: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	got, _ = store.GetBookVersion(ver.ID)
+	if got.TrashedAt != nil {
+		t.Errorf("restored version still has TrashedAt %v", got.TrashedAt)
+	}
+}
+
+// TestHandlePurgeVersion_RefusesUntrashed: "Purge now" deletes files from
+// disk. On an active version that meant the book's playable files; on an alt
+// it skipped the trash window entirely. Both are refused, and the file stays.
+func TestHandlePurgeVersion_RefusesUntrashed(t *testing.T) {
+	for _, status := range []string{
+		database.BookVersionStatusActive,
+		database.BookVersionStatusAlt,
+		database.BookVersionStatusPending,
+		database.BookVersionStatusSwappingIn,
+		database.BookVersionStatusSwappingOut,
+		database.BookVersionStatusInactivePurged,
+		database.BookVersionStatusBlockedForRedownload,
+	} {
+		t.Run(status, func(t *testing.T) {
+			srv, store := setupVersionLifecycleServer(t)
+
+			bookDir := t.TempDir()
+			audio := filepath.Join(bookDir, "book.m4b")
+			if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: audio}); err != nil {
+				t.Fatalf("create book: %v", err)
+			}
+			ver, err := store.CreateBookVersion(&database.BookVersion{
+				BookID: "b1", Status: status, Format: "m4b", Source: "imported",
+			})
+			if err != nil {
+				t.Fatalf("create version: %v", err)
+			}
+			if err := store.CreateBookFile(&database.BookFile{
+				BookID: "b1", FilePath: audio, VersionID: ver.ID, TrackNumber: 1,
+			}); err != nil {
+				t.Fatalf("create book file: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
+			w := httptest.NewRecorder()
+			srv.router.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("purge-now on %s: expected 400, got %d: %s", status, w.Code, w.Body.String())
+			}
+			if _, err := os.Stat(audio); err != nil {
+				t.Errorf("purge-now on %s removed the file: %v", status, err)
+			}
+			got, _ := store.GetBookVersion(ver.ID)
+			if got.Status != status {
+				t.Errorf("status = %s, want unchanged %s", got.Status, status)
+			}
+		})
+	}
+}
+
+// TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows: the allowed case.
+// The version's files are removed from disk; its book_file row is kept.
+func TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+
+	bookDir := t.TempDir()
+	audio := filepath.Join(bookDir, "book.m4b")
+	if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: audio}); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{
+		BookID: "b1", FilePath: audio, VersionID: ver.ID, TrackNumber: 1,
+	}); err != nil {
+		t.Fatalf("create book file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("purge-now: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(audio); !os.IsNotExist(err) {
+		t.Errorf("purged version's file still on disk (stat err %v)", err)
+	}
+	got, _ := store.GetBookVersion(ver.ID)
+	if got.Status != database.BookVersionStatusInactivePurged || got.TrashedAt != nil {
+		t.Errorf("status=%s TrashedAt=%v, want inactive_purged and nil", got.Status, got.TrashedAt)
+	}
+	files, err := store.GetBookFiles("b1")
+	if err != nil {
+		t.Fatalf("get book files: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("book_file rows = %d, want 1: purge must not delete book_file rows", len(files))
 	}
 }
 

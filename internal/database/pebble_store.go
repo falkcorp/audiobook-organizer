@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
 // version: 1.212.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -4908,6 +4908,12 @@ func (p *PebbleStore) CreateBookVersion(v *BookVersion) (*BookVersion, error) {
 	if v.Version == 0 {
 		v.Version = 1
 	}
+	// A version created outside the trash carries no trash stamp. One created
+	// directly in the trash keeps whatever the caller set -- including nil,
+	// which CleanupTrashedVersions treats as "stamp now, purge later".
+	if v.Status != BookVersionStatusTrash {
+		v.TrashedAt = nil
+	}
 
 	// Single-active invariant: callers swapping primary go through
 	// the version_swap tracked op per spec 3.1 §4.
@@ -5012,7 +5018,9 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 	if prev == nil {
 		return fmt.Errorf("book version %s not found", v.ID)
 	}
-	v.UpdatedAt = time.Now()
+	now := time.Now()
+	maintainTrashedAt(prev, v, now)
+	v.UpdatedAt = now
 	v.Version = prev.Version + 1
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -5049,6 +5057,34 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 		}
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// maintainTrashedAt keeps BookVersion.TrashedAt consistent with Status on
+// every write. It is bookkeeping, like UpdatedAt -- not a transition rule
+// (those stay in the server layer, see the BookVersionStatus comment) -- and
+// it lives here because this is the one place that sees both the stored row
+// and the incoming one, so no caller can forget it:
+//
+//   - entering the trash (stored status was not trash) always stamps now,
+//     whatever the caller passed. A stale stamp is the dangerous direction:
+//     trash, restore, then trash again with the first stamp still on the row
+//     would make the cleanup purge it at once.
+//   - staying in the trash keeps the caller's stamp, falling back to the
+//     stored one, so a write that loaded an older copy cannot erase it. Both
+//     may be nil for a row trashed before the field existed; the cleanup
+//     stamps those itself.
+//   - any status other than trash clears it (restore, a swap that pulls a
+//     trashed version back in, purge).
+func maintainTrashedAt(prev, v *BookVersion, now time.Time) {
+	switch {
+	case v.Status != BookVersionStatusTrash:
+		v.TrashedAt = nil
+	case prev.Status != BookVersionStatusTrash:
+		stamp := now
+		v.TrashedAt = &stamp
+	case v.TrashedAt == nil:
+		v.TrashedAt = prev.TrashedAt
+	}
 }
 
 func (p *PebbleStore) DeleteBookVersion(id string) error {

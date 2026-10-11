@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -9,6 +9,7 @@ package server
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -35,7 +36,9 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 
 	wasActive := ver.Status == database.BookVersionStatusActive
 
-	ver.Status = database.BookVersionStatusTrash
+	// Stamps TrashedAt: the 14-day window before the trash cleanup purges
+	// this version's files is counted from now.
+	versions.MarkTrashed(ver, time.Now())
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		httputil.InternalError(c, "trash version", err)
 		return
@@ -72,7 +75,7 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 		return
 	}
 
-	ver.Status = database.BookVersionStatusAlt
+	versions.MarkRestored(ver)
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		httputil.InternalError(c, "restore version", err)
 		return
@@ -83,8 +86,16 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 	}{Version: ver})
 }
 
-// handlePurgeVersion physically deletes files and marks purged.
+// handlePurgeVersion physically deletes files and marks purged: "Purge now"
+// on the trash page, i.e. empty one version out of the trash early.
 // POST /api/v1/books/:id/versions/:vid/purge-now
+//
+// Only a trashed version may be purged. Until 2026-10-11 there was no status
+// check, so a direct call on the ACTIVE version deleted the book's playable
+// files at the book root, dropped its active index and promoted nothing; on
+// an alt it deleted the files with no trash window at all. The only UI caller
+// (the trash page) already sends trashed versions only, so the guard costs
+// that flow nothing; anything else has to go through the trash first.
 func (s *Server) handlePurgeVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
@@ -96,6 +107,10 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 	}
 	if ver.BookID != bookID {
 		httputil.RespondWithBadRequest(c, "version/book mismatch")
+		return
+	}
+	if ver.Status != database.BookVersionStatusTrash {
+		httputil.RespondWithBadRequest(c, "version is not in trash; trash it before purging")
 		return
 	}
 

@@ -1,7 +1,7 @@
 // file: web/src/services/versionApi.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 import type { RevertOperationResult } from './api';
 import { apiFetch } from '../utils/apiFetch';
@@ -18,6 +18,8 @@ export interface BookVersion {
   torrent_hash?: string;
   ingest_date: string;
   purged_date?: string;
+  /** When the version entered the trash; the 14-day purge window counts from here. Unset outside the trash. */
+  trashed_at?: string;
   created_at: string;
   updated_at: string;
   version: number;

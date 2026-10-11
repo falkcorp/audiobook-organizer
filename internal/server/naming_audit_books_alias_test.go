@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package server
 
@@ -113,7 +113,8 @@ func TestDeprecatedBooksAliases_AllNineRoutesAnswer(t *testing.T) {
 	call(http.MethodPost, "/api/v1/books/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/restore", "")
 	call(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/restore", "")
 
-	// 9. POST versions/:vid/purge-now
-	call(http.MethodPost, "/api/v1/books/b1/versions/"+newVersion(database.BookVersionStatusActive)+"/purge-now", "")
-	call(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusActive)+"/purge-now", "")
+	// 9. POST versions/:vid/purge-now (version must be in trash; purging an
+	// active version is refused, see TestHandlePurgeVersion_RefusesUntrashed)
+	call(http.MethodPost, "/api/v1/books/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/purge-now", "")
+	call(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/purge-now", "")
 }
