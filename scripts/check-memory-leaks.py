@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check-memory-leaks.py
-# version: 1.3.1
+# version: 1.3.2
+# guid: e3a10354-33b1-44e3-81ec-1fac6b119e85
+# last-edited: 2026-10-11
 """
 Detects common memory leak patterns in React/TypeScript code.
 Scans for:
@@ -20,7 +22,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 
 class MemoryLeakDetector:
@@ -65,10 +67,7 @@ class MemoryLeakDetector:
         if not stripped or stripped.startswith("//"):
             return True
 
-        for pattern in self.ignore_patterns:
-            if re.search(pattern, line):
-                return True
-        return False
+        return any(re.search(pattern, line) for pattern in self.ignore_patterns)
 
     def check_untracked_timers(self, filepath: str, content: str) -> None:
         """Find setTimeout/setInterval without proper tracking.
@@ -123,9 +122,7 @@ class MemoryLeakDetector:
                 continue  # Cleanup exists
 
             # This is an untracked timer
-            self.issues.append(
-                (filepath, i, f"Untracked {timer_type} (may fire after unmount)")
-            )
+            self.issues.append((filepath, i, f"Untracked {timer_type} (may fire after unmount)"))
 
     def check_untracked_listeners(self, filepath: str, content: str) -> None:
         """Find addEventListener without removeEventListener.
@@ -219,7 +216,7 @@ class MemoryLeakDetector:
 
         # Patterns that indicate the polling is properly guarded against leaks.
         # Includes both explicit cancellation flags and ref-based unmount guards.
-        _CANCELLATION_PATTERNS = re.compile(
+        cancellation_patterns = re.compile(
             r"cancelled|AbortController|Ref\.current|isMounted|isUnmounted|isCleanedUp"
         )
 
@@ -232,7 +229,7 @@ class MemoryLeakDetector:
                 # Collect a 50-line window around the polling function
                 window = "".join(lines[max(0, i - 1) : min(i + 50, len(lines))])
                 # If any cancellation/cleanup pattern is present, skip
-                if _CANCELLATION_PATTERNS.search(window):
+                if cancellation_patterns.search(window):
                     continue
                 for j in range(i, min(i + 50, len(lines))):
                     if re.search(r"setTimeout\(\w*[Pp]oll", lines[j]):
@@ -251,17 +248,11 @@ class MemoryLeakDetector:
             print(f"Warning: {self.web_src} not found, skipping memory leak scan")
             return True
 
-        tsx_files = sorted(
-            list(self.web_src.rglob("*.tsx")) + list(self.web_src.rglob("*.ts"))
-        )
+        tsx_files = sorted(list(self.web_src.rglob("*.tsx")) + list(self.web_src.rglob("*.ts")))
         # Exclude test files
-        tsx_files = [
-            f for f in tsx_files if ".test." not in f.name and "setup.ts" not in f.name
-        ]
+        tsx_files = [f for f in tsx_files if ".test." not in f.name and "setup.ts" not in f.name]
 
-        print(
-            f"🔍 Scanning {len(tsx_files)} files for memory leaks...", file=sys.stderr
-        )
+        print(f"🔍 Scanning {len(tsx_files)} files for memory leaks...", file=sys.stderr)
 
         for filepath in tsx_files:
             try:
@@ -299,13 +290,9 @@ class MemoryLeakDetector:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Detect memory leak patterns in React/TS code"
-    )
+    parser = argparse.ArgumentParser(description="Detect memory leak patterns in React/TS code")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--json", action="store_true", help="Output findings as JSON array"
-    )
+    group.add_argument("--json", action="store_true", help="Output findings as JSON array")
     group.add_argument(
         "--todo-entry",
         metavar="DATE",
@@ -328,9 +315,7 @@ def main() -> int:
     clean = detector.scan()
 
     if args.json:
-        data = [
-            {"file": f, "line": ln, "message": msg} for f, ln, msg in detector.issues
-        ]
+        data = [{"file": f, "line": ln, "message": msg} for f, ln, msg in detector.issues]
         print(json.dumps(data, indent=2))
         return 0 if clean else 1
 
@@ -383,11 +368,7 @@ def _insert_into_todo(entry: str) -> None:
         # Prepend a new section before the last "---" divider, or append at end
         last_divider = content.rfind("\n---\n")
         if last_divider != -1:
-            content = (
-                content[:last_divider]
-                + f"\n\n{header}\n\n{entry}"
-                + content[last_divider:]
-            )
+            content = content[:last_divider] + f"\n\n{header}\n\n{entry}" + content[last_divider:]
         else:
             content += f"\n\n{header}\n\n{entry}"
 
