@@ -1,5 +1,5 @@
 // file: internal/operations/registry/cancel_row_cas_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 90197191-b0f8-4979-823d-4e5265a1c1c4
 // last-edited: 2026-10-10
 
@@ -729,6 +729,11 @@ func TestCancel_InTheReleaseGapOfACompletedRunKeepsCompleted(t *testing.T) {
 	if got := s.statusOf(s.target); got != "completed" {
 		t.Fatalf("final status = %q, want completed: the run's work completed", got)
 	}
+	// Review round 3 S2: a nil message means "leave unchanged", so the row
+	// kept the cancel's message under a completed status.
+	if row, _ := s.fakeStore.GetOperationV2(s.target); row.ErrorMessage != nil {
+		t.Fatalf("completed row keeps error_message %q from the cancel", *row.ErrorMessage)
+	}
 	// The last op.terminal the UI sees must be the real outcome.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -786,4 +791,123 @@ func TestCancel_StoreErrorWithNoStoppedRunIsReturned(t *testing.T) {
 			t.Fatalf("Cancel = %v, want an error wrapping the store failure (no run was stopped)", err)
 		}
 	})
+}
+
+// opTerminalStatuses lists the statuses of every op.terminal published for id,
+// in order.
+func opTerminalStatuses(bus *recordingBus, id string) []string {
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	var out []string
+	for _, ev := range bus.events {
+		if p, ok := ev.payload.(map[string]any); ok && ev.name == "op.terminal" && p["op_id"] == id {
+			st, _ := p["status"].(string)
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// TestShutdown_StampedCanceledRunPublishesOpTerminal is review round 3's S1.
+// The user cancels a slow run (Cancel sets userCanceled and leaves the row to
+// the run); Shutdown times out while the run is still unwinding and stamps the
+// row "canceled"; the run then returns inside its grace. The worker found
+// "canceled", kept it, and published nothing on the assumption that Cancel
+// had -- but the stamp does not publish either, so the op's legacy twin and
+// the UI bell never heard the op had ended.
+func TestShutdown_StampedCanceledRunPublishesOpTerminal(t *testing.T) {
+	store := newFakeStore()
+	bus := &recordingBus{}
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		AbandonGrace: 10 * time.Second, // the run returns inside it
+		Bus:          bus,
+	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	def := makeValidDef("test.cancel.shutdown-stamp")
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
+		close(started)
+		<-release // ignores ctx: still unwinding when Shutdown times out
+		return ctx.Err()
+	}
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	id, err := r.EnqueueOp(t.Context(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, started, "the run to start")
+	awaitStatus(t, store, id, "running", 5*time.Second)
+	if err := r.Cancel(id); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got := store.statusOf(id); got != "running" {
+		t.Fatalf("status after Cancel = %q, want running (Cancel leaves a live run's row to the run)", got)
+	}
+
+	// Release the run once Shutdown's stamp has landed.
+	go func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for store.statusOf(id) != "canceled" && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		close(release)
+	}()
+	sctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = r.Shutdown(sctx)
+
+	if got := store.statusOf(id); got != "canceled" {
+		t.Fatalf("final status = %q, want canceled", got)
+	}
+	got := opTerminalStatuses(bus, id)
+	if len(got) == 0 {
+		t.Fatal("no op.terminal published for a run that ended canceled")
+	}
+	for _, st := range got {
+		if st != "canceled" {
+			t.Fatalf("op.terminal statuses = %v, want only canceled", got)
+		}
+	}
+}
+
+// TestCancel_WorkerDoesNotPublishAStaleInterruptedStatus pins
+// settleInterrupted's re-read (review round 2 N3, round 3 N1). The pickup gate
+// writes interrupted_quiesced and is held; Cancel moves that row to "canceled"
+// and publishes it; the worker then must not publish its now-stale
+// interrupted_quiesced over Cancel's event.
+//
+// Mutation check: make the re-read in settleInterrupted never match and the
+// worker publishes interrupted_quiesced after "canceled".
+func TestCancel_WorkerDoesNotPublishAStaleInterruptedStatus(t *testing.T) {
+	h := newCancelHarness(t, registry.ScanStandDownDefIDForTest, registry.ResumeRestart)
+	s := h.store
+	bus := &recordingBus{}
+	h.r.SetBus(bus)
+	s.gateMode = gateWriteAfter
+	s.raiseGate.Store(true)
+	h.insert("queued")
+	h.r.DispatchCycleForTest(t.Context())
+	recv(t, s.gateArrived, "the pickup gate's write")
+
+	if err := h.r.Cancel(s.target); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got := s.statusOf(s.target); got != "canceled" {
+		t.Fatalf("status after Cancel = %q, want canceled", got)
+	}
+	s.proceed()
+	h.assertStaysCanceledAfterGateRelease(t)
+	got := opTerminalStatuses(bus, s.target)
+	if len(got) == 0 {
+		t.Fatal("no op.terminal published")
+	}
+	for _, st := range got {
+		if st == "interrupted_quiesced" {
+			t.Fatalf("op.terminal statuses = %v: the worker published a stale interrupted_quiesced over the cancel", got)
+		}
+	}
 }

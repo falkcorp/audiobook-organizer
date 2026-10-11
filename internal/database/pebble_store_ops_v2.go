@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.29.0
+// version: 3.30.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 
@@ -332,7 +332,13 @@ func (p *PebbleStore) updateOperationV2Status(id string, expect *string, status 
 	// why that is an allowlist), and an existing stamp is never overwritten.
 	stampCompletedAtIfTerminal(&row)
 	if errMsg != nil {
-		row.ErrorMessage = errMsg
+		if *errMsg == "" {
+			// An empty message clears the field: a run that completed over a
+			// cancel must not keep the cancel's message.
+			row.ErrorMessage = nil
+		} else {
+			row.ErrorMessage = errMsg
+		}
 	}
 
 	data, err := json.Marshal(&row)

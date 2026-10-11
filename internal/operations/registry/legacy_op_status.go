@@ -1,5 +1,5 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
 // last-edited: 2026-10-10
 
@@ -205,6 +205,16 @@ func (r *Registry) propagateLegacyOpStatus(opID, v2Status string) {
 
 	row, err := r.store.GetOperationV2(opID)
 	if err != nil || row == nil || row.Params == "" {
+		return
+	}
+	// Mirror the row, not the event. Two writers can publish op.terminal for
+	// one op out of order -- Registry.Cancel publishes "canceled" for a row it
+	// canceled in a run's handle-released gap, and the worker then records the
+	// run's "completed" over it and publishes that -- so the argument can be
+	// the older status. The row is the final word: mirror what it holds now,
+	// and nothing if it is live again.
+	legacyStatus = legacyStatusFor(row.Status)
+	if legacyStatus == "" {
 		return
 	}
 	var p legacyOpParams

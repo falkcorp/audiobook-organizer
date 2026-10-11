@@ -1,5 +1,5 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
 // last-edited: 2026-10-10
 
@@ -197,7 +197,12 @@ func (f *fakeStore) UpdateOperationV2Status(id, status string, startedAt, comple
 		op.CompletedAt = completedAt
 	}
 	if errMsg != nil {
-		op.ErrorMessage = errMsg
+		// Mirrors PebbleStore: an empty message clears the field.
+		if *errMsg == "" {
+			op.ErrorMessage = nil
+		} else {
+			op.ErrorMessage = errMsg
+		}
 	}
 	f.ops[id] = op
 	return nil
@@ -230,7 +235,12 @@ func (f *fakeStore) UpdateOperationV2StatusIf(id, fromStatus, status string, sta
 		op.CompletedAt = &now
 	}
 	if errMsg != nil {
-		op.ErrorMessage = errMsg
+		// Mirrors PebbleStore: an empty message clears the field.
+		if *errMsg == "" {
+			op.ErrorMessage = nil
+		} else {
+			op.ErrorMessage = errMsg
+		}
 	}
 	f.ops[id] = op
 	return true, nil
