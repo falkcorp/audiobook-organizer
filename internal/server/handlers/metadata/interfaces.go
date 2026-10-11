@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-10-10
 
@@ -74,11 +74,16 @@ type MetadataAuditWriter interface {
 	// compile error rather than something a reviewer has to notice.
 }
 
-// MetadataRejectionStore records and reads per-book metadata rejections.
+// MetadataRejectionStore records and reads per-book metadata rejections, and
+// reads the owner's rejected candidates.
 type MetadataRejectionStore interface {
 	// Metadata rejections (markAudiobookNoMatch / handleGetMetadataRejections).
 	AddMetadataRejection(r database.MetadataRejection) error
 	GetMetadataRejections(bookID string) ([]database.MetadataRejection, error)
+	// The owner's candidate rejections: the bulk fetch never applies one,
+	// and the search dialog's fetch ranks them last in the cached row
+	// (metabatch.MergeRanker).
+	metafetch.RejectedCandidateReader
 }
 
 // BookSnapshotStore manages copy-on-write book snapshots: revert, list, prune.
@@ -144,10 +149,6 @@ type MetadataStore interface {
 	// The field-lock guard's surface: bulkFetchMetadata consults
 	// database.LockedUserFields so a user-locked field is never overwritten.
 	database.MetadataFieldStateReader
-	// The owner's candidate rejections: the bulk fetch never applies one,
-	// and the search dialog's fetch ranks them last in the cached row
-	// (metabatch.MergeRanker).
-	metafetch.RejectedCandidateReader
 }
 
 // MetadataFetcher fetches and searches metadata for a book.

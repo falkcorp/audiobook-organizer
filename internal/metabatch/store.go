@@ -1,5 +1,5 @@
 // file: internal/metabatch/store.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
 // last-edited: 2026-10-10
 
@@ -35,6 +35,13 @@ type ownerManualReader interface {
 	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 }
 
+// upgradeCursorStore is the metadata upgrade's persisted sweep cursor
+// (upgradeCursorKey).
+type upgradeCursorStore interface {
+	GetOperationState(opID string) ([]byte, error)
+	SaveOperationState(opID string, state []byte) error
+}
+
 // Store is the metabatch consumer slice. Exported so a caller that constructs a
 // MetadataUpgradeService (internal/scheduler) can name this instead of reaching
 // for database.Store.
@@ -45,9 +52,7 @@ type Store interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBooksByTag(tag string) ([]string, error)
 	ownerManualReader
-	// The metadata upgrade's persisted sweep cursor (upgradeCursorKey).
-	GetOperationState(opID string) ([]byte, error)
-	SaveOperationState(opID string, state []byte) error
+	upgradeCursorStore
 	// The author credits the certainty gate judges a candidate's author
 	// against (database.LiveBookAuthorNames), never the Book.Author snapshot.
 	database.BookAuthorReader
