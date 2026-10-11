@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-10
 //
@@ -1111,6 +1111,185 @@ describe('page mode requests', () => {
     );
     expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
     expect(sentPins().p1).toMatchObject({ content_hash: 'h2-p1' });
+  });
+
+  // --- review round 3 (PR #3944) ------------------------------------------
+  //
+  // The first two began as the round-3 reviewer's repros ZZ-A and ZZ-B (which
+  // asserted the bugs) and are inverted here; all were measured red first.
+
+  const applyNow = (result: { current: MetadataLane }) =>
+    act(async () =>
+      result.current.dispatch({
+        lane: 'metadata',
+        type: 'applySelected',
+        ids: [...result.current.selectedIds],
+      })
+    );
+
+  it('a failed re-list keeps the selection and its list, says so, and the next click retries', async () => {
+    const { result } = await selectAllUntickA2ThenNewGeneration();
+    vi.mocked(api.getReviewMatchingIds).mockRejectedValueOnce(new Error('boom'));
+    await applyNow(result);
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^Could not list the matching books again; your selection is unchanged/
+        ),
+        'error'
+      )
+    );
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/select all again/), 'warning');
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a3']);
+    // The next click re-lists (the default mock now answers) instead of
+    // refusing the books as unpinned...
+    await applyNow(result);
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.anything(), 'info'));
+    // ...and the one after applies the narrowed selection, never a2 or a4.
+    await applyNow(result);
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+    expect([...vi.mocked(api.batchApplyFromCache).mock.calls[0][0]].sort()).toEqual(['a1', 'a3']);
+  });
+
+  it('a re-list superseded by a Select all that fails does not leave the lane refusing', async () => {
+    const { result } = await selectAllUntickA2ThenNewGeneration();
+    vi.mocked(api.getReviewMatchingIds).mockImplementationOnce(() => new Promise(() => {}));
+    await applyNow(result);
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(2));
+    vi.mocked(api.getReviewMatchingIds).mockRejectedValueOnce(new Error('x'));
+    act(() => result.current.selectAllMatching());
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith('Could not list the matching books.', 'error')
+    );
+    toast.mockClear();
+    // The hung re-list no longer holds the guard: this click re-lists...
+    await applyNow(result);
+    expect(toast).not.toHaveBeenCalledWith(
+      expect.stringMatching(/still being listed again/),
+      'warning'
+    );
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.anything(), 'info'));
+    // ...and the next one applies.
+    await applyNow(result);
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+    expect([...vi.mocked(api.batchApplyFromCache).mock.calls[0][0]].sort()).toEqual(['a1', 'a3']);
+  });
+
+  it('a second click while the re-list is out is refused without another request', async () => {
+    const { result } = await selectAllUntickA2ThenNewGeneration();
+    let answer: (v: api.ReviewMatchingIds) => void = () => {};
+    vi.mocked(api.getReviewMatchingIds).mockImplementationOnce(
+      () =>
+        new Promise<api.ReviewMatchingIds>((r) => {
+          answer = r;
+        })
+    );
+    await applyNow(result);
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(2));
+    toast.mockClear();
+    await applyNow(result);
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/still being listed again/),
+      'warning'
+    );
+    expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(2);
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    await act(async () =>
+      answer({ ids: ['a1', 'a3'], total: 2, generation: 'g2', pins: pinsOf(['a1', 'a3']) })
+    );
+    await applyNow(result);
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Clear during the re-list drops the list it returns and shows no count', async () => {
+    const { result } = await selectAllUntickA2ThenNewGeneration();
+    let answer: (v: api.ReviewMatchingIds) => void = () => {};
+    vi.mocked(api.getReviewMatchingIds).mockImplementationOnce(
+      () =>
+        new Promise<api.ReviewMatchingIds>((r) => {
+          answer = r;
+        })
+    );
+    await applyNow(result);
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(2));
+    act(() => result.current.clearSelection());
+    toast.mockClear();
+    await act(async () =>
+      answer({
+        ids: ['a1', 'a2', 'a3', 'a4'],
+        total: 4,
+        generation: 'g2',
+        pins: pinsOf(['a1', 'a2', 'a3', 'a4']),
+      })
+    );
+    expect(result.current.selectedIds.size).toBe(0);
+    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'info');
+    // No list is held: ticking a1 and applying it does not consult one.
+    expect(result.current.allMatchingSelected).toBe(false);
+  });
+
+  it('a book that joined and was ticked by hand during the re-list is not counted as joined', async () => {
+    const { result } = await selectAllUntickA2ThenNewGeneration();
+    let answer: (v: api.ReviewMatchingIds) => void = () => {};
+    vi.mocked(api.getReviewMatchingIds).mockImplementationOnce(
+      () =>
+        new Promise<api.ReviewMatchingIds>((r) => {
+          answer = r;
+        })
+    );
+    await applyNow(result);
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(2));
+    act(() => result.current.setSelection(['a4'], true));
+    toast.mockClear();
+    await act(async () =>
+      answer({
+        ids: ['a1', 'a2', 'a3', 'a4'],
+        total: 4,
+        generation: 'g2',
+        pins: pinsOf(['a1', 'a2', 'a3', 'a4']),
+      })
+    );
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/selection is unchanged/), 'info');
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/joined/), 'info');
+  });
+
+  it('a selected row the session hid is not counted as seen on screen', async () => {
+    armApply();
+    const ids = ['a1', 'a2', 'a3'];
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 3, 'g1'));
+    vi.mocked(api.getReviewMatchingIds).mockResolvedValue({
+      ids,
+      total: 3,
+      generation: 'g1',
+      pins: pinsOf(ids),
+    });
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // a2 is skipped and hidden by Hide skipped before anything is selected.
+    act(() => result.current.setFilters({ hideSkipped: true }));
+    act(() => result.current.dispatch({ lane: 'metadata', type: 'skip', id: 'a2' }));
+    await waitFor(() => expect(result.current.pageResults.map((r) => r.book.id)).toEqual(['a1']));
+    act(() => result.current.selectAllMatching());
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(3));
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 3, 'g2'));
+    const before = vi.mocked(api.getReviewPage).mock.calls.length;
+    act(() => result.current.refresh());
+    await waitFor(() =>
+      expect(vi.mocked(api.getReviewPage).mock.calls.length).toBeGreaterThan(before)
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    toast.mockClear();
+    // a2 was never shown, so its only pin is the list's: the stale list is refused.
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a2'] })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^The queue changed after you selected all/),
+      'warning'
+    );
   });
 
   it('after a failed page fetch a bulk action says the page did not load', async () => {
