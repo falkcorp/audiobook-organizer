@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package undo
 
@@ -54,6 +54,9 @@ import (
 //   - book_file_create (maintenance.fs-regroup-xml): reversing it would delete
 //     a book_file row, which no repair may do. The op creates a row only on
 //     the book whose path it is, so the row left behind fills that book's gap.
+//   - book_file_version_link (maintenance.relink-pre-fix-imports): undoing
+//     it would unlink a row from its own version, restoring the orphan the
+//     repair fixed. It has no revert case on purpose.
 //   - any change type the revert engine has no case for (e.g. db_update,
 //     dir_create).
 //
@@ -179,6 +182,15 @@ const (
 	// path, NewValue "". Restorable: put back while the field is still
 	// empty; nothing on disk or in iTunes is touched either way.
 	ChangeTypeITunesPathClear = "itunes_path_clear"
+	// ChangeTypeBookFileVersionLink: the book_file row named in FieldName
+	// ("book_file:<id>") of BookID, which named no version, was linked to the
+	// book's version NewValue (OldValue ""), with the row's torrent hash
+	// unchanged. Written by maintenance.relink-pre-fix-imports, which links
+	// the rows imported before 2026-10-10 to the versions those imports
+	// recorded but never attached. NOT restorable: the revert engine has no
+	// case for it, so it counts as not restorable. Undoing it would only put
+	// back the broken state the repair fixed (a version nothing points at).
+	ChangeTypeBookFileVersionLink = "book_file_version_link"
 )
 
 // ITunesPathBookField is the FieldName of a ChangeTypeITunesPathClear row

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.83.0
+// version: 1.84.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-11
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -418,7 +419,8 @@ type opsStoreProvider interface {
 
 // forwardingStoreProvider serves the ops that forward their store into
 // another package (internal/reconcile, internal/itunes/service,
-// internal/merge), each typed by that package's own requirement.
+// internal/merge, internal/versions), each typed by that package's own
+// requirement.
 type forwardingStoreProvider interface {
 	// ReconcileStore serves runITunesHeal, which forwards into internal/reconcile.
 	ReconcileStore() ReconcileStore
@@ -431,6 +433,11 @@ type forwardingStoreProvider interface {
 	// correct; the capabilities it probes (sync identity, bookmarks) are
 	// resolved with database.AsCapability inside internal/merge.
 	MergeUserStateStore() merge.UserStateRepairStore
+	// IngestVersionStore serves the relink-pre-fix-imports fixer, which
+	// forwards into versions.CreateIngestVersion (adopt-only) and
+	// versions.LiveTorrentHolder. Every method is on database.Store, so a
+	// plain `return s.store` is correct.
+	IngestVersionStore() versions.IngestStore
 }
 
 // FragmentRepairReader is what the fragment-consolidation fixer reads beyond
