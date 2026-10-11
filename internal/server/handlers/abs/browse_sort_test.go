@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_sort_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e2f81-3a76-4b50-8d19-6e2b7c05af34
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package abs
 
@@ -131,7 +131,7 @@ func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 	// sees only *Book and stripBookForMemdb nils Book.Author, so it ordered
 	// every row under one empty key. Sorting by author is now served by
 	// resolving the name while materialising the match set.
-	defaults := []string{"year"}
+	defaults := []string{"year", "created_at"}
 
 	if unknown := database.SetEnabledSortIndexes(defaults); len(unknown) > 0 {
 		t.Fatalf("config default names the store does not recognise: %v", unknown)
@@ -151,6 +151,9 @@ func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 	for key, want := range map[string]string{
 		"media.metadata.title":         "title",
 		"media.metadata.publishedYear": "year",
+		// Date Added / ABS "Recently Added": indexed 2026-10-11 so it stops
+		// materialising and sorting the whole visible set per request.
+		"addedAt": "created_at",
 	} {
 		got := absSortField(key)
 		if got != want {
@@ -172,7 +175,6 @@ func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 	// someone widens the default later, this fails and they have to
 	// acknowledge the insert-throughput cost rather than drift into it.
 	for key, want := range map[string]string{
-		"addedAt":        "created_at",
 		"updatedAt":      "updated_at",
 		"media.duration": "duration",
 		"size":           "file_size",

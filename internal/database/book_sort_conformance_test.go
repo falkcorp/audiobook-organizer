@@ -1,7 +1,7 @@
 // file: internal/database/book_sort_conformance_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8a4d2e07-6b39-4c15-9e8f-1d07b3a5c264
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 //
 // The real conformance test between the two ways a library page gets ordered.
 //
@@ -167,6 +167,99 @@ func TestSortBooksUnknownFieldIsANoOp(t *testing.T) {
 	for _, f := range []string{"title", "year", "author", "genre", "sample_rate"} {
 		if !CanSortBooksBy(f) {
 			t.Errorf("CanSortBooksBy(%q) = false, want true", f)
+		}
+	}
+}
+
+// TestCreatedAtIndexedMatchesUnindexedWithPredicate is the equivalence proof
+// behind shipping created_at in the default enabled_sort_indexes (2026-10-11):
+// the same corpus is read through a store WITH the created_at index and a store
+// WITHOUT it (materialise-and-sort), in both directions, with and without a
+// Predicate and a page limit, and the pages must be identical.
+//
+// The Predicate/limit case is ABS "Recently Added": Predicate requires a
+// non-nil CreatedAt, limit 10, newest first. The Predicate is applied in-loop
+// during the ordered walk (memdb_summaries.go), so it does not force the slow
+// path; this test pins that the indexed page and the sorted page agree.
+//
+// The corpus has rows with nil CreatedAt (ranked FIRST on descending, last on
+// ascending -- the existing semantics, deliberately unchanged), a zero time
+// (also "missing"), and tied timestamps (ties break by ID in both paths).
+func TestCreatedAtIndexedMatchesUnindexedWithPredicate(t *testing.T) {
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	at := func(h int) *time.Time { v := base.Add(time.Duration(h) * time.Hour); return &v }
+	zero := time.Time{}
+
+	var books []Book
+	for i := 0; i < 25; i++ {
+		id := string(rune('a'+i%26)) + "-" + time.Duration(i).String()
+		b := Book{ID: id, Title: id}
+		switch {
+		case i%7 == 0:
+			// CreatedAt nil: missing.
+		case i%11 == 0:
+			b.CreatedAt = &zero // zero time: also missing.
+		default:
+			b.CreatedAt = at(i / 3) // i/3 produces tied timestamps.
+		}
+		books = append(books, b)
+	}
+
+	build := func(enabled []string) *MemStore {
+		t.Helper()
+		SetEnabledSortIndexes(enabled)
+		t.Cleanup(func() { SetEnabledSortIndexes(nil) })
+		m, err := NewMemStore()
+		if err != nil {
+			t.Fatalf("NewMemStore: %v", err)
+		}
+		seedMemStore(t, m, books, nil, nil, nil)
+		return m
+	}
+	indexed := build([]string{"year", "created_at"})
+	if !CanPushDownSort("created_at") {
+		t.Fatal("created_at should be push-downable with the shipped default set")
+	}
+	plain := build([]string{"year"})
+	if CanPushDownSort("created_at") {
+		t.Fatal("created_at must not be push-downable without its index")
+	}
+	// The enabled set is process-global and read again at QUERY time
+	// (sortIndexEnabled), not only when the schema is built, so each read below
+	// restores the set its store was built with. Without that the indexed store
+	// would silently take the materialise path and the test would compare the
+	// slow path with itself.
+	read := func(m *MemStore, enabled []string, limit int, f BookSummaryFilter) []BookSummary {
+		t.Helper()
+		SetEnabledSortIndexes(enabled)
+		out, err := m.GetBookSummaries(limit, 0, f)
+		if err != nil {
+			t.Fatalf("GetBookSummaries: %v", err)
+		}
+		return out
+	}
+
+	requireCreated := func(b *Book) bool { return b.CreatedAt != nil }
+	cases := map[string]BookSummaryFilter{
+		"all":                   {},
+		"predicate_nonnil":      {Predicate: requireCreated},
+		"predicate_nonnil_zero": {Predicate: func(b *Book) bool { return b.CreatedAt != nil && !b.CreatedAt.IsZero() }},
+	}
+	for name, f := range cases {
+		for _, asc := range []bool{true, false} {
+			for _, limit := range []int{0, 10} {
+				ff := f
+				ff.SortBy, ff.SortAscending = "created_at", asc
+				got := read(indexed, []string{"year", "created_at"}, limit, ff)
+				want := read(plain, []string{"year"}, limit, ff)
+				if summaryIDLine(got) != summaryIDLine(want) {
+					t.Errorf("%s asc=%v limit=%d: indexed and unindexed pages differ\n  indexed:   %s\n  unindexed: %s",
+						name, asc, limit, summaryIDLine(got), summaryIDLine(want))
+				}
+				if limit == 0 && len(got) == 0 {
+					t.Errorf("%s asc=%v: empty result, fixture not exercised", name, asc)
+				}
+			}
 		}
 	}
 }

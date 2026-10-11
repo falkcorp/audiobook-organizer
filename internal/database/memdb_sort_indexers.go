@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sort_indexers.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e7d1b94-08c6-4a32-bf51-9d2e6c0a374b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 //
 // Sorted secondary indexes for the library list.
 //
@@ -258,8 +258,9 @@ func bookUpdatedAtSortValue(b *Book) (int64, bool) {
 // Alias keys (duration_seconds, bitrate_kbps, file_size_bytes) point at the
 // same index as their short form — one physical index, two spellings.
 // enabledSortIndexes holds the sort fields whose indexes are registered in
-// the schema. Empty by default, which reproduces pre-2026-08-09 behaviour
-// exactly: only title streams.
+// the schema. Empty here until cmd/root.go calls SetEnabledSortIndexes with
+// the config default (year, created_at); an unconfigured store, such as most
+// tests build, streams only title.
 //
 // A setter rather than reading config.AppConfig directly, because
 // internal/config already imports internal/database — reading config here

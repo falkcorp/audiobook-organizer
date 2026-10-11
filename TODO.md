@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.4 -->
+<!-- version: 10.76.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Project TODO — live items only
 
@@ -14779,6 +14779,8 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       `enabled_sort_indexes`, defaulting to empty (today's behaviour exactly). What is
       left is choosing what to turn on, and that needs the real number rather than the
       one the decision was originally made on.
+
+      > **2026-10-11 (owner):** `created_at` is now in the shipped default (`["year", "created_at"]`) for ABS Recently Added / Library date-added; `updated_at`, `duration`, `file_size`, `bitrate` remain off pending the sort_by usage data below.
 
       ## What was decided, and on what basis
 
