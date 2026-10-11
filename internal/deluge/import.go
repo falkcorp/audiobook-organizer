@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -193,7 +193,7 @@ func ImportToLibraryWith(
 	rel, relErr := filepath.Rel(cfg.RootDir, filepath.Dir(src))
 
 	var destSP safepath.SafePath
-	if relErr == nil && !filepath.IsAbs(rel) && !isParentTraversal(rel) {
+	if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
 		// Source is under RootDir — preserve structure.
 		destSP, err = safepath.Join(cfg.RootDir, rel, filepath.Base(src))
 		if err != nil {
@@ -381,7 +381,3 @@ func isProtected(protected tagger.PathChecker, path string) bool {
 	return protected != nil && protected.IsProtected(path)
 }
 
-// isParentTraversal returns true if the rel path starts with ".." (escapes root).
-func isParentTraversal(rel string) bool {
-	return len(rel) >= 2 && rel[:2] == ".."
-}

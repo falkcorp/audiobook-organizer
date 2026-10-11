@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-01
+// last-edited: 2026-10-11
 
 package deluge
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -112,7 +113,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 
 		var destDir string
 		rel, relErr := filepath.Rel(cfg.RootDir, filepath.Dir(srcPath))
-		if relErr == nil && !filepath.IsAbs(rel) && !isParentTraversal(rel) {
+		if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
 			destDir = filepath.Join(cfg.RootDir, rel)
 		} else {
 			destDir = cfg.RootDir
@@ -193,7 +194,3 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 	return runErr
 }
 
-// Helper functions copied from deluge_import.go
-func isParentTraversal(rel string) bool {
-	return rel == ".." || len(rel) >= 3 && rel[:3] == "../"
-}

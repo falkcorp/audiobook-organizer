@@ -1,7 +1,7 @@
 // file: internal/deluge/import_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678902
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 //
 // Tests for ImportToLibrary in internal/deluge/import.go.
 
@@ -88,6 +88,40 @@ func TestImportToLibrary_SamePath_NoOp(t *testing.T) {
 	}
 	// Nothing is copied, but the row is marked imported so discovery stops
 	// offering it; its path is unchanged.
+	if store.updated == nil || store.updated.ImportedFromDelugeAt == nil || store.updated.FilePath != srcFile {
+		t.Errorf("row not marked imported in place: %+v", store.updated)
+	}
+}
+
+// A library directory whose name begins with two dots ("..Extras") is inside
+// the root. Until 2026-10-11 the importer tested rel[:2] == "..", read it as
+// outside, and copied the file to the top of the root; deluge.link-backfill
+// and deluge.centralize already called it inside. All of them now share
+// pathutil.RelEscapesBase.
+func TestImportToLibrary_DotDotNamedLibraryDirIsInPlace(t *testing.T) {
+	rootDir := t.TempDir()
+	srcFile := filepath.Join(rootDir, "..Extras", "book.m4b")
+	if err := os.MkdirAll(filepath.Dir(srcFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srcFile, []byte("audio data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{RootDir: rootDir}
+	store := &fakeDelugStore{}
+	bf := &database.BookFile{ID: "id-dotdot", FilePath: srcFile}
+
+	newPath, err := ImportToLibrary(cfg, nil, store, bf, nil)
+	if err != nil {
+		t.Fatalf("ImportToLibrary: %v", err)
+	}
+	if newPath != srcFile {
+		t.Errorf("newPath = %q, want the file's own path %q", newPath, srcFile)
+	}
+	if _, statErr := os.Stat(filepath.Join(rootDir, "book.m4b")); !os.IsNotExist(statErr) {
+		t.Errorf("a copy was made at the top of the root (stat err %v)", statErr)
+	}
 	if store.updated == nil || store.updated.ImportedFromDelugeAt == nil || store.updated.FilePath != srcFile {
 		t.Errorf("row not marked imported in place: %+v", store.updated)
 	}

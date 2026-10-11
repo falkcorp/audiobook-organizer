@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-10-11
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -272,12 +273,13 @@ func buildLinkLibraryIndex(root string, rows []database.BookFileCore) *linkLibra
 // the seeding path (never imported) also matches its own content hash; linking
 // it would put it on GetBookFilesNeedingDelugeImportCore with a path outside
 // the library, and the bulk importers would then copy it in.
+//
+// It is pathutil.IsUnderRoot, the containment test the importers and
+// deluge.centralize make (pathutil.RelEscapesBase), so a row this op calls "in
+// the library" is one they resolve to its own path: a directory named
+// "..Extras" is inside the root for all of them.
 func underLibraryRoot(root, path string) bool {
-	if root == "" || path == "" {
-		return false
-	}
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != "." && !filepath.IsAbs(rel) && !isParentTraversal(rel)
+	return pathutil.IsUnderRoot(root, path)
 }
 
 // torrentResolution is phase 1's output for one torrent. Each worker writes
