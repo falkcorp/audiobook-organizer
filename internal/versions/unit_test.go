@@ -1,7 +1,7 @@
 // file: internal/versions/unit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
-// last-edited: 2026-09-01
+// last-edited: 2026-10-10
 
 package versions
 
@@ -23,7 +23,7 @@ import (
 
 func TestCreateIngestVersion_EmptyBookID(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	_, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	_, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		FilePath: "/tmp/book.m4b",
 	})
 	require.Error(t, err)
@@ -32,7 +32,7 @@ func TestCreateIngestVersion_EmptyBookID(t *testing.T) {
 
 func TestCreateIngestVersion_EmptyFilePath(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	_, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	_, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID: "book-1",
 	})
 	require.Error(t, err)
@@ -45,12 +45,14 @@ func TestCreateIngestVersion_StoreErrorOnCreate(t *testing.T) {
 	// Allow-all import path so the path gate passes; this test exercises
 	// version-creation error handling, not path validation.
 	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
+	// The row lookup runs before anything is created (idempotency check).
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	// No torrent hash so fingerprint check is skipped.
 	// First version — no active version exists.
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(nil, errors.New("not found"))
 	mockStore.EXPECT().CreateBookVersion(mock.AnythingOfType("*database.BookVersion")).Return(nil, errors.New("db write failed"))
 
-	_, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	_, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",
 		FilePath: "/nonexistent/path.m4b",
 		Format:   "m4b",
@@ -67,7 +69,7 @@ func TestCreateIngestVersion_RejectsDisallowedPath(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{}, nil)
 
-	_, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	_, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",
 		FilePath: "/etc/passwd",
 		Format:   "m4b",
@@ -81,6 +83,7 @@ func TestCreateIngestVersion_FingerprintBlocksPurgedTorrent_Mock(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
 	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	// Torrent hash matches a purged version.
 	mockStore.EXPECT().GetBookVersionByTorrentHash("bad-hash").Return(&database.BookVersion{
 		ID:     "v-old",
@@ -88,7 +91,7 @@ func TestCreateIngestVersion_FingerprintBlocksPurgedTorrent_Mock(t *testing.T) {
 		Status: database.BookVersionStatusInactivePurged,
 	}, nil)
 
-	_, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	_, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:      "book-1",
 		FilePath:    "/tmp/book.m4b",
 		Format:      "m4b",
@@ -113,14 +116,14 @@ func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 		ID: "v-1", BookID: "book-1", Status: database.BookVersionStatusActive,
 	}, nil)
 
-	// Hashing fails on this nonexistent path, and the file lookup must happen
-	// ANYWAY: the version-to-file linkage is not conditional on the hash. This
-	// was .Maybe() while the linkage lived inside the hash check's else branch,
-	// which let the mock pass whether or not the orphaned-version bug was
-	// present. Required now, so it cannot go back.
+	// The file lookup is required, not .Maybe(): it was optional while the
+	// linkage lived inside the hash check's else branch, which let the mock
+	// pass whether or not the orphaned-version bug was present. It now runs
+	// first, before the version is created, and no row is returned, so the
+	// version must be reported unlinked.
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 
-	ver, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	ver, linked, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",
 		FilePath: "/nonexistent/path.m4b",
 		Format:   "m4b",
@@ -128,6 +131,7 @@ func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, database.BookVersionStatusActive, ver.Status)
+	assert.False(t, linked, "no book_file row exists, so nothing can be linked")
 }
 
 func TestCreateIngestVersion_SecondVersionIsAlt_Mock(t *testing.T) {
@@ -145,11 +149,10 @@ func TestCreateIngestVersion_SecondVersionIsAlt_Mock(t *testing.T) {
 		ID: "v-2", BookID: "book-1", Status: database.BookVersionStatusAlt,
 	}, nil)
 
-	// See the note in the sibling test: the hash fails here, and the file
-	// lookup must still run so the version gets linked.
+	// See the note in the sibling test: the file lookup must run.
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 
-	ver, err := CreateIngestVersion(mockStore, IngestVersionParams{
+	ver, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",
 		FilePath: "/nonexistent/path.mp3",
 		Format:   "mp3",

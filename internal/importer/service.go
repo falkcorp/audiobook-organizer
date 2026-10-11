@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.17.0
+// version: 1.18.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-10
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -149,8 +150,9 @@ type ImportFileRequest struct {
 	// a live version of another book already holds, is never linked (see
 	// ImportFileResponse.TorrentLinked). When it is linked it is
 	// written onto the new BookVersion (TorrentHash, Source "deluge") and the
-	// new BookFile (DelugeHash). It does not mark the file as copied: the later
-	// copy into the library sets ImportedFromDelugeAt and DelugeOriginalPath.
+	// new BookFile (DelugeHash, next to its VersionID). It does not mark the
+	// file as copied: the later copy into the library sets
+	// ImportedFromDelugeAt and DelugeOriginalPath.
 	TorrentHash string `json:"-"`
 }
 
@@ -196,9 +198,10 @@ type ImportFileResponse struct {
 
 	// TorrentLinked reports what was actually written for
 	// ImportFileRequest.TorrentHash: true only when a BookVersion carrying the
-	// hash was created AND the BookFile row carrying it (DelugeHash) was
-	// created. It is false whenever no hash was given. TorrentLinkNote says why
-	// a given hash was not linked (one of the TorrentLinkNote* constants).
+	// hash was created AND the BookFile row was linked to it (VersionID and
+	// DelugeHash written in one update). It is false whenever no hash was
+	// given. TorrentLinkNote says why a given hash was not linked (one of the
+	// TorrentLinkNote* constants).
 	//
 	// Neither is serialized: the field they describe is not bindable from JSON
 	// either, so POST /api/v1/import/file has nothing to report, and the one
@@ -217,9 +220,13 @@ const (
 	// TorrentLinkNoteVersionFailed: the version row could not be created, so
 	// neither the version nor the file row carries the hash.
 	TorrentLinkNoteVersionFailed = "version not recorded"
-	// TorrentLinkNoteFileFailed: the version carrying the hash was created but
-	// the book_file row was not, so the link is incomplete.
+	// TorrentLinkNoteFileFailed: the book_file row could not be written, so
+	// the version carrying the hash was created with nothing to link to.
 	TorrentLinkNoteFileFailed = "book file row not recorded"
+	// TorrentLinkNoteLinkFailed: the book_file row and the version carrying
+	// the hash were both created, but the write linking them (VersionID and
+	// DelugeHash on the row) failed, so the row does not carry the hash.
+	TorrentLinkNoteLinkFailed = "book file row not linked to its version"
 	// TorrentLinkNoteAlreadyLinked: a live version of another book already
 	// holds the hash in the one-to-one torrent index. Linking again would move
 	// the index to the new book and orphan the existing link, so the file is
@@ -434,6 +441,24 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		}
 	}
 
+	// Identity hash, computed ONCE per import and written onto the book_file
+	// row at creation; versions.CreateIngestVersion trusts a row that already
+	// carries one and does not read the file again. filehash.BookFileHash is
+	// the algorithm dedup's exact-file collector expects. Its cost is
+	// bounded: a whole-file read at or below its 100 MB threshold, 10 MB from
+	// each end above it, so a multi-GB file is never read in full. This is the
+	// same read CreateIngestVersion did before; it moved, it was not added.
+	// Hashed before the book row exists so the
+	// window in which a book has no file row stays short. A failure leaves
+	// the hash empty (CreateIngestVersion retries it once, a backfill after
+	// that) and never fails the import.
+	fileHash, hashErr := filehash.BookFileHash(req.FilePath)
+	if hashErr != nil {
+		slog.Warn("import: identity hash failed; file_hash left empty for backfill",
+			"path", logger.SanitizeLogValue(req.FilePath), "err", hashErr)
+		fileHash = ""
+	}
+
 	// Create book in database
 	created, err := is.db.CreateBook(book)
 	if err != nil {
@@ -448,59 +473,27 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		}
 	}
 
-	// Create version row for the imported file (spec 3.1). A purged torrent
-	// gets no version at all, exactly as when CreateIngestVersion refused it.
+	// Give the imported book its book_file row, BEFORE its version.
 	//
-	// versionLinked is the gate for DelugeHash below: the file row carries the
-	// hash only when a version carrying it was really created, so the two
-	// halves of the link can never disagree in the file row's favour.
-	versionLinked := false
-	if purged {
-		logger.New("importer").Warn("not creating a version for book %s: its torrent content was previously purged", created.ID)
-	} else {
-		versionSource := "imported"
-		if linkHash != "" {
-			versionSource = "deluge"
-		}
-		ver, verErr := versions.CreateIngestVersion(is.db, versions.IngestVersionParams{
-			BookID: created.ID, FilePath: created.FilePath,
-			Format: created.Format, Source: versionSource,
-			TorrentHash: linkHash,
-		})
-		switch {
-		case verErr != nil:
-			slog.Warn("create ingest version", "id", created.ID, "err", verErr)
-			if linkHash != "" {
-				linkNote = TorrentLinkNoteVersionFailed
-			}
-		case linkHash != "" && ver != nil:
-			versionLinked = true
-		}
-	}
-	fileDelugeHash := ""
-	if versionLinked {
-		fileDelugeHash = linkHash
-	}
-
-	// Give the imported book its book_file row.
+	// The order is the fix for IMPORT-ORPHANED-VERSIONS (2026-10-10).
+	// versions.CreateIngestVersion links the version it creates to an EXISTING
+	// row; it never creates one. This block used to run after it, so every
+	// import -- torrent or not -- created a version, found no row to link,
+	// logged "version is orphaned", and left the row with no VersionID and no
+	// FileHash: `unverifiable` to the torrent cleanup fixer until a hash
+	// backfill ran.
 	//
-	// Without this the book row exists and the audio exists and NOTHING
+	// Without this row the book row exists and the audio exists and NOTHING
 	// CONNECTS THEM. Every other path that ingests audio creates book_file
 	// rows — merge, itunes, metafetch, organizer, both maintenance packages,
-	// and the scan path via server.ensureSingleFileBookFile — and this one did
-	// not. The capability was not even in importBookStore, so it could not have.
+	// and the scan path via server.ensureSingleFileBookFile.
 	//
-	// (An earlier draft said "nine packages". Measured: seven, before this
-	// change added the eighth. The count was never load-bearing, so it is now a
-	// list that can be checked rather than a number that quietly rots.)
-	//
-	// The immediate consequence was that organize-on-import is INERT:
-	// FilterBooksNeedingOrganization (organizer/service.go:689-696) drops any
-	// book whose FilePath is outside RootDir and which has zero book_files,
-	// counting it into skippedMissingFiles behind a log.Debug. An imported file
-	// is outside RootDir BY DEFINITION — that is what importing means — so
-	// every import-triggered organize would have been silently skipped, and the
-	// handler would still have reported a queued op id.
+	// The immediate consequence of a missing row is that organize-on-import is
+	// INERT: FilterBooksNeedingOrganization drops any book whose FilePath is
+	// outside RootDir and which has zero book_files, counting it into
+	// skippedMissingFiles behind a log.Debug. An imported file is outside
+	// RootDir BY DEFINITION, so every import-triggered organize would be
+	// silently skipped while the handler still reported a queued op id.
 	//
 	// This is always the single-file shape: ImportFile rejects directories
 	// above, and fileInfo/ext are the values already computed for that check.
@@ -510,8 +503,9 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// server.ensureSingleFileBookFile, which exists to backfill exactly this
 	// gap after the fact.
 	//
-	// VersionID is deliberately left unset, matching every other creation path
-	// (only versions/fingerprint.go populates it today).
+	// VersionID and DelugeHash are deliberately unset here: CreateIngestVersion
+	// writes both in the one update that links the version, so the row never
+	// claims a torrent that no version carries.
 	//
 	// A failure here does NOT fail the import. The book row is already
 	// committed, so returning an error would tell the caller to retry an import
@@ -523,14 +517,11 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		OriginalFilename: filepath.Base(created.FilePath),
 		Format:           strings.TrimPrefix(ext, "."),
 		FileSize:         fileInfo.Size(),
+		FileHash:         fileHash,
 		TrackNumber:      1,
 		TrackCount:       meta.TrackTotal,
 		DiscNumber:       meta.DiscNumber,
 		DiscCount:        meta.DiscTotal,
-		// DelugeHash only, and only when the version carrying the same hash
-		// was created; ImportedFromDelugeAt and DelugeOriginalPath stay unset
-		// because the file has not been copied (copy model, D57).
-		DelugeHash: fileDelugeHash,
 	}
 	if meta.TrackNumber > 0 {
 		bf.TrackNumber = meta.TrackNumber
@@ -544,15 +535,70 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		known.BookDurationSec = *created.Duration
 	}
 	bookfileaudio.EnsureDuration(bf, known, nil)
-	torrentLinked := false
-	if bfErr := is.db.CreateBookFile(bf); bfErr != nil {
+	// A durability-unknown error means the row WAS written (only its fsync is
+	// in doubt), so it is linked like any other row.
+	bfErr := is.db.CreateBookFile(bf)
+	bfWritten := bfErr == nil || errors.Is(bfErr, database.ErrBookFileDurabilityUnknown)
+	if bfErr != nil {
+		slog.Warn("import: book_file row write reported an error",
+			"book_id", created.ID, "path", created.FilePath, "written", bfWritten, "err", bfErr)
+	}
+	if !bfWritten {
 		slog.Warn("import: could not create book_file row — the book has no route to its audio, and organize will skip it",
-			"book_id", created.ID, "path", created.FilePath, "err", bfErr)
-		if versionLinked {
-			linkNote = TorrentLinkNoteFileFailed
-		}
+			"book_id", created.ID, "path", created.FilePath)
+	}
+
+	// Create the version row and link it to the book_file row above (spec
+	// 3.1). A purged torrent gets no version at all, exactly as when
+	// CreateIngestVersion refused it.
+	//
+	// When the row was not written the version is STILL created, unlinked (its
+	// orphan warning is then accurate): with a torrent hash it holds the
+	// one-to-one torrent index, and that index is what makes a retried
+	// discover import of the same torrent a 409 instead of a second book.
+	//
+	// Failure states, none of which needs a deletion to recover:
+	//   - version create fails: the row keeps FileHash, has no VersionID and
+	//     no DelugeHash, and the import still succeeds (no caller retry, no
+	//     duplicate). CreateIngestVersion over the same row later links it.
+	//   - link write fails: the version exists unlinked (logged), the row is
+	//     as in the previous case, and the torrent is reported not linked.
+	//     CreateIngestVersion over the row later ADOPTS that version instead
+	//     of creating a second one.
+	//   - row already linked (a re-run): CreateIngestVersion returns the
+	//     existing version and creates nothing.
+	torrentLinked := false
+	if purged {
+		logger.New("importer").Warn("not creating a version for book %s: its torrent content was previously purged", created.ID)
 	} else {
-		torrentLinked = versionLinked
+		versionSource := "imported"
+		if linkHash != "" {
+			versionSource = "deluge"
+		}
+		params := versions.IngestVersionParams{
+			BookID: created.ID, FilePath: created.FilePath,
+			Format: created.Format, Source: versionSource,
+			TorrentHash: linkHash,
+		}
+		if bfWritten {
+			params.BookFileID = bf.ID
+		}
+		ver, linked, verErr := versions.CreateIngestVersion(is.db, params)
+		switch {
+		case verErr != nil:
+			slog.Warn("create ingest version", "id", created.ID, "err", verErr)
+			if linkHash != "" {
+				linkNote = TorrentLinkNoteVersionFailed
+			}
+		case linkHash == "":
+			// No torrent to report on.
+		case !bfWritten:
+			linkNote = TorrentLinkNoteFileFailed
+		case !linked:
+			linkNote = TorrentLinkNoteLinkFailed
+		case ver != nil && ver.TorrentHash == linkHash:
+			torrentLinked = true
+		}
 	}
 
 	// Post-import dedup check — two paths, selected by config flag:

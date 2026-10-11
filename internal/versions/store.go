@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-10
 
@@ -64,6 +64,12 @@ type IngestStore interface {
 
 	CreateBookVersion(v *database.BookVersion) (*database.BookVersion, error)
 	GetActiveVersionForBook(bookID string) (*database.BookVersion, error)
+	// GetBookVersion resolves a row's existing VersionID, so a re-run over an
+	// already-linked row returns that version instead of minting another.
+	GetBookVersion(id string) (*database.BookVersion, error)
+	// GetBookVersionsByBookID finds a version an earlier run created but
+	// never linked, so a re-run adopts it instead of creating a duplicate.
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 	UpdateBookFile(id string, file *database.BookFile) error
 }
 

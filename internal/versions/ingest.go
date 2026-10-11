@@ -1,14 +1,17 @@
 // file: internal/versions/ingest.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
-// Every time a new book enters the library (import, scan, organize)
-// or a new file is added to an existing book, a BookVersion row is
-// created. The version tracks the file's provenance (source, hash,
-// torrent hash) and its lifecycle status.
+// Spec 3.1 calls for a BookVersion row on every ingest. Today only one path
+// creates one: importer.ImportFile (POST /api/v1/import/file and the Deluge
+// discover import), which creates the book_file row first and then calls
+// CreateIngestVersion to create the version and link it. Scan and organize do
+// not create versions. The version tracks the file's provenance (source,
+// torrent hash) and its lifecycle status; the linked book_file row carries
+// the identity hash.
 //
 // New books get an `active` version. Known books adding a second
 // copy get an `alt` version — the user must explicitly promote it
@@ -17,6 +20,7 @@
 package versions
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -31,63 +35,163 @@ import (
 type IngestVersionParams struct {
 	BookID   string
 	FilePath string
-	Format   string
+	// BookFileID names the book_file row the new version is linked to. When
+	// set, only that row is linked; when empty, the book's row whose FilePath
+	// equals FilePath is. Either way the row must ALREADY EXIST: this function
+	// links a row, it never creates one. A caller that creates the row after
+	// calling here gets an orphaned version -- which is exactly what every
+	// import did until 2026-10-10 (IMPORT-ORPHANED-VERSIONS), because the
+	// importer called this before CreateBookFile.
+	BookFileID string
+	Format     string
 	// Source is "deluge" whenever TorrentHash is set.
 	Source string // "imported", "scanned", "organized", "deluge"
-	// TorrentHash is empty for non-torrent sources. The book_file link below
-	// (VersionID, FileHash) only happens when that row already exists at call
-	// time; a caller that creates the row afterwards gets an orphaned version.
+	// TorrentHash is empty for non-torrent sources. When set, the linked
+	// book_file row's DelugeHash is written in the same update that sets its
+	// VersionID, so the row carries the hash only when it is linked to the
+	// version carrying it -- never one half of the link without the other.
 	TorrentHash string
 }
 
-// CreateIngestVersion creates a BookVersion for a newly-ingested file.
+// CreateIngestVersion creates a BookVersion for a newly-ingested file and
+// links it to the file's existing book_file row (see IngestVersionParams).
 // If the book already has an active version, the new one gets status=alt.
 // If no active version exists, the new one becomes active.
 //
-// Also computes and stores the file's identity hash on the BookFile row (if
-// one exists for the book + file path). The hash MUST come from
-// filehash.BookFileHash: book_files.file_hash is the column dedup's exact-file
-// collector treats as certainty, and a whole-file SHA-256 written here — which
-// is what this function used to do — disagrees with every scanner-written row
-// above 100 MB, so the duplicate is silently never found.
-func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*database.BookVersion, error) {
+// It returns the version and whether the link landed (linked). linked=false
+// with a nil error means the version exists but no row points at it: the row
+// was not found, could not be read, or its update failed. Each is logged.
+//
+// It is idempotent per row: when the target row already carries a VersionID
+// naming a version of this book, that version is returned (linked=true) and
+// nothing is created, so a repair that re-runs ingest over a row never mints a
+// second version. A row left without a VersionID is linked on the next run:
+// after a failed version create a version is created then; after a failed
+// link write (or an import from before 2026-10-10, which never linked) the
+// stranded version is adopted rather than duplicated (see strandedVersion).
+// Nothing is deleted on any path.
+//
+// It also stores the file's identity hash on the linked row when the row does
+// not carry one yet. A caller that has already hashed the file (the importer
+// writes FileHash at CreateBookFile) is trusted, so the file is read once per
+// ingest, not twice. The hash MUST come from filehash.BookFileHash:
+// book_files.file_hash is the column dedup's exact-file collector treats as
+// certainty, and a whole-file SHA-256 written here — which is what this
+// function used to do — disagrees with every scanner-written row above 100 MB,
+// so the duplicate is silently never found.
+func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*database.BookVersion, bool, error) {
 	if params.BookID == "" || params.FilePath == "" {
-		return nil, fmt.Errorf("book_id and file_path required")
+		return nil, false, fmt.Errorf("book_id and file_path required")
 	}
 
 	// Validate the path is inside an allowed directory before hashing the file
 	// (go/path-injection); use the cleaned absolute path downstream.
 	validPath, err := fileops.ValidateUserPath(store, params.FilePath)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	params.FilePath = validPath
 
-	// Check fingerprint first — refuse if this file was previously purged.
-	if params.TorrentHash != "" {
-		match := CheckFingerprint(store, params.TorrentHash, nil)
-		if match != nil && match.Matched {
-			return nil, fmt.Errorf("fingerprint match: this content was previously %s (book %s, version %s)",
-				match.Status, match.BookID, match.VersionID)
+	// Find the row to link BEFORE creating anything, so an already-linked row
+	// short-circuits (idempotency) instead of gaining a second version.
+	//
+	// A store failure here is not fatal: the version is still recorded (it
+	// holds the torrent index, which is what stops a retried torrent import
+	// from creating a second linked book), but it is reported unlinked.
+	// Previously discarded, which made a store failure look identical to "this
+	// book has no files" — with no log line either way.
+	files, filesErr := store.GetBookFiles(params.BookID)
+	if filesErr != nil {
+		slog.Warn("versions.CreateIngestVersion: cannot load book files; version will NOT be linked to any file row",
+			"book_id", logger.SanitizeLogValue(params.BookID), "err", filesErr)
+	}
+	target := -1
+	for i := range files {
+		if params.BookFileID != "" {
+			if files[i].ID == params.BookFileID {
+				target = i
+				break
+			}
+		} else if files[i].FilePath == params.FilePath {
+			target = i
+			break
 		}
 	}
 
-	// Determine status: active if no existing active, alt otherwise.
-	status := database.BookVersionStatusActive
-	existing, err := store.GetActiveVersionForBook(params.BookID)
-	if err == nil && existing != nil {
-		status = database.BookVersionStatusAlt
+	if target >= 0 && files[target].VersionID != "" {
+		existing, getErr := store.GetBookVersion(files[target].VersionID)
+		if getErr != nil {
+			// Cannot tell whether the row is already linked. Creating anyway
+			// could mint a duplicate version, so refuse; the row is untouched.
+			return nil, false, fmt.Errorf("read linked version %s: %w", files[target].VersionID, getErr)
+		}
+		if existing != nil && existing.BookID == params.BookID {
+			return existing, true, nil
+		}
+		// A VersionID naming a missing version, or another book's (the row was
+		// repointed), is stale: fall through and relink the row to a new one.
 	}
 
-	ver, err := store.CreateBookVersion(&database.BookVersion{
-		BookID:      params.BookID,
-		Status:      status,
-		Format:      params.Format,
-		Source:      params.Source,
-		TorrentHash: params.TorrentHash,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create version: %w", err)
+	// Adopt a version stranded by an earlier run, before creating one. A run
+	// whose link write failed (or an import from before 2026-10-10, which
+	// never linked) leaves a version no row points at and a row with no
+	// VersionID. Creating again would leave the first orphaned and ACTIVE and
+	// make the new one an alt that takes over the torrent index; adopting it
+	// makes a re-run the repair. Only when there is a row to link and the
+	// rows were read, so "unreferenced" is known.
+	var ver *database.BookVersion
+	if target >= 0 && filesErr == nil {
+		stranded, strandErr := strandedVersion(store, params, files)
+		if strandErr != nil {
+			// Cannot tell whether a stranded version exists; creating could
+			// duplicate it. The row is untouched and a later run can link it.
+			return nil, false, fmt.Errorf("list versions of book %s: %w", params.BookID, strandErr)
+		}
+		ver = stranded
+	}
+
+	if ver == nil {
+		// Check fingerprint first — refuse if this file was previously purged.
+		if params.TorrentHash != "" {
+			match := CheckFingerprint(store, params.TorrentHash, nil)
+			if match != nil && match.Matched {
+				return nil, false, fmt.Errorf("fingerprint match: this content was previously %s (book %s, version %s)",
+					match.Status, match.BookID, match.VersionID)
+			}
+		}
+
+		// Determine status: active if no existing active, alt otherwise.
+		status := database.BookVersionStatusActive
+		existing, err := store.GetActiveVersionForBook(params.BookID)
+		if err == nil && existing != nil {
+			status = database.BookVersionStatusAlt
+		}
+
+		created, err := store.CreateBookVersion(&database.BookVersion{
+			BookID:      params.BookID,
+			Status:      status,
+			Format:      params.Format,
+			Source:      params.Source,
+			TorrentHash: params.TorrentHash,
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("create version: %w", err)
+		}
+		ver = created
+	}
+
+	if target < 0 {
+		if filesErr == nil {
+			// A real condition, not a nit: CreateIngestVersion did half its job.
+			// Paths drift (organize renames under RootDir), and a caller that
+			// creates its row after calling here lands here every time.
+			slog.Warn("versions.CreateIngestVersion: no book_file row matched the ingest path; version is orphaned",
+				"book_id", logger.SanitizeLogValue(params.BookID),
+				"book_file_id", logger.SanitizeLogValue(params.BookFileID),
+				"file_path", logger.SanitizeLogValue(params.FilePath),
+				"version_id", ver.ID, "candidate_files", len(files))
+		}
+		return ver, false, nil
 	}
 
 	// Link the new version to its book_file row, and stamp the identity hash
@@ -100,50 +204,69 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	// version row was created, nothing pointed at it, and CreateIngestVersion
 	// returned (ver, nil). An orphaned version is a data-integrity bug; a
 	// missing hash is a backfill job's problem. Only the second is acceptable.
-	hash, hashErr := filehash.BookFileHash(params.FilePath)
-	if hashErr != nil {
-		slog.Warn("versions.CreateIngestVersion: identity hash failed; version linkage still written, file_hash left empty for backfill",
-			"book_id", logger.SanitizeLogValue(params.BookID),
-			"file_path", logger.SanitizeLogValue(params.FilePath),
-			"version_id", ver.ID, "err", hashErr)
-	}
-
-	files, filesErr := store.GetBookFiles(params.BookID)
-	if filesErr != nil {
-		// Previously discarded, which made a store failure look identical to
-		// "this book has no files" — with no log line either way.
-		slog.Warn("versions.CreateIngestVersion: cannot load book files; version created but NOT linked to any file row",
-			"book_id", logger.SanitizeLogValue(params.BookID), "version_id", ver.ID, "err", filesErr)
-		return ver, nil
-	}
-
-	linked := false
-	for _, f := range files {
-		if f.FilePath == params.FilePath {
-			if hashErr == nil {
-				f.FileHash = hash
-			}
-			f.VersionID = ver.ID
-			if updateErr := store.UpdateBookFile(f.ID, &f); updateErr != nil {
-				slog.Warn("versions.CreateIngestVersion: book file update failed; version created but NOT linked",
-					"book_id", logger.SanitizeLogValue(params.BookID), "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
-			} else {
-				linked = true
-			}
-			break
+	f := files[target]
+	if f.FileHash == "" {
+		hash, hashErr := filehash.BookFileHash(params.FilePath)
+		if hashErr != nil {
+			slog.Warn("versions.CreateIngestVersion: identity hash failed; version linkage still written, file_hash left empty for backfill",
+				"book_id", logger.SanitizeLogValue(params.BookID),
+				"file_path", logger.SanitizeLogValue(params.FilePath),
+				"version_id", ver.ID, "err", hashErr)
+		} else {
+			f.FileHash = hash
 		}
 	}
-	if !linked {
-		// A real condition, not a nit: CreateIngestVersion did half its job and
-		// its caller cannot tell. Paths drift (organize renames under RootDir),
-		// so the ingest path may no longer match any row by the time we look.
-		slog.Warn("versions.CreateIngestVersion: no book_file row matched the ingest path; version is orphaned",
-			"book_id", logger.SanitizeLogValue(params.BookID),
-			"file_path", logger.SanitizeLogValue(params.FilePath),
-			"version_id", ver.ID, "candidate_files", len(files))
+	f.VersionID = ver.ID
+	if params.TorrentHash != "" {
+		f.DelugeHash = params.TorrentHash
 	}
+	if updateErr := store.UpdateBookFile(f.ID, &f); updateErr != nil {
+		if errors.Is(updateErr, database.ErrBookFileDurabilityUnknown) {
+			// The write was applied; only its fsync is in doubt. The row IS
+			// linked as far as every reader can see.
+			slog.Warn("versions.CreateIngestVersion: book file link applied but not confirmed durable",
+				"book_id", logger.SanitizeLogValue(params.BookID), "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
+			return ver, true, nil
+		}
+		slog.Warn("versions.CreateIngestVersion: book file update failed; version created but NOT linked",
+			"book_id", logger.SanitizeLogValue(params.BookID), "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
+		return ver, false, nil
+	}
+	return ver, true, nil
+}
 
-	return ver, nil
+// strandedVersion returns the one version of params.BookID that an earlier
+// ingest created but never linked: live (active or alt), carrying the same
+// TorrentHash (empty matches empty), and named by no row in files. It returns
+// nil when there is none, or more than one -- several candidates means the
+// history is not the simple failed-link case, and picking one would be a
+// guess, so a new version is created as before.
+func strandedVersion(store IngestStore, params IngestVersionParams, files []database.BookFile) (*database.BookVersion, error) {
+	vers, err := store.GetBookVersionsByBookID(params.BookID)
+	if err != nil {
+		return nil, err
+	}
+	referenced := make(map[string]bool, len(files))
+	for _, f := range files {
+		if f.VersionID != "" {
+			referenced[f.VersionID] = true
+		}
+	}
+	var found *database.BookVersion
+	for i := range vers {
+		v := &vers[i]
+		if v.Status != database.BookVersionStatusActive && v.Status != database.BookVersionStatusAlt {
+			continue
+		}
+		if v.TorrentHash != params.TorrentHash || referenced[v.ID] {
+			continue
+		}
+		if found != nil {
+			return nil, nil
+		}
+		found = v
+	}
+	return found, nil
 }
 
 // HashFile is deliberately gone. It computed a whole-file SHA-256 and its only

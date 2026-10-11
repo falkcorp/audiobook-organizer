@@ -1,12 +1,13 @@
 // file: internal/importer/bookfile_on_import_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1e93a7-4f28-4b60-a8d3-e29b7c046f51
-// last-edited: 2026-08-25
+// last-edited: 2026-10-10
 
 package importer
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,8 +60,32 @@ func stageFixture(t *testing.T) (dir, path string) {
 
 // importStore returns a MockStore wired so ImportFile reaches CreateBook, with
 // every created book_file row appended to *rows.
+//
+// The rows are STATEFUL: GetBookFiles returns them and UpdateBookFile rewrites
+// them by ID, so *rows holds what the store holds after the import, not merely
+// the struct handed to CreateBookFile. Before 2026-10-10 neither method was
+// wired, so the version link versions.CreateIngestVersion writes could never be
+// observed here -- one reason every import orphaning its version went unseen.
 func importStore(dir string, rows *[]*database.BookFile) *database.MockStore {
 	return &database.MockStore{
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			var out []database.BookFile
+			for _, r := range *rows {
+				if r.BookID == bookID {
+					out = append(out, *r)
+				}
+			}
+			return out, nil
+		},
+		UpdateBookFileFunc: func(id string, f *database.BookFile) error {
+			for _, r := range *rows {
+				if r.ID == id {
+					*r = *f
+					return nil
+				}
+			}
+			return fmt.Errorf("book file %s not found", id)
+		},
 		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
 			return []database.ImportPath{{ID: 1, Path: dir, Name: "staging", Enabled: true}}, nil
 		},
@@ -70,6 +95,9 @@ func importStore(dir string, rows *[]*database.BookFile) *database.MockStore {
 			return &out, nil
 		},
 		CreateBookFileFunc: func(f *database.BookFile) error {
+			if f.ID == "" {
+				f.ID = fmt.Sprintf("01JIMPORTEDFILE%09d", len(*rows))
+			}
 			*rows = append(*rows, f)
 			return nil
 		},

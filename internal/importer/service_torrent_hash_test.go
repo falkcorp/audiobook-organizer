@@ -1,5 +1,5 @@
 // file: internal/importer/service_torrent_hash_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b0f6d2e-3a41-4c85-9e17-5d8a2c4b1f90
 // last-edited: 2026-10-10
 
@@ -64,6 +64,9 @@ func TestImportFile_TorrentHashReachesVersionAndBookFile(t *testing.T) {
 	bf := rows[0]
 	if bf.DelugeHash != testTorrentHash {
 		t.Errorf("DelugeHash = %q, want %q", bf.DelugeHash, testTorrentHash)
+	}
+	if bf.VersionID != vers[0].ID {
+		t.Errorf("VersionID = %q, want the torrent version %q", bf.VersionID, vers[0].ID)
 	}
 	if bf.ImportedFromDelugeAt != nil {
 		t.Errorf("ImportedFromDelugeAt must stay nil (the file has not been copied), got %v", bf.ImportedFromDelugeAt)
@@ -243,6 +246,14 @@ func TestImportFile_TorrentHashVersionFailureDropsFileHash(t *testing.T) {
 	if rows[0].DelugeHash != "" {
 		t.Errorf("DelugeHash = %q, want empty when no version carries the hash", rows[0].DelugeHash)
 	}
+	// The row was written before the version was attempted, so it keeps its
+	// identity hash and is simply unlinked -- relinkable, nothing to delete.
+	if rows[0].FileHash == "" {
+		t.Error("FileHash is empty: the row was written before the version and must carry it")
+	}
+	if rows[0].VersionID != "" {
+		t.Errorf("VersionID = %q, want empty when no version was created", rows[0].VersionID)
+	}
 	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteVersionFailed {
 		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteVersionFailed, resp.TorrentLinked, resp.TorrentLinkNote)
 	}
@@ -359,5 +370,68 @@ func TestImportFile_TorrentHashIndexErrorImportsUnlinked(t *testing.T) {
 	}
 	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteLookupFailed {
 		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteLookupFailed, resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+}
+
+// The row and the version carrying the hash were both created, but the write
+// linking them failed: the stored row carries neither VersionID nor DelugeHash,
+// and the torrent is reported not linked rather than half-linked.
+func TestImportFile_TorrentHashLinkWriteFailureIsNotLinked(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	st := torrentStore(dir, &rows, &vers, &created)
+	st.UpdateBookFileFunc = func(string, *database.BookFile) error { return errors.New("synthetic link failure") }
+	is := NewImportService(st)
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("a link-write failure must not fail the import: %v", err)
+	}
+	if len(vers) != 1 || len(rows) != 1 {
+		t.Fatalf("want 1 version and 1 row, got %d and %d", len(vers), len(rows))
+	}
+	if rows[0].VersionID != "" || rows[0].DelugeHash != "" {
+		t.Errorf("unlinked row must carry neither half: VersionID=%q DelugeHash=%q", rows[0].VersionID, rows[0].DelugeHash)
+	}
+	if rows[0].FileHash == "" {
+		t.Error("FileHash must still be on the row: it was written at create, not by the link")
+	}
+	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteLinkFailed {
+		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteLinkFailed, resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+}
+
+// A durability-unknown CreateBookFile error means the row WAS written, so it
+// is linked like any other row instead of being treated as missing.
+func TestImportFile_DurabilityUnknownRowStillLinks(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	st := torrentStore(dir, &rows, &vers, &created)
+	inner := st.CreateBookFileFunc
+	st.CreateBookFileFunc = func(f *database.BookFile) error {
+		if err := inner(f); err != nil {
+			return err
+		}
+		return database.ErrBookFileDurabilityUnknown
+	}
+	is := NewImportService(st)
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	if !resp.TorrentLinked || resp.TorrentLinkNote != "" {
+		t.Errorf("want linked with no note, got linked=%v note=%q", resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+	if len(rows) != 1 || len(vers) != 1 || rows[0].VersionID != vers[0].ID {
+		t.Errorf("the applied row must be linked to the version: rows=%d vers=%d", len(rows), len(vers))
 	}
 }
