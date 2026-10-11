@@ -52,7 +52,9 @@ class BalanceTest(unittest.TestCase):
 
     def test_unknown_tests_get_the_median_estimate(self) -> None:
         timings = {"TestA": 10.0, "TestB": 10.0, "TestC": 10.0}
-        shards = gts.balance(["TestA", "TestB", "TestC", "TestNew1", "TestNew2", "TestNew3"], 3, timings)
+        shards = gts.balance(
+            ["TestA", "TestB", "TestC", "TestNew1", "TestNew2", "TestNew3"], 3, timings
+        )
         self.assertEqual(sorted(len(s) for s in shards), [2, 2, 2])
 
     def test_more_shards_than_tests_drops_empty_shards(self) -> None:
@@ -117,7 +119,9 @@ class ListTestsManyTest(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=self.OUT, stderr="")
 
         with mock.patch.object(gts.subprocess, "run", fake_run):
-            got = gts.list_tests_many(["m/a", "m/none", "m/b"], ["-short", "-race", "-timeout", "25m"])
+            got = gts.list_tests_many(
+                ["m/a", "m/none", "m/b"], ["-short", "-race", "-timeout", "25m"]
+            )
         self.assertEqual(
             got,
             {"m/a": ["ExampleA", "TestA1", "TestA2"], "m/none": [], "m/b": ["FuzzB", "TestB1"]},
@@ -154,7 +158,9 @@ class ListTestsManyTest(unittest.TestCase):
         def failing(cmd: list[str], **kwargs: object) -> mock.Mock:
             if cmd[1] == "list":
                 return mock.Mock(returncode=0, stdout="m/a\n", stderr="")
-            return mock.Mock(returncode=1, stdout="FAIL\tm/a [build failed]\n", stderr="x.go:1: boom")
+            return mock.Mock(
+                returncode=1, stdout="FAIL\tm/a [build failed]\n", stderr="x.go:1: boom"
+            )
 
         with mock.patch.object(gts.subprocess, "run", failing), self.assertRaises(SystemExit):
             gts.list_tests_many(["m/a"], [])

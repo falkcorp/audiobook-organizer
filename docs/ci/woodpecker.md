@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -200,10 +200,12 @@ The server and the U0 agent run as one Docker swarm stack,
 Images are pinned by digest. The server publishes 18733 (HTTP) and 18734
 (gRPC) in host mode.
 
-U0 is the production host, so its agent is capped:
+U0 is the production host, so its agent is capped. The live value was changed
+with `docker service update` on 2026-10-11; if the stack file still says 2, a
+stack redeploy puts it back -- update the stack file too:
 
 ```
-WOODPECKER_MAX_WORKFLOWS=2
+WOODPECKER_MAX_WORKFLOWS=1   # owner 2026-10-11 (was 2); set live with `docker service update --env-add`
 WOODPECKER_BACKEND_DOCKER_LIMIT_CPU_QUOTA=800000     # 8 CPUs per step container
 WOODPECKER_BACKEND_DOCKER_LIMIT_MEM=17179869184      # 16 GiB per step container
 WOODPECKER_BACKEND_DOCKER_VOLUMES=/mnt/cache/woodpecker-cache:/ci-cache
