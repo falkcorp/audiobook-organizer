@@ -1,7 +1,7 @@
 // file: internal/organizer/target_path_collision_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1a9e4f-2b3d-4c5e-8f6a-1d2e3f4a5b6c
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -72,7 +72,7 @@ func (l *warnCapturingLogger) snapshot() []string {
 }
 
 // newCollisionMockStore builds a MockStore that can hydrate/update the given
-// books by ID — the minimum organizeBooks' already-in-place branch needs
+// books by ID — the minimum organizeBooksOpts' already-in-place branch needs
 // (stampOrganizeMetadata -> modifyBook -> ModifyBook).
 func newCollisionMockStore(books map[string]*database.Book) *database.MockStore {
 	return &database.MockStore{
@@ -88,7 +88,7 @@ func newCollisionMockStore(books map[string]*database.Book) *database.MockStore 
 }
 
 // TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath drives
-// organizeBooks directly (bypassing FilterBooksNeedingOrganization, which
+// organizeBooksOpts directly (bypassing FilterBooksNeedingOrganization, which
 // would otherwise divert an already-at-target book into alreadyCorrect
 // before it ever reaches the worker loop this brief instruments) with two
 // different books whose Title/Author combination computes the identical
@@ -172,8 +172,8 @@ func TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath(t *testing.T) {
 	svc := NewService(mockDB)
 	testLog := &warnCapturingLogger{}
 
-	stats := svc.organizeBooks(context.Background(),
-		[]database.Book{*bookA, *bookB, *bookC}, nil, testLog, "")
+	stats := svc.organizeBooksOpts(context.Background(),
+		[]database.Book{*bookA, *bookB, *bookC}, nil, testLog, "", false, nil)
 
 	// (a) No behavior change: all three books still organize successfully.
 	if stats.Failed != 0 {

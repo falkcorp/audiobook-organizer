@@ -1,7 +1,7 @@
 // file: internal/backup/codec.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b7c41d8-6e52-4a19-9f03-c8d5a2e71b64
-// last-edited: 2026-08-29
+// last-edited: 2026-10-11
 
 package backup
 
@@ -74,12 +74,6 @@ func ResolveCodec(name string) (Codec, error) {
 		return nil, fmt.Errorf("unknown backup compression %q (want %s, %s or %s)",
 			name, CompressionGzip, CompressionZstd, CompressionNone)
 	}
-}
-
-// SupportedCompression lists the accepted names, for validation messages and
-// for the settings UI to render as choices.
-func SupportedCompression() []string {
-	return []string{CompressionGzip, CompressionZstd, CompressionNone}
 }
 
 // archiveExtensions are every suffix a backup archive can carry. ListBackups

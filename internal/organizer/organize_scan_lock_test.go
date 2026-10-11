@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -166,7 +166,7 @@ func TestOrganizeBooks_BookHeldPastTheBoundIsSkippedBusyNotFailed(t *testing.T) 
 }
 
 // The post-scan auto-organize runs INSIDE the scan and must never take the
-// scan lock (R3, T9): organizeBooks without lockBooks organizes a book whose
+// scan lock (R3, T9): organizeBooksOpts without lockBooks organizes a book whose
 // key is held, without waiting.
 func TestOrganizeBooks_AutoOrganizeTakesNoScanLock(t *testing.T) {
 	svc, store, root := setupInPlace(t)
@@ -175,7 +175,9 @@ func TestOrganizeBooks_AutoOrganizeTakesNoScanLock(t *testing.T) {
 	holdBook(t, b.ID)
 
 	done := make(chan *Stats, 1)
-	go func() { done <- svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "") }()
+	go func() {
+		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", false, nil)
+	}()
 	select {
 	case stats := <-done:
 		if stats.Failed != 0 || stats.Collisions[OutcomeScanBusy] != 0 {

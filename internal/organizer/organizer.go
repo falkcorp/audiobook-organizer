@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.43.0
+// version: 1.43.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-30
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -644,7 +644,7 @@ func stringOrEmpty(s *string) string {
 // safe for that reason; the Ingest variants keep the property deliberately.
 //
 // The temp name is UNIQUE PER WRITER and opened O_EXCL. It used to be the fixed
-// `dst+".tmp"`, os.Remove'd first and opened O_TRUNC — and organizeBooks runs
+// `dst+".tmp"`, os.Remove'd first and opened O_TRUNC — and organizeBooksOpts runs
 // eight workers with no cross-book target dedupe, so two same-titled books, or
 // one book planned twice, wrote through the same temp at once. In 30 of 30 probe
 // iterations one worker returned success while dst held the OTHER worker's
@@ -1054,7 +1054,7 @@ func leftoverSuffix(leftover []string) string {
 // adoptExistingDestination decides whether a file already sitting at dstPath
 // is THIS book's file (adopt it: record the row as organized there) or an
 // unrelated occupant (leave the row unchanged). It is the single adoption
-// test for both places organizeBooks can meet an occupied destination — the
+// test for both places organizeBooksOpts can meet an occupied destination — the
 // pre-copy os.Stat, and the os.IsExist returned when another worker won the
 // race between that stat and the exclusive create/finalize — so the two
 // cannot drift apart again. Until 2026-09-02 the race path adopted

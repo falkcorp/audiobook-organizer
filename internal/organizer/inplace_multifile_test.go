@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c2a9e4d-7b13-4f58-a0d2-3e9b1c5f8a47
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -224,7 +224,7 @@ func TestReOrganizeInPlace_MultiFileRollbackFailureIsAFailureNotASkip(t *testing
 		return prev(src, dst)
 	}
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", false, nil)
 	if stats.Failed != 1 || stats.Skipped != 0 || len(stats.Collisions) != 0 {
 		t.Fatalf("stats = %+v, want one failure and no skip/collision", stats)
 	}

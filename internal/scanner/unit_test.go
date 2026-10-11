@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -50,31 +50,6 @@ func TestExtractQuotedValue(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-// ---------------------------------------------------------------------------
-// SetScanCache / ClearScanCache (0% -> 100%)
-// ---------------------------------------------------------------------------
-
-func TestSetScanCacheAndClear(t *testing.T) {
-	// Ensure clean state
-	ClearScanCache()
-
-	cache := map[string]database.ScanCacheEntry{
-		"/tmp/a.m4b": {Mtime: 100, Size: 200},
-	}
-	SetScanCache(cache)
-
-	globalScanCacheMu.RLock()
-	assert.NotNil(t, globalScanCache)
-	assert.Len(t, globalScanCache, 1)
-	globalScanCacheMu.RUnlock()
-
-	ClearScanCache()
-
-	globalScanCacheMu.RLock()
-	assert.Nil(t, globalScanCache)
-	globalScanCacheMu.RUnlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -706,8 +681,7 @@ func TestProcessBooksParallelWithScanCache(t *testing.T) {
 	cache := map[string]database.ScanCacheEntry{
 		filePath: {Mtime: fi.ModTime().Unix(), Size: fi.Size(), NeedsRescan: false},
 	}
-	SetScanCache(cache)
-	t.Cleanup(func() { ClearScanCache() })
+	t.Cleanup(AcquireScanCache(cache))
 
 	books := []Book{{FilePath: filePath, Format: ".m4b"}}
 

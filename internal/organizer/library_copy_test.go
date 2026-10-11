@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 93a1faee-be59-4abb-ab7d-eb7996f3665e
-// last-edited: 2026-09-30
+// last-edited: 2026-10-11
 
 package organizer
 
@@ -240,7 +240,7 @@ func TestResolveOrganizeSubject_FallsBackToTheBook(t *testing.T) {
 // skip (counted under library_copy_exists), not a failure.
 func TestOrganizeBooks_OwnLibraryCopyCountsAsSkipped(t *testing.T) {
 	f := newLibraryCopyFixture(t, "vg-1")
-	stats := f.svc.organizeBooks(context.Background(), []database.Book{*f.original}, nil, &noopLogger{}, "")
+	stats := f.svc.organizeBooksOpts(context.Background(), []database.Book{*f.original}, nil, &noopLogger{}, "", false, nil)
 	if stats.Failed != 0 || stats.Skipped != 1 {
 		t.Errorf("stats failed=%d skipped=%d; want failed=0 skipped=1", stats.Failed, stats.Skipped)
 	}

@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_startup_cancel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b8e6c14-5d97-4f30-9a1e-c7f04d82b6a3
-// last-edited: 2026-09-13
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -69,7 +69,6 @@ func installSlowWorksStore(t *testing.T, delay time.Duration) *slowWorksStore {
 	SetStore(s)
 	t.Cleanup(func() {
 		SetStore(prev)
-		ClearWorksLookupCache()
 	})
 	return s
 }

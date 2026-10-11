@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-11
 
@@ -111,7 +111,7 @@ const (
 	// written only once the hand-off succeeded, so it is evidence the
 	// operation changed the group's flags: the primary demote's revert
 	// re-crowns BookID over an already-restored flag only when this row
-	// exists (undo.RevertPlan.HandedOff). Restorable with nothing to write:
+	// exists (undo.RevertPlan.handedOff). Restorable with nothing to write:
 	// the demote row's revert (versionprimary.Crown) undoes the hand-off.
 	// OldValue names the member the hand-off left primary, as
 	// HandOffNoteValue writes it ("" on rows journaled before 2026-10-02):
@@ -132,7 +132,7 @@ const (
 	// refusal: it is the revert's evidence that every other member's
 	// explicit true predates the operation, so BookID's restored true
 	// yields to it rather than re-crown over it. Not evidence of a
-	// hand-off: RevertPlan.HandedOff ignores it.
+	// hand-off: RevertPlan.handedOff ignores it.
 	ChangeTypeBookPrimaryHandoffRefused = "book_primary_handoff_refused"
 	// ChangeTypeRepairPlanRecord: the decision a Repairs apply run worked
 	// from, journaled on the row's main book (BookID) before the run's first

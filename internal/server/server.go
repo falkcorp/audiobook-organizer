@@ -1314,7 +1314,7 @@ func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scan
 	// That hand-written half was wrong in three ways, and PerformOrganize
 	// has been getting all three right the whole time:
 	//
-	//   - It never created the organized VERSION row. organizeBooks routes
+	//   - It never created the organized VERSION row. organizeBooksOpts routes
 	//     an out-of-root book to CreateOrganizedVersion, which creates a row
 	//     for the organized copy, clones its BookFiles using paths from the
 	//     same planner the copy used, version-links the two, and marks the

@@ -1,7 +1,7 @@
 // file: internal/organizer/saferename_emptydir_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e12d01fe-5747-4d06-98b6-ac7563d9621b
-// last-edited: 2026-09-24
+// last-edited: 2026-10-11
 
 // Directory moves onto an existing destination.
 //
@@ -124,7 +124,7 @@ func assertSize(t *testing.T, path string, want int64) {
 	}
 }
 
-// End to end through organizeBooks: a directory book whose computed target is
+// End to end through organizeBooksOpts: a directory book whose computed target is
 // an existing EMPTY folder is moved into it. Before 2026-09-24 this counted as
 // Failed with "destination already exists".
 func TestOrganize_DirectoryBookOntoEmptyTargetDir(t *testing.T) {
@@ -148,7 +148,7 @@ func TestOrganize_DirectoryBookOntoEmptyTargetDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", false, nil)
 	if stats.Failed != 0 || stats.Skipped != 0 {
 		t.Fatalf("directory book onto an empty target must organize, got %+v", stats)
 	}
