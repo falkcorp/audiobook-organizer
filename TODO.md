@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.6 -->
+<!-- version: 10.76.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -120,11 +120,14 @@ into one of the curated sections below, is a normal direct edit.
       second bounded match over the field's last 16 KB under the same
       `Budget`. Cost: one extra match per long row, only for those patterns.
 
-- [ ] **RELINK-PRE-FIX-IMPORTS** (owner decision) Files imported before the
+- [x] **RELINK-PRE-FIX-IMPORTS** (owner decision) Files imported before the
       IMPORT-ORPHANED-VERSIONS fix each have an orphaned active version and a
       book_file row with no `VersionID` and, unless the hash backfill reached
-      them since, no `FileHash`. That leaves them invisible to exact-duplicate
-      matching and `unverifiable` for torrent cleanup.
+      them since, no `FileHash`. The link matters for version swaps (an
+      unlinked row moves with either version) and purges (once linked,
+      purging the version deletes the file); exact-duplicate matching keys on
+      `FileHash`, not `VersionID`. Done by `maintenance.relink-pre-fix-imports`
+      (Repairs tab); applying it in prod needs the owner's review.
       `versions.CreateIngestVersion` adopts a stranded version (exactly one
       live, unreferenced version of the book with the same torrent hash) and
       refuses (`ErrTorrentLinkedElsewhere`) to link a torrent a different live
@@ -139,8 +142,8 @@ into one of the curated sections below, is a normal direct edit.
       refused as held by V of this very book, although linking row 2 to V is
       arguably the right outcome. A pass over multi-file rows has to decide
       that case itself (compare `holder.BookID` with the book being relinked);
-      single-file rows, which are all the pre-fix imports, cannot hit it. None
-      exists yet, and running one in prod needs the owner's go-ahead.
+      single-file rows, which are all the pre-fix imports, cannot hit it. The
+      relink pass decides it as its `same_book_version` class.
 
 - [ ] **OPSMETRICS-SOAK-CLEANUP** After the soak ends on 2026-11-09, delete the legacy
       per-run gauges `op_items_processed` / `op_items_total` and their
