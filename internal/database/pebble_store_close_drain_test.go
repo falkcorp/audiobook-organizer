@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_close_drain_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c2e9b14-5d3a-4f8e-9a61-2b0c4d8e7f35
 // last-edited: 2026-10-11
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -340,14 +341,14 @@ func TestDBGate_StaleReleaseDoesNotSignalDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	paused, resume := make(chan struct{}), make(chan struct{})
-	g.releaseHook = func(int64) {
+	g.setReleaseHook(func(int64) {
 		close(paused)
 		<-resume
-	}
+	})
 	rDone := make(chan struct{})
 	go func() { defer close(rDone); g.release() }() // R parks after its decrement
 	<-paused
-	g.releaseHook = nil // R already read the hook; L's release must not park
+	g.setReleaseHook(nil) // R already read the hook; L's release must not park
 	if err := g.acquire(); err != nil {
 		t.Fatalf("L acquire before Close began: %v", err)
 	}
@@ -573,15 +574,15 @@ func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
 		},
 	}
 	for name, call := range calls {
-		releases := 0
-		g.releaseHook = func(int64) { releases++ }
+		var releases atomic.Int64
+		g.setReleaseHook(func(int64) { releases.Add(1) })
 		err := call()
-		g.releaseHook = nil
+		g.setReleaseHook(nil)
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
-		if releases == 0 {
+		if releases.Load() == 0 {
 			t.Errorf("%s took no lease, so Close's drain cannot see it", name)
 		}
 		if n := g.inFlight(); n != 0 {
@@ -601,16 +602,16 @@ func TestDBGate_RefusedAcquireLeavesCountAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.beginClose()
-	releases := 0
-	g.releaseHook = func(int64) { releases++ }
+	var releases atomic.Int64
+	g.setReleaseHook(func(int64) { releases.Add(1) })
 	for range 100 {
 		if err := g.acquire(); !errors.Is(err, pebble.ErrClosed) {
 			t.Fatalf("acquire after beginClose returned %v; want ErrClosed", err)
 		}
 	}
-	g.releaseHook = nil
-	if releases != 0 {
-		t.Fatalf("refused acquires touched the count (%d back-out releases)", releases)
+	g.setReleaseHook(nil)
+	if n := releases.Load(); n != 0 {
+		t.Fatalf("refused acquires touched the count (%d back-out releases)", n)
 	}
 	if n := g.inFlight(); n != 1 {
 		t.Fatalf("in flight %d after refused acquires; want 1", n)

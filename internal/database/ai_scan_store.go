@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.16.0
+// version: 2.16.1
 // last-edited: 2026-10-11
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -41,7 +41,7 @@ type AIScanStore struct {
 	prefix string // "aiscan:" when shared, "" when standalone
 	owned  bool   // if false, Close and Optimize are no-ops
 	// closeDB closes an owned engine (NewOwnedGatedDB: drain, sync, close;
-	// idempotent). Nil when the DB is shared.
+	// idempotent once it has succeeded). Nil when the DB is shared.
 	closeDB func(timeout time.Duration) error
 	// applyMu makes "apply a result" and "supersede the scan" one decision
 	// each (MarkResultApplied, SupersedeIfUnapplied): without it a supersede
@@ -177,8 +177,9 @@ func (s *AIScanStore) k(format string, args ...any) []byte {
 }
 
 // Close closes the underlying PebbleDB. No-op when sharing an external DB.
-// Safe to call more than once, concurrently too: later calls return the
-// first call's result.
+// Safe to call more than once, concurrently too: after a successful close
+// later calls return its result; after one that timed out (the engine is left
+// open) the next call retries.
 func (s *AIScanStore) Close() error {
 	if !s.owned || s.closeDB == nil {
 		return nil
