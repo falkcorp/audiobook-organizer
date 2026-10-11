@@ -1,5 +1,5 @@
 // file: internal/tagger/safe_write_verify_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e5b94-2d38-4f6a-a0b7-93e4c8d51f26
 // last-edited: 2026-10-11
 
@@ -150,5 +150,42 @@ func TestWriteTagsSafe_VerifyAfterWrite_UnreadableFileFails(t *testing.T) {
 	path := makeVerifyAudio(t)
 	if err := WriteTagsSafe(context.Background(), path, verifyTags, 0, SafeWriteDeps{}); !errors.Is(err, ErrVerifyAfterWrite) {
 		t.Fatalf("err = %v; want ErrVerifyAfterWrite when the read-back fails", err)
+	}
+}
+
+// innerStore is a store that is both a hash recorder and a provenance
+// recorder, as the production Pebble store is.
+type innerStore struct {
+	database.Store // nil: only the overridden methods may be called
+	captureRecorder
+}
+
+func (*innerStore) GetBookFileByPath(string) (*database.BookFile, error)      { return nil, nil }
+func (*innerStore) UpdateBookFileHashes(string, string, string, string) error { return nil }
+
+// decoratedStore mirrors server.indexedStore: it embeds only database.Store,
+// so AppendFileEvent is not in its method set, and it opts in to capability
+// lookup through Unwrap.
+type decoratedStore struct {
+	database.Store
+	inner *innerStore
+}
+
+func (d *decoratedStore) Unwrap() database.Store { return d.inner }
+
+// The production HashStore is a decorator that hides AppendFileEvent; the
+// event must still reach the recorder underneath.
+func TestWriteTagsSafe_VerifyAfterWrite_RecordsThroughStoreDecorator(t *testing.T) {
+	setVerifyAfterWrite(t, true)
+	dropKeyWriter(t, "ALBUM")
+	path := makeVerifyAudio(t)
+	inner := &innerStore{}
+	deps := SafeWriteDeps{BookFileID: "bf-9", HashStore: &decoratedStore{Store: inner, inner: inner}}
+
+	if err := WriteTagsSafe(context.Background(), path, verifyTags, 0, deps); !errors.Is(err, ErrVerifyAfterWrite) {
+		t.Fatalf("err = %v; want ErrVerifyAfterWrite", err)
+	}
+	if len(inner.events) != 1 || inner.events[0].BookFileID != "bf-9" {
+		t.Fatalf("events through the decorator = %+v; want one on bf-9", inner.events)
 	}
 }
