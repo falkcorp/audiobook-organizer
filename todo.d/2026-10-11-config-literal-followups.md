@@ -9,3 +9,8 @@
       the viper defaults (the same reads InitConfig does) instead of copying values
       by hand, and extend `initconfig_reads_every_key_test.go`'s enumeration to it.
       `log_retention_days` and `enabled_sort_indexes` are already safe there.
+- [ ] **DELUGE-PASSWORD-ENV-VS-BLOB** (owner decision) `DELUGE_WEB_PASSWORD` now
+      reaches `AppConfig` from the environment, but `SaveConfigToDatabase` does not
+      blank it like the other secrets, so the first settings save freezes the env
+      password into the stored blob in plaintext and later env rotations are
+      ignored; decide whether it becomes a real secret row or env-authoritative.
