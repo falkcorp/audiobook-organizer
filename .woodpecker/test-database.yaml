@@ -1,5 +1,5 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.4.0
+# version: 1.5.0
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
 # last-edited: 2026-10-11
 #
@@ -7,8 +7,9 @@
 #
 # The slowest package by test count (1,439 tests, 265 s in one process on U1).
 # It runs as 8 shard processes (scripts/ci/go_test_shards.py) on any heavy
-# local-backend agent (`heavy=true`): usually U1 (Linux amd64, 48 cores), or
-# llm1 (macOS arm64) while U1 is paused. It ran on the prod host's docker
+# local-backend agent (`heavy=true`): U1 (Linux amd64, 48 cores) or llm1 (macOS
+# arm64); both score the same, so the server picks whichever has a free slot,
+# effectively at random. It ran on the prod host's docker
 # agent until 2026-09-29; moving it keeps CI load off prod, whose agent now
 # runs only checks-lint.
 #

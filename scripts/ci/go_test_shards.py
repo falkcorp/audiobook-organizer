@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/go_test_shards.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 3b8e6d21-7c4f-4a90-b1e5-9f2d0c7a6e48
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 """Run Go test packages split into shards, then merge their coverage.
 
 `go test` runs packages in parallel but each package's tests in one process,
@@ -122,6 +122,17 @@ def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]
     return {p: sorted(found[by_import[p]]) for p in pkgs}
 
 
+def default_jobs(shards: int) -> int:
+    """Concurrent shard processes when --jobs is not given.
+
+    Every shard is a `go test` process that already uses all cores, so running
+    more of them than the host has cores only adds memory pressure (a 10-core
+    host given 22 -race shards). A host with more cores than shards (U1) still
+    runs every shard at once.
+    """
+    return max(1, min(shards, os.cpu_count() or 1))
+
+
 def balance(names: list[str], shards: int, timings: dict[str, float]) -> list[list[str]]:
     """Longest-processing-time-first: each test goes to the lightest shard."""
     known = [timings[n] for n in names if n in timings]
@@ -167,7 +178,7 @@ def main() -> int:
     ap.add_argument("--pkg", action="append", required=True, metavar="PKG:N",
                     help="package and its shard count (repeatable)")
     ap.add_argument("--out", required=True, help="merged coverage profile")
-    ap.add_argument("--jobs", type=int, default=0, help="concurrent shards (default: all)")
+    ap.add_argument("--jobs", type=int, default=0, help="concurrent shards (default: min(shards, CPU count))")
     ap.add_argument("--timings", default=os.path.join(os.path.dirname(__file__), "go_test_timings.json"))
     ap.add_argument("go_args", nargs=argparse.REMAINDER)
     a = ap.parse_args()
@@ -210,7 +221,7 @@ def main() -> int:
 
     # Longest shards first so the slowest one starts immediately.
     order = sorted(plan, key=lambda it: -sum(timings.get(it[0].removeprefix("./"), {}).get(t, 0.0) for t in it[2]))
-    jobs = a.jobs if a.jobs > 0 else len(order)
+    jobs = a.jobs if a.jobs > 0 else default_jobs(len(order))
     failed, profiles = 0, []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:

@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -48,11 +48,24 @@ Third, the five heavy workflows (`test-database`, `test-server-scanner`,
 that label (owner decision 2026-10-11, so CI keeps working when U1 is paused at
 night). U1 is the fast host (48 cores; under 55 s per shard), and llm1's 10
 cores were the slowest (538 s for `test-server-scanner` with 4 shards each), so
-expect llm1 runs to be slower and to compete with Whisper transcription. The
-server hands a workflow to whichever eligible agent is free; to force a
-host, pause the other agent. `checks-lint` stays on `host=u0`; `u0` has no
-`heavy` label, so heavy work can never be routed to the prod host. An ssh-based prototype (`scripts/ci_remote.py`)
-measured an earlier layout at **753 s** for a full run on 2026-09-26; a local
+expect llm1 runs to be slower and to compete with Whisper transcription.
+
+U1 and llm1 score the same for a `heavy=true` workflow (an exact `heavy` match
+plus the `repo` and `org-id` wildcards), so the server gives each heavy
+workflow to whichever of them has a free slot, effectively at random. llm1 can
+therefore take a heavy workflow while U1 is online and idle. To force a host,
+pause the other agent.
+
+*Option, not done:* to prefer U1, relabel llm1's agent `host=llm1,heavy=*`
+(`WOODPECKER_AGENT_LABELS`; this needs the llm1 LaunchDaemon plist edited with
+sudo and the agent restarted). The `*` scores lower than U1's exact `heavy`
+match, so llm1 would take only overflow when U1 has no free slot, or
+everything while U1 is paused. No workflow changes, and llm1 still cannot get
+`checks-lint` (`host: u0`).
+
+`checks-lint` stays on `host=u0`; `u0` has no `heavy` label, so heavy work can
+never be routed to the prod host. An ssh-based prototype
+(`scripts/ci_remote.py`) measured an earlier layout at **753 s** for a full run on 2026-09-26; a local
 `make ci` of the same commit on the loaded Mac took **2099 s**.
 
 ### Sharding
@@ -170,9 +183,9 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 
 | agent | host | backend | labels | parallel workflows | runs as |
 |---|---|---|---|---|---|
-| U0 | 192.0.2.10 | docker | `host=u0` | 2 | swarm service `woodpecker_woodpecker-agent` |
+| U0 | 192.0.2.10 | docker | `host=u0` | 1 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
-| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 6 | systemd `woodpecker-agent.service`, `User=woodpecker` |
+| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 1 | systemd `woodpecker-agent.service`, `User=woodpecker` |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
@@ -243,18 +256,18 @@ golangci-lint caches (under `XDG_CACHE_HOME`) there.
 ### llm1: local backend (takes `heavy=true` workflows)
 
 No workflow targets `host=llm1` by name, but it carries `heavy=true`, so it
-runs the five heavy workflows whenever it is free and U1 is busy or paused; see
-Pipeline layout. Its tools (Homebrew Go, node/npm, ffmpeg, ffprobe, fpcalc,
+runs the five heavy workflows whenever it has a free slot, whether or not U1 is
+busy or paused; see Pipeline layout (which also covers preferring U1). Its tools (Homebrew Go, node/npm, ffmpeg, ffprobe, fpcalc,
 python3, golangci-lint, make) must be on the agent's PATH. Its cache root is
-`/Users/jdfalk/ci/cache/{gomod,go-build,npm}`. This agent runs steps directly on macOS (`WOODPECKER_BACKEND=local`). The
-decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
+`/Users/jdfalk/ci/cache/{gomod,go-build,npm}`. This agent runs steps directly
+on macOS (`WOODPECKER_BACKEND=local`). The decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
 Docker backend.
 
 - **Install layout:** `~/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`. The agent is darwin/arm64 from the woodpecker releases (v3.19.0 since 2026-10-10); plugin-git is 2.10.1.
 - **Logs:** `~/ci/woodpecker/agent.log`.
 - **Step workspaces:** `~/ci/woodpecker/work`.
 
-The plist puts the pinned toolchains first on PATH. `GOTOOLCHAIN=go1.27.1` is
+The plist puts the pinned toolchains first on PATH. `GOTOOLCHAIN=go1.27.2` is
 set per step, so a host with an older go fetches the exact version.
 
 **On the local backend, a step's `image:` is the shell that runs its
@@ -277,7 +290,7 @@ U1 runs the `heavy=true` workflows (`test-rest`, `test-database`,
 backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
 fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies
 the C compiler `-race` needs, and `golang-go` is only a bootstrap:
-`GOTOOLCHAIN=go1.27.1` fetches the pinned version.
+`GOTOOLCHAIN=go1.27.2` fetches the pinned version.
 
 - **Runs as:** the unprivileged system user `woodpecker` (no sudo). Pipelines
   execute pull-request code, so the agent never runs as a login user.
@@ -288,9 +301,11 @@ the C compiler `-race` needs, and `golang-go` is only a bootstrap:
   hard-code a cache path: each step sources `scripts/ci/cache_env.sh`, which
   uses the first existing root of `/tank/ci/cache` (U1) and
   `/Users/jdfalk/ci/cache` (llm1) and exports `GOMODCACHE`, `GOCACHE` and
-  `npm_config_cache` from it. It is a script rather than an agent env var
-  because `environment:` takes literals, and the local backend gives every
-  pipeline a fresh HOME and is not relied on to pass the agent's environment.
+  `npm_config_cache` from it. The local backend does pass the agent's
+  environment, so per-agent env vars would work too. The script is preferred
+  because the paths live in the repo, and because it fails fast when no cache
+  root exists: a missing agent env var would silently fall back to the per-run
+  HOME cache, the disk-filling mode.
 - **Node (web tests):** the official `node-v26.10.0-linux-x64` tarball, checked
   against the release's `SHASUMS256.txt`, unpacked in `/tank/ci/tools` with a
   `/tank/ci/tools/node` symlink that `checks-build` puts on PATH when the
@@ -336,7 +351,7 @@ Set these on the repo in the Woodpecker UI:
 ## Troubleshooting
 
 - **A workflow sits in "pending".** No online agent has matching labels. Check
-  the Agents page. Each agent runs at most 2 workflows at a time. A
+  the Agents page. U0 and U1 run 1 workflow at a time and llm1 runs 2. A
   `heavy=true` workflow waits when both U1 and llm1 are paused or offline.
 - **The coverage gate fails with "no CI-COVERAGE line".** That test workflow
   failed or never ran. Its own log shows why.

@@ -1,5 +1,5 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 2.3.0
+# version: 2.4.0
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
 # last-edited: 2026-10-11
 #
@@ -9,11 +9,13 @@
 #
 # server and scanner decode audio in their tests (exec.LookPath("ffmpeg") and
 # similar), so this runs on an agent with ffmpeg, ffprobe and fpcalc, never on
-# the prod host: any heavy agent (`heavy=true`), usually U1 (local backend,
-# Linux amd64, 48 cores). It ran on llm1 until 2026-09-29, where 12 shards on
-# 10 cores took 538 s; llm1 is otherwise kept free for Whisper transcription
-# and takes this workflow only while U1 is paused (owner 2026-10-11). Measured
-# on U1 with these shard counts: every shard under 55 s.
+# the prod host: any heavy agent (`heavy=true`), U1 (local backend, Linux
+# amd64, 48 cores) or llm1 (macOS arm64, 10 cores). U1 and llm1 score the same,
+# so the server gives the workflow to whichever has a free slot, effectively at
+# random; llm1 can take it while U1 is idle. It ran on llm1 until 2026-09-29,
+# where 12 shards on 10 cores took 538 s, and llm1 also runs Whisper
+# transcription. Measured on U1 with these shard counts: every shard under 55 s.
+# go_test_shards.py caps concurrent shards at the host's CPU count.
 
 labels:
   # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
