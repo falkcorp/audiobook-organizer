@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-11
 
@@ -332,20 +332,25 @@ func (p *Plugin) purgeOldLogsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID: "maintenance.purge-old-logs",
 		// LivenessManual: runPurgeOldLogs reports after every committed chunk
-		// (5,000 rows). Before 2026-10-11 the whole backlog went in one commit
-		// and the op could not report, so it was LivenessNone with a 30-minute
-		// silence budget. A chunk commits in milliseconds; the longest silent
-		// stretch is the scan to the next 5,000 expired rows, so 10 minutes is
-		// ample without letting a wedged scan run unnoticed for half an hour.
+		// (5,000 rows) AND every 10,000 scanned rows (the store's scan
+		// heartbeat), so a run that scans months of unexpired rows with nothing
+		// to delete still reports. Before 2026-10-11 the whole backlog went in
+		// one commit and the op could not report, so it was LivenessNone with a
+		// 30-minute silence budget. The budget stays at 30 minutes: a row-count
+		// heartbeat cannot fire while a single iterator step is skipping a long
+		// run of point tombstones (what the first purge leaves at the front of
+		// the syslog: keyspace until compaction drops them), and that stretch
+		// is slow but not stuck.
 		Liveness:        sdk.LivenessManual,
-		ProgressTimeout: 10 * time.Minute,
+		ProgressTimeout: 30 * time.Minute,
 		Plugin:          "maintenance",
-		DisplayName:     "Prune old operation logs",
-		Description:     "Prunes operation logs and system activity logs older than the configured retention period.",
+		DisplayName:     "Prune old logs",
+		Description:     "Prunes system log entries and legacy operation log rows older than the configured retention period (log_retention_days). Never touches undo history.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.purge-old-logs",
-		// Cancellable: the prune checks ctx between chunks, so a cancel (or the
+		// Cancellable: the prune checks ctx between chunks and every 10,000
+		// scanned rows, so a cancel (or the
 		// Timeout below) stops it with every committed chunk kept and the rest
 		// left for the next run. It was false while one batch could not be
 		// interrupted.
@@ -365,8 +370,11 @@ func (p *Plugin) runPurgeOldLogs(ctx context.Context, _ json.RawMessage, reporte
 		return nil
 	}
 	_ = reporter.UpdateProgress(0, 0, fmt.Sprintf("Pruning logs older than %d days", retentionDays))
-	total, err := p.deps.PruneOldLogs(ctx, retentionDays, func(kind string, totalPruned int) {
-		_ = reporter.UpdateProgress(totalPruned, 0, fmt.Sprintf("Pruned %d records so far (latest chunk: %s)", totalPruned, kind))
+	total, err := p.deps.PruneOldLogs(ctx, retentionDays, func(kind string, scanned, totalPruned int) {
+		// Called per committed chunk and per scan heartbeat; either way it
+		// stamps the watchdog's liveness clock.
+		_ = reporter.UpdateProgress(totalPruned, 0, fmt.Sprintf(
+			"Pruned %d records so far; scanning %s (%d rows checked)", totalPruned, kind, scanned))
 	})
 	if err != nil {
 		// Chunks committed before the failure or cancel stay deleted; say how

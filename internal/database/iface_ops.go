@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b93b0da0-8afb-46fb-983e-c43f238ea67c
 // last-edited: 2026-10-11
 
@@ -75,10 +75,14 @@ type OperationResultStore interface {
 type OperationPruner interface {
 	// Retention
 	// Both delete in bounded chunks (one commit per chunk), stop between chunks
-	// when ctx is cancelled (returning ctx.Err() and the rows already deleted),
-	// and call onChunk, if non-nil, after each committed chunk.
-	PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
-	PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
+	// or mid-scan when ctx is cancelled (returning ctx.Err() and the rows
+	// already deleted), and call onProgress, if non-nil, after each committed
+	// chunk and every few thousand scanned rows (see PruneProgressFunc).
+	PruneOperationLogs(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error)
+	// PruneOperationChanges prunes the undo journal. It has no production
+	// caller: the log purge must never drive it (the undo journal gets its own
+	// undo window, todo.d UNDO-WINDOW-PRUNE); see the PebbleStore method.
+	PruneOperationChanges(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error)
 	// DeleteOperationWithLogs removes the operation record (operation:<id>) and all
 	// associated log lines (operationlog:<id>:*) in a single atomic batch.
 	// This is the correct deletion primitive for the retention sweep — deleting the

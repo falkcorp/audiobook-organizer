@@ -1,5 +1,5 @@
 // file: internal/logger/logger_coverage_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: dbb463d6-f89b-4dee-8f50-b9ea2a790f2e
 // last-edited: 2026-10-11
 
@@ -245,10 +245,8 @@ func TestCoverage_OperationLogger_ConcurrentRecordChange(t *testing.T) {
 // whether it should fail. Zero values ⇒ (0, nil) for that method.
 type retentionStoreConfig struct {
 	logsCount     int
-	changesCount  int
 	activityCount int
 	logErr        error
-	changeErr     error
 	activityErr   error
 }
 
@@ -256,7 +254,6 @@ func newRetentionStoreMock(t *testing.T, cfg retentionStoreConfig) *mocks.MockRe
 	t.Helper()
 	m := mocks.NewMockRetentionStore(t)
 	m.EXPECT().PruneOperationLogs(mock.Anything, mock.Anything, mock.Anything).Return(cfg.logsCount, cfg.logErr).Maybe()
-	m.EXPECT().PruneOperationChanges(mock.Anything, mock.Anything, mock.Anything).Return(cfg.changesCount, cfg.changeErr).Maybe()
 	m.EXPECT().PruneSystemActivityLogs(mock.Anything, mock.Anything, mock.Anything).Return(cfg.activityCount, cfg.activityErr).Maybe()
 	return m
 }
@@ -278,30 +275,20 @@ func TestCoverage_PruneOldLogs(t *testing.T) {
 		log := New("test")
 		store := newRetentionStoreMock(t, retentionStoreConfig{
 			logsCount:     10,
-			changesCount:  5,
 			activityCount: 3,
 		})
 		n, err := PruneOldLogs(context.Background(), store, 30, log, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if n != 18 {
-			t.Errorf("expected 18 total pruned, got %d", n)
+		if n != 13 {
+			t.Errorf("expected 13 total pruned, got %d", n)
 		}
 	})
 
 	t.Run("handles log prune error", func(t *testing.T) {
 		log := New("test")
 		store := newRetentionStoreMock(t, retentionStoreConfig{logErr: errMock})
-		_, err := PruneOldLogs(context.Background(), store, 30, log, nil)
-		if err == nil {
-			t.Error("expected error")
-		}
-	})
-
-	t.Run("handles change prune error", func(t *testing.T) {
-		log := New("test")
-		store := newRetentionStoreMock(t, retentionStoreConfig{changeErr: errMock})
 		_, err := PruneOldLogs(context.Background(), store, 30, log, nil)
 		if err == nil {
 			t.Error("expected error")

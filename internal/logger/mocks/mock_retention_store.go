@@ -47,81 +47,9 @@ func (_m *MockRetentionStore) EXPECT() *MockRetentionStore_Expecter {
 	return &MockRetentionStore_Expecter{mock: &_m.Mock}
 }
 
-// PruneOperationChanges provides a mock function for the type MockRetentionStore
-func (_mock *MockRetentionStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk func(deleted int)) (int, error) {
-	ret := _mock.Called(ctx, olderThan, onChunk)
-
-	if len(ret) == 0 {
-		panic("no return value specified for PruneOperationChanges")
-	}
-
-	var r0 int
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(deleted int)) (int, error)); ok {
-		return returnFunc(ctx, olderThan, onChunk)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(deleted int)) int); ok {
-		r0 = returnFunc(ctx, olderThan, onChunk)
-	} else {
-		r0 = ret.Get(0).(int)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, func(deleted int)) error); ok {
-		r1 = returnFunc(ctx, olderThan, onChunk)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockRetentionStore_PruneOperationChanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PruneOperationChanges'
-type MockRetentionStore_PruneOperationChanges_Call struct {
-	*mock.Call
-}
-
-// PruneOperationChanges is a helper method to define mock.On call
-//   - ctx context.Context
-//   - olderThan time.Time
-//   - onChunk func(deleted int)
-func (_e *MockRetentionStore_Expecter) PruneOperationChanges(ctx any, olderThan any, onChunk any) *MockRetentionStore_PruneOperationChanges_Call {
-	return &MockRetentionStore_PruneOperationChanges_Call{Call: _e.mock.On("PruneOperationChanges", ctx, olderThan, onChunk)}
-}
-
-func (_c *MockRetentionStore_PruneOperationChanges_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk func(deleted int))) *MockRetentionStore_PruneOperationChanges_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 time.Time
-		if args[1] != nil {
-			arg1 = args[1].(time.Time)
-		}
-		var arg2 func(deleted int)
-		if args[2] != nil {
-			arg2 = args[2].(func(deleted int))
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockRetentionStore_PruneOperationChanges_Call) Return(n int, err error) *MockRetentionStore_PruneOperationChanges_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockRetentionStore_PruneOperationChanges_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk func(deleted int)) (int, error)) *MockRetentionStore_PruneOperationChanges_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // PruneOperationLogs provides a mock function for the type MockRetentionStore
-func (_mock *MockRetentionStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk func(deleted int)) (int, error) {
-	ret := _mock.Called(ctx, olderThan, onChunk)
+func (_mock *MockRetentionStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onProgress func(scanned int, deleted int)) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onProgress)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneOperationLogs")
@@ -129,16 +57,16 @@ func (_mock *MockRetentionStore) PruneOperationLogs(ctx context.Context, olderTh
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(deleted int)) (int, error)); ok {
-		return returnFunc(ctx, olderThan, onChunk)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(scanned int, deleted int)) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onProgress)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(deleted int)) int); ok {
-		r0 = returnFunc(ctx, olderThan, onChunk)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(scanned int, deleted int)) int); ok {
+		r0 = returnFunc(ctx, olderThan, onProgress)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, func(deleted int)) error); ok {
-		r1 = returnFunc(ctx, olderThan, onChunk)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, func(scanned int, deleted int)) error); ok {
+		r1 = returnFunc(ctx, olderThan, onProgress)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -153,12 +81,12 @@ type MockRetentionStore_PruneOperationLogs_Call struct {
 // PruneOperationLogs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - olderThan time.Time
-//   - onChunk func(deleted int)
-func (_e *MockRetentionStore_Expecter) PruneOperationLogs(ctx any, olderThan any, onChunk any) *MockRetentionStore_PruneOperationLogs_Call {
-	return &MockRetentionStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", ctx, olderThan, onChunk)}
+//   - onProgress func(scanned int, deleted int)
+func (_e *MockRetentionStore_Expecter) PruneOperationLogs(ctx any, olderThan any, onProgress any) *MockRetentionStore_PruneOperationLogs_Call {
+	return &MockRetentionStore_PruneOperationLogs_Call{Call: _e.mock.On("PruneOperationLogs", ctx, olderThan, onProgress)}
 }
 
-func (_c *MockRetentionStore_PruneOperationLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk func(deleted int))) *MockRetentionStore_PruneOperationLogs_Call {
+func (_c *MockRetentionStore_PruneOperationLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onProgress func(scanned int, deleted int))) *MockRetentionStore_PruneOperationLogs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -168,9 +96,9 @@ func (_c *MockRetentionStore_PruneOperationLogs_Call) Run(run func(ctx context.C
 		if args[1] != nil {
 			arg1 = args[1].(time.Time)
 		}
-		var arg2 func(deleted int)
+		var arg2 func(scanned int, deleted int)
 		if args[2] != nil {
-			arg2 = args[2].(func(deleted int))
+			arg2 = args[2].(func(scanned int, deleted int))
 		}
 		run(
 			arg0,
@@ -186,14 +114,14 @@ func (_c *MockRetentionStore_PruneOperationLogs_Call) Return(n int, err error) *
 	return _c
 }
 
-func (_c *MockRetentionStore_PruneOperationLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk func(deleted int)) (int, error)) *MockRetentionStore_PruneOperationLogs_Call {
+func (_c *MockRetentionStore_PruneOperationLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onProgress func(scanned int, deleted int)) (int, error)) *MockRetentionStore_PruneOperationLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // PruneSystemActivityLogs provides a mock function for the type MockRetentionStore
-func (_mock *MockRetentionStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onChunk func(deleted int)) (int, error) {
-	ret := _mock.Called(ctx, olderThan, onChunk)
+func (_mock *MockRetentionStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onProgress func(scanned int, deleted int)) (int, error) {
+	ret := _mock.Called(ctx, olderThan, onProgress)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PruneSystemActivityLogs")
@@ -201,16 +129,16 @@ func (_mock *MockRetentionStore) PruneSystemActivityLogs(ctx context.Context, ol
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(deleted int)) (int, error)); ok {
-		return returnFunc(ctx, olderThan, onChunk)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(scanned int, deleted int)) (int, error)); ok {
+		return returnFunc(ctx, olderThan, onProgress)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(deleted int)) int); ok {
-		r0 = returnFunc(ctx, olderThan, onChunk)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time, func(scanned int, deleted int)) int); ok {
+		r0 = returnFunc(ctx, olderThan, onProgress)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, func(deleted int)) error); ok {
-		r1 = returnFunc(ctx, olderThan, onChunk)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time, func(scanned int, deleted int)) error); ok {
+		r1 = returnFunc(ctx, olderThan, onProgress)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -225,12 +153,12 @@ type MockRetentionStore_PruneSystemActivityLogs_Call struct {
 // PruneSystemActivityLogs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - olderThan time.Time
-//   - onChunk func(deleted int)
-func (_e *MockRetentionStore_Expecter) PruneSystemActivityLogs(ctx any, olderThan any, onChunk any) *MockRetentionStore_PruneSystemActivityLogs_Call {
-	return &MockRetentionStore_PruneSystemActivityLogs_Call{Call: _e.mock.On("PruneSystemActivityLogs", ctx, olderThan, onChunk)}
+//   - onProgress func(scanned int, deleted int)
+func (_e *MockRetentionStore_Expecter) PruneSystemActivityLogs(ctx any, olderThan any, onProgress any) *MockRetentionStore_PruneSystemActivityLogs_Call {
+	return &MockRetentionStore_PruneSystemActivityLogs_Call{Call: _e.mock.On("PruneSystemActivityLogs", ctx, olderThan, onProgress)}
 }
 
-func (_c *MockRetentionStore_PruneSystemActivityLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onChunk func(deleted int))) *MockRetentionStore_PruneSystemActivityLogs_Call {
+func (_c *MockRetentionStore_PruneSystemActivityLogs_Call) Run(run func(ctx context.Context, olderThan time.Time, onProgress func(scanned int, deleted int))) *MockRetentionStore_PruneSystemActivityLogs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -240,9 +168,9 @@ func (_c *MockRetentionStore_PruneSystemActivityLogs_Call) Run(run func(ctx cont
 		if args[1] != nil {
 			arg1 = args[1].(time.Time)
 		}
-		var arg2 func(deleted int)
+		var arg2 func(scanned int, deleted int)
 		if args[2] != nil {
-			arg2 = args[2].(func(deleted int))
+			arg2 = args[2].(func(scanned int, deleted int))
 		}
 		run(
 			arg0,
@@ -258,7 +186,7 @@ func (_c *MockRetentionStore_PruneSystemActivityLogs_Call) Return(n int, err err
 	return _c
 }
 
-func (_c *MockRetentionStore_PruneSystemActivityLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onChunk func(deleted int)) (int, error)) *MockRetentionStore_PruneSystemActivityLogs_Call {
+func (_c *MockRetentionStore_PruneSystemActivityLogs_Call) RunAndReturn(run func(ctx context.Context, olderThan time.Time, onProgress func(scanned int, deleted int)) (int, error)) *MockRetentionStore_PruneSystemActivityLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
