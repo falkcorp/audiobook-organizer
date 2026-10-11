@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
 // last-edited: 2026-10-11
 
@@ -186,8 +186,19 @@ func TestListDedupCandidates(t *testing.T) {
 	}
 }
 
+// allowITunesFlagReads lets a test that lists with include_books=true ignore the
+// reads behind each book's is_itunes flag: books with no files and no external
+// ids, so every flag is false. TestListDedupCandidates_IncludeBooks_ITunesFlag
+// pins the flag itself.
+func allowITunesFlagReads(d testDeps) {
+	d.store.EXPECT().GetBookFilesForIDsCore(mock.Anything).
+		Return(map[string][]database.BookFileCore{}, nil).Maybe()
+	d.store.EXPECT().GetExternalIDsForBook(mock.Anything).Return(nil, nil).Maybe()
+}
+
 func TestListDedupCandidates_IncludeBooks(t *testing.T) {
 	h, d := newHandler(t)
+	allowITunesFlagReads(d)
 	insertCandidate(t, d.es, "book-a", "book-b")
 	d.store.EXPECT().GetBookByID(mock.Anything).
 		Return(&database.Book{ID: "x", Title: "Enriched Title"}, nil).Maybe()
@@ -241,6 +252,7 @@ func TestListDedupCandidates_IncludeBooks(t *testing.T) {
 
 func TestListDedupCandidates_BothUnmatched(t *testing.T) {
 	h, d := newHandler(t)
+	allowITunesFlagReads(d)
 	matched := "matched"
 	asin := "B00ABC1234"
 	insertCandidate(t, d.es, "u1", "u2")    // both unmatched → should appear
