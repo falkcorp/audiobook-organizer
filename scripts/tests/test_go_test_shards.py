@@ -1,7 +1,7 @@
 # file: scripts/tests/test_go_test_shards.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 9d4a1f63-2b7e-4c85-a0f1-6e3b8c2d7a59
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 """Tests for scripts/ci/go_test_shards.py: shard balancing and coverage merge.
 
 The merge feeds the CI coverage gate, so a block counted twice (once per shard)
@@ -19,6 +19,20 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ci"))
 
 import go_test_shards as gts  # noqa: E402
+
+
+class DefaultJobsTest(unittest.TestCase):
+    def test_capped_at_cpu_count_on_a_small_host(self) -> None:
+        with mock.patch.object(gts.os, "cpu_count", return_value=10):
+            self.assertEqual(gts.default_jobs(22), 10)
+
+    def test_all_shards_at_once_on_a_big_host(self) -> None:
+        with mock.patch.object(gts.os, "cpu_count", return_value=48):
+            self.assertEqual(gts.default_jobs(22), 22)
+
+    def test_unknown_cpu_count_runs_one_at_a_time(self) -> None:
+        with mock.patch.object(gts.os, "cpu_count", return_value=None):
+            self.assertEqual(gts.default_jobs(22), 1)
 
 
 class BalanceTest(unittest.TestCase):

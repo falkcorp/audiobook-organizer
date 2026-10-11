@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.5.0
+# version: 1.6.0
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
 # last-edited: 2026-10-11
 #
@@ -10,8 +10,9 @@
 # `checks` workflow on U0 until 2026-09-29 and are split so they run on both
 # hosts at once. None of these steps needs the installed linters.
 #
-# Runs on any heavy local-backend agent (`heavy=true`): usually U1 (Linux
-# amd64, 48 cores), or llm1 (macOS arm64) while U1 is paused. `image` names the
+# Runs on any heavy local-backend agent (`heavy=true`): U1 (Linux amd64, 48
+# cores) or llm1 (macOS arm64); the server picks whichever has a free slot,
+# effectively at random, since both score the same. `image` names the
 # shell that runs the commands. The caches are host directories shared with
 # the test workflows; scripts/ci/cache_env.sh picks /tank/ci/cache on U1 and
 # /Users/jdfalk/ci/cache on llm1. Node on U1 is the official v26 tarball under
