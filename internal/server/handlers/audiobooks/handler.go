@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -719,7 +719,10 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// is invalidated by all of them, so a search page never goes through this
 	// cache while that one is on. A per-user DSL query (read_status: and
 	// friends) is never cached here either: the key does not carry the user.
+	// An ident: filter is never cached here either: identification states
+	// move on metadata_cache writes, which do not move the library generation.
 	useListCache := len(filters.PerUserFilters) == 0 &&
+		!audiobookspkg.HasIdentFilter(filters.FieldFilters) &&
 		!(params.Search != "" && (h.searchServedByResultCache(params.Search, authorID, seriesID, filters) || audiobookspkg.SearchHasPerUserFilters(params.Search)))
 	if useListCache {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
@@ -802,7 +805,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		})
 		return
 	}
-	if respondSearchLimit(c, err) {
+	if respondIdentIndexBuilding(c, err) || respondSearchLimit(c, err) {
 		return
 	}
 	if err != nil {
@@ -1222,7 +1225,7 @@ func (h *Handler) AudiobookFacets(c *gin.Context) {
 		return
 	}
 	facets, err := h.audiobookService.ScopedTagFacets(c.Request.Context(), req.params.Search, req.authorID, req.seriesID, req.filters)
-	if respondSearchLimit(c, err) {
+	if respondIdentIndexBuilding(c, err) || respondSearchLimit(c, err) {
 		return
 	}
 	if err != nil {
@@ -1282,6 +1285,24 @@ func (h *Handler) GetAudiobook(c *gin.Context) {
 // pattern slot busy is a 503 with Retry-After. The review handler in package
 // handlers has the same function; httputil and querygrammar are both leaf
 // packages, so neither can host it.
+// identIndexRetryAfter is the Retry-After, in seconds, of a 503 for an
+// ident: query while the identification index is being built. A rebuild over
+// a production-sized library takes seconds.
+const identIndexRetryAfter = "5"
+
+// respondIdentIndexBuilding answers an ident: query that arrived while the
+// identification index is being built (database.ErrIdentIndexBuilding) with
+// 503 and Retry-After, and reports whether it did. A count read off a
+// half-built index would be a wrong number that reads as a fact.
+func respondIdentIndexBuilding(c *gin.Context, err error) bool {
+	if !errors.Is(err, database.ErrIdentIndexBuilding) {
+		return false
+	}
+	c.Header("Retry-After", identIndexRetryAfter)
+	httputil.RespondWithServiceUnavailable(c, err.Error())
+	return true
+}
+
 func respondSearchLimit(c *gin.Context, err error) bool {
 	var slow *querygrammar.TooSlowError
 	if errors.As(err, &slow) {

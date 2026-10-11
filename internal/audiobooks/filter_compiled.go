@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -93,6 +93,12 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 		return cf, wrap(err)
 	}
 	switch {
+	case f.Field == IdentFilterField:
+		// Resolved to an id set before the walk (resolveIdentFilters). One
+		// that reaches the row matcher was missed by an entry point; refusing
+		// it here makes mustCompileForPredicate log it and match nothing,
+		// rather than match the state name as text.
+		return cf, wrap(fmt.Errorf("ident must be resolved through the identification index before the walk"))
 	case durationFilterFields[f.Field]:
 		e, err := parseDurationExpr(f.Value)
 		if err != nil {

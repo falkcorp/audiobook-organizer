@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_field_conformance_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d84f0b6-31ca-4e57-9a1f-6b70c8e2d415
-// last-edited: 2026-08-14
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -124,7 +124,10 @@ func TestFilterFieldNames_MatchTheMatcher(t *testing.T) {
 
 	// And the reverse direction, spot-checked: a name the matcher accepts but
 	// the list omits would never be suggested to a caller who needs it.
-	for _, implemented := range []string{"title", "year", "duration", "marked_for_deletion", "isbn13", "version_group_id"} {
+	// asin is a book column; ident is not (it resolves through the
+	// identification index before the walk, filter_ident.go) but is a field
+	// the list accepts all the same.
+	for _, implemented := range []string{"title", "year", "duration", "marked_for_deletion", "isbn13", "version_group_id", "asin", "ident"} {
 		require.Containsf(t, names, implemented,
 			"%q is filterable but missing from KnownFilterFields", implemented)
 	}

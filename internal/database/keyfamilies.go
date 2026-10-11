@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package database
 
@@ -120,6 +120,11 @@ var keyFamilies = []KeyFamily{
 	{"merge:survivor-reconcile:", "per-user markers that make a touched survivor's put-back safe to re-run", "internal/merge/combine_journal.go"},
 	{"scanner:ai_parse_single_fail:", "single-file AI parse give-up markers by path hash", "internal/scanner/ai_parse_giveup.go"},
 	{"metadata_cache:", "metadata provider response cache", "internal/database/pebble_store_metadata_cache.go"},
+	{"ident:state:", "book identification state and reason per book (derived, rebuilt on boot)", "internal/database/ident_state.go"},
+	{"ident:by:", "book identification membership by state, keys only plus a primary-scope byte", "internal/database/ident_state.go"},
+	{"ident:n:", "book identification counters per scope and state", "internal/database/ident_state.go"},
+	{"ident:dirty:", "book identification dirty set (epoch per book)", "internal/database/ident_state.go"},
+	{"ident:meta:", "book identification index format marker", "internal/database/ident_state.go"},
 	{"metadata_change:", "metadata change records", "internal/database/pebble_store_metadata.go"},
 	{"metadata_fetch_cache:", "metadata fetch cache per book and source", "internal/database/metadata_fetch_cache.go"},
 	{"metadata_rejection:", "rejected metadata candidates", "internal/database/pebble_store_metadata.go"},

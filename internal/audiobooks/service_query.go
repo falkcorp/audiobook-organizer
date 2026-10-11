@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -89,6 +89,12 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 // taken at this ONE level and never nested (CountAudiobooksFiltered, the
 // other scan, is never called from inside this one).
 func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}, build bool) ([]database.Book, int, error) {
+	// The public entry points resolve ident: before keying any cache on f;
+	// this catches a caller that reaches the pipeline another way.
+	f, err := svc.resolveIdentFilters(f)
+	if err != nil {
+		return nil, 0, err
+	}
 	if !fieldFiltersCostly(f.FieldFilters) {
 		return svc.queryAudiobooksBudgeted(ctx, limit, offset, search, authorID, seriesID, f, restrict, build, nil)
 	}
@@ -948,6 +954,15 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	}
 	if err := CheckFilterSetSize(filters.FieldFilters, filters.PerUserFilters); err != nil {
 		return 0, fmt.Errorf("invalid filter value: %w", err)
+	}
+	// ident: over the Library's default view is a counter read (O(1));
+	// anything else resolves to an id restriction and walks.
+	if n, ok, err := svc.identCounterCount(filters); err != nil || ok {
+		return n, err
+	}
+	filters, err := svc.resolveIdentFilters(filters)
+	if err != nil {
+		return 0, err
 	}
 	filtersForCount := filters
 	filtersForCount.SortBy = ""

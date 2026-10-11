@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.19.2
+// version: 1.20.1
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-10-11
 
@@ -507,6 +507,10 @@ func bookFieldValue(book database.Book, field string) (string, bool) {
 		bookValue = derefStr(book.ISBN10)
 	case "isbn13":
 		bookValue = derefStr(book.ISBN13)
+	// ASIN is on the memdb-resident row (stripBookForMemdb does not strip
+	// it), so asin: is a cheap in-loop match like isbn10.
+	case "asin":
+		bookValue = derefStr(book.ASIN)
 	case "version_group_id":
 		bookValue = derefStr(book.VersionGroupID)
 	case "work_id":
@@ -576,6 +580,11 @@ func FieldIsKnown(field string) bool {
 	if IsPerUserField(field) {
 		return true
 	}
+	// ident: is not a book column: it resolves through the identification
+	// index to an id set before the walk (filter_ident.go).
+	if field == IdentFilterField {
+		return true
+	}
 	_, known := bookFieldValue(database.Book{}, field)
 	return known
 }
@@ -633,8 +642,8 @@ var allFilterFieldNames = []string{
 	"itunes_sync_status", "duration", "duration_seconds", "has_duration",
 	"metadata", "bitrate",
 	"bitrate_kbps", "file_size", "file_size_bytes", "sample_rate",
-	"sample_rate_hz", "channels", "bit_depth", "isbn10", "isbn13", "work_id",
-	"version_group_id",
+	"sample_rate_hz", "channels", "bit_depth", "isbn10", "isbn13", "asin", "work_id",
+	"version_group_id", "ident",
 	"year", "created_at", "updated_at", "marked_for_deletion",
 	"read_status", "progress_pct", "last_played",
 	"user_rating_overall", "user_rating_story", "user_rating_performance",

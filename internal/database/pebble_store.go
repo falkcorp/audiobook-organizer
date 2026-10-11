@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.215.2
+// version: 1.216.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 
@@ -129,6 +129,9 @@ type PebbleStore struct {
 	// the book lock first, then its stripe; Put and Delete take only the
 	// stripe.
 	metadataCacheLocks [64]sync.Mutex
+	// ident is the in-process half of the book identification index
+	// (ident_state.go): the counter mirror, identMu and the ready flag.
+	ident identIndex
 	// sampleMu serialises the metrics sampler against Close: the sampler holds
 	// the read lock (TryRLock) from its dbClosed check through db.Metrics();
 	// Close takes the write lock around dbClosed.Store(true) + db.Close(). The
@@ -697,6 +700,16 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 			db.Close()
 			return nil, fmt.Errorf("failed to check counter %s: %w", counter, err)
 		}
+	}
+
+	// The identification index: load its counters when it is built, stamp it
+	// when the store is empty, or leave it not ready for EnsureIdentIndex.
+	if err := store.loadIdentIndexState(); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			identLog.Error("close PebbleDB after identification index load failure: path=%s error=%s",
+				logger.SanitizeLogValue(path), logger.SanitizeLogValue(closeErr.Error()))
+		}
+		return nil, fmt.Errorf("load identification index state: %w", err)
 	}
 
 	// Stamp the storage format (after the counters: the stamp is a preference
@@ -3149,9 +3162,38 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 		}
 	}
 
+	// The new book's identification state (ident_state.go), in this batch,
+	// under the book's cache stripe (book -> cache order). A caller-supplied
+	// ID can find a cache row already there, so it is read, not assumed absent.
+	identMuBook := p.metadataCacheLock(book.ID)
+	identMuBook.Lock()
+	identBookLocked := true
+	defer func() {
+		if identBookLocked {
+			identMuBook.Unlock()
+		}
+	}()
+	identTx := p.beginIdent(batch)
+	defer identTx.end(false)
+	identCache, err := p.getMetadataCacheForIdent(book.ID)
+	if err != nil {
+		batch.Close()
+		return nil, err
+	}
+	if err := identTx.stage(book.ID, book, identCache); err != nil {
+		batch.Close()
+		return nil, err
+	}
+	if err := identTx.prepare(); err != nil {
+		batch.Close()
+		return nil, err
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
+	identTx.end(true)
+	identMuBook.Unlock()
+	identBookLocked = false
 
 	// Record the original import path so full provenance is preserved forever.
 	if err := p.RecordPathChange(&BookPathChange{
@@ -3556,7 +3598,20 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	var unlockCache func()
 	identityChanged := p.candidateSearchIdentityChanged(oldBook, book)
 	oldASIN, asinReplaced := asinReplacedOnWrite(oldBook, book)
-	if identityChanged || asinReplaced {
+	// identInputs: the write changes what the book's identification state
+	// (ident_state.go) is derived from on the book side -- its review status
+	// class, or its membership of the primary scope (primary flag, trash,
+	// quarantine). A retitle moves it too, through the Stale stamp below.
+	// Only these writes take the cache stripe and identMu; every other book
+	// write (the scanner's bulk of them) touches neither.
+	identInputs := identBookInputsChanged(oldBook, book)
+	var identTx *identTxn
+	defer func() {
+		if identTx != nil {
+			identTx.end(false)
+		}
+	}()
+	if identityChanged || asinReplaced || identInputs {
 		// A retitle or re-credit keeps the row but marks it Stale (it used to
 		// delete it, which lost 1,180 candidate rows on 2026-10-06): the apply
 		// gate refuses every candidate of a Stale row
@@ -3580,23 +3635,35 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			}
 		}()
 		var staged bool
+		var cacheAfter *MetadataCandidateCache
 		var err error
-		if identityChanged {
+		switch {
+		case identityChanged:
 			// stampASIN: the ASIN the row was fetched for, recorded only when
 			// this write also replaces it; "" leaves FetchedForASIN alone.
 			stampASIN := ""
 			if asinReplaced {
 				stampASIN = oldASIN
 			}
-			staged, err = p.stageCacheStaleStamp(batch, id, stampASIN)
-		} else {
-			staged, err = p.stageCacheASINStamp(batch, id, oldASIN)
+			staged, cacheAfter, err = p.stageCacheStaleStamp(batch, id, stampASIN)
+		case asinReplaced:
+			staged, cacheAfter, err = p.stageCacheASINStamp(batch, id, oldASIN)
+		default:
+			cacheAfter, err = p.getMetadataCacheForIdent(id)
 		}
 		if err != nil {
 			batch.Close()
 			return nil, err
 		}
 		cacheRowChanged = staged
+		// The identification state, from the row as this batch leaves it and
+		// the book as written, in the same batch (and under the same stripe)
+		// as the change that moves it.
+		identTx = p.beginIdent(batch)
+		if err := identTx.stage(id, book, cacheAfter); err != nil {
+			batch.Close()
+			return nil, err
+		}
 	}
 
 	// ISBN/ASIN secondary index: delete stale rows for old values and write
@@ -3623,8 +3690,18 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	if bookWriteBatchPreCommitHook != nil {
 		bookWriteBatchPreCommitHook("update", id, batch)
 	}
+	if identTx != nil {
+		// identMu from the counter read through the commit (identTxn).
+		if err := identTx.prepare(); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
+	}
+	if identTx != nil {
+		identTx.end(true)
 	}
 	if unlockCache != nil {
 		unlockCache()
@@ -4214,6 +4291,24 @@ func (p *PebbleStore) DeleteBook(id string) error {
 			unlockNarrators()
 		}
 	}()
+	// The cache stripe -- the book's identification lock -- is taken last
+	// (book -> owner -> book_authors -> book_narrators -> cache), so the
+	// metadata_cache row delete below can no longer interleave with a
+	// PutMetadataCache, and the book's ident: rows go in the same batch.
+	identMuBook := p.metadataCacheLock(id)
+	identMuBook.Lock()
+	identBookLocked := true
+	defer func() {
+		if identBookLocked {
+			identMuBook.Unlock()
+		}
+	}()
+	identTx := p.beginIdent(batch)
+	defer identTx.end(false)
+	if err := identTx.stage(id, nil, nil); err != nil {
+		batch.Close()
+		return err
+	}
 	cacheRowDeleted := false
 	for _, sidecar := range [][]byte{
 		[]byte("book_authors:" + id),
@@ -4257,9 +4352,16 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	if bookWriteBatchPreCommitHook != nil {
 		bookWriteBatchPreCommitHook("delete", id, batch)
 	}
+	if err := identTx.prepare(); err != nil {
+		batch.Close()
+		return err
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
 	}
+	identTx.end(true)
+	identMuBook.Unlock()
+	identBookLocked = false
 	if cacheRowDeleted {
 		p.bumpMetadataCacheGeneration(id)
 	}
@@ -5467,14 +5569,75 @@ func (p *PebbleStore) recomputeDurationMap(bookNumericID int) error {
 // SetRaw, DeleteRaw and DeleteRawBatch refuse opv2:op: keys
 // (rejectOpv2OpRawKey): those rows must be written through commitOpV2Row so
 // the timeline index changes in the same batch.
+//
+// A raw write of a metadata_cache: row keeps the book's identification state
+// current in the same batch, as PutMetadataCache does (commitRawWrites).
 func (p *PebbleStore) SetRaw(key string, value []byte) error {
 	if err := rejectOpv2OpRawKey(key); err != nil {
 		return err
 	}
-	if err := p.db.Set([]byte(key), value, pebble.Sync); err != nil {
+	if value == nil {
+		value = []byte{}
+	}
+	if err := p.commitRawWrites([]string{key}, [][]byte{value}); err != nil {
 		return err
 	}
 	p.noteRawMetadataCacheWrite(key)
+	return nil
+}
+
+// commitRawWrites sets (values[i] non-nil) or deletes (nil) each key in one
+// synced batch. When any key is a metadata_cache: row, the books those rows
+// belong to are restaged in the identification index in the same batch,
+// under their cache stripes (taken in stripe order) and identMu.
+func (p *PebbleStore) commitRawWrites(keys []string, values [][]byte) error {
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	for i, k := range keys {
+		var err error
+		if values[i] != nil {
+			err = batch.Set([]byte(k), values[i], nil)
+		} else {
+			err = batch.Delete([]byte(k), nil)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	// The last write of a key in the batch wins, and so decides its row.
+	last := make(map[string][]byte)
+	var ids []string
+	for i, k := range keys {
+		id, ok := strings.CutPrefix(k, metadataCacheKeyPrefix)
+		if !ok || id == "" {
+			continue
+		}
+		if _, seen := last[id]; !seen {
+			ids = append(ids, id)
+		}
+		last[id] = values[i]
+	}
+	if len(ids) == 0 {
+		return batch.Commit(pebble.Sync)
+	}
+	unlock := p.lockIdentStripes(ids)
+	defer unlock()
+	t := p.beginIdent(batch)
+	defer t.end(false)
+	vals := make([][]byte, len(ids))
+	for i, id := range ids {
+		vals[i] = last[id]
+	}
+	if err := p.stageIdentForRawCacheWrites(t, ids, vals); err != nil {
+		return err
+	}
+	if err := t.prepare(); err != nil {
+		return err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+	t.end(true)
 	return nil
 }
 
@@ -5500,7 +5663,7 @@ func (p *PebbleStore) DeleteRaw(key string) error {
 	if err := rejectOpv2OpRawKey(key); err != nil {
 		return err
 	}
-	if err := p.db.Delete([]byte(key), pebble.Sync); err != nil {
+	if err := p.commitRawWrites([]string{key}, [][]byte{nil}); err != nil {
 		return err
 	}
 	p.noteRawMetadataCacheWrite(key)
@@ -5597,14 +5760,7 @@ func (p *PebbleStore) DeleteRawBatch(keys []string) error {
 			return err
 		}
 	}
-	b := p.db.NewBatch()
-	defer b.Close()
-	for _, k := range keys {
-		if err := b.Delete([]byte(k), nil); err != nil {
-			return err
-		}
-	}
-	if err := b.Commit(pebble.Sync); err != nil {
+	if err := p.commitRawWrites(keys, make([][]byte, len(keys))); err != nil {
 		return err
 	}
 	for _, k := range keys {
@@ -5832,11 +5988,24 @@ func (p *PebbleStore) Reset() error {
 		batch.Close()
 		return fmt.Errorf("reset: stage storage format stamp: %w", err)
 	}
+	// The wipe removed every ident: row with the books and cache rows they
+	// described, so the identification index of the reset store is the empty
+	// one: stamped built in the same batch, with every counter zero (absent).
+	if err := batch.Set([]byte(identBuiltKey), []byte(fmt.Sprint(identIndexVersion)), pebble.NoSync); err != nil {
+		batch.Close()
+		return fmt.Errorf("reset: stage identification index marker: %w", err)
+	}
 
-	// Commit with sync for durability
+	// Commit with sync for durability. identMu spans the commit so no
+	// identification write can interleave with the zeroing of the counters.
+	p.ident.mu.Lock()
 	if err := batch.Commit(pebble.Sync); err != nil {
+		p.ident.mu.Unlock()
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
+	p.ident.setCounts([2][numIdentStates]int64{})
+	p.ident.ready.Store(true)
+	p.ident.mu.Unlock()
 	// The wipe removed the opchange_by_book: sentinel. Bump the generation
 	// now that the DeleteRange is durable: that drops both the cached
 	// sentinel read and this boot's trust, so GetBookChanges uses the full
@@ -5931,6 +6100,27 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 		if covers(prefix, metadataCacheKeyPrefix) {
 			p.cacheChanges.bumpAll(&p.cacheGen)
 		}
+	}
+	// A prefix covering book:, metadata_cache: or ident: rows deletes inputs
+	// (or rows) of the identification index without going through its
+	// write-through. The index is marked not ready (and its marker removed,
+	// so a crash mid-wipe rebuilds on boot) before the first delete, and
+	// rebuilt from what is left after the last, error or not.
+	identCovered := false
+	for _, prefix := range prefixes {
+		if covers(prefix, bookRowPrefix) || covers(prefix, metadataCacheKeyPrefix) || covers(prefix, "ident:") {
+			identCovered = true
+		}
+	}
+	if identCovered {
+		if err := p.invalidateIdentIndex(); err != nil {
+			return 0, fmt.Errorf("wipe: invalidate identification index: %w", err)
+		}
+		defer func() {
+			if _, err := p.RebuildIdentIndex(p.closingContext()); err != nil {
+				identLog.Warn("identification index rebuild after a wipe failed; it is rebuilt on the next boot: %v", err)
+			}
+		}()
 	}
 	for _, prefix := range prefixes {
 		lb := []byte(prefix)

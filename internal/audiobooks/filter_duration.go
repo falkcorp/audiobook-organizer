@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 7c1e5a92-3f04-4d8b-b6e1-0a9d2c47f815
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -109,7 +109,14 @@ func parseDurationExpr(expr string) (durationExpr, error) {
 // unterminated /regex/ (RE2 — lookahead is rejected), or a malformed numeric
 // comparison/range. It runs the SAME compile the matcher runs
 // (compileFieldFilter), so the two cannot disagree about what is valid.
+//
+// ident: is the one exception: it is resolved to an id set before the walk
+// (filter_ident.go) and never compiled for the row matcher, so its values
+// are checked by validateIdentFilterValue.
 func ValidateFilterValue(f FieldFilter) error {
+	if f.Field == IdentFilterField {
+		return validateIdentFilterValue(f)
+	}
 	_, err := compileFieldFilter(f)
 	return err
 }

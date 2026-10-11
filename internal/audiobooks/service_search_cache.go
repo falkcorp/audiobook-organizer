@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -183,6 +183,13 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 	}
 	if err := CheckFilterSetSize(f.FieldFilters, f.PerUserFilters); err != nil {
 		return nil, 0, SearchMeta{}, fmt.Errorf("invalid filter value: %w", err)
+	}
+	// ident: becomes an id restriction before anything is keyed on f, so
+	// the search result cache (which RestrictToIDs keeps out) never holds a
+	// list an identification-state change could leave stale.
+	f, err := svc.resolveIdentFilters(f)
+	if err != nil {
+		return nil, 0, SearchMeta{}, err
 	}
 	if key, ok := svc.searchCacheKey(search, authorID, seriesID, f); ok {
 		books, total, meta, err := svc.cachedSearchPage(ctx, key, limit, offset, search, authorID, seriesID, f)

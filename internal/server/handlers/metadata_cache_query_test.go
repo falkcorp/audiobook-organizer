@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package handlers
 
@@ -141,14 +141,16 @@ func serveReviewRaw(t testing.TB, h *MetadataCacheHandler, query string) (int, [
 // REVIEW_GOLDEN_PRINT=1 go test -run TestReviewQuery_IndexViewByteIdentical.
 // 02-PR5b added unreviewable_by_cause.identity_stale (0 here, no retitled
 // row) and nothing else: stripping that key reproduces the previous hashes.
+// 02-PR4 added the summary's ident_counts block and nothing else: without
+// that one assignment the previous hashes pass unchanged.
 var reviewGoldenHashes = map[string]string{
-	"all=true&view=index":                   "88397ecb6870b592d58fd28a482678ca4fe42598c5c992d6487ef0d147125f14",
-	"all=true":                              "697375efdaf7ad738c1cfdb3d83512d3cff3d13eb432956d667f8951f17bfce9",
-	"limit=5&offset=3":                      "dd513352834280ef54d115d4a7a7145a7739e0e68dfaef65d160840fb399c981",
-	"all=true&bucket=unreviewable":          "f6408cf3c3ba04498b5976560ee1217304bab6bbbb210c61ae6a96c3cec93012",
-	"bucket=unreviewable&limit=2&offset=1":  "efe547860be27f941013397d7170a52d5ffa6d4498a235ad9374ad611a653386",
-	"ids=" + goldenIDList(0, 3, 13, 17, 22): "7c7dd7112565c7e1264b6984ba5d4b6422721de361ed9f3a1528ca58cfda5114",
-	"view=index&ids=" + goldenIDList(1, 4):  "afc4b96550d1c9be09983526f3b73a7e351761629c2ed0a88b08a2af71142090",
+	"all=true&view=index":                   "f283a183fe1194dad47e0b4d3827b0560a00b80b17451597cfddb8545f23f14d",
+	"all=true":                              "130cfc616eedf1df0333438fe21268c4c78d4b9cf1bba27b287f6727bae53464",
+	"limit=5&offset=3":                      "ed15ddd735bcf7f8a3154b1f0b91dea9bde046804cf6abf5b3ced5a16ec69a2f",
+	"all=true&bucket=unreviewable":          "52fd8fdbd85592d4eaed72afb77c3681dc6def29081cbb86dcaf770a9a30361b",
+	"bucket=unreviewable&limit=2&offset=1":  "5fe9f5de7dc2f71cfe5754376ce3fc9db0642a610c57af7dd555f3a244f907e0",
+	"ids=" + goldenIDList(0, 3, 13, 17, 22): "f12d519f2c97dfad651cd00279db66cd41a6645f4f1c9577886d49c966652b8f",
+	"view=index&ids=" + goldenIDList(1, 4):  "a0b1bb21141fb896c6ebd36313b1d30840aecaffd20a9a071f24222f6d5379a5",
 }
 
 func goldenIDList(is ...int) string {
