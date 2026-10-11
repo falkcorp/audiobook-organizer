@@ -1,5 +1,5 @@
 // file: internal/database/pebble_ops_v2_closed_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 9e4b2c17-5a6d-4f38-8c01-7d2e9f4a6b53
 // last-edited: 2026-10-10
 
@@ -85,8 +85,6 @@ func TestOpsV2ClosedStore_AllPathsReturnErrors(t *testing.T) {
 		store.UpdateOperationV2Status("op-1", "running", &now, nil, nil))
 	_, err = store.UpdateOperationV2StatusIf("op-1", "queued", "running", &now, nil, nil)
 	requireClosedErr(t, "UpdateOperationV2StatusIf", err)
-	_, err = store.SetOperationV2StatusIfQueued("op-1", "running")
-	requireClosedErr(t, "SetOperationV2StatusIfQueued", err)
 	_, err = store.ListActiveOperationsV2()
 	requireClosedErr(t, "ListActiveOperationsV2", err)
 	_, err = store.GetOperationV2("op-1")

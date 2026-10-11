@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.28.0
+// version: 3.29.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 
@@ -471,81 +471,6 @@ func (p *PebbleStore) SetOperationV2Result(id string, resultData string) (err er
 	prev := row
 	row.ResultData = &resultData
 	return p.commitOpV2Row(&prev, &row, nil)
-}
-
-// SetOperationV2StatusIfQueued atomically transitions status only when current status is 'queued'.
-// Returns true if the row was updated. Row write + index maintenance are
-// committed as a single batch for the same reason described on
-// UpdateOperationV2Status: separate writes let a concurrent
-// ListActiveOperationsV2 scan observe a row whose status no longer matches
-// its active-index membership.
-func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (updated bool, err error) {
-	defer recoverPebbleClosed("SetOperationV2StatusIfQueued", &err)
-	p.opsMu.Lock()
-	defer p.opsMu.Unlock()
-
-	var row OperationV2Row
-	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
-		return false, err
-	}
-	if row.ID == "" || row.Status != "queued" {
-		return false, nil
-	}
-
-	prev := row
-	row.Status = newStatus
-	// Stamp CompletedAt whenever this transition takes the row out of the live
-	// states. CompletedAt is the CANONICAL liveness signal in this store --
-	// ListOperationsV2Since keeps a row forever on `CompletedAt == nil`, and the
-	// timeline handler counts it as in-flight on the same test -- so a terminal
-	// status written without a stamp produces a row that is dead to the worker
-	// and alive to every reader. That is not hypothetical: a canceled
-	// maintenance.transcribe-book-intros op sat in the UI's "Active Operations"
-	// panel from 2026-06-26 to 2026-09-07 with completed_at null, and no user
-	// action could clear it.
-	//
-	// This uses the explicit terminal ALLOWLIST rather than the complement of the
-	// live states. An earlier revision of this function used the complement
-	// (`!= "running" && != "queued"`) on the reasoning that ListOperationsV2Since
-	// :631 avoids a status list, so this should too. That reasoning does not
-	// transfer, because a reader and a writer have opposite safe defaults: a
-	// reader that misses a terminal status under-reports deadness, and the row
-	// lingers visibly until someone complains, whereas a writer that misses a
-	// LIVE status stamps a row the resume machinery still owns -- silently, and
-	// the result looks like completed work. The complement got that backwards:
-	// "interrupted_quiesced" (resumable, see isResumableV2Status) and
-	// "waiting_deps" are both live and both would have been stamped. Only the
-	// fact that the two real call sites (registry.go:990, :999) pass a literal
-	// "canceled" kept that from being reachable.
-	stampCompletedAtIfTerminal(&row)
-	data, err := json.Marshal(&row)
-	if err != nil {
-		return false, err
-	}
-
-	batch := p.db.NewBatch()
-	defer batch.Close()
-	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
-		return false, err
-	}
-	if err := stageOpRow(batch, &prev, &row); err != nil {
-		return false, err
-	}
-	if err := batch.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), nil); err != nil {
-		return false, err
-	}
-	if newStatus != "running" {
-		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
-			return false, err
-		}
-	}
-	if err := p.runOpsV2BeforeCommitHook(); err != nil {
-		return false, err
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // ListActiveOperationsV2 returns ops with status 'queued' or 'running'.
@@ -1298,7 +1223,7 @@ func IsTerminalV2Status(status string) bool { return isTerminalV2Status(status) 
 // stampCompletedAtIfTerminal sets row.CompletedAt to now when the row holds a
 // terminal status and has no stamp yet. It is the single rule every opv2 row
 // writer that can set a status applies (InsertOperationV2,
-// UpdateOperationV2Status, SetOperationV2StatusIfQueued), so a terminal row can
+// UpdateOperationV2Status, UpdateOperationV2StatusIf), so a terminal row can
 // never be written with a null completed_at. An existing stamp always wins: it
 // is the earlier, truer completion time.
 func stampCompletedAtIfTerminal(row *OperationV2Row) {
@@ -1316,7 +1241,7 @@ func stampCompletedAtIfTerminal(row *OperationV2Row) {
 // the canonical liveness signal in this store (ListOperationsV2Since:631) -- so
 // it sits in the UI's Active Operations panel forever with no user action able
 // to clear it. Before 2026-09-07 the only producer was
-// SetOperationV2StatusIfQueued, which wrote a terminal status without a stamp;
+// SetOperationV2StatusIfQueued (since folded into UpdateOperationV2StatusIf), which wrote a terminal status without a stamp;
 // every other writer of a terminal status passed a non-nil completedAt. That
 // bug is fixed at the source, and since 2026-09-12 every status-setting writer
 // applies stampCompletedAtIfTerminal, so no writer can produce the shape at
@@ -1324,7 +1249,7 @@ func stampCompletedAtIfTerminal(row *OperationV2Row) {
 //
 // The scan reads the opv2:op: keyspace rather than the opv2:act: index because
 // the affected rows are exactly the ones the index has already dropped
-// (SetOperationV2StatusIfQueued deletes the act key on the same write that
+// (SetOperationV2StatusIfQueued deleted the act key on the same write that
 // leaves completed_at null). There is no age cutoff and no row cap: the oldest
 // known instance had been stuck for 73 days, which is precisely the row a
 // "recent 500" query would miss.

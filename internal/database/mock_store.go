@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.141.0
+// version: 1.142.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -309,7 +309,6 @@ type MockStore struct {
 	GetOperationV2Func                func(id string) (*OperationV2Row, error)
 	UpdateOperationV2StatusFunc       func(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error
 	UpdateOperationV2StatusIfFunc     func(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error)
-	SetOperationV2StatusIfQueuedFunc  func(id, newStatus string) (bool, error)
 	RepairOpsV2MissingCompletedAtFunc func() (int, error)
 	CountRunningByPluginV2Func        func(plugin string) (int, error)
 	ListActiveOperationsV2Func        func() ([]OperationV2Row, error)
@@ -3855,12 +3854,6 @@ func (m *MockStore) UpdateOperationV2StatusIf(id, fromStatus, status string, sta
 		return m.UpdateOperationV2StatusIfFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
 	}
 	return true, nil
-}
-func (m *MockStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
-	if m.SetOperationV2StatusIfQueuedFunc != nil {
-		return m.SetOperationV2StatusIfQueuedFunc(id, newStatus)
-	}
-	return false, nil
 }
 func (m *MockStore) RepairOpsV2MissingCompletedAt() (int, error) {
 	if m.RepairOpsV2MissingCompletedAtFunc != nil {

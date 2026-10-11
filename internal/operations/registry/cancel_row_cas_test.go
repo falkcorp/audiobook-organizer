@@ -1,5 +1,5 @@
 // file: internal/operations/registry/cancel_row_cas_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 90197191-b0f8-4979-823d-4e5265a1c1c4
 // last-edited: 2026-10-10
 
@@ -45,8 +45,8 @@ type interleaveStore struct {
 	armRead atomic.Bool
 	onRead  func() (*database.OperationV2Row, error)
 
-	// onCancelCAS runs on the first SetOperationV2StatusIfQueued(target,
-	// "canceled") after armCancelCAS is set, wrapped around the real write:
+	// onCancelCAS runs on the first UpdateOperationV2StatusIf(target,
+	// "queued", "canceled", ...) after armCancelCAS is set, wrapped around the real write:
 	// before(), the write, then after().
 	armCancelCAS atomic.Bool
 	beforeCAS    func()
@@ -75,12 +75,13 @@ type interleaveStore struct {
 	onGateWrite     func()
 	onGateWriteOnce sync.Once
 
-	// failCancelCAS / failRead make the next SetOperationV2StatusIfQueued(target,
-	// "canceled") / GetOperationV2(target) fail with errStoreFlake.
+	// failCancelCAS / failRead make the next UpdateOperationV2StatusIf(target,
+	// "queued", "canceled", ...) / GetOperationV2(target) fail with
+	// errStoreFlake.
 	failCancelCAS atomic.Bool
 	failRead      atomic.Bool
-	// failCancelIf makes the next UpdateOperationV2StatusIf(target, *,
-	// "canceled") fail with errStoreFlake.
+	// failCancelIf makes the next UpdateOperationV2StatusIf(target, from,
+	// "canceled", ...) with from other than "queued" fail with errStoreFlake.
 	failCancelIf atomic.Bool
 
 	// onFinalWrite, if set, runs once just before the first
@@ -124,23 +125,6 @@ func (s *interleaveStore) GetOperationV2(id string) (*database.OperationV2Row, e
 	return s.fakeStore.GetOperationV2(id)
 }
 
-func (s *interleaveStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
-	if id == s.target && newStatus == "canceled" && s.failCancelCAS.CompareAndSwap(true, false) {
-		return false, errStoreFlake
-	}
-	if id == s.target && newStatus == "canceled" && s.armCancelCAS.CompareAndSwap(true, false) {
-		if s.beforeCAS != nil {
-			s.beforeCAS()
-		}
-		ok, err := s.fakeStore.SetOperationV2StatusIfQueued(id, newStatus)
-		if s.afterCAS != nil {
-			s.afterCAS()
-		}
-		return ok, err
-	}
-	return s.fakeStore.SetOperationV2StatusIfQueued(id, newStatus)
-}
-
 // holdGateWrite wraps the worker's pickup-gate write (the only writer of
 // interrupted_quiesced to the target in these tests).
 func (s *interleaveStore) holdGateWrite(id, status string, write func()) {
@@ -179,7 +163,24 @@ func (s *interleaveStore) UpdateOperationV2Status(id, status string, startedAt, 
 }
 
 func (s *interleaveStore) UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
-	if id == s.target && status == "canceled" && s.failCancelIf.CompareAndSwap(true, false) {
+	// Cancel's compare-and-set from "queued" (the lock-free attempt and
+	// cancelByRow's queued case).
+	if id == s.target && fromStatus == "queued" && status == "canceled" {
+		if s.failCancelCAS.CompareAndSwap(true, false) {
+			return false, errStoreFlake
+		}
+		if s.armCancelCAS.CompareAndSwap(true, false) {
+			if s.beforeCAS != nil {
+				s.beforeCAS()
+			}
+			ok, err := s.fakeStore.UpdateOperationV2StatusIf(id, fromStatus, status, startedAt, completedAt, errMsg)
+			if s.afterCAS != nil {
+				s.afterCAS()
+			}
+			return ok, err
+		}
+	}
+	if id == s.target && fromStatus != "queued" && status == "canceled" && s.failCancelIf.CompareAndSwap(true, false) {
 		return false, errStoreFlake
 	}
 	if id == s.target && fromStatus == "running" && s.onFinalWrite != nil && status == s.finalWriteStatus {

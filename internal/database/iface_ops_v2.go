@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-10
 
@@ -244,7 +244,8 @@ type OpV2StatusStore interface {
 	// whether it did. A missing row reports false with a nil error. Use it
 	// wherever the status was decided from an earlier read that another
 	// writer (a worker's claim, the deps scheduler's promotion, a re-queue)
-	// can have overtaken.
+	// can have overtaken. UpdateOperationV2StatusIf(id, "queued", s, nil, nil,
+	// nil) is the old SetOperationV2StatusIfQueued(id, s).
 	UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error)
 	// ResetOperationV2ForResume flips an interrupted op back to "queued" for a
 	// ResumeRestart resume and CLEARS CompletedAt (and the interrupt error) to
@@ -253,9 +254,6 @@ type OpV2StatusStore interface {
 	// and stays invisible in the Active-Operations timeline. QueuedAt is left
 	// untouched (it feeds restart-strike accounting).
 	ResetOperationV2ForResume(id string) error
-	// SetOperationV2StatusIfQueued atomically sets status=canceled only if status was queued.
-	// Returns true if the row was updated.
-	SetOperationV2StatusIfQueued(id, newStatus string) (bool, error)
 	// RepairOpsV2MissingCompletedAt stamps completed_at on rows that hold a
 	// terminal status with completed_at null -- rows that are dead to the worker
 	// but read as in-flight to every consumer. Returns the number written.

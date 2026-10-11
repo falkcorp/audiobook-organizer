@@ -1,7 +1,7 @@
 // file: internal/operations/registry/cancel_persisted_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e2c1b5a-4d3f-4a9e-8c6b-2f1d0e9a7b3c
-// last-edited: 2026-09-10
+// last-edited: 2026-10-10
 
 package registry_test
 
@@ -20,7 +20,7 @@ import (
 // with no handle) must be moved to a terminal "canceled" status by Cancel so
 // that ListResumableOperationsV2 — the startup sweep's candidate list — never
 // hands it back. Before the fix Cancel only knew how to flip a "queued" row
-// (SetOperationV2StatusIfQueued) and answered ErrOpNotFound for everything
+// (then SetOperationV2StatusIfQueued) and answered ErrOpNotFound for everything
 // else, so the cancel never touched the row and every restart resumed it.
 func TestCancel_PersistedNonRunningRowBecomesCanceled(t *testing.T) {
 	for _, status := range []string{"interrupted_quiesced", "waiting_deps", "running", "interrupted_ask"} {
