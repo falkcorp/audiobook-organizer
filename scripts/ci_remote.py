@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 
 """Run `make ci` sharded across a pool of remote runner nodes (`make ci-remote`).
 
@@ -506,6 +506,7 @@ MAKE_LEGS = (
     ("vet", "make --no-print-directory vet", 120.0),
     ("staticcheck", "make --no-print-directory staticcheck", 300.0),
     ("errcheck-ratchet", "make --no-print-directory lint-errcheck-ratchet", 400.0),
+    ("deadcode-ratchet", "make --no-print-directory lint-deadcode-ratchet", 120.0),
     ("sdkguard", "make --no-print-directory sdkguard", 30.0),
     ("bench-check", "make --no-print-directory bench-check", 120.0),
     ("fmt-check", "make --no-print-directory fmt-check", 10.0),

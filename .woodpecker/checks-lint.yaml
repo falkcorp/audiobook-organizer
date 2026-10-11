@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.5.0
+# version: 2.6.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
-# last-edited: 2026-10-10
+# last-edited: 2026-10-11
 #
 # The linter gates of `make ci`: staticcheck, the errcheck ratchet and
 # mocks-check, each as its own step so one failure does not hide the others.
@@ -87,12 +87,20 @@ steps:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory lint-errcheck-ratchet
 
+  - name: deadcode-ratchet
+    image: *go_image
+    environment: *go_env
+    depends_on: [tools]
+    commands:
+      - export PATH="$$GOBIN:$$PATH"
+      - make --no-print-directory lint-deadcode-ratchet
+
   - name: mocks-check
     # After the linters, not beside them: mockery rewrites the committed mock
     # files, and a linter parsing one mid-write reports a spurious error.
     image: *go_image
     environment: *go_env
-    depends_on: [staticcheck, errcheck-ratchet]
+    depends_on: [staticcheck, errcheck-ratchet, deadcode-ratchet]
     commands:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory mocks-check
@@ -103,7 +111,7 @@ steps:
     # keeps the cache well below it so builds never fail on a full cache.
     image: *go_image
     environment: *go_env
-    depends_on: [staticcheck, errcheck-ratchet, mocks-check]
+    depends_on: [staticcheck, errcheck-ratchet, deadcode-ratchet, mocks-check]
     when:
       - status: [success, failure]
     commands:
