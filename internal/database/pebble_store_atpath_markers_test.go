@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
 // last-edited: 2026-10-11
 
@@ -25,7 +25,7 @@ func batchDeletes(t *testing.T) func(op string) [][]byte {
 	var mu sync.Mutex
 	got := map[string][][]byte{}
 	bookWriteBatchPreCommitHook = func(op, _ string, b *GatedBatch) {
-		r := b.Reader()
+		r := b.b.Reader()
 		for {
 			kind, ukey, _, ok, err := r.Next()
 			if err != nil {

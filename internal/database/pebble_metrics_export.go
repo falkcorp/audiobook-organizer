@@ -1,13 +1,11 @@
 // file: internal/database/pebble_metrics_export.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7efe29c0-d5f8-489a-bdaa-2715b790979d
 // last-edited: 2026-10-11
 
 package database
 
 import (
-	"errors"
-
 	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -32,46 +30,28 @@ func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
 	if p.dbClosed.Load() {
 		return metrics.PebbleSample{}, false
 	}
-	// The gated Metrics call holds a lease, so Close cannot close the engine
-	// under it (pebble_gate.go); once Close has begun it fails instead.
-	m, err := p.db.Metrics()
+	return PebbleSampleFromDB(p.db)
+}
+
+// PebbleSampleFromDB reads db.Metrics() into a metrics.PebbleSample. ok is
+// false for a nil db and for a store that has begun closing.
+//
+// pebble v2.1.7's DB.Metrics() does NOT check for a closed DB and is not safe
+// concurrently with Close (Close tears down the file cache after releasing
+// the engine mutex). The gated Metrics call holds a lease, so Close cannot
+// close the engine under it (pebble_gate.go), and once Close has begun it is
+// refused instead. Probing the engine instead was tried and rejected:
+// db.NewSnapshot() as a probe can leave a snapshot open when Close lands, and
+// Close then fails with "leaked snapshots".
+func PebbleSampleFromDB(db *GatedDB) (s metrics.PebbleSample, ok bool) {
+	if db == nil {
+		return metrics.PebbleSample{}, false
+	}
+	m, err := db.Metrics()
 	if err != nil {
 		return metrics.PebbleSample{}, false
 	}
 	return pebbleSampleFromMetrics(m), true
-}
-
-// PebbleSampleFromDB reads db.Metrics() into a metrics.PebbleSample. ok is
-// false for a nil db, and for a panic matching pebble.ErrClosed; any other
-// panic is re-raised, the same rule recoverPebbleClosed applies.
-//
-// pebble v2.1.7's DB.Metrics() does NOT check for a closed DB, and it is not
-// safe to call concurrently with Close: Close tears down the file cache after
-// releasing the engine mutex, and Metrics() then reads it and can panic with
-// something other than ErrClosed. This function cannot tell a closed DB from an
-// open one and does not make that call safe. Its one remaining caller, the
-// OpenLibrary store, serialises it against Close (OLStore.sampleMu: read lock
-// held from the closed-flag check through Metrics(), write lock held by
-// Close); PebbleStore samples through its gated handle instead. Any other
-// caller must do the same; the only containment otherwise is the recover in
-// metrics' samplePebbleSource, which drops that store from one scrape. Probing
-// the engine instead was tried and rejected: db.NewSnapshot() as a probe can
-// leave a snapshot open when Close lands, and Close then fails with "leaked
-// snapshots".
-func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
-	if db == nil {
-		return metrics.PebbleSample{}, false
-	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			if err, isErr := rec.(error); isErr && errors.Is(err, pebble.ErrClosed) {
-				s, ok = metrics.PebbleSample{}, false
-				return
-			}
-			panic(rec)
-		}
-	}()
-	return pebbleSampleFromMetrics(db.Metrics()), true
 }
 
 // pebbleSampleFromMetrics maps one Metrics sample to a metrics.PebbleSample.

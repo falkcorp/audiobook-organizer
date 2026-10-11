@@ -1,7 +1,7 @@
 // file: internal/openlibrary/store.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package openlibrary
 
@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -27,13 +26,14 @@ import (
 
 // OLStore provides local lookup of Open Library data dump records stored in PebbleDB.
 type OLStore struct {
-	db *pebble.DB
-	// sampleMu serialises PebbleMetricsSample against Close; see
-	// database.PebbleSampleFromDB. Close holds the write lock across
-	// closed.Store(true) + db.Close(); the sampler holds the read lock from its
-	// closed check through Metrics().
-	sampleMu sync.RWMutex
-	closed   atomic.Bool
+	// db is the gated engine handle (database.NewOwnedGatedDB). Every lookup,
+	// import batch and metrics sample holds a lease, so Close waits for them
+	// before closing the engine instead of closing it under an open iterator
+	// or Get closer (pebble then panics "inconsistent reference count"), and
+	// refuses later ones with an error wrapping pebble.ErrClosed.
+	db *database.GatedDB
+	// closeDB drains, syncs and closes the engine; idempotent.
+	closeDB func(timeout time.Duration) error
 }
 
 // NewOLStore opens or creates a PebbleDB instance for Open Library dump data.
@@ -45,15 +45,14 @@ func NewOLStore(path string) (*OLStore, error) {
 		return nil, fmt.Errorf("failed to open OL store: %w", err)
 	}
 	slog.Info("OL PebbleDB opened", "path", path, "formatVersion", db.FormatMajorVersion())
-	return &OLStore{db: db}, nil
+	gated, closeDB := database.NewOwnedGatedDB(db)
+	return &OLStore{db: gated, closeDB: closeDB}, nil
 }
 
-// Close closes the underlying PebbleDB.
+// Close closes the underlying PebbleDB once in-flight lookups finish (bounded
+// by database.DefaultCloseDrainTimeout). Safe to call more than once.
 func (s *OLStore) Close() error {
-	s.sampleMu.Lock()
-	defer s.sampleMu.Unlock()
-	s.closed.Store(true)
-	return s.db.Close()
+	return s.closeDB(database.DefaultCloseDrainTimeout)
 }
 
 // Optimize compacts the PebbleDB database to reclaim space.
@@ -68,15 +67,8 @@ func (s *OLStore) CompactionStats() database.CompactionStats {
 }
 
 // PebbleMetricsSample samples the OpenLibrary cache's PebbleDB for the
-// pebble_* Prometheus series. ok is false when the database is closed.
+// pebble_* Prometheus series. ok is false once the store has begun closing.
 func (s *OLStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
-	if !s.sampleMu.TryRLock() {
-		return metrics.PebbleSample{}, false
-	}
-	defer s.sampleMu.RUnlock()
-	if s.closed.Load() {
-		return metrics.PebbleSample{}, false
-	}
 	return database.PebbleSampleFromDB(s.db)
 }
 

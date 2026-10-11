@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.15.0
+// version: 2.16.0
 // last-edited: 2026-10-11
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -40,6 +40,9 @@ type AIScanStore struct {
 	db     *GatedDB
 	prefix string // "aiscan:" when shared, "" when standalone
 	owned  bool   // if false, Close and Optimize are no-ops
+	// closeDB closes an owned engine (NewOwnedGatedDB: drain, sync, close;
+	// idempotent). Nil when the DB is shared.
+	closeDB func(timeout time.Duration) error
 	// applyMu makes "apply a result" and "supersede the scan" one decision
 	// each (MarkResultApplied, SupersedeIfUnapplied): without it a supersede
 	// could read "nothing applied", an apply land, and the scan then be hidden
@@ -126,7 +129,8 @@ func NewAIScanStore(path string) (*AIScanStore, error) {
 		return nil, fmt.Errorf("failed to open AI scan DB: %w", err)
 	}
 
-	store := &AIScanStore{db: NewGatedDB(db), prefix: "", owned: true}
+	gated, closeDB := NewOwnedGatedDB(db)
+	store := &AIScanStore{db: gated, prefix: "", owned: true, closeDB: closeDB}
 	if err := store.initCounters(); err != nil {
 		db.Close()
 		return nil, err
@@ -173,11 +177,13 @@ func (s *AIScanStore) k(format string, args ...any) []byte {
 }
 
 // Close closes the underlying PebbleDB. No-op when sharing an external DB.
+// Safe to call more than once, concurrently too: later calls return the
+// first call's result.
 func (s *AIScanStore) Close() error {
-	if !s.owned {
+	if !s.owned || s.closeDB == nil {
 		return nil
 	}
-	return s.db.closeOwned(defaultCloseDrainTimeout)
+	return s.closeDB(DefaultCloseDrainTimeout)
 }
 
 // Optimize compacts the PebbleDB. No-op when sharing an external DB (compaction
@@ -197,7 +203,7 @@ func (s *AIScanStore) CompactionStats() (stats CompactionStats, ok bool) {
 	if !s.owned {
 		return CompactionStats{}, false
 	}
-	return collectGatedCompactionStats(s.db), true
+	return CollectCompactionStats(s.db), true
 }
 
 // nextID atomically reads and increments the counter for the given entity type.

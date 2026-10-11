@@ -1,5 +1,5 @@
 // file: internal/database/dedup_label.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
 // last-edited: 2026-10-11
 
@@ -394,8 +394,10 @@ func (s *EmbeddingStore) ListLabeledExamplesForEntitiesStrict(ids []string, f La
 			hexID := string(iter.Key()[len(prefix):])
 			n, perr := strconv.ParseUint(hexID, 16, 64)
 			if perr != nil {
+				// Copy the key first: it is only valid until the iterator closes.
+				key := string(iter.Key())
 				_ = iter.Close()
-				return nil, fmt.Errorf("label entity index key %q is unreadable: %w", iter.Key(), perr)
+				return nil, fmt.Errorf("label entity index key %q is unreadable: %w", key, perr)
 			}
 			cands = append(cands, int64(n))
 		}

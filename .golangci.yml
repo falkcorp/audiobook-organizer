@@ -1,5 +1,5 @@
 # file: .golangci.yml
-# version: 1.5.1
+# version: 1.5.2
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
 # last-edited: 2026-10-11
 
@@ -120,11 +120,12 @@ linters:
         - (*github.com/cockroachdb/pebble/v2.Batch).Close
         - (*github.com/cockroachdb/pebble/v2.Snapshot).Close
         # The store's gated wrappers (internal/database/pebble_gate.go) close
-        # the same pebble handles and then release a Close-drain lease; the
-        # same read-handle reasoning applies. GatedBatch.Close is pebble's
-        # Batch.Close, promoted, so the entry above already covers it.
+        # the same pebble handles (and release a Close-drain lease); the same
+        # reasoning applies: read handles, and a batch whose error that
+        # matters is on Commit (not exempted).
         - (*github.com/falkcorp/audiobook-organizer/internal/database.GatedIter).Close
         - (*github.com/falkcorp/audiobook-organizer/internal/database.GatedSnapshot).Close
+        - (*github.com/falkcorp/audiobook-organizer/internal/database.GatedBatch).Close
 
         # ---------------------------------------------------------------
         # Bucket (f): HTTP response writes. A failed response write means

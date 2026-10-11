@@ -1,5 +1,5 @@
 // file: internal/database/compaction_stats.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3014758-0b25-4fcb-8a87-c8b158b6be42
 // last-edited: 2026-10-11
 
@@ -88,20 +88,12 @@ func (s CompactionStats) WrittenBytes() uint64 {
 	return s.CompletedBytes + uint64(in)
 }
 
-// CollectCompactionStats samples a raw Pebble database (the OpenLibrary
-// store's). Cheap: Metrics() reads in-memory counters and does not touch the
-// LSM on disk. The caller must keep it from racing that DB's Close.
-func CollectCompactionStats(db *pebble.DB) CompactionStats {
-	if db == nil {
-		return CompactionStats{Absent: true}
-	}
-	return compactionStatsFromMetrics(db.Metrics())
-}
-
-// collectGatedCompactionStats samples a gated engine (pebble_gate.go). The
-// Metrics call holds a lease, so it cannot race Close; a store already
-// closing reports Absent.
-func collectGatedCompactionStats(d *GatedDB) CompactionStats {
+// CollectCompactionStats samples a gated engine (pebble_gate.go): the main
+// store, the AI-scan store, the OpenLibrary store. Cheap: Metrics() reads
+// in-memory counters and does not touch the LSM on disk. The Metrics call
+// holds a lease, so it cannot race Close; a store already closing reports
+// Absent.
+func CollectCompactionStats(d *GatedDB) CompactionStats {
 	if d == nil {
 		return CompactionStats{Absent: true}
 	}

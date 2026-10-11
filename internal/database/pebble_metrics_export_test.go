@@ -1,5 +1,5 @@
 // file: internal/database/pebble_metrics_export_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7f67b147-94c7-439f-8b61-2ea3da025abe
 // last-edited: 2026-10-11
 
@@ -25,7 +25,7 @@ func TestPebbleSampleFromDB_RealStore(t *testing.T) {
 	if err := p.db.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	s, ok := PebbleSampleFromDB(p.db.db)
+	s, ok := PebbleSampleFromDB(p.db)
 	if !ok {
 		t.Fatal("live store sampled as not ok")
 	}

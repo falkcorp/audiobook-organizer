@@ -1,7 +1,7 @@
 // file: internal/compactprogress/step_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f8a1c6e-2d7b-4c90-a5e4-9b1f0d7c2a83
-// last-edited: 2026-10-02
+// last-edited: 2026-10-11
 
 package compactprogress
 
@@ -293,9 +293,10 @@ func TestCollectCompactionStats_RealPebble(t *testing.T) {
 		require.NoError(t, db.Delete([]byte{byte(i >> 8), byte(i)}, pebble.NoSync))
 	}
 	require.NoError(t, db.Flush())
-	before := database.CollectCompactionStats(db)
+	gated := database.NewGatedDB(db)
+	before := database.CollectCompactionStats(gated)
 	require.NoError(t, db.Compact(context.Background(), nil, []byte{0xff}, false))
-	after := database.CollectCompactionStats(db)
+	after := database.CollectCompactionStats(gated)
 	assert.Greater(t, after.LiveTableSize, int64(0))
 	assert.Greater(t, after.WrittenBytes(), before.WrittenBytes(), "a compaction must show written bytes")
 	assert.Greater(t, after.BottomLevelSize, int64(0), "a full compaction lands data in the bottom level")

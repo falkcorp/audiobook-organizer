@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_dirty.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8508267e-71d5-4292-877d-1c3a803cedae
-// last-edited: 2026-08-09
+// last-edited: 2026-10-11
 //
 // Durable dirty-set for search-index reconciliation.
 //
@@ -89,10 +89,18 @@ var _ SearchIndexDirtyStore = (*PebbleStore)(nil)
 // drop exists to relieve, and would have stalled shutdown's write-lock
 // acquisition too.
 //
-// NoSync still writes the WAL into the OS page cache, so the set survives a
-// process crash, panic or SIGKILL. Only machine power-loss can lose it — and
-// a host that lost power mid-bulk-operation warrants a full reindex anyway,
-// which is a decision a human makes, not a fsync.
+// What NoSync does and does not guarantee (pebble v2.1.7, record.LogWriter):
+// a NoSync record is copied into the WAL writer's in-process block buffer,
+// and the flush goroutine writes a partial block to the file only when it is
+// woken by a sync request, a full block, or the engine closing. So a mark
+// reaches the OS page cache, and survives a later panic or SIGKILL, only once
+// some later synced write (any pebble.Sync write or SyncWAL, which this
+// store's book_file and candidate writers issue routinely), a full WAL block,
+// or Close has pushed it out; Close syncs the WAL even when its drain times
+// out (pebble_gate.go). A crash before then can lose the most recent marks,
+// as can machine power loss before an fsync. Losing them leaves books that
+// need a reindex unmarked; a crash or power loss mid-bulk-operation warrants
+// a full reindex anyway, which is a decision a human makes, not a fsync.
 //
 // Precedent: the Pebble write-stall that froze this app for 9 hours was
 // fixed the same way.

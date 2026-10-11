@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store_candidate_durability_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4f1e8a20-9c3b-4d7e-8a51-2b6f0c9d7e34
 // last-edited: 2026-10-11
 
@@ -29,7 +29,7 @@ func TestUpsertCandidate_SurvivesGracefulClose(t *testing.T) {
 
 	db, err := pebble.Open(dir, &pebble.Options{})
 	require.NoError(t, err)
-	store := &EmbeddingStore{db: NewGatedDB(db), owned: true}
+	store := newOwnedEmbeddingStoreForTest(db)
 
 	sim := 0.87
 	id, isNew, err := store.UpsertCandidateNew(DedupCandidate{
@@ -50,7 +50,7 @@ func TestUpsertCandidate_SurvivesGracefulClose(t *testing.T) {
 	// Reopen the SAME directory; the candidate must still be there.
 	db2, err := pebble.Open(dir, &pebble.Options{})
 	require.NoError(t, err)
-	store2 := &EmbeddingStore{db: NewGatedDB(db2), owned: true}
+	store2 := newOwnedEmbeddingStoreForTest(db2)
 	t.Cleanup(func() { _ = store2.Close() })
 
 	got, err := store2.GetCandidateByID(id)
