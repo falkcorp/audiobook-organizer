@@ -1,5 +1,5 @@
 // file: internal/versions/ingest_link_cas_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91d19c19-e81f-4b9b-9706-59e4789058f3
 // last-edited: 2026-10-11
 
@@ -7,6 +7,7 @@ package versions
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -298,5 +299,54 @@ func TestCreateIngestVersion_AdoptOnlyConcurrentSameLinkIsLinked(t *testing.T) {
 	}
 	if row := storedRow(t, pebble, book.ID, "f1"); row.VersionID != v.ID {
 		t.Errorf("row VersionID = %q, want %q", row.VersionID, v.ID)
+	}
+}
+
+// Adopt-only compares the row's stored path with the path the caller PLANNED,
+// raw, not with the cleaned path validation produces. A row stored with a
+// doubled separator (as an older writer could leave it) is the planned row:
+// the caller passes the same string back, so the hold must let it through and
+// the link must land. Comparing the cleaned path instead would refuse every
+// such row.
+func TestCreateIngestVersion_AdoptOnlyComparesRawPlannedPath(t *testing.T) {
+	pebble, book, filePath := ingestFixture(t, database.BookFile{})
+	v := strandVersion(t, pebble, book.ID, "")
+	raw := filepath.Dir(filePath) + string(filepath.Separator) + string(filepath.Separator) + filepath.Base(filePath)
+	if raw == filepath.Clean(raw) {
+		t.Fatalf("test path %q is already clean", raw)
+	}
+	modifyRow(t, pebble, book.ID, func(r *database.BookFile) { r.FilePath = raw })
+
+	got, linked, err := CreateIngestVersion(pebble, adoptParams(book.ID, raw, "", v.ID))
+	if err != nil || !linked || got == nil || got.ID != v.ID {
+		t.Fatalf("want %s linked for a row stored at %q, got ver=%v linked=%v err=%v", v.ID, raw, got, linked, err)
+	}
+	if row := storedRow(t, pebble, book.ID, "f1"); row.VersionID != v.ID || row.FilePath != raw {
+		t.Errorf("row: VersionID=%q FilePath=%q, want %q at %q", row.VersionID, row.FilePath, v.ID, raw)
+	}
+}
+
+// An adopt-only call whose row has left the book since the plan reports a
+// changed book_file (ErrBookFileChanged), not a version that cannot be
+// adopted: it was the row that changed. Nothing is written.
+func TestCreateIngestVersion_AdoptOnlyRowGoneIsBookFileChanged(t *testing.T) {
+	pebble, book, filePath := ingestFixture(t, database.BookFile{})
+	v := strandVersion(t, pebble, book.ID, "")
+	other, err := pebble.CreateBook(&database.Book{Title: "Other", FilePath: filePath, Format: "m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	if err := pebble.MoveBookFilesToBook([]string{"f1"}, book.ID, other.ID); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	got, linked, err := CreateIngestVersion(pebble, adoptParams(book.ID, filePath, "", v.ID))
+	if !errors.Is(err, ErrBookFileChanged) || errors.Is(err, ErrVersionNotAdoptable) || linked || got != nil {
+		t.Fatalf("want ErrBookFileChanged only, got ver=%v linked=%v err=%v", got, linked, err)
+	}
+	if vers, _ := pebble.GetBookVersionsByBookID(book.ID); len(vers) != 1 {
+		t.Errorf("want the 1 stranded version only, got %d", len(vers))
+	}
+	if row := storedRow(t, pebble, other.ID, "f1"); row.VersionID != "" {
+		t.Errorf("row linked to %q", row.VersionID)
 	}
 }

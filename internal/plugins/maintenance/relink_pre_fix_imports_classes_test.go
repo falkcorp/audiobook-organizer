@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_classes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8f3a1e-6c47-4d92-9e0b-2f7a41c8d6e3
 // last-edited: 2026-10-11
 
@@ -10,7 +10,8 @@ package maintenance
 // chips count and open the rows of each check. These tests pin the class of
 // each disagreement, the primary order for a row failing several, the
 // click-through (PlanResult.Page by class lists exactly the counted rows) and
-// that a row whose class moves after planning is refused at apply.
+// that a row whose action or failing checks change after planning is refused at
+// apply, while a sibling flip (would_link -> same_book_version) is applied.
 
 import (
 	"fmt"

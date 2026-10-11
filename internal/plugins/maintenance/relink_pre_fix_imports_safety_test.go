@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_safety_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 17b88502-dcdd-4723-9e9b-a13d2548dac6
 // last-edited: 2026-10-11
 
@@ -459,4 +459,39 @@ func TestRelinkPreFixImports_PlanLogsEvidenceCounts(t *testing.T) {
 	rep.mu.Unlock()
 	require.Contains(t, logs, "evidence over 3 link rows (3 would_link, 0 same_book_version): low risk 1, review 2;")
 	require.Contains(t, logs, "dates 2, format 0, location 0, missing 1")
+}
+
+// pfrGoneRowStore hides one row from GetBookFiles, as if it had left the book
+// between the trial and the apply.
+type pfrGoneRowStore struct {
+	versions.IngestStore
+	rowID string
+}
+
+func (s *pfrGoneRowStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	rows, err := s.IngestStore.GetBookFiles(id)
+	out := make([]database.BookFile, 0, len(rows))
+	for _, r := range rows {
+		if r.ID != s.rowID {
+			out = append(out, r)
+		}
+	}
+	return out, err
+}
+
+// N2: when the file record has left the book since the trial, the refusal
+// says the FILE RECORD changed, not the version.
+func TestRelinkPreFixImports_AdoptRowGoneNamesTheFileRecord(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	f.preFixImport(t, "g1", "")
+	_, d := pfrFreshDecision(t, f, "g1")
+
+	err := pfrAdopt(&pfrGoneRowStore{IngestStore: f.s, rowID: f.rowIDs["g1"]}, d, "")
+	require.Error(t, err)
+	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+	require.ErrorIs(t, err, versions.ErrBookFileChanged)
+	require.NotErrorIs(t, err, versions.ErrVersionNotAdoptable)
+	require.Contains(t, err.Error(), "the file record changed since the trial")
+	require.NotContains(t, err.Error(), "the version changed since the trial")
 }

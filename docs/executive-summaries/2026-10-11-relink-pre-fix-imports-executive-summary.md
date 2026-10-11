@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-relink-pre-fix-imports-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: c8b260fc-3025-4657-b8a0-573cbea538a5 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -22,15 +22,12 @@ Branch `feat/relink-pre-fix-imports`.
     is usually a file in an import folder or a Deluge download folder. Before
     this repair, purging one of these versions deleted no audio. Every file
     imported since 10-10 already works this way.
-    - "Purge now" deletes it immediately, whether the version was trashed or
-      not.
-    - **Trashing one of these versions does not give 14 days to change your
-      mind.** The daily cleanup (06:00) counts its 14 days from when the
-      version was created, not from when it was trashed. For anything
-      imported more than two weeks ago, the file is deleted at the next
-      cleanup; for a newer import, at the first cleanup after the version
-      turns 14 days old. A separate fix for that is pending; until it lands,
-      trashing one of these versions is nearly as final as purging it.
+    - "Purge now" deletes it immediately, but it only works on a version that
+      is already in the trash.
+    - Trashing one of these versions gives you 14 days to change your mind.
+      The daily cleanup (06:00) counts its 14 days from when the version was
+      trashed, so you can restore it from the trash page until then. After
+      that, the first cleanup deletes the file.
 - **A new repair does the attaching, and the owner reviews it first.** "Link
   pre-fix imports to their versions" is in the Repairs tab of the review page.
   Running a trial changes nothing. It lists every file of every book that has
@@ -55,10 +52,13 @@ Branch `feat/relink-pre-fix-imports`.
   disagree is marked **review**, with the reason, and needs a look before it
   is applied. The trial sorts these rows into groups by the first check they
   fail, checked in this order: file marked missing, file not in an import
-  folder, format disagrees, dates far apart. Each group is a button in the
+  folder, format disagrees, import and file record dated far apart. Each group is a button in the
   Repairs tab with its count, and clicking it lists exactly those rows; rows
   where every check agrees are their own group. A row that fails several
   checks is counted once, in the first group, and its details name the others.
+  If a row's checks change between the trial and the apply, apply refuses it;
+  if only a sibling file's link changes which kind of link it is (a
+  "link" that becomes a "same-book link"), it is still applied.
   The dates check goes last because it is the noisiest: every import from
   before 2026-08-25 fails it, because its file record was created later by a
   scan, so a row is grouped under it only when nothing else is wrong. The same

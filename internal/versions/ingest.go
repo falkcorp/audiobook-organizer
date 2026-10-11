@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -71,7 +71,8 @@ type IngestVersionParams struct {
 	// to the stranded version with this id (see strandedVersion) or to
 	// nothing, and no version is ever created. Anything else -- no stranded
 	// version, a different one, several, or a row that could not be read --
-	// returns ErrVersionNotAdoptable with nothing written. A repair pass sets
+	// returns ErrVersionNotAdoptable with nothing written; a row that was read
+	// but is no longer among the book's rows returns ErrBookFileChanged. A repair pass sets
 	// it (maintenance.relink-pre-fix-imports): a pass that planned "link this
 	// row to version V" must not mint a new version when V stopped being
 	// adoptable between its plan and its write, because no repair can take a
@@ -194,11 +195,10 @@ func LockTorrent(hash string) (unlock func()) {
 // inside the same compare-and-set and the write is refused unless it is still
 // a live version of the book with the same torrent hash: the trash handler
 // takes no lock, and a link landing on a trashed version would let a purge of
-// it delete the file. That purge can come at the very next daily trash
-// cleanup, because CleanupTrashedVersions counts its 14 days from the
-// version's creation, not from the trash (a separate fix is pending): any
-// version older than 14 days is purged at the first cleanup after its trash. This
-// narrows the race to the commit itself; it does not close it, because
+// it delete the file. That purge comes at the first daily trash cleanup after
+// the version has been in the trash for 14 days (CleanupTrashedVersions counts
+// from TrashedAt), or at once if the owner uses "Purge now" on the trashed
+// version. This narrows the race to the commit itself; it does not close it, because
 // UpdateBookVersion takes no lock this function can hold: a trash committed
 // in the same instant as the link can still win.
 //
@@ -279,6 +279,15 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			return nil, false, fmt.Errorf("%w: book_file %s of book %s, version %s: %s",
 				ErrBookFileChanged, files[target].ID, params.BookID, params.AdoptVersionID, why)
 		}
+	}
+
+	// Adopt-only with the rows read and the row not among them: the file
+	// record left the book since the plan. That is a changed row, not a
+	// version that cannot be adopted (the stranded-version check below would
+	// report the latter with the wrong lead).
+	if params.AdoptVersionID != "" && target < 0 && filesErr == nil {
+		return nil, false, fmt.Errorf("%w: book_file %s of book %s, version %s: it is no longer a row of the book",
+			ErrBookFileChanged, params.BookFileID, params.BookID, params.AdoptVersionID)
 	}
 
 	if target >= 0 && files[target].VersionID != "" {
