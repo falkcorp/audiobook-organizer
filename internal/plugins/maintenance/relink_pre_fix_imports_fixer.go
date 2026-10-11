@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -131,6 +130,11 @@ type relinkPreFixFixer struct{ p *Plugin }
 func newRelinkPreFixFixer(p *Plugin) *relinkPreFixFixer { return &relinkPreFixFixer{p: p} }
 
 var _ repairs.Fixer = (*relinkPreFixFixer)(nil)
+
+// pfrLog logs through internal/logger, which sanitizes each line. The pass runs
+// on user-controlled paths and torrent-derived IDs, so it never calls log/slog
+// directly (internal/logger TestGuard_NoDirectSlogCalls).
+var pfrLog = logger.New("maintenance")
 
 func (f *relinkPreFixFixer) ID() string    { return relinkPreFixFixerID }
 func (f *relinkPreFixFixer) Title() string { return "Link pre-fix imports to their versions" }
@@ -641,8 +645,8 @@ func pfrAdopt(store OpsStore, vs versions.IngestStore, d *pfrDecision, hash stri
 		}); err != nil && !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
 			// Not fatal: the link below hashes the file itself when the row
 			// still has none.
-			slog.Warn("relink-pre-fix-imports: identity hash not stored before the link",
-				"book_id", logger.SanitizeLogValue(fl.BookID), "book_file_id", fl.ID, "err", err)
+			pfrLog.Warn("relink-pre-fix-imports: identity hash not stored before the link for book %s (book_file %s): %s",
+				logger.SanitizeLogValue(fl.BookID), logger.SanitizeLogValue(fl.ID), logger.SanitizeLogValue(err.Error()))
 		}
 	}
 	ver, linked, err := versions.CreateIngestVersion(vs, versions.IngestVersionParams{
@@ -704,9 +708,9 @@ func pfrIdentityHash(vs versions.IngestStore, fl database.BookFile) string {
 	}
 	h, err := filehash.BookFileHash(path)
 	if err != nil {
-		slog.Warn("relink-pre-fix-imports: identity hash failed; left for backfill-file-hashes",
-			"book_id", logger.SanitizeLogValue(fl.BookID), "book_file_id", fl.ID,
-			"file_path", logger.SanitizeLogValue(fl.FilePath), "err", err)
+		pfrLog.Warn("relink-pre-fix-imports: identity hash failed for %s (book %s, book_file %s); left for backfill-file-hashes: %s",
+			logger.SanitizeLogValue(fl.FilePath), logger.SanitizeLogValue(fl.BookID), logger.SanitizeLogValue(fl.ID),
+			logger.SanitizeLogValue(err.Error()))
 		return ""
 	}
 	return h
