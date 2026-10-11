@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -101,12 +102,18 @@ const (
 // FileHash, not VersionID):
 //   - versions.filesForVersion: a version swap moves the rows linked to each
 //     version. An unlinked row matches BOTH versions and moves with either.
-//   - versions.PurgeVersion: purging a version (purge-now, or
-//     CleanupTrashedVersions 14 days after a trash) runs os.Remove on every
-//     row linked to it. Before the link, purging one of these versions deleted
-//     no audio; after it, purging deletes the linked file -- for these rows
-//     usually a file in an import or Deluge download folder. This is the
-//     model every post-fix import already has; the trial output says so.
+//   - versions.PurgeVersion: purging a version runs os.Remove on every row
+//     linked to it. Before the link, purging one of these versions deleted no
+//     audio; after it, purging deletes the linked file -- for these rows
+//     usually a file in an import or Deluge download folder. "Purge now"
+//     (handlePurgeVersion) does that at once, whatever the version's status.
+//     Trashing a linked version does it at the next daily trash cleanup
+//     (06:00), not 14 days later: CleanupTrashedVersions counts its 14 days
+//     from the version's creation, not from the trash, and every version this
+//     pass links was created before 2026-10-10. A separate fix
+//     (fix/trash-cleanup-from-trashed-at) is pending; until it lands, trashing
+//     one of these versions is as good as purging it. This is the model every
+//     post-fix import already has; the trial output says so.
 //   - MarkFileImportedFromDeluge matching, whose only caller is dormant.
 //
 // Nearly every pre-fix row in prod is hashless: until 2026-10-10 the importer
@@ -114,7 +121,9 @@ const (
 // would_link decision rests on "one unnamed live version, one unlinked row".
 // Each link row therefore carries evidence (pfrLinkEvidence) comparing the
 // version with the row on what one import would have made agree -- dates,
-// format, location, presence -- and is Review risk when any disagrees.
+// format, location, presence -- and is Review risk when any disagrees. The
+// plan logs how many link rows each check flags (pfrEvidenceSummary) to the
+// repairs.plan op log, so the owner can size each group before applying.
 //
 // PLAN (read-only; repairs.plan is the dry run). One bulk read of every
 // book_file row finds the books worth looking at; each book is then
@@ -144,6 +153,13 @@ const (
 // same_book_version through pfrSameBook. A concurrent writer's change to any
 // other field of the row survives. Nothing is ever deleted, and no version is
 // created or changed.
+//
+// THE RESIDUAL TRASH RACE. Each write re-reads the target version inside its
+// compare-and-set and refuses one no longer live, but the version trash
+// handler takes no lock this pass can hold, so a trash committed in the same
+// instant as the link can still win. The row is then linked to a trashed
+// version, and until the trash-window fix lands its file is deleted at the
+// next daily cleanup (see PurgeVersion above).
 //
 // CONCURRENCY. Rows are book_file rows and BookIDs is the one book, so the
 // engine's union-find runs every row of a book in one partition, in order: no
@@ -175,10 +191,13 @@ func (f *relinkPreFixFixer) Description() string {
 		"torrent it belongs to) that no file points at. Apply links each selected file to its own book's version " +
 		"and fills the file's checksum when it has none; it changes nothing else on the file record, never creates " +
 		"or deletes a version or a file record, and never changes a version. Once a file is linked, purging that " +
-		"version (purge now, or the automatic cleanup 14 days after it is trashed) DELETES the file from disk, " +
-		"usually a file in an import or download folder. Before the link, purging deleted no audio. Rows marked " +
-		"review need a look before applying; each row's evidence says why (for most, the version and the file " +
-		"disagree on date, format, location or presence)."
+		"version DELETES the file from disk, usually a file in an import or download folder; before the link, " +
+		"purging deleted no audio. 'Purge now' deletes it at once, trashed or not. Trashing the version deletes it " +
+		"at the next daily cleanup (06:00), not 14 days later: the cleanup counts its 14 days from when the version " +
+		"was created, and every one of these versions is older than that (a fix is pending). A trash in the same " +
+		"instant as the link can still win the race. Rows marked review need a look before applying; each row's " +
+		"evidence says why (the version and the file disagree on date, format, location or presence), and the " +
+		"trial's operation log counts the rows each check flags."
 }
 
 // pfrStores returns the fixer's two store views.
@@ -295,7 +314,45 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 	for _, rows := range perBook {
 		out = append(out, rows...)
 	}
+	if rep != nil {
+		_ = rep.Log(slog.LevelInfo, pfrEvidenceSummary(out))
+	}
 	return out, nil
+}
+
+// pfrEvidenceSummary counts, over the plan's link rows (would_link and
+// same_book_version), how many each evidence check flags, plus how many are
+// low risk, so the owner can size each Review group before applying: a
+// check that flags nearly every row (dates for every import before
+// 2026-08-25, location for an unregistered download folder) carries little
+// signal. The checks overlap (one row may fail several), so they do not sum
+// to the Review total; same_book_version rows are Review by class. Counted
+// before the framework guards, which may still skip a row. Logged to the
+// repairs.plan op log: the Repairs lane tallies rows by class only.
+func pfrEvidenceSummary(rows []repairs.Row) string {
+	byCheck := map[string]int{}
+	var links, low, sameBook int
+	for i := range rows {
+		d, ok := rows[i].Detail.(*pfrDecision)
+		if !ok || d == nil || !d.links() {
+			continue
+		}
+		links++
+		if d.class == pfrClassSameBook {
+			sameBook++
+		}
+		if rows[i].Risk == repairs.RiskLow {
+			low++
+		}
+		for _, c := range d.disagree {
+			byCheck[c]++
+		}
+	}
+	return fmt.Sprintf("%s evidence over %d link rows (%d %s, %d %s): low risk %d, review %d; "+
+		"rows each check flags (a row can fail several): %s %d, %s %d, %s %d, %s %d",
+		relinkPreFixFixerID, links, links-sameBook, pfrClassLink, sameBook, pfrClassSameBook, low, links-low,
+		pfrCheckDates, byCheck[pfrCheckDates], pfrCheckFormat, byCheck[pfrCheckFormat],
+		pfrCheckLocation, byCheck[pfrCheckLocation], pfrCheckMissing, byCheck[pfrCheckMissing])
 }
 
 // pfrErrorRows reports every row of bookID as unclassified.
@@ -600,10 +657,14 @@ const (
 // pfrLinkEvidence compares d's target version with its row on what one
 // import would have made agree, appends one evidence line per check, and
 // returns the checks that disagree, in a fixed order (empty: all agree). A
-// value it cannot read (a zero date, an empty format) counts as disagreeing:
-// the row then needs a look. It reads only the version and the row, so a
-// row's checks do not change when a sibling's adoption turns its would_link
-// into same_book_version (the target is the same version).
+// value it cannot read (a zero date; a row with neither a format nor a file
+// extension) counts as disagreeing: the row then needs a look. The version's
+// format is the exception: no import has ever recorded one (the importer
+// passes Book.Format, which it never sets), so an empty version format is
+// neutral and the row's format is compared with its file extension instead.
+// It reads only the version and the row, so a row's checks do not change when
+// a sibling's adoption turns its would_link into same_book_version (the target
+// is the same version).
 func pfrLinkEvidence(d *pfrDecision, env pfrEnvironment) []string {
 	v, fl := d.target, d.file
 	var disagree []string
@@ -635,9 +696,12 @@ func pfrLinkEvidence(d *pfrDecision, env pfrEnvironment) []string {
 
 	vf, rf := pfrFormat(v.Format), pfrFormat(fl.Format)
 	ext := pfrFormat(filepath.Ext(fl.FilePath))
-	add(pfrCheckFormat, vf != "" && (rf != "" || ext != "") && (rf == "" || rf == vf) && (ext == "" || ext == vf),
-		fmt.Sprintf("version format %s, file record format %s, file extension %s",
-			pfrHashLabel(vf), pfrHashLabel(rf), pfrHashLabel(ext)))
+	verWords := "version format " + vf
+	if vf == "" {
+		verWords = "version format not recorded (imports never set it; not compared)"
+	}
+	add(pfrCheckFormat, pfrFormatsAgree(vf, rf, ext), fmt.Sprintf("%s, file record format %s, file extension %s",
+		verWords, pfrHashLabel(rf), pfrHashLabel(ext)))
 
 	where, underImport := pfrLocation(fl.FilePath, env)
 	add(pfrCheckLocation, underImport, where)
@@ -647,6 +711,28 @@ func pfrLinkEvidence(d *pfrDecision, env pfrEnvironment) []string {
 		false: "the file record is not marked missing",
 	}[fl.Missing])
 	return disagree
+}
+
+// pfrFormatsAgree: the row's format and its file extension (at least one
+// known) agree with each other and, when the version records a format (vf not
+// empty; no import has set one), with that too. All three are normalized
+// (pfrFormat).
+func pfrFormatsAgree(vf, rf, ext string) bool {
+	if rf == "" && ext == "" {
+		return false
+	}
+	known := make([]string, 0, 3)
+	for _, f := range []string{vf, rf, ext} {
+		if f != "" {
+			known = append(known, f)
+		}
+	}
+	for _, f := range known[1:] {
+		if f != known[0] {
+			return false
+		}
+	}
+	return true
 }
 
 // pfrFormat normalizes a format or extension for comparison ("M4B", ".m4b"
@@ -845,8 +931,12 @@ func pfrAdopt(vs versions.IngestStore, d *pfrDecision, hash string) error {
 		FileHash: hash, NoFileRead: true,
 	})
 	switch {
-	case errors.Is(err, versions.ErrBookFileChanged), errors.Is(err, versions.ErrVersionNotAdoptable):
-		return fmt.Errorf("%w: adopt version %s for file %s: %w", repairs.ErrChangedSincePlan, d.target.ID, fl.ID, err)
+	case errors.Is(err, versions.ErrBookFileChanged):
+		return fmt.Errorf("%w: the file record changed since the trial: adopt version %s for file %s: %w",
+			repairs.ErrChangedSincePlan, d.target.ID, fl.ID, err)
+	case errors.Is(err, versions.ErrVersionNotAdoptable):
+		return fmt.Errorf("%w: the version changed since the trial: adopt version %s for file %s: %w",
+			repairs.ErrChangedSincePlan, d.target.ID, fl.ID, err)
 	case err != nil:
 		return fmt.Errorf("adopt version %s for file %s: %w", d.target.ID, fl.ID, err)
 	case ver == nil || ver.ID != d.target.ID:

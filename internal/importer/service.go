@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-11
 
@@ -228,7 +228,12 @@ const (
 	TorrentLinkNoteFileFailed = "book file row not recorded"
 	// TorrentLinkNoteLinkFailed: the book_file row and the version carrying
 	// the hash were both created, but the write linking them (VersionID and
-	// DelugeHash on the row) failed, so the row does not carry the hash.
+	// DelugeHash on the row) did not land: it failed, or its compare-and-set
+	// refused the row because another writer changed it first (see
+	// versions.CreateIngestVersion). The row does not carry the hash; after a
+	// refusal it keeps the other writer's VersionID, DelugeHash or path. The
+	// version still holds the torrent index, so a retry is refused as
+	// already linked.
 	TorrentLinkNoteLinkFailed = "book file row not linked to its version"
 	// TorrentLinkNoteAlreadyLinked: a live version of another book took the
 	// hash in the one-to-one torrent index AFTER the already-linked guard

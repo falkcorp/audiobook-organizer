@@ -1,5 +1,5 @@
 // file: internal/versions/ingest_link_cas_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91d19c19-e81f-4b9b-9706-59e4789058f3
 // last-edited: 2026-10-11
 
@@ -7,6 +7,7 @@ package versions
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -239,4 +240,63 @@ func TestCreateIngestVersion_AdoptOnlyNoFileReadUsesCallerHash(t *testing.T) {
 			t.Errorf("row: VersionID=%q FileHash=%q, want linked keeping the backfill's hash", row.VersionID, row.FileHash)
 		}
 	})
+}
+
+// Adopt-only holds the row to the CALLER'S plan, not only to this call's own
+// read: a row whose path, torrent hash or version link changed after the
+// caller planned it and before CreateIngestVersion read it is refused with
+// ErrBookFileChanged and nothing written -- including a row another writer
+// already linked to the very version the caller wanted, because the plan the
+// owner reviewed had it unlinked.
+func TestCreateIngestVersion_AdoptOnlyHoldsRowToThePlan(t *testing.T) {
+	const torrent = "4123456789abcdef0123456789abcdef01234567"
+	cases := []struct {
+		name string
+		// drift changes the stored row before the call; v is the stranded
+		// version the caller plans to adopt.
+		drift func(r *database.BookFile, v *database.BookVersion)
+	}{
+		{"path changed", func(r *database.BookFile, _ *database.BookVersion) { r.FilePath += ".moved" }},
+		{"torrent hash gained", func(r *database.BookFile, _ *database.BookVersion) { r.DelugeHash = torrent }},
+		{"linked to the planned version", func(r *database.BookFile, v *database.BookVersion) { r.VersionID = v.ID }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pebble, book, filePath := ingestFixture(t, database.BookFile{})
+			v := strandVersion(t, pebble, book.ID, "")
+			modifyRow(t, pebble, book.ID, func(r *database.BookFile) { tc.drift(r, v) })
+			before := storedRow(t, pebble, book.ID, "f1")
+
+			got, linked, err := CreateIngestVersion(pebble, adoptParams(book.ID, filePath, "", v.ID))
+			if !errors.Is(err, ErrBookFileChanged) || linked || got != nil {
+				t.Fatalf("want ErrBookFileChanged with nothing returned, got ver=%v linked=%v err=%v", got, linked, err)
+			}
+			if after := storedRow(t, pebble, book.ID, "f1"); !reflect.DeepEqual(after, before) {
+				t.Errorf("row written:\n before %+v\n after  %+v", before, after)
+			}
+			if vers, _ := pebble.GetBookVersionsByBookID(book.ID); len(vers) != 1 {
+				t.Errorf("want the 1 stranded version only, got %d", len(vers))
+			}
+		})
+	}
+}
+
+// A writer that links the row to the SAME version inside the read-to-write
+// window (after the plan check passed) leaves the row exactly as the link
+// would: the compare-and-set reports it linked, not refused.
+func TestCreateIngestVersion_AdoptOnlyConcurrentSameLinkIsLinked(t *testing.T) {
+	pebble, book, filePath := ingestFixture(t, database.BookFile{})
+	v := strandVersion(t, pebble, book.ID, "")
+	store := &interleaveIngestStore{PebbleStore: pebble}
+	store.afterVersionsR = func() {
+		store.afterVersionsR = nil
+		modifyRow(t, pebble, book.ID, func(r *database.BookFile) { r.VersionID = v.ID })
+	}
+	got, linked, err := CreateIngestVersion(store, adoptParams(book.ID, filePath, "", v.ID))
+	if err != nil || !linked || got == nil || got.ID != v.ID {
+		t.Fatalf("want %s linked, got ver=%v linked=%v err=%v", v.ID, got, linked, err)
+	}
+	if row := storedRow(t, pebble, book.ID, "f1"); row.VersionID != v.ID {
+		t.Errorf("row VersionID = %q, want %q", row.VersionID, v.ID)
+	}
 }

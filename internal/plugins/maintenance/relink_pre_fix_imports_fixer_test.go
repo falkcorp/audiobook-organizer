@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c719ee18-e470-4f27-8a02-a0cf5b7074cd
 // last-edited: 2026-10-11
 
@@ -47,7 +47,11 @@ func newPreFixFixture(t *testing.T) *fragFixture {
 }
 
 // version creates a version of bookID carrying hash: active when the book has
-// none, alt otherwise (the store allows one active version per book).
+// none, alt otherwise (the store allows one active version per book). Its
+// Format is empty, as on every version an import has ever created: the
+// importer passes Book.Format, which it never sets (importer
+// TestImportFile_VersionFormatIsNotRecorded), so the format evidence must
+// treat an empty version format as neutral.
 func (f *fragFixture) version(t *testing.T, bookID, hash string) *database.BookVersion {
 	t.Helper()
 	status := database.BookVersionStatusActive
@@ -58,7 +62,7 @@ func (f *fragFixture) version(t *testing.T, bookID, hash string) *database.BookV
 	if hash != "" {
 		source = "deluge"
 	}
-	v, err := f.s.CreateBookVersion(&database.BookVersion{BookID: bookID, Status: status, Format: "m4b",
+	v, err := f.s.CreateBookVersion(&database.BookVersion{BookID: bookID, Status: status, Format: "",
 		Source: source, TorrentHash: hash})
 	require.NoError(t, err)
 	return v

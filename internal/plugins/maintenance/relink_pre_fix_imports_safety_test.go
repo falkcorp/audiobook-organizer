@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_safety_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 17b88502-dcdd-4723-9e9b-a13d2548dac6
 // last-edited: 2026-10-11
 
@@ -10,7 +10,9 @@ package maintenance
 // compare-and-set (R3a/R3b), pfrSameBook's compare-and-set (R4), the
 // same-book holder's status (M10), and the per-row link evidence (S1).
 // R1-R4 come from the round-1 review of the branch; R3 is split in two because
-// the compare-and-set refuses a row whose path moved (see R3b).
+// the compare-and-set refuses a row whose path moved (see R3b). The round-2
+// review added RV4a/RV4b (adopt-only holds the row to the plan, not only to
+// CreateIngestVersion's own read) and the empty version format (B2).
 
 import (
 	"context"
@@ -256,6 +258,9 @@ func TestRelinkPreFixImports_EvidenceAgreeIsLowRisk(t *testing.T) {
 	}
 	require.NotContains(t, ev, "REVIEW")
 	require.Contains(t, ev, "import path "+f.root)
+	// The fixture's version has no format, as every imported version: that is
+	// neutral, not a disagreement.
+	require.Contains(t, ev, "version format not recorded")
 }
 
 // S1: each disagreement alone makes a would_link row Review risk, names the
@@ -271,11 +276,22 @@ func TestRelinkPreFixImports_EvidenceDisagreeIsReview(t *testing.T) {
 			// later backfill, scan or fixer, not from the import.
 			book := f.book(t, "x", "Placeholder Dates", f.path("imports/x.m4b"), nil)
 			_, err := f.s.CreateBookVersion(&database.BookVersion{BookID: book, Status: database.BookVersionStatusActive,
-				Format: "m4b", Source: "imported", IngestDate: time.Now().Add(-30 * 24 * time.Hour)})
+				Source: "imported", IngestDate: time.Now().Add(-30 * 24 * time.Hour)})
 			require.NoError(t, err)
 			f.importRow(t, "x", book, "", "")
 		}},
-		{pfrCheckFormat, func(t *testing.T, f *fragFixture) {
+		{pfrCheckFormat + " (row vs extension)", func(t *testing.T, f *fragFixture) {
+			// No version format (as on every import): the row's format is
+			// compared with its file's extension.
+			book := f.book(t, "x", "Placeholder Format Ext", f.path("imports/x.m4b"), nil)
+			f.version(t, book, "")
+			p := f.file(t, "imports/x.m4b", 333)
+			bf := &database.BookFile{BookID: book, FilePath: p, Format: "mp3", FileSize: 333, TrackNumber: 1}
+			require.NoError(t, f.s.CreateBookFile(bf))
+			f.rowIDs["x"] = bf.ID
+		}},
+		{pfrCheckFormat + " (version set)", func(t *testing.T, f *fragFixture) {
+			// A version that does record a format must agree with the row.
 			book := f.book(t, "x", "Placeholder Format", f.path("imports/x.m4b"), nil)
 			_, err := f.s.CreateBookVersion(&database.BookVersion{BookID: book, Status: database.BookVersionStatusActive,
 				Format: "mp3", Source: "imported"})
@@ -308,8 +324,9 @@ func TestRelinkPreFixImports_EvidenceDisagreeIsReview(t *testing.T) {
 			require.True(t, r.Applicable())
 			require.Equal(t, repairs.RiskReview, r.Risk, "%v", r.Evidence)
 			ev := strings.Join(r.Evidence, "\n")
-			require.Contains(t, ev, "REVIEW ("+tc.check+")")
-			require.Equal(t, 1, strings.Count(ev, "REVIEW"), "only %s should disagree: %s", tc.check, ev)
+			check, _, _ := strings.Cut(tc.check, " ")
+			require.Contains(t, ev, "REVIEW ("+check+")")
+			require.Equal(t, 1, strings.Count(ev, "REVIEW"), "only %s should disagree: %s", check, ev)
 		})
 	}
 }
@@ -356,4 +373,88 @@ func TestRelinkPreFixImports_LocationChecksRootFirst(t *testing.T) {
 		require.Equal(t, tc.want, ok, "%s: %s", tc.name, where)
 		require.Contains(t, where, tc.wantIn, tc.name)
 	}
+}
+
+// preReadStore runs hook once, BEFORE CreateIngestVersion's own row read
+// (GetBookFiles): after Apply's locked re-plan and before the read the link
+// write's compare-and-set compares against. A writer that takes neither lock
+// can land there (Apply's Beat and journal write sit in that window).
+type preReadStore struct {
+	versions.IngestStore
+	once sync.Once
+	hook func()
+}
+
+func (s *preReadStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	s.once.Do(s.hook)
+	return s.IngestStore.GetBookFiles(id)
+}
+
+// RV4a: a repoint that lands between the locked re-plan and
+// CreateIngestVersion's row read is refused, not linked at a path the owner
+// never reviewed. Before round 2 the compare-and-set held the row only to
+// CreateIngestVersion's own read, which already saw the moved path.
+func TestRelinkPreFixImports_AdoptRefusesRepointBeforeIngestRead(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	book, _ := f.preFixImport(t, "p1", "")
+	_, d := pfrFreshDecision(t, f, "p1")
+	moved := f.file(t, "library/p1-moved.m4b", 999)
+	is := &preReadStore{IngestStore: f.s, hook: func() {
+		_, err := f.s.ModifyBookFile(book, f.rowIDs["p1"], func(r *database.BookFile) error { r.FilePath = moved; return nil })
+		require.NoError(t, err)
+	}}
+	err := pfrAdopt(is, d, "")
+	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+	require.ErrorIs(t, err, versions.ErrBookFileChanged)
+	row := f.bookFile(t, "p1")
+	require.Empty(t, row.VersionID)
+	require.Equal(t, moved, row.FilePath)
+}
+
+// RV4b: a hashless row that gains a torrent hash in the same window is
+// refused, not linked to the hashless version while claiming the torrent.
+func TestRelinkPreFixImports_AdoptRefusesHashGainedBeforeIngestRead(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	book, _ := f.preFixImport(t, "p2", "")
+	_, d := pfrFreshDecision(t, f, "p2")
+	is := &preReadStore{IngestStore: f.s, hook: func() {
+		_, err := f.s.ModifyBookFile(book, f.rowIDs["p2"], func(r *database.BookFile) error { r.DelugeHash = pfrHashA; return nil })
+		require.NoError(t, err)
+	}}
+	err := pfrAdopt(is, d, "")
+	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+	require.ErrorIs(t, err, versions.ErrBookFileChanged)
+	row := f.bookFile(t, "p2")
+	require.Empty(t, row.VersionID)
+	require.Equal(t, pfrHashA, row.DelugeHash)
+}
+
+// The plan logs, to the repairs.plan op log, how many link rows each evidence
+// check flags, so the owner can size each Review group before applying.
+func TestRelinkPreFixImports_PlanLogsEvidenceCounts(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	f.preFixImport(t, "agree", "")
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	for _, role := range []string{"dates", "both"} {
+		book := f.book(t, role, "Placeholder "+role, f.path("imports/"+role+".m4b"), nil)
+		_, err := f.s.CreateBookVersion(&database.BookVersion{BookID: book, Status: database.BookVersionStatusActive,
+			Source: "imported", IngestDate: old})
+		require.NoError(t, err)
+		f.importRow(t, role, book, "", "")
+		if role == "both" {
+			_, err := f.s.ModifyBookFile(book, f.rowIDs[role], func(r *database.BookFile) error { r.Missing = true; return nil })
+			require.NoError(t, err)
+		}
+	}
+	rep := &fakeReporter{}
+	_, err := newRelinkPreFixFixer(f.p).Plan(context.Background(), nil, rep)
+	require.NoError(t, err)
+	rep.mu.Lock()
+	logs := strings.Join(rep.logs, "\n")
+	rep.mu.Unlock()
+	require.Contains(t, logs, "evidence over 3 link rows (3 would_link, 0 same_book_version): low risk 1, review 2;")
+	require.Contains(t, logs, "dates 2, format 0, location 0, missing 1")
 }
