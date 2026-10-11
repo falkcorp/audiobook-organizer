@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.39.0
+# version: 2.40.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-10
+# last-edited: 2026-10-11
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -718,7 +718,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard ops-check bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet
+ci: mocks-check staticcheck sdkguard ops-check bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool
@@ -866,6 +866,9 @@ lint-errcheck-full: ## Same, with a count — use this to verify a new exclusion
 
 lint-errcheck-ratchet: ## Ratchet gate: fails if errcheck findings went up (or down without lowering .errcheck-baseline)
 	@bash scripts/check-errcheck-ratchet.sh
+
+lint-deadcode-ratchet: ## Ratchet gate: fails if a NEW production function becomes unreachable from every main (deadcode)
+	@python3 scripts/deadcode-ratchet.py
 
 lint-width: ## Interface-width gate (interfacebloat + nolintlint), same selector CI uses
 	golangci-lint run --enable-only interfacebloat,nolintlint ./...

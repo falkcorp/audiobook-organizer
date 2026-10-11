@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_ci_remote.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: b886cb9e-2020-4cfc-806d-6002504520df
-# last-edited: 2026-09-26
+# last-edited: 2026-10-11
 
 """Unit tests for scripts/ci_remote.py: CI_NODES parsing, decode routing,
 sharding, scheduling, coverage merging and the generated remote scripts.
@@ -179,7 +179,7 @@ class ShardingTest(unittest.TestCase):
         legs = cr.build_legs([], cr.Timings(None), ["linux"])
         names = {l.name for l in legs}
         # every non-test prerequisite of `make ci` (coverage-check runs after the merge)
-        for want in ("vet", "staticcheck", "errcheck-ratchet", "sdkguard", "bench-check",
+        for want in ("vet", "staticcheck", "errcheck-ratchet", "deadcode-ratchet", "sdkguard", "bench-check",
                      "fmt-check", "web-test", "mocks-check"):
             self.assertIn(want, names)
         self.assertTrue(next(l for l in legs if l.name == "mocks-check").local_only)
