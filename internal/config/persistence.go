@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -1688,7 +1688,7 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	safeConfig.HardcoverAPIToken = ""
 	safeConfig.BasicAuthPassword = ""
 
-	blobJSON, err := json.Marshal(safeConfig)
+	blobJSON, err := marshalConfigBlob(safeConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config blob: %w", err)
 	}
@@ -1820,6 +1820,42 @@ func cloneMetadataSources(src []MetadataSource) []MetadataSource {
 	return out
 }
 
+// bootOnlyConfigKeys are the JSON keys of the settings that only take effect
+// at process start (see pinBootOnlySettings). They are never written to
+// config_blob: the running value comes from the config file or environment on
+// every boot, so a persisted copy can only go stale and make the next boot warn
+// about a mismatch the operator just fixed. GET /api/v1/config does not read the
+// blob (it reports MaskSecrets(Snapshot())), so it is unaffected.
+var bootOnlyConfigKeys = []string{"enabled_sort_indexes"}
+
+// isBootOnlyConfigKey reports whether key (a flattened dotted audit key or a
+// top-level JSON key) is, or sits under, a boot-only setting.
+func isBootOnlyConfigKey(key string) bool {
+	for _, k := range bootOnlyConfigKeys {
+		if key == k || strings.HasPrefix(key, k+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// marshalConfigBlob renders cfg as the config_blob JSON with every boot-only
+// key removed.
+func marshalConfigBlob(cfg Config) ([]byte, error) {
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	for _, k := range bootOnlyConfigKeys {
+		delete(m, k)
+	}
+	return json.Marshal(m)
+}
+
 // pinBootOnlySettings overwrites the settings that only take effect at
 // process start with the value the process actually started with, whatever a
 // stored layer (blob, legacy row) says.
@@ -1832,9 +1868,14 @@ func cloneMetadataSources(src []MetadataSource) []MetadataSource {
 // past save froze into the blob) that was never built. UpdateConfig refuses a
 // PUT that changes it; the config file or the ENABLED_SORT_INDEXES environment
 // variable plus a restart is the only way to change it.
+//
+// SaveConfigToDatabase no longer writes the key (bootOnlyConfigKeys), so a
+// non-nil stored value here can only come from a blob saved before that change
+// or a hand edit. The warning therefore fires once for such an install: the
+// operator's next settings save rewrites the blob without the key.
 func pinBootOnlySettings(c *Config, bootSortIndexes []string) {
 	if c.EnabledSortIndexes != nil && !sameSortIndexSet(c.EnabledSortIndexes, bootSortIndexes) {
-		configLog.Warn("config: stored enabled_sort_indexes=%v ignored; this process built %v. "+
+		configLog.Warn("stored enabled_sort_indexes=%v ignored; this process built %v. "+
 			"It is read once at startup: set it in the config file or the ENABLED_SORT_INDEXES "+
 			"environment variable (space-separated) and restart",
 			c.EnabledSortIndexes, bootSortIndexes)

@@ -1,7 +1,7 @@
 // file: internal/config/blob_default_audit.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b8d5f60-c179-4e34-a5d2-70f9e1c46b8a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package config
 
@@ -72,6 +72,11 @@ func defaultsPreservedOverBlob(blobStr string, loaded Config) []string {
 	var inherited []string
 	for key, val := range effLeaves {
 		if _, present := stored[key]; present {
+			continue
+		}
+		// Boot-only keys are deliberately never in the blob and their value
+		// comes from the config file or environment, not a shipped default.
+		if isBootOnlyConfigKey(key) {
 			continue
 		}
 		if isZeroJSON(val) {
