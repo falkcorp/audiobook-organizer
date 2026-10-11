@@ -324,11 +324,14 @@ into one of the curated sections below, is a normal direct edit.
       the viper defaults (the same reads InitConfig does) instead of copying values
       by hand, and extend `initconfig_reads_every_key_test.go`'s enumeration to it.
       `log_retention_days` and `enabled_sort_indexes` are already safe there.
-- [ ] **DELUGE-PASSWORD-ENV-VS-BLOB** (owner decision) `DELUGE_WEB_PASSWORD` now
+- [x] **DELUGE-PASSWORD-ENV-VS-BLOB** (owner decision) `DELUGE_WEB_PASSWORD` now
       reaches `AppConfig` from the environment, but `SaveConfigToDatabase` does not
       blank it like the other secrets, so the first settings save freezes the env
       password into the stored blob in plaintext and later env rotations are
       ignored; decide whether it becomes a real secret row or env-authoritative.
+      Done 2026-10-11: env-authoritative. The five `deluge_*` settings are locked by
+      `DELUGE_*` or the config file (`SettingLockedBy`), and a locked password is no
+      longer written to the blob.
 
 - [ ] **CONFIG-TEST-ISOLATION** `TestUpdateConfig_WithoutRemovedKeyUnaffected`
       (`internal/config`) returns 403 under `go test -shuffle` (7 of 8 seeds

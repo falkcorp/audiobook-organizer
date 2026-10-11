@@ -1,7 +1,7 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
-<!-- last-edited: 2026-09-11 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Configuration Reference
 
@@ -67,6 +67,27 @@ below):
 | `JSON_BODY_LIMIT_MB` | `json_body_limit_mb` | `1` |
 | `UPLOAD_BODY_LIMIT_MB` | `upload_body_limit_mb` | `10` |
 | `ENABLE_AUTH` | `enable_auth` | `true` |
+| `DELUGE_WEB_URL` | `deluge_web_url` | `http://deluge.example.invalid:8112` |
+| `DELUGE_WEB_PASSWORD` | `deluge_web_password` | (the Deluge Web UI password) |
+| `DELUGE_DISCOVERY_LABEL` | `deluge_discovery_label` | `audiobooks` |
+| `DELUGE_DISCOVERY_ENABLED` | `deluge_discovery_enabled` | `true` |
+| `DELUGE_MOVE_ENABLED` | `deluge_move_enabled` | `true` |
+
+### Deluge settings precedence
+
+The five Deluge settings above are operator-authoritative. A value from the
+environment variable, or from the same key in the config file, **wins over the
+value saved in the database** (including a saved empty value), and Settings shows
+the field read-only with a note naming the source. The environment wins over the
+config file when both are set. An empty variable or an empty config-file value
+does not count as set. When neither source sets a key, the saved value (set with
+`PUT /api/v1/config`) is used, as for every other setting. A Deluge password
+supplied this way is not copied into the saved settings, and it is shown only
+masked.
+
+Changing a locked key with `PUT /api/v1/config` is accepted and saved like the
+other locked settings, but the environment or config-file value is applied again
+on the next start.
 
 ## Config File Keys
 

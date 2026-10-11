@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.152.0
+// version: 1.153.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -2156,6 +2156,12 @@ func ResetExplicitFlagsForTest() {
 // actually renders. The category-1 auth keys (OAuth, CF Access, ABS secrets) are
 // deliberately absent: they have no UI control to annotate, and naming a secret's
 // environment variable in an API response buys nothing.
+//
+// The Deluge keys are the one secret-bearing exception, by owner decision
+// (2026-10-11): the Deluge tab renders them, so a locked one must say so.
+// deluge_web_password is listed with its variable NAME only — the name is public
+// documentation, and the value still reaches the client only masked
+// (UpdateService.MaskSecrets). Nothing in this file may log or return the value.
 var envLockedSettings = map[string]string{
 	"activity_backend":           "ACTIVITY_BACKEND",
 	"activity_db_move_on_change": "ACTIVITY_DB_MOVE_ON_CHANGE",
@@ -2164,6 +2170,61 @@ var envLockedSettings = map[string]string{
 	// supplies DATABASE_PATH, so the Settings page cannot present a field that
 	// silently discards what you type on the next boot.
 	"database_path": "DATABASE_PATH",
+	// Deluge connection settings. Env-OR-config-file authoritative — see
+	// configFileLockedSettings for the second half.
+	"deluge_web_url":           "DELUGE_WEB_URL",
+	"deluge_web_password":      "DELUGE_WEB_PASSWORD",
+	"deluge_discovery_label":   "DELUGE_DISCOVERY_LABEL",
+	"deluge_discovery_enabled": "DELUGE_DISCOVERY_ENABLED",
+	"deluge_move_enabled":      "DELUGE_MOVE_ENABLED",
+}
+
+// LockedByConfigFile is the SettingLocks value for a key that the server's config
+// file locks. It is not an environment variable name and does not start with "--",
+// so a client can tell the three mechanisms apart (it contains a space, which no
+// variable name can).
+const LockedByConfigFile = "config file"
+
+// configFileLockedSettings is the set of locked keys that a value in the server's
+// config file ALSO locks, in addition to the environment variable named in
+// envLockedSettings. Same effect as the environment: applyEnvAuthoritativeConfig
+// re-applies the file's value over the persisted blob on every load, and the UI shows
+// the field read-only.
+//
+// Only the Deluge keys are here. The other envLockedSettings keys are
+// environment-only on purpose (a systemd unit is where an operator pins a path);
+// the Deluge keys were reachable from the config file before the owner decision of
+// 2026-10-11, and a stored blob silently outranked it.
+//
+// Precedence between the two sources is viper's own: environment over file.
+var configFileLockedSettings = map[string]bool{
+	"deluge_web_url":           true,
+	"deluge_web_password":      true,
+	"deluge_discovery_label":   true,
+	"deluge_discovery_enabled": true,
+	"deluge_move_enabled":      true,
+}
+
+// configFileSupplied reports whether the server's config file sets key to a real
+// value. Only the file layer counts: viper.IsSet and viper.Get are also true for a
+// registered default (see envSupplied), while viper.InConfig answers for the parsed
+// file alone.
+//
+// An empty string, or a key present with no value, is not a lock — the same rule as
+// an empty environment variable. A boolean false IS a lock: forcing a toggle off from
+// the file is a legitimate operator choice, as DELUGE_MOVE_ENABLED=false is.
+func configFileSupplied(key string) bool {
+	if !configFileLockedSettings[key] || !viper.InConfig(key) {
+		return false
+	}
+	switch v := viper.Get(key).(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	default:
+		return true
+	}
 }
 
 // flagLockedSettings maps a config JSON key to the command-line flag that, when
@@ -2178,8 +2239,11 @@ var flagLockedSettings = map[string]string{
 	"database_path": "--db",
 }
 
-// EnvLockedSettings returns the JSON field names of the settings the environment is
-// currently forcing, sorted so the response is stable.
+// EnvLockedSettings returns the JSON field names of the settings the operator is
+// currently forcing — through the environment, an explicit flag, or (for the Deluge
+// keys) the server's config file — sorted so the response is stable. The name is the
+// wire name of the API field ("env_locked") and was kept when the file source was
+// added.
 //
 // This exists so the UI cannot lie. Production sets ACTIVITY_DB_PATH in its systemd
 // unit; without this list the path control renders as an ordinary editable field
@@ -2188,7 +2252,7 @@ var flagLockedSettings = map[string]string{
 func EnvLockedSettings() []string {
 	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
 	for key, envVar := range envLockedSettings {
-		if envSupplied(envVar) {
+		if envSupplied(envVar) || configFileSupplied(key) {
 			locked = append(locked, key)
 		}
 	}
@@ -2204,8 +2268,9 @@ func EnvLockedSettings() []string {
 	return locked
 }
 
-// SettingLockedBy names what makes key read-only — the environment variable or
-// the command-line flag — or "" when the key is freely settable from the UI.
+// SettingLockedBy names what makes key read-only — the environment variable, the
+// command-line flag, or LockedByConfigFile — or "" when the key is freely settable
+// from the UI. When several apply the environment wins, then the flag, then the file.
 // The UI uses it to say WHY a field is disabled; "locked" with no reason is a
 // support ticket.
 func SettingLockedBy(key string) string {
@@ -2214,6 +2279,9 @@ func SettingLockedBy(key string) string {
 	}
 	if flag, ok := flagLockedSettings[key]; ok && flagSupplied(key) {
 		return flag
+	}
+	if configFileSupplied(key) {
+		return LockedByConfigFile
 	}
 	return ""
 }
@@ -2355,6 +2423,29 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	// table on explicitFlags above.
 	if flagSupplied("database_path") || envSupplied("DATABASE_PATH") {
 		c.DatabasePath = viper.GetString("database_path")
+	}
+	// Deluge connection settings (owner decision 2026-10-11). Category 2 like
+	// activity_db_path: with neither the environment nor the config file setting a
+	// key, the stored blob (the UI / PUT /config) wins unchanged. When one does, it
+	// beats the blob — INCLUDING a stored empty value, which the blob writes for
+	// every field it knows and which used to mask env and file on any install that
+	// had ever saved settings. SettingLockedBy is the single test, so the value the
+	// server applies and the lock the UI shows cannot disagree. viper.GetString
+	// resolves the environment-over-file order.
+	if SettingLockedBy("deluge_web_url") != "" {
+		c.DelugeWebURL = viper.GetString("deluge_web_url")
+	}
+	if SettingLockedBy("deluge_web_password") != "" {
+		c.DelugeWebPassword = viper.GetString("deluge_web_password")
+	}
+	if SettingLockedBy("deluge_discovery_label") != "" {
+		c.DelugeDiscoveryLabel = viper.GetString("deluge_discovery_label")
+	}
+	if SettingLockedBy("deluge_discovery_enabled") != "" {
+		c.DelugeDiscoveryEnabled = viper.GetBool("deluge_discovery_enabled")
+	}
+	if SettingLockedBy("deluge_move_enabled") != "" {
+		c.DelugeMoveEnabled = viper.GetBool("deluge_move_enabled")
 	}
 	// NOT root_dir, deliberately. It is the same shape and the same argument
 	// applies in the abstract, but the base unit ships a generic
@@ -2505,6 +2596,13 @@ func InitConfig() {
 	viper.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
 	viper.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
 	viper.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
+	// Deluge: bound explicitly so the environment reaches viper where AutomaticEnv
+	// is off. The names are the ones SettingLocks reports (envLockedSettings).
+	viper.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
+	viper.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
+	viper.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck
+	viper.BindEnv("deluge_discovery_enabled", "DELUGE_DISCOVERY_ENABLED") //nolint:errcheck
+	viper.BindEnv("deluge_move_enabled", "DELUGE_MOVE_ENABLED")           //nolint:errcheck
 	// LIST_WARMER_MAX_HEAP_MB is a legacy alias for the same setting — viper
 	// checks env var names in the order given, so the current name wins when
 	// both are set.
@@ -3259,8 +3357,9 @@ func InitConfig() {
 			ExcludePatterns:     excludePatterns,
 
 			// Deluge integration. Read here so the config file and environment
-			// reach it (DelugeSettingsTab tells operators to set deluge_web_url
-			// there); a stored blob still wins on load, like every other key.
+			// reach it. A value they supply is locked and beats the stored blob
+			// on load (applyEnvAuthoritativeConfig); with neither set the blob
+			// wins, like every other UI-managed key.
 			DelugeWebURL:           viper.GetString("deluge_web_url"),
 			DelugeWebPassword:      viper.GetString("deluge_web_password"),
 			DelugeDiscoveryLabel:   viper.GetString("deluge_discovery_label"),

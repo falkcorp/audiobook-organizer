@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -1722,6 +1722,12 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	safeConfig.GoogleBooksAPIKey = ""
 	safeConfig.HardcoverAPIToken = ""
 	safeConfig.BasicAuthPassword = ""
+	// A Deluge password the environment or config file supplies is re-applied over
+	// the blob on every load (applyEnvAuthoritativeConfig), so persisting it would
+	// only freeze a copy of that secret into the database in plaintext.
+	if SettingLockedBy("deluge_web_password") != "" {
+		safeConfig.DelugeWebPassword = ""
+	}
 
 	blobJSON, err := marshalConfigBlob(safeConfig)
 	if err != nil {

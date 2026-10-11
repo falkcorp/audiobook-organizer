@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/config_env_locks_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e6b0d47-9a13-4c85-bf20-5d81c7a4e396
-// last-edited: 2026-09-07
+// last-edited: 2026-10-11
 
 package system_test
 
@@ -154,4 +154,39 @@ func TestGetConfig_PreservesLargeIntegersExactly(t *testing.T) {
 
 	assert.Contains(t, w.Body.String(), `"backup_max_total_bytes":9007199254740993`,
 		"the config was re-encoded through float64 and lost precision")
+}
+
+// TestGetConfig_ReportsDelugeLocks covers the five Deluge connection settings, which
+// the environment locks since 2026-10-11. The annotation names the variable (never
+// its value) so the Deluge tab can tell the operator where the setting comes from;
+// the password's value must not appear anywhere in the response.
+func TestGetConfig_ReportsDelugeLocks(t *testing.T) {
+	const secret = "dlw-handler-secret-5519"
+	t.Setenv("DELUGE_WEB_URL", "http://192.0.2.10:8112")
+	t.Setenv("DELUGE_WEB_PASSWORD", secret)
+	t.Setenv("DELUGE_DISCOVERY_LABEL", "")
+	t.Setenv("DELUGE_DISCOVERY_ENABLED", "")
+	t.Setenv("DELUGE_MOVE_ENABLED", "")
+
+	h, d := newTestHandler(t)
+	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{DelugeWebPassword: "dlw****5519"})
+
+	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
+		r.GET("/config", h.GetConfig)
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, w.Body.String(), secret, "the response must never carry the password value")
+
+	cfg := getConfigBody(t, h)
+	locked, ok := cfg["env_locked"].([]any)
+	require.True(t, ok)
+	assert.Contains(t, locked, "deluge_web_url")
+	assert.Contains(t, locked, "deluge_web_password")
+	assert.NotContains(t, locked, "deluge_discovery_label", "an unset variable must not lock its field")
+
+	locks, ok := cfg["setting_locks"].(map[string]any)
+	require.True(t, ok, "setting_locks missing; got %T", cfg["setting_locks"])
+	assert.Equal(t, "DELUGE_WEB_URL", locks["deluge_web_url"])
+	assert.Equal(t, "DELUGE_WEB_PASSWORD", locks["deluge_web_password"])
+	assert.NotContains(t, locks, "deluge_move_enabled")
 }

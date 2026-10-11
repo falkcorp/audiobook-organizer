@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.6.5 -->
+<!-- version: 1.6.6 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -138,6 +138,7 @@ opv2:strike:{def_id}:{ts_nano:020d}:{op_id}      → OpStrikeV2Row JSON (watchdo
 ### `internal/config` — Configuration
 - **config.go** — `Config` struct with 100+ fields. Global: `config.AppConfig`
 - Key settings: `RootDir`, `DatabasePath`, `DatabaseType`, `FolderNamingPattern`, `FileNamingPattern`, `ConcurrentScans`, `OperationTimeoutMinutes`, `MetadataSources`, `ITunesPathMappings`
+- **Locked settings** (`envLockedSettings`, `configFileLockedSettings`, `flagLockedSettings` in `config.go`): a few settings are operator-authoritative. When the environment, an explicit flag or (Deluge keys only) the server's config file supplies one, `applyEnvAuthoritativeConfig` re-applies that value over the stored settings blob on every load, and `GET /config` reports it in `env_locked` (keys) and `setting_locks` (key to the variable name, the flag, or `config file`) so the UI shows the field read-only. `SettingLockedBy(key)` is the single test for both the apply and the annotation. An empty variable or empty file value is not a lock; with nothing supplied the stored value wins. The five Deluge keys (`deluge_web_url`, `deluge_web_password`, `deluge_discovery_label`, `deluge_discovery_enabled`, `deluge_move_enabled`; variables `DELUGE_*`) are locked this way since 2026-10-11, and a locked `deluge_web_password` is not written into the stored blob. `PUT /config` on a locked key is accepted and stored like the others, then overridden on the next load.
 
 ### `internal/logger` — Logging
 - **operation.go** — `OperationLogger` wraps operation progress reporting

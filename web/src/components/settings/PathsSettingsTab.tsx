@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c9d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -31,6 +31,7 @@ import {
 } from '@mui/icons-material';
 import * as api from '../../services/api';
 import DelugeSettingsTab from './DelugeSettingsTab';
+import { describeLock } from '../../utils/settingLocks';
 // Imported, not redeclared: a local copy of the status union silently rendered
 // any status it lacked (such as `interrupted`) as the folder's book count.
 import type { ScanStatus } from '../../hooks/useSettingsHandlers';
@@ -57,26 +58,12 @@ interface PathsSettingsTabProps {
   envLocked: string[];
   /**
    * The same keys as `envLocked`, mapped to what is locking each one: an
-   * environment variable name, or a command-line flag. Used for the copy that
-   * tells the operator where to go and change it.
+   * environment variable name, a command-line flag, or the config file. Used for
+   * the copy that tells the operator where to go and change it.
    */
   settingLocks: Record<string, string>;
   /** Server-computed path an empty Activity Database Path resolves to. */
   activityDbResolvedPath: string;
-}
-
-/**
- * describeLock turns a lock mechanism into the sentence fragment that tells the
- * operator where to look. A flag and an environment variable live in different
- * halves of the same unit file, and sending someone to the wrong half is worse
- * than a disabled control with no explanation at all: they delete something that
- * was never the cause and conclude the app is broken.
- */
-function describeLock(mechanism: string | undefined): string {
-  if (!mechanism) return 'the server configuration';
-  return mechanism.startsWith('--')
-    ? `the ${mechanism} flag on the server's start-up command`
-    : `the ${mechanism} environment variable on the server`;
 }
 
 export function PathsSettingsTab(props: PathsSettingsTabProps) {
@@ -393,7 +380,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
 
       {/* Deluge Settings */}
       <Grid size={12}>
-        <DelugeSettingsTab />
+        <DelugeSettingsTab envLocked={props.envLocked} settingLocks={props.settingLocks} />
       </Grid>
     </Grid>
   );

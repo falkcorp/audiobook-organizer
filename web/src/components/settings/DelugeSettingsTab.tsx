@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 
@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import { apiFetch } from '../../utils/apiFetch';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../../utils/apiResponse';
+import { describeLock } from '../../utils/settingLocks';
 
 const API_BASE = '/api/v1';
 
@@ -48,7 +49,31 @@ interface TorrentInfo {
   progress: number;
 }
 
-export default function DelugeSettingsTab() {
+// The five Deluge connection settings the server can lock, in display order. A
+// value in the server's config file or a DELUGE_* environment variable beats the
+// saved one on every start, so the tab names which are locked and by what. The
+// password is listed by name only; its value never reaches the browser unmasked.
+const DELUGE_SETTINGS: { key: string; label: string }[] = [
+  { key: 'deluge_web_url', label: 'Web URL' },
+  { key: 'deluge_web_password', label: 'Web password' },
+  { key: 'deluge_discovery_label', label: 'Discovery label' },
+  { key: 'deluge_discovery_enabled', label: 'Discovery enabled' },
+  { key: 'deluge_move_enabled', label: 'Move storage enabled' },
+];
+
+interface DelugeSettingsTabProps {
+  /** Config keys the server is forcing (`env_locked` from GET /api/v1/config). */
+  envLocked?: string[];
+  /** The same keys mapped to what locks each (`setting_locks`): variable, flag or config file. */
+  settingLocks?: Record<string, string>;
+}
+
+export default function DelugeSettingsTab({
+  envLocked = [],
+  settingLocks = {},
+}: DelugeSettingsTabProps) {
+  const lockedSettings = DELUGE_SETTINGS.filter((s) => envLocked.includes(s.key));
+  const urlIsLocked = envLocked.includes('deluge_web_url');
   const [status, setStatus] = useState<DelugeStatus | null>(null);
   const [testResult, setTestResult] = useState<{ connected: boolean; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -138,6 +163,25 @@ export default function DelugeSettingsTab() {
       </Typography>
       <Divider sx={{ mb: 2 }} />
 
+      {lockedSettings.length > 0 && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          <Typography variant="body2">
+            These Deluge settings are set by the server and override anything saved here on every
+            start. To manage one through the API instead, remove it from the place named and
+            restart.
+          </Typography>
+          <Box component="ul" sx={{ m: 0, mt: 1, pl: 3 }}>
+            {lockedSettings.map((s) => (
+              <li key={s.key}>
+                <Typography variant="body2">
+                  <strong>{s.label}</strong> ({s.key}): set by {describeLock(settingLocks[s.key])}
+                </Typography>
+              </li>
+            ))}
+          </Box>
+        </Alert>
+      )}
+
       <Grid container spacing={2}>
         <Grid
           size={{
@@ -151,7 +195,11 @@ export default function DelugeSettingsTab() {
             placeholder="http://<deluge-host>:8112"
             value={status?.url || ''}
             disabled
-            helperText="Set deluge_web_url with PUT /api/v1/config. The server config file or environment applies only until saved settings contain it (a saved value wins on restart). Default password: deluge"
+            helperText={
+              urlIsLocked
+                ? `Locked: set by ${describeLock(settingLocks.deluge_web_url)}, which overrides any saved value. Default password: deluge`
+                : 'Set deluge_web_url with PUT /api/v1/config, or pin it in the server config file or with DELUGE_WEB_URL on the server; a pinned value overrides the saved one and locks this setting. Default password: deluge'
+            }
             size="small"
           />
         </Grid>
