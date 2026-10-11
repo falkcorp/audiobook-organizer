@@ -37,6 +37,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 
 // Verify *Server implements maintenance.ServerDeps at compile time.
@@ -118,6 +119,10 @@ func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 // accessors to that.
 // MergeUserStateStore returns the store for repair-merged-user-state.
 func (s *Server) MergeUserStateStore() merge.UserStateRepairStore { return s.store }
+
+// IngestVersionStore returns the store for the relink-pre-fix-imports fixer,
+// which forwards it into internal/versions.
+func (s *Server) IngestVersionStore() versions.IngestStore { return s.store }
 
 func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 	if r, ok := database.AsCapability[database.ReviewStatusIndexRepairer](s.store); ok {

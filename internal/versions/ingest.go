@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -67,6 +67,17 @@ type IngestVersionParams struct {
 	// nothing created. That read already succeeded once in the importer's own
 	// guard, so a second failure is unlikely, not impossible.
 	NewBook bool
+	// AdoptVersionID, when set, makes the call adopt-only: the row is linked
+	// to the stranded version with this id (see strandedVersion) or to
+	// nothing, and no version is ever created. Anything else -- no stranded
+	// version, a different one, several, or a row that could not be read --
+	// returns ErrVersionNotAdoptable with nothing written. A repair pass sets
+	// it (maintenance.relink-pre-fix-imports): a pass that planned "link this
+	// row to version V" must not mint a new version when V stopped being
+	// adoptable between its plan and its write, because no repair can take a
+	// created version back. A row that already names a version of BookID
+	// returns that version as before; the caller compares its ID.
+	AdoptVersionID string
 }
 
 // ErrTorrentLinkedElsewhere is returned by CreateIngestVersion when
@@ -75,6 +86,11 @@ type IngestVersionParams struct {
 // writing it onto the row would make the row claim a torrent another version
 // owns. Nothing is created or written.
 var ErrTorrentLinkedElsewhere = errors.New("torrent already linked to another live version")
+
+// ErrVersionNotAdoptable is returned by an adopt-only CreateIngestVersion
+// (IngestVersionParams.AdoptVersionID) when the version it names is not the
+// book's one stranded version for the row. Nothing is created or written.
+var ErrVersionNotAdoptable = errors.New("version is not the row's one stranded version")
 
 // torrentLocks serializes torrent links per hash; see LockTorrent.
 var torrentLocks keyedmutex.Mutex
@@ -221,6 +237,14 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			return nil, false, fmt.Errorf("list versions of book %s: %w", params.BookID, strandErr)
 		}
 		ver = stranded
+	}
+	if params.AdoptVersionID != "" && (ver == nil || ver.ID != params.AdoptVersionID) {
+		found := "none"
+		if ver != nil {
+			found = ver.ID
+		}
+		return nil, false, fmt.Errorf("%w: book %s, wanted %s, found %s",
+			ErrVersionNotAdoptable, params.BookID, params.AdoptVersionID, found)
 	}
 
 	if holder != nil && (ver == nil || holder.ID != ver.ID) {

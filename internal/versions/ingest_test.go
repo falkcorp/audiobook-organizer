@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package versions
 
@@ -666,4 +666,90 @@ func TestCreateIngestVersion_NewBookSkipsStrandedLookup(t *testing.T) {
 	if got := storedRow(t, pebble, book.ID, "f1"); got.VersionID != ver.ID || got.DelugeHash != torrent {
 		t.Errorf("row: VersionID=%q DelugeHash=%q, want %q and %q", got.VersionID, got.DelugeHash, ver.ID, torrent)
 	}
+}
+
+// strandVersion creates a version of book carrying torrent that no row names:
+// the state every import before 2026-10-10 left behind.
+func strandVersion(t *testing.T, store *database.PebbleStore, bookID, torrent string) *database.BookVersion {
+	t.Helper()
+	status := database.BookVersionStatusActive
+	if a, _ := store.GetActiveVersionForBook(bookID); a != nil {
+		status = database.BookVersionStatusAlt
+	}
+	v, err := store.CreateBookVersion(&database.BookVersion{BookID: bookID, Status: status,
+		Format: "m4b", Source: "deluge", TorrentHash: torrent})
+	if err != nil {
+		t.Fatalf("CreateBookVersion: %v", err)
+	}
+	return v
+}
+
+// An adopt-only call (AdoptVersionID) links the row to the named stranded
+// version and writes the row's hash, exactly as the plain re-run does.
+func TestCreateIngestVersion_AdoptOnlyLinksTheNamedStrandedVersion(t *testing.T) {
+	const torrent = "1123456789abcdef0123456789abcdef01234567"
+	store, book, filePath := ingestFixture(t, database.BookFile{DelugeHash: torrent})
+	v := strandVersion(t, store, book.ID, torrent)
+
+	got, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, TorrentHash: torrent, AdoptVersionID: v.ID,
+	})
+	if err != nil || !linked || got == nil || got.ID != v.ID {
+		t.Fatalf("adopt-only: got=%+v linked=%v err=%v, want %s linked", got, linked, err, v.ID)
+	}
+	row := storedRow(t, store, book.ID, "f1")
+	if row.VersionID != v.ID || row.DelugeHash != torrent || row.FileHash == "" {
+		t.Errorf("row: VersionID=%q DelugeHash=%q FileHash=%q", row.VersionID, row.DelugeHash, row.FileHash)
+	}
+}
+
+// An adopt-only call never creates a version: with nothing stranded, or a
+// different version stranded, it refuses and leaves the row and the book's
+// versions exactly as they were.
+func TestCreateIngestVersion_AdoptOnlyNeverCreates(t *testing.T) {
+	t.Run("nothing stranded", func(t *testing.T) {
+		store, book, filePath := ingestFixture(t, database.BookFile{})
+		_, linked, err := CreateIngestVersion(store, IngestVersionParams{
+			BookID: book.ID, BookFileID: "f1", FilePath: filePath, AdoptVersionID: "no-such-version",
+		})
+		if !errors.Is(err, ErrVersionNotAdoptable) || linked {
+			t.Fatalf("want ErrVersionNotAdoptable, got linked=%v err=%v", linked, err)
+		}
+		if vers, _ := store.GetBookVersionsByBookID(book.ID); len(vers) != 0 {
+			t.Errorf("adopt-only created %d version(s)", len(vers))
+		}
+		if row := storedRow(t, store, book.ID, "f1"); row.VersionID != "" || row.FileHash != "" {
+			t.Errorf("row written: VersionID=%q FileHash=%q", row.VersionID, row.FileHash)
+		}
+	})
+	t.Run("another version stranded", func(t *testing.T) {
+		store, book, filePath := ingestFixture(t, database.BookFile{})
+		v := strandVersion(t, store, book.ID, "")
+		_, _, err := CreateIngestVersion(store, IngestVersionParams{
+			BookID: book.ID, BookFileID: "f1", FilePath: filePath, AdoptVersionID: v.ID + "-other",
+		})
+		if !errors.Is(err, ErrVersionNotAdoptable) {
+			t.Fatalf("want ErrVersionNotAdoptable, got %v", err)
+		}
+		if vers, _ := store.GetBookVersionsByBookID(book.ID); len(vers) != 1 {
+			t.Errorf("want the 1 stranded version only, got %d", len(vers))
+		}
+		if row := storedRow(t, store, book.ID, "f1"); row.VersionID != "" {
+			t.Errorf("row linked to %q", row.VersionID)
+		}
+	})
+	t.Run("two stranded", func(t *testing.T) {
+		store, book, filePath := ingestFixture(t, database.BookFile{})
+		v := strandVersion(t, store, book.ID, "")
+		strandVersion(t, store, book.ID, "")
+		_, _, err := CreateIngestVersion(store, IngestVersionParams{
+			BookID: book.ID, BookFileID: "f1", FilePath: filePath, AdoptVersionID: v.ID,
+		})
+		if !errors.Is(err, ErrVersionNotAdoptable) {
+			t.Fatalf("want ErrVersionNotAdoptable for an ambiguous book, got %v", err)
+		}
+		if vers, _ := store.GetBookVersionsByBookID(book.ID); len(vers) != 2 {
+			t.Errorf("want 2 versions, got %d", len(vers))
+		}
+	})
 }

@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-10-import-orphaned-versions-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 8c3f6a25-d4e1-4b97-a0c2-5e9d17b8f463 -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Import: every imported file is now tied to its version and carries its checksum
 
@@ -38,7 +38,10 @@ Branch `fix/import-orphaned-versions`.
 - **Files imported before this fix are not repaired yet.** Each still has a
   version that points at nothing. Because the version step now picks up such a
   stranded version instead of duplicating it, a one-time repair pass over them
-  can build on it; it has not been written or run.
+  can build on it. That repair now exists ("Link pre-fix imports to their
+  versions" in the Repairs tab, see
+  [the 2026-10-11 summary](2026-10-11-relink-pre-fix-imports-executive-summary.md));
+  it has not been run in production yet.
 - **Two imports of the same torrent at once can no longer both claim it.** A
   double click or a retried request used to be able to attach one torrent to
   two books, or to leave a second, unlinked copy of the book behind. Imports of
