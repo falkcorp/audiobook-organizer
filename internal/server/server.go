@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.88.0
+// version: 2.88.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package server
 
@@ -751,7 +751,6 @@ func NewServer(store database.Store) *Server {
 	server.extraOpsRegistrar = scheduler.NewExtraOpsRegistrar(resolvedStore, scheduler.ExtraOpsDeps{
 		DedupCache:           server.dedupCache,
 		MetadataFetchService: server.metadataFetchService,
-		AudiobookService:     server.audiobookService,
 		ScanStandDown:        server,
 	})
 

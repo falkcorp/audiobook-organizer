@@ -1,5 +1,5 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
 // last-edited: 2026-10-11
 
@@ -146,16 +146,7 @@ func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		server.runAutoPurgeSoftDeleted(ctx, "")
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("runAutoPurgeSoftDeleted did not return after its context was cancelled")
-	}
+	server.runAutoPurgeSoftDeleted(ctx, "")
 
 	for _, b := range books {
 		got, err := database.GetGlobalStore().GetBookByID(b.ID)

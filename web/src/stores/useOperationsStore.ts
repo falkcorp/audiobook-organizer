@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.13.0
+// version: 3.13.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -13,7 +13,7 @@ import { groupOperations, type OperationGroup } from './operationGrouping';
 export interface ActiveOperation {
   id: string;
   /** def_id is the canonical operation identifier, e.g.
-   *  "scheduler.purge-deleted". Use this for equality checks like
+   *  "maintenance.purge-deleted". Use this for equality checks like
    *  `op.def_id === 'scan'`. Kept separate from the legacy `type`
    *  field so existing call sites that match on the old short name
    *  ('scan', 'itunes_import', 'ol_dump_import') keep working. */
@@ -121,7 +121,7 @@ interface OperationsState {
 // The legacy `type` field used to be set from `op.plugin`, which made every
 // scheduler op render as "scheduler" (the plugin namespace) in the UI even
 // though the def_id and display_name carried the real identity. We now
-// derive `type` from the def_id's tail segment ("scheduler.purge-deleted"
+// derive `type` from the def_id's tail segment ("maintenance.purge-deleted"
 // → "purge-deleted") so existing equality checks like
 // `op.type === 'scan'` keep working when the def_id is just "scan", while
 // the bare-plugin display is fixed. The full def_id and the curated
