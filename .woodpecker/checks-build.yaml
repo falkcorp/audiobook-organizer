@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.6.0
+# version: 1.6.1
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
 # last-edited: 2026-10-11
 #
@@ -83,8 +83,10 @@ steps:
       - npm ci --prefix web --no-audit --no-fund
       # vitest defaults to availableParallelism()-1 workers (47 on U1). Beside
       # vet and fmt that starves the box: workers stall for tens of seconds and
-      # tests hit the 30s timeout. Eight workers keep the suite fast without it.
-      - cd web && npm run test -- --run --maxWorkers=8
+      # tests hit the 30s timeout. Half the cores, capped at eight: U1 keeps 8,
+      # llm1 (10 cores, also running Go workflows) gets 5 -- at 8 there a
+      # ReviewWorkspace test timed out at 30s (pipeline 758, 2026-10-11).
+      - WORKERS=$$(( $$(getconf _NPROCESSORS_ONLN) / 2 )); if [ "$$WORKERS" -gt 8 ]; then WORKERS=8; fi; if [ "$$WORKERS" -lt 1 ]; then WORKERS=1; fi; echo "vitest workers=$$WORKERS"; cd web && npm run test -- --run --maxWorkers=$$WORKERS
 
   - name: cleanup
     # Same cleanup as test-rest.yaml: cap the shared GOCACHE, clear this clone
