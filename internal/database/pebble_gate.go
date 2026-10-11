@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-10-11
 
@@ -131,6 +131,12 @@ import (
 // registry's log-and-skip paths, recoverPebbleClosed's sentinel) treat it the
 // same as a closed engine.
 var errStoreClosing = fmt.Errorf("pebble store is closing: %w", pebble.ErrClosed)
+
+// errCloseAttemptAborted is what a joined waiter gets when the close attempt
+// it joined ended without producing a result (it panicked). It deliberately
+// does not wrap pebble.ErrClosed: the engine is NOT known to be closed, and
+// callers must treat it as a failed close.
+var errCloseAttemptAborted = errors.New("pebble close: the close attempt did not finish")
 
 // Gate state bits. The lease count and both flags live in ONE atomic word, so
 // every transition reads the count and the flags it changes together.
@@ -376,8 +382,13 @@ func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error
 		mu.Unlock()
 
 		// Finish the attempt however it ends, a panic included: waiters are
-		// released and the next call can start a fresh one.
-		var err error
+		// released and the next call can start a fresh one. err starts as a
+		// failure and is replaced only by a result the attempt actually
+		// produced, so a panic leaves the joined waiters an error rather than
+		// a nil that reads as "closed": the caller (deleteOLData, factory
+		// reset) would then remove the data under an engine that is still
+		// open. The panic itself still propagates to the attempting caller.
+		err := errCloseAttemptAborted
 		sealed := false
 		defer func() {
 			mu.Lock()
@@ -390,10 +401,13 @@ func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error
 			mu.Unlock()
 			close(a.done)
 		}()
-		sealed, err = d.drainAndSeal(timeout)
-		if sealed {
-			err = errors.Join(err, d.closeEngine())
+		var drainErr error
+		sealed, drainErr = d.drainAndSeal(timeout)
+		if !sealed {
+			err = drainErr
+			return err
 		}
+		err = errors.Join(drainErr, d.closeEngine())
 		return err
 	}
 }
