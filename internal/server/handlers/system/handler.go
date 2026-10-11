@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.3
+// version: 1.22.4
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-11
 
@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
@@ -442,6 +443,12 @@ func (h *Handler) ResetSystem(c *gin.Context) {
 
 var systemLog = logger.New("handlers.system")
 
+// afterOLCloseHook, unset outside tests, runs in deleteOLDataLocked after the
+// Open Library store has closed cleanly and before its data directory is
+// removed: the window in which the service's Mu must still be held. It is an
+// atomic pointer so a test can install it while the handler is live.
+var afterOLCloseHook atomic.Pointer[func()]
+
 // deleteOLDataLocked closes the Open Library store and removes its data
 // directory, holding the service's Mu from the close through the RemoveAll.
 // Releasing Mu between the two let an import's EnsureStore open a new engine
@@ -466,6 +473,9 @@ func (h *Handler) deleteOLDataLocked() {
 	}
 	if targetDir == "" {
 		return
+	}
+	if hook := afterOLCloseHook.Load(); hook != nil {
+		(*hook)()
 	}
 	if err := os.RemoveAll(targetDir); err != nil {
 		systemLog.Warn("Factory reset failed to remove OL data dir: %v", err)
