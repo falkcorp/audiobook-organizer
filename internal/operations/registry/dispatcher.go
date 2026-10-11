@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.7.1
+// version: 2.8.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-10
 
@@ -316,7 +316,13 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		if fresh.Status != "queued" {
 			r.logger.Info("registry: stale snapshot, op is no longer queued; releasing claim",
 				"op_id", row.ID, "def_id", row.DefID, "status", fresh.Status)
-			r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey)
+			// A cancel that flagged this stub leaves op.terminal to the worker
+			// that drops the run (Registry.Cancel). Releasing the claim here
+			// means no worker ever sees it, so publish for it, or the UI bell
+			// shows the canceled op as running.
+			if flagged := r.releaseClaim(row.ID, def.Plugin, def.ConcurrencyKey); flagged && fresh.Status == "canceled" {
+				r.publishOpTerminal(row.ID, row.DefID, "canceled")
+			}
 			continue
 		}
 		if fresh.Params != row.Params {
@@ -363,9 +369,15 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 // Never reached for a zombie (05-PR3): it releases a claim this dispatch
 // cycle just made, and Gate 0 refuses to claim an id that is in r.running,
 // so the handle under opID here is always the cycle's own stub.
-func (r *Registry) releaseClaim(opID, plugin, concurrencyKey string) {
+//
+// It reports whether the released stub had been flagged by a cancel
+// (queuedCancel).
+func (r *Registry) releaseClaim(opID, plugin, concurrencyKey string) (canceled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if h, ok := r.running[opID]; ok {
+		canceled = h.queuedCancel
+	}
 	r.pluginRunning[plugin]--
 	if concurrencyKey != "" {
 		if holder := r.concurrencyKeys[concurrencyKey]; holder == opID {
@@ -373,6 +385,7 @@ func (r *Registry) releaseClaim(opID, plugin, concurrencyKey string) {
 		}
 	}
 	delete(r.running, opID)
+	return canceled
 }
 
 // writeSetConflictLocked returns the first running op (other than candidateID
