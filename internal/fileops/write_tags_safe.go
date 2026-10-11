@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package fileops
 
@@ -368,6 +368,17 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	}
 
 	return originalHash, postHash, nil
+}
+
+// RecordObserved appends a FileEventObserved event carrying detail for the
+// book_file row bookFileID at path, for callers that observe a file outside a
+// write (the tagger's read-back after a tag write). A nil recorder or an empty
+// bookFileID records nothing: with no digest, an event naming no row would be
+// an unadoptable orphan. Like every provenance record it is observational and
+// a failure is logged, not returned.
+func RecordObserved(rec database.FileProvenanceRecorder, bookFileID, actor, path, detail string) {
+	recordEvent(WriteTagsSafeOptions{Provenance: rec, BookFileID: bookFileID, Actor: actor},
+		database.FileEventObserved, path, "", 0, detail, "")
 }
 
 // recordEvent appends one provenance event, if a recorder is configured.
