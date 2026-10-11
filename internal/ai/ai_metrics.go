@@ -1,5 +1,5 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
 // last-edited: 2026-10-11
 
@@ -158,13 +158,19 @@ type callMeta struct {
 	// endpointID is the pool row id of a routed parser. It goes on the span
 	// only (ai.endpoint_id), never on a metric.
 	endpointID string
+	// spanModel is the model name after the whitespace and length fold but
+	// before the label-set admission, set by normalized. The cardinality cap
+	// protects metric series; a trace attribute is not a series, so the span
+	// keeps the real name and a model past the cap is still identifiable there.
+	spanModel string
 }
 
 // normalized folds a model string that would make a poor label value to a
 // fixed one: empty is "unknown"; longer than 64 characters or containing
 // whitespace (free text leaking into the model field) is "other"; and past the
 // first maxModelLabels distinct (provider, model) pairs the process has seen, a
-// model is "other" too (see modelLabelSet).
+// model is "other" too (see modelLabelSet). Only the metric label is capped:
+// spanModel keeps the name that survived the first two folds.
 func (m callMeta) normalized() callMeta {
 	if m.provider == "" {
 		m.provider = providerOpenAI
@@ -174,6 +180,9 @@ func (m callMeta) normalized() callMeta {
 		m.model = modelUnknown
 	case len(m.model) > maxModelLabelLen || strings.ContainsAny(m.model, " \t\r\n"):
 		m.model = modelOther
+	}
+	if m.spanModel == "" {
+		m.spanModel = m.model
 	}
 	m.model = modelLabels.admit(m.provider, m.model)
 	return m
@@ -185,10 +194,19 @@ func (m callMeta) labelList() []attribute.KeyValue {
 
 func (m callMeta) labels() attribute.Set { return attribute.NewSet(m.labelList()...) }
 
+// spanAttributeModel is the model for the span: the uncapped name when
+// normalized ran, the label otherwise.
+func (m callMeta) spanAttributeModel() string {
+	if m.spanModel != "" {
+		return m.spanModel
+	}
+	return m.model
+}
+
 func (m callMeta) spanAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String("ai.provider", m.provider),
-		attribute.String("ai.model", m.model),
+		attribute.String("ai.model", m.spanAttributeModel()),
 		attribute.String("ai.task", m.task),
 	}
 	if m.endpointID != "" {
