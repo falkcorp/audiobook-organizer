@@ -1,4 +1,4 @@
-- [ ] **IMPORT-ORPHANED-VERSIONS** Every `ImportFile` orphans its version
+- [x] **IMPORT-ORPHANED-VERSIONS** Every `ImportFile` orphans its version
       (round-1 S1 of PR #3928). `CreateIngestVersion` runs before
       `CreateBookFile` in `internal/importer/service.go`, so when it looks for
       the book_file row to link (`internal/versions/ingest.go`) none exists:

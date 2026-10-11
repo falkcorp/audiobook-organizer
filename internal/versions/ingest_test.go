@@ -1,13 +1,14 @@
 // file: internal/versions/ingest_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-01
+// last-edited: 2026-10-10
 
 package versions
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -63,7 +64,7 @@ func TestCreateIngestVersion_NewBook(t *testing.T) {
 		Title: "New Book", FilePath: filePath, Format: "m4b",
 	})
 
-	ver, err := CreateIngestVersion(store, IngestVersionParams{
+	ver, _, err := CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: filePath, Format: "m4b", Source: "imported",
 	})
 	if err != nil {
@@ -91,7 +92,7 @@ func TestCreateIngestVersion_SecondVersionIsAlt(t *testing.T) {
 	})
 
 	// First version → active.
-	v1, _ := CreateIngestVersion(store, IngestVersionParams{
+	v1, _, _ := CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: filepath.Join(dir, "Book.m4b"), Format: "m4b", Source: "imported",
 	})
 	if v1.Status != database.BookVersionStatusActive {
@@ -99,7 +100,7 @@ func TestCreateIngestVersion_SecondVersionIsAlt(t *testing.T) {
 	}
 
 	// Second version → alt.
-	v2, err := CreateIngestVersion(store, IngestVersionParams{
+	v2, _, err := CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: filepath.Join(dir, "Book.mp3"), Format: "mp3", Source: "deluge",
 	})
 	if err != nil {
@@ -133,7 +134,7 @@ func TestCreateIngestVersion_FingerprintBlocksPurged(t *testing.T) {
 		Title: "New Import", FilePath: filePath, Format: "m4b",
 	})
 
-	_, err = CreateIngestVersion(store, IngestVersionParams{
+	_, _, err = CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: filePath, Format: "m4b",
 		Source: "deluge", TorrentHash: "blocked-hash",
 	})
@@ -222,7 +223,7 @@ func TestCreateIngestVersion_StoresChunkedHashAboveThreshold(t *testing.T) {
 		t.Fatalf("create book file: %v", err)
 	}
 
-	if _, err := CreateIngestVersion(store, IngestVersionParams{
+	if _, _, err := CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: filePath, Format: "m4b", Source: "imported",
 	}); err != nil {
 		t.Fatalf("CreateIngestVersion: %v", err)
@@ -271,7 +272,7 @@ func TestCreateIngestVersion_FileHashUpdated(t *testing.T) {
 		ID: "f1", BookID: book.ID, FilePath: filePath, Format: "m4b",
 	})
 
-	ver, _ := CreateIngestVersion(store, IngestVersionParams{
+	ver, _, _ := CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: filePath, Format: "m4b", Source: "imported",
 	})
 
@@ -325,7 +326,7 @@ func TestCreateIngestVersion_LinksVersionEvenWhenHashingFails(t *testing.T) {
 		t.Fatalf("CreateBookFile: %v", cerr)
 	}
 
-	ver, err := CreateIngestVersion(store, IngestVersionParams{
+	ver, linked, err := CreateIngestVersion(store, IngestVersionParams{
 		BookID: book.ID, FilePath: missing, Format: "m4b", Source: "imported",
 	})
 	if err != nil {
@@ -333,6 +334,9 @@ func TestCreateIngestVersion_LinksVersionEvenWhenHashingFails(t *testing.T) {
 	}
 	if ver == nil {
 		t.Fatal("CreateIngestVersion returned a nil version")
+	}
+	if !linked {
+		t.Error("CreateIngestVersion reported the row unlinked")
 	}
 
 	files, gerr := store.GetBookFiles(book.ID)
@@ -353,5 +357,191 @@ func TestCreateIngestVersion_LinksVersionEvenWhenHashingFails(t *testing.T) {
 	}
 	if got.FileHash != "" {
 		t.Errorf("file_hash = %q, want empty: the file could not be read, so any value here is invented", got.FileHash)
+	}
+}
+
+// ingestFixture opens a PebbleStore with an allowed dir holding one audio file,
+// a book, and a book_file row for that file (ID "f1").
+func ingestFixture(t *testing.T, row database.BookFile) (*database.PebbleStore, *database.Book, string) {
+	t.Helper()
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	dir := t.TempDir()
+	allowDir(t, store, dir)
+	filePath := filepath.Join(dir, "Book.m4b")
+	writeTestFile(t, filePath, "audio-content-to-hash")
+
+	book, err := store.CreateBook(&database.Book{Title: "Ingest", FilePath: filePath, Format: "m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	row.ID = "f1"
+	row.BookID = book.ID
+	row.FilePath = filePath
+	row.Format = "m4b"
+	if err := store.CreateBookFile(&row); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+	return store, book, filePath
+}
+
+func storedRow(t *testing.T, store *database.PebbleStore, bookID, id string) database.BookFile {
+	t.Helper()
+	files, err := store.GetBookFiles(bookID)
+	if err != nil {
+		t.Fatalf("GetBookFiles: %v", err)
+	}
+	for _, f := range files {
+		if f.ID == id {
+			return f
+		}
+	}
+	t.Fatalf("book file %s not found", id)
+	return database.BookFile{}
+}
+
+// Re-running ingest over a row that is already linked must not mint a second
+// version: that is what makes a row left behind by a failed import safe to
+// repair by simply running ingest again.
+func TestCreateIngestVersion_RerunOverLinkedRowCreatesNothing(t *testing.T) {
+	store, book, filePath := ingestFixture(t, database.BookFile{})
+	params := IngestVersionParams{BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "imported"}
+
+	first, linked, err := CreateIngestVersion(store, params)
+	if err != nil || !linked {
+		t.Fatalf("first ingest: linked=%v err=%v", linked, err)
+	}
+	again, linked, err := CreateIngestVersion(store, params)
+	if err != nil || !linked {
+		t.Fatalf("second ingest: linked=%v err=%v", linked, err)
+	}
+	if again.ID != first.ID {
+		t.Errorf("re-run returned version %q, want the existing %q", again.ID, first.ID)
+	}
+	if vers, _ := store.GetBookVersionsByBookID(book.ID); len(vers) != 1 {
+		t.Errorf("want 1 version after a re-run, got %d", len(vers))
+	}
+	if got := storedRow(t, store, book.ID, "f1"); got.VersionID != first.ID {
+		t.Errorf("row VersionID = %q, want %q", got.VersionID, first.ID)
+	}
+}
+
+// A VersionID naming a version that no longer exists is stale, not a link: the
+// row is relinked to a new version rather than reported linked to nothing.
+func TestCreateIngestVersion_RelinksStaleVersionID(t *testing.T) {
+	store, book, filePath := ingestFixture(t, database.BookFile{VersionID: "01JGONEVERSION0000000000"})
+
+	ver, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "imported",
+	})
+	if err != nil || !linked {
+		t.Fatalf("ingest: linked=%v err=%v", linked, err)
+	}
+	if ver.ID == "01JGONEVERSION0000000000" {
+		t.Fatal("returned the missing version")
+	}
+	if got := storedRow(t, store, book.ID, "f1"); got.VersionID != ver.ID {
+		t.Errorf("row VersionID = %q, want the new version %q", got.VersionID, ver.ID)
+	}
+}
+
+// A row that already carries the identity hash (the importer writes it at
+// CreateBookFile) is trusted, so ingest reads the file once, not twice. The
+// sentinel value proves no rehash overwrote it.
+func TestCreateIngestVersion_KeepsHashTheRowAlreadyCarries(t *testing.T) {
+	const preset = "caller-computed-hash"
+	store, book, filePath := ingestFixture(t, database.BookFile{FileHash: preset})
+
+	if _, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "imported",
+	}); err != nil || !linked {
+		t.Fatalf("ingest: linked=%v err=%v", linked, err)
+	}
+	if got := storedRow(t, store, book.ID, "f1"); got.FileHash != preset {
+		t.Errorf("FileHash = %q, want the row's own %q (the file was hashed again)", got.FileHash, preset)
+	}
+}
+
+// The torrent hash lands on the row in the same write as its VersionID, and
+// BookFileID picks the named row even when another row shares the path.
+func TestCreateIngestVersion_LinksNamedRowWithDelugeHash(t *testing.T) {
+	const torrent = "0123456789abcdef0123456789abcdef01234567"
+	store, book, filePath := ingestFixture(t, database.BookFile{})
+	if err := store.CreateBookFile(&database.BookFile{ID: "f0", BookID: book.ID, FilePath: filePath, Format: "m4b"}); err != nil {
+		t.Fatalf("CreateBookFile twin: %v", err)
+	}
+
+	ver, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "deluge", TorrentHash: torrent,
+	})
+	if err != nil || !linked {
+		t.Fatalf("ingest: linked=%v err=%v", linked, err)
+	}
+	got := storedRow(t, store, book.ID, "f1")
+	if got.VersionID != ver.ID || got.DelugeHash != torrent {
+		t.Errorf("named row: VersionID=%q DelugeHash=%q, want %q and %q", got.VersionID, got.DelugeHash, ver.ID, torrent)
+	}
+	if got.FileHash == "" {
+		t.Error("named row: FileHash empty")
+	}
+	if twin := storedRow(t, store, book.ID, "f0"); twin.VersionID != "" || twin.DelugeHash != "" {
+		t.Errorf("unnamed twin row was linked: VersionID=%q DelugeHash=%q", twin.VersionID, twin.DelugeHash)
+	}
+}
+
+// failFirstLinkStore is a PebbleStore whose first UpdateBookFile fails, which
+// is the "version created, link write failed" state an import can be left in.
+type failFirstLinkStore struct {
+	*database.PebbleStore
+	failed bool
+}
+
+func (s *failFirstLinkStore) UpdateBookFile(id string, f *database.BookFile) error {
+	if !s.failed {
+		s.failed = true
+		return errors.New("synthetic link failure")
+	}
+	return s.PebbleStore.UpdateBookFile(id, f)
+}
+
+// A link write that failed leaves a version nothing points at and a row with
+// no VersionID. Re-running ingest over that row must ADOPT the stranded
+// version, not mint a second one: otherwise the first stays orphaned and
+// active, and the new one is created as an alt that steals the torrent index.
+func TestCreateIngestVersion_RerunAdoptsVersionStrandedByFailedLink(t *testing.T) {
+	const torrent = "0123456789abcdef0123456789abcdef01234567"
+	pebble, book, filePath := ingestFixture(t, database.BookFile{})
+	store := &failFirstLinkStore{PebbleStore: pebble}
+	params := IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "deluge", TorrentHash: torrent,
+	}
+
+	first, linked, err := CreateIngestVersion(store, params)
+	if err != nil || linked {
+		t.Fatalf("first ingest: want created-but-unlinked, got linked=%v err=%v", linked, err)
+	}
+	again, linked, err := CreateIngestVersion(store, params)
+	if err != nil || !linked {
+		t.Fatalf("re-run: linked=%v err=%v", linked, err)
+	}
+	if again.ID != first.ID {
+		t.Errorf("re-run returned version %q, want the stranded %q adopted", again.ID, first.ID)
+	}
+	if vers, _ := pebble.GetBookVersionsByBookID(book.ID); len(vers) != 1 {
+		t.Errorf("want exactly 1 version after the re-run, got %d", len(vers))
+	}
+	got := storedRow(t, pebble, book.ID, "f1")
+	if got.VersionID != first.ID || got.DelugeHash != torrent {
+		t.Errorf("row: VersionID=%q DelugeHash=%q, want %q and %q", got.VersionID, got.DelugeHash, first.ID, torrent)
+	}
+	if v, _ := pebble.GetBookVersion(first.ID); v == nil || v.Status != database.BookVersionStatusActive {
+		t.Errorf("the adopted version must stay active, got %+v", v)
+	}
+	if idx, _ := pebble.GetBookVersionByTorrentHash(torrent); idx == nil || idx.ID != first.ID {
+		t.Errorf("torrent index must still name %q, got %+v", first.ID, idx)
 	}
 }
