@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-relink-pre-fix-imports-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c8b260fc-3025-4657-b8a0-573cbea538a5 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -18,11 +18,18 @@ Branch `feat/relink-pre-fix-imports`.
     version. A file attached to nothing is moved along with either version;
     once attached, it moves only with its own.
   - **Purging a version now deletes its file.** Once a file is attached,
-    trashing that version and then purging it ("purge now", or the automatic
-    cleanup 14 days after it was trashed) **deletes the file from disk**. For
-    these files that is usually a file in an import folder or a Deluge
-    download folder. Before this repair, purging one of these versions deleted
-    no audio. Every file imported since 10-10 already works this way.
+    purging that version **deletes the file from disk**. For these files that
+    is usually a file in an import folder or a Deluge download folder. Before
+    this repair, purging one of these versions deleted no audio. Every file
+    imported since 10-10 already works this way.
+    - "Purge now" deletes it immediately, whether the version was trashed or
+      not.
+    - **Trashing one of these versions deletes its file at the next daily
+      cleanup (06:00), not 14 days later.** The cleanup counts its 14 days
+      from when the version was created, not from when it was trashed, and
+      every one of these versions is older than that. A separate fix for that
+      is pending; until it lands, trashing one of these versions is as good
+      as purging it.
 - **A new repair does the attaching, and the owner reviews it first.** "Link
   pre-fix imports to their versions" is in the Repairs tab of the review page.
   Running a trial changes nothing. It lists every file of every book that has
@@ -40,10 +47,15 @@ Branch `feat/relink-pre-fix-imports`.
   10-10 did not record torrents, so the match for almost every file is "this
   book has one unattached version and one unattached file". To make that
   checkable, each row shows whether the version and the file agree: created at
-  the same time, the same format, the file still in an import folder (not
-  moved into the library), and the file not marked missing. A row where any of
-  these disagree is marked **review**, with the reason, and needs a look
-  before it is applied.
+  the same time, a consistent format, the file still in an import folder (not
+  moved into the library), and the file not marked missing. Imports never
+  recorded a format on the version, so the format check compares the file
+  record's format with the file's own extension. A row where any of these
+  disagree is marked **review**, with the reason, and needs a look before it
+  is applied. The trial's operation log says how many rows each check flags,
+  so the owner can see before applying whether one check flags nearly every
+  row (for example, every import from before 2026-08-25 fails the date check,
+  because its file record was created later by a scan).
 - **Everything else is listed and left alone.** That covers files whose
   torrent belongs to a different book, files that point at another book's
   version (usually left behind by a merge), files that point at a version
@@ -59,9 +71,12 @@ Branch `feat/relink-pre-fix-imports`.
   while holding the locks that keep a merge or an import of the same torrent
   from running at the same moment. The write itself changes only those fields
   on the record as it is at that moment, and is refused if the record's
-  version link, location or torrent changed, or the version was trashed, in
-  the meantime. Anything else someone changes on the same file at the same
-  moment (a track number, a missing mark) is kept, not undone. The same
+  version link, location or torrent changed since the trial, or the version
+  was trashed, in the meantime. Anything else someone changes on the same file
+  at the same moment (a track number, a missing mark) is kept, not undone.
+  One race is left: trashing the version in the same instant as the write can
+  still win, and until the cleanup fix above lands, that file is then deleted
+  at the next 06:00 cleanup. The same
   protection now covers the importer's own linking step. Running the repair
   again finds nothing new to link.
 - **Missing checksums are filled in on the way.** A linked file with no

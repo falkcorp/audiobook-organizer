@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -75,10 +75,18 @@ type IngestVersionParams struct {
 	// it (maintenance.relink-pre-fix-imports): a pass that planned "link this
 	// row to version V" must not mint a new version when V stopped being
 	// adoptable between its plan and its write, because no repair can take a
-	// created version back. A row that already names a version of BookID
-	// returns that version as before; the caller compares its ID. A link
-	// write the row's compare-and-set refuses returns ErrBookFileChanged (see
-	// CreateIngestVersion), also with nothing written.
+	// created version back.
+	//
+	// The row is also held to the caller's plan, not only to this call's own
+	// read of it: FilePath (as passed, before path validation cleans it) must
+	// equal the row's path, TorrentHash its DelugeHash, and the row must name
+	// no version. A row that fails any of these -- repointed, given a torrent,
+	// or linked by another writer after the caller planned it and before this
+	// call read it -- returns ErrBookFileChanged with nothing written, even
+	// when the version it now names is AdoptVersionID. The link write's own
+	// compare-and-set then holds the row to that read (see
+	// CreateIngestVersion), so the whole span from the caller's plan to the
+	// write is covered.
 	AdoptVersionID string
 	// FileHash is the file's identity hash (filehash.BookFileHash) when the
 	// caller computed it already. It is written onto the linked row only when
@@ -108,9 +116,10 @@ var ErrTorrentLinkedElsewhere = errors.New("torrent already linked to another li
 var ErrVersionNotAdoptable = errors.New("version is not the row's one stranded version")
 
 // ErrBookFileChanged is returned by an adopt-only CreateIngestVersion when the
-// link write's compare-and-set refuses the row: between the read the link was
-// decided on and the write, the row left the book, another writer linked it,
-// or its path or torrent hash changed. Nothing is created or written. Outside
+// row no longer matches the caller's plan (IngestVersionParams.AdoptVersionID)
+// or the link write's compare-and-set refuses it: between the caller's plan
+// and the write, the row left the book, another writer linked it, or its path
+// or torrent hash changed. Nothing is created or written. Outside
 // adopt-only mode the same refusal is reported as linked=false with a nil
 // error (logged), like any other link write that did not land.
 var ErrBookFileChanged = errors.New("book_file row changed before the link write")
@@ -179,12 +188,18 @@ func LockTorrent(hash string) (unlock func()) {
 //     to a version that does not carry it.
 //
 // A row moved to another book is not found under BookID and is refused the
-// same way. An adopted (not created) version is re-read inside the same
-// compare-and-set and the write is refused unless it is still a live version
-// of the book with the same torrent hash: the trash handler takes no lock, and
-// a link landing on a trashed version would have the 14-day purge delete the
-// file. This narrows that race to the commit itself; it does not close it,
-// because UpdateBookVersion takes no lock this function can hold.
+// same way. In adopt-only mode the row read is first held to the caller's plan
+// (see IngestVersionParams.AdoptVersionID), so a change that landed before
+// that read is refused too. An adopted (not created) version is re-read
+// inside the same compare-and-set and the write is refused unless it is still
+// a live version of the book with the same torrent hash: the trash handler
+// takes no lock, and a link landing on a trashed version would let a purge of
+// it delete the file. That purge can come at the very next daily trash
+// cleanup, because CleanupTrashedVersions counts its 14 days from the
+// version's creation, not from the trash (a separate fix is pending). This
+// narrows the race to the commit itself; it does not close it, because
+// UpdateBookVersion takes no lock this function can hold: a trash committed
+// in the same instant as the link can still win.
 //
 // It is idempotent per row: when the target row already carries a VersionID
 // naming a version of this book, that version is returned (linked=true) and
@@ -217,6 +232,9 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 
 	// Validate the path is inside an allowed directory before hashing the file
 	// (go/path-injection); use the cleaned absolute path downstream.
+	// plannedPath is the caller's path as passed; an adopt-only call holds
+	// the row to it (adoptRowMoved), and validation below may clean it.
+	plannedPath := params.FilePath
 	validPath, err := fileops.ValidateUserPath(store, params.FilePath)
 	if err != nil {
 		return nil, false, err
@@ -246,6 +264,17 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		} else if files[i].FilePath == params.FilePath {
 			target = i
 			break
+		}
+	}
+
+	// Adopt-only: hold the row this call read to the caller's plan before
+	// anything else, the already-linked short-circuit included. The link
+	// write's compare-and-set holds the row to this read, so together the two
+	// cover the span from the plan to the write.
+	if params.AdoptVersionID != "" && target >= 0 {
+		if why := adoptRowMoved(files[target], plannedPath, params.TorrentHash); why != "" {
+			return nil, false, fmt.Errorf("%w: book_file %s of book %s, version %s: %s",
+				ErrBookFileChanged, files[target].ID, params.BookID, params.AdoptVersionID, why)
 		}
 	}
 
@@ -440,6 +469,21 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		return refuseLink(params, f.ID, ver, ErrBookFileChanged, refused)
 	}
 	return ver, true, nil
+}
+
+// adoptRowMoved says why row no longer matches an adopt-only caller's plan --
+// the row at plannedPath, carrying torrentHash, naming no version -- or ""
+// when it does.
+func adoptRowMoved(row database.BookFile, plannedPath, torrentHash string) string {
+	switch {
+	case row.FilePath != plannedPath:
+		return "its path changed since the plan"
+	case row.DelugeHash != torrentHash:
+		return fmt.Sprintf("its torrent hash changed since the plan (planned: %q, now: %q)", torrentHash, row.DelugeHash)
+	case row.VersionID != "":
+		return "it was linked to version " + row.VersionID + " since the plan"
+	}
+	return ""
 }
 
 // errVersionMoved is the link write's internal signal that the adopted version
