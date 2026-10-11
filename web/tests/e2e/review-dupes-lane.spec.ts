@@ -1,5 +1,5 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.2.0
+// version: 2.3.0
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
 // last-edited: 2026-10-11
 
@@ -216,27 +216,40 @@ test.describe('the dupes lane of /review', () => {
   }) => {
     await setupPhase2Interactive(page);
     await mockDedupRoutes(page);
-    // Registered after the shared mocks, so it wins: only the acoustic layer
-    // holds a pair, which is how the layer filter shows up in the list.
+    // Registered after the shared mocks, so it wins. Two pending pairs, one per
+    // layer. The unfiltered list holds both and the acoustid-filtered list is
+    // the subset with layer acoustid, as the server's would be.
+    const acoustic = {
+      ...MOCK_CANDIDATE,
+      id: 43,
+      layer: 'acoustid',
+      entity_a_id: '01ABCDEFGHIJKLMNOPQRSTUV03',
+      entity_b_id: '01ABCDEFGHIJKLMNOPQRSTUV04',
+      book_a: { ...MOCK_CANDIDATE.book_a, id: '01ABCDEFGHIJKLMNOPQRSTUV03', title: 'Second Foundation' },
+      book_b: { ...MOCK_CANDIDATE.book_b, id: '01ABCDEFGHIJKLMNOPQRSTUV04', title: 'Second Foundation (Duplicate)' },
+    };
+    const all = [MOCK_CANDIDATE, acoustic];
     await page.route('**/api/v1/dedup/stats', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          data: { stats: [{ entity_type: 'book', layer: 'acoustid', status: 'pending', count: 1 }] },
+          data: {
+            stats: [
+              { entity_type: 'book', layer: 'embedding', status: 'pending', count: 1 },
+              { entity_type: 'book', layer: 'acoustid', status: 'pending', count: 1 },
+            ],
+          },
         }),
       })
     );
     await page.route('**/api/v1/dedup/candidates?**', (route) => {
-      const acoustic = new URL(route.request().url()).searchParams.get('layer') === 'acoustid';
+      const layer = new URL(route.request().url()).searchParams.get('layer');
+      const rows = layer ? all.filter((c) => c.layer === layer) : all;
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          data: acoustic
-            ? { candidates: [{ ...MOCK_CANDIDATE, layer: 'acoustid' }], total: 1 }
-            : { candidates: [], total: 0 },
-        }),
+        body: JSON.stringify({ data: { candidates: rows, total: rows.length } }),
       });
     });
 
@@ -245,10 +258,14 @@ test.describe('the dupes lane of /review', () => {
 
     const chip = page.locator('[data-testid="layer-chip-acoustid"]');
     await expect(chip).toHaveText('Acoustic (1)');
-    await expect(page.locator('[data-testid="dupes-total"]')).toContainText('0 candidates');
+    await expect(page.locator('[data-testid="layer-chip-all"]')).toHaveText('All layers (2)');
+    await expect(page.locator('[data-testid="dupes-row-42"]')).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-row-43"]')).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-total"]')).toContainText('2 candidates match');
 
     await chip.click();
-    await expect(bookALink(page)).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-row-43"]')).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-row-42"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="dupes-total"]')).toContainText('1 candidate match');
     // Seeded from the URL only: choosing a chip does not write it back.
     await expect(page).not.toHaveURL(/layer=/);

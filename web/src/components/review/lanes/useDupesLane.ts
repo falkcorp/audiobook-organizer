@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-10-11
 
@@ -104,13 +104,38 @@ export function filterChangedMessage(matched: number): string {
 export type DedupStatusFilter = 'pending' | 'merged' | 'dismissed' | '';
 
 /**
- * The candidate layers the lane can filter to: the three the retired Exact,
- * Acoustic and Embedding tabs each showed. Sent verbatim as the `layer` query
- * parameter of the list and bulk endpoints (and matched against the stats
- * rows' `layer`), so these are the server's own strings.
+ * The candidate layers the lane can filter to: every `layer` a book candidate
+ * row can carry, so the chips' counts add up to the list's total. Sent verbatim
+ * as the `layer` query parameter of the list and bulk endpoints (and matched
+ * against the stats rows' `layer`), so these are the server's own strings; the
+ * server binds `layer` as a free string, with no allow-list to keep in step.
+ *
+ * Where each comes from:
+ *  - exact / acoustid / embedding: the unified scoring pass (engine.go
+ *    layerNameForKind), by the strongest signal on the pair.
+ *  - book_signature: the book-signature scan.
+ *  - metadata_hash_match: the scanner, for a pair sharing a metadata source hash.
+ *  - llm: UpdateCandidateLLM REWRITES the layer of a pair the LLM judged, so a
+ *    reviewed pair leaves its collector's layer.
+ *  - manual: a pair a human enqueued.
  */
-export type DedupLayer = 'exact' | 'acoustid' | 'embedding';
-export const DEDUP_LAYERS: readonly DedupLayer[] = ['exact', 'acoustid', 'embedding'];
+export type DedupLayer =
+  | 'exact'
+  | 'acoustid'
+  | 'embedding'
+  | 'book_signature'
+  | 'metadata_hash_match'
+  | 'llm'
+  | 'manual';
+export const DEDUP_LAYERS: readonly DedupLayer[] = [
+  'exact',
+  'acoustid',
+  'embedding',
+  'book_signature',
+  'metadata_hash_match',
+  'llm',
+  'manual',
+];
 
 /** A URL value as a layer: anything that is not a known layer is null, never passed on. */
 export function parseDedupLayer(value: string | null | undefined): DedupLayer | null {
@@ -217,11 +242,20 @@ export interface DupesLane {
    */
   pendingTotal: number;
   /**
-   * Pending BOOK pairs per layer, from the same stats the hook already fetches
-   * (no extra request). Unfiltered by every other control, like `pendingTotal`;
-   * each count is what the matching layer chip opens.
+   * BOOK pairs per layer at the CURRENT status filter, from the same stats the
+   * hook already fetches (no extra request). The stats are grouped by status,
+   * so the counts follow `filters.status` (every status when it is ''): a chip
+   * opens the rows it counts, which stayed true of a pending-only count only
+   * while the status filter happened to be Pending. Unfiltered by every other
+   * control, like `pendingTotal`.
    */
-  pendingByLayer: Record<DedupLayer, number>;
+  countByLayer: Record<DedupLayer, number>;
+  /**
+   * Every BOOK pair at the current status filter whatever its layer: what
+   * "All layers" opens. Equals the sum of `countByLayer` unless a layer string
+   * the lane does not know exists, which is then the gap a chip is missing.
+   */
+  layerTotal: number;
 
   /**
    * The explicit selection. EMPTY in all-matching mode -- read
@@ -668,15 +702,21 @@ export function useDupesLane(
     [stats]
   );
 
-  const pendingByLayer = useMemo(() => {
-    const counts: Record<DedupLayer, number> = { exact: 0, acoustid: 0, embedding: 0 };
+  const { countByLayer, layerTotal } = useMemo(() => {
+    const counts = Object.fromEntries(DEDUP_LAYERS.map((l) => [l, 0])) as Record<
+      DedupLayer,
+      number
+    >;
+    let all = 0;
     for (const s of stats) {
-      if (s.entity_type !== 'book' || s.status !== 'pending') continue;
+      if (s.entity_type !== 'book') continue;
+      if (filters.status !== '' && s.status !== filters.status) continue;
+      all += s.count;
       const layer = parseDedupLayer(s.layer);
       if (layer) counts[layer] += s.count;
     }
-    return counts;
-  }, [stats]);
+    return { countByLayer: counts, layerTotal: all };
+  }, [stats, filters.status]);
 
   const mergeAllFilteredDisabledReason = filters.bothUnmatched
     ? MERGE_ALL_BLOCKED_REASON
@@ -1235,7 +1275,8 @@ export function useDupesLane(
     filters,
     setFilters,
     pendingTotal,
-    pendingByLayer,
+    countByLayer,
+    layerTotal,
     selectedIds,
     selection,
     selectAllMatchingDisabledReason,

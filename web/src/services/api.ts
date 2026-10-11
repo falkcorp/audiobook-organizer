@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.176.0
+// version: 2.177.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -220,6 +220,13 @@ export interface Book {
   // 0–100 coverage % of real (non-synthesized) audio in the book sig.
   // null / undefined = full coverage (all files contributed real fingerprints).
   book_sig_coverage_pct?: number | null;
+  /**
+   * Set only on the books of GET /dedup/candidates?include_books=true: the
+   * server's own answer to "is this an iTunes copy?" (itunesguard.OwnershipWhy:
+   * book or row persistent id, row iTunes path, iTunes external id, an iTunes
+   * Media or books/itunes path). Absent on every other endpoint's books.
+   */
+  is_itunes?: boolean;
 }
 
 export interface Author {

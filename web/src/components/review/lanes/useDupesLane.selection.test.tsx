@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
 // last-edited: 2026-10-11
 //
@@ -433,7 +433,7 @@ describe('DupesPanel select-all integration', () => {
     expect(await screen.findByTestId('layer-chip-acoustid')).toHaveTextContent('Acoustic (12)');
     expect(screen.getByTestId('layer-chip-exact')).toHaveTextContent('Exact (4)');
     expect(screen.getByTestId('layer-chip-embedding')).toHaveTextContent('Embedding (0)');
-    expect(screen.getByTestId('layer-chip-all')).toHaveTextContent('All layers');
+    expect(screen.getByTestId('layer-chip-all')).toHaveTextContent('All layers (16)');
 
     await user.click(screen.getByTestId('layer-chip-acoustid'));
     await waitFor(() =>
@@ -446,6 +446,103 @@ describe('DupesPanel select-all integration', () => {
     await user.click(screen.getByTestId('layer-chip-acoustid'));
     await waitFor(() =>
       expect(vi.mocked(api.getDedupCandidates).mock.calls.at(-1)?.[0]).not.toHaveProperty('layer')
+    );
+  });
+
+  it('every layer a candidate can carry has a chip, and the chips add up to the total', async () => {
+    const layers = [
+      ['exact', 1],
+      ['acoustid', 2],
+      ['embedding', 3],
+      ['book_signature', 4],
+      ['metadata_hash_match', 5],
+      ['llm', 6],
+      ['manual', 7],
+    ] as const;
+    vi.mocked(api.getDedupStats).mockResolvedValue({
+      stats: [
+        ...layers.map(([layer, count]) => ({
+          entity_type: 'book',
+          layer,
+          status: 'pending',
+          count,
+        })),
+        // Not a book pair, so it is in no chip and not in the total.
+        { entity_type: 'author', layer: 'exact', status: 'pending', count: 90 },
+      ],
+    });
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    expect(await screen.findByTestId('layer-chip-llm')).toHaveTextContent('LLM (6)');
+    expect(screen.getByTestId('layer-chip-book_signature')).toHaveTextContent(
+      'Book signature (4)'
+    );
+    const sum = layers.reduce((n, [, c]) => n + c, 0);
+    expect(screen.getByTestId('layer-chip-all')).toHaveTextContent(`All layers (${sum})`);
+    for (const [layer, count] of layers) {
+      expect(screen.getByTestId(`layer-chip-${layer}`)).toHaveTextContent(`(${count})`);
+    }
+  });
+
+  it('a layer chip opens the rows it counts: counts follow the status filter', async () => {
+    vi.mocked(api.getDedupStats).mockResolvedValue({
+      stats: [
+        { entity_type: 'book', layer: 'exact', status: 'pending', count: 4 },
+        { entity_type: 'book', layer: 'exact', status: 'merged', count: 30 },
+        { entity_type: 'book', layer: 'llm', status: 'dismissed', count: 8 },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    expect(await screen.findByTestId('layer-chip-exact')).toHaveTextContent('Exact (4)');
+    expect(screen.getByTestId('layer-chip-llm')).toHaveTextContent('LLM (0)');
+
+    await user.click(await screen.findByRole('combobox', { name: 'Status' }));
+    await user.click(await screen.findByRole('option', { name: 'Merged' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('layer-chip-exact')).toHaveTextContent('Exact (30)')
+    );
+    expect(screen.getByTestId('layer-chip-all')).toHaveTextContent('All layers (30)');
+
+    await user.click(await screen.findByRole('combobox', { name: 'Status' }));
+    await user.click(await screen.findByRole('option', { name: 'All' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('layer-chip-exact')).toHaveTextContent('Exact (34)')
+    );
+    expect(screen.getByTestId('layer-chip-llm')).toHaveTextContent('LLM (8)');
+    expect(screen.getByTestId('layer-chip-all')).toHaveTextContent('All layers (42)');
+  });
+
+  it('clicking All layers while it is already active changes nothing: no refetch, selection kept', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByRole('checkbox', { name: 'Select candidate 2' }));
+    expect(screen.getByTestId('dupes-selected-count')).toHaveTextContent('1 selected');
+    const fetches = vi.mocked(api.getDedupCandidates).mock.calls.length;
+
+    await user.click(screen.getByTestId('layer-chip-all'));
+
+    expect(screen.getByTestId('dupes-selected-count')).toHaveTextContent('1 selected');
+    expect(vi.mocked(api.getDedupCandidates).mock.calls.length).toBe(fetches);
+  });
+
+  it('the (all N) buttons name the server count once it has arrived', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    // Until the count is fetched the list total stands in.
+    expect(screen.getByTestId('keep-older-all')).toHaveTextContent(`(all ${TOTAL})`);
+    // Selecting the page makes the lane ask the server for the filter's count,
+    // the same value the select-all banner then offers.
+    await user.click(screen.getByRole('checkbox', { name: 'Select all 5 on this page' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('keep-older-all')).toHaveTextContent(`(all ${COUNT})`)
+    );
+    expect(screen.getByTestId('keep-newer-all')).toHaveTextContent(`(all ${COUNT})`);
+    expect(screen.getByTestId('dupes-select-all-matching')).toHaveTextContent(
+      `Select all ${COUNT} matching`
     );
   });
 
@@ -478,5 +575,34 @@ describe('DupesPanel select-all integration', () => {
     await user.click(await screen.findByRole('option', { name: 'Merged' }));
     await waitFor(() => expect(screen.queryByTestId('keep-older-all')).not.toBeInTheDocument());
     expect(screen.queryByTestId('keep-newer-all')).not.toBeInTheDocument();
+  });
+
+  it('keep-newer over the whole filter confirms the count and sends keep_side b', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByTestId('keep-newer-all'));
+    const dialog = await screen.findByTestId('dupes-bulk-confirm');
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(`Keep the newer record of all ${COUNT} matching pairs?`)
+    );
+    expect(dialog).toHaveTextContent(
+      `Keeps the newer record of every one of the ${COUNT} matching pairs`
+    );
+    await user.click(within(dialog).getByTestId('dupes-bulk-confirm-btn'));
+    await waitFor(() => expect(api.bulkLinkDedupCandidates).toHaveBeenCalledTimes(1));
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ keep_side: 'b', expected_total: COUNT })
+    );
+  });
+
+  it('keep-older and keep-newer are disabled with the reason while Both unmatched is on', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByText('Both unmatched'));
+    await waitFor(() => expect(screen.getByTestId('keep-older-all')).toBeDisabled());
+    expect(screen.getByTestId('keep-newer-all')).toBeDisabled();
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
   });
 });
