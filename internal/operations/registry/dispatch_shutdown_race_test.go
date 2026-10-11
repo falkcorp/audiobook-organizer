@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatch_shutdown_race_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c67f935-8917-41f9-8b65-e03988c07b12
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 // White-box regression tests for OPS-V2-DISPATCH-RACE: a run must never START
 // after Shutdown has begun.
@@ -204,8 +204,8 @@ func TestShutdown_ReleasesBufferedClaimWithoutStatus(t *testing.T) {
 func TestShutdown_TimeoutReleasesStubsAndInterruptsRuns(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
 	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
-	store.EXPECT().UpdateOperationV2Status("op-run", "interrupted_dropped", mock.Anything, mock.Anything, mock.Anything).
-		Return(nil).Once()
+	store.EXPECT().UpdateOperationV2StatusIf("op-run", "running", "interrupted_dropped", mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Once()
 
 	def := plainDef("test.plain") // ResumeDrop
 	r := New(store, slog.Default(), 2, nil)
@@ -227,6 +227,36 @@ func TestShutdown_TimeoutReleasesStubsAndInterruptsRuns(t *testing.T) {
 	defer r.mu.RUnlock()
 	require.NotContains(t, r.running, "op-stub", "the never-run claim must be released, not interrupted")
 	require.Contains(t, r.running, "op-run", "a real run stays registered until its goroutine exits")
+}
+
+// TestShutdown_TimeoutStampsAUserCanceledRunCanceled: a run the user canceled
+// (Cancel set userCanceled and left the row to the run) that is still going
+// at the shutdown timeout is stamped "canceled", not a resumable interrupted
+// status the next boot would resume, and the stamp is a compare-and-set from
+// "running" so it cannot overwrite a "canceled" Cancel already wrote.
+func TestShutdown_TimeoutStampsAUserCanceledRunCanceled(t *testing.T) {
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
+	store.EXPECT().UpdateOperationV2StatusIf("op-run", "running", "canceled", mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Once()
+
+	def := plainDef("test.plain")
+	def.ResumePolicy = ResumeRestart // would otherwise be stamped interrupted_quiesced
+	r := New(store, slog.Default(), 2, nil)
+	require.NoError(t, r.RegisterOp(def))
+	h := &runHandle{
+		id: "op-run", defID: def.ID, plugin: def.Plugin, resumePolicy: def.ResumePolicy,
+		cancel: func() {}, // a running op that ignores cancellation
+	}
+	h.userCanceled.Store(true)
+	r.mu.Lock()
+	r.pluginRunning[def.Plugin]++
+	r.running["op-run"] = h
+	r.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, r.Shutdown(ctx), context.DeadlineExceeded)
 }
 
 // plantStub publishes a claim exactly as dispatchCycle does: a stub handle

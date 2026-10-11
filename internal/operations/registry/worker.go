@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.31.0
+// version: 2.32.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -90,6 +90,11 @@ type runHandle struct {
 	// Recording the intent at the cancel site is the only ordering-independent
 	// answer.
 	userCanceled atomic.Bool
+	// claimed is set once this run's queued->running compare-and-set applied.
+	// The full handle is registered before that claim (and before the scan
+	// stand-down pickup gate), so Registry.Cancel reads it to know whether it
+	// stopped a run that had started or only a handle that might never run.
+	claimed atomic.Bool
 	// queuedCancel is set by Registry.Cancel on a dispatcher STUB handle (nil
 	// cancel func) when the op is canceled while sitting in the buffered
 	// nextRun channel. The worker checks it — under Registry.mu, the same lock
@@ -429,9 +434,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// A cancel that found this handle (it is registered, so Cancel takes it
 		// for a live run) set userCanceled and may have read the row before
 		// the write above. Honor it now, from the status just written.
-		status = r.cancelInterruptedIfUserCanceled(qr, h, status, &quiescedAt)
+		out := r.settleInterrupted(qr, h, status, &quiescedAt)
+		status = out.status
 		r.releaseRunHandle(qr.opID)
-		r.publishOpTerminal(qr.opID, qr.defID, status)
+		if out.publish {
+			r.publishOpTerminal(qr.opID, qr.defID, status)
+		}
 		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
 		// Without this the dropped scan was never recorded anywhere a release
 		// reads, so it sat interrupted_quiesced until the next startup sweep.
@@ -464,6 +472,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// left alone. A failed write leaves the row as it was: still queued, it is
 	// dispatched again next cycle; anything else, it was not ours to run.
 	started, casErr := r.store.SetOperationV2StatusIfQueued(qr.opID, "running")
+	if casErr == nil && started {
+		// Registry.Cancel reads this to tell a run it stopped from a handle
+		// whose run never started (cancelIntent.stopped).
+		h.claimed.Store(true)
+	}
 	if casErr != nil || !started {
 		close(h.parked)
 		r.releaseRunHandle(qr.opID)
@@ -539,9 +552,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		} else {
 			finalStatus = "completed"
 		}
-		finalStatus = r.writeRunTerminalStatus(qr, h, finalStatus, &completedAt, errMsg)
+		out := r.writeRunTerminalStatus(qr, h, finalStatus, &completedAt, errMsg)
+		finalStatus = out.status
 		// R-1: fan out op.terminal so the UI bell stops showing this op as running.
-		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
+		if out.publish {
+			r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
+		}
 		r.recordRunMetrics(qr.defID, finalStatus, runStartedAt)
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
@@ -683,7 +699,8 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			if reason != nil {
 				abandonMsg += "; " + *reason
 			}
-			abandonStatus = r.writeRunTerminalStatus(qr, h, abandonStatus, &abandonedAt, &abandonMsg)
+			abandonOut := r.writeRunTerminalStatus(qr, h, abandonStatus, &abandonedAt, &abandonMsg)
+			abandonStatus = abandonOut.status
 			// R-3: the runaway goroutine keeps calling reporter.Log even though
 			// its flushLoop has exited (runCtx canceled) — the buffered lines are
 			// unrecoverable by design, so flip the reporter's terminal flag to make
@@ -692,7 +709,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				dbr.markTerminal()
 			}
 			// R-1: fan out op.terminal for the abandonment transition.
-			r.publishOpTerminal(qr.opID, qr.defID, abandonStatus)
+			if abandonOut.publish {
+				r.publishOpTerminal(qr.opID, qr.defID, abandonStatus)
+			}
 			// Terminal transition: resolve dep-waiting subjects now rather than
 			// leaving them to the 5m sweep (C-5).
 			for _, sub := range subjectsFromParams(qr.params) {
@@ -742,10 +761,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		finalStatus = "completed"
 	}
 
-	finalStatus = r.writeRunTerminalStatus(qr, h, finalStatus, &completedAt, errMsg)
+	out := r.writeRunTerminalStatus(qr, h, finalStatus, &completedAt, errMsg)
+	finalStatus = out.status
 
 	// R-1: fan out op.terminal so the UI bell stops showing this op as running.
-	r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
+	if out.publish {
+		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
+	}
 	r.recordRunMetrics(qr.defID, finalStatus, runStartedAt)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
@@ -762,34 +784,59 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 // retries when the row is not "running" (see there).
 const runTerminalWriteAttempts = 4
 
-// writeRunTerminalStatus writes the final status of a run that reached Run
-// and returns the status the row ends with, which is what the caller then
-// publishes, counts and logs.
+// terminalOutcome is what a worker's final status write left behind.
+type terminalOutcome struct {
+	// status is the row's final status as far as this worker knows: what the
+	// caller counts, logs and hands to the deps scheduler.
+	status string
+	// publish is false when another writer (Registry.Cancel) put status on
+	// the row and already published op.terminal for it, so the worker must
+	// not publish again -- or, for a stale interrupted_* status, at all.
+	publish bool
+}
+
+// keepsUserCancel reports whether a run whose own outcome is status should
+// leave a user's "canceled" on its row. An interrupted_* status would make a
+// canceled run resumable (the stand-down release or the boot sweep re-queues
+// it), and "canceled" agrees with the cancel. A run that completed or failed
+// did finish: its outcome stands over the cancel, exactly as when a cancel
+// reaches the live handle too late to stop it.
+func keepsUserCancel(status string) bool {
+	return status == "canceled" || strings.HasPrefix(status, "interrupted_")
+}
+
+// writeRunTerminalStatus writes the final status of a run that reached Run.
 //
-// The write is a compare-and-set from "running" so it never overwrites a
-// user's cancel. Every exit path releases the run's handle BEFORE it decides
-// and writes the final status, so in that gap the row reads "running" with no
-// handle, and Registry.Cancel cancels such a row itself (cancelByRow). An
-// unconditional write here replaced that "canceled": for a scan quiesced by a
-// stand-down it wrote interrupted_quiesced, and the stand-down release
-// re-queued the scan the user had canceled. So when the row is not "running":
-//   - "canceled": the user's cancel stands, and "canceled" is returned;
+// The write is a compare-and-set from "running". Every exit path releases the
+// run's handle BEFORE it decides and writes the final status, so in that gap
+// the row reads "running" with no handle, and Registry.Cancel cancels such a
+// row itself (cancelByRow). So when the row is not "running":
+//   - "canceled", and the run's outcome is interrupted_* or canceled
+//     (keepsUserCancel): the cancel stands. An unconditional write here wrote
+//     interrupted_quiesced over it for a scan quiesced by a stand-down, and
+//     the stand-down release re-queued the scan the user had canceled.
+//   - "canceled", and the run completed or failed: the run's outcome is
+//     written over "canceled" (compare-and-set from "canceled"). Keeping the
+//     cancel recorded completed work as canceled, and the deps scheduler then
+//     failed every dependent waiting on it.
 //   - anything else (Shutdown stamps an interrupted status on a run that did
 //     not drain in time): the run's own outcome is written over it, as the
 //     unconditional write always did, with a compare-and-set from what was
 //     read.
 //
-// A store error is logged and the decided status returned, as before.
-// Finally cancelInterruptedIfUserCanceled covers the other order: a cancel
-// that set userCanceled after the status was decided.
-func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status string, completedAt *time.Time, errMsg *string) string {
+// A store error, or a row that keeps changing, is logged and the decided
+// status returned, as before: it is the run's own outcome and always a final
+// status for the run, never a live one the row might momentarily hold.
+// settleInterrupted then covers the other order: a cancel that set
+// userCanceled after the status was decided.
+func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status string, completedAt *time.Time, errMsg *string) terminalOutcome {
 	from := "running"
 	for attempt := 1; ; attempt++ {
 		applied, err := r.store.UpdateOperationV2StatusIf(qr.opID, from, status, nil, completedAt, errMsg)
 		if err != nil {
 			r.logger.Warn("registry: failed to write op terminal status",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", err)
-			return status
+			return terminalOutcome{status: status, publish: true}
 		}
 		if applied {
 			break
@@ -798,26 +845,31 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status st
 		if gerr != nil || row == nil || row.ID == "" {
 			r.logger.Warn("registry: op terminal status not written; the row is no longer running and could not be re-read",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", gerr)
-			return status
+			return terminalOutcome{status: status, publish: true}
+		}
+		if row.Status == "canceled" && keepsUserCancel(status) {
+			r.logger.Info("registry: run stopped after its row was canceled; keeping canceled",
+				"op_id", qr.opID, "def_id", qr.defID, "run_status", status)
+			// Cancel wrote and published it.
+			return terminalOutcome{status: "canceled", publish: false}
 		}
 		if row.Status == "canceled" {
-			r.logger.Info("registry: run finished after its row was canceled; keeping canceled",
+			r.logger.Info("registry: run finished before the cancel could stop it; recording its outcome over canceled",
 				"op_id", qr.opID, "def_id", qr.defID, "run_status", status)
-			return "canceled"
 		}
 		if attempt >= runTerminalWriteAttempts {
 			r.logger.Warn("registry: op terminal status not written; the row's status kept changing",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "row_status", row.Status)
-			return row.Status
+			return terminalOutcome{status: status, publish: true}
 		}
 		from = row.Status
 	}
-	return r.cancelInterruptedIfUserCanceled(qr, h, status, completedAt)
+	return r.settleInterrupted(qr, h, status, completedAt)
 }
 
-// cancelInterruptedIfUserCanceled turns an interrupted_* status this worker
-// has just written into "canceled" when the user canceled the run meanwhile,
-// and returns the status the row ends with.
+// settleInterrupted runs after this worker wrote status to its row. For an
+// interrupted_* status it settles a racing user cancel; any other status is
+// returned as written.
 //
 // finalStatusForCanceledRun reads userCanceled once, when it decides. A cancel
 // that sets the flag after that decision (Cancel found the handle, then the
@@ -825,27 +877,33 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status st
 // status on shutdown) relies on its own read of the row to cancel it, which
 // it makes only after setting the flag; if that read came before this
 // worker's write it saw "running" and stopped there. Checking the flag after
-// the write closes that: either this check sees the flag, or the cancel's
-// read comes after the write and cancels the interrupted row itself. The
-// compare-and-set is from the status just written, so it never undoes a
-// status anyone else wrote since.
-func (r *Registry) cancelInterruptedIfUserCanceled(qr *queuedRun, h *runHandle, status string, completedAt *time.Time) string {
-	if h == nil || !strings.HasPrefix(status, "interrupted_") || !h.userCanceled.Load() {
-		return status
+// the write closes that: either this check sees the flag and moves the row to
+// "canceled" (a compare-and-set from the status just written, so it never
+// undoes anyone else's write), or the cancel's read comes after the write and
+// cancels the interrupted row itself. In that second case the row is
+// "canceled" and Cancel published it, so the stale interrupted status is not
+// published; the re-read narrows that window, it cannot close it (Cancel may
+// still land after it), and the row is right either way.
+func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status string, completedAt *time.Time) terminalOutcome {
+	if !strings.HasPrefix(status, "interrupted_") {
+		return terminalOutcome{status: status, publish: true}
 	}
-	msg := "canceled by user while the run was being interrupted"
-	applied, err := r.store.UpdateOperationV2StatusIf(qr.opID, status, "canceled", nil, completedAt, &msg)
-	if err != nil {
-		r.logger.Warn("registry: failed to record a user cancel over an interrupted status",
-			"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", err)
-		return status
+	if h != nil && h.userCanceled.Load() {
+		msg := "canceled by user while the run was being interrupted"
+		applied, err := r.store.UpdateOperationV2StatusIf(qr.opID, status, "canceled", nil, completedAt, &msg)
+		if err != nil {
+			r.logger.Warn("registry: failed to record a user cancel over an interrupted status",
+				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", err)
+		} else if applied {
+			r.logger.Info("registry: user canceled the run while it was being interrupted; recorded canceled",
+				"op_id", qr.opID, "def_id", qr.defID, "interrupted_status", status)
+			return terminalOutcome{status: "canceled", publish: true}
+		}
 	}
-	if !applied {
-		return status
+	if row, err := r.store.GetOperationV2(qr.opID); err == nil && row != nil && row.Status == "canceled" {
+		return terminalOutcome{status: "canceled", publish: false}
 	}
-	r.logger.Info("registry: user canceled the run while it was being interrupted; recorded canceled",
-		"op_id", qr.opID, "def_id", qr.defID, "interrupted_status", status)
-	return "canceled"
+	return terminalOutcome{status: status, publish: true}
 }
 
 // recordRunMetrics publishes one finished run attempt to the Prometheus
