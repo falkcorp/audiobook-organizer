@@ -1,7 +1,7 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package aidispatch
 
@@ -192,6 +192,20 @@ func modelFor(ep Endpoint, spec Spec) (string, bool) {
 		return ep.EmbedModel, ep.EmbedModel != ""
 	}
 	return "", true
+}
+
+// ModelFor returns the model a call for c sends to ep, and whether ep has one:
+// the capability's override in CapabilityModels, else the endpoint's chat or
+// embed model by the capability's kind. It is the model Call puts in
+// Target.Model, exported so a consumer that needs to know which models a pool
+// can be asked for (the AI metrics' model-label set) resolves them the way the
+// dispatcher does instead of copying the rule. false for an unregistered c.
+func ModelFor(ep Endpoint, c Capability) (string, bool) {
+	spec, ok := Lookup(c)
+	if !ok {
+		return "", false
+	}
+	return modelFor(ep, spec)
 }
 
 // refuse returns why ep cannot serve spec, or "" if it can (ignoring

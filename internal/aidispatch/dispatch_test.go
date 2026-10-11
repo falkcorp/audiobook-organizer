@@ -1,7 +1,7 @@
 // file: internal/aidispatch/dispatch_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 29aa8b75-6c17-4559-9e41-f39e445566bd
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package aidispatch
 
@@ -466,5 +466,37 @@ func TestCall_RaceNeverExceedsConcurrency(t *testing.T) {
 	}
 	if ok.Load() == 0 || failed.Load()+ok.Load() != goroutines*perG {
 		t.Errorf("ok %d failed %d", ok.Load(), failed.Load())
+	}
+}
+
+// ModelFor is the model Call hands the callback: a consumer that predicts the
+// models a pool is asked for must get the same answer the call path does.
+func TestModelForMatchesCallTargetModel(t *testing.T) {
+	ep := chatEP("a", 1, LLMFilenameParse.ID(), LLMMetadataRerank.ID(), EmbedText.ID())
+	ep.CapabilityModels = map[string]string{LLMFilenameParse.ID(): "cap-m"}
+	for _, c := range []struct {
+		cap  Capability
+		want string
+	}{
+		{LLMFilenameParse, "cap-m"},   // the capability override wins
+		{LLMMetadataRerank, "chat-m"}, // chat kind falls back to the chat model
+		{EmbedText, "embed-m"},        // embed kind falls back to the embed model
+	} {
+		got, ok := ModelFor(ep, c.cap)
+		if !ok || got != c.want {
+			t.Errorf("ModelFor(%s) = %q, %v; want %q", c.cap, got, ok, c.want)
+		}
+		d := isolated([]Endpoint{ep}, WithPinnedModel(EmbedText, "embed-m"))
+		sent, err := Call(context.Background(), d, c.cap, func(_ context.Context, tg Target) (string, error) { return tg.Model, nil })
+		if err != nil || sent != got {
+			t.Errorf("Call(%s) sent %q, %v; ModelFor said %q", c.cap, sent, err, got)
+		}
+	}
+	bare := Endpoint{ID: "b", Protocol: ProtocolOpenAICompat, Enabled: true}
+	if m, ok := ModelFor(bare, LLMFilenameParse); ok || m != "" {
+		t.Errorf("an endpoint with no model: ModelFor = %q, %v; want \"\", false", m, ok)
+	}
+	if _, ok := ModelFor(ep, Capability{}); ok {
+		t.Error("ModelFor of an unregistered capability reported a model")
 	}
 }
