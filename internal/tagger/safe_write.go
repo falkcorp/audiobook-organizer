@@ -1,5 +1,5 @@
 // file: internal/tagger/safe_write.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
 // last-edited: 2026-10-11
 //
@@ -113,7 +113,8 @@ type SafeWriteDeps struct {
 	// Provenance, when set, receives a FileEventObserved event with the diff
 	// when verify_after_write finds the file differs from what was written.
 	// When nil, a HashStore that also implements database.FileProvenanceRecorder
-	// (the production store does) is used.
+	// (the production store does, resolved through any
+	// store decorator that opts in via database.StoreUnwrapper) is used.
 	Provenance database.FileProvenanceRecorder
 }
 
@@ -264,7 +265,10 @@ func equalValues(a, b []string) bool {
 func (deps SafeWriteDeps) recordVerifyFailure(bookFileID string, verr *VerifyAfterWriteError) {
 	rec := deps.Provenance
 	if rec == nil {
-		rec, _ = deps.HashStore.(database.FileProvenanceRecorder)
+		// Not a bare assertion: production's HashStore is a decorator that
+		// embeds database.Store, which hides capability methods. See
+		// database.AsCapability.
+		rec, _ = database.AsCapability[database.FileProvenanceRecorder](deps.HashStore)
 	}
 	fileops.RecordObserved(rec, bookFileID, "tagger", verr.Path,
 		"verify_after_write mismatch: "+strings.Join(verr.Keys, ", "))
