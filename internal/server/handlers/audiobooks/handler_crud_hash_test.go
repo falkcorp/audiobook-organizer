@@ -1,11 +1,12 @@
 // file: internal/server/handlers/audiobooks/handler_crud_hash_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4e1a73-8d25-4f6b-b3e0-7a2d6f9c1e58
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package audiobookshandler_test
 
 import (
+	"context"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 // Review round 4, item 1 (audit A3 item 9): the book PATCH write-back rewrote
@@ -84,5 +87,61 @@ func TestUpdateAudiobook_WriteBackRecordsNewFileHash(t *testing.T) {
 	}
 	if row.OriginalFileHash != before {
 		t.Errorf("OriginalFileHash = %q, want the pre-write %q", row.OriginalFileHash, before)
+	}
+}
+
+// The book PATCH write-back passes the request's ctx to the tag write, so the
+// create_backups decision follows it: with create_backups on, a request ctx
+// carrying the tagger.WithoutBackup opt-out leaves no .bak-* sibling, and a
+// plain one leaves exactly one. The write used a background context before,
+// which took a backup whatever the caller's ctx said.
+func TestUpdateAudiobook_WriteBackBackupFollowsRequestContext(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not on PATH")
+	}
+	prev := config.Snapshot().CreateBackups
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
+	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
+
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		wantBaks int
+	}{
+		{"request ctx opts out (WithoutBackup)", tagger.WithoutBackup(context.Background()), 0},
+		{"plain request ctx", context.Background(), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "book.mp3")
+			gen := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+				"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1",
+				"-c:a", "libmp3lame", "-b:a", "64k", path)
+			if out, err := gen.CombinedOutput(); err != nil {
+				t.Fatalf("ffmpeg: %v: %s", err, out)
+			}
+
+			h, d := newHandler(t)
+			d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
+				Return(&database.Book{ID: "b1", Title: "Synthetic Title", FilePath: path}, nil, nil)
+			d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{}, nil).Maybe()
+			d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
+			d.store.EXPECT().SetLastWrittenAt("b1", mock.Anything).Return(nil)
+			d.svc.EXPECT().InvalidateListCache().Return()
+			c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "Synthetic Title"}, p("id", "b1"))
+			c.Request = c.Request.WithContext(tc.ctx)
+			h.UpdateAudiobook(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+			}
+
+			baks, err := filepath.Glob(path + ".bak-*")
+			if err != nil {
+				t.Fatalf("glob: %v", err)
+			}
+			if len(baks) != tc.wantBaks {
+				t.Errorf("backup siblings = %v, want %d", baks, tc.wantBaks)
+			}
+		})
 	}
 }

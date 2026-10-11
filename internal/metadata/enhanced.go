@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.28.3
+// version: 1.29.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-11
 
@@ -468,6 +468,19 @@ func WriteMetadataToFileInPlace(filePath string, metadata map[string]any, config
 	return writeMetadataViaCLI(filePath, metadata, config)
 }
 
+// WriteMetadataToFile is WriteMetadataToFileContext with a background
+// context, so the write keeps a .bak-* backup when create_backups is on. A
+// caller with a context of its own passes it to WriteMetadataToFileContext,
+// so a tagger.WithoutBackup opt-out on it holds.
+func WriteMetadataToFile(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
+	return WriteMetadataToFileContext(context.Background(), filePath, metadata, config)
+}
+
+// WriteMetadataToFileContext writes metadata to filePath, with ctx reaching
+// the protected-path guard, the native writer and the create_backups
+// decision for the CLI fallback, as WriteSingleTagContext does for a single
+// tag.
+//
 // The protected-path guard runs FIRST, for every writer below: the path is
 // resolved once (tagger.ResolvePathForWrite with the package's safe-write
 // deps) and the native writer and the CLI fallback both write the resolved
@@ -475,12 +488,12 @@ func WriteMetadataToFileInPlace(filePath string, metadata map[string]any, config
 // 2026-09-14 the guard ran only inside the native writer, and its refusal
 // was treated as a native failure: the CLI writers (AtomicParsley
 // --overWrite, ffmpeg) then rewrote the ORIGINAL protected file.
-func WriteMetadataToFile(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
+func WriteMetadataToFileContext(ctx context.Context, filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	target := filePath
 	if abs, err := filepath.Abs(filePath); err == nil {
 		target = abs
 	}
-	target, err := tagger.ResolvePathForWrite(context.Background(), target, packageSafeWriteDeps)
+	target, err := tagger.ResolvePathForWrite(ctx, target, packageSafeWriteDeps)
 	if err != nil {
 		return fmt.Errorf("write metadata to %s: %w", filePath, err)
 	}
@@ -489,9 +502,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 	// Upstream taglib v0.11.1+ writes custom freeform atoms natively for MP4.
 	// Do NOT run ffmpeg after taglib — ffmpeg's -map_metadata strips freeform atoms.
 	if taglibAvailable {
-		// Every caller is a single-book edit (the PATCH write-back), so the write
-		// keeps a backup when create_backups is on.
-		nativeErr := writeMetadataWithTaglib(context.Background(), target, metadata, config)
+		nativeErr := writeMetadataWithTaglib(ctx, target, metadata, config)
 		if nativeErr == nil {
 			return nil
 		}
@@ -510,7 +521,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 	// touching the file, so it gets no backup.
 	var bak string
 	var before os.FileInfo
-	if cliWriterSupports(target) && tagger.BackupWanted(context.Background()) {
+	if cliWriterSupports(target) && tagger.BackupWanted(ctx) {
 		var berr error
 		if bak, berr = fileops.KeepBackupCopy(target); berr != nil {
 			return fmt.Errorf("write metadata to %s: backup before CLI write: %w", filePath, berr)

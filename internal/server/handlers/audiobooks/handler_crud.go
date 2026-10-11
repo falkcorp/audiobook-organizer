@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -122,7 +122,9 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 				slog.Info("skipping write-back for protected path", "updatedBook", logger.SanitizeLogValue(updatedBook.FilePath))
 			} else {
 				opConfig := fileops.OperationConfig{VerifyChecksums: true}
-				if writeErr := metadata.WriteMetadataToFile(updatedBook.FilePath, tagMap, opConfig); writeErr != nil {
+				// The request's ctx, as the per-book write-back passes it, so
+				// the create_backups decision follows the caller's context.
+				if writeErr := metadata.WriteMetadataToFileContext(c.Request.Context(), updatedBook.FilePath, tagMap, opConfig); writeErr != nil {
 					slog.Warn("write-back failed for", "updatedBook", logger.SanitizeLogValue(updatedBook.FilePath), "writeErr", logger.SanitizeLogValue(fmt.Sprint(writeErr)))
 				} else {
 					// Stamp last_written_at after successful write-back.

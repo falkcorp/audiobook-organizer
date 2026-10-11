@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.7 -->
+<!-- version: 10.76.8 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -99,11 +99,13 @@ into one of the curated sections below, is a normal direct edit.
       `internal/metadata/taglib_cgo.go` is only vetted by hand, so a change to
       its signatures or its create_backups handling can break that build
       unnoticed (found in the PR #3919 review, N5).
-- [ ] **ORGANIZE-FETCH-REFETCH** `organizer.PerformOrganizeStats` with
-      `fetch_metadata_first` re-reads the WHOLE library (`GetAllBooksCore`
+- [x] **ORGANIZE-FETCH-REFETCH** `organizer.PerformOrganizeStats` with
+      `fetch_metadata_first` re-read the WHOLE library (`GetAllBooksCore`
       pages) after the fetch even when the request named specific `BookIDs`,
-      so a fetch-first organize of a few books goes on to organize every book.
-      Re-read only the requested IDs.
+      so a fetch-first organize of a few books went on to organize every book.
+      Done in 62eb02ade: both loads go through `loadCandidates`, which keeps
+      the `BookIDs` and `FolderPath` scope on the reload
+      (`TestOrganizeFolderScope_FetchMetadataFirstKeepsBookIDsScope`).
 - [ ] **BACKUP-SWEEP-CONSOLIDATE** Three "delete old backups" implementations
       exist: `maintenance.cleanup-old-backups`, `scheduler.cleanup-old-backups`
       (both age by `fileops.BackupTime`) and the manual `cleanup-backups` job,
