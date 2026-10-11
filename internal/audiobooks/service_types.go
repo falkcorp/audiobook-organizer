@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -189,7 +189,7 @@ type DeleteAudiobookOptions struct {
 // PerUserFieldNames is the set of search fields whose values come from
 // per-user state (database.UserBookState) rather than book columns.
 // Handlers use this to split incoming FieldFilters between the global
-// pass (matchesFieldFilters) and the per-user pass.
+// pass (matchesCompiledFilters) and the per-user pass.
 var PerUserFieldNames = map[string]struct{}{
 	"read_status":  {},
 	"progress_pct": {},

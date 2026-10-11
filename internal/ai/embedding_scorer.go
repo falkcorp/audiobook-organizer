@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_scorer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f7a2c841-3b5e-4d9f-82c6-1e0d7f3a9b4c
-// last-edited: 2026-07-03
+// last-edited: 2026-10-11
 
 package ai
 
@@ -37,12 +37,6 @@ type EmbeddingScorer struct {
 // will always embed the query text on the fly.
 func NewEmbeddingScorer(client *EmbeddingClient, store *database.EmbeddingStore) *EmbeddingScorer {
 	return &EmbeddingScorer{api: client, store: store}
-}
-
-// NewEmbeddingScorerWithAPI is the test seam. Do not call this from
-// production code.
-func NewEmbeddingScorerWithAPI(api embeddingAPI, store *database.EmbeddingStore) *EmbeddingScorer {
-	return &EmbeddingScorer{api: api, store: store}
 }
 
 // Name implements MetadataCandidateScorer.

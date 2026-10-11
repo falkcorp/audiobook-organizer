@@ -1,7 +1,7 @@
 // file: internal/fingerprint/fpcalc_live_decode_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f8a1c6e-94b2-4d7a-8e05-b6c2d9f14a73
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package fingerprint
 
@@ -104,7 +104,7 @@ func TestLive_FileFingerprintLength_MatchesFpcalcRaw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FileFingerprintLength: %v", err)
 	}
-	got := make([]uint32, wf.FrameCount())
+	got := make([]uint32, len(wf.Raw)/4)
 	for i := range got {
 		got[i] = binary.LittleEndian.Uint32(wf.Raw[i*4:])
 	}

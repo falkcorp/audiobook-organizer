@@ -1,6 +1,7 @@
 // file: internal/diagnosis/probe.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
+// last-edited: 2026-10-11
 
 // Package diagnosis probes audio files with available system tools (ffprobe,
 // mediainfo, file) to produce structured diagnostic data when fingerprinting
@@ -11,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -121,55 +121,6 @@ func ProbeFile(ctx context.Context, path string) FileDiagnostic {
 
 	deriveFlags(&d)
 	return d
-}
-
-// Classify returns the best FailureReason and a short detail string derived
-// from a FileDiagnostic plus the raw fpcalc/ffmpeg stderr captured by the caller.
-func Classify(d FileDiagnostic, fpcalcStderr string) (FailureReason, string) {
-	if d.IsEmpty {
-		return ReasonEmptyFile, "file is empty (0 bytes)"
-	}
-	if d.IsTruncated {
-		return ReasonIncompleteDownload, truncate("moov atom not found — file download incomplete: "+d.FFProbeErrorStr, detailMaxBytes)
-	}
-	if d.HasActiveDRM {
-		return ReasonActiveDRM, truncate("DRM encryption detected: "+d.Encryption, detailMaxBytes)
-	}
-	if d.WasOriginallyDRM {
-		return ReasonOriginallyDRM, truncate("originally DRM-protected, decoded via "+d.EncodedApplication, detailMaxBytes)
-	}
-	// wrong format: file magic says it's not audio
-	if d.FileMagic != "" && !looksLikeAudio(d.FileMagic) {
-		return ReasonWrongFormat, truncate("file magic: "+d.FileMagic, detailMaxBytes)
-	}
-	if d.DurationSec > 0 && d.DurationSec < 1.0 {
-		return ReasonTooShort, fmt.Sprintf("audio duration %.2fs is under 1 second", d.DurationSec)
-	}
-	// unsupported codec from ffprobe stderr or fpcalc stderr
-	combined := strings.ToLower(d.FFProbeErrorStr + " " + fpcalcStderr)
-	if strings.Contains(combined, "decoder") && (strings.Contains(combined, "not found") || strings.Contains(combined, "no such")) {
-		return ReasonUnsupportedCodec, truncate(d.FFProbeErrorStr+fpcalcStderr, detailMaxBytes)
-	}
-	if strings.Contains(combined, "invalid data") || strings.Contains(combined, "corrupt") {
-		return ReasonCorruptAudio, truncate(d.FFProbeErrorStr+fpcalcStderr, detailMaxBytes)
-	}
-	if fpcalcStderr != "" {
-		return ReasonFpcalcError, truncate(fpcalcStderr, detailMaxBytes)
-	}
-	if d.FFProbeErrorStr != "" {
-		return ReasonFpcalcError, truncate(d.FFProbeErrorStr, detailMaxBytes)
-	}
-	return ReasonFpcalcError, "fingerprinting failed (unknown reason)"
-}
-
-// ToJSON serialises a FileDiagnostic as a compact JSON string for storage.
-// Returns an empty string on marshal failure (should never happen).
-func ToJSON(d FileDiagnostic) string {
-	b, err := json.Marshal(d)
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }
 
 // ─── tool runners ────────────────────────────────────────────────────────────
@@ -337,17 +288,6 @@ func deriveFlags(d *FileDiagnostic) {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-func looksLikeAudio(magic string) bool {
-	low := strings.ToLower(magic)
-	for _, kw := range []string{"audio", "mpeg", "mp3", "mp4", "m4a", "m4b", "ogg", "flac",
-		"iso media", "apple", "aiff", "wav", "riff", "vorbis", "opus"} {
-		if strings.Contains(low, kw) {
-			return true
-		}
-	}
-	return false
-}
 
 func truncate(s string, n int) string {
 	if len(s) <= n {

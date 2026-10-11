@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.67.0
+// version: 1.67.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -637,10 +637,6 @@ func formatTypeCounts(counts map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%d %s %s", counts[t], t, noun))
 	}
 	return strings.Join(parts, ", ")
-}
-
-func (rs *RevertService) revertChange(c *database.OperationChange) error {
-	return rs.revertChangeIn(c, nil)
 }
 
 // revertChangeIn reverts one row of the operation plan orders (nil: the row

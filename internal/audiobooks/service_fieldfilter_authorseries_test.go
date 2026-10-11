@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_fieldfilter_authorseries_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d4c2e91-8a3f-4b6d-9e5c-1f2a3b4c5d6e
-// last-edited: 2026-07-18
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 
 // TODO item 16b regression test: a FieldFilter{Field:"author"} or
 // {Field:"series"} on the Library listing always returned 0 books,
-// independent of sort. Root cause: fieldMatchesValue (service_filtering.go)
+// independent of sort. Root cause: the field matcher (fieldMatchesCompiled in filter_compiled.go)
 // reads book.Author.Name / book.Series.Name, but those joined struct fields
 // are populated ONLY via joins (see database.Book's "Related objects" doc
 // comment) — the memdb-resident *Book used by the production pushdown path

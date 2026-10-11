@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -225,7 +225,7 @@ func matchesAllPerUserFilters(state *database.UserBookState, filters []FieldFilt
 // FirstEmptyFilterValue returns the field name of the first filter carrying an
 // empty value, and whether one was found.
 //
-// WHY this exists: the comparison at the bottom of fieldMatchesValue is
+// WHY this exists: the comparison at the bottom of fieldMatchesCompiled is
 //
 //	strings.Contains(strings.ToLower(bookValue), strings.ToLower(value))
 //
@@ -244,7 +244,7 @@ func matchesAllPerUserFilters(state *database.UserBookState, filters []FieldFilt
 // silently targets the whole library. That is the same failure shape as the
 // base64 op-params defect (#2309), where organize defaulted to every book.
 //
-// Callers use this to reject the input loudly. matchesFieldFilters below also
+// Callers use this to reject the input loudly. matchesCompiledFilters also
 // fails closed as a last line of defence, so a filter that somehow evades
 // validation matches nothing rather than everything.
 func FirstEmptyFilterValue(filters []FieldFilter) (string, bool) {
@@ -254,37 +254,6 @@ func FirstEmptyFilterValue(filters []FieldFilter) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// matchesFieldFilters returns true if a book matches all the given field filters.
-// All filters are ANDed: every filter must match for the book to be included.
-func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
-	return matchesFieldFiltersRT(book, filters, nil)
-}
-
-// matchesFieldFiltersRT is matchesFieldFilters with the runtime source the
-// duration: filter compares against (nil = stored Book.Duration).
-func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtimeFunc) bool {
-	// Fail CLOSED on an empty value. Falling through would reach
-	// strings.Contains(x, "") == true and match every book — see
-	// FirstEmptyFilterValue. Matching nothing is visibly wrong and harmless;
-	// matching everything is invisibly wrong and, on the background-op path,
-	// destructive. Negated is deliberately not consulted: neither `f == ""`
-	// nor `f != ""` is a constraint anyone can have meant.
-	for _, f := range filters {
-		if f.Value == "" {
-			return false
-		}
-	}
-	// Convenience path for single-row callers and tests: compiles per call.
-	// The list paths compile once per request (see compileFieldFilters) and
-	// call matchesCompiledFilters directly. An uncompilable value matches
-	// nothing — the boundary validation answers it with a 400 first.
-	cfs, ok := mustCompileForPredicate(filters)
-	if !ok {
-		return false
-	}
-	return matchesCompiledFilters(&book, cfs, rt)
 }
 
 // matchesFieldFiltersWithStrippedFallback evaluates field filters against a
@@ -405,29 +374,10 @@ func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (a
 	return authorNames, seriesNames
 }
 
-// fieldMatchesValue checks whether a book's field value matches the search
-// value under the unified grammar (internal/querygrammar): substring, "quoted"
-// literal, /RE2/ regex, * glob, and numeric comparisons/ranges for the
-// numeric fields. An invalid value or an unknown field matches nothing.
-func fieldMatchesValue(book database.Book, field, value string) bool {
-	return fieldMatchesValueRT(book, field, value, nil)
-}
-
-// fieldMatchesValueRT is fieldMatchesValue with an explicit runtime source for
-// the duration fields (nil = stored Book.Duration). See filter_duration.go.
-// It compiles the value per call; row loops use compileFieldFilters instead.
-func fieldMatchesValueRT(book database.Book, field, value string, rt runtimeFunc) bool {
-	cf, err := compileFieldFilter(FieldFilter{Field: field, Value: value})
-	if err != nil {
-		return false
-	}
-	return fieldMatchesCompiled(&book, &cf, rt)
-}
-
 // bookFieldValue renders a book field as the string the substring matcher
 // compares against, and reports whether the field name is known at all.
 //
-// Split out of fieldMatchesValue so that "which fields exist" has exactly ONE
+// Split out of fieldMatchesCompiled so that "which fields exist" has exactly ONE
 // definition. FieldIsKnown answers that question by asking this function, which
 // is the only way a validator and a matcher can be guaranteed to agree — a
 // second hand-maintained list of valid names would drift from this switch the
@@ -516,7 +466,7 @@ func bookFieldValue(book database.Book, field string) (string, bool) {
 	// to the unknown-field default and answered "no books found". Measured on
 	// production 2026-08-14: duration:1 returned 0 while duration_seconds:1
 	// returned 25,090 — the same rows, under a name the UI never sends.
-	// Rendered for FieldIsKnown only: fieldMatchesValueRT evaluates duration
+	// Rendered for FieldIsKnown only: fieldMatchesCompiled evaluates duration
 	// as a numeric runtime comparison (filter_duration.go), never as the
 	// substring match that made duration:>1200 return 0 books.
 	case "duration", "duration_seconds":
@@ -527,7 +477,7 @@ func bookFieldValue(book database.Book, field string) (string, bool) {
 		} else {
 			bookValue = "no"
 		}
-	// metadata:applied — exact match in fieldMatchesValueRT, see
+	// metadata:applied — exact match in fieldMatchesCompiled, see
 	// BookMetadataApplied for the definition.
 	case "metadata":
 		if BookMetadataApplied(&book) {

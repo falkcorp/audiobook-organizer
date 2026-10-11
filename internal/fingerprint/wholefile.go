@@ -1,7 +1,7 @@
 // file: internal/fingerprint/wholefile.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package fingerprint
 
@@ -48,14 +48,6 @@ type WholeFile struct {
 	DurationSec float64
 	// AnalysisLengthSec is the -length value passed to fpcalc (0 = whole file).
 	AnalysisLengthSec int
-}
-
-// FrameCount returns the number of chromaprint frames in the fingerprint.
-func (w *WholeFile) FrameCount() int {
-	if w == nil {
-		return 0
-	}
-	return len(w.Raw) / 4
 }
 
 // FileWholeFingerprint fingerprints the audio file at path with fpcalc's
