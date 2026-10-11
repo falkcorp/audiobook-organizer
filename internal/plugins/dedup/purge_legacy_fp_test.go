@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
-// last-edited: 2026-09-26
+// last-edited: 2026-10-11
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -48,7 +48,7 @@ func newTestEmbeddingStorePurge(t *testing.T) *database.EmbeddingStore {
 	// We own the DB but the store will not close it (owned=false via NewEmbeddingStore).
 	// Use the test-only helper from the database package instead.
 	_ = db // used via the constructor below
-	es := database.NewEmbeddingStore(db)
+	es := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 	return es
 }

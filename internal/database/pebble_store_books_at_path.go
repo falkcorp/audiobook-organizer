@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_books_at_path.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
-// last-edited: 2026-10-02
+// last-edited: 2026-10-11
 
 package database
 
@@ -156,7 +156,7 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 // is empty and this does no I/O at all; it never range-scans the marker family,
 // whose absent-key tombstones made that "empty seek" cost ~51s per cache-review
 // request on 2026-10-02 (pebble_store_atpath_markers.go).
-func undecodableMarkedAtPath(snap *pebble.Snapshot, markerIDs []string, path string) ([]string, error) {
+func undecodableMarkedAtPath(snap *GatedSnapshot, markerIDs []string, path string) ([]string, error) {
 	matched, err := undecodableMarkedMatching(snap, markerIDs, func(p string) bool { return p == path })
 	if err != nil {
 		return nil, err
@@ -173,7 +173,7 @@ func undecodableMarkedAtPath(snap *pebble.Snapshot, markerIDs []string, path str
 // predicate: it returns id -> path for each marked row that now decodes, is
 // live, and whose path matches, and fails closed on a row that still does not
 // decode.
-func undecodableMarkedMatching(snap *pebble.Snapshot, markerIDs []string, match func(path string) bool) (map[string]string, error) {
+func undecodableMarkedMatching(snap *GatedSnapshot, markerIDs []string, match func(path string) bool) (map[string]string, error) {
 	atPath := map[string]string{}
 	if len(markerIDs) == 0 {
 		return atPath, nil
@@ -197,7 +197,7 @@ func undecodableMarkedMatching(snap *pebble.Snapshot, markerIDs []string, match 
 
 // undecodableMarkedVisit point-reads one marked row: gone is ignored, still
 // undecodable is appended to blocking, live and matching lands in atPath.
-func undecodableMarkedVisit(snap *pebble.Snapshot, id string, match func(path string) bool,
+func undecodableMarkedVisit(snap *GatedSnapshot, id string, match func(path string) bool,
 	atPath map[string]string, blocking *[]string) error {
 	v, closer, err := snap.Get([]byte("book:" + id))
 	if errors.Is(err, pebble.ErrNotFound) {

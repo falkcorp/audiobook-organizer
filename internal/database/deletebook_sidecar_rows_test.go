@@ -1,7 +1,7 @@
 // file: internal/database/deletebook_sidecar_rows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c125e490-ad49-4fbd-8185-e0ae632b4de3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -18,7 +18,7 @@ import (
 // iteration — deliberately not through any store reader, because several of
 // the readers skip rows whose book no longer exists and would mask exactly the
 // leak this file guards against.
-func rawKeysWithPrefix(t *testing.T, db *pebble.DB, prefix string) []string {
+func rawKeysWithPrefix(t *testing.T, db *GatedDB, prefix string) []string {
 	t.Helper()
 	p := []byte(prefix)
 	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixEnd(p)})
@@ -34,7 +34,7 @@ func rawKeysWithPrefix(t *testing.T, db *pebble.DB, prefix string) []string {
 
 // rawKeysWithSuffix returns every committed key under prefix that ends with
 // suffix — the shape of a reverse index such as tag_idx:<tag>:<bookID>.
-func rawKeysWithSuffix(t *testing.T, db *pebble.DB, prefix, suffix string) []string {
+func rawKeysWithSuffix(t *testing.T, db *GatedDB, prefix, suffix string) []string {
 	t.Helper()
 	var out []string
 	for _, k := range rawKeysWithPrefix(t, db, prefix) {
@@ -51,7 +51,7 @@ type sidecarFamily struct {
 	keys func(bookID string) []string
 }
 
-func sidecarFamilies(t *testing.T, db *pebble.DB) []sidecarFamily {
+func sidecarFamilies(t *testing.T, db *GatedDB) []sidecarFamily {
 	t.Helper()
 	exact := func(prefix string) func(string) []string {
 		return func(id string) []string { return rawKeysWithPrefix(t, db, prefix+id) }

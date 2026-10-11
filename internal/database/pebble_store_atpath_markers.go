@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 68a95fef-a156-403b-a6fa-3ae0ba84f8fd
-// last-edited: 2026-10-02
+// last-edited: 2026-10-11
 
 package database
 
@@ -191,7 +191,7 @@ func (p *PebbleStore) clearUndecodableMarkersUpTo(gen uint64) {
 // undecodableMarkerSnapshot opens a Pebble snapshot and copies the set under
 // its read lock, so the copy is a superset of the markers in the snapshot.
 // The caller closes the snapshot.
-func (p *PebbleStore) undecodableMarkerSnapshot() (*pebble.Snapshot, []string, error) {
+func (p *PebbleStore) undecodableMarkerSnapshot() (*GatedSnapshot, []string, error) {
 	if err := p.ensureUndecodableMarkersLoaded(); err != nil {
 		return nil, nil, err
 	}
@@ -220,7 +220,7 @@ func (p *PebbleStore) undecodableMarkerCount() int {
 // markersOnDiskIn returns which of ids have a marker key in snap. Point reads
 // only: the bloom filter answers most absent keys, and no tombstone run is
 // ever walked.
-func markersOnDiskIn(snap *pebble.Snapshot, ids []string) ([]string, error) {
+func markersOnDiskIn(snap *GatedSnapshot, ids []string) ([]string, error) {
 	var out []string
 	for _, id := range ids {
 		_, closer, err := snap.Get(bookAtPathUndecodableKey(id))
@@ -247,7 +247,7 @@ func markersOnDiskIn(snap *pebble.Snapshot, ids []string) ([]string, error) {
 // between the probe and the commit and survive. The same writer landing just
 // after the commit already survives the unconditional Delete, so this only
 // moves the edge of an existing window, it does not open a new class.
-func (p *PebbleStore) stageDeleteIfPresent(batch *pebble.Batch, key []byte) (staged bool, err error) {
+func (p *PebbleStore) stageDeleteIfPresent(batch *GatedBatch, key []byte) (staged bool, err error) {
 	_, closer, gerr := p.db.Get(key)
 	switch {
 	case errors.Is(gerr, pebble.ErrNotFound):
@@ -268,7 +268,7 @@ func (p *PebbleStore) stageDeleteIfPresent(batch *pebble.Batch, key []byte) (sta
 
 // bookWriteBatchPreCommitHook, when non-nil, sees UpdateBook's and
 // DeleteBook's batch just before it commits. Tests only.
-var bookWriteBatchPreCommitHook func(op, id string, b *pebble.Batch)
+var bookWriteBatchPreCommitHook func(op, id string, b *GatedBatch)
 
 // bookAtPathBackfillBeforeChunkCommit, when non-nil, runs in a backfill worker
 // just before it commits a chunk (the chunk's markers are staged and already
@@ -310,7 +310,7 @@ func (l *atpathRunLock) lock(ctx context.Context) (func(), error) {
 
 // markersInRange range-scans the marker family in snap. Only the cold
 // maintenance path (verify) uses it; it walks every tombstone in the family.
-func markersInRange(snap *pebble.Snapshot) ([]string, error) {
+func markersInRange(snap *GatedSnapshot) ([]string, error) {
 	lower := []byte(bookAtPathUndecodablePrefix)
 	var ids []string
 	err := forEachKeyInRange(snap, lower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {

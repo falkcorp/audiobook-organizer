@@ -1,7 +1,7 @@
 // file: internal/database/junction_bookid.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 073892d4-fddf-47bf-a5aa-be1665175519
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package database
 
@@ -209,7 +209,7 @@ func (p *PebbleStore) memdbAcceptsDirectWrites() bool {
 // book ID taken from the key and the raw value, and returns either nil (leave
 // the key alone) or the replacement value, which is staged on batch. A value
 // fix cannot decode is counted in undecodable, logged, and left untouched.
-func (p *PebbleStore) scanJunction(prefix string, scanned, undecodable *int, fix func(bookID string, val []byte) ([]byte, error), batch *pebble.Batch) error {
+func (p *PebbleStore) scanJunction(prefix string, scanned, undecodable *int, fix func(bookID string, val []byte) ([]byte, error), batch *GatedBatch) error {
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte(prefix),
 		UpperBound: prefixUpperBound([]byte(prefix)),

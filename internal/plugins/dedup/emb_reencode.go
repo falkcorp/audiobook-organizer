@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -311,7 +311,7 @@ type reencodeTarget struct {
 // reencodeChunk writes a batch of re-encoded rows atomically.
 // Each row's JSON is read fresh, the vector blob replaced, and the updated
 // JSON written back.  Rows that can't be read are skipped with a warning.
-func (p *Plugin) reencodeChunk(db *pebble.DB, chunk []reencodeTarget) error {
+func (p *Plugin) reencodeChunk(db *database.GatedDB, chunk []reencodeTarget) error {
 	b := db.NewBatch()
 	defer b.Close()
 

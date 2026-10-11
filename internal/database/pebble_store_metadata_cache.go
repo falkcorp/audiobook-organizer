@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -139,7 +139,7 @@ func asinReplacedOnWrite(oldBook, newBook *Book) (old string, replaced bool) {
 // The caller must hold the book's metadataCacheLock until the batch commits;
 // staged reports whether the row was rewritten (the caller then bumps the
 // cache generation after the commit).
-func (p *PebbleStore) stageCacheASINStamp(batch *pebble.Batch, bookID, oldASIN string) (staged bool, err error) {
+func (p *PebbleStore) stageCacheASINStamp(batch *GatedBatch, bookID, oldASIN string) (staged bool, err error) {
 	return p.stageCacheRowStamp(batch, bookID, false, oldASIN)
 }
 
@@ -161,13 +161,13 @@ func (p *PebbleStore) stageCacheASINStamp(batch *pebble.Batch, bookID, oldASIN s
 // The caller must hold the book's metadataCacheLock until the batch commits;
 // staged reports whether the row was rewritten or dropped (the caller then
 // bumps the cache generation after the commit).
-func (p *PebbleStore) stageCacheStaleStamp(batch *pebble.Batch, bookID, oldASIN string) (staged bool, err error) {
+func (p *PebbleStore) stageCacheStaleStamp(batch *GatedBatch, bookID, oldASIN string) (staged bool, err error) {
 	return p.stageCacheRowStamp(batch, bookID, true, oldASIN)
 }
 
 // stageCacheRowStamp is the one read-modify-write both stamps share, so a
 // write that is a retitle and an ASIN replacement rewrites the row once.
-func (p *PebbleStore) stageCacheRowStamp(batch *pebble.Batch, bookID string, markStale bool, oldASIN string) (staged bool, err error) {
+func (p *PebbleStore) stageCacheRowStamp(batch *GatedBatch, bookID string, markStale bool, oldASIN string) (staged bool, err error) {
 	entry, err := p.GetMetadataCache(bookID)
 	if err != nil {
 		// A row that cannot be read cannot be stamped. Keeping it unstamped

@@ -1,6 +1,7 @@
 // file: internal/database/pebble_metrics_store.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e5f6a7b8-c9d0-0005-ef01-000000000005
+// last-edited: 2026-10-11
 
 // Package database — PebbleDB-backed cache-stats metrics store.
 //
@@ -46,14 +47,14 @@ const (
 // It satisfies the MetricsStorer interface and is a drop-in replacement for
 // the retired NutsDB metrics store.
 //
-// The caller retains ownership of the *pebble.DB — Close() on this store is a no-op.
+// The caller retains ownership of the *GatedDB — Close() on this store is a no-op.
 type PebbleMetricsStore struct {
-	db *pebble.DB
+	db *GatedDB
 }
 
 // NewPebbleMetricsStore creates a PebbleMetricsStore backed by the provided DB.
 // The caller retains ownership of db; Close() on this store does NOT close db.
-func NewPebbleMetricsStore(db *pebble.DB) *PebbleMetricsStore {
+func NewPebbleMetricsStore(db *GatedDB) *PebbleMetricsStore {
 	return &PebbleMetricsStore{db: db}
 }
 

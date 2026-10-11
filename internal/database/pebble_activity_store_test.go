@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -34,7 +34,7 @@ func newTestPebbleActivityStore(t *testing.T) *PebbleActivityStore {
 	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return NewPebbleActivityStore(db)
+	return NewPebbleActivityStore(NewGatedDB(db))
 }
 
 // ── parity: basic record + query ─────────────────────────────────────────────

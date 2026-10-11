@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -24,7 +24,7 @@ func newTestEmbeddingStore(t *testing.T) *EmbeddingStore {
 	t.Helper()
 	db, err := pebble.Open("embeddings.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
-	store := &EmbeddingStore{db: db, owned: true}
+	store := &EmbeddingStore{db: NewGatedDB(db), owned: true}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }

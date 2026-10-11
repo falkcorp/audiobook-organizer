@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -186,7 +186,7 @@ func pactFilterIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool)
 // so these are all their index keys) and the filter-index backfill (whose rows
 // already have their op/book keys). Summarize does not use it: its summary
 // row stages every family, op tags included, through pactIndexKeysFor.
-func pactStageFilterIndexes(batch *pebble.Batch, primaryKey []byte, e ActivityEntry) error {
+func pactStageFilterIndexes(batch *GatedBatch, primaryKey []byte, e ActivityEntry) error {
 	keys, ok := pactFilterIndexKeysFor(primaryKey, e)
 	if !ok {
 		return fmt.Errorf("pebble_activity_store: derive filter index keys for %q", primaryKey)
@@ -207,7 +207,7 @@ func pactStageFilterIndexes(batch *pebble.Batch, primaryKey []byte, e ActivityEn
 // not decode cannot have its keys derived; that is logged, and any key left
 // behind is an orphan RepairActivityIndexes removes and the planner skips (it
 // verifies every candidate's primary row exists).
-func (s *PebbleActivityStore) stageDeleteFilterIndexesForKey(batch *pebble.Batch, primaryKey []byte) error {
+func (s *PebbleActivityStore) stageDeleteFilterIndexesForKey(batch *GatedBatch, primaryKey []byte) error {
 	val, closer, err := s.db.Get(primaryKey)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil
@@ -333,7 +333,7 @@ func (s *PebbleActivityStore) loadSeenThrough() {
 // stageSeenThrough stages the mark at nanos into batch when it advances the
 // in-memory mark. Monotonic in memory; see ActivityFilterIndexSeenThroughKey
 // for why the stored value may lag.
-func (s *PebbleActivityStore) stageSeenThrough(batch *pebble.Batch, nanos int64) error {
+func (s *PebbleActivityStore) stageSeenThrough(batch *GatedBatch, nanos int64) error {
 	for {
 		cur := s.seenThrough.Load()
 		if nanos <= cur {
@@ -347,7 +347,7 @@ func (s *PebbleActivityStore) stageSeenThrough(batch *pebble.Batch, nanos int64)
 }
 
 // stageSeenThroughForKeys advances the mark to the newest of primary keys.
-func (s *PebbleActivityStore) stageSeenThroughForKeys(batch *pebble.Batch, primaries ...[]byte) error {
+func (s *PebbleActivityStore) stageSeenThroughForKeys(batch *GatedBatch, primaries ...[]byte) error {
 	var newest int64
 	for _, k := range primaries {
 		if ns, ok := pactPrimaryKeyNanos(k); ok && ns > newest {
@@ -617,7 +617,7 @@ func (s *PebbleActivityStore) backfillFilterIndexRange(ctx context.Context, lowe
 // stageFilterBackfillChunk stages up to activityFilterBackfillCommitEvery rows
 // from [lower, upper) into batch and closes its iterator before returning.
 // done reports that the range is exhausted.
-func (s *PebbleActivityStore) stageFilterBackfillChunk(ctx context.Context, batch *pebble.Batch, lower, upper []byte, tally *pactDecodeTally) (staged int, last []byte, done bool, err error) {
+func (s *PebbleActivityStore) stageFilterBackfillChunk(ctx context.Context, batch *GatedBatch, lower, upper []byte, tally *pactDecodeTally) (staged int, last []byte, done bool, err error) {
 	it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		return 0, nil, false, err
@@ -843,7 +843,7 @@ type pactFilterWalk struct {
 	decodeBudget, keyBudget int
 	decoded, keys           int
 
-	probeIters map[string]*pebble.Iterator // "<family prefix><value>:<tier>:" → iterator
+	probeIters map[string]*GatedIter // "<family prefix><value>:<tier>:" → iterator
 	tally      pactDecodeTally
 }
 
@@ -884,7 +884,7 @@ func (w *pactFilterWalk) probeValue(fam pactFilterFamily, value, tier string, su
 			return false, err
 		}
 		if w.probeIters == nil {
-			w.probeIters = make(map[string]*pebble.Iterator)
+			w.probeIters = make(map[string]*GatedIter)
 		}
 		w.probeIters[id] = it
 	}
@@ -897,7 +897,7 @@ func (w *pactFilterWalk) probeValue(fam pactFilterFamily, value, tier string, su
 type pactFilterCursor struct {
 	tier   string
 	prefix string
-	iter   *pebble.Iterator
+	iter   *GatedIter
 }
 
 // sortKey is what the unindexed merge orders by: the key's timestamp, then the

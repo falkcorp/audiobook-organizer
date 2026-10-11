@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_batch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b41d0c7-3e59-4a16-b2d7-6f9c1a840e35
-// last-edited: 2026-09-11
+// last-edited: 2026-10-11
 
 // Package database — regression suite for the batched activity write path.
 //
@@ -275,7 +275,7 @@ func TestRecordBatch_CommitFailureNamesTheWholeCallLoss(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ro.Close() })
 
-	s := NewPebbleActivityStore(ro)
+	s := NewPebbleActivityStore(NewGatedDB(ro))
 
 	orig := activityRecordBatchCap
 	activityRecordBatchCap = 4
@@ -379,5 +379,5 @@ func newBenchPebbleActivityStore(b *testing.B) *PebbleActivityStore {
 		b.Fatalf("pebble.Open: %v", err)
 	}
 	b.Cleanup(func() { _ = db.Close() })
-	return NewPebbleActivityStore(db)
+	return NewPebbleActivityStore(NewGatedDB(db))
 }

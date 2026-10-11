@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
-// last-edited: 2026-09-10
+// last-edited: 2026-10-11
 
 // Package database — Pebble → SQLite activity backfill for the backend cutover.
 //
@@ -462,7 +462,7 @@ func BackfillPebbleActivityToSQLWithProgress(
 func (s *PebbleActivityStore) SQLBackfillDone() bool { return IsActivitySQLBackfillDone(s.db) }
 
 // IsActivitySQLBackfillDone reports whether the Pebble→SQLite sentinel exists.
-func IsActivitySQLBackfillDone(db *pebble.DB) bool {
+func IsActivitySQLBackfillDone(db *GatedDB) bool {
 	_, closer, err := db.Get([]byte(ActivitySQLBackfillKey))
 	if err == nil {
 		closer.Close()

@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_triage_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 858930a2-ded4-48a8-9404-abc75c5bd103
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package server
 
@@ -27,7 +27,7 @@ func newTriageTestEmbeddingStore(t *testing.T) *database.EmbeddingStore {
 	dir := t.TempDir()
 	db, err := pebble.Open(dir, &pebble.Options{})
 	require.NoError(t, err)
-	store := database.NewEmbeddingStore(db)
+	store := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 	return store
 }

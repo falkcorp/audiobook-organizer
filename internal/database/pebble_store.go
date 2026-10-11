@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.213.0
+// version: 1.214.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 
@@ -103,7 +103,19 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 // - author_tombstone:<old_id>        -> canonical_id (merged author redirect)
 
 type PebbleStore struct {
-	db *pebble.DB
+	// db is the only handle to the engine. Every access through it holds a
+	// lease that Close waits for before closing the engine (pebble_gate.go).
+	db *GatedDB
+	// closeDrainTimeout bounds how long Close waits for in-flight engine
+	// accesses to finish; zero means defaultCloseDrainTimeout. Tests shorten it.
+	closeDrainTimeout time.Duration
+	// closingCtx is cancelled when Close begins, so long scans that take it
+	// (ReconcileOpsV2TimelineIndex) stop early instead of making Close wait
+	// for a full pass. The drain is what keeps Close correct; this only
+	// shortens it. Nil on a store built without initPebbleStore; use
+	// closingContext().
+	closingCtx    context.Context
+	closingCancel context.CancelFunc
 	// metadataCacheLocks serialise writes of one book's metadata_cache row
 	// (striped by book id, metadataCacheLock): PutMetadataCache and
 	// DeleteMetadataCache, and the book write that re-stamps a kept row's
@@ -643,9 +655,12 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 		return nil, fmt.Errorf("ratchet %s to Pebble format %d: %w", path, PebbleFormatMajorVersion, err)
 	}
 
+	closingCtx, closingCancel := context.WithCancel(context.Background())
 	store := &PebbleStore{
-		db:       db,
-		UseMemDB: true, // in-memory query layer is the default after Phase 3
+		db:            NewGatedDB(db),
+		UseMemDB:      true, // in-memory query layer is the default after Phase 3
+		closingCtx:    closingCtx,
+		closingCancel: closingCancel,
 	}
 	store.seedWorksGeneration()
 
@@ -766,8 +781,45 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	return store, nil
 }
 
-// Close closes the database
+// defaultCloseDrainTimeout bounds Close's wait for in-flight engine accesses.
+// The unit's TimeoutStopSec is 30s and the HTTP drain and ops registry spend
+// part of it before the store closes, so this leaves room for both.
+const defaultCloseDrainTimeout = 10 * time.Second
+
+var pebbleCloseLog = logger.New("database.pebble-close")
+
+// closingContext returns a context cancelled when Close begins. A store built
+// without initPebbleStore (test fixtures) gets one that is never cancelled.
+func (p *PebbleStore) closingContext() context.Context {
+	if p.closingCtx == nil {
+		return context.Background()
+	}
+	return p.closingCtx
+}
+
+// Close closes the database.
+//
+// The engine is closed only after every in-flight access has released its
+// lease (pebble_gate.go): an iterator, snapshot or Get closer released after
+// pebble's Close corrupts its memtable refcounts and panics. Order matters:
+//
+//  1. Stop the goroutines Close owns (memdb warmup, stats recompute) and
+//     cancel closingCtx so cooperative long scans unwind.
+//  2. Mark the timeline index closed BEFORE the drain, so a reconcile that
+//     finishes while Close waits is refused trust.
+//  3. Refuse new leases and wait for held ones, holding NO store mutex: an
+//     in-flight op may need opsMu, counterMu, a metadata stripe or sampleMu
+//     to finish and release its lease.
+//  4. Only then take sampleMu and close the engine.
+//
+// If the drain times out, the engine is left open and Close returns an
+// error: an engine left open at process exit replays its WAL on the next
+// open, while closing under a held lease crashes the process.
 func (p *PebbleStore) Close() error {
+	if p.closingCancel != nil {
+		p.closingCancel()
+	}
+
 	// Stop the async memdb warmup before closing the DB. The warmup goroutine
 	// iterates p.db; closing the DB out from under it races warmIter's NewIter
 	// and panics ("pebble: closed" / nil-pointer deref). Cancel it and wait for
@@ -792,10 +844,22 @@ func (p *PebbleStore) Close() error {
 	// later flip to trusted (markOpsV2TimelineClosed).
 	p.markOpsV2TimelineClosed()
 
+	p.db.beginClose()
+	timeout := p.closeDrainTimeout
+	if timeout <= 0 {
+		timeout = defaultCloseDrainTimeout
+	}
+	if !p.db.waitDrained(timeout) {
+		n := p.db.inFlight()
+		pebbleCloseLog.Error("pebble close: %d engine accesses still in flight after %s; leaving the engine open rather than closing it under them", n, timeout)
+		p.dbClosed.Store(true)
+		return fmt.Errorf("pebble close: %d engine accesses still in flight after %s: %w", n, timeout, errStoreClosing)
+	}
+
 	p.sampleMu.Lock()
 	defer p.sampleMu.Unlock()
 	p.dbClosed.Store(true)
-	return p.db.Close()
+	return p.db.closeEngine()
 }
 
 // Checkpoint writes a consistent point-in-time snapshot of the PebbleDB to
@@ -806,8 +870,10 @@ func (p *PebbleStore) Checkpoint(destDir string) error {
 	return p.db.Checkpoint(destDir)
 }
 
-// DB returns the underlying *pebble.DB. Used by AIScanStore to share the DB.
-func (p *PebbleStore) DB() *pebble.DB {
+// DB returns the store's gated engine handle, for the stores that borrow it
+// (embedding, metrics, activity, AI scan, catalog). Borrowers' accesses hold
+// leases on the same gate, so Close waits for them too.
+func (p *PebbleStore) DB() *GatedDB {
 	return p.db
 }
 
@@ -2885,7 +2951,7 @@ func seriesObjectLoss(old *Book, kept *Series, newID *int) *Series {
 // object in the book write's own batch, so the record commits atomically with
 // the drop and never before it (no ledger-before-write). The key shape and the
 // nanosecond ID are RecordMetadataChange's. A nil lost stages nothing.
-func stageSeriesObjectDrop(batch *pebble.Batch, bookID string, lost, kept *Series, keptID *int, at time.Time) error {
+func stageSeriesObjectDrop(batch *GatedBatch, bookID string, lost, kept *Series, keptID *int, at time.Time) error {
 	if lost == nil {
 		return nil
 	}
@@ -3139,7 +3205,7 @@ type bookWriteOpts struct {
 	// they land atomically with the row. ModifyBookCredits stages the
 	// book's credit lists through it (credits_store.go). An error aborts the
 	// write.
-	stage func(*pebble.Batch) error
+	stage func(*GatedBatch) error
 }
 
 // updateBookLockedMode is UpdateBook's body with the variations in opts. The
@@ -4204,7 +4270,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 // index derived from the key (tag_idx for book_tag, for example). The
 // iterator reads committed state, which is fine: the batch is not indexed and
 // nothing under these prefixes is written by the same batch.
-func deleteKeysWithPrefix(db *pebble.DB, batch *pebble.Batch, prefix []byte, onKey func(key []byte) error) error {
+func deleteKeysWithPrefix(db *GatedDB, batch *GatedBatch, prefix []byte, onKey func(key []byte) error) error {
 	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
@@ -5912,10 +5978,10 @@ func (p *PebbleStore) Optimize(ctx context.Context) error {
 
 // CompactionStats reports Pebble's live compaction counters. Cheap: it reads
 // in-memory metrics and does not touch the LSM. The field mapping lives in
-// CollectCompactionStats (compaction_stats.go) so the AI-scan and
+// compactionStatsFromMetrics (compaction_stats.go) so the AI-scan and
 // OpenLibrary stores report the same shape.
 func (p *PebbleStore) CompactionStats() CompactionStats {
-	return CollectCompactionStats(p.db)
+	return collectGatedCompactionStats(p.db)
 }
 
 // derefInt64 safely dereferences a *int64, returning 0 for nil.
@@ -6002,7 +6068,7 @@ func marshalBookFileDropSegs(f *BookFile) ([]byte, error) {
 
 // writeBookFileSecondaryIndexes adds the PID and path secondary index entries
 // to the batch. Either index is only written when the relevant field is non-empty.
-func writeBookFileSecondaryIndexes(batch *pebble.Batch, f *BookFile) error {
+func writeBookFileSecondaryIndexes(batch *GatedBatch, f *BookFile) error {
 	ref := []byte(fmt.Sprintf("%s:%s", f.BookID, f.ID))
 
 	// book_file_id:<fileID> → "<bookID>:<fileID>" — allows ID-only lookups.
@@ -6135,7 +6201,7 @@ func decodeLSHMeta(v []byte) ([]fingerprint.Subprint, []byte) {
 // Value stored in each fpidx: row is the BookID (UTF-8 bytes), matching the
 // spec (SPEC 1 §5) so T013's probe-collector can retrieve the candidate
 // book without a secondary BookFile lookup.
-func writeFingerprintLSHIndexes(batch *pebble.Batch, f *BookFile) error {
+func writeFingerprintLSHIndexes(batch *GatedBatch, f *BookFile) error {
 	// Legacy-era prints are misdecoded bytes: never index them, so they
 	// cannot surface as candidates or crowd a probe's candidate cap.
 	if len(f.AcoustIDFingerprint) == 0 || !f.HasCurrentPrint() {
@@ -6172,7 +6238,7 @@ func writeFingerprintLSHIndexes(batch *pebble.Batch, f *BookFile) error {
 // the store.
 //
 // Callers should use deleteFingerprintLSHIndexesByIDWithStore below.
-func deleteFingerprintLSHIndexesByIDWithStore(s *PebbleStore, batch *pebble.Batch, bookFileID string) error {
+func deleteFingerprintLSHIndexesByIDWithStore(s *PebbleStore, batch *GatedBatch, bookFileID string) error {
 	metaKey := lshMetaKey(bookFileID)
 	v, closer, err := s.db.Get(metaKey)
 	if err != nil {
@@ -6200,7 +6266,7 @@ func deleteFingerprintLSHIndexesByIDWithStore(s *PebbleStore, batch *pebble.Batc
 // meta row from the committed DB state.
 //
 //lint:ignore U1000 kept: no-op placeholder for the secondary-index-delete hook signature (see doc above, 2026-07-12)
-func deleteFingerprintLSHIndexesByID(_ *pebble.Batch, _ string) error {
+func deleteFingerprintLSHIndexesByID(_ *GatedBatch, _ string) error {
 	return nil
 }
 

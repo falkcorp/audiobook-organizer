@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.14.0
-// last-edited: 2026-10-10
+// version: 2.15.0
+// last-edited: 2026-10-11
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -23,7 +23,7 @@ import (
 //
 //   - Standalone (NewAIScanStore): opens and owns its own Pebble file at the
 //     given path. Keys have no prefix.
-//   - Shared (NewAIScanStoreFromDB): reuses the caller's *pebble.DB. All keys
+//   - Shared (NewAIScanStoreFromDB): reuses the caller's *GatedDB. All keys
 //     are namespaced under "aiscan:" to avoid collisions with the host store.
 //     Close and Optimize are no-ops in this mode.
 //
@@ -37,7 +37,7 @@ import (
 //     mid-flight so a restart can continue it (finished realtime chunks, the
 //     group->author-id map a batch was submitted with)
 type AIScanStore struct {
-	db     *pebble.DB
+	db     *GatedDB
 	prefix string // "aiscan:" when shared, "" when standalone
 	owned  bool   // if false, Close and Optimize are no-ops
 	// applyMu makes "apply a result" and "supersede the scan" one decision
@@ -126,7 +126,7 @@ func NewAIScanStore(path string) (*AIScanStore, error) {
 		return nil, fmt.Errorf("failed to open AI scan DB: %w", err)
 	}
 
-	store := &AIScanStore{db: db, prefix: "", owned: true}
+	store := &AIScanStore{db: NewGatedDB(db), prefix: "", owned: true}
 	if err := store.initCounters(); err != nil {
 		db.Close()
 		return nil, err
@@ -136,10 +136,10 @@ func NewAIScanStore(path string) (*AIScanStore, error) {
 	return store, nil
 }
 
-// NewAIScanStoreFromDB creates an AIScanStore that shares an existing *pebble.DB.
+// NewAIScanStoreFromDB creates an AIScanStore that shares an existing *GatedDB.
 // All keys are namespaced under "aiscan:" to avoid collisions. Close and Optimize
 // are no-ops — the caller owns the DB lifecycle.
-func NewAIScanStoreFromDB(db *pebble.DB) (*AIScanStore, error) {
+func NewAIScanStoreFromDB(db *GatedDB) (*AIScanStore, error) {
 	store := &AIScanStore{db: db, prefix: "aiscan:", owned: false}
 	if err := store.initCounters(); err != nil {
 		return nil, err
@@ -177,7 +177,7 @@ func (s *AIScanStore) Close() error {
 	if !s.owned {
 		return nil
 	}
-	return s.db.Close()
+	return s.db.closeOwned(defaultCloseDrainTimeout)
 }
 
 // Optimize compacts the PebbleDB. No-op when sharing an external DB (compaction
@@ -197,7 +197,7 @@ func (s *AIScanStore) CompactionStats() (stats CompactionStats, ok bool) {
 	if !s.owned {
 		return CompactionStats{}, false
 	}
-	return CollectCompactionStats(s.db), true
+	return collectGatedCompactionStats(s.db), true
 }
 
 // nextID atomically reads and increments the counter for the given entity type.
@@ -406,7 +406,7 @@ func (s *AIScanStore) DeleteScan(id int) error {
 }
 
 // deletePrefix queues a delete of every key under prefix onto batch.
-func (s *AIScanStore) deletePrefix(batch *pebble.Batch, prefix []byte) error {
+func (s *AIScanStore) deletePrefix(batch *GatedBatch, prefix []byte) error {
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(append([]byte{}, prefix...), 0xff),
@@ -908,7 +908,11 @@ func (s *AIScanStore) HealthStats() (_ AIScanHealthStats, err error) {
 	var sizeBytes uint64
 	source := AIScanSizeSourceStore
 	if s.owned {
-		sizeBytes = s.db.Metrics().DiskSpaceUsage()
+		m, err := s.db.Metrics()
+		if err != nil {
+			return AIScanHealthStats{}, fmt.Errorf("aiscan engine metrics: %w", err)
+		}
+		sizeBytes = m.DiskSpaceUsage()
 	} else {
 		source = AIScanSizeSourcePrefix
 		// s.prefix is the constant "aiscan:", so its upper bound is never nil.

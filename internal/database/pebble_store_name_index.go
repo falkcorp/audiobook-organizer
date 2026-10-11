@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_name_index.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c0380c7-4e20-40bb-b2a0-a5b6e840b5be
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package database
 
@@ -152,7 +152,7 @@ func (p *PebbleStore) nameIndexGet(keyFor nameIndexKeyFunc, name string) ([]byte
 	return nil, nil
 }
 
-// nameIndexDeleter is satisfied by both *pebble.Batch and *pebble.DB.
+// nameIndexDeleter is satisfied by both *GatedBatch and *GatedDB.
 type nameIndexDeleter interface {
 	Delete(key []byte, opts *pebble.WriteOptions) error
 }

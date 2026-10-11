@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package database
 
@@ -342,7 +342,7 @@ func (s *PebbleStore) lockWindowRefs(refs ...FingerprintWindowRef) func() {
 // errBookFileRowVanished — applying nothing — when it is not (the row was
 // moved or deleted after it was read). The fsync runs after the owner stripe
 // is released (book_delete_owns_files.go).
-func (s *PebbleStore) commitWithWindowCascadeIfPresent(batch *pebble.Batch, f *BookFile, key []byte) error {
+func (s *PebbleStore) commitWithWindowCascadeIfPresent(batch *GatedBatch, f *BookFile, key []byte) error {
 	unlockWin := s.lockWindowRefs(FileWindowRef(f.ID))
 	defer unlockWin()
 	if err := s.stageFileWindowCascade(batch, f); err != nil {
@@ -370,7 +370,7 @@ func (s *PebbleStore) commitWithWindowCascadeIfPresent(batch *pebble.Batch, f *B
 	return s.syncBookFileWAL()
 }
 
-func (s *PebbleStore) commitWithWindowCascade(batch *pebble.Batch, files ...*BookFile) error {
+func (s *PebbleStore) commitWithWindowCascade(batch *GatedBatch, files ...*BookFile) error {
 	refs := make([]FingerprintWindowRef, 0, len(files))
 	for _, f := range files {
 		if f != nil && f.ID != "" {
@@ -394,7 +394,7 @@ func (s *PebbleStore) commitWithWindowCascade(batch *pebble.Batch, files ...*Boo
 // a range delete staged in the same batch, and the book_file delete batches this
 // is staged into are indexed batches that read through themselves. A file has at
 // most a handful of windows, so the scan is a single short seek.
-func (s *PebbleStore) stageFingerprintWindowDeletes(batch *pebble.Batch, ref FingerprintWindowRef) (int, error) {
+func (s *PebbleStore) stageFingerprintWindowDeletes(batch *GatedBatch, ref FingerprintWindowRef) (int, error) {
 	prefix := fpwinRefPrefix(ref)
 	var keys [][]byte
 	if err := forEachKeyInRange(s.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
@@ -417,7 +417,7 @@ func (s *PebbleStore) stageFingerprintWindowDeletes(batch *pebble.Batch, ref Fin
 // stageFileWindowCascade is the delete cascade for book_file rows: it stages
 // the windows of every file in files into batch. The caller holds their
 // window stripes (commitWithWindowCascade).
-func (s *PebbleStore) stageFileWindowCascade(batch *pebble.Batch, files ...*BookFile) error {
+func (s *PebbleStore) stageFileWindowCascade(batch *GatedBatch, files ...*BookFile) error {
 	for _, f := range files {
 		if f == nil || f.ID == "" {
 			continue
@@ -544,7 +544,7 @@ func (s *PebbleStore) ReplaceFingerprintWindows(ref FingerprintWindowRef, ws []F
 		}
 		encoded = append(encoded, [2][]byte{fpwinKey(&row), data})
 	}
-	return s.commitRefWrite(ref, "ReplaceFingerprintWindows", func(batch *pebble.Batch) error {
+	return s.commitRefWrite(ref, "ReplaceFingerprintWindows", func(batch *GatedBatch) error {
 		for _, kv := range encoded {
 			if err := batch.Set(kv[0], kv[1], nil); err != nil {
 				return err
@@ -571,7 +571,7 @@ func (s *PebbleStore) RecordFingerprintWindowFailure(f *FingerprintWindowFailure
 	if err != nil {
 		return fmt.Errorf("RecordFingerprintWindowFailure %s: marshal: %w", row.Ref, err)
 	}
-	return s.commitRefWrite(row.Ref, "RecordFingerprintWindowFailure", func(batch *pebble.Batch) error {
+	return s.commitRefWrite(row.Ref, "RecordFingerprintWindowFailure", func(batch *GatedBatch) error {
 		return batch.Set(fpwinFailKey(row.Ref), data, nil)
 	})
 }
@@ -602,7 +602,7 @@ func (s *PebbleStore) GetFingerprintWindowFailure(ref FingerprintWindowRef) (*Fi
 // f: ref's row before the stripe (the pre-index fallback is a full scan),
 // take the stripe, re-confirm the row with point reads, stage the deletes of
 // every stored window and the tombstone, let stage add the new keys, commit.
-func (s *PebbleStore) commitRefWrite(ref FingerprintWindowRef, op string, stage func(*pebble.Batch) error) error {
+func (s *PebbleStore) commitRefWrite(ref FingerprintWindowRef, op string, stage func(*GatedBatch) error) error {
 	fileID, isFile := fileIDOfWindowRef(ref)
 	var hint *BookFile
 	if isFile {

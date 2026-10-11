@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_storage.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a4b6c8e-1f3d-5a7b-9c0e-2d4f6a8b0c1d
-// last-edited: 2026-05-29
+// last-edited: 2026-10-11
 
 // Split-book candidate storage. The detector is purely analytical;
 // these helpers persist its results so the operator-facing CLI and the
@@ -27,6 +27,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	ulid "github.com/oklog/ulid/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // splitBookKeyPrefix is the Pebble key prefix for stored candidates.
@@ -37,17 +39,17 @@ const (
 	splitBookKeyUpper  = "split_book_candidate;"
 )
 
-// SplitBookStore is implemented by anything that exposes a *pebble.DB.
+// SplitBookStore is implemented by anything that exposes a *database.GatedDB.
 // EmbeddingStore satisfies this via its (currently unexported) db field;
 // we wrap it with a thin helper rather than adding methods directly to
 // avoid bloating EmbeddingStore's API surface.
 type SplitBookStore struct {
-	db *pebble.DB
+	db *database.GatedDB
 }
 
 // NewSplitBookStore constructs a SplitBookStore backed by the given
 // Pebble database. The DB is shared; Close is a no-op.
-func NewSplitBookStore(db *pebble.DB) *SplitBookStore {
+func NewSplitBookStore(db *database.GatedDB) *SplitBookStore {
 	return &SplitBookStore{db: db}
 }
 
@@ -159,7 +161,7 @@ func (s *SplitBookStore) deleteAll() error {
 // PebbleDB exposes the underlying Pebble handle for callers (e.g.
 // EmbeddingStore) that want to construct a SplitBookStore from a
 // pre-existing shared DB. Returns nil if the receiver is nil.
-func (s *SplitBookStore) PebbleDB() *pebble.DB {
+func (s *SplitBookStore) PebbleDB() *database.GatedDB {
 	if s == nil {
 		return nil
 	}

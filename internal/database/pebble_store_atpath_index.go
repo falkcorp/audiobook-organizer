@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-10-02
+// last-edited: 2026-10-11
 
 // The book_atpath: multi-valued path index.
 //
@@ -210,7 +210,7 @@ func (p *PebbleStore) RebuildBookAtPathIndex(ctx context.Context) (BookAtPathBac
 // (forEachBookRow) and hands each row, copied, to exactly one of
 // bookAtPathBackfillWorkers workers over a bounded channel. Each worker decodes
 // its rows (the JSON decode is the per-row cost) and stages Sets into its OWN
-// *pebble.Batch, which is not goroutine-safe and so is never shared, committing
+// *GatedBatch, which is not goroutine-safe and so is never shared, committing
 // every bookAtPathBackfillChunk keys. The rows a worker sees are disjoint from
 // every other worker's, and each key is derived from one row's id, so no two
 // workers ever write the same key. The counters are atomics.

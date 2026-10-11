@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpoint_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9f127ce-e5b7-4da2-b2ee-f2761a0d087d
-// last-edited: 2026-09-08
+// last-edited: 2026-10-11
 
 // Tests for the Pebble→SQLite backfill's DURABLE checkpoint.
 //
@@ -43,7 +43,7 @@ func tierKeys(t *testing.T, s *PebbleActivityStore, tier string) []string {
 // loadActivityBackfillProgress applies. Tests that assert a tier was recorded as
 // `failed` must use this: the loader deliberately rewrites `failed` to a full
 // re-scan, so going through it would hide the very state under test.
-func rawProgress(t *testing.T, db *pebble.DB) ActivityBackfillProgress {
+func rawProgress(t *testing.T, db *GatedDB) ActivityBackfillProgress {
 	t.Helper()
 	val, closer, err := db.Get([]byte(ActivitySQLBackfillProgressKey))
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_scorer_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 9c3e5b17-6f8a-4d2e-b091-5a7c8d4e2f6a
-// last-edited: 2026-07-03
+// last-edited: 2026-10-11
 
 package ai
 
@@ -169,7 +169,7 @@ func TestEmbeddingScorer_BookIDFastPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := pebble.Open(tmpDir, &pebble.Options{})
 	require.NoError(t, err)
-	store := database.NewEmbeddingStore(db)
+	store := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 
 	// Seed book BOOK_A with a one-hot 'a'-style vector so it matches
@@ -205,7 +205,7 @@ func TestEmbeddingScorer_BookIDMissFallsBackToEmbed(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := pebble.Open(tmpDir, &pebble.Options{})
 	require.NoError(t, err)
-	store := database.NewEmbeddingStore(db)
+	store := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 	// Store has no entry for BOOK_MISSING.
 
@@ -251,7 +251,7 @@ func TestEmbeddingScorer_BookIDModelMismatchFallsBackToEmbed(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := pebble.Open(tmpDir, &pebble.Options{})
 	require.NoError(t, err)
-	store := database.NewEmbeddingStore(db)
+	store := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 
 	// Seed a stale 3072-dim vector tagged with the old OpenAI model name.

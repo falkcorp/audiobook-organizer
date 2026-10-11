@@ -1,7 +1,7 @@
 // file: internal/database/metadata_cache_asin_stamp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c3f1a7e-52d8-4b6a-8e0f-d41b7c2a9e53
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 package database
 
@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,7 +132,7 @@ func TestUpdateBook_ASINStampDoesNotClobberAConcurrentFetch(t *testing.T) {
 	freshTwo, _ := json.Marshal(map[string]any{"title": "Fresh Two"})
 	var wg sync.WaitGroup
 	putDone := make(chan struct{})
-	bookWriteBatchPreCommitHook = func(op, id string, _ *pebble.Batch) {
+	bookWriteBatchPreCommitHook = func(op, id string, _ *GatedBatch) {
 		if op != "update" || id != b.ID {
 			return
 		}

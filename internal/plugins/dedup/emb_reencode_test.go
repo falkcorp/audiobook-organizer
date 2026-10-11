@@ -1,6 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a3c1f9e-4b2d-4a7f-b5c0-8e1d6f4a9b2c
+// last-edited: 2026-10-11
 
 // Tests for the dedup.emb-reencode op (T021).
 //
@@ -36,7 +37,7 @@ func newReencodePlugin(t *testing.T) (*Plugin, *database.EmbeddingStore, *pebble
 	dir := t.TempDir()
 	db, err := pebble.Open(dir, &pebble.Options{})
 	require.NoError(t, err)
-	es := database.NewEmbeddingStore(db)
+	es := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() {
 		_ = db.Close()
 	})

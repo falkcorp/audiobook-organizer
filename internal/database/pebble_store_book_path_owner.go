@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_path_owner.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d8a2f41-7c3e-4b96-a1d0-9e6b3c7f2a18
-// last-edited: 2026-09-13
+// last-edited: 2026-10-11
 
 package database
 
@@ -77,7 +77,7 @@ func (p *PebbleStore) bookPathKeyHeldByOther(path, id string) (string, error) {
 //
 // Check-then-set, not atomic: two writers racing onto one free path can still
 // both see it free. Closing that needs a store-wide path lock.
-func (p *PebbleStore) setBookPathKeyIfFree(batch *pebble.Batch, path, id string) error {
+func (p *PebbleStore) setBookPathKeyIfFree(batch *GatedBatch, path, id string) error {
 	owner, err := p.bookPathKeyHeldByOther(path, id)
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func (p *PebbleStore) setBookPathKeyIfFree(batch *pebble.Batch, path, id string)
 // key still names id (compare-and-delete). A book leaving a path, by a move
 // or a delete, used to delete the key unconditionally, so leaving a path that
 // another book had since taken erased that book's lookup key.
-func (p *PebbleStore) deleteBookPathKeyIfOwned(batch *pebble.Batch, path, id string) error {
+func (p *PebbleStore) deleteBookPathKeyIfOwned(batch *GatedBatch, path, id string) error {
 	value, closer, err := p.db.Get(bookPathKey(path))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil

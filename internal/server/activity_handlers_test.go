@@ -1,7 +1,7 @@
 // file: internal/server/activity_handlers_test.go
-// version: 5.3.1
+// version: 5.3.2
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 // Updated for Phase 2 handler extraction: tests now use handlers.ActivityHandler
 // directly instead of *Server methods.
@@ -505,5 +505,5 @@ func newTestPebbleActivityStore(t *testing.T) *database.PebbleActivityStore {
 	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return database.NewPebbleActivityStore(db)
+	return database.NewPebbleActivityStore(database.NewGatedDB(db))
 }

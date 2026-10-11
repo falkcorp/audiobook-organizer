@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.30.0
+// version: 3.30.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -188,7 +188,7 @@ func (p *PebbleStore) InsertOperationV2(row OperationV2Row) (err error) {
 	} else if !errors.Is(gerr, pebble.ErrNotFound) {
 		return gerr
 	}
-	return p.commitOpV2Row(prev, &row, func(b *pebble.Batch) error {
+	return p.commitOpV2Row(prev, &row, func(b *GatedBatch) error {
 		for _, k := range staleKeys {
 			if err := b.Delete(k, nil); err != nil {
 				return err
@@ -1407,7 +1407,7 @@ func (p *PebbleStore) PromoteToQueued(id string) (err error) {
 	row.Status = "queued"
 	// The row and the queue-index key (so ListQueuedOperationsV2 can find this
 	// op; same encoding as InsertOperationV2) are one batch.
-	return p.commitOpV2Row(&prev, &row, func(b *pebble.Batch) error {
+	return p.commitOpV2Row(&prev, &row, func(b *GatedBatch) error {
 		return b.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), nil)
 	})
 }

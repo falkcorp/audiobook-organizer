@@ -1,7 +1,7 @@
 // file: internal/database/store_invariants_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c2e3f4a5-6b7c-8d9e-0f1a-storeinvar0001
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package database
 
@@ -179,14 +179,14 @@ func scanTrailingKeyIsID(t *testing.T, ps *PebbleStore, prefix string, exists fu
 	}
 }
 
-func mustIterPrefix(t *testing.T, ps *PebbleStore, prefix string) *pebble.Iterator {
+func mustIterPrefix(t *testing.T, ps *PebbleStore, prefix string) *GatedIter {
 	t.Helper()
 	ub := append([]byte(nil), []byte(prefix)...)
 	ub[len(ub)-1]++ // prefix end
 	return mustIter(t, ps, prefix, string(ub))
 }
 
-func mustIter(t *testing.T, ps *PebbleStore, lower, upper string) *pebble.Iterator {
+func mustIter(t *testing.T, ps *PebbleStore, lower, upper string) *GatedIter {
 	t.Helper()
 	iter, err := ps.db.NewIter(&pebble.IterOptions{LowerBound: []byte(lower), UpperBound: []byte(upper)})
 	if err != nil {

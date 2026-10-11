@@ -1,7 +1,7 @@
 // file: internal/database/book_row_iter.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9c032ba7-3cab-4fd8-9e0b-b08a0939dd0b
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package database
 
@@ -77,9 +77,9 @@ func bareRowUpperBound(prefix string) []byte {
 	return upper
 }
 
-// bareRowIterReader is satisfied by *pebble.DB and *pebble.Snapshot.
+// bareRowIterReader is satisfied by *GatedDB and *GatedSnapshot.
 type bareRowIterReader interface {
-	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+	NewIter(o *pebble.IterOptions) (*GatedIter, error)
 }
 
 // forEachBookRow calls visit with the ID and value of every book:<id> record
@@ -145,7 +145,7 @@ func forEachKeyInRange(r bareRowIterReader, lower, upper []byte, visit func(key,
 
 // rowCursor is the one place a scan helper's loop, error check and Close live.
 type rowCursor struct {
-	it *pebble.Iterator
+	it *GatedIter
 
 	// Test seam, nil in production: see setRowScanFault.
 	fault   *rowScanFault
@@ -236,7 +236,7 @@ func (c *rowCursor) run(start, next func() bool, visit func(key, value []byte) e
 // rowScanFault makes scans opened on one reader fail after afterRows rows.
 // Tests only: production never stores into rowScanFaults, so the per-scan cost
 // is one Load on an empty sync.Map. It is keyed by reader (a test's own
-// *pebble.DB), so parallel tests on other stores are unaffected.
+// *GatedDB), so parallel tests on other stores are unaffected.
 //
 // lowerPrefix limits the fault to scans whose lower bound starts with it (""
 // matches every scan). A function that makes two passes needs this: with every
@@ -269,7 +269,7 @@ func setRowScanFaultWithClose(r bareRowIterReader, lowerPrefix string, afterRows
 	return func() { rowScanFaults.Delete(r) }
 }
 
-// bareRowIter positions a *pebble.Iterator on the record rows "<prefix><id>"
+// bareRowIter positions a *GatedIter on the record rows "<prefix><id>"
 // of a key family, in key (plain byte) order. It is the engine under
 // scanBareRows and is deliberately not handed to callers: see rule 3 above.
 //
@@ -279,7 +279,7 @@ func setRowScanFaultWithClose(r bareRowIterReader, lowerPrefix string, afterRows
 // record whose ID is "<seg>" sorts before its subtree and one whose ID starts
 // "<seg>;" sorts after the seek target, so neither is lost.
 type bareRowIter struct {
-	it     *pebble.Iterator
+	it     *GatedIter
 	prefix []byte
 }
 

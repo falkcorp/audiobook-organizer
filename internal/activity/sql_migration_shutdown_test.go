@@ -1,7 +1,7 @@
 // file: internal/activity/sql_migration_shutdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a8f6c25-0e39-4d71-b8a4-7c3d5e02f96b
-// last-edited: 2026-09-07
+// last-edited: 2026-10-11
 
 package activity
 
@@ -32,7 +32,7 @@ func newMigrationStarterForTest(t *testing.T) *sqlMigrationStarter {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlStore.Close() })
 
-	mig := database.NewMigratingActivityStore(database.NewPebbleActivityStore(db), sqlStore, false)
+	mig := database.NewMigratingActivityStore(database.NewPebbleActivityStore(database.NewGatedDB(db)), sqlStore, false)
 	return &sqlMigrationStarter{mig: mig}
 }
 
