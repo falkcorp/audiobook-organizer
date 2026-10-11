@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.19.0
+// version: 2.20.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-09-15
+// last-edited: 2026-10-10
 
 package registry_test
 
@@ -201,6 +201,39 @@ func (f *fakeStore) UpdateOperationV2Status(id, status string, startedAt, comple
 	}
 	f.ops[id] = op
 	return nil
+}
+
+// UpdateOperationV2StatusIf mirrors PebbleStore.UpdateOperationV2StatusIf: the
+// status check and the write happen under one lock, a missing row or a status
+// other than fromStatus is (false, nil), and a terminal status is stamped with
+// completed_at when the caller passes none. updateStatusErr fails it too, since
+// the real store shares one write path for both.
+func (f *fakeStore) UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.updateStatusErr != nil {
+		return false, f.updateStatusErr
+	}
+	op, ok := f.ops[id]
+	if !ok || op.Status != fromStatus {
+		return false, nil
+	}
+	op.Status = status
+	if startedAt != nil {
+		op.StartedAt = startedAt
+	}
+	if completedAt != nil {
+		op.CompletedAt = completedAt
+	}
+	if database.IsTerminalV2Status(status) && op.CompletedAt == nil {
+		now := time.Now().UTC()
+		op.CompletedAt = &now
+	}
+	if errMsg != nil {
+		op.ErrorMessage = errMsg
+	}
+	f.ops[id] = op
+	return true, nil
 }
 
 func (f *fakeStore) ResetOperationV2ForResume(id string) error {

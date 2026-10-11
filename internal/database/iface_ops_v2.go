@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package database
 
@@ -239,6 +239,13 @@ type OpV2StatusStore interface {
 	// UpdateOperationV2Status sets the status (and optional timestamps).
 	// startedAt / completedAt are set when non-nil.
 	UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error
+	// UpdateOperationV2StatusIf is UpdateOperationV2Status as a compare-and-set:
+	// it writes only when the row's current status is fromStatus, and reports
+	// whether it did. A missing row reports false with a nil error. Use it
+	// wherever the status was decided from an earlier read that another
+	// writer (a worker's claim, the deps scheduler's promotion, a re-queue)
+	// can have overtaken.
+	UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error)
 	// ResetOperationV2ForResume flips an interrupted op back to "queued" for a
 	// ResumeRestart resume and CLEARS CompletedAt (and the interrupt error) to
 	// nil — something UpdateOperationV2Status cannot do (nil means "leave

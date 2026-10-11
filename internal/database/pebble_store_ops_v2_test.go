@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package database
 
@@ -992,4 +992,108 @@ func TestDeleteOperationV2_RemovesUndecodableRow(t *testing.T) {
 	logs, err := s.GetOpLogsV2("op-corrupt", 10)
 	require.NoError(t, err)
 	require.Empty(t, logs)
+}
+
+// TestUpdateOperationV2StatusIf_ComparesAndSets pins the compare-and-set
+// Registry.Cancel and the worker's stand-down pickup gate rely on: the write
+// applies only from the named status, a miss leaves the row and its indexes
+// alone, and a hit maintains the queue and active indexes exactly as
+// UpdateOperationV2Status does (it is the same code path).
+func TestUpdateOperationV2StatusIf_ComparesAndSets(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	queuedIDs := func(t *testing.T) map[string]bool {
+		t.Helper()
+		rows, err := s.ListQueuedOperationsV2()
+		require.NoError(t, err)
+		ids := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			ids[r.ID] = true
+		}
+		return ids
+	}
+	activeIDs := func(t *testing.T) map[string]bool {
+		t.Helper()
+		rows, err := s.ListActiveOperationsV2()
+		require.NoError(t, err)
+		ids := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			ids[r.ID] = true
+		}
+		return ids
+	}
+
+	t.Run("a hit from queued writes the status, message and indexes", func(t *testing.T) {
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-q", "queued")))
+		require.True(t, queuedIDs(t)["op-cas-q"])
+
+		msg := "canceled by user"
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-q", "queued", "canceled", nil, nil, &msg)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-cas-q")
+		require.NoError(t, err)
+		require.Equal(t, "canceled", got.Status)
+		require.NotNil(t, got.CompletedAt, "a terminal write is stamped even with a nil completedAt")
+		require.NotNil(t, got.ErrorMessage)
+		require.Equal(t, msg, *got.ErrorMessage)
+		require.False(t, queuedIDs(t)["op-cas-q"], "the queue index entry must go with the queued status")
+		require.False(t, activeIDs(t)["op-cas-q"], "a canceled row is not active")
+	})
+
+	t.Run("a miss leaves the row and its indexes alone", func(t *testing.T) {
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-miss", "queued")))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-miss", "waiting_deps", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.False(t, updated)
+
+		got, err := s.GetOperationV2("op-cas-miss")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+		require.Nil(t, got.CompletedAt)
+		require.True(t, queuedIDs(t)["op-cas-miss"], "a missed compare-and-set must not touch the queue index")
+	})
+
+	t.Run("a promotion out of waiting_deps makes a waiting_deps cancel miss", func(t *testing.T) {
+		// Registry.Cancel reads waiting_deps, the deps scheduler promotes the
+		// row to queued, and Cancel's write must then miss rather than
+		// overwrite a row a worker can now claim.
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-deps", "waiting_deps")))
+		require.NoError(t, s.PromoteToQueued("op-cas-deps"))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-deps", "waiting_deps", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.False(t, updated)
+		got, err := s.GetOperationV2("op-cas-deps")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+
+		// And a hit from waiting_deps on a row still parked there.
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-deps-2", "waiting_deps")))
+		updated, err = s.UpdateOperationV2StatusIf("op-cas-deps-2", "waiting_deps", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+		got, err = s.GetOperationV2("op-cas-deps-2")
+		require.NoError(t, err)
+		require.Equal(t, "canceled", got.Status)
+	})
+
+	t.Run("a hit to running adds the active index entry", func(t *testing.T) {
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-run", "interrupted_quiesced")))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-run", "interrupted_quiesced", "running", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+		require.True(t, activeIDs(t)["op-cas-run"])
+	})
+
+	t.Run("a missing row is not applied and not an error", func(t *testing.T) {
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-absent", "queued", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.False(t, updated)
+	})
 }

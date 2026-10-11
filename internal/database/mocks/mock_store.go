@@ -3936,6 +3936,96 @@ func (_c *MockOpsV2Store_UpdateOperationV2Status_Call) RunAndReturn(run func(id 
 	return _c
 }
 
+// UpdateOperationV2StatusIf provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) UpdateOperationV2StatusIf(id string, fromStatus string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) (bool, error) {
+	ret := _mock.Called(id, fromStatus, status, startedAt, completedAt, errMsg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateOperationV2StatusIf")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, *time.Time, *time.Time, *string) (bool, error)); ok {
+		return returnFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, *time.Time, *time.Time, *string) bool); ok {
+		r0 = returnFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, *time.Time, *time.Time, *string) error); ok {
+		r1 = returnFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOpsV2Store_UpdateOperationV2StatusIf_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateOperationV2StatusIf'
+type MockOpsV2Store_UpdateOperationV2StatusIf_Call struct {
+	*mock.Call
+}
+
+// UpdateOperationV2StatusIf is a helper method to define mock.On call
+//   - id string
+//   - fromStatus string
+//   - status string
+//   - startedAt *time.Time
+//   - completedAt *time.Time
+//   - errMsg *string
+func (_e *MockOpsV2Store_Expecter) UpdateOperationV2StatusIf(id any, fromStatus any, status any, startedAt any, completedAt any, errMsg any) *MockOpsV2Store_UpdateOperationV2StatusIf_Call {
+	return &MockOpsV2Store_UpdateOperationV2StatusIf_Call{Call: _e.mock.On("UpdateOperationV2StatusIf", id, fromStatus, status, startedAt, completedAt, errMsg)}
+}
+
+func (_c *MockOpsV2Store_UpdateOperationV2StatusIf_Call) Run(run func(id string, fromStatus string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string)) *MockOpsV2Store_UpdateOperationV2StatusIf_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 *time.Time
+		if args[3] != nil {
+			arg3 = args[3].(*time.Time)
+		}
+		var arg4 *time.Time
+		if args[4] != nil {
+			arg4 = args[4].(*time.Time)
+		}
+		var arg5 *string
+		if args[5] != nil {
+			arg5 = args[5].(*string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+			arg4,
+			arg5,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_UpdateOperationV2StatusIf_Call) Return(b bool, err error) *MockOpsV2Store_UpdateOperationV2StatusIf_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_UpdateOperationV2StatusIf_Call) RunAndReturn(run func(id string, fromStatus string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) (bool, error)) *MockOpsV2Store_UpdateOperationV2StatusIf_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpsertOpDefinitionV2 provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) UpsertOpDefinitionV2(row database.OpDefinitionV2Row) error {
 	ret := _mock.Called(row)
@@ -31019,6 +31109,96 @@ func (_c *MockStore_UpdateOperationV2Status_Call) Return(err error) *MockStore_U
 }
 
 func (_c *MockStore_UpdateOperationV2Status_Call) RunAndReturn(run func(id string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) error) *MockStore_UpdateOperationV2Status_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateOperationV2StatusIf provides a mock function for the type MockStore
+func (_mock *MockStore) UpdateOperationV2StatusIf(id string, fromStatus string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) (bool, error) {
+	ret := _mock.Called(id, fromStatus, status, startedAt, completedAt, errMsg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateOperationV2StatusIf")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, *time.Time, *time.Time, *string) (bool, error)); ok {
+		return returnFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, *time.Time, *time.Time, *string) bool); ok {
+		r0 = returnFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, *time.Time, *time.Time, *string) error); ok {
+		r1 = returnFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_UpdateOperationV2StatusIf_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateOperationV2StatusIf'
+type MockStore_UpdateOperationV2StatusIf_Call struct {
+	*mock.Call
+}
+
+// UpdateOperationV2StatusIf is a helper method to define mock.On call
+//   - id string
+//   - fromStatus string
+//   - status string
+//   - startedAt *time.Time
+//   - completedAt *time.Time
+//   - errMsg *string
+func (_e *MockStore_Expecter) UpdateOperationV2StatusIf(id any, fromStatus any, status any, startedAt any, completedAt any, errMsg any) *MockStore_UpdateOperationV2StatusIf_Call {
+	return &MockStore_UpdateOperationV2StatusIf_Call{Call: _e.mock.On("UpdateOperationV2StatusIf", id, fromStatus, status, startedAt, completedAt, errMsg)}
+}
+
+func (_c *MockStore_UpdateOperationV2StatusIf_Call) Run(run func(id string, fromStatus string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string)) *MockStore_UpdateOperationV2StatusIf_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 *time.Time
+		if args[3] != nil {
+			arg3 = args[3].(*time.Time)
+		}
+		var arg4 *time.Time
+		if args[4] != nil {
+			arg4 = args[4].(*time.Time)
+		}
+		var arg5 *string
+		if args[5] != nil {
+			arg5 = args[5].(*string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+			arg4,
+			arg5,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_UpdateOperationV2StatusIf_Call) Return(b bool, err error) *MockStore_UpdateOperationV2StatusIf_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockStore_UpdateOperationV2StatusIf_Call) RunAndReturn(run func(id string, fromStatus string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) (bool, error)) *MockStore_UpdateOperationV2StatusIf_Call {
 	_c.Call.Return(run)
 	return _c
 }
