@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -204,6 +204,46 @@ func TestFragmentFixer_RevertFirstOpAndRetryInEitherOrder(t *testing.T) {
 			require.Equal(t, []string{f.ids["fragG"]}, f.livePrimaries(t, "vg-fragG"))
 		})
 	}
+}
+
+// The lease-renewal budget these tests script (handOffProbeRenewals counts it
+// from an uncontended run, leaseLostAtHandOff spends total-2 of it) is the
+// row's own beats. LockWaiting also renews on a ticker while the apply waits
+// for the process-wide merge lock, and these tests run in parallel with ones
+// that hold that lock for a long time (holdMergeLockPastTheLease): on a slow
+// CI runner the wait outlived the 30s default tick, a ticker renewal spent
+// the budget early, and the lease was refused at the retire's soft-delete
+// instead of at the hand-off ("row partially applied: after 1 step(s):
+// soft-delete ...", Woodpecker pipeline 730). noWait now stops the ticker
+// from firing, so how long the lock is held cannot move the refusal. The 300ms
+// hold is shorter than the real 30s tick, so this only fails if the default
+// tick is shortened (it was verified red with defaultLockRenewEvery at 5ms
+// and noWait without LockRenewEvery); it pins that noWait carries the setting.
+func TestFragmentFixer_RenewalBudgetIgnoresMergeLockWait(t *testing.T) {
+	t.Parallel()
+	total := handOffProbeRenewals(t)
+	f := newFragFixture(t)
+	f.seed(t)
+	f.primaryFragG(t)
+	f.plan(t, "op-plan")
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.renewsLeft = total - 2
+	scan.mu.Unlock()
+
+	merge.LockMergeRMW()
+	released := make(chan struct{})
+	time.AfterFunc(300*time.Millisecond, func() {
+		merge.UnlockMergeRMW()
+		close(released)
+	})
+	res, err := f.applyErr(t, "op-plan", "op-apply", []string{"copy:" + f.ids["suns"]}, nil)
+	<-released // the lock is always freed, even if the apply never waited for it
+	require.ErrorIs(t, err, repairs.ErrStandDownLost)
+	require.NotNil(t, res)
+	require.Len(t, res.Rows, 1)
+	require.Contains(t, res.Rows[0].Error, "hand-off",
+		"the refusal must land in the hand-off however long the merge lock was held: %+v", res.Rows[0])
 }
 
 // A fragment whose flag someone else changed after this fixer's demote is

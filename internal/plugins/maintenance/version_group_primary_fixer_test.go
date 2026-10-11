@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -170,7 +170,18 @@ func (r *repairsOpReporter) SetResult(v any) error {
 	return nil
 }
 
-var noWait = repairs.WaitOptions{Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }}
+// noWait is the stand-down wait every fixture test uses: no sleeping, and no
+// ticker renewals while a row waits for a process-wide lock. LockWaiting's
+// 30s default tick would fire whenever a parallel test holds the merge lock
+// for longer than that on a slow runner, and each tick is one more lease
+// renewal than the test scripted: the tests that spend an exact renewal
+// budget (renewsLeft = N) then had the lease refused N ticks early. A test
+// that wants the ticker sets LockRenewEvery on its own copy
+// (holdMergeLockPastTheLease does).
+var noWait = repairs.WaitOptions{
+	Sleep:          func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	LockRenewEvery: 24 * time.Hour,
+}
 
 func (f *vgRepairFixture) plugin(deps ServerDeps) *Plugin {
 	return &Plugin{deps: deps, standDownWait: noWait}
