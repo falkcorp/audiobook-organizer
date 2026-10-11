@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2180,10 +2181,22 @@ var envLockedSettings = map[string]string{
 }
 
 // LockedByConfigFile is the SettingLocks value for a key that the server's config
-// file locks. It is not an environment variable name and does not start with "--",
-// so a client can tell the three mechanisms apart (it contains a space, which no
-// variable name can).
+// file locks, followed by " <path>" when viper knows which file it read. It is not
+// an environment variable name and does not start with "--", so a client can tell
+// the three mechanisms apart (it contains a space, which no variable name can).
+//
+// The file is the one viper loaded: the --config flag, else
+// $HOME/.audiobook-organizer.yaml. It is NOT the <database dir>/config.yaml that
+// SaveConfigToFile writes and LoadConfigFromFile reads; those never lock anything.
 const LockedByConfigFile = "config file"
+
+// configFileLockReason is the SettingLocks value for a config-file lock.
+func configFileLockReason() string {
+	if path := viper.ConfigFileUsed(); path != "" {
+		return LockedByConfigFile + " " + path
+	}
+	return LockedByConfigFile
+}
 
 // configFileLockedSettings is the set of locked keys that a value in the server's
 // config file ALSO locks, in addition to the environment variable named in
@@ -2269,7 +2282,7 @@ func EnvLockedSettings() []string {
 }
 
 // SettingLockedBy names what makes key read-only — the environment variable, the
-// command-line flag, or LockedByConfigFile — or "" when the key is freely settable
+// command-line flag, or LockedByConfigFile (plus the file's path) — or "" when the key is freely settable
 // from the UI. When several apply the environment wins, then the flag, then the file.
 // The UI uses it to say WHY a field is disabled; "locked" with no reason is a
 // support ticket.
@@ -2281,7 +2294,7 @@ func SettingLockedBy(key string) string {
 		return flag
 	}
 	if configFileSupplied(key) {
-		return LockedByConfigFile
+		return configFileLockReason()
 	}
 	return ""
 }
@@ -2300,6 +2313,21 @@ func SettingLocks() map[string]string {
 		locks[key] = SettingLockedBy(key)
 	}
 	return locks
+}
+
+// lockedBool returns the boolean a locked key resolves to. viper turns a value that
+// is not a boolean ("yes", "maybe", a typo) into false without a word, so a locked
+// toggle would be silently forced off; this logs a Warn naming the source first.
+// The accepted spellings are strconv.ParseBool's. The value is a toggle, not a
+// secret, so it is safe to log.
+func lockedBool(key string) bool {
+	if raw, ok := viper.Get(key).(string); ok {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			configLog.Warn("%s: %q from %s is not a boolean (true/false/1/0/t/f); treating it as false",
+				key, raw, SettingLockedBy(key))
+		}
+	}
+	return viper.GetBool(key)
 }
 
 func applyEnvAuthoritativeConfig(c *Config) {
@@ -2442,10 +2470,10 @@ func applyEnvAuthoritativeConfig(c *Config) {
 		c.DelugeDiscoveryLabel = viper.GetString("deluge_discovery_label")
 	}
 	if SettingLockedBy("deluge_discovery_enabled") != "" {
-		c.DelugeDiscoveryEnabled = viper.GetBool("deluge_discovery_enabled")
+		c.DelugeDiscoveryEnabled = lockedBool("deluge_discovery_enabled")
 	}
 	if SettingLockedBy("deluge_move_enabled") != "" {
-		c.DelugeMoveEnabled = viper.GetBool("deluge_move_enabled")
+		c.DelugeMoveEnabled = lockedBool("deluge_move_enabled")
 	}
 	// NOT root_dir, deliberately. It is the same shape and the same argument
 	// applies in the abstract, but the base unit ships a generic

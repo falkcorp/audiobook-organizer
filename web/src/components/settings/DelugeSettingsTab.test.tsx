@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DelugeSettingsTab.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 333780a3-eba8-4978-9f00-8866eed4cfa7
 // last-edited: 2026-10-11
 
@@ -168,14 +168,35 @@ describe('DelugeSettingsTab', () => {
       renderWithProviders(
         <DelugeSettingsTab
           envLocked={['deluge_web_url', 'deluge_move_enabled']}
-          settingLocks={{ deluge_web_url: 'config file', deluge_move_enabled: 'DELUGE_MOVE_ENABLED' }}
+          settingLocks={{
+            deluge_web_url: 'config file /etc/audiobook-organizer/config.example.yaml',
+            deluge_move_enabled: 'DELUGE_MOVE_ENABLED',
+          }}
         />
       );
       await screen.findByText('Configured');
 
-      expect(screen.getByText(/^Locked: set by the server's config file/)).toBeInTheDocument();
+      // The note names the file the server loaded, so the operator edits the right one.
+      expect(
+        screen.getByText(
+          /^Locked: set by the server's config file \(\/etc\/audiobook-organizer\/config\.example\.yaml\)/
+        )
+      ).toBeInTheDocument();
       expect(screen.getByText('Move storage enabled')).toBeInTheDocument();
       expect(screen.queryByText('Discovery label')).not.toBeInTheDocument();
+    });
+
+    it('falls back to a bare config file reason when the server did not name the file', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => configured.clone()));
+      renderWithProviders(
+        <DelugeSettingsTab
+          envLocked={['deluge_web_url']}
+          settingLocks={{ deluge_web_url: 'config file' }}
+        />
+      );
+      await screen.findByText('Configured');
+
+      expect(screen.getByText(/^Locked: set by the server's config file,/)).toBeInTheDocument();
     });
 
     it('lists the password lock by name and never renders a value for it', async () => {

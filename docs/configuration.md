@@ -1,5 +1,5 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -81,13 +81,34 @@ value saved in the database** (including a saved empty value), and Settings show
 the field read-only with a note naming the source. The environment wins over the
 config file when both are set. An empty variable or an empty config-file value
 does not count as set. When neither source sets a key, the saved value (set with
-`PUT /api/v1/config`) is used, as for every other setting. A Deluge password
-supplied this way is not copied into the saved settings, and it is shown only
-masked.
+`PUT /api/v1/config`) is used, as for every other setting.
 
-Changing a locked key with `PUT /api/v1/config` is accepted and saved like the
-other locked settings, but the environment or config-file value is applied again
-on the next start.
+"The config file" here means the file the server was started with: the `--config`
+flag, by default `$HOME/.audiobook-organizer.yaml`. The Settings note and the
+`setting_locks` value from `GET /api/v1/config` give its path. It is **not** the
+`config.yaml` the server keeps next to the database; that file never locks a
+setting. If you point `--config` at the `config.yaml` next to the database, the
+server rewrites that file when settings are saved. It keeps the keys it does not
+manage (the Deluge keys among them), updates the ones it does, and removes a
+secret that has become empty.
+
+A Deluge boolean that does not parse (the accepted spellings are those of Go's
+`strconv.ParseBool`: `1`, `t`, `true`, `0`, `f`, `false` and their capitalised forms) is
+treated as `false`, and a warning naming the key and its source is logged.
+
+Changing a locked key with `PUT /api/v1/config`:
+
+- For `deluge_web_url`, `deluge_discovery_label`, `deluge_discovery_enabled` and
+  `deluge_move_enabled`, the request is accepted and the new value is saved, like
+  the other locked settings. It is in effect until the next start, when the
+  environment or config-file value is applied again.
+- For `deluge_web_password`, the request is accepted and the new value is in effect
+  until the next start, but it is **not saved**: the password already stored is kept
+  as it was. The environment or file password is never written to the database
+  either. If you later remove the environment or file entry, the password you had
+  stored before is used again.
+
+The password is returned by `GET /api/v1/config` only masked, and is never logged.
 
 ## Config File Keys
 

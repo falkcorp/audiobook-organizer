@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/spf13/viper"
@@ -113,7 +114,20 @@ func SaveConfigToFile() error {
 
 	// WHY Snapshot: consistent read of many fields under a single read lock.
 	c := Snapshot()
-	fileConfig := map[string]any{
+
+	// Start from what is already in the file, so keys this function does not manage
+	// survive the rewrite. This path is <database dir>/config.yaml, and an operator
+	// may also point --config at it: rewriting it from scratch would silently drop
+	// every other key in it, including the Deluge keys that lock those settings.
+	// A missing or unparseable file starts empty, as before.
+	fileConfig := map[string]any{}
+	if existing, err := os.ReadFile(path); err == nil {
+		var prior map[string]any
+		if yaml.Unmarshal(existing, &prior) == nil && prior != nil {
+			fileConfig = prior
+		}
+	}
+	for k, v := range map[string]any{
 		"root_dir":              c.RootDir,
 		"database_path":         c.DatabasePath,
 		"playlist_dir":          c.PlaylistDir,
@@ -127,17 +141,22 @@ func SaveConfigToFile() error {
 		"enable_ai_parsing":     c.EnableAIParsing,
 		"concurrent_scans":      c.ConcurrentScans,
 		"log_level":             c.LogLevel,
+	} {
+		fileConfig[k] = v
 	}
 
-	// Only write secrets if they're set (plaintext in file, file permissions protect them)
-	if c.OpenAIAPIKey != "" {
-		fileConfig["openai_api_key"] = c.OpenAIAPIKey
-	}
-	if c.GoogleBooksAPIKey != "" {
-		fileConfig["google_books_api_key"] = c.GoogleBooksAPIKey
-	}
-	if c.HardcoverAPIToken != "" {
-		fileConfig["hardcover_api_token"] = c.HardcoverAPIToken
+	// Only write secrets if they're set (plaintext in file, file permissions protect them).
+	// A secret that is now empty is removed, not left behind from an earlier write.
+	for k, v := range map[string]string{
+		"openai_api_key":       c.OpenAIAPIKey,
+		"google_books_api_key": c.GoogleBooksAPIKey,
+		"hardcover_api_token":  c.HardcoverAPIToken,
+	} {
+		if v != "" {
+			fileConfig[k] = v
+		} else {
+			delete(fileConfig, k)
+		}
 	}
 
 	data, err := yaml.Marshal(fileConfig)
@@ -1693,6 +1712,34 @@ func applySetting(key, value, typ string) error {
 	return applyErr
 }
 
+// configBlobSaveMu serialises SaveConfigToDatabase's read-modify-write of the
+// config_blob row.
+var configBlobSaveMu sync.Mutex
+
+// storedDelugeWebPassword returns the deluge_web_password held in the stored
+// config_blob, or "" when there is no blob (or it has no such key). A read failure
+// other than "not found" is an error: carrying forward "" on a transient failure
+// would destroy the stored password.
+func storedDelugeWebPassword(store database.SettingsStore) (string, error) {
+	row, err := store.GetSetting("config_blob")
+	if err != nil {
+		if errors.Is(err, database.ErrSettingNotFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read stored config_blob to keep the Deluge password: %w", err)
+	}
+	if row == nil || row.Value == "" {
+		return "", nil
+	}
+	var stored struct {
+		Password string `json:"deluge_web_password"`
+	}
+	if err := json.Unmarshal([]byte(row.Value), &stored); err != nil {
+		return "", fmt.Errorf("parse stored config_blob to keep the Deluge password: %w", err)
+	}
+	return stored.Password, nil
+}
+
 // SaveConfigToDatabase persists current AppConfig to database AND config file.
 //
 // Storage format (v2, blob-based):
@@ -1722,11 +1769,22 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	safeConfig.GoogleBooksAPIKey = ""
 	safeConfig.HardcoverAPIToken = ""
 	safeConfig.BasicAuthPassword = ""
+	// The blob is read-then-written below; serialise concurrent saves so the stored
+	// password this carries forward is never one a racing save is replacing.
+	configBlobSaveMu.Lock()
+	defer configBlobSaveMu.Unlock()
 	// A Deluge password the environment or config file supplies is re-applied over
-	// the blob on every load (applyEnvAuthoritativeConfig), so persisting it would
-	// only freeze a copy of that secret into the database in plaintext.
+	// the blob on every load (applyEnvAuthoritativeConfig), so the live value must
+	// not be frozen into the blob in plaintext. But writing "" instead would destroy
+	// the operator's own stored password: remove the environment or file entry later
+	// and every layer is empty, and the Deluge client falls back to its default
+	// password. So the previously stored blob value is carried forward unchanged.
 	if SettingLockedBy("deluge_web_password") != "" {
-		safeConfig.DelugeWebPassword = ""
+		prior, err := storedDelugeWebPassword(store)
+		if err != nil {
+			return err
+		}
+		safeConfig.DelugeWebPassword = prior
 	}
 
 	blobJSON, err := marshalConfigBlob(safeConfig)

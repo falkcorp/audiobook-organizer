@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 
@@ -198,7 +198,7 @@ export default function DelugeSettingsTab({
             helperText={
               urlIsLocked
                 ? `Locked: set by ${describeLock(settingLocks.deluge_web_url)}, which overrides any saved value. Default password: deluge`
-                : 'Set deluge_web_url with PUT /api/v1/config, or pin it in the server config file or with DELUGE_WEB_URL on the server; a pinned value overrides the saved one and locks this setting. Default password: deluge'
+                : 'Set deluge_web_url with PUT /api/v1/config, or pin it in the config file the server was started with (--config, by default ~/.audiobook-organizer.yaml) or with DELUGE_WEB_URL on the server; a pinned value overrides the saved one and locks this setting. Default password: deluge'
             }
             size="small"
           />

@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.18.1
-// last-edited: 2026-10-10
+// version: 1.19.0
+// last-edited: 2026-10-11
 
 package config
 
@@ -39,7 +39,7 @@ func (m *mockSettingsStore) GetSetting(key string) (*database.Setting, error) {
 	}
 	s, ok := m.settings[key]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, fmt.Errorf("not found: %w", database.ErrSettingNotFound)
 	}
 	return s, nil
 }
