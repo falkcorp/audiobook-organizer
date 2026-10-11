@@ -1,5 +1,5 @@
 // file: internal/metafetch/openlibrary_close_recovery_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5e1c7a39-84d2-4b06-9f3a-c2d8e60b1a47
 // last-edited: 2026-10-11
 
@@ -217,5 +217,23 @@ func TestOpenLibraryService_MetadataLookupFollowsRecoveredStore(t *testing.T) {
 	}
 	if meta == nil || meta.Title != "Recovered Book" {
 		t.Fatalf("lookup returned %+v; want the edition from the reopened store", meta)
+	}
+}
+
+// An import that starts after the store was closed or deleted reports an error
+// instead of dereferencing the nil store inside its goroutine (a panic on a
+// goroutine ends the process). The service has no store here, as it does after
+// a delete or factory reset.
+func TestOpenLibraryService_ImportWithNoStoreFailsInsteadOfPanicking(t *testing.T) {
+	svc := &OpenLibraryService{Importing: map[string]bool{}}
+	err := svc.Import(context.Background(), nil, t.TempDir(), []string{"editions", "works"})
+	if err == nil || !strings.Contains(err.Error(), "not open") {
+		t.Fatalf("Import with no store returned %v; want an error saying the store is not open", err)
+	}
+	svc.Mu.Lock()
+	n := len(svc.Importing)
+	svc.Mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d import slots left marked in progress after a failed import", n)
 	}
 }

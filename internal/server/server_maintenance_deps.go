@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-11
 
@@ -280,10 +280,16 @@ func (s *Server) OptimizeAIScanStore(ctx context.Context) error {
 }
 
 func (s *Server) OptimizeOLStore(ctx context.Context) error {
-	if s.olService == nil || s.olService.Store() == nil {
+	if s.olService == nil {
 		return nil
 	}
-	return s.olService.Store().Optimize(ctx)
+	// One load: a second Store() call can see nil where the first saw a store
+	// (a delete or factory reset closing it in between).
+	store := s.olService.LiveStore()
+	if store == nil {
+		return nil
+	}
+	return store.Optimize(ctx)
 }
 
 func (s *Server) AIScanStoreCompactionStats() (compactprogress.Stats, bool) {
