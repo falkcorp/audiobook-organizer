@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.37.0
+// version: 1.38.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-10
 //
@@ -2286,6 +2286,19 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const applyOne = useCallback(
     (bookId: string) => {
+      // A single-row Apply is the owner's review of what the row shows: pin
+      // it. Page mode sends no apply without a pin (see pagePinsFor), so a
+      // row with no candidate hash is refused here rather than sent unpinned,
+      // which would apply whatever candidate is on top through the certainty
+      // gate with no stale-candidate check. Index mode keeps its behaviour.
+      const pin = rowPinFor(bookId);
+      if (pageMode && !pin) {
+        toast(
+          'This book has no candidate the page can pin, so it was not applied. Refresh and try again.',
+          'warning'
+        );
+        return;
+      }
       // Retained at the OPTIMISTIC MARK, not after the dispatch resolves.
       // applyOne marks the row synchronously but its dispatch is behind a 500ms
       // debounce, so retaining later left a window in which any refresh (another
@@ -2295,16 +2308,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       retainInFlight([bookId]);
       clearServerDerived([bookId]);
       setRowStates((prev) => new Map(prev).set(bookId, 'applied'));
-      // A single-row Apply is the owner's review of that row: pin what it
-      // shows. Several quick clicks share one debounced request, which is
-      // fine because pins are per book.
-      const pin = rowPinFor(bookId);
+      // Several quick clicks share one debounced request, which is fine
+      // because pins are per book.
       if (pin) applyPinsRef.current.set(bookId, pin);
       applyQueueRef.current.push(bookId);
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => void flushApplyQueue(), 500);
     },
-    [flushApplyQueue, retainInFlight, clearServerDerived, rowPinFor]
+    [flushApplyQueue, retainInFlight, clearServerDerived, rowPinFor, pageMode, toast]
   );
 
   const applyMany = useCallback(
@@ -2733,6 +2744,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           setRowStates((prev) => new Map(prev).set(action.id, 'pending'));
           return;
         case 'rejectGroup':
+          // Its ids are rows on the page, which may still answer the
+          // previous filters (refuseUnsettled); reject writes no-match marks.
+          if (refuseUnsettled()) return;
           void (async () => {
             try {
               await Promise.all(action.ids.map((id) => api.markNoMatch(id)));
