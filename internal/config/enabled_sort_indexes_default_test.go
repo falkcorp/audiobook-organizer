@@ -1,5 +1,5 @@
 // file: internal/config/enabled_sort_indexes_default_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c1e8a7d-2b95-4f63-9d0a-6e3b7f58c1a2
 // last-edited: 2026-10-11
 
@@ -17,7 +17,10 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -286,5 +289,105 @@ func TestResetToDefaultsKeepsBootOnlySortIndexes(t *testing.T) {
 	})
 	if status != http.StatusOK {
 		t.Fatalf("PUT of the running set after a reset: status = %d; resp = %v", status, resp)
+	}
+}
+
+// captureWarnings routes slog.Default (which internal/logger writes through)
+// into a buffer for the duration of the test and returns it.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func savedBlob(t *testing.T, store *mockSettingsStore) string {
+	t.Helper()
+	row, ok := store.settings["config_blob"]
+	if !ok || row == nil {
+		t.Fatalf("SaveConfigToDatabase wrote no config_blob")
+	}
+	return row.Value
+}
+
+// A save must not persist the boot-only key, so the blob can never carry a
+// value that goes stale when the operator changes the config file.
+func TestSaveConfigToDatabaseOmitsBootOnlySortIndexes(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.EnabledSortIndexes = slices.Clone(wantDefaultSortIndexes) })
+	store := newMockSettingsStore()
+
+	if err := SaveConfigToDatabase(store); err != nil {
+		t.Fatalf("SaveConfigToDatabase: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(savedBlob(t, store)), &m); err != nil {
+		t.Fatalf("blob is not a JSON object: %v", err)
+	}
+	if _, present := m["enabled_sort_indexes"]; present {
+		t.Fatalf("config_blob contains enabled_sort_indexes; boot-only keys must not be persisted")
+	}
+	if _, present := m["root_dir"]; !present {
+		t.Fatalf("config_blob lost ordinary keys: %v", m)
+	}
+}
+
+// The sanctioned workflow: save, then change the boot set via file/env and
+// restart. Boot must neither warn nor list the key as a kept shipped default.
+func TestBootAfterSaveWithChangedFileSortIndexesIsQuiet(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.EnabledSortIndexes = slices.Clone(wantDefaultSortIndexes) })
+	store := newMockSettingsStore()
+	if err := SaveConfigToDatabase(store); err != nil {
+		t.Fatalf("SaveConfigToDatabase: %v", err)
+	}
+
+	built := []string{"year", "created_at", "duration"}
+	Mutate(func(c *Config) { c.EnabledSortIndexes = slices.Clone(built) }) // the new boot's InitConfig value
+	logs := captureWarnings(t)
+
+	if err := LoadConfigFromDatabase(store); err != nil {
+		t.Fatalf("LoadConfigFromDatabase: %v", err)
+	}
+	if got := Snapshot().EnabledSortIndexes; !slices.Equal(got, built) {
+		t.Fatalf("EnabledSortIndexes = %v, want the file-configured %v", got, built)
+	}
+	if strings.Contains(logs.String(), "enabled_sort_indexes") {
+		t.Fatalf("boot logged about enabled_sort_indexes after the sanctioned change:\n%s", logs.String())
+	}
+	if got := defaultsPreservedOverBlob(savedBlob(t, store), Snapshot()); slices.Contains(got, "enabled_sort_indexes") {
+		t.Fatalf("boot-only key reported as a kept shipped default: %v", got)
+	}
+}
+
+// A blob saved before this change can still hold a differing value: warn once
+// (without the doubled subsystem prefix), and the next save drops the key.
+func TestLegacyBlobSortIndexesWarnsOnceThenIsDroppedBySave(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.EnabledSortIndexes = []string{"year", "created_at", "duration"} })
+	store := storeWithBlob(t, `{"enabled_sort_indexes":["year","created_at"]}`)
+	logs := captureWarnings(t)
+
+	if err := LoadConfigFromDatabase(store); err != nil {
+		t.Fatalf("LoadConfigFromDatabase: %v", err)
+	}
+	if n := strings.Count(logs.String(), "stored enabled_sort_indexes="); n != 1 {
+		t.Fatalf("legacy blob produced %d warnings, want 1:\n%s", n, logs.String())
+	}
+	if strings.Contains(logs.String(), "config: config: stored enabled_sort_indexes") {
+		t.Fatalf("warning has a doubled subsystem prefix:\n%s", logs.String())
+	}
+
+	if err := SaveConfigToDatabase(store); err != nil {
+		t.Fatalf("SaveConfigToDatabase: %v", err)
+	}
+	logs.Reset()
+	if err := LoadConfigFromDatabase(store); err != nil {
+		t.Fatalf("second LoadConfigFromDatabase: %v", err)
+	}
+	if strings.Contains(logs.String(), "enabled_sort_indexes") {
+		t.Fatalf("warning recurred after a save:\n%s", logs.String())
 	}
 }
