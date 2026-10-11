@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-10-11
 
@@ -731,14 +731,16 @@ func (h *Handler) Personalized(c *gin.Context) {
 		return out
 	}
 
-	authors, err := h.authorDTOsCached(c.Request.Context())
+	// Newest Authors is read from the contributor index, which chose it when it
+	// was built (newestAuthorsOf): no library scan and no sort per request.
+	idx, err := h.contributorsCached(c.Request.Context())
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not build home shelves")
 		return
 	}
-	newestAuthors := make([]any, 0, len(authors))
-	for i := range authors {
-		newestAuthors = append(newestAuthors, authors[i])
+	newestAuthors := make([]any, 0, len(idx.newestAuthors))
+	for i := range idx.newestAuthors {
+		newestAuthors = append(newestAuthors, idx.newestAuthors[i])
 	}
 
 	shelves := []shelfDTO{}
@@ -1625,6 +1627,10 @@ type contributorIndex struct {
 	narrators     []narratorDTO
 	authorBooks   map[int][]string
 	narratorBooks map[string][]string
+	// newestAuthors is the home page's Newest Authors shelf, chosen once per
+	// build — see newestAuthorsOf. A SEPARATE slice, never a re-sort of
+	// authors: every reader shares this index (see sortAuthors).
+	newestAuthors []authorDTO
 }
 
 // contributorDTOs builds the author AND narrator lists from the VISIBLE books only.
@@ -1679,6 +1685,10 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 	type authorAgg struct {
 		name string
 		id   int
+		// firstAdded is the earliest CreatedAt among the author's VISIBLE books,
+		// zero when none of them is dated. See newestAuthorsOf for why it is the
+		// earliest and not the newest.
+		firstAdded time.Time
 	}
 	authorSeen := map[int]*authorAgg{}
 	// Walked in the order visibleBookSummaries returned, NOT by ranging the
@@ -1690,8 +1700,13 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 			if strings.TrimSpace(a.Name) == "" {
 				continue
 			}
-			if _, ok := authorSeen[a.ID]; !ok {
-				authorSeen[a.ID] = &authorAgg{name: a.Name, id: a.ID}
+			agg, ok := authorSeen[a.ID]
+			if !ok {
+				agg = &authorAgg{name: a.Name, id: a.ID}
+				authorSeen[a.ID] = agg
+			}
+			if at := books[i].CreatedAt; at != nil && !at.IsZero() && (agg.firstAdded.IsZero() || at.Before(agg.firstAdded)) {
+				agg.firstAdded = *at
 			}
 			// numBooks is len(authorBooks[id]) rather than its own counter, so the
 			// count the tile shows and the set the drill-down pages CANNOT disagree.
@@ -1731,8 +1746,17 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 	now := msEpoch(h.now())
 	idx.authors = make([]authorDTO, 0, len(authorSeen))
 	for _, agg := range authorSeen {
+		// 🔴 addedAt IS WHEN THE AUTHOR FIRST REACHED THE VISIBLE LIBRARY, NOT
+		// "NOW". Until 2026-10-11 every author was stamped with the build time,
+		// so the Newest Authors shelf showed every entry as added today and
+		// ?sort=addedAt had nothing to order by. An author with no dated
+		// visible book emits 0, as an undated book's addedAt does (msEpochPtr).
+		var addedAt int64
+		if !agg.firstAdded.IsZero() {
+			addedAt = msEpoch(agg.firstAdded)
+		}
 		idx.authors = append(idx.authors, authorDTO{
-			AddedAt:   now,
+			AddedAt:   addedAt,
 			ID:        strconv.Itoa(agg.id),
 			LastFirst: lastFirst(agg.name),
 			LibraryID: h.libraryID(),
@@ -1742,6 +1766,7 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 		})
 	}
 	sort.SliceStable(idx.authors, func(i, j int) bool { return absNameLess(idx.authors[i].Name, idx.authors[j].Name) })
+	idx.newestAuthors = newestAuthorsOf(idx.authors, personalizedShelfSize)
 
 	idx.narrators = make([]narratorDTO, 0, len(narratorSeen))
 	for name := range narratorSeen {
@@ -1751,6 +1776,66 @@ func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error
 	sort.SliceStable(idx.narrators, func(i, j int) bool { return absNameLess(idx.narrators[i].Name, idx.narrators[j].Name) })
 
 	return idx, nil
+}
+
+// newestAuthorsOf picks the Newest Authors shelf from a built author list: the
+// `limit` authors who most recently reached the visible library, newest first.
+//
+// 🔴 UNTIL 2026-10-11 THE SHELF WAS THE FIRST TEN AUTHORS BY NAME. Personalized
+// copied the name-sorted index and kept the first ten, with every addedAt set to
+// the build time. Names starting with punctuation or a digit sort before letters,
+// so the shelf on prod was "&#169", "(c) 2001 …", "10 831MB] …", "13 short
+// stories" — all "added today". Nothing about it was "newest".
+//
+// The order key is the author's addedAt: the EARLIEST CreatedAt among the
+// author's visible books. database.Author carries no timestamp, so a book date
+// is the only one available, and the earliest is the one that means "this author
+// is new here":
+//
+//   - an author whose first book was just imported has that book's date, so they
+//     lead the shelf;
+//   - an established author who gained a new book today keeps their old date.
+//     Keyed on the NEWEST book, every prolific author would sit on "Newest
+//     Authors" whenever they published, which is Recently Added's job.
+//
+// Only authors in the contributor index can appear, and the index is built from
+// the visible books alone (absItemFilterBase), so an author with no visible
+// book never reaches the shelf, and a hidden book's date never counts. Authors
+// with no dated visible book (addedAt 0) are left off: their date is unknown,
+// not old, and the shelf does not guess.
+//
+// Ties (one import stamping many books alike) go to the higher author id. Ids
+// are allocated from a monotonic counter, so that is the later-created row; a
+// NAME tie-break would hand the shelf back to symbol-first names.
+func newestAuthorsOf(authors []authorDTO, limit int) []authorDTO {
+	out := make([]authorDTO, 0, len(authors))
+	for i := range authors {
+		if authors[i].AddedAt > 0 {
+			out = append(out, authors[i])
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].AddedAt != out[j].AddedAt {
+			return out[i].AddedAt > out[j].AddedAt
+		}
+		return authorIDGreater(out[i].ID, out[j].ID)
+	})
+	if len(out) > limit {
+		out = out[:limit:limit]
+	}
+	return out
+}
+
+// authorIDGreater compares two author ids numerically (they are strconv.Itoa of
+// the store's int id), falling back to a string compare for anything else so
+// the order stays total.
+func authorIDGreater(a, b string) bool {
+	ai, errA := strconv.Atoi(a)
+	bi, errB := strconv.Atoi(b)
+	if errA == nil && errB == nil {
+		return ai > bi
+	}
+	return a > b
 }
 
 // LibraryAuthors handles GET /api/libraries/:libraryId/authors.
