@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.48.1
+// version: 2.48.2
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-11
 
@@ -382,8 +382,12 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.dedupEngine != nil {
 		dedupEng = s.dedupEngine
 	}
+	// storeForWiring, not Ops(): DedupStore now carries the two reads of the
+	// include_books iTunes flag (GetBookFilesForIDsCore, GetExternalIDsForBook),
+	// which internal/server itself never calls, and a callee that declares its
+	// own narrow interface is exactly what that accessor is for.
 	dedupH := deduphandler.New(
-		s.Ops(),
+		s.storeForWiring(),
 		s.embeddingStore,
 		dedupOpReg,
 		dedupMergeSvc,
