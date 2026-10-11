@@ -1,7 +1,7 @@
 // file: internal/database/dedup_label.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
-// last-edited: 2026-10-01
+// last-edited: 2026-10-11
 
 package database
 
@@ -44,7 +44,7 @@ func dedupLabelEntityKey(entityID string, candidateID int64) []byte {
 
 // stageLabelEntityIndex sets (del=false) or deletes (del=true) ex's two
 // entity-index rows in b.
-func stageLabelEntityIndex(b *pebble.Batch, ex *LabeledExample, del bool) error {
+func stageLabelEntityIndex(b *GatedBatch, ex *LabeledExample, del bool) error {
 	for _, id := range []string{ex.EntityAID, ex.EntityBID} {
 		if id == "" {
 			continue

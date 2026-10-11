@@ -1,7 +1,7 @@
 // file: internal/activity/writer_batch_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2c7e5f10-9a63-4d84-8b21-4e0d7c395a6f
-// last-edited: 2026-08-30
+// last-edited: 2026-10-11
 
 // Package activity — regression suite for the batched write path in
 // Writer.writeBatch.
@@ -67,7 +67,7 @@ func newCountingBatchStore(t *testing.T) *countingBatchStore {
 	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return &countingBatchStore{PebbleActivityStore: database.NewPebbleActivityStore(db)}
+	return &countingBatchStore{PebbleActivityStore: database.NewPebbleActivityStore(database.NewGatedDB(db))}
 }
 
 // countActivityKeys reads the keyspace directly — the instrument for every

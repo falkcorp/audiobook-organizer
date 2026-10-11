@@ -1,7 +1,7 @@
 // file: internal/database/storage_format.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a2abfc6-3471-4cb1-8ed7-2efe634af689
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -181,10 +181,16 @@ type storageFormatState struct {
 	sidecarPresent bool // the sidecar parsed as one integer
 }
 
+// pebbleGetter is the point read the format checks need. Both the raw
+// *pebble.DB the open phase holds and the store's *GatedDB satisfy it.
+type pebbleGetter interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+}
+
 // readStorageFormatStamp reads preference:storage_format straight from the
-// raw DB. A value that does not decode is an error, never "absent": treating a
+// DB. A value that does not decode is an error, never "absent": treating a
 // corrupt stamp as missing would let the open restamp a store it cannot read.
-func readStorageFormatStamp(db *pebble.DB) (stamp int, present bool, err error) {
+func readStorageFormatStamp(db pebbleGetter) (stamp int, present bool, err error) {
 	key := []byte("preference:" + storageFormatPreferenceKey)
 	value, closer, err := db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -214,7 +220,7 @@ func readStorageFormatStamp(db *pebble.DB) (stamp int, present bool, err error) 
 
 // storageMigrationMarkerPresent reports whether preference:storage_migration
 // exists. Its content is release B's business; only presence matters here.
-func storageMigrationMarkerPresent(db *pebble.DB) (bool, error) {
+func storageMigrationMarkerPresent(db pebbleGetter) (bool, error) {
 	_, closer, err := db.Get([]byte("preference:" + storageMigrationPreferenceKey))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return false, nil

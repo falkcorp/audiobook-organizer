@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_export.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7efe29c0-d5f8-489a-bdaa-2715b790979d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -32,7 +32,13 @@ func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
 	if p.dbClosed.Load() {
 		return metrics.PebbleSample{}, false
 	}
-	return PebbleSampleFromDB(p.db)
+	// The gated Metrics call holds a lease, so Close cannot close the engine
+	// under it (pebble_gate.go); once Close has begun it fails instead.
+	m, err := p.db.Metrics()
+	if err != nil {
+		return metrics.PebbleSample{}, false
+	}
+	return pebbleSampleFromMetrics(m), true
 }
 
 // PebbleSampleFromDB reads db.Metrics() into a metrics.PebbleSample. ok is
@@ -43,9 +49,10 @@ func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
 // safe to call concurrently with Close: Close tears down the file cache after
 // releasing the engine mutex, and Metrics() then reads it and can panic with
 // something other than ErrClosed. This function cannot tell a closed DB from an
-// open one and does not make that call safe. The store owners serialise it
-// against Close (PebbleStore.sampleMu, OLStore.sampleMu: read lock held from the
-// closed-flag check through Metrics(), write lock held by Close). Any other
+// open one and does not make that call safe. Its one remaining caller, the
+// OpenLibrary store, serialises it against Close (OLStore.sampleMu: read lock
+// held from the closed-flag check through Metrics(), write lock held by
+// Close); PebbleStore samples through its gated handle instead. Any other
 // caller must do the same; the only containment otherwise is the recover in
 // metrics' samplePebbleSource, which drops that store from one scrape. Probing
 // the engine instead was tried and rejected: db.NewSnapshot() as a probe can
@@ -64,7 +71,11 @@ func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
 			panic(rec)
 		}
 	}()
-	m := db.Metrics()
+	return pebbleSampleFromMetrics(db.Metrics()), true
+}
+
+// pebbleSampleFromMetrics maps one Metrics sample to a metrics.PebbleSample.
+func pebbleSampleFromMetrics(m *pebble.Metrics) (s metrics.PebbleSample) {
 	s = metrics.PebbleSample{
 		BlockCacheBytes:           float64(m.BlockCache.Size),
 		BlockCacheBlocks:          float64(m.BlockCache.Count),
@@ -95,5 +106,5 @@ func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
 		s.LevelBytesCompacted[i] = float64(l.TableBytesCompacted + l.BlobBytesCompacted)
 		s.LevelWriteAmp[i] = l.WriteAmp()
 	}
-	return s, true
+	return s
 }

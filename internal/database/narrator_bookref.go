@@ -1,7 +1,7 @@
 // file: internal/database/narrator_bookref.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 36c225c3-b235-4aac-b164-0273255164fd
-// last-edited: 2026-09-23
+// last-edited: 2026-10-11
 
 package database
 
@@ -152,11 +152,11 @@ type narratorRefKey struct {
 	narratorID int
 }
 
-// pebbleIterSource is what both *pebble.DB and *pebble.Snapshot provide, so the
+// pebbleIterSource is what both *GatedDB and *GatedSnapshot provide, so the
 // junction scan below serves the snapshot-based bulk count and the live
 // per-item re-check from one body.
 type pebbleIterSource interface {
-	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+	NewIter(o *pebble.IterOptions) (*GatedIter, error)
 }
 
 // scanNarratorJunction calls fn for every book_narrators:<bookID> row.

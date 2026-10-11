@@ -1,7 +1,7 @@
 // file: internal/database/ai_scan_store_health_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 32eddfe1-cb1f-4009-9b7c-a3e3c626c050
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -30,7 +30,9 @@ func TestAIScanHealthStats_SharedReportsPrefixEstimate(t *testing.T) {
 	stats, err := s.HealthStats()
 	require.NoError(t, err)
 	require.Equal(t, "aiscan_prefix_estimate", stats.SizeSource)
-	require.Less(t, stats.SizeBytes, p.db.Metrics().DiskSpaceUsage())
+	m, err := p.db.Metrics()
+	require.NoError(t, err)
+	require.Less(t, stats.SizeBytes, m.DiskSpaceUsage())
 }
 
 func TestAIScanHealthStats_OwnedReportsStoreUsage(t *testing.T) {
@@ -48,7 +50,7 @@ func TestAIScanHealthStats_OwnedReportsStoreUsage(t *testing.T) {
 func TestAIScanHealthStats_ClosedSharedDBReturnsError(t *testing.T) {
 	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
-	s, err := NewAIScanStoreFromDB(db)
+	s, err := NewAIScanStoreFromDB(NewGatedDB(db))
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 

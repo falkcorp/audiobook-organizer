@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -23,7 +23,7 @@ func openTestCatalogStore(t *testing.T) *CatalogStore {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return NewCatalogStore(db)
+	return NewCatalogStore(NewGatedDB(db))
 }
 
 // TestCatalogList_UnfilteredUsesKeysOnlyIndex: the unfiltered list and the

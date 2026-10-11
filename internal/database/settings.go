@@ -1,7 +1,7 @@
 // file: internal/database/settings.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -393,7 +393,7 @@ func (s *PebbleStore) GetAllSettings() ([]Setting, error) {
 // settingKeyPrefix is the Pebble key prefix of every settings row.
 const settingKeyPrefix = "setting:"
 
-// settingsIter is the subset of *pebble.Iterator collectSettings uses; it is
+// settingsIter is the subset of *GatedIter collectSettings uses; it is
 // an interface so a test can inject an iterator error, which a real Pebble
 // store does not produce on demand.
 type settingsIter interface {

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 // The opchange_by_book: secondary index over the operation-change journal.
 //
@@ -187,7 +187,7 @@ func opChangeUndecodableKey(primary []byte) []byte {
 
 // stageOpChangeIndex adds the row's index entry to batch. Rows whose book id
 // is not indexable get none (GetBookChanges scans for those ids).
-func stageOpChangeIndex(batch *pebble.Batch, bookID string, primary []byte) error {
+func stageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) error {
 	if !opChangeIndexable(bookID) {
 		return nil
 	}
@@ -198,7 +198,7 @@ func stageOpChangeIndex(batch *pebble.Batch, bookID string, primary []byte) erro
 }
 
 // unstageOpChangeIndex adds the deletion of the row's index entry to batch.
-func unstageOpChangeIndex(batch *pebble.Batch, bookID string, primary []byte) error {
+func unstageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) error {
 	if !opChangeIndexable(bookID) {
 		return nil
 	}
@@ -392,7 +392,7 @@ func (p *PebbleStore) getBookChangesIndexed(bookID string) ([]*OperationChange, 
 // fails on any undecodable row. A marker whose row is gone or now decodes is
 // stale and ignored. The family is empty unless the journal has corruption, so
 // on a healthy store this is one empty range probe.
-func opChangeUndecodableGate(r pebble.Reader) error {
+func opChangeUndecodableGate(r gatedReader) error {
 	lower := []byte(opChangeUndecodablePrefix)
 	iter, err := r.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: prefixEnd(lower)})
 	if err != nil {

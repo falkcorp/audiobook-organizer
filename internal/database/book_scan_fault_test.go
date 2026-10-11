@@ -1,7 +1,7 @@
 // file: internal/database/book_scan_fault_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5d1f7c2e-8a4b-4e3f-9c6d-2b7a1e0f4d93
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -85,7 +85,7 @@ func TestForEachRow_FaultEndsScanWithError(t *testing.T) {
 // Not covered here: the three scans that read through a snapshot
 // (getAllAuthorBookRefBucketsPebble, getAllAuthorFileRefCountsPebble,
 // GetAllNarratorRefs). The fault is keyed by reader and those open their own
-// *pebble.Snapshot; they use the same helper, which the first test pins.
+// *GatedSnapshot; they use the same helper, which the first test pins.
 func TestBookScans_FailOnMidScanReadError(t *testing.T) {
 	p := setupTestPebbleStore(t)
 	p.WaitForWarmup()

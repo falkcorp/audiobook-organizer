@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 // Tests for the Tier-1 (Band CERTAIN) auto-resolution pass:
 // Engine.AutoResolveCertain, autoResolveEligible, and UnmergeAuto.
@@ -329,7 +329,7 @@ func setupRealStoreEngine(t *testing.T) (*Engine, database.Store, *database.Embe
 	if err != nil {
 		t.Fatalf("pebble.Open embed: %v", err)
 	}
-	es := database.NewEmbeddingStore(edb)
+	es := database.NewEmbeddingStore(database.NewGatedDB(edb))
 	t.Cleanup(func() {
 		database.SetGlobalStore(origStore)
 		_ = edb.Close()
@@ -498,7 +498,7 @@ func TestAutoMergeCertain_ProvisionalJournalFailureSkipsMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pebble.Open embed (read-only): %v", err)
 	}
-	es := database.NewEmbeddingStore(edb)
+	es := database.NewEmbeddingStore(database.NewGatedDB(edb))
 	t.Cleanup(func() {
 		database.SetGlobalStore(origStore)
 		_ = edb.Close()

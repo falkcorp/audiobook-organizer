@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_store_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d0e1f2a3-b4c5-0011-4567-000000000011
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -25,7 +25,7 @@ func newTestPebbleMetricsStore(t *testing.T) *PebbleMetricsStore {
 	db, err := pebble.Open("metrics.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return NewPebbleMetricsStore(db)
+	return NewPebbleMetricsStore(NewGatedDB(db))
 }
 
 // TestPebbleMetricsStore_RecordAndRetrieve verifies basic round-trip.
@@ -114,7 +114,7 @@ func TestPebbleMetricsStore_SweepExpiredMetrics(t *testing.T) {
 	db, err := pebble.Open(filepath.Join(dir, "metrics.pebble"), &pebble.Options{})
 	require.NoError(t, err)
 	defer db.Close()
-	s := NewPebbleMetricsStore(db)
+	s := NewPebbleMetricsStore(NewGatedDB(db))
 
 	// Write one snapshot with a past ExpiresAt to simulate an expired entry.
 	pastTime := time.Now().UTC().Add(-40 * 24 * time.Hour) // 40 days ago (> 30d TTL)

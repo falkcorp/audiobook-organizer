@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.25.0
-// last-edited: 2026-10-01
+// version: 2.26.0
+// last-edited: 2026-10-11
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -267,7 +267,7 @@ type EmbeddingHealthStats struct {
 // EmbeddingStore is a PebbleDB-backed store for vector embeddings, text-hash
 // cache, and dedup candidates. It replaces the former SQLite sidecar (embeddings.db).
 type EmbeddingStore struct {
-	db    *pebble.DB
+	db    *GatedDB
 	owned bool // if true, Close() shuts down the DB
 	// closeMu serialises every DB-touching operation against Close. Operations
 	// hold RLock for their whole duration; Close takes the write lock, so it
@@ -288,7 +288,7 @@ type EmbeddingStore struct {
 
 // NewEmbeddingStore creates an EmbeddingStore backed by the given PebbleDB.
 // The DB is shared with the main store; Close() is a no-op.
-func NewEmbeddingStore(db *pebble.DB) *EmbeddingStore {
+func NewEmbeddingStore(db *GatedDB) *EmbeddingStore {
 	return &EmbeddingStore{db: db, owned: false}
 }
 
@@ -310,7 +310,7 @@ func (s *EmbeddingStore) Close() error {
 		s.closeMu.Lock()
 		defer s.closeMu.Unlock()
 		s.closed.Store(true)
-		closeErr = s.db.Close()
+		closeErr = s.db.closeOwned(defaultCloseDrainTimeout)
 	})
 	return closeErr
 }
@@ -319,7 +319,7 @@ func (s *EmbeddingStore) Close() error {
 // adjacent stores (e.g. the split-book candidate keyspace) can share
 // the same shared-database connection without re-opening it. Returns
 // nil if the receiver is nil or already closed.
-func (s *EmbeddingStore) PebbleDB() *pebble.DB {
+func (s *EmbeddingStore) PebbleDB() *GatedDB {
 	if s == nil || s.closed.Load() {
 		return nil
 	}
@@ -630,7 +630,7 @@ func dedupEntityKey(entityType, entityID string, id int64) []byte {
 // rows, and a verdict landing on one must still be found by entity — the
 // duplicate-copies and fragment fixers' Replan reads verdicts only through
 // this index (ListCandidatesForEntityStrict). Migration 64 backfills the rest.
-func setCandidateEntityIndex(b *pebble.Batch, rec candRec, id int64) error {
+func setCandidateEntityIndex(b *GatedBatch, rec candRec, id int64) error {
 	if rec.EntityAID != "" {
 		if err := b.Set(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil, nil); err != nil {
 			return err
@@ -654,7 +654,7 @@ func dedupStatusIdxKey(status string, id int64) []byte {
 
 // nextID reads and increments the sequential counter. Must be called with s.mu held.
 // The new counter value is written into the supplied batch so counter + record land atomically.
-func (s *EmbeddingStore) nextID(b *pebble.Batch) (int64, error) {
+func (s *EmbeddingStore) nextID(b *GatedBatch) (int64, error) {
 	val, closer, err := s.db.Get([]byte(dedupSeqKey))
 	var id int64
 	if err == pebble.ErrNotFound {
@@ -935,7 +935,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 //
 // EmbeddingStore reads/writes this directly via the same "setting:" key
 // namespace + JSON Setting{} schema that PebbleStore.GetSetting/SetSetting
-// use (settings.go) — both structs wrap the SAME underlying *pebble.DB
+// use (settings.go) — both structs wrap the SAME underlying *GatedDB
 // (see NewEmbeddingStore), so this is not a second settings mechanism, just
 // a second Go-level accessor for the identical physical rows.
 const dedupCandidateStatusIndexBuiltFlagKey = "dedup_candidate_status_index_v1_done"
@@ -1876,7 +1876,7 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 // -row bug recorded in DeleteBook's comments (work index, hash indexes,
 // signature sidecar) came from exactly that kind of drift — one writer gained an
 // index and the deleter never learned about it.
-func deleteCandidateKeys(b *pebble.Batch, id int64, rec candRec) {
+func deleteCandidateKeys(b *GatedBatch, id int64, rec candRec) {
 	_ = b.Delete(dedupRecKey(id), nil)
 	_ = b.Delete(dedupPairKey(rec.EntityType, rec.EntityAID, rec.EntityBID), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil)
@@ -1886,7 +1886,7 @@ func deleteCandidateKeys(b *pebble.Batch, id int64, rec candRec) {
 
 // readCandRec loads and decodes one candidate record. Returns ok=false for both
 // "absent" and "corrupt", which teardown treats identically.
-func readCandRec(db *pebble.DB, id int64) (candRec, bool) {
+func readCandRec(db *GatedDB, id int64) (candRec, bool) {
 	val, closer, err := db.Get(dedupRecKey(id))
 	if err != nil {
 		return candRec{}, false
@@ -1911,7 +1911,7 @@ func readCandRec(db *pebble.DB, id int64) (candRec, bool) {
 // standing on in place, converting a candidate orphan into a stale *index*
 // orphan that no later pass revisits. Every branch below deletes the index entry
 // it found.
-func deleteDedupCandidatesForBook(db *pebble.DB, b *pebble.Batch, bookID string) error {
+func deleteDedupCandidatesForBook(db *GatedDB, b *GatedBatch, bookID string) error {
 	if bookID == "" {
 		return nil
 	}

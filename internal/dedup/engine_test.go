@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.11.0
+// version: 2.11.1
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package dedup
 
@@ -33,7 +33,7 @@ func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.Embe
 	if err != nil {
 		t.Fatalf("pebble.Open: %v", err)
 	}
-	es := database.NewEmbeddingStore(db)
+	es := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 
 	// Ensure the global config flag is true so embeddingsEnabled() works as

@@ -1,7 +1,7 @@
 // file: internal/database/credits_store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -9,8 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // The store side of credit lists (see credits.go and
@@ -163,7 +161,7 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 	if err != nil {
 		return nil, BookCreditsEdit{}, err
 	}
-	stage := func(b *pebble.Batch) error {
+	stage := func(b *GatedBatch) error {
 		if err := b.Set(bookAuthorsKey(bookID), authorData, nil); err != nil {
 			return fmt.Errorf("stage book_authors:%s: %w", bookID, err)
 		}

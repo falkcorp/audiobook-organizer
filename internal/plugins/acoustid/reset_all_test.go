@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b2f4a6c-1d3e-4f5a-9c7b-0e1a2b3c4d5f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package acoustid
 
@@ -55,7 +55,7 @@ func newTestResetAllEmbeddingStore(t *testing.T) *database.EmbeddingStore {
 	if err != nil {
 		t.Fatalf("open test pebble db: %v", err)
 	}
-	store := database.NewEmbeddingStore(db)
+	store := database.NewEmbeddingStore(database.NewGatedDB(db))
 	t.Cleanup(func() { _ = db.Close() })
 	return store
 }

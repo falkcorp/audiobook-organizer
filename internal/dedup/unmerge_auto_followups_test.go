@@ -1,7 +1,7 @@
 // file: internal/dedup/unmerge_auto_followups_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2a9e64-1c7b-4f03-b8e6-0a4f3c9d7b12
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 package dedup
 
@@ -31,7 +31,7 @@ func vpEngine(t *testing.T) (*Engine, *vptest.Fixture, *merge.Service, *database
 	edb, err := pebble.Open(t.TempDir(), &pebble.Options{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = edb.Close() })
-	es := database.NewEmbeddingStore(edb)
+	es := database.NewEmbeddingStore(database.NewGatedDB(edb))
 	ms := merge.NewService(f.S)
 	engine, err := NewEngine(es, f.S, nil, nil, ms, unified.DefaultScoreConfig())
 	require.NoError(t, err)

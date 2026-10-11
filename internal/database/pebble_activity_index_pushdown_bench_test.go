@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_bench_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e60d064c-d3a5-4f0d-8c1b-1c1fa0b27a7b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 // Package database — before/after benchmark for the activity index limit
 // pushdown.
@@ -60,7 +60,7 @@ func seedFatOperation(b *testing.B, n int) *PebbleActivityStore {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = db.Close() })
-	s := NewPebbleActivityStore(db)
+	s := NewPebbleActivityStore(NewGatedDB(db))
 
 	base := time.Now().UTC().Add(-time.Duration(n) * time.Millisecond)
 	tiers := []string{"change", "info", "debug", "batch"}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -882,7 +882,7 @@ func TestPebbleMigrateImportPathKeys(t *testing.T) {
 		t.Fatalf("Failed to write legacy counter: %v", err)
 	}
 
-	store := &PebbleStore{db: db}
+	store := &PebbleStore{db: NewGatedDB(db)}
 	if err := store.migrateImportPathKeys(); err != nil {
 		t.Fatalf("migrateImportPathKeys failed: %v", err)
 	}

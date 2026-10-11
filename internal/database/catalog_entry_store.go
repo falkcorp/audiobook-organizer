@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package database
 
@@ -231,7 +231,7 @@ type CatalogAuthorState struct {
 
 // CatalogStore is the Pebble-backed catalog. Safe for concurrent use.
 type CatalogStore struct {
-	db *pebble.DB
+	db *GatedDB
 	// writeMu serializes every upsert and stale pass. It spans the pid
 	// lookup, the group-key assignment and the batch commit: two harvest
 	// workers handling co-authors can both see the same ASIN, and without
@@ -246,7 +246,7 @@ type CatalogStore struct {
 }
 
 // NewCatalogStore builds the catalog store on a shared PebbleDB handle.
-func NewCatalogStore(db *pebble.DB) *CatalogStore {
+func NewCatalogStore(db *GatedDB) *CatalogStore {
 	return &CatalogStore{db: db, now: time.Now}
 }
 
@@ -404,7 +404,7 @@ func (s *CatalogStore) UpsertEntries(items []CatalogUpsert, harvestKey string) (
 // sight. An empty key (no author identity or no title) always gets a fresh
 // singleton group: R6 forbids grouping on title alone, so there is nothing to
 // share it with. Caller holds writeMu.
-func (s *CatalogStore) assignGroup(batch *pebble.Batch, key string, pending map[string]string) (string, error) {
+func (s *CatalogStore) assignGroup(batch *GatedBatch, key string, pending map[string]string) (string, error) {
 	if key == "" {
 		return ulid.Make().String(), nil
 	}
@@ -448,7 +448,7 @@ func entryIndexKeys(e *CatalogEntry) []string {
 	return keys
 }
 
-func (s *CatalogStore) setIndexes(batch *pebble.Batch, e *CatalogEntry) error {
+func (s *CatalogStore) setIndexes(batch *GatedBatch, e *CatalogEntry) error {
 	for _, k := range entryIndexKeys(e) {
 		if err := batch.Set([]byte(k), nil, nil); err != nil {
 			return err
@@ -457,7 +457,7 @@ func (s *CatalogStore) setIndexes(batch *pebble.Batch, e *CatalogEntry) error {
 	return nil
 }
 
-func (s *CatalogStore) deleteIndexes(batch *pebble.Batch, e *CatalogEntry) error {
+func (s *CatalogStore) deleteIndexes(batch *GatedBatch, e *CatalogEntry) error {
 	for _, k := range entryIndexKeys(e) {
 		if err := batch.Delete([]byte(k), nil); err != nil {
 			return err

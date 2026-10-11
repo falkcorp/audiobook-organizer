@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.44.1
+// version: 1.44.2
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -46,7 +46,7 @@ func (s *PebbleStore) getBookFileByID(bookID, fileID string) (*BookFile, error) 
 // index entries from the batch for the given BookFile. The store pointer
 // is used to read the LSH meta-row from the committed DB state — Pebble's
 // non-indexed batch can't satisfy that lookup itself.
-func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *BookFile) error {
+func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *GatedBatch, f *BookFile) error {
 	// Delete book_file_id secondary index.
 	if f.ID != "" {
 		if err := batch.Delete([]byte(fmt.Sprintf("book_file_id:%s", f.ID)), nil); err != nil {
@@ -118,7 +118,7 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 // Every book_file batch that reaches here is an indexed batch for that reason.
 // Pebble's Batch.Get answers from the batch alone, so a key the batch has not
 // touched falls back to the committed state.
-func (s *PebbleStore) deleteSingleOwnerIndexIfOwned(batch *pebble.Batch, key []byte, f *BookFile) error {
+func (s *PebbleStore) deleteSingleOwnerIndexIfOwned(batch *GatedBatch, key []byte, f *BookFile) error {
 	val, found, err := s.hashIndexValue(batch, key)
 	if err != nil || !found {
 		return err
@@ -131,7 +131,7 @@ func (s *PebbleStore) deleteSingleOwnerIndexIfOwned(batch *pebble.Batch, key []b
 
 // hashIndexValue reads key through batch when it is indexed, then from the
 // committed state. found is false when neither holds the key.
-func (s *PebbleStore) hashIndexValue(batch *pebble.Batch, key []byte) (val string, found bool, err error) {
+func (s *PebbleStore) hashIndexValue(batch *GatedBatch, key []byte) (val string, found bool, err error) {
 	if batch.Indexed() {
 		v, closer, gerr := batch.Get(key)
 		if gerr == nil {
@@ -276,7 +276,7 @@ func (s *PebbleStore) HasLSHIndex(bookFileID string) bool {
 // The returned prior owner (nil when nothing transferred) is the caller's to
 // refresh in memdb and recompute AFTER a successful commit. This function performs
 // no post-commit side effects, because nothing is committed when it returns.
-func (s *PebbleStore) stagePIDTransfer(batch *pebble.Batch, file *BookFile) (*BookFile, error) {
+func (s *PebbleStore) stagePIDTransfer(batch *GatedBatch, file *BookFile) (*BookFile, error) {
 	if file == nil || file.ITunesPersistentID == "" {
 		return nil, nil
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_progress.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a7db9843-e6c9-42ed-bd67-c747b5b5c670
-// last-edited: 2026-09-08
+// last-edited: 2026-10-11
 
 // Package database — durable progress for the Pebble → SQLite activity backfill.
 //
@@ -158,7 +158,7 @@ func (p *ActivityBackfillProgress) PendingTiers() []string {
 // Normalisation applies the sticky-but-self-healing rule: a `failed` tier comes
 // back as in_progress with its cursor and counters CLEARED, so it is re-scanned
 // in full. A clean tail can never clear a failure; only a complete re-scan can.
-func loadActivityBackfillProgress(db *pebble.DB) *ActivityBackfillProgress {
+func loadActivityBackfillProgress(db *GatedDB) *ActivityBackfillProgress {
 	fresh := &ActivityBackfillProgress{
 		Version: activityProgressVersion,
 		Tiers:   make(map[string]*ActivityBackfillTierProgress, len(actTiers)),
@@ -209,7 +209,7 @@ func loadActivityBackfillProgress(db *pebble.DB) *ActivityBackfillProgress {
 // batch, whereas losing a verdict is a correctness bug. Cursors are written every
 // batch — roughly every two seconds of work at production throughput — because a
 // coarser throttle discards minutes of scanning to save a single small write.
-func saveActivityBackfillProgress(db *pebble.DB, p *ActivityBackfillProgress, sync bool) error {
+func saveActivityBackfillProgress(db *GatedDB, p *ActivityBackfillProgress, sync bool) error {
 	p.Version = activityProgressVersion
 	p.UpdatedAt = time.Now().UTC()
 	blob, err := json.Marshal(p)
@@ -229,7 +229,7 @@ func saveActivityBackfillProgress(db *pebble.DB, p *ActivityBackfillProgress, sy
 // clearActivityBackfillProgress removes the blob. Called once the sentinel is
 // written: the migration is done, so the resume state is dead weight and leaving
 // it behind would only confuse a future reader.
-func clearActivityBackfillProgress(db *pebble.DB) {
+func clearActivityBackfillProgress(db *GatedDB) {
 	if err := db.Delete([]byte(ActivitySQLBackfillProgressKey), pebble.Sync); err != nil {
 		slog.Warn("[activity-sql-backfill] could not delete progress blob after completion",
 			"key", ActivitySQLBackfillProgressKey, "err", err)

@@ -1,7 +1,7 @@
 // file: internal/database/deletebook_dedup_cascade_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c2a9e14-6b83-4f51-9d27-3ea5c8b04f16
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -13,7 +13,7 @@ import (
 )
 
 // cascadeKeyPresent reports whether a raw key exists in the DB.
-func cascadeKeyPresent(t *testing.T, db *pebble.DB, key []byte) bool {
+func cascadeKeyPresent(t *testing.T, db *GatedDB, key []byte) bool {
 	t.Helper()
 	_, closer, err := db.Get(key)
 	if err == pebble.ErrNotFound {

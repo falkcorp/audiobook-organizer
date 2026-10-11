@@ -1,7 +1,7 @@
 // file: internal/activity/writer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f7e8d9c0-b1a2-4e3f-9c8d-7b6a5e4f3d2c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package activity
 
@@ -303,5 +303,5 @@ func newTestPebbleActivityStore(t *testing.T) *database.PebbleActivityStore {
 		t.Fatalf("pebble.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return database.NewPebbleActivityStore(db)
+	return database.NewPebbleActivityStore(database.NewGatedDB(db))
 }

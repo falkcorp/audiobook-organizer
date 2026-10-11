@@ -1,7 +1,7 @@
 // file: internal/database/credits_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a5a7e839-5ad1-49ad-8401-9428121f66e7
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -535,7 +535,7 @@ func TestModifyBookCredits_OneBatchWithRow(t *testing.T) {
 	// When the row's batch is about to commit, the credits must not be in
 	// Pebble yet: they ride in that batch, not in a separate earlier write.
 	hookRan := false
-	bookWriteBatchPreCommitHook = func(op, id string, _ *pebble.Batch) {
+	bookWriteBatchPreCommitHook = func(op, id string, _ *GatedBatch) {
 		if op != "update" || id != b.ID {
 			return
 		}

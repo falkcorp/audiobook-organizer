@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package database
 
@@ -519,7 +519,7 @@ func TestFilterIndex_BackfillHoldsNoIteratorAcrossCommits(t *testing.T) {
 	var commits, pinned int
 	pactFilterBackfillBeforeCommit = func() {
 		commits++
-		if s.db.Metrics().TableIters > 0 {
+		if m, err := s.db.Metrics(); err == nil && m.TableIters > 0 {
 			pinned++
 		}
 	}

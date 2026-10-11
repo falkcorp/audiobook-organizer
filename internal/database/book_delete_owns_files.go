@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package database
 
@@ -43,7 +43,7 @@ var ErrBookOwnsFiles = errors.New("book still owns book_file rows")
 // It reads Pebble, never memdb: this count authorizes (or refuses) a hard
 // delete, and memdb is a derived projection that can be short. It counts keys
 // only — no value is decoded — so it is O(rows this book owns).
-func countBookFileRows(db *pebble.DB, bookID string) (int, error) {
+func countBookFileRows(db *GatedDB, bookID string) (int, error) {
 	prefix := []byte("book_file:" + bookID + ":")
 	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -260,7 +260,7 @@ const maxStageRetries = 5
 // row under two books). On refusal the batch is closed, nothing is applied,
 // and a *staleStageError says why. The fsync runs after the stripes are
 // released (see WHAT RUNS UNDER THEM above).
-func (p *PebbleStore) commitBookFileBatch(batch *pebble.Batch, lockIDs, newOwners []string, rewriteKeys [][]byte) error {
+func (p *PebbleStore) commitBookFileBatch(batch *GatedBatch, lockIDs, newOwners []string, rewriteKeys [][]byte) error {
 	if bookFileBeforeCommitHook != nil {
 		bookFileBeforeCommitHook()
 	}
@@ -559,7 +559,7 @@ var ErrBookFilePIDConflict = errors.New("book_file iTunes PID is held by another
 // deleted row, kept forever; wipes by prefix do not write them.
 func bookFileGoneKey(id string) []byte { return []byte("book_file_gone:" + id) }
 
-func stageBookFileTombstone(batch *pebble.Batch, id string) error {
+func stageBookFileTombstone(batch *GatedBatch, id string) error {
 	if id == "" {
 		return nil
 	}

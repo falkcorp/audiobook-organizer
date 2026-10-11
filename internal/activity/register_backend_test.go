@@ -1,7 +1,7 @@
 // file: internal/activity/register_backend_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6d2e8b41-37a9-4c5f-9e0d-1b8a4f7c2e93
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package activity
 
@@ -38,7 +38,7 @@ func TestActivityStore_BackendSelection(t *testing.T) {
 			db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
-			pas := database.NewPebbleActivityStore(db)
+			pas := database.NewPebbleActivityStore(database.NewGatedDB(db))
 
 			cfg := &config.Config{
 				DatabasePath:    t.TempDir(),

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_isbn_index.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 // ISBN/ASIN secondary index for PebbleStore.
 //
@@ -76,7 +76,7 @@ func isbnIndexKey(keyspace, value, bookID string) []byte {
 
 // writeISBNIndexRows adds index rows for all non-empty ISBN10/ISBN13/ASIN
 // values to the supplied batch.  No-op for empty values.
-func writeISBNIndexRows(batch *pebble.Batch, bookID, isbn10, isbn13, asin string) error {
+func writeISBNIndexRows(batch *GatedBatch, bookID, isbn10, isbn13, asin string) error {
 	if isbn10 != "" {
 		if err := batch.Set(isbnIndexKey("isbn10", isbn10, bookID), []byte{}, nil); err != nil {
 			return fmt.Errorf("pebble isbn10 index set: %w", err)
@@ -97,7 +97,7 @@ func writeISBNIndexRows(batch *pebble.Batch, bookID, isbn10, isbn13, asin string
 
 // deleteISBNIndexRows removes index rows for all non-empty ISBN10/ISBN13/ASIN
 // values from the supplied batch.  Missing keys are a no-op in pebble.
-func deleteISBNIndexRows(batch *pebble.Batch, bookID, isbn10, isbn13, asin string) error {
+func deleteISBNIndexRows(batch *GatedBatch, bookID, isbn10, isbn13, asin string) error {
 	if isbn10 != "" {
 		if err := batch.Delete(isbnIndexKey("isbn10", isbn10, bookID), nil); err != nil {
 			return fmt.Errorf("pebble isbn10 index delete: %w", err)
@@ -119,7 +119,7 @@ func deleteISBNIndexRows(batch *pebble.Batch, bookID, isbn10, isbn13, asin strin
 // updateISBNIndex is the UPDATE helper: deletes stale rows for old values and
 // writes fresh rows for new values, only when a value has actually changed.
 // Mirrors the updateHashIndex closure in UpdateBook.
-func updateISBNIndex(batch *pebble.Batch, bookID string, oldISBN10, newISBN10, oldISBN13, newISBN13, oldASIN, newASIN string) error {
+func updateISBNIndex(batch *GatedBatch, bookID string, oldISBN10, newISBN10, oldISBN13, newISBN13, oldASIN, newASIN string) error {
 	updateField := func(keyspace, oldVal, newVal string) error {
 		if oldVal == newVal {
 			return nil // unchanged — no index work needed

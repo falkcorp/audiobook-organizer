@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6a1d9c3e-4b7f-4a2d-9e6c-8f1b2c3d4e5f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 // Tests for CONC-5: parallelizing the dedup.embed-scan synchronous per-book
 // EmbedBook loop with registry.RunItems.
@@ -46,7 +46,7 @@ func newEmbedScanFixture(t *testing.T, n int) (*Plugin, *database.MockStore, *da
 	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	es := database.NewEmbeddingStore(db)
+	es := database.NewEmbeddingStore(database.NewGatedDB(db))
 
 	prevEnabled := config.AppConfig.Dedup.EmbeddingsEnabled
 	config.AppConfig.Dedup.EmbeddingsEnabled = true

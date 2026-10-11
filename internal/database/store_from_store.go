@@ -1,14 +1,14 @@
 // file: internal/database/store_from_store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e9c2a71-4b36-48df-9107-8c3d6f2b1a94
-// last-edited: 2026-08-19
+// last-edited: 2026-10-11
 
 package database
 
 // Store-taking constructors for the sibling stores that share the main PebbleDB
 // handle.
 //
-// Each of these has a *pebble.DB-taking twin (NewEmbeddingStore,
+// Each of these has a *GatedDB-taking twin (NewEmbeddingStore,
 // NewPebbleMetricsStore, NewAIScanStoreFromDB, NewPebbleActivityStore). Those
 // twins forced every caller to do the unwrap itself:
 //

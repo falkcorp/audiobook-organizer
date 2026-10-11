@@ -1,7 +1,7 @@
 // file: internal/database/census_families.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3f3063e-7a83-4402-9443-4ec19031525d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -149,7 +149,10 @@ func (p *PebbleStore) censusFamilies(ctx context.Context, out *DBCensus) error {
 	if note := censusRangeDelNote(out.Families); note != "" {
 		out.Notes = append(out.Notes, note)
 	}
-	m := p.db.Metrics()
+	m, err := p.db.Metrics()
+	if err != nil {
+		return fmt.Errorf("census engine metrics: %w", err)
+	}
 	out.DiskSpaceUsage = m.DiskSpaceUsage()
 	return nil
 }

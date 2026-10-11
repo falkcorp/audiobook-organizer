@@ -1,7 +1,7 @@
 // file: internal/database/ops_v2_recent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f2d9c41-6a85-4b3e-9d17-2e8c5f0a6b94
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package database
 
@@ -20,7 +20,7 @@ import (
 
 // writeRecentFixtureRow stores row with its timeline index keys, the way the
 // real writers do (stageOpRow in the row's batch).
-func writeRecentFixtureRow(t testing.TB, p *PebbleStore, batch *pebble.Batch, row OperationV2Row) {
+func writeRecentFixtureRow(t testing.TB, p *PebbleStore, batch *GatedBatch, row OperationV2Row) {
 	t.Helper()
 	data, err := json.Marshal(&row)
 	if err != nil {

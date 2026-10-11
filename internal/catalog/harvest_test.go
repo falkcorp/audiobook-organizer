@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-02
+// last-edited: 2026-10-11
 
 package catalog
 
@@ -146,7 +146,7 @@ func openCatalog(t *testing.T) (*database.CatalogStore, *pebble.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return database.NewCatalogStore(db), db
+	return database.NewCatalogStore(database.NewGatedDB(db)), db
 }
 
 var tchaikovsky = ScopeAuthor{Key: HarvestKey("Adrian Tchaikovsky"), Name: "Adrian Tchaikovsky", OwnedASINs: []string{"B071Y9TTHC"}}

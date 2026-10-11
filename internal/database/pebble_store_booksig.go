@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4c81f0a7-5e93-4d2b-9a16-7f30c8e51b42
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package database
 
@@ -187,7 +187,7 @@ func (p *PebbleStore) hydrateBookSig(b *Book) error {
 // the stored signature alone. Clearing a signature is not something any current
 // caller does; if one ever needs to, it must delete the key explicitly rather
 // than get it for free by passing nil.
-func writeBookSigToBatch(batch *pebble.Batch, b *Book) error {
+func writeBookSigToBatch(batch *GatedBatch, b *Book) error {
 	sig, ok := bookSigOf(b)
 	if !ok {
 		return nil

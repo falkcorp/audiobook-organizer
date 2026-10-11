@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 package database
 
@@ -534,10 +534,8 @@ func (p *PebbleStore) GetBookStats(bookNumericID int) (*BookStats, error) {
 	// Return nil,nil when no stats have been recorded for this book (both keys absent).
 	if playsErr == nil && secsErr == nil && plays == 0 && secs == 0 {
 		// Check if either key actually exists (zero is a valid recorded value).
-		if _, _, err := p.db.Get([]byte(playsKey)); err == pebble.ErrNotFound {
-			if _, _, err2 := p.db.Get([]byte(secsKey)); err2 == pebble.ErrNotFound {
-				return nil, nil
-			}
+		if !p.statsKeyPresent(playsKey) && !p.statsKeyPresent(secsKey) {
+			return nil, nil
 		}
 	}
 	return &BookStats{BookID: bookNumericID, PlayCount: plays, ListenSeconds: secs, Version: 1}, nil
@@ -551,11 +549,25 @@ func (p *PebbleStore) GetUserStats(userID string) (*UserStats, error) {
 	secsKey := "stats:user:listen_seconds:" + userID
 	secs, _ := p.readIntKey(secsKey)
 	if secs == 0 {
-		if _, _, err := p.db.Get([]byte(secsKey)); err == pebble.ErrNotFound {
+		if !p.statsKeyPresent(secsKey) {
 			return nil, nil
 		}
 	}
 	return &UserStats{UserID: userID, ListenSeconds: secs, Version: 1}, nil
+}
+
+// statsKeyPresent reports whether key exists. Only a clean not-found reads as
+// absent; a read error reads as present, as the inline checks it replaces
+// did. It closes the read's closer: the inline checks discarded it, which
+// leaked a pebble iterator per present key and, now, a gate lease that makes
+// Close wait out its drain timeout (pebble_gate.go).
+func (p *PebbleStore) statsKeyPresent(key string) bool {
+	_, closer, err := p.db.Get([]byte(key))
+	if err != nil {
+		return err != pebble.ErrNotFound
+	}
+	_ = closer.Close()
+	return true
 }
 
 func (p *PebbleStore) readIntKey(key string) (int, error) {

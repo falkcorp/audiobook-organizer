@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.30.3
+// version: 1.30.4
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -105,9 +105,9 @@ var (
 // It satisfies the ActivityStorer interface and is a drop-in replacement for both
 // ActivityStore (SQLite) and the retired NutsDB activity store.
 //
-// The caller retains ownership of the *pebble.DB — Close() on this store is a no-op.
+// The caller retains ownership of the *GatedDB — Close() on this store is a no-op.
 type PebbleActivityStore struct {
-	db      *pebble.DB
+	db      *GatedDB
 	counter atomic.Int64
 
 	// entriesDecoded counts every attempt to json.Unmarshal a stored
@@ -161,7 +161,7 @@ type pactSourcesCacheEntry struct {
 
 // NewPebbleActivityStore creates a PebbleActivityStore backed by the provided DB.
 // The caller retains ownership of db; Close() on this store does NOT close db.
-func NewPebbleActivityStore(db *pebble.DB) *PebbleActivityStore {
+func NewPebbleActivityStore(db *GatedDB) *PebbleActivityStore {
 	s := &PebbleActivityStore{db: db, sourcesCache: make(map[string]pactSourcesCacheEntry)}
 	// Seed counter from current time so IDs don't collide across restarts.
 	s.counter.Store(time.Now().UnixNano())
@@ -181,11 +181,14 @@ func (s *PebbleActivityStore) DecodeFailures() int64 { return s.decodeFailures.L
 // Close is a no-op: the caller owns the PebbleDB instance.
 //
 // The DB is BORROWED — NewPebbleActivityStoreFromStore hands this store the
-// main PebbleStore's *pebble.DB — so activity.Service.Close closing this store
+// main PebbleStore's *GatedDB — so activity.Service.Close closing this store
 // closes nothing, and the main store's owner can close the DB while a deferred
-// flush or a maintenance op is still running here. Pebble PANICS ErrClosed
-// from Get/Set/NewIter/Commit on a closed DB instead of returning an error, so
-// every method in this file that touches s.db (and SetLastActivityDBPath in
+// flush or a maintenance op is still running here. The gated handle makes that
+// safe at the engine: PebbleStore.Close waits for this store's in-flight
+// accesses, and refuses later ones with an error wrapping pebble.ErrClosed
+// (pebble_gate.go). Before the gate, pebble PANICKED ErrClosed from
+// Get/Set/NewIter/Commit on a closed DB, so every method in this file that
+// touches s.db (and SetLastActivityDBPath in
 // sql_activity_relocate.go) defers recoverPebbleClosed: an access
 // after close returns an error wrapping pebble.ErrClosed, which every caller
 // already logs (activity.Service.writeDeferred with a lost-entry count),
@@ -202,9 +205,9 @@ func (s *PebbleActivityStore) DecodeFailures() int64 { return s.decodeFailures.L
 // the DB, so a panic there is a real bug and should crash.
 func (s *PebbleActivityStore) Close() error { return nil }
 
-// DB returns the underlying *pebble.DB. Used by callers (e.g., backfill, registry wiring)
+// DB returns the underlying *GatedDB. Used by callers (e.g., backfill, registry wiring)
 // that need to check the backfill sentinel key directly.
-func (s *PebbleActivityStore) DB() *pebble.DB { return s.db }
+func (s *PebbleActivityStore) DB() *GatedDB { return s.db }
 
 // ── Key construction ──────────────────────────────────────────────────────────
 
@@ -551,7 +554,7 @@ func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
 // it is never silent. The one contract that cannot live with that is
 // WipeAllActivity, which therefore range-deletes the entire "act:" prefix after
 // its row-by-row pass rather than relying on it; see its doc comment.
-func pactDeleteEntry(batch *pebble.Batch, kv pactKV) error {
+func pactDeleteEntry(batch *GatedBatch, kv pactKV) error {
 	if err := batch.Delete(kv.key, nil); err != nil {
 		return err
 	}
@@ -682,7 +685,7 @@ func (s *PebbleActivityStore) prepareEntry(e ActivityEntry) (pactPreparedEntry, 
 
 // pactStagePrepared stages a prepared row's primary key and every secondary
 // index key into batch. Mirror image of pactDeleteEntry.
-func pactStagePrepared(batch *pebble.Batch, p pactPreparedEntry) error {
+func pactStagePrepared(batch *GatedBatch, p pactPreparedEntry) error {
 	if err := batch.Set(p.primary, p.value, nil); err != nil {
 		return fmt.Errorf("pebble_activity_store: set primary: %w", err)
 	}
@@ -1924,7 +1927,7 @@ func (s *PebbleActivityStore) claimDayChunk(ctx context.Context, dayStart, dayEn
 // replacement into batch, WITHOUT committing. The caller commits it together
 // with the deletion of the entries dd counted, which is what makes counting and
 // deletion the same atomic unit.
-func (s *PebbleActivityStore) stageDayDigest(batch *pebble.Batch, startOfDay time.Time, dateKey string, dd DigestDetails) error {
+func (s *PebbleActivityStore) stageDayDigest(batch *GatedBatch, startOfDay time.Time, dateKey string, dd DigestDetails) error {
 	existing, existingKey, err := s.findExistingDigest(dateKey)
 	if err != nil {
 		return err
@@ -2195,7 +2198,7 @@ func (t *pactDecodeTally) log(op string) {
 // field of the key it currently sits on.
 type pactCursor struct {
 	tier string
-	iter *pebble.Iterator
+	iter *GatedIter
 	tf   string
 }
 

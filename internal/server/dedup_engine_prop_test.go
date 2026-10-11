@@ -1,7 +1,7 @@
 // file: internal/server/dedup_engine_prop_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: e6425d8b-3ab4-4e0c-86fd-71ece563085e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package server
 
@@ -152,7 +152,7 @@ func propDB(t *testing.T) func(fatalfer) *database.EmbeddingStore {
 		t.Fatalf("pebble.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	es := database.NewEmbeddingStore(db)
+	es := database.NewEmbeddingStore(database.NewGatedDB(db))
 
 	return func(rt fatalfer) *database.EmbeddingStore {
 		// Clear all emb: and dedup: keys from the previous iteration.

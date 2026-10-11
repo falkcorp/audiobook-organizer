@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -350,7 +350,7 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 // every book_authors:<bookID> row that references it. It returns the surviving
 // association slice for each row it touched, keyed by book ID, so the caller
 // can replay the same edit into memdb once the batch commits.
-func (p *PebbleStore) sweepAuthorFromBookAuthors(batch *pebble.Batch, authorID int) (map[string][]BookAuthor, error) {
+func (p *PebbleStore) sweepAuthorFromBookAuthors(batch *GatedBatch, authorID int) (map[string][]BookAuthor, error) {
 	// prefixUpperBound, not a hand-written "book_authors:~" sentinel. The key
 	// is book_authors:<bookID> and bookID is an opaque string: a literal '~'
 	// (0x7E) upper bound silently excludes any id whose first byte is higher,
@@ -661,7 +661,7 @@ func (p *PebbleStore) getAuthorAliasByID(id int) (*AuthorAlias, error) {
 // ownership checks on the author_alias:name: entries are only sound under it.
 // It does not lock itself: its one caller, DeleteAuthor, already holds
 // nameIdx.author and nameIdx.alias, and sync.Mutex is not reentrant.
-func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) error {
+func (p *PebbleStore) deleteAuthorAliases(batch *GatedBatch, authorID int) error {
 	prefix := []byte(fmt.Sprintf("author_alias:author:%d:", authorID))
 	upper := []byte(fmt.Sprintf("author_alias:author:%d;", authorID))
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
@@ -1255,7 +1255,7 @@ func (p *PebbleStore) DeleteNarrator(id int) error {
 // caller can replay the same edit into memdb once the batch commits. It is the
 // narrator twin of sweepAuthorFromBookAuthors; see that function for the
 // reasoning behind the upper bound and the skip-unparseable-row rule.
-func (p *PebbleStore) sweepNarratorFromBookNarrators(batch *pebble.Batch, narratorID int) (map[string][]BookNarrator, error) {
+func (p *PebbleStore) sweepNarratorFromBookNarrators(batch *GatedBatch, narratorID int) (map[string][]BookNarrator, error) {
 	prefix := []byte("book_narrators:")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,

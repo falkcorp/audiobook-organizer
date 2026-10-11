@@ -1,7 +1,7 @@
 // file: internal/database/census_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b6c66985-8717-4b85-b9df-85f7eb9291f3
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -34,7 +34,7 @@ func newCensusRawStore(t *testing.T) *PebbleStore {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return &PebbleStore{db: db}
+	return &PebbleStore{db: NewGatedDB(db)}
 }
 
 // newCensusTestStore opens a full in-memory PebbleStore with memdb, for the
@@ -187,7 +187,8 @@ func TestDBCensus_SmallMemtableIsNotFlushed(t *testing.T) {
 		require.NoError(t, p.db.Flush())
 	}
 	writeCensusKeys(t, p, 10, func(i int) string { return fmt.Sprintf("work:%05d", i) })
-	m := p.db.Metrics()
+	m, err := p.db.Metrics()
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, m.MemTable.Size, uint64(censusFlushMinMemtable),
 		"fixture: the memtable arena has grown past the gate")
 	require.Less(t, m.WAL.Size, uint64(censusFlushMinMemtable), "fixture: only 10 small writes are unflushed")
@@ -667,7 +668,7 @@ func TestDBCensus_ColdMemdbIsCachedBriefly(t *testing.T) {
 func TestCensusCache_IsBounded(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < censusCacheMaxStores+5; i++ {
-		censusCachePut(new(pebble.DB), &DBCensus{}, now.Add(time.Duration(i)*time.Second), censusCacheTTL)
+		censusCachePut(new(GatedDB), &DBCensus{}, now.Add(time.Duration(i)*time.Second), censusCacheTTL)
 	}
 	censusCache.mu.Lock()
 	n := len(censusCache.m)

@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_chaos_test.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 //
 // Chaos tests for the EmbeddingStore under shutdown conditions.
 // Validates graceful behavior when the store is closed during or
@@ -28,7 +28,7 @@ func newOwnedEmbeddingStore(t *testing.T, dir string) *EmbeddingStore {
 	t.Helper()
 	db, err := pebble.Open(dir, &pebble.Options{})
 	require.NoError(t, err)
-	return &EmbeddingStore{db: db, owned: true}
+	return &EmbeddingStore{db: NewGatedDB(db), owned: true}
 }
 
 // waitForWorkers blocks until wg is done, or fails the test after a deadline.

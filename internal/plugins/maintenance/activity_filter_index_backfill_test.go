@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
-// last-edited: 2026-09-29
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -82,7 +82,7 @@ func newAfibStore(t *testing.T, days int) (*database.PebbleActivityStore, time.T
 	db, err := pebble.Open(filepath.Join(t.TempDir(), "a.pebble"), &pebble.Options{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	s := database.NewPebbleActivityStore(db)
+	s := database.NewPebbleActivityStore(database.NewGatedDB(db))
 	start := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	var batch []database.ActivityEntry
 	for i := 0; i < days*4; i++ {

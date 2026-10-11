@@ -1,7 +1,7 @@
 // file: internal/database/series_scan_truncation_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1f9a72-3d84-4b05-9e27-8a5d61b3f9c4
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package database
 
@@ -103,7 +103,7 @@ func truncatingStoreWithFixture(t *testing.T, seriesID int) (*PebbleStore, *erro
 		Cache:              noCache,
 	})
 	require.NoError(t, err)
-	p := &PebbleStore{db: db}
+	p := &PebbleStore{db: NewGatedDB(db)}
 	t.Cleanup(func() {
 		toggle.Off() // Close() reads; leaving injection on breaks cleanup.
 		_ = db.Close()

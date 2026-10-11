@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 // Timeline indexes for opv2 operation rows.
 //
@@ -180,7 +180,7 @@ func parseOpv2DoneKey(k []byte) (nanos int64, opID string, ok bool) {
 // Every writer of an opv2:op: row must call this in the SAME batch as the
 // row, including any future record pruner (release D), which deletes through
 // stageOpRow(b, old, nil).
-func stageOpRow(b *pebble.Batch, prev, next *OperationV2Row) error {
+func stageOpRow(b *GatedBatch, prev, next *OperationV2Row) error {
 	prevDone := prev != nil && prev.CompletedAt != nil
 	prevOpen := prev != nil && prev.CompletedAt == nil
 	nextDone := next != nil && next.CompletedAt != nil
@@ -214,7 +214,7 @@ func stageOpRow(b *pebble.Batch, prev, next *OperationV2Row) error {
 // index delta against prev and whatever extra stages (queue and active keys),
 // as one batch committed with pebble.Sync. It is the only non-batch path
 // allowed to write an opv2:op: row.
-func (p *PebbleStore) commitOpV2Row(prev *OperationV2Row, row *OperationV2Row, extra func(*pebble.Batch) error) (err error) {
+func (p *PebbleStore) commitOpV2Row(prev *OperationV2Row, row *OperationV2Row, extra func(*GatedBatch) error) (err error) {
 	defer recoverPebbleClosed("commitOpV2Row", &err)
 	if row == nil || row.ID == "" {
 		return errors.New("opv2: commitOpV2Row: row has no id")
@@ -531,7 +531,7 @@ func (p *PebbleStore) listOperationsV2SinceIndexed(since time.Time, limit int) (
 
 // forEachSnapKey iterates [lower, upper) on snap. k and v are valid only for
 // the duration of fn.
-func forEachSnapKey(snap *pebble.Snapshot, lower, upper []byte, fn func(k, v []byte) error) error {
+func forEachSnapKey(snap *GatedSnapshot, lower, upper []byte, fn func(k, v []byte) error) error {
 	iter, err := snap.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		return err
@@ -552,7 +552,7 @@ func forEachSnapKey(snap *pebble.Snapshot, lower, upper []byte, fn func(k, v []b
 // getOpV2FromSnapshot point-reads one op row from snap. A missing,
 // undecodable or id-less row reports ok=false with a nil error, the same as
 // the scan's skip; any other read error is returned.
-func getOpV2FromSnapshot(snap *pebble.Snapshot, id string) (OperationV2Row, bool, error) {
+func getOpV2FromSnapshot(snap *GatedSnapshot, id string) (OperationV2Row, bool, error) {
 	var row OperationV2Row
 	val, closer, err := snap.Get(opv2OpKey(id))
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -675,7 +675,7 @@ type opsV2TimelineKV struct {
 // workers; work(w, item) runs on worker w (0 <= w < workers), so a worker can
 // keep its own unshared state. This is the CLAUDE.md bounded worker pool: one
 // iterator, a bounded channel, NumCPU workers.
-func runOpsV2TimelinePool(ctx context.Context, snap *pebble.Snapshot, workers int, lower, upper []byte, withValues bool, work func(w int, item opsV2TimelineKV) error) error {
+func runOpsV2TimelinePool(ctx context.Context, snap *GatedSnapshot, workers int, lower, upper []byte, withValues bool, work func(w int, item opsV2TimelineKV) error) error {
 	g, gctx := errgroup.WithContext(ctx)
 	ch := make(chan opsV2TimelineKV, workers*64)
 	// Every pool goroutine carries its own recoverPebbleClosed: the caller's
@@ -816,6 +816,13 @@ func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (rows int, c
 // attempts (the book_atpath backfill argument).
 func (p *PebbleStore) ReconcileOpsV2TimelineIndex(ctx context.Context) (res OpsV2TimelineReconcileResult, err error) {
 	defer recoverPebbleClosed("ReconcileOpsV2TimelineIndex", &err)
+	// Stop when the store starts closing, not only when the caller cancels:
+	// this is a full-table pass that runs on every boot, and Close waits for
+	// its held snapshot and iterators to be released (pebble_gate.go).
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stopOnClose := context.AfterFunc(p.closingContext(), func() { cancel(errStoreClosing) })
+	defer stopOnClose()
 	start := time.Now()
 	defer func() { res.Duration = time.Since(start) }()
 

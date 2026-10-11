@@ -1,7 +1,7 @@
 // file: internal/database/census.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package database
 
@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -223,7 +222,7 @@ type censusCacheEntry struct {
 	ttl   time.Duration
 }
 
-// censusCache holds the estimated census per *pebble.DB, for at most
+// censusCache holds the estimated census per *GatedDB, for at most
 // censusCacheMaxStores stores; the store with the oldest entry is evicted
 // first, so closed stores (tests open thousands) do not accumulate.
 //
@@ -232,8 +231,8 @@ type censusCacheEntry struct {
 // pebble_store.go in this wave.
 var censusCache = struct {
 	mu sync.Mutex
-	m  map[*pebble.DB]censusCacheEntry
-}{m: map[*pebble.DB]censusCacheEntry{}}
+	m  map[*GatedDB]censusCacheEntry
+}{m: map[*GatedDB]censusCacheEntry{}}
 
 var censusFlight singleflight.Group
 
@@ -243,7 +242,7 @@ var censusLog = logger.New("database.census")
 // shared census computation.
 var censusBeforeCompute func()
 
-func censusCacheGet(db *pebble.DB, now time.Time) *DBCensus {
+func censusCacheGet(db *GatedDB, now time.Time) *DBCensus {
 	censusCache.mu.Lock()
 	defer censusCache.mu.Unlock()
 	e, ok := censusCache.m[db]
@@ -253,12 +252,12 @@ func censusCacheGet(db *pebble.DB, now time.Time) *DBCensus {
 	return e.value
 }
 
-func censusCachePut(db *pebble.DB, v *DBCensus, at time.Time, ttl time.Duration) {
+func censusCachePut(db *GatedDB, v *DBCensus, at time.Time, ttl time.Duration) {
 	censusCache.mu.Lock()
 	defer censusCache.mu.Unlock()
 	if _, ok := censusCache.m[db]; !ok {
 		for len(censusCache.m) >= censusCacheMaxStores {
-			var victim *pebble.DB
+			var victim *GatedDB
 			var victimAt time.Time
 			for k, e := range censusCache.m {
 				if victim == nil || e.at.Before(victimAt) {
@@ -417,8 +416,8 @@ func (p *PebbleStore) computeDBCensus(ctx context.Context) (_ *DBCensus, err err
 // cache).
 var censusFlushes = struct {
 	mu sync.Mutex
-	m  map[*pebble.DB]time.Time
-}{m: map[*pebble.DB]time.Time{}}
+	m  map[*GatedDB]time.Time
+}{m: map[*GatedDB]time.Time{}}
 
 // censusMaybeFlush flushes the memtable so the sstable properties cover recent
 // writes — unless the memtable is nearly empty or this store was flushed for a
@@ -431,7 +430,11 @@ func (p *PebbleStore) censusMaybeFlush(now time.Time) (string, error) {
 	// gauge — it is arena capacity (256 KiB on a fresh store, 4 MiB once the
 	// memtables have grown), not bytes in use, so it passes any threshold
 	// below that capacity whether or not anything was written.
-	mt := p.db.Metrics().WAL.Size
+	m, err := p.db.Metrics()
+	if err != nil {
+		return "", fmt.Errorf("census flush check: %w", err)
+	}
+	mt := m.WAL.Size
 	if mt < censusFlushMinMemtable {
 		return fmt.Sprintf("memtable not flushed: only %d bytes of writes are unflushed; those writes are not in the figures", mt), nil
 	}
@@ -444,7 +447,7 @@ func (p *PebbleStore) censusMaybeFlush(now time.Time) (string, error) {
 	}
 	if !seen {
 		for len(censusFlushes.m) >= censusCacheMaxStores {
-			var victim *pebble.DB
+			var victim *GatedDB
 			var victimAt time.Time
 			for k, at := range censusFlushes.m {
 				if victim == nil || at.Before(victimAt) {

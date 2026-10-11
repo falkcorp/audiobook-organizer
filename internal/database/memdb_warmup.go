@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package database
 
@@ -674,7 +674,7 @@ func emitMemdbSizeTelemetry(ctx context.Context, m *MemStore, counts map[string]
 // why": a phase reading 40 GB and a phase reading 400 MB in the same wall time
 // have nothing in common and take opposite fixes. Cost is one integer add per
 // key.
-func warmIter(ctx context.Context, db *pebble.DB, prefix string, fn func(key string, val []byte) (bool, error)) (rows int, scanned int, bytes int64, err error) {
+func warmIter(ctx context.Context, db *GatedDB, prefix string, fn func(key string, val []byte) (bool, error)) (rows int, scanned int, bytes int64, err error) {
 	// Bail before creating an iterator if the warmup was canceled (Close). This
 	// keeps cancellation prompt and avoids calling NewIter on a DB that is about
 	// to be closed.
