@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -28,6 +28,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -806,15 +807,25 @@ func TestReviewQuery_BadFieldIs400(t *testing.T) {
 		"hide_runtime=maybe":     "hide_runtime must be true or false",
 		"ids=" + goldenBookID(1): "ids must be all",
 		"bucket=elsewhere":       "bucket must be",
+		"pins=true":              "pins is read only with ids=all",
+		"q=" + strings.Repeat("a", reviewQueryMaxQBytes+1): "q is 1025 bytes long",
 	} {
 		code, body, hdr := serveReviewRaw(t, h, "view=page&"+q)
 		require.Equal(t, http.StatusBadRequest, code, q)
 		var e struct {
 			Error string `json:"error"`
+			Field string `json:"field"`
 		}
 		require.NoError(t, json.Unmarshal(body, &e), q)
 		require.Contains(t, e.Error, want, q)
 		require.Equal(t, "no-store", hdr.Get("Cache-Control"))
+		// Only a refusal of the Title pattern names it, so the lane shows any
+		// other 400 as a page error rather than under the Title box.
+		wantField := ""
+		if strings.HasPrefix(q, "q=") {
+			wantField = "q"
+		}
+		require.Equal(t, wantField, e.Field, q)
 	}
 	// Words the lane reads as free text are not field tokens.
 	code, body, _ := serveReviewRaw(t, h, "view=page&q=NOT+foo:bar")
@@ -828,10 +839,129 @@ func TestReviewQuery_MinConfidenceAcceptsTheLaneLevels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	for _, v := range []string{"0", "85", "100", "190", "1000"} {
-		code, body, _ := serveReviewRaw(t, h, "view=page&min_confidence="+v)
-		require.Equal(t, http.StatusOK, code, "min_confidence=%s: %s", v, body)
+	all, _, _ := servePage(t, h, "limit=500")
+	// The threshold applies to matched rows only (score*100 >= threshold), so
+	// at each level the list is every row that is not matched plus the matched
+	// rows whose score reaches it. The golden scores top out at 0.9, so this
+	// test cannot tell 190 from a threshold clamped to 100; the shared cases
+	// "min confidence 150 boundary" and "min confidence 190" (scores 1.95 and
+	// 1.50, TestReviewQuery_MatchesSharedCases and the lane's parity test) can.
+	wantAt := func(threshold float64) []string {
+		var out []string
+		for _, r := range all.Data.Results {
+			if r.Status != "matched" || (r.Candidate != nil && r.Candidate.Score*100 >= threshold) {
+				out = append(out, r.Book.ID)
+			}
+		}
+		return out
 	}
+	for _, v := range []string{"0", "85", "100", "190", "1000"} {
+		code, body, _ := serveReviewRaw(t, h, "view=page&limit=500&min_confidence="+v)
+		require.Equal(t, http.StatusOK, code, "min_confidence=%s: %s", v, body)
+		var page pageResp
+		require.NoError(t, json.Unmarshal(body, &page))
+		threshold, err := strconv.ParseFloat(v, 64)
+		require.NoError(t, err)
+		var got []string
+		for _, r := range page.Data.Results {
+			got = append(got, r.Book.ID)
+		}
+		require.Equal(t, wantAt(threshold), got, "min_confidence=%s", v)
+	}
+	require.Less(t, len(wantAt(190)), len(wantAt(85)), "the golden set must tell 85 from 190")
+}
+
+// pinsResp is an ids=all&pins=true body.
+type pinsResp struct {
+	Data struct {
+		IDs         []string                          `json:"ids"`
+		Pins        map[string]metafetch.CandidatePin `json:"pins"`
+		PinsOmitted bool                              `json:"pins_omitted"`
+	} `json:"data"`
+}
+
+func serveIDsWithPins(t *testing.T, h *MetadataCacheHandler, query string) (pinsResp, map[string]json.RawMessage) {
+	t.Helper()
+	code, body, _ := serveReviewRaw(t, h, "view=page&ids=all&"+query)
+	require.Equal(t, http.StatusOK, code, string(body))
+	var r pinsResp
+	require.NoError(t, json.Unmarshal(body, &r))
+	var raw struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &raw))
+	return r, raw.Data
+}
+
+// TestReviewQuery_IDsAllPinsAreThePagePins: ids=all&pins=true carries, for
+// every listed book with a candidate, the pin a page row of the same
+// evaluation would give (its candidate_hash and identity fields), so "select
+// all N" applies with the stale-candidate refusal a visible row gets. Books
+// with no candidate get no pin, the origin is left to the lane, and a plain
+// ids=all is unchanged.
+func TestReviewQuery_IDsAllPinsAreThePagePins(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	for _, filter := range []string{"", "chip=total", "bucket=unreviewable"} {
+		page, _, _ := servePage(t, h, "limit=500&"+filter)
+		ids, raw := serveIDsWithPins(t, h, "pins=true&"+filter)
+		require.False(t, ids.Data.PinsOmitted, filter)
+		require.Len(t, ids.Data.IDs, page.Data.TotalCount, filter)
+		withCandidate := 0
+		for _, r := range page.Data.Results {
+			pin, ok := ids.Data.Pins[r.Book.ID]
+			if r.Candidate == nil || r.CandidateHash == "" {
+				require.False(t, ok, "%s: %s has no candidate, so no pin", filter, r.Book.ID)
+				continue
+			}
+			withCandidate++
+			require.True(t, ok, "%s: %s", filter, r.Book.ID)
+			want := metafetch.CandidatePin{ContentHash: r.CandidateHash, Source: r.Candidate.Source,
+				Title: r.Candidate.Title, Author: r.Candidate.Author, ASIN: r.Candidate.ASIN,
+				ISBN: r.Candidate.ISBN, ISBN10: r.Candidate.ISBN10, ISBN13: r.Candidate.ISBN13}
+			require.Equal(t, want, pin, "%s: %s", filter, r.Book.ID)
+			require.Empty(t, pin.Origin)
+		}
+		require.Len(t, ids.Data.Pins, withCandidate, filter)
+		require.Contains(t, raw, "pins", filter)
+		if filter == "" {
+			require.NotZero(t, withCandidate, "the golden set lists rows with candidates")
+		}
+	}
+	_, raw := serveIDsWithPins(t, h, "")
+	require.NotContains(t, raw, "pins")
+	require.NotContains(t, raw, "pins_omitted")
+}
+
+// TestReviewQuery_IDsAllPinsOmittedPastTheApplyCap: a list longer than the
+// bulk apply cap could never be applied in one go, so its pins are not sent
+// (pins_omitted); the ids still are. pins is not part of the list's key, so
+// asking for them costs no second evaluation.
+func TestReviewQuery_IDsAllPinsOmittedPastTheApplyCap(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	prev := config.AppConfig.BulkApplyMaxItems
+	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+
+	full, _ := serveIDsWithPins(t, h, "pins=true")
+	n := len(full.Data.IDs)
+	require.Greater(t, n, 2)
+	evaluations := h.reviewQuery.evaluations.Load()
+
+	config.AppConfig.BulkApplyMaxItems = n - 1
+	over, raw := serveIDsWithPins(t, h, "pins=true")
+	require.True(t, over.Data.PinsOmitted)
+	require.NotContains(t, raw, "pins")
+	require.Equal(t, full.Data.IDs, over.Data.IDs)
+
+	config.AppConfig.BulkApplyMaxItems = n
+	at, _ := serveIDsWithPins(t, h, "pins=true")
+	require.False(t, at.Data.PinsOmitted)
+	require.Equal(t, full.Data.Pins, at.Data.Pins)
+	require.Equal(t, evaluations, h.reviewQuery.evaluations.Load(), "pins must not change the list key")
 }
 
 // reviewQueryError400 serves q and returns the 400's error text and how long
@@ -980,6 +1110,13 @@ func TestReviewQuery_BudgetIs400AndNotCached(t *testing.T) {
 		require.Contains(t, msg, "simpler search")
 	}
 	require.EqualValues(t, 2, h.reviewQuery.evaluations.Load(), "a refusal is never served from the LRU")
+	// The budget is the Title pattern's, so the 400 names that field.
+	_, body, _ := serveReviewRaw(t, h, "view=page&q="+url.QueryEscape("/title/"))
+	var e struct {
+		Field string `json:"field"`
+	}
+	require.NoError(t, json.Unmarshal(body, &e))
+	require.Equal(t, "q", e.Field)
 	page, _, _ := servePage(t, h, "q=title")
 	require.NotZero(t, page.Data.TotalCount, "a substring query is not timed")
 

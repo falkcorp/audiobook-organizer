@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-10
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"slices"
 	"sort"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -165,6 +168,14 @@ type ReviewQuery struct {
 	Limit, Offset int
 	// IDsAll asks for {ids, total, generation} only.
 	IDsAll bool
+	// Pins (only with IDsAll) adds the candidate pin of every listed book
+	// that has a candidate, so a bulk apply of books the reviewer selected
+	// with "Select all N matching" keeps the stale-candidate refusal a pin
+	// gives. Served only while the list fits under the bulk apply cap
+	// (applycap): a longer list can never be applied in one go, so its pins
+	// would be bytes nobody uses. It cuts nothing from the list, so it is not
+	// part of normalized.
+	Pins bool
 
 	title *reviewTitleFilter
 	// normalized is every field that decides the list (not the page), in a
@@ -172,13 +183,32 @@ type ReviewQuery struct {
 	normalized string
 }
 
-// reviewQueryError is a request the query refuses (400).
-type reviewQueryError struct{ msg string }
+// reviewQueryError is a request the query refuses (400). field names the
+// parameter at fault when the refusal is about the Title pattern ("q"), so
+// the lane can show it under the Title box instead of as a page error; a
+// refusal of any other parameter leaves it empty.
+type reviewQueryError struct {
+	msg   string
+	field string
+}
 
 func (e *reviewQueryError) Error() string { return e.msg }
 
 func badReviewQuery(format string, args ...any) error {
 	return &reviewQueryError{msg: fmt.Sprintf(format, args...)}
+}
+
+// reviewQueryFieldQ is the field a refusal of the Title pattern names.
+const reviewQueryFieldQ = "q"
+
+// respondReviewQueryError answers a refused request with a 400, carrying
+// `field` when the refusal names one.
+func respondReviewQueryError(c *gin.Context, e *reviewQueryError) {
+	if e.field == "" {
+		httputil.RespondWithBadRequest(c, e.msg)
+		return
+	}
+	httputil.RespondWithErrorFields(c, http.StatusBadRequest, e.msg, "BAD_REQUEST", map[string]any{"field": e.field})
 }
 
 // parseReviewQuery reads a view=page request. get returns a query parameter
@@ -217,6 +247,7 @@ func parseReviewQuery(get func(string) string) (*ReviewQuery, error) {
 	boolParam("has_transcription", &q.HasTranscription)
 	boolParam("transcription_matched", &q.TranscriptionMatched)
 	boolParam("hide_multi_book", &q.HideMultiBook)
+	boolParam("pins", &q.Pins)
 	if err != nil {
 		return nil, err
 	}
@@ -252,11 +283,17 @@ func parseReviewQuery(get func(string) string) (*ReviewQuery, error) {
 	default:
 		return nil, badReviewQuery("ids must be all on view=page (a detail lookup by id uses the listing without view=page)")
 	}
+	if q.Pins && !q.IDsAll {
+		return nil, badReviewQuery("pins is read only with ids=all")
+	}
 	if q.Chip != "" && !slices.Contains(reviewChips, q.Chip) {
 		return nil, badReviewQuery("chip must be one of %s", strings.Join(reviewChips, ", "))
 	}
 	if len(q.Q) > reviewQueryMaxQBytes {
-		return nil, badReviewQuery("q is %d bytes long; the limit is %d (search for a shorter part of it)", len(q.Q), reviewQueryMaxQBytes)
+		return nil, &reviewQueryError{
+			msg:   fmt.Sprintf("q is %d bytes long; the limit is %d (search for a shorter part of it)", len(q.Q), reviewQueryMaxQBytes),
+			field: reviewQueryFieldQ,
+		}
 	}
 	if q.Bucket == "" {
 		q.Bucket = reviewBucketReviewable
@@ -273,7 +310,7 @@ func parseReviewQuery(get func(string) string) (*ReviewQuery, error) {
 	q.Skipped = idList(get("skipped"))
 	title, terr := compileReviewTitleFilter(q.Q)
 	if terr != nil {
-		return nil, &reviewQueryError{msg: terr.Error()}
+		return nil, &reviewQueryError{msg: terr.Error(), field: reviewQueryFieldQ}
 	}
 	q.title = title
 	q.normalized = q.normalize()
@@ -1251,13 +1288,45 @@ func runReviewEvaluation(ctx context.Context, base *reviewQueryBase, q *ReviewQu
 // --- responses -------------------------------------------------------------------
 
 // reviewIDsResponse is the ids=all body: every listed book id, in list order.
-func reviewIDsResponse(l *reviewResultList) gin.H {
+//
+// With pins it also carries `pins`, book id to the candidate pin of the
+// candidate that row lists (content hash and identity fields, no origin: the
+// lane sets that), for every listed book that has a candidate -- but only
+// while the list is no longer than pinCap, the bulk apply cap. Past it the
+// body says `pins_omitted` instead: no single apply may send that many
+// books, and the lane refuses an apply of books it holds no pin for. The
+// hash is the one the row was built with (snapshotRow.hash), the value the
+// page serves as candidate_hash, so nothing is re-hashed here.
+func reviewIDsResponse(l *reviewResultList, pins bool, pinCap int) gin.H {
 	ids := make([]string, len(l.refs))
 	for i, ref := range l.refs {
 		row, _ := l.row(ref)
 		ids[i] = row.sum.BookID
 	}
-	return gin.H{"ids": ids, "total": len(ids), "generation": l.base.generation}
+	out := gin.H{"ids": ids, "total": len(ids), "generation": l.base.generation}
+	if !pins {
+		return out
+	}
+	if len(ids) > pinCap {
+		out["pins_omitted"] = true
+		return out
+	}
+	byID := make(map[string]metafetch.CandidatePin, len(ids))
+	for i, ref := range l.refs {
+		if ref < 0 {
+			// An unreviewable row has no candidate to pin.
+			continue
+		}
+		row := l.base.rows.reviewable[ref].row
+		if row.cand == nil || row.hash == "" {
+			continue
+		}
+		c := row.cand
+		byID[ids[i]] = metafetch.CandidatePin{ContentHash: row.hash, Source: c.Source, Title: c.Title, Author: c.Author,
+			ASIN: c.ASIN, ISBN: c.ISBN, ISBN10: c.ISBN10, ISBN13: c.ISBN13}
+	}
+	out["pins"] = byID
+	return out
 }
 
 // reviewFacets is what the rail renders: the chip counts over the whole
@@ -1308,14 +1377,18 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 	// about a generation that may be gone.
 	c.Header("Cache-Control", "no-store")
 	q, err := parseReviewQuery(c.Query)
+	var refused *reviewQueryError
+	if errors.As(err, &refused) {
+		respondReviewQueryError(c, refused)
+		return
+	}
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
 	l, err := h.reviewQueryList(c.Request.Context(), q)
-	var refused *reviewQueryError
 	if errors.As(err, &refused) {
-		httputil.RespondWithBadRequest(c, refused.Error())
+		respondReviewQueryError(c, refused)
 		return
 	}
 	if respondSearchLimit(c, err) {
@@ -1326,7 +1399,7 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 		return
 	}
 	if q.IDsAll {
-		httputil.RespondWithOK(c, reviewIDsResponse(l))
+		httputil.RespondWithOK(c, reviewIDsResponse(l, q.Pins, applycap.Effective(config.AppConfig.BulkApplyMaxItems)))
 	} else {
 		series, _ := database.AsCapability[metabatch.SeriesBatchGetter](h.store)
 		httputil.RespondWithOK(c, reviewPageResponse(l, q, series))
@@ -1342,15 +1415,17 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 // cannot be answered within the limit), every pattern slot busy is a 503
 // with Retry-After. The audiobooks handler package has the same function;
 // httputil and querygrammar are both leaf packages, so neither can host it.
+// The Title (q) is the only pattern this endpoint evaluates, so both 400s
+// name it as their field.
 func respondSearchLimit(c *gin.Context, err error) bool {
 	var slow *querygrammar.TooSlowError
 	if errors.As(err, &slow) {
-		httputil.RespondWithBadRequest(c, slow.Error())
+		respondReviewQueryError(c, &reviewQueryError{msg: slow.Error(), field: reviewQueryFieldQ})
 		return true
 	}
 	var inexact *querygrammar.InexactError
 	if errors.As(err, &inexact) {
-		httputil.RespondWithBadRequest(c, inexact.Error())
+		respondReviewQueryError(c, &reviewQueryError{msg: inexact.Error(), field: reviewQueryFieldQ})
 		return true
 	}
 	var busy *querygrammar.BusyError

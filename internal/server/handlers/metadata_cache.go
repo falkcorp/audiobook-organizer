@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-10
 
@@ -509,15 +509,18 @@ func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]data
 // or confidence), limit (default 50, at most 500) and offset. The response is
 // the page of index-shaped rows, total_count (the whole filtered list), the
 // rail's facets and `generation`; ids=all returns only {ids, total,
-// generation} for "select all N", cut from the same evaluation as the count.
-// Responses are Cache-Control: no-store. Evaluated lists are kept per
+// generation} for "select all N", cut from the same evaluation as the count,
+// and ids=all&pins=true adds each listed book's candidate pin while the list
+// fits under the bulk apply cap (pins_omitted past it). A 400 about the Title
+// pattern carries field "q". Responses are Cache-Control: no-store. Evaluated lists are kept per
 // generation (the last 32 filters), so paging, the count and ids=all for one
 // filter cost one evaluation, and any write misses.
 //
 // `generation` names the cache and library generations the list was
-// evaluated at. The lane (task 02-PR18) refuses to apply an ids=all list
-// whose generation is older than the page it is acting on: the list would be
-// a selection over data the owner is no longer looking at.
+// evaluated at; any book write moves it. It is not a staleness check by
+// itself (two requests a moment apart routinely differ): the lane applies a
+// "select all" list only with the per-book pins that came with it, and the
+// apply refuses a pin whose candidate has changed since (stale_candidate).
 //
 // Rows come from a snapshot of the per-row work (cache reads, the legacy
 // filter, the resolver, file facts, the candidate decode) held between
