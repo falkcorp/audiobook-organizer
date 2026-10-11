@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check_toolchain_versions.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: 983ded55-56c4-4f7e-b15e-a2f724b54016
-# last-edited: 2026-10-10
+# last-edited: 2026-10-11
 """Fail when any Go or Node toolchain copy drifts from its pin (CI-04, CI-03).
 
 Run by ``.github/workflows/test-action-integration.yml`` ("Check version
@@ -83,7 +83,9 @@ GOLANG_REF_RE = re.compile(
 GOMOD_GO_RE = re.compile(r"^go\s+(\S+)\s*$", re.M)
 GOMOD_TOOLCHAIN_RE = re.compile(r"^toolchain\s+\S+", re.M)
 WORKFLOW_KEY_RE = re.compile(r"^\s*(?:-\s+)?(go-version|node-version)\s*:\s*(.*?)\s*$")
-WOODPECKER_GOTOOLCHAIN_RE = re.compile(r"^\s*GOTOOLCHAIN\s*:\s*['\"]?go([^'\"\s#]+)['\"]?\s*(?:#.*)?$")
+WOODPECKER_GOTOOLCHAIN_RE = re.compile(
+    r"^\s*GOTOOLCHAIN\s*:\s*['\"]?go([^'\"\s#]+)['\"]?\s*(?:#.*)?$"
+)
 # Loose on purpose (any ``golang:`` reference), like DOCKER_FROM_GOLANG_RE: the
 # strict GOLANG_REF_RE then judges it, so a typo cannot hide a reference.
 WOODPECKER_GOLANG_RE = re.compile(r"(?<![\w/.-])golang(?P<ref>:[^\s'\"]*)")
@@ -181,20 +183,37 @@ def check_woodpecker(c: Checker, pin_full: str) -> None:
                 ref = m.group("ref")
                 rm = GOLANG_REF_RE.match(ref)
                 if not rm:
-                    c.error(rel, f"golang image 'golang{ref}' is not 'golang:<version>[-<variant>]@sha256:<64 hex>'", lineno)
+                    c.error(
+                        rel,
+                        f"golang image 'golang{ref}' is not 'golang:<version>[-<variant>]@sha256:<64 hex>'",
+                        lineno,
+                    )
                     continue
                 version, digest = rm.group("version"), rm.group("digest")
-                c.info(f"{rel}:{lineno}", f"golang:{version}" + (f" @sha256:{digest[:12]}..." if digest else " (no digest)"))
+                c.info(
+                    f"{rel}:{lineno}",
+                    f"golang:{version}"
+                    + (f" @sha256:{digest[:12]}..." if digest else " (no digest)"),
+                )
                 if version != pin_full:
                     c.error(rel, f"golang:{version} != Makefile pin {pin_full}", lineno)
                 if digest:
                     digested.append((rel, lineno))
                 else:
-                    c.error(rel, f"golang:{version} image has no @sha256: digest; the Woodpecker golang image must be pinned by digest", lineno)
+                    c.error(
+                        rel,
+                        f"golang:{version} image has no @sha256: digest; the Woodpecker golang image must be pinned by digest",
+                        lineno,
+                    )
     if toolchains == 0:
-        c.error(".woodpecker", "no GOTOOLCHAIN found in any Woodpecker file; the check would be vacuous")
+        c.error(
+            ".woodpecker", "no GOTOOLCHAIN found in any Woodpecker file; the check would be vacuous"
+        )
     if len(digested) != 1:
-        c.error(".woodpecker", f"expected exactly one digest-pinned golang image (the &go_image anchor), found {len(digested)}")
+        c.error(
+            ".woodpecker",
+            f"expected exactly one digest-pinned golang image (the &go_image anchor), found {len(digested)}",
+        )
 
 
 def check_ci_remote(c: Checker, pin_full: str) -> None:
@@ -206,12 +225,16 @@ def check_ci_remote(c: Checker, pin_full: str) -> None:
         return
     found = list(CI_REMOTE_TOOLCHAIN_RE.finditer(text))
     if len(found) != 1:
-        c.error(rel, f'expected exactly one \'GO_TOOLCHAIN = "goX.Y.Z"\' line, found {len(found)}')
+        c.error(rel, f"expected exactly one 'GO_TOOLCHAIN = \"goX.Y.Z\"' line, found {len(found)}")
         return
     m = found[0]
     c.info(rel, m.group(1))
     if m.group(1) != pin_full:
-        c.error(rel, f"GO_TOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}", _line_of(text, m.start()))
+        c.error(
+            rel,
+            f"GO_TOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}",
+            _line_of(text, m.start()),
+        )
 
 
 def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
@@ -222,7 +245,10 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     if text is not None:
         pins = MAKEFILE_PIN_RE.findall(text)
         if len(pins) != 1 or not FULL_VERSION_RE.match(pins[0]):
-            c.error("Makefile", f"expected exactly one 'export GOTOOLCHAIN := goX.Y.Z', found {pins or 'none'}")
+            c.error(
+                "Makefile",
+                f"expected exactly one 'export GOTOOLCHAIN := goX.Y.Z', found {pins or 'none'}",
+            )
         else:
             m = FULL_VERSION_RE.match(pins[0])
             assert m
@@ -230,8 +256,8 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
             c.info("Makefile", pins[0])
     if pin is None:
         return c.errors
-    pin_full = "%d.%d.%d" % pin
-    pin_minor = "%d.%d" % pin[:2]
+    pin_full = f"{pin[0]}.{pin[1]}.{pin[2]}"
+    pin_minor = f"{pin[0]}.{pin[1]}"
 
     for rel, regex in ((".envrc", ENVRC_PIN_RE), (".vscode/settings.json", VSCODE_PIN_RE)):
         text = c.read(rel)
@@ -243,9 +269,15 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
         for m in found:
             c.info(rel, m.group(1))
             if m.group(1) != pin_full:
-                c.error(rel, f"GOTOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}", _line_of(text, m.start()))
+                c.error(
+                    rel,
+                    f"GOTOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}",
+                    _line_of(text, m.start()),
+                )
 
-    dockerfiles = sorted({p.name for p in root.glob("Dockerfile*") if p.is_file()} | set(REQUIRED_DOCKERFILES))
+    dockerfiles = sorted(
+        {p.name for p in root.glob("Dockerfile*") if p.is_file()} | set(REQUIRED_DOCKERFILES)
+    )
     # One entry per golang STAGE, not per file: a file with two golang stages
     # must not let the second overwrite the first.
     stages: list[tuple[str, int, str]] = []
@@ -261,14 +293,25 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
             ref = m.group("ref") or ""
             rm = GOLANG_REF_RE.match(ref)
             if not rm:
-                c.error(rel, f"golang stage 'golang{ref}' is not 'golang:<version>[-<variant>]@sha256:<64 hex>'", line)
+                c.error(
+                    rel,
+                    f"golang stage 'golang{ref}' is not 'golang:<version>[-<variant>]@sha256:<64 hex>'",
+                    line,
+                )
                 continue
             version, digest = rm.group("version"), rm.group("digest")
-            c.info(f"{rel}:{line}", f"golang:{version}" + (f" @sha256:{digest[:12]}..." if digest else " (no digest)"))
+            c.info(
+                f"{rel}:{line}",
+                f"golang:{version}" + (f" @sha256:{digest[:12]}..." if digest else " (no digest)"),
+            )
             if version != pin_full:
                 c.error(rel, f"golang:{version} != Makefile pin {pin_full}", line)
             if not digest:
-                c.error(rel, f"golang:{version} stage has no @sha256: digest; every golang stage must be pinned by digest", line)
+                c.error(
+                    rel,
+                    f"golang:{version} stage has no @sha256: digest; every golang stage must be pinned by digest",
+                    line,
+                )
                 continue
             stages.append((rel, line, digest))
     if len({d for _, _, d in stages}) > 1:
@@ -295,11 +338,19 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
             vm = GOMOD_VERSION_RE.match(m.group(1))
             line = _line_of(text, m.start())
             if not vm or (int(vm.group(1)), int(vm.group(2))) != pin[:2]:
-                c.error("go.mod", f"go {m.group(1)} is not on the pin's {pin_minor} line (pin go{pin_full})", line)
+                c.error(
+                    "go.mod",
+                    f"go {m.group(1)} is not on the pin's {pin_minor} line (pin go{pin_full})",
+                    line,
+                )
             elif int(vm.group(3) or 0) > pin[2]:
                 c.error("go.mod", f"go {m.group(1)} requires more than the pin go{pin_full}", line)
         for m in GOMOD_TOOLCHAIN_RE.finditer(text):
-            c.error("go.mod", "go.mod must not carry a 'toolchain' directive; the pin lives in Makefile/.envrc", _line_of(text, m.start()))
+            c.error(
+                "go.mod",
+                "go.mod must not carry a 'toolchain' directive; the pin lives in Makefile/.envrc",
+                _line_of(text, m.start()),
+            )
 
     versions = _repo_config_versions(c)
     cfg = ".github/repository-config.yml"
@@ -309,7 +360,9 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     for line, go_cfg in go_cfgs:
         c.info(f"{cfg}:{line} versions.go", str(go_cfg))
         if go_cfg != [pin_minor]:
-            c.error(cfg, f"versions.go {go_cfg} != ['{pin_minor}'] (Makefile pin go{pin_full})", line)
+            c.error(
+                cfg, f"versions.go {go_cfg} != ['{pin_minor}'] (Makefile pin go{pin_full})", line
+            )
     node_cfgs = versions.get("node", [])
     node_pin: str | None = None
     if not node_cfgs:
@@ -317,7 +370,11 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     for line, node_cfg in node_cfgs:
         c.info(f"{cfg}:{line} versions.node", str(node_cfg))
         if len(node_cfg) != 1:
-            c.error(cfg, f"versions.node must hold exactly one version to act as the pin, found {node_cfg}", line)
+            c.error(
+                cfg,
+                f"versions.node must hold exactly one version to act as the pin, found {node_cfg}",
+                line,
+            )
             node_pin = None
             break
         if node_pin is None:
@@ -350,36 +407,60 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
             counts[key] += 1
             if key == "go-version":
                 if value != pin_full:
-                    c.error(rel, f"go-version '{value}' != '{pin_full}' (Makefile pin go{pin_full})", lineno)
+                    c.error(
+                        rel,
+                        f"go-version '{value}' != '{pin_full}' (Makefile pin go{pin_full})",
+                        lineno,
+                    )
             else:
                 node_rows.append((rel, lineno, value))
     c.info(".github/workflows go-version literals", str(counts["go-version"]))
     c.info(".github/workflows GOTOOLCHAIN literals", str(counts["GOTOOLCHAIN"]))
     if counts["go-version"] == 0:
-        c.error(".github/workflows", "no literal go-version found in any workflow; the check would be vacuous")
+        c.error(
+            ".github/workflows",
+            "no literal go-version found in any workflow; the check would be vacuous",
+        )
 
     print("--- Node version ---")
     if node_pin is not None:
         c.info(f"{cfg} versions.node", node_pin)
         for rel, lineno, value in node_rows:
             if value != node_pin:
-                c.error(rel, f"node-version '{value}' != '{node_pin}' (repository-config versions.node)", lineno)
+                c.error(
+                    rel,
+                    f"node-version '{value}' != '{node_pin}' (repository-config versions.node)",
+                    lineno,
+                )
         c.info(".github/workflows node-version literals", str(counts["node-version"]))
         if counts["node-version"] == 0:
-            c.error(".github/workflows", "no literal node-version found in any workflow; the check would be vacuous")
+            c.error(
+                ".github/workflows",
+                "no literal node-version found in any workflow; the check would be vacuous",
+            )
         if action_node_output is not None:
             c.info("gha-get-frontend-config output", action_node_output or "(empty)")
             if action_node_output != node_pin:
-                c.error(cfg, f"frontend-config action node-version '{action_node_output}' != '{node_pin}'")
+                c.error(
+                    cfg,
+                    f"frontend-config action node-version '{action_node_output}' != '{node_pin}'",
+                )
     return c.errors
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--root", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1],
-                        help="repository root to check (default: this script's repo)")
-    parser.add_argument("--action-node-output", default=None,
-                        help="node-version emitted by gha-get-frontend-config; must equal versions.node")
+    parser.add_argument(
+        "--root",
+        type=pathlib.Path,
+        default=pathlib.Path(__file__).resolve().parents[1],
+        help="repository root to check (default: this script's repo)",
+    )
+    parser.add_argument(
+        "--action-node-output",
+        default=None,
+        help="node-version emitted by gha-get-frontend-config; must equal versions.node",
+    )
     args = parser.parse_args(argv)
     errors = check(args.root.resolve(), args.action_node_output)
     for err in errors:
