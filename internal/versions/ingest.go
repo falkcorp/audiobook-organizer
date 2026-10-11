@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -76,8 +76,21 @@ type IngestVersionParams struct {
 	// row to version V" must not mint a new version when V stopped being
 	// adoptable between its plan and its write, because no repair can take a
 	// created version back. A row that already names a version of BookID
-	// returns that version as before; the caller compares its ID.
+	// returns that version as before; the caller compares its ID. A link
+	// write the row's compare-and-set refuses returns ErrBookFileChanged (see
+	// CreateIngestVersion), also with nothing written.
 	AdoptVersionID string
+	// FileHash is the file's identity hash (filehash.BookFileHash) when the
+	// caller computed it already. It is written onto the linked row only when
+	// the stored row carries none at the moment of the link write.
+	FileHash string
+	// NoFileRead forbids CreateIngestVersion from reading the file. A caller
+	// that holds a process-wide lock across the call (the relink pass holds
+	// the merge lock, which must never wait on a NAS read) computes FileHash
+	// before taking it; a row it could not hash is linked without one and left
+	// to backfill-file-hashes. Without NoFileRead, a row with no hash and no
+	// FileHash is hashed here, before the link write and outside it.
+	NoFileRead bool
 }
 
 // ErrTorrentLinkedElsewhere is returned by CreateIngestVersion when
@@ -89,8 +102,18 @@ var ErrTorrentLinkedElsewhere = errors.New("torrent already linked to another li
 
 // ErrVersionNotAdoptable is returned by an adopt-only CreateIngestVersion
 // (IngestVersionParams.AdoptVersionID) when the version it names is not the
-// book's one stranded version for the row. Nothing is created or written.
+// book's one stranded version for the row, including when it stopped being
+// live between the stranded-version read and the link write (the version
+// trash handler takes no lock). Nothing is created or written.
 var ErrVersionNotAdoptable = errors.New("version is not the row's one stranded version")
+
+// ErrBookFileChanged is returned by an adopt-only CreateIngestVersion when the
+// link write's compare-and-set refuses the row: between the read the link was
+// decided on and the write, the row left the book, another writer linked it,
+// or its path or torrent hash changed. Nothing is created or written. Outside
+// adopt-only mode the same refusal is reported as linked=false with a nil
+// error (logged), like any other link write that did not land.
+var ErrBookFileChanged = errors.New("book_file row changed before the link write")
 
 // torrentLocks serializes torrent links per hash; see LockTorrent.
 var torrentLocks keyedmutex.Mutex
@@ -129,7 +152,39 @@ func LockTorrent(hash string) (unlock func()) {
 //
 // It returns the version and whether the link landed (linked). linked=false
 // with a nil error means the version exists but no row points at it: the row
-// was not found, could not be read, or its update failed. Each is logged.
+// was not found, could not be read, its update failed, or the link write's
+// compare-and-set refused it (below). Each is logged.
+//
+// The link write is a compare-and-set on the CURRENT row (ModifyBookFile), not
+// a write-back of the row read at the start: it sets only the link fields --
+// VersionID, DelugeHash when TorrentHash is set, and FileHash when the row
+// still has none -- so a concurrent writer's change to any other field
+// (TrackNumber, Missing, Duration, the iTunes fields, ...) survives. Most
+// book_file writers take neither the merge lock nor the torrent lock (user file
+// edits, quarantine, mark-missing-files, the acoustid backfill, swap path
+// updates), and the whole-row write this replaced silently reverted any of
+// them that committed between the read and the write. The write is refused,
+// with nothing written, when a field the link was decided on moved:
+//   - VersionID: another writer linked the row (or relinked it from the stale
+//     id this call read); overwriting would discard that link. A row that now
+//     names the version this call links is already linked, and is reported so.
+//   - FilePath: the link was decided for the file at that path -- by the
+//     caller's review, by the path match when BookFileID is empty, and by the
+//     identity hash, which was read from it. A row repointed elsewhere may
+//     name another book's file, and once linked, purging the version deletes
+//     whatever file the row names (PurgeVersion).
+//   - DelugeHash: the version was chosen by torrent hash (strandedVersion and
+//     the holder check), and the write sets DelugeHash itself; a changed one
+//     would be overwritten, or a row now claiming a torrent would be linked
+//     to a version that does not carry it.
+//
+// A row moved to another book is not found under BookID and is refused the
+// same way. An adopted (not created) version is re-read inside the same
+// compare-and-set and the write is refused unless it is still a live version
+// of the book with the same torrent hash: the trash handler takes no lock, and
+// a link landing on a trashed version would have the 14-day purge delete the
+// file. This narrows that race to the commit itself; it does not close it,
+// because UpdateBookVersion takes no lock this function can hold.
 //
 // It is idempotent per row: when the target row already carries a VersionID
 // naming a version of this book, that version is returned (linked=true) and
@@ -229,6 +284,8 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	// rows were read, so "unreferenced" is known, and never for a book the
 	// caller just created (NewBook), which has nothing to strand.
 	var ver *database.BookVersion
+	// created: ver was minted by this call, not adopted (see the link write).
+	created := false
 	if target >= 0 && filesErr == nil && !params.NewBook {
 		stranded, strandErr := strandedVersion(store, params, files)
 		if strandErr != nil {
@@ -269,7 +326,7 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			status = database.BookVersionStatusAlt
 		}
 
-		created, err := store.CreateBookVersion(&database.BookVersion{
+		newVer, err := store.CreateBookVersion(&database.BookVersion{
 			BookID:      params.BookID,
 			Status:      status,
 			Format:      params.Format,
@@ -279,7 +336,7 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		if err != nil {
 			return nil, false, fmt.Errorf("create version: %w", err)
 		}
-		ver = created
+		ver, created = newVer, true
 	}
 
 	if target < 0 {
@@ -296,8 +353,8 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		return ver, false, nil
 	}
 
-	// Link the new version to its book_file row, and stamp the identity hash
-	// onto the same row while we are there.
+	// Link the version to its book_file row, and stamp the identity hash onto
+	// the same row while we are there.
 	//
 	// These are two separate units of work and must not share one error gate.
 	// They used to: the row update lived in the `else` of the hash check, so a
@@ -306,36 +363,121 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	// version row was created, nothing pointed at it, and CreateIngestVersion
 	// returned (ver, nil). An orphaned version is a data-integrity bug; a
 	// missing hash is a backfill job's problem. Only the second is acceptable.
+	//
+	// The file is read here, before the write and never inside it: the write
+	// holds the row's store stripe, and a caller may hold a process-wide lock
+	// (NoFileRead forbids the read entirely).
 	f := files[target]
-	if f.FileHash == "" {
-		hash, hashErr := filehash.BookFileHash(params.FilePath)
+	hash := params.FileHash
+	if f.FileHash == "" && hash == "" && !params.NoFileRead {
+		h, hashErr := filehash.BookFileHash(params.FilePath)
 		if hashErr != nil {
 			slog.Warn("versions.CreateIngestVersion: identity hash failed; version linkage still written, file_hash left empty for backfill",
 				"book_id", logger.SanitizeLogValue(params.BookID),
 				"file_path", logger.SanitizeLogValue(params.FilePath),
 				"version_id", ver.ID, "err", hashErr)
 		} else {
-			f.FileHash = hash
+			hash = h
 		}
 	}
-	f.VersionID = ver.ID
-	if params.TorrentHash != "" {
-		f.DelugeHash = params.TorrentHash
-	}
-	if updateErr := store.UpdateBookFile(f.ID, &f); updateErr != nil {
-		if errors.Is(updateErr, database.ErrBookFileDurabilityUnknown) {
-			// The write was applied; only its fsync is in doubt. The row IS
-			// linked as far as every reader can see.
-			logger.New("versions").Warn("CreateIngestVersion: book file %s link to version %s (book %s) applied but not confirmed durable: %s",
-				logger.SanitizeLogValue(f.ID), logger.SanitizeLogValue(ver.ID), logger.SanitizeLogValue(params.BookID),
-				logger.SanitizeLogValue(updateErr.Error()))
-			return ver, true, nil
+
+	// The compare-and-set; see the function comment for the fields it
+	// compares and why.
+	refused, alreadyLinked := "", false
+	row, updateErr := store.ModifyBookFile(params.BookID, f.ID, func(r *database.BookFile) error {
+		switch {
+		case r.VersionID == ver.ID:
+			alreadyLinked = true
+			return database.ErrSkipBookFileWrite
+		case r.VersionID != f.VersionID:
+			refused = fmt.Sprintf("it now names version %s (read: %q)", r.VersionID, f.VersionID)
+		case r.FilePath != f.FilePath:
+			refused = "its path changed"
+		case r.DelugeHash != f.DelugeHash:
+			refused = fmt.Sprintf("its torrent hash changed (read: %q, now: %q)", f.DelugeHash, r.DelugeHash)
 		}
-		slog.Warn("versions.CreateIngestVersion: book file update failed; version created but NOT linked",
+		if refused != "" {
+			return database.ErrSkipBookFileWrite
+		}
+		if !created {
+			cur, getErr := store.GetBookVersion(ver.ID)
+			if getErr != nil {
+				return fmt.Errorf("re-read version %s: %w", ver.ID, getErr)
+			}
+			if why := notAdoptableNow(cur, params); why != "" {
+				refused = why
+				return errVersionMoved
+			}
+		}
+		r.VersionID = ver.ID
+		if params.TorrentHash != "" {
+			r.DelugeHash = params.TorrentHash
+		}
+		if r.FileHash == "" && hash != "" {
+			r.FileHash = hash
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(updateErr, errVersionMoved):
+		return refuseLink(params, f.ID, ver, ErrVersionNotAdoptable, refused)
+	case updateErr != nil && errors.Is(updateErr, database.ErrBookFileDurabilityUnknown):
+		// The write was applied; only its fsync is in doubt. The row IS
+		// linked as far as every reader can see.
+		logger.New("versions").Warn("CreateIngestVersion: book file %s link to version %s (book %s) applied but not confirmed durable: %s",
+			logger.SanitizeLogValue(f.ID), logger.SanitizeLogValue(ver.ID), logger.SanitizeLogValue(params.BookID),
+			logger.SanitizeLogValue(updateErr.Error()))
+		return ver, true, nil
+	case updateErr != nil:
+		slog.Warn("versions.CreateIngestVersion: book file update failed; version exists but is NOT linked",
 			"book_id", logger.SanitizeLogValue(params.BookID), "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
 		return ver, false, nil
+	case row == nil:
+		return refuseLink(params, f.ID, ver, ErrBookFileChanged, "it is no longer a row of the book")
+	case alreadyLinked:
+		return ver, true, nil
+	case refused != "":
+		return refuseLink(params, f.ID, ver, ErrBookFileChanged, refused)
 	}
 	return ver, true, nil
+}
+
+// errVersionMoved is the link write's internal signal that the adopted version
+// stopped being adoptable (notAdoptableNow) inside the compare-and-set.
+var errVersionMoved = errors.New("adopted version is no longer adoptable")
+
+// notAdoptableNow says why cur, the adopted version re-read inside the link
+// write, may no longer be linked to the row, or "" when it still may: it must
+// still exist, belong to params.BookID, be live (active or alt) and carry
+// params.TorrentHash -- what strandedVersion selected it on.
+func notAdoptableNow(cur *database.BookVersion, params IngestVersionParams) string {
+	switch {
+	case cur == nil:
+		return "the version no longer exists"
+	case cur.BookID != params.BookID:
+		return "the version now belongs to book " + cur.BookID
+	case cur.Status != database.BookVersionStatusActive && cur.Status != database.BookVersionStatusAlt:
+		return "the version is now " + cur.Status
+	case cur.TorrentHash != params.TorrentHash:
+		return "the version's torrent hash changed"
+	}
+	return ""
+}
+
+// refuseLink reports a link write the compare-and-set refused, with nothing
+// written. Adopt-only (AdoptVersionID) returns sentinel wrapped with why, as
+// that mode returns every refusal; otherwise the refusal is logged and
+// reported as linked=false, like any other link write that did not land, so
+// a caller that just created ver still gets it back.
+func refuseLink(params IngestVersionParams, fileID string, ver *database.BookVersion, sentinel error, why string) (*database.BookVersion, bool, error) {
+	if params.AdoptVersionID != "" {
+		return nil, false, fmt.Errorf("%w: book_file %s of book %s, version %s: %s",
+			sentinel, fileID, params.BookID, ver.ID, why)
+	}
+	logger.New("versions").Warn("CreateIngestVersion: link of book file %s (book %s) to version %s refused, nothing written: %s",
+		logger.SanitizeLogValue(fileID), logger.SanitizeLogValue(params.BookID), logger.SanitizeLogValue(ver.ID),
+		logger.SanitizeLogValue(why))
+	return ver, false, nil
 }
 
 // strandedVersion returns the one version of params.BookID that an earlier

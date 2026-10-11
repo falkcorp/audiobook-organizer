@@ -1,5 +1,5 @@
 // file: internal/versions/ingest_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 
@@ -493,19 +493,20 @@ func TestCreateIngestVersion_LinksNamedRowWithDelugeHash(t *testing.T) {
 	}
 }
 
-// failFirstLinkStore is a PebbleStore whose first UpdateBookFile fails, which
-// is the "version created, link write failed" state an import can be left in.
+// failFirstLinkStore is a PebbleStore whose first link write (ModifyBookFile,
+// CreateIngestVersion's compare-and-set) fails, which is the "version created,
+// link write failed" state an import can be left in.
 type failFirstLinkStore struct {
 	*database.PebbleStore
 	failed bool
 }
 
-func (s *failFirstLinkStore) UpdateBookFile(id string, f *database.BookFile) error {
+func (s *failFirstLinkStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
 	if !s.failed {
 		s.failed = true
-		return errors.New("synthetic link failure")
+		return nil, errors.New("synthetic link failure")
 	}
-	return s.PebbleStore.UpdateBookFile(id, f)
+	return s.PebbleStore.ModifyBookFile(bookID, fileID, fn)
 }
 
 // A link write that failed leaves a version nothing points at and a row with

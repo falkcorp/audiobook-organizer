@@ -75,7 +75,11 @@ type IngestStore interface {
 	// GetBookVersionsByBookID finds a version an earlier run created but
 	// never linked, so a re-run adopts it instead of creating a duplicate.
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	// ModifyBookFile is the link write: a compare-and-set that sets only the
+	// link fields on the CURRENT row. It replaced UpdateBookFile on 2026-10-11,
+	// whose write-back of the row read at the start of CreateIngestVersion
+	// reverted any other writer's change that landed in between.
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 type swapStore interface {
