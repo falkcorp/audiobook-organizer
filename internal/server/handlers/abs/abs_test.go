@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.7
+// version: 1.5.8
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package abs_test
 
@@ -267,6 +267,9 @@ type fakeUserData struct {
 }
 
 func (f *fakeUserData) MediaProgress(string) ([]any, error) { return f.progress, f.err }
+
+// MediaProgressDisplay: the fake renders no rows, so nothing can fail per row.
+func (f *fakeUserData) MediaProgressDisplay(u string) ([]any, error) { return f.MediaProgress(u) }
 
 // ClientMediaProgress: the fake has no aliases, so the client list is the list.
 func (f *fakeUserData) ClientMediaProgress(u string) ([]any, error) { return f.MediaProgress(u) }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package abs
 
@@ -208,44 +208,14 @@ func NewUserData(o UserDataOptions) (UserDataProvider, error) {
 //     pool, writing into a pre-sized slice by index so concurrency cannot reorder
 //     or short the list.
 func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
-	if userID == "" {
-		// An empty id would prefix-scan "upos::" and answer a confidently wrong
-		// list for nobody. Refuse.
-		return nil, errors.New("abs: userdata: userID is required")
-	}
-
-	positions, err := p.progress.ListUserPositionsSince(userID, time.Time{})
+	bookIDs, latest, err := p.latestPositions(userID)
 	if err != nil {
-		return nil, fmt.Errorf("abs: userdata: list positions for user %s: %w", userID, err)
+		return nil, err
 	}
-
-	latest := make(map[string]database.UserPosition, len(positions))
-	for _, pos := range positions {
-		if pos.BookID == "" {
-			// A row with no book cannot be named with a libraryItemId, so no client
-			// can have it either — skipping it drops nothing the client could
-			// delete. Logged because it means a corrupt write happened somewhere.
-			progressLog.Warn("abs: userdata: skipping a stored position with no book id: user_id=%s segment_id=%s",
-				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(pos.SegmentID))
-			continue
-		}
-		cur, seen := latest[pos.BookID]
-		if !seen || betterPosition(pos, cur) {
-			latest[pos.BookID] = pos
-		}
-	}
-	if len(latest) == 0 {
+	if len(bookIDs) == 0 {
 		// Non-nil: `mediaProgress` must marshal as [] and never as null.
 		return []any{}, nil
 	}
-
-	bookIDs := make([]string, 0, len(latest))
-	for id := range latest {
-		bookIDs = append(bookIDs, id)
-	}
-	// Sorted so the body is byte-stable across refreshes rather than reshuffling
-	// with Go's map iteration order.
-	sort.Strings(bookIDs)
 
 	rows := make([]any, len(bookIDs))
 	g := new(errgroup.Group)
@@ -267,6 +237,90 @@ func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
 		return nil, err
 	}
 	return rows, nil
+}
+
+// MediaProgressDisplay is MediaProgress for a surface that only DISPLAYS the
+// rows (the Continue Listening shelf) and feeds no client sync. It renders the
+// same rows through the same progressRow, but a row that cannot be rendered is
+// logged and skipped instead of failing the list.
+//
+// That is the opposite of MediaProgress's discipline, and deliberately so: a short
+// list from MediaProgress makes the client delete the missing books (§1.8.1), while
+// a short list here costs one book its place on a home shelf until the next load.
+// Failing the whole shelf over one unreadable book would hide every other
+// in-progress book too, with no error on screen. ListenedSeconds makes the same
+// trade for the same reason.
+//
+// Only the enumeration of the user's positions is all-or-nothing: if that fails
+// there is no list to show part of.
+func (p *userDataProvider) MediaProgressDisplay(userID string) ([]any, error) {
+	bookIDs, latest, err := p.latestPositions(userID)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]any, len(bookIDs))
+	g := new(errgroup.Group)
+	g.SetLimit(p.concurrency)
+	for i := range bookIDs {
+		g.Go(func() error {
+			row, rerr := p.progressRow(userID, latest[bookIDs[i]])
+			if rerr != nil {
+				progressLog.Warn("abs: userdata: skipping a progress row that could not be rendered for display: user_id=%s book_id=%s: %v",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookIDs[i]), rerr)
+				return nil
+			}
+			rows[i] = row
+			return nil
+		})
+	}
+	_ = g.Wait() // no goroutine returns an error; see the note above
+	out := make([]any, 0, len(rows))
+	for _, row := range rows {
+		if row != nil {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+// latestPositions is the shared first half of MediaProgress and
+// MediaProgressDisplay: ONE user-keyed prefix scan, collapsed to the latest
+// position per book. It returns the book ids in sorted order, so the body is
+// byte-stable across refreshes rather than reshuffling with Go's map iteration
+// order, and the position chosen for each.
+func (p *userDataProvider) latestPositions(userID string) ([]string, map[string]database.UserPosition, error) {
+	if userID == "" {
+		// An empty id would prefix-scan "upos::" and answer a confidently wrong
+		// list for nobody. Refuse.
+		return nil, nil, errors.New("abs: userdata: userID is required")
+	}
+
+	positions, err := p.progress.ListUserPositionsSince(userID, time.Time{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("abs: userdata: list positions for user %s: %w", userID, err)
+	}
+
+	latest := make(map[string]database.UserPosition, len(positions))
+	for _, pos := range positions {
+		if pos.BookID == "" {
+			// A row with no book cannot be named with a libraryItemId, so no client
+			// can have it either — skipping it drops nothing the client could
+			// delete. Logged because it means a corrupt write happened somewhere.
+			progressLog.Warn("abs: userdata: skipping a stored position with no book id: user_id=%s segment_id=%s",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(pos.SegmentID))
+			continue
+		}
+		cur, seen := latest[pos.BookID]
+		if !seen || betterPosition(pos, cur) {
+			latest[pos.BookID] = pos
+		}
+	}
+	bookIDs := make([]string, 0, len(latest))
+	for id := range latest {
+		bookIDs = append(bookIDs, id)
+	}
+	sort.Strings(bookIDs)
+	return bookIDs, latest, nil
 }
 
 // MediaProgressFor renders the single row GET /api/me/progress/:id serves.
