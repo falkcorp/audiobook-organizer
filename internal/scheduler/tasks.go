@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -1336,7 +1336,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "purge_old_logs"), nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.LogRetentionDays > 0 },
+		// 0 means the default (90), not "off"; only a negative value (-1)
+		// disables the purge. See config.ResolveLogRetentionDays.
+		IsEnabled:              func() bool { return config.ResolveLogRetentionDays(config.AppConfig.LogRetentionDays) > 0 },
 		GetInterval:            func() time.Duration { return 7 * 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.PurgeOldLogs },

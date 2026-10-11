@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.148.1
+// version: 1.149.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -1473,9 +1473,17 @@ type Config struct {
 	// outright so the gate is never consulted. Set to -1 to disable.
 	// Defaults to 144 (6 days).
 	MinRescanAgeHours int `json:"min_rescan_age_hours"`
-	// Log retention in days (0 = keep forever)
+	// LogRetentionDays is the purge_old_logs window: operation logs, operation
+	// changes and system activity log rows older than this many days are
+	// deleted. Default 90 (DefaultLogRetentionDays). -1 (any negative value)
+	// keeps logs forever. 0 means the default, NOT "keep forever": until
+	// 2026-10-11 InitConfig never read this key, so every install ran with 0
+	// and the purge never ran; see ResolveLogRetentionDays. Consumers must call
+	// ResolveLogRetentionDays rather than read the field.
 	LogRetentionDays int `json:"log_retention_days"`
-	// Operation log retention in days (0 = keep forever; default 90)
+	// OperationLogRetentionDays is the retention-and-hygiene job's operation
+	// sweep window. 0 or less means 90; there is no "keep forever" value (the
+	// job has always mapped 0 to 90, whatever this comment used to say).
 	OperationLogRetentionDays int `json:"operation_log_retention_days"`
 	// Activity log retention (separate from operation log retention)
 	ActivityLogRetentionChangeDays int `json:"activity_log_retention_change_days"` // default 90
@@ -1617,7 +1625,7 @@ type Config struct {
 	// auto-generated, because an ephemeral secret would invalidate every client's
 	// stored token on every restart. Deliberately excluded from the config blob and
 	// from any API response.
-	ABSJWTSecret string `json:"-"`
+	ABSJWTSecret string `json:"-" mapstructure:"abs_jwt_secret"`
 	// ABSAccessTokenTTL defaults to 720h = 30 DAYS, not one hour (§1.6 item 1): many
 	// ABS clients implement no refresh at all, and a short access token logs them out
 	// on that cadence. 30d is empirically proven by a known-working ABS shim.
@@ -1658,13 +1666,13 @@ type Config struct {
 	// from the settings API or the stored config blob (`json:"-"`): the blob
 	// used to carry a materialized default for the old days setting, and a
 	// sign-in lifetime is not something an API key should be able to raise.
-	BootstrapKeyTTL string `json:"-"`
+	BootstrapKeyTTL string `json:"-" mapstructure:"bootstrap_key_ttl"`
 	// BootstrapKeyTTLDays is the DEPRECATED predecessor of BootstrapKeyTTL
 	// (whole days, default 30 until 2026-10-07). A config file or environment
 	// that still sets it is honoured, capped at MaxBootstrapKeyTTL, with a
 	// startup warning, and only when BootstrapKeyTTL is unset. `json:"-"` so
 	// the 30 that older config blobs stored is ignored. (SEC-1/PROC-6)
-	BootstrapKeyTTLDays int `json:"-"`
+	BootstrapKeyTTLDays int `json:"-" mapstructure:"bootstrap_key_ttl_days"`
 	MemoryLimitPercent  int `json:"memory_limit_percent"` // % of system memory
 	MemoryLimitMB       int `json:"memory_limit_mb"`      // absolute MB
 
@@ -2003,6 +2011,31 @@ func ParseWhisperEndpoints(s string) []WhisperEndpoint {
 		return nil
 	}
 	return endpoints
+}
+
+// viperDecodeJSON decodes the viper value at key into a T through its JSON
+// form, so the config file uses the same field names as the stored blob and
+// the settings API (the json tags; several of these element types carry no
+// mapstructure tags, so viper.UnmarshalKey would silently drop snake_case
+// fields). An unset key yields the zero T. A value that does not decode is
+// reported on stderr and yields the zero T rather than failing startup, the
+// same rule as ParseWhisperEndpoints: the stored blob, which normally owns
+// these UI-managed lists, still loads on top.
+func viperDecodeJSON[T any](key string) T {
+	var out T
+	if !viper.IsSet(key) {
+		return out
+	}
+	raw, err := json.Marshal(viper.Get(key))
+	if err == nil {
+		err = json.Unmarshal(raw, &out)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: ignoring malformed %s (%v)\n", key, err)
+		var zero T
+		return zero
+	}
+	return out
 }
 
 // ActivityDBDirName is the dot-directory that holds the activity database under
@@ -2398,6 +2431,15 @@ func InitConfig() {
 	viper.SetDefault("language", "en")
 	viper.SetDefault("metadata_review_default_view", "compact")
 
+	// Managed external-tool lifecycle (tools.*). Until 2026-10-11 InitConfig
+	// assigned these as constants and never consulted viper; the defaults are
+	// those same constants, so nothing changes unless a config file sets them.
+	viper.SetDefault("tools.managed_dir", "/var/lib/audiobook-organizer/tools")
+	viper.SetDefault("tools.ollama.mode", string(tools.ToolModeSystem))
+	viper.SetDefault("tools.fpcalc.mode", string(tools.ToolModeSystem))
+	viper.SetDefault("tools.allow_periodic_ollama", false)
+	viper.SetDefault("tools.ollama_debounce_min", 10)
+
 	// Open Library dump defaults
 	viper.SetDefault("openlibrary_dump_enabled", false)
 	viper.SetDefault("openlibrary_dump_dir", "")
@@ -2481,7 +2523,12 @@ func InitConfig() {
 	viper.SetDefault("operation_timeout_minutes", 30)
 	viper.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
 	viper.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
-	viper.SetDefault("log_retention_days", 90)
+	viper.SetDefault("log_retention_days", DefaultLogRetentionDays)
+	// operation_log_retention_days, activity_log_compaction_days and
+	// activity_log_retention_{change,debug}_days have NO viper default on
+	// purpose: each consumer maps 0 (or less) to its effective default
+	// (90 / 14 / 90 / 30), so 0 is "use the default" and changes nothing.
+	// InitConfig reads them so a config file or environment value reaches them.
 	viper.SetDefault("activity_log_nightly_compaction_enabled", true)
 	viper.SetDefault("activity_log_full_detail_days", 0)
 	viper.SetDefault("ai_journal_retention_days", 30)
@@ -2974,8 +3021,11 @@ func InitConfig() {
 			// AI parsing
 			EnableAIParsing:    viper.GetBool("enable_ai_parsing"),
 			AIEndpointsRouting: viper.GetBool("ai_endpoints_routing"),
-			OpenAIAPIKey:       viper.GetString("openai_api_key"),
-			AcoustIDAPIKey:     viper.GetString("acoustid_api_key"),
+			// Usually UI-managed through the stored blob, which wins on load;
+			// read here so a config-file list is not silently dropped.
+			AIEndpoints:    viperDecodeJSON[[]AIEndpoint]("ai_endpoints"),
+			OpenAIAPIKey:   viper.GetString("openai_api_key"),
+			AcoustIDAPIKey: viper.GetString("acoustid_api_key"),
 
 			// Activity-log store backend. Read from viper here so config.yaml's
 			// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
@@ -3010,6 +3060,7 @@ func InitConfig() {
 			LibraryCountsCacheMinIntervalSeconds: viper.GetInt("library_counts_cache_min_interval_seconds"),
 			BleveDescriptionMaxChars:             viper.GetInt("bleve_description_max_chars"),
 			MetadataReviewModel:                  viper.GetString("metadata_review_model"),
+			MetadataReviewDefaultView:            viper.GetString("metadata_review_default_view"),
 			FilenameParseModel:                   viper.GetString("filename_parse_model"),
 			CoverArtModel:                        viper.GetString("cover_art_model"),
 
@@ -3036,6 +3087,11 @@ func InitConfig() {
 			EnableAuth:                          viper.GetBool("enable_auth"),
 			ActivityLogNightlyCompactionEnabled: viper.GetBool("activity_log_nightly_compaction_enabled"),
 			ActivityLogFullDetailDays:           viper.GetInt("activity_log_full_detail_days"),
+			ActivityLogCompactionDays:           viper.GetInt("activity_log_compaction_days"),
+			ActivityLogRetentionChangeDays:      viper.GetInt("activity_log_retention_change_days"),
+			ActivityLogRetentionDebugDays:       viper.GetInt("activity_log_retention_debug_days"),
+			LogRetentionDays:                    viper.GetInt("log_retention_days"),
+			OperationLogRetentionDays:           viper.GetInt("operation_log_retention_days"),
 			AIJournalRetentionDays:              viper.GetInt("ai_journal_retention_days"),
 			EnableRateLimit:                     viper.GetBool("enable_rate_limit"),
 			ReviewApplyEnabled:                  viper.GetBool("review_apply_enabled"),
@@ -3075,13 +3131,14 @@ func InitConfig() {
 			ABSDefaultLibraryID: viper.GetString("abs_default_library_id"),
 
 			// Memory management
-			MemoryLimitType:           viper.GetString("memory_limit_type"),
-			CacheSize:                 viper.GetInt("cache_size"),
-			MetadataFetchCacheTTLDays: viper.GetInt("metadata_fetch_cache_ttl_days"),
-			BootstrapKeyTTL:           viper.GetString("bootstrap_key_ttl"),
-			BootstrapKeyTTLDays:       viper.GetInt("bootstrap_key_ttl_days"),
-			MemoryLimitPercent:        viper.GetInt("memory_limit_percent"),
-			MemoryLimitMB:             viper.GetInt("memory_limit_mb"),
+			MemoryLimitType:             viper.GetString("memory_limit_type"),
+			CacheSize:                   viper.GetInt("cache_size"),
+			CacheInvalidateOnBookUpdate: viper.GetBool("cache_invalidate_on_book_update"),
+			MetadataFetchCacheTTLDays:   viper.GetInt("metadata_fetch_cache_ttl_days"),
+			BootstrapKeyTTL:             viper.GetString("bootstrap_key_ttl"),
+			BootstrapKeyTTLDays:         viper.GetInt("bootstrap_key_ttl_days"),
+			MemoryLimitPercent:          viper.GetInt("memory_limit_percent"),
+			MemoryLimitMB:               viper.GetInt("memory_limit_mb"),
 
 			// Lifecycle / retention
 			PurgeSoftDeletedAfterDays:   viper.GetInt("purge_soft_deleted_after_days"),
@@ -3121,6 +3178,7 @@ func InitConfig() {
 				LibrarySizeRefresh:   viper.GetBool("maintenance.library_size_refresh"),
 				AcoustIDOnlineLookup: viper.GetBool("maintenance.acoustid_online_lookup"),
 				AcoustIDNightlyLimit: viper.GetInt("maintenance.acoustid_nightly_limit"),
+				AcoustIDBackfill:     viper.GetBool("maintenance.acoustid_backfill"),
 			},
 
 			// iTunes import (nested sub-struct)
@@ -3130,7 +3188,9 @@ func InitConfig() {
 				PathTrimEnabled: viper.GetBool("itunes.path_trim_enabled"),
 				WindowsRootPath: viper.GetString("itunes.windows_root_path"),
 				MediaRoot:       viper.GetString("itunes.media_root"),
-				// PathMappings loaded from DB blob, not viper
+				// Usually UI-managed through the stored blob, which wins on load;
+				// read here so a config-file list is not silently dropped.
+				PathMappings: viperDecodeJSON[[]ITunesPathMap]("itunes.path_mappings"),
 				Libraries: LibrarySet{
 					Original: LibraryRef{
 						ITLPath: viper.GetString("itunes.libraries.original.itl_path"),
@@ -3185,6 +3245,23 @@ func InitConfig() {
 			SupportedExtensions: supportedExtensions,
 			ExcludePatterns:     excludePatterns,
 
+			// Deluge integration. Read here so the config file and environment
+			// reach it (DelugeSettingsTab tells operators to set deluge_web_url
+			// there); a stored blob still wins on load, like every other key.
+			DelugeWebURL:           viper.GetString("deluge_web_url"),
+			DelugeWebPassword:      viper.GetString("deluge_web_password"),
+			DelugeDiscoveryLabel:   viper.GetString("deluge_discovery_label"),
+			DelugeDiscoveryEnabled: viper.GetBool("deluge_discovery_enabled"),
+			DelugeMoveEnabled:      viper.GetBool("deluge_move_enabled"),
+			ProtectedPaths:         viper.GetStringSlice("protected_paths"),
+
+			// Usually UI-managed through the stored blob, which wins on load;
+			// read here so a config-file value is not silently dropped.
+			PathAliases: viperDecodeJSON[[]PathAlias]("path_aliases"),
+			Plugins:     viperDecodeJSON[map[string]PluginConfig]("plugins"),
+
+			DisablePerUserSearchFilters: viper.GetBool("disable_per_user_search_filters"),
+
 			// Embedding pipeline (nested sub-struct)
 			Embedding: EmbeddingConfig{
 				Enabled:               viper.GetBool("embedding.enabled"),
@@ -3208,11 +3285,13 @@ func InitConfig() {
 				OnImportViaScheduler:       viper.GetBool("dedup.on_import_via_scheduler"),
 				ReviewModel:                viper.GetString("dedup.review_model"),
 				ChromemLazy:                viper.GetBool("dedup.chromem_lazy"),
+				EmbeddingThresholdsByModel: viperDecodeJSON[map[string]EmbeddingModelThresholds]("dedup.embedding_thresholds_by_model"),
 				Signals: DedupSignalConfig{
 					BandCertainMin: viper.GetFloat64("dedup.signals.band_certain_min"),
 					BandHighMin:    viper.GetFloat64("dedup.signals.band_high_min"),
 					BandMediumMin:  viper.GetFloat64("dedup.signals.band_medium_min"),
 					BandReviewMin:  viper.GetFloat64("dedup.signals.band_review_min"),
+					Confidence:     viperDecodeJSON[map[string]DedupKindConfidence]("dedup.signals.confidence"),
 				},
 			},
 
@@ -3307,18 +3386,28 @@ func InitConfig() {
 					Interval:  viper.GetInt("scheduled.acoustid_backfill.interval"),
 					OnStartup: viper.GetBool("scheduled.acoustid_backfill.on_startup"),
 				},
+				// For these four only Interval gates the task (0 turns it off);
+				// Enabled/OnStartup are read so the struct is uniform and a
+				// config-file value reaches GET, not because a consumer reads them.
 				MetadataUpgrade: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.metadata_upgrade.enabled"),
 					Interval:  viper.GetInt("scheduled.metadata_upgrade.interval"),
 					OnStartup: viper.GetBool("scheduled.metadata_upgrade.on_startup"),
 				},
 				ASINBackfill: ScheduledTaskConfig{
-					Interval: viper.GetInt("scheduled.asin_backfill.interval"),
+					Enabled:   viper.GetBool("scheduled.asin_backfill.enabled"),
+					Interval:  viper.GetInt("scheduled.asin_backfill.interval"),
+					OnStartup: viper.GetBool("scheduled.asin_backfill.on_startup"),
 				},
 				CandidateFetch: ScheduledTaskConfig{
-					Interval: viper.GetInt("scheduled.candidate_fetch.interval"),
+					Enabled:   viper.GetBool("scheduled.candidate_fetch.enabled"),
+					Interval:  viper.GetInt("scheduled.candidate_fetch.interval"),
+					OnStartup: viper.GetBool("scheduled.candidate_fetch.on_startup"),
 				},
 				CatalogHarvest: ScheduledTaskConfig{
-					Interval: viper.GetInt("scheduled.catalog_harvest.interval"),
+					Enabled:   viper.GetBool("scheduled.catalog_harvest.enabled"),
+					Interval:  viper.GetInt("scheduled.catalog_harvest.interval"),
+					OnStartup: viper.GetBool("scheduled.catalog_harvest.on_startup"),
 				},
 				LabelRefinement: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
@@ -3341,8 +3430,9 @@ func InitConfig() {
 					OnStartup: viper.GetBool("scheduled.metadata_refresh.on_startup"),
 				},
 				ResolveProductionAuthors: ScheduledTaskConfig{
-					Enabled:  viper.GetBool("scheduled.resolve_production_authors.enabled"),
-					Interval: viper.GetInt("scheduled.resolve_production_authors.interval"),
+					Enabled:   viper.GetBool("scheduled.resolve_production_authors.enabled"),
+					Interval:  viper.GetInt("scheduled.resolve_production_authors.interval"),
+					OnStartup: viper.GetBool("scheduled.resolve_production_authors.on_startup"),
 				},
 				SeriesPrune: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.series_prune.enabled"),
@@ -3362,13 +3452,21 @@ func InitConfig() {
 			},
 		}
 
-		// Managed external-tool lifecycle
+		// Managed external-tool lifecycle. These were hard-coded constants, so a
+		// config-file tools: section was ignored; they are now viper keys whose
+		// defaults are the same constants (see the tools.* SetDefault calls).
 		c.Tools = tools.ToolsConfig{
-			ManagedDir:          "/var/lib/audiobook-organizer/tools",
-			Ollama:              tools.ToolConfig{Mode: tools.ToolModeSystem},
-			Fpcalc:              tools.ToolConfig{Mode: tools.ToolModeSystem},
-			AllowPeriodicOllama: false,
-			OllamaDebounceMin:   10,
+			ManagedDir: viper.GetString("tools.managed_dir"),
+			Ollama: tools.ToolConfig{
+				Mode:       tools.ToolMode(viper.GetString("tools.ollama.mode")),
+				CustomPath: viper.GetString("tools.ollama.custom_path"),
+			},
+			Fpcalc: tools.ToolConfig{
+				Mode:       tools.ToolMode(viper.GetString("tools.fpcalc.mode")),
+				CustomPath: viper.GetString("tools.fpcalc.custom_path"),
+			},
+			AllowPeriodicOllama: viper.GetBool("tools.allow_periodic_ollama"),
+			OllamaDebounceMin:   viper.GetInt("tools.ollama_debounce_min"),
 		}
 
 		// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
@@ -3599,6 +3697,9 @@ func (c *Config) Validate() error {
 	// on every PUT candidate, so this is where a zero is caught on every path
 	// that loads or changes config. See ResolveChapterConsolidationThresholdMin.
 	normalizeChapterConsolidationThreshold(c, "the loaded configuration")
+	// log_retention_days: same rule, same reason. 0 means the default, never
+	// "keep forever" (that is -1); see ResolveLogRetentionDays.
+	normalizeLogRetentionDays(c, "the loaded configuration")
 
 	// Backup compression is validated HERE, at startup and on PUT /config,
 	// rather than at backup time.
