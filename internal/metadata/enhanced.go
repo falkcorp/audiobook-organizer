@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.28.2
+// version: 1.28.3
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metadata
 
@@ -515,7 +515,12 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 		if bak, berr = fileops.KeepBackupCopy(target); berr != nil {
 			return fmt.Errorf("write metadata to %s: backup before CLI write: %w", filePath, berr)
 		}
-		before, _ = os.Stat(target)
+		var serr error
+		if before, serr = os.Stat(target); serr != nil {
+			// before stays nil, which fileUnchangedSince reads as "changed", so
+			// a failed CLI write keeps the backup rather than dropping it.
+			logger.New("metadata").Debug("stat before CLI tag write: %s", logger.SanitizeLogValue(serr.Error()))
+		}
 		logger.New("metadata").Debug("backup before CLI tag write: %s", logger.SanitizeLogValue(bak))
 	}
 
