@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -107,13 +107,15 @@ const (
 //     audio; after it, purging deletes the linked file -- for these rows
 //     usually a file in an import or Deluge download folder. "Purge now"
 //     (handlePurgeVersion) does that at once, whatever the version's status.
-//     Trashing a linked version does it at the next daily trash cleanup
-//     (06:00), not 14 days later: CleanupTrashedVersions counts its 14 days
-//     from the version's creation, not from the trash, and every version this
-//     pass links was created before 2026-10-10. A separate fix
+//     Trashing a linked version does it at the first daily trash cleanup
+//     (06:00) after the version is 14 days old, not 14 days after the trash:
+//     CleanupTrashedVersions counts its 14 days from the version's creation.
+//     Every version this pass links was created before 2026-10-10, so for an
+//     import more than two weeks old that is the next cleanup, and for a
+//     newer one still well short of 14 days after the trash. A separate fix
 //     (fix/trash-cleanup-from-trashed-at) is pending; until it lands, trashing
-//     one of these versions is as good as purging it. This is the model every
-//     post-fix import already has; the trial output says so.
+//     one of these versions is nearly as final as purging it. This is the
+//     model every post-fix import already has; the trial output says so.
 //   - MarkFileImportedFromDeluge matching, whose only caller is dormant.
 //
 // Nearly every pre-fix row in prod is hashless: until 2026-10-10 the importer
@@ -159,7 +161,8 @@ const (
 // handler takes no lock this pass can hold, so a trash committed in the same
 // instant as the link can still win. The row is then linked to a trashed
 // version, and until the trash-window fix lands its file is deleted at the
-// next daily cleanup (see PurgeVersion above).
+// first daily cleanup after the version is 14 days old -- for most of these
+// rows the next one (see PurgeVersion above).
 //
 // CONCURRENCY. Rows are book_file rows and BookIDs is the one book, so the
 // engine's union-find runs every row of a book in one partition, in order: no
@@ -193,9 +196,9 @@ func (f *relinkPreFixFixer) Description() string {
 		"or deletes a version or a file record, and never changes a version. Once a file is linked, purging that " +
 		"version DELETES the file from disk, usually a file in an import or download folder; before the link, " +
 		"purging deleted no audio. 'Purge now' deletes it at once, trashed or not. Trashing the version deletes it " +
-		"at the next daily cleanup (06:00), not 14 days later: the cleanup counts its 14 days from when the version " +
-		"was created, and every one of these versions is older than that (a fix is pending). A trash in the same " +
-		"instant as the link can still win the race. Rows marked review need a look before applying; each row's " +
+		"at the first daily cleanup (06:00) after the version is 14 days old, not 14 days after the trash: the " +
+		"cleanup counts from when the version was created (a fix is pending). For anything imported more than two " +
+		"weeks ago that is the next cleanup. A trash in the same instant as the link can still win the race. Rows marked review need a look before applying; each row's " +
 		"evidence says why (the version and the file disagree on date, format, location or presence), and the " +
 		"trial's operation log counts the rows each check flags."
 }
