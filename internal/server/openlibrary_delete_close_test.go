@@ -1,5 +1,5 @@
 // file: internal/server/openlibrary_delete_close_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c7f4d52-3a8e-4b19-b6d1-7e92a5c3f860
 // last-edited: 2026-10-11
 
@@ -44,10 +44,8 @@ func TestDeleteOLData_NeverRemovesDataUnderAnOpenEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 	it.First()
-	svc := &metafetch.OpenLibraryService{
-		OLStore:      openlibrary.NewOLStoreOnEngine(gated, closeDB),
-		CloseTimeout: 50 * time.Millisecond,
-	}
+	svc := metafetch.NewOpenLibraryServiceWithStore(openlibrary.NewOLStoreOnEngine(gated, closeDB))
+	svc.CloseTimeout = 50 * time.Millisecond
 	s := &Server{olService: svc}
 
 	del := func() int {

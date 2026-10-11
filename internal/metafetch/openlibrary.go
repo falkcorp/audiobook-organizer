@@ -1,5 +1,5 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-11
 
@@ -25,10 +25,15 @@ import (
 
 // OpenLibraryService manages the Open Library data dump lifecycle.
 type OpenLibraryService struct {
-	OLStore   *openlibrary.OLStore
 	Tracker   *openlibrary.DownloadTracker
 	Mu        sync.Mutex
 	Importing map[string]bool
+
+	// olStore is the open store, or nil. Guarded by Mu, and unexported so that
+	// every write goes through setStoreLocked: a write from anywhere else would
+	// leave live (what lookups read) pointing at a different store. Code that
+	// does not hold Mu reads LiveStore instead.
+	olStore *openlibrary.OLStore
 
 	// pendingClose is a store whose Close timed out: a lookup or import
 	// outlived the drain, so its engine is still open (and holds the
@@ -36,10 +41,10 @@ type OpenLibraryService struct {
 	// work. It is kept, not dropped, so the close can be finished once the
 	// straggler lets go; see CloseStoreLocked. Guarded by Mu.
 	pendingClose *openlibrary.OLStore
-	// live is OLStore published for readers that must not take Mu (a
+	// live is olStore published for readers that must not take Mu (a
 	// metadata lookup: Mu is held across a Pebble open and across RemoveAll).
-	// Written only by setStoreLocked, so it follows every change to OLStore;
-	// nil whenever OLStore is nil, which includes while a close is pending.
+	// Written only by setStoreLocked, so it follows every change to olStore;
+	// nil whenever olStore is nil, which includes while a close is pending.
 	live atomic.Pointer[openlibrary.OLStore]
 	// CloseTimeout bounds each close attempt's wait for in-flight accesses.
 	// Zero means database.DefaultCloseDrainTimeout; tests shorten it.
@@ -83,10 +88,23 @@ func NewOpenLibraryService() *OpenLibraryService {
 	return svc
 }
 
+// NewOpenLibraryServiceWithStore returns a service that already holds store,
+// for callers (tests, tools) that open the engine themselves. It does not look
+// at the dump directory or the config, unlike NewOpenLibraryService. The store
+// goes through setStoreLocked like every other, so LiveStore sees it.
+func NewOpenLibraryServiceWithStore(store *openlibrary.OLStore) *OpenLibraryService {
+	svc := &OpenLibraryService{
+		Tracker:   openlibrary.NewDownloadTracker(),
+		Importing: make(map[string]bool),
+	}
+	svc.setStoreLocked(store)
+	return svc
+}
+
 // setStoreLocked replaces the live store and publishes it to LiveStore. The
 // caller holds Mu (or is the constructor).
 func (svc *OpenLibraryService) setStoreLocked(store *openlibrary.OLStore) {
-	svc.OLStore = store
+	svc.olStore = store
 	svc.live.Store(store)
 }
 
@@ -98,7 +116,7 @@ func (svc *OpenLibraryService) setStoreLocked(store *openlibrary.OLStore) {
 //
 // A caller that needs the store more than once in a row loads it ONCE into a
 // local: a second call can see nil where the first saw a store (a delete or
-// factory reset closing it in between). The OLStore field is guarded by Mu;
+// factory reset closing it in between). The olStore field is guarded by Mu;
 // code that does not hold Mu reads this instead.
 func (svc *OpenLibraryService) LiveStore() *openlibrary.OLStore {
 	return svc.live.Load()
@@ -106,17 +124,17 @@ func (svc *OpenLibraryService) LiveStore() *openlibrary.OLStore {
 
 // CompactionStats samples the OL store's Pebble counters under Mu, the lock
 // the delete-OL-data and factory-reset handlers hold while they close the
-// store and nil it. Reading svc.OLStore without it raced those handlers, and
+// store and nil it. Reading svc.olStore without it raced those handlers, and
 // sampling a closed *pebble.DB is not safe. ok is false when there is no
 // store; the returned Stats is then marked Absent so compactprogress.Moved
 // never reads the store disappearing as "debt fell".
 func (svc *OpenLibraryService) CompactionStats() (stats compactprogress.Stats, ok bool) {
 	svc.Mu.Lock()
 	defer svc.Mu.Unlock()
-	if svc.OLStore == nil {
+	if svc.olStore == nil {
 		return compactprogress.Stats{Absent: true}, false
 	}
-	return svc.OLStore.CompactionStats(), true
+	return svc.olStore.CompactionStats(), true
 }
 
 // PebbleMetricsSample samples the OL store's Pebble metrics under Mu, for the
@@ -134,10 +152,10 @@ func (svc *OpenLibraryService) PebbleMetricsSample() (metrics.PebbleSample, bool
 		return metrics.PebbleSample{}, false
 	}
 	defer svc.Mu.Unlock()
-	if svc.OLStore == nil {
+	if svc.olStore == nil {
 		return metrics.PebbleSample{}, false
 	}
-	return svc.OLStore.PebbleMetricsSample()
+	return svc.olStore.PebbleMetricsSample()
 }
 
 // closeTimeout is the wait for in-flight accesses per close attempt.
@@ -155,15 +173,15 @@ func (svc *OpenLibraryService) closeTimeout() time.Duration {
 //
 // A store whose Close times out (a lookup or import outlived the drain) has
 // already begun refusing work and its engine is still open. It moves to
-// pendingClose, svc.OLStore becomes nil, and the error is returned. Dropping
+// pendingClose, svc.olStore becomes nil, and the error is returned. Dropping
 // it there would strand the engine: it holds the directory's lock file, so
 // EnsureStore could never reopen the store and a retried delete would remove
 // files under a live engine. Keeping it lets the next call (a retried
 // delete, an EnsureStore for the next import, or shutdown) retry the close,
 // which succeeds as soon as the straggler has released.
 func (svc *OpenLibraryService) CloseStoreLocked() error {
-	if svc.OLStore != nil {
-		svc.pendingClose = svc.OLStore
+	if svc.olStore != nil {
+		svc.pendingClose = svc.olStore
 		svc.setStoreLocked(nil)
 	}
 	if svc.pendingClose == nil {
@@ -193,7 +211,7 @@ func (svc *OpenLibraryService) Close() {
 func (svc *OpenLibraryService) EnsureStore(targetDir string) error {
 	svc.Mu.Lock()
 	defer svc.Mu.Unlock()
-	if svc.OLStore == nil {
+	if svc.olStore == nil {
 		if svc.pendingClose != nil {
 			if err := svc.CloseStoreLocked(); err != nil {
 				return fmt.Errorf("the previous Open Library store has not finished closing: %w", err)
@@ -247,7 +265,7 @@ func (svc *OpenLibraryService) Import(ctx context.Context, progress operations.P
 
 		dt, idx := dumpType, i
 		// Load the store once, here, and let the goroutine use that local. A
-		// read of svc.OLStore inside the goroutine raced a delete or factory
+		// read of svc.olStore inside the goroutine raced a delete or factory
 		// reset niling it: a nil deref there is a panic on a goroutine, which
 		// takes the whole process down. A store closed after this load
 		// refuses the import with pebble.ErrClosed, which is reported below.

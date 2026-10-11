@@ -1,5 +1,5 @@
 // file: internal/metafetch/openlibrary_close_recovery_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e1c7a39-84d2-4b06-9f3a-c2d8e60b1a47
 // last-edited: 2026-10-11
 
@@ -71,7 +71,7 @@ func TestOpenLibraryService_TimedOutCloseRecoversOnceTheStragglerReleases(t *tes
 	if err == nil {
 		t.Fatal("CloseStoreLocked with a lookup in flight returned nil")
 	}
-	if svc.OLStore != nil {
+	if svc.olStore != nil {
 		t.Fatal("a store that refuses all work was left as the live store")
 	}
 
@@ -89,7 +89,7 @@ func TestOpenLibraryService_TimedOutCloseRecoversOnceTheStragglerReleases(t *tes
 	if err := svc.EnsureStore(dir); err == nil || !strings.Contains(err.Error(), "has not finished closing") {
 		t.Fatalf("EnsureStore with the previous engine still open returned %v; want a has-not-finished-closing error", err)
 	}
-	if svc.OLStore != nil {
+	if svc.olStore != nil {
 		t.Fatal("EnsureStore installed a store while the previous engine was still open")
 	}
 
@@ -100,14 +100,14 @@ func TestOpenLibraryService_TimedOutCloseRecoversOnceTheStragglerReleases(t *tes
 	if err := svc.EnsureStore(dir); err != nil {
 		t.Fatalf("EnsureStore after the straggler released: %v", err)
 	}
-	if svc.OLStore == nil {
+	if svc.olStore == nil {
 		t.Fatal("EnsureStore left no store")
 	}
-	if _, err := svc.OLStore.GetStatus(); err != nil {
+	if _, err := svc.olStore.GetStatus(); err != nil {
 		t.Fatalf("the reopened store is not usable: %v", err)
 	}
 	svc.Close()
-	if svc.OLStore != nil || svc.pendingClose != nil {
+	if svc.olStore != nil || svc.pendingClose != nil {
 		t.Fatal("Close left a store behind")
 	}
 }
@@ -116,7 +116,8 @@ func TestOpenLibraryService_TimedOutCloseRecoversOnceTheStragglerReleases(t *tes
 // path) finishes the job and reports success.
 func TestOpenLibraryService_RetriedCloseSucceedsAfterStragglerReleases(t *testing.T) {
 	store, held := openStoreWithHeldIterator(t, t.TempDir())
-	svc := &OpenLibraryService{OLStore: store, CloseTimeout: 50 * time.Millisecond}
+	svc := NewOpenLibraryServiceWithStore(store)
+	svc.CloseTimeout = 50 * time.Millisecond
 
 	svc.Mu.Lock()
 	defer svc.Mu.Unlock()
@@ -207,7 +208,7 @@ func TestOpenLibraryService_MetadataLookupFollowsRecoveredStore(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.OLStore.ImportDump("editions", dump, nil); err != nil {
+	if err := svc.olStore.ImportDump("editions", dump, nil); err != nil {
 		t.Fatalf("import into the reopened store: %v", err)
 	}
 
