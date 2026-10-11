@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c719ee18-e470-4f27-8a02-a0cf5b7074cd
 // last-edited: 2026-10-11
 
@@ -33,12 +33,16 @@ const (
 
 // newPreFixFixture is a fragFixture whose temp root is a registered import
 // path, so versions.CreateIngestVersion's allow-list accepts its files
-// without touching the global config (the tests stay parallel).
+// without touching the global config (the tests stay parallel). The library
+// root (deps.RootDir) is its library/ subdirectory, so a file under imports/
+// is in an import folder and one under library/ is a library file, as the
+// location evidence (pfrLocation) tells them apart.
 func newPreFixFixture(t *testing.T) *fragFixture {
 	t.Helper()
 	f := newFragFixture(t)
 	_, err := f.s.CreateImportPath(f.root, "relink-test")
 	require.NoError(t, err)
+	f.setDepsRoot(t, f.path("library"))
 	return f
 }
 
@@ -387,9 +391,13 @@ func TestRelinkPreFixImports_ApplyLinksAndIsIdempotent(t *testing.T) {
 }
 
 // Two rows of one book (one torrent) and rows of other books applied at once,
-// straight through the fixer's Apply rather than the engine's partitioning:
-// the merge and torrent locks alone must keep the result one version per
-// book, every row linked to it, and nothing created. Run under -race.
+// straight through the fixer's Apply rather than the engine's partitioning.
+// One version per book and nothing created come from adopt-only mode (safety:
+// CreateIngestVersion never creates under AdoptVersionID). What the merge and
+// torrent locks add is liveness: without them a sibling's in-lock re-plan and
+// write interleave and it is refused with ErrVersionNotAdoptable instead of
+// linking through the same-book path. So every row must be linked, with no
+// error. Run under -race.
 func TestRelinkPreFixImports_ConcurrentApplySameBookAndTorrent(t *testing.T) {
 	t.Parallel()
 	f := newPreFixFixture(t)

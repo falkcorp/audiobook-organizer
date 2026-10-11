@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -93,8 +94,27 @@ const (
 // recorded. Until then importer.ImportFile created the version BEFORE the
 // book_file row, so the version found nothing to link: every import left an
 // active version no row names and a row with no VersionID (and, until the hash
-// backfill reached it, no FileHash), invisible to exact-duplicate matching
-// and "unverifiable" to the torrent cleanup.
+// backfill reached it, no FileHash).
+//
+// What the link changes, read from the code that reads VersionID (database,
+// importer, versions and this fixer; exact-duplicate matching keys on
+// FileHash, not VersionID):
+//   - versions.filesForVersion: a version swap moves the rows linked to each
+//     version. An unlinked row matches BOTH versions and moves with either.
+//   - versions.PurgeVersion: purging a version (purge-now, or
+//     CleanupTrashedVersions 14 days after a trash) runs os.Remove on every
+//     row linked to it. Before the link, purging one of these versions deleted
+//     no audio; after it, purging deletes the linked file -- for these rows
+//     usually a file in an import or Deluge download folder. This is the
+//     model every post-fix import already has; the trial output says so.
+//   - MarkFileImportedFromDeluge matching, whose only caller is dormant.
+//
+// Nearly every pre-fix row in prod is hashless: until 2026-10-10 the importer
+// passed no TorrentHash, so the version and the row both carry none and the
+// would_link decision rests on "one unnamed live version, one unlinked row".
+// Each link row therefore carries evidence (pfrLinkEvidence) comparing the
+// version with the row on what one import would have made agree -- dates,
+// format, location, presence -- and is Review risk when any disagrees.
 //
 // PLAN (read-only; repairs.plan is the dry run). One bulk read of every
 // book_file row finds the books worth looking at; each book is then
@@ -115,16 +135,28 @@ const (
 // interleave) and versions.LockTorrent(hash) (an import of the same torrent
 // cannot interleave), the row is re-planned and refused as changed when its
 // decision moved; the link is journaled (undo.ChangeTypeBookFileVersionLink,
-// record-only) and written: would_link through versions.CreateIngestVersion
-// in adopt-only mode (it never creates a version), same_book_version through
-// a compare-and-set on the row. Nothing is ever deleted, and no version is
+// record-only) and written. Both write paths are a compare-and-set on the
+// current row (ModifyBookFile) that sets only the link fields -- VersionID,
+// and FileHash when the row still has none -- and is refused when the row's
+// VersionID, path or torrent hash moved: would_link through
+// versions.CreateIngestVersion in adopt-only mode (it never creates a version,
+// never reads the file, and re-reads the version inside the write),
+// same_book_version through pfrSameBook. A concurrent writer's change to any
+// other field of the row survives. Nothing is ever deleted, and no version is
 // created or changed.
 //
 // CONCURRENCY. Rows are book_file rows and BookIDs is the one book, so the
 // engine's union-find runs every row of a book in one partition, in order: no
 // two workers touch one book. Two books sharing a torrent are serialized by
 // LockTorrent. The merge lock is process-wide, so the locked section is kept
-// to reads and two point writes; the file read happens before it.
+// to point reads and one point write; the only file read (the identity hash)
+// happens before it, and nothing under it reads a file.
+//
+// THE REVERSE RACE belongs to other writers. One that reads a row whole
+// before the link and writes it back whole after (UpdateBookFile replace mode:
+// mark-missing-files, the file-edit handlers, the acoustid backfill) writes
+// VersionID "" back and silently unlinks the row while its journal row still
+// says linked. A re-plan lists the row as would_link again.
 type relinkPreFixFixer struct{ p *Plugin }
 
 func newRelinkPreFixFixer(p *Plugin) *relinkPreFixFixer { return &relinkPreFixFixer{p: p} }
@@ -140,10 +172,13 @@ func (f *relinkPreFixFixer) ID() string    { return relinkPreFixFixerID }
 func (f *relinkPreFixFixer) Title() string { return "Link pre-fix imports to their versions" }
 func (f *relinkPreFixFixer) Description() string {
 	return "Files imported before 2026-10-10 were recorded with a version (where the copy came from and which " +
-		"torrent it belongs to) that nothing points at, so they cannot be matched as exact duplicates or verified " +
-		"by the torrent cleanup. Apply links each selected file to its own book's stranded version, and fills the " +
-		"file's checksum when it has none. It never creates or deletes a version or a file record. Books without " +
-		"any version are not listed."
+		"torrent it belongs to) that no file points at. Apply links each selected file to its own book's version " +
+		"and fills the file's checksum when it has none; it changes nothing else on the file record, never creates " +
+		"or deletes a version or a file record, and never changes a version. Once a file is linked, purging that " +
+		"version (purge now, or the automatic cleanup 14 days after it is trashed) DELETES the file from disk, " +
+		"usually a file in an import or download folder. Before the link, purging deleted no audio. Rows marked " +
+		"review need a look before applying; each row's evidence says why (for most, the version and the file " +
+		"disagree on date, format, location or presence)."
 }
 
 // pfrStores returns the fixer's two store views.
@@ -171,6 +206,9 @@ type pfrDecision struct {
 	// holder is the torrent's live holder, when the row carries a hash.
 	holder   *database.BookVersion
 	evidence []string
+	// disagree names the link evidence checks (pfrLinkEvidence) on which the
+	// target version and the row disagree; any makes the row Review risk.
+	disagree []string
 	// action is what the fingerprint hashes beside the row's own state:
 	// "link:<version>" for both link classes (so a sibling's adoption, which
 	// turns would_link into same_book_version, does not change it), the
@@ -216,9 +254,9 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 		}
 	}
 	sort.Strings(books)
-	importPaths, err := vs.GetAllImportPaths()
+	env, err := f.pfrEnv(vs)
 	if err != nil {
-		return nil, fmt.Errorf("list import paths: %w", err)
+		return nil, err
 	}
 	perBook := make([][]repairs.Row, len(books))
 	var done atomic.Int64
@@ -233,7 +271,7 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 				return nil
 			}
 		}
-		decs, cerr := classifyPreFixBook(vs, id, importPaths)
+		decs, cerr := classifyPreFixBook(vs, id, env)
 		if cerr != nil {
 			perBook[i] = pfrErrorRows(id, cores, cerr)
 			return nil
@@ -285,11 +323,11 @@ func (f *relinkPreFixFixer) Replan(_ context.Context, _ json.RawMessage, planned
 		return repairs.Row{}, fmt.Errorf("relink row %s: want one book, got %d", planned.RowID, len(planned.BookIDs))
 	}
 	bookID := planned.BookIDs[0]
-	importPaths, err := vs.GetAllImportPaths()
+	env, err := f.pfrEnv(vs)
 	if err != nil {
-		return repairs.Row{}, fmt.Errorf("list import paths: %w", err)
+		return repairs.Row{}, err
 	}
-	decs, err := classifyPreFixBook(vs, bookID, importPaths)
+	decs, err := classifyPreFixBook(vs, bookID, env)
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("classify book %s: %w", bookID, err)
 	}
@@ -303,9 +341,25 @@ func (f *relinkPreFixFixer) Replan(_ context.Context, _ json.RawMessage, planned
 	return pfrRow(d), nil
 }
 
+// pfrEnvironment is what classification reads besides the book: the allow-list
+// (import paths) and the library root, for the path checks and the location
+// evidence.
+type pfrEnvironment struct {
+	importPaths []database.ImportPath
+	rootDir     string
+}
+
+func (f *relinkPreFixFixer) pfrEnv(vs versions.IngestStore) (pfrEnvironment, error) {
+	importPaths, err := vs.GetAllImportPaths()
+	if err != nil {
+		return pfrEnvironment{}, fmt.Errorf("list import paths: %w", err)
+	}
+	return pfrEnvironment{importPaths: importPaths, rootDir: f.p.deps.RootDir()}, nil
+}
+
 // classifyPreFixBook reads one book, its versions and its rows, and decides
 // every row. A read error fails the whole book (it is reported, not guessed).
-func classifyPreFixBook(vs versions.IngestStore, bookID string, importPaths []database.ImportPath) ([]*pfrDecision, error) {
+func classifyPreFixBook(vs versions.IngestStore, bookID string, env pfrEnvironment) ([]*pfrDecision, error) {
 	book, err := vs.GetBookByID(bookID)
 	if err != nil {
 		return nil, fmt.Errorf("read book: %w", err)
@@ -367,7 +421,10 @@ func classifyPreFixBook(vs versions.IngestStore, bookID string, importPaths []da
 			decidePreFixNamedRow(vs, d, own)
 			continue
 		}
-		decidePreFixUnlinkedRow(vs, d, vers, referenced, peers[fl.DelugeHash], holderOf, importPaths)
+		decidePreFixUnlinkedRow(vs, d, vers, referenced, peers[fl.DelugeHash], holderOf, env)
+		if d.links() {
+			d.disagree = pfrLinkEvidence(d, env)
+		}
 	}
 	return out, nil
 }
@@ -402,13 +459,13 @@ func decidePreFixNamedRow(vs versions.IngestStore, d *pfrDecision, own map[strin
 
 // decidePreFixUnlinkedRow classifies a row that names no version.
 func decidePreFixUnlinkedRow(vs versions.IngestStore, d *pfrDecision, vers []database.BookVersion, referenced map[string]string,
-	peers int, holderOf func(string) (*database.BookVersion, error), importPaths []database.ImportPath) {
+	peers int, holderOf func(string) (*database.BookVersion, error), env pfrEnvironment) {
 	fl := d.file
 	hash := fl.DelugeHash
 	set := func(class, action, reason string) {
 		d.class, d.action, d.reason = class, action, reason
 	}
-	if abs, err := filepath.Abs(fl.FilePath); err != nil || fl.FilePath == "" || !fileops.IsAllowedPath(abs, importPaths) {
+	if abs, err := filepath.Abs(fl.FilePath); err != nil || fl.FilePath == "" || !fileops.IsAllowedPath(abs, env.importPaths) {
 		set(pfrClassPathNotAllowed, pfrClassPathNotAllowed,
 			"the file's path is outside the library root, the import paths and the allowed prefixes; linking reads the file there")
 		return
@@ -496,9 +553,133 @@ func decidePreFixUnlinkedRow(vs versions.IngestStore, d *pfrDecision, vers []dat
 			"the book's unlinked versions carry a different torrent hash than the file ("+pfrHashLabel(hash)+" vs "+
 				strings.Join(hashes, ", ")+"); not inferred")
 	default:
+		if v := pfrLinkedSameTorrent(vers, referenced, hash); v != nil {
+			set(pfrClassNoCandidate, pfrClassNoCandidate+":"+v.ID,
+				"version "+v.ID+" of this book carries this file's torrent and is already linked to file "+referenced[v.ID]+
+					", but the torrent index does not name it; not inferred")
+			return
+		}
 		set(pfrClassNoCandidate, pfrClassNoCandidate,
 			"every live version of the book is already linked to a file, or none is live")
 	}
+}
+
+// pfrLinkedSameTorrent returns a live version of the book carrying hash that
+// another row already names, or nil (always nil for an empty hash). It only
+// words a no_candidate reason: a multi-file torrent book whose version does
+// not hold the torrent index, where one row linked it and the next found
+// nothing unnamed left.
+func pfrLinkedSameTorrent(vers []database.BookVersion, referenced map[string]string, hash string) *database.BookVersion {
+	if hash == "" {
+		return nil
+	}
+	for i := range vers {
+		v := &vers[i]
+		if _, named := referenced[v.ID]; named && v.TorrentHash == hash && pfrAdoptable(v) {
+			return v
+		}
+	}
+	return nil
+}
+
+// pfrSameImportWindow is how far apart a version's ingest date and its row's
+// creation may be for the two to read as one import. The importer wrote them
+// seconds apart (one media header probe between them). A row created later --
+// by the 2026-08-25 ensureSingleFileBookFile backfill for imports before then,
+// by a scan, or by a fixer -- is hours or days off.
+const pfrSameImportWindow = 10 * time.Minute
+
+// Link evidence checks (pfrDecision.disagree).
+const (
+	pfrCheckDates    = "dates"
+	pfrCheckFormat   = "format"
+	pfrCheckLocation = "location"
+	pfrCheckMissing  = "missing"
+)
+
+// pfrLinkEvidence compares d's target version with its row on what one
+// import would have made agree, appends one evidence line per check, and
+// returns the checks that disagree, in a fixed order (empty: all agree). A
+// value it cannot read (a zero date, an empty format) counts as disagreeing:
+// the row then needs a look. It reads only the version and the row, so a
+// row's checks do not change when a sibling's adoption turns its would_link
+// into same_book_version (the target is the same version).
+func pfrLinkEvidence(d *pfrDecision, env pfrEnvironment) []string {
+	v, fl := d.target, d.file
+	var disagree []string
+	add := func(check string, ok bool, line string) {
+		if ok {
+			d.evidence = append(d.evidence, "agrees ("+check+"): "+line)
+			return
+		}
+		d.evidence = append(d.evidence, "REVIEW ("+check+"): "+line)
+		disagree = append(disagree, check)
+	}
+
+	verDate := v.IngestDate
+	if verDate.IsZero() {
+		verDate = v.CreatedAt
+	}
+	switch {
+	case verDate.IsZero() || fl.CreatedAt.IsZero():
+		add(pfrCheckDates, false, "the version's ingest date or the file record's creation date is not recorded")
+	default:
+		gap := fl.CreatedAt.Sub(verDate)
+		if gap < 0 {
+			gap = -gap
+		}
+		add(pfrCheckDates, gap <= pfrSameImportWindow, fmt.Sprintf(
+			"version ingested %s, file record created %s (%s apart; one import writes both within %s)",
+			verDate.UTC().Format(time.RFC3339), fl.CreatedAt.UTC().Format(time.RFC3339), gap.Round(time.Second), pfrSameImportWindow))
+	}
+
+	vf, rf := pfrFormat(v.Format), pfrFormat(fl.Format)
+	ext := pfrFormat(filepath.Ext(fl.FilePath))
+	add(pfrCheckFormat, vf != "" && (rf != "" || ext != "") && (rf == "" || rf == vf) && (ext == "" || ext == vf),
+		fmt.Sprintf("version format %s, file record format %s, file extension %s",
+			pfrHashLabel(vf), pfrHashLabel(rf), pfrHashLabel(ext)))
+
+	where, underImport := pfrLocation(fl.FilePath, env)
+	add(pfrCheckLocation, underImport, where)
+
+	add(pfrCheckMissing, !fl.Missing, map[bool]string{
+		true:  "the file record is marked missing; nothing on disk confirms which file it is",
+		false: "the file record is not marked missing",
+	}[fl.Missing])
+	return disagree
+}
+
+// pfrFormat normalizes a format or extension for comparison ("M4B", ".m4b"
+// and "m4b" are one format).
+func pfrFormat(s string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(s), "."))
+}
+
+// pfrLocation says where path sits and whether that is a registered import
+// path. The library root is checked first, so a file under the root counts as
+// a library file even when an import path also contains it (an import path
+// may contain the root). A file there needs a look, not a refusal: organize
+// on import moves a legitimate import's file into the library, but so does a
+// repoint, which can leave a row naming a library file another book uses.
+func pfrLocation(path string, env pfrEnvironment) (string, bool) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "the file's path cannot be resolved", false
+	}
+	under := func(prefix string) bool {
+		prefix = strings.TrimRight(prefix, string(filepath.Separator))
+		return prefix != "" && (abs == prefix || strings.HasPrefix(abs, prefix+string(filepath.Separator)))
+	}
+	if env.rootDir != "" && under(env.rootDir) {
+		return "the file is under the library root " + env.rootDir +
+			", not an import folder (organize on import puts a file there, but so does a repoint; check it is this import's file)", false
+	}
+	for _, ip := range env.importPaths {
+		if ip.Path != "" && under(ip.Path) {
+			return "the file is under the import path " + ip.Path, true
+		}
+	}
+	return "the file is under no registered import path and not under the library root", false
 }
 
 func pfrLinkAction(v *database.BookVersion) string {
@@ -550,15 +731,20 @@ func pfrRow(d *pfrDecision) repairs.Row {
 		r.Proposed = map[string]string{"version_id": d.target.ID, "version_status": d.target.Status,
 			"version_source": d.target.Source}
 		if fl.FileHash == "" {
-			r.Proposed["file_hash"] = "filled"
+			// Read at apply, before the locks; a file that cannot be read is
+			// linked without one (backfill-file-hashes fills it later).
+			r.Proposed["file_hash"] = "filled if the file can be read"
 		}
-		if d.class == pfrClassSameBook {
+		if d.class == pfrClassSameBook || len(d.disagree) > 0 {
 			r.Risk = repairs.RiskReview
 		}
 	} else {
 		r.Skipped, r.SkipReason = d.class, d.reason
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{fl.ID, fl.BookID, fl.VersionID, fl.DelugeHash, fl.FilePath, d.action}, "\n")))
+	// The disagreeing checks are fingerprinted: a row whose risk would change
+	// between the plan the owner reviewed and the apply is refused.
+	sum := sha256.Sum256([]byte(strings.Join([]string{fl.ID, fl.BookID, fl.VersionID, fl.DelugeHash, fl.FilePath, d.action,
+		strings.Join(d.disagree, ",")}, "\n")))
 	r.Fingerprint = hex.EncodeToString(sum[:])[:32]
 	return r
 }
@@ -586,15 +772,31 @@ func (f *relinkPreFixFixer) Apply(ctx context.Context, w *repairs.Writer, fresh 
 
 	// The process-wide merge lock first, then the torrent's: a merge moving
 	// the row between books, or an import of the same torrent, cannot run
-	// between the re-check below and the write. Nothing that holds a torrent
-	// lock takes the merge lock (only the importer takes torrent locks), so
-	// this order cannot deadlock.
+	// between the re-check below and the write. The importer takes torrent
+	// locks and never the merge lock; this fixer takes both, always merge
+	// first. So no holder of a torrent lock waits on the merge lock, and this
+	// order cannot deadlock.
+	//
+	// Both are taken through LockWaiting: the importer holds a torrent lock
+	// across a media probe, and while this waits it holds the process-wide
+	// merge lock, so the wait must keep the stand-down lease and watch ctx.
+	// A hashless row (nearly every pre-fix import) takes no torrent lock.
 	if err := w.LockWaiting(ctx, "the merge lock", merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {
 		return err
 	}
 	defer merge.UnlockMergeRMW()
-	unlockTorrent := versions.LockTorrent(d.file.DelugeHash)
-	defer unlockTorrent()
+	if torrent := d.file.DelugeHash; torrent != "" {
+		// Written by LockWaiting's goroutine; read only after LockWaiting
+		// returned nil (its channel hand-off orders the two), or by that
+		// goroutine itself.
+		var unlockTorrent func()
+		if err := w.LockWaiting(ctx, "the torrent lock",
+			func() { unlockTorrent = versions.LockTorrent(torrent) },
+			func() { unlockTorrent() }); err != nil {
+			return err
+		}
+		defer unlockTorrent()
+	}
 
 	locked, err := f.Replan(ctx, nil, fresh, nil)
 	if err != nil {
@@ -620,7 +822,7 @@ func (f *relinkPreFixFixer) Apply(ctx context.Context, w *repairs.Writer, fresh 
 		if ld.class == pfrClassSameBook {
 			return pfrSameBook(store, ld, hash)
 		}
-		return pfrAdopt(store, vs, ld, hash)
+		return pfrAdopt(vs, ld, hash)
 	})
 }
 
@@ -628,32 +830,23 @@ func (f *relinkPreFixFixer) Apply(ctx context.Context, w *repairs.Writer, fresh 
 var errPreFixRowMoved = errors.New("the file record changed before the link was written")
 
 // pfrAdopt links the row to its stranded version through
-// versions.CreateIngestVersion in adopt-only mode. The hash computed before
-// the locks is stored first (a compare-and-set on an unchanged, still
-// hashless row), so CreateIngestVersion, which trusts a row that carries one,
-// does not read the file again under the merge lock. Returns an error only
-// when the link was not written.
-func pfrAdopt(store OpsStore, vs versions.IngestStore, d *pfrDecision, hash string) error {
+// versions.CreateIngestVersion in adopt-only mode, whose link write is a
+// compare-and-set on the current row that sets only VersionID (DelugeHash is
+// rewritten with the value the row already carries) and, when the row still
+// has none, FileHash from hash -- computed before the locks; NoFileRead keeps
+// CreateIngestVersion from reading the file under them. Returns an error only
+// when the link was not written; a refusal because the row or the version
+// moved is ErrChangedSincePlan.
+func pfrAdopt(vs versions.IngestStore, d *pfrDecision, hash string) error {
 	fl := d.file
-	if hash != "" {
-		if _, err := store.ModifyBookFile(fl.BookID, fl.ID, func(r *database.BookFile) error {
-			if r.FileHash != "" || r.FilePath != fl.FilePath || r.VersionID != "" {
-				return database.ErrSkipBookFileWrite
-			}
-			r.FileHash = hash
-			return nil
-		}); err != nil && !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
-			// Not fatal: the link below hashes the file itself when the row
-			// still has none.
-			pfrLog.Warn("relink-pre-fix-imports: identity hash not stored before the link for book %s (book_file %s): %s",
-				logger.SanitizeLogValue(fl.BookID), logger.SanitizeLogValue(fl.ID), logger.SanitizeLogValue(err.Error()))
-		}
-	}
 	ver, linked, err := versions.CreateIngestVersion(vs, versions.IngestVersionParams{
 		BookID: fl.BookID, BookFileID: fl.ID, FilePath: fl.FilePath, Format: fl.Format,
 		TorrentHash: fl.DelugeHash, AdoptVersionID: d.target.ID,
+		FileHash: hash, NoFileRead: true,
 	})
 	switch {
+	case errors.Is(err, versions.ErrBookFileChanged), errors.Is(err, versions.ErrVersionNotAdoptable):
+		return fmt.Errorf("%w: adopt version %s for file %s: %w", repairs.ErrChangedSincePlan, d.target.ID, fl.ID, err)
 	case err != nil:
 		return fmt.Errorf("adopt version %s for file %s: %w", d.target.ID, fl.ID, err)
 	case ver == nil || ver.ID != d.target.ID:
@@ -704,6 +897,9 @@ func pfrSameBook(store OpsStore, d *pfrDecision, hash string) error {
 func pfrIdentityHash(vs versions.IngestStore, fl database.BookFile) string {
 	path, err := fileops.ValidateUserPath(vs, fl.FilePath)
 	if err != nil {
+		pfrLog.Warn("relink-pre-fix-imports: identity hash not computed for %s (book %s, book_file %s), path refused; left for backfill-file-hashes: %s",
+			logger.SanitizeLogValue(fl.FilePath), logger.SanitizeLogValue(fl.BookID), logger.SanitizeLogValue(fl.ID),
+			logger.SanitizeLogValue(err.Error()))
 		return ""
 	}
 	h, err := filehash.BookFileHash(path)
