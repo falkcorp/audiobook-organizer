@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -456,4 +457,31 @@ func TestRelinkPreFixImports_ChangedSincePlanIsRefused(t *testing.T) {
 	require.Zero(t, out.Applied)
 	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
 	require.Empty(t, f.bookFile(t, "moved").VersionID)
+}
+
+// A pre-fix import merged into another book: the merge moved the row to the
+// keeper but left the version on the absorbed, now deleted, book. The keeper
+// has no version of its own, yet the row is listed (by its torrent hash) and
+// reported, never linked.
+func TestRelinkPreFixImports_MergedImportIsReported(t *testing.T) {
+	t.Parallel()
+	f := newPreFixFixture(t)
+	absorbed, v := f.preFixImport(t, "merged", pfrHashMulti)
+	keeper := f.book(t, "keeper", "Placeholder Keeper", f.path("imports/keeper"), nil)
+	require.NoError(t, f.s.MoveBookFilesToBook([]string{f.rowIDs["merged"]}, absorbed, keeper))
+	f.ids["merged"] = keeper
+	yes := true
+	_, err := f.s.ModifyBook(absorbed, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MergedIntoBookID = &yes, &keeper
+		return nil
+	})
+	require.NoError(t, err)
+
+	res := f.fixerPlan(t, relinkPreFixFixerID, "op-plan", nil)
+	r := findRow(t, res, f.rowIDs["merged"])
+	require.Equal(t, pfrClassDeletedHolder, r.Class, r.Reason)
+	require.Equal(t, pfrClassDeletedHolder, r.Skipped)
+	require.Contains(t, r.SkipReason, v.ID)
+	require.Contains(t, strings.Join(r.Evidence, "\n"), "merged into "+keeper)
+	require.Zero(t, res.Applicable)
 }

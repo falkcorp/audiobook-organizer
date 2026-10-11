@@ -75,6 +75,13 @@ const (
 	pfrClassPathNotAllowed = "path_not_allowed"
 	// pfrClassBookDeleted: the row's book is soft-deleted.
 	pfrClassBookDeleted = "book_deleted"
+	// pfrClassDeletedHolder: the row carries a torrent hash, its own book has
+	// no version for it, and the torrent index names a version of a DELETED
+	// book -- in practice a pre-fix import that a merge moved onto this book,
+	// because a merge moves book_file rows but not versions. Reported, never
+	// changed: linking the row to a version of a retired book, or moving the
+	// version, is the owner's call.
+	pfrClassDeletedHolder = "torrent_on_deleted_book"
 	// pfrClassGone: the row no longer exists on the planned book (Replan
 	// only: it was moved or the book was removed).
 	pfrClassGone = "gone"
@@ -93,8 +100,11 @@ const (
 // PLAN (read-only; repairs.plan is the dry run). One bulk read of every
 // book_file row finds the books worth looking at; each book is then
 // classified on its own (versions, rows, torrent holder) on a bounded
-// registry.RunItems pool. A book with no version and no row naming one is not
-// listed: that is every scanned book, and none of them has anything to link.
+// registry.RunItems pool. A book with no version, no row naming one and no
+// unlinked row carrying a torrent hash is not listed: that is every scanned
+// book, and none of them has anything to link. (A book with such a hashed row
+// is listed even without a version: a merge moves rows but not versions, so a
+// merged pre-fix import lands on a keeper that has none.)
 // Every row of a listed book is classified into one of the pfrClass*
 // outcomes, with its book, path, proposed version and reason.
 //
@@ -180,6 +190,10 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 		return nil, fmt.Errorf("list book files: %w", err)
 	}
 	named := map[string]bool{}
+	// hashed: books with an unlinked row carrying a torrent hash. Such a book
+	// is listed even with no version of its own: a merge moves rows, not
+	// versions, so a merged pre-fix import sits on a keeper with no version.
+	hashed := map[string]bool{}
 	var books []string
 	seen := map[string]bool{}
 	for i := range cores {
@@ -193,6 +207,8 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 		}
 		if cores[i].VersionID != "" {
 			named[id] = true
+		} else if cores[i].DelugeHash != "" {
+			hashed[id] = true
 		}
 	}
 	sort.Strings(books)
@@ -207,7 +223,7 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(books)), func(_ context.Context, i int) error {
 		defer done.Add(1)
 		id := books[i]
-		if !named[id] {
+		if !named[id] && !hashed[id] {
 			vers, verr := vs.GetBookVersionsByBookID(id)
 			if verr == nil && len(vers) == 0 {
 				return nil
@@ -347,7 +363,7 @@ func classifyPreFixBook(vs versions.IngestStore, bookID string, importPaths []da
 			decidePreFixNamedRow(vs, d, own)
 			continue
 		}
-		decidePreFixUnlinkedRow(d, vers, referenced, peers[fl.DelugeHash], holderOf, importPaths)
+		decidePreFixUnlinkedRow(vs, d, vers, referenced, peers[fl.DelugeHash], holderOf, importPaths)
 	}
 	return out, nil
 }
@@ -381,7 +397,7 @@ func decidePreFixNamedRow(vs versions.IngestStore, d *pfrDecision, own map[strin
 }
 
 // decidePreFixUnlinkedRow classifies a row that names no version.
-func decidePreFixUnlinkedRow(d *pfrDecision, vers []database.BookVersion, referenced map[string]string,
+func decidePreFixUnlinkedRow(vs versions.IngestStore, d *pfrDecision, vers []database.BookVersion, referenced map[string]string,
 	peers int, holderOf func(string) (*database.BookVersion, error), importPaths []database.ImportPath) {
 	fl := d.file
 	hash := fl.DelugeHash
@@ -465,6 +481,8 @@ func decidePreFixUnlinkedRow(d *pfrDecision, vers []database.BookVersion, refere
 	case holder != nil:
 		set(pfrClassNoCandidate, pfrClassNoCandidate+":"+holder.ID+":"+holder.Status,
 			"torrent "+hash+" is held by version "+holder.ID+" of this book in status "+holder.Status+", which is not linked to files")
+	case hash != "" && holder == nil && pfrDeletedHolder(vs, d, hash):
+		// Classified (or failed) inside pfrDeletedHolder.
 	case len(otherHash) > 0:
 		hashes := make([]string, len(otherHash))
 		for i, v := range otherHash {
@@ -692,4 +710,41 @@ func pfrIdentityHash(vs versions.IngestStore, fl database.BookFile) string {
 		return ""
 	}
 	return h
+}
+
+// pfrDeletedHolder classifies d as pfrClassDeletedHolder when the torrent
+// index names a version of a deleted book other than d's (LiveTorrentHolder
+// reports no holder for it), and reports whether it classified d. A read
+// error classifies d as pfrClassError.
+func pfrDeletedHolder(vs versions.IngestStore, d *pfrDecision, hash string) bool {
+	v, err := vs.GetBookVersionByTorrentHash(hash)
+	if err != nil {
+		d.class, d.action = pfrClassError, pfrClassError
+		d.reason = fmt.Sprintf("read the torrent index for %s: %v", hash, err)
+		return true
+	}
+	if v == nil || v.BookID == d.file.BookID {
+		return false
+	}
+	b, err := vs.GetBookByID(v.BookID)
+	if err != nil {
+		d.class, d.action = pfrClassError, pfrClassError
+		d.reason = fmt.Sprintf("read book %s: %v", v.BookID, err)
+		return true
+	}
+	if b != nil && !b.IsSoftDeleted() {
+		return false
+	}
+	merged := ""
+	if b != nil && b.MergedIntoBookID != nil {
+		merged = *b.MergedIntoBookID
+	}
+	d.class, d.action = pfrClassDeletedHolder, pfrClassDeletedHolder+":"+v.ID+":"+v.BookID+":"+merged
+	d.reason = "torrent " + hash + " belongs to version " + v.ID + " of deleted book " + v.BookID +
+		"; this book has no version for it (a merge moves files, not versions); left for the owner"
+	d.evidence = append(d.evidence, "version "+v.ID+" (status "+v.Status+") is on deleted book "+v.BookID)
+	if merged != "" {
+		d.evidence = append(d.evidence, "book "+v.BookID+" was merged into "+merged)
+	}
+	return true
 }

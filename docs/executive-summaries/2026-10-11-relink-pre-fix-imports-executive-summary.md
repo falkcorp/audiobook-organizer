@@ -29,7 +29,9 @@ Branch `feat/relink-pre-fix-imports`.
 - **Everything else is listed and left alone.** That covers files whose
   torrent belongs to a different book, files that point at another book's
   version (usually left behind by a merge), files that point at a version
-  that no longer exists, books with more than one possible match, files with
+  that no longer exists, torrent files whose version stayed behind on a book
+  that was merged away (a merge moves files but not versions), books with
+  more than one possible match, files with
   no torrent on a book whose version has one, files outside the allowed
   folders, and deleted books. Each is a decision for the owner, not a guess.
 - **It cannot create or lose anything.** It never creates, changes or deletes
