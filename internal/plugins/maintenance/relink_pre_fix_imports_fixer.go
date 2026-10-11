@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -111,16 +111,13 @@ const (
 //     linked to it. Before the link, purging one of these versions deleted no
 //     audio; after it, purging deletes the linked file -- for these rows
 //     usually a file in an import or Deluge download folder. "Purge now"
-//     (handlePurgeVersion) does that at once, whatever the version's status.
-//     Trashing a linked version does it at the first daily trash cleanup
-//     (06:00) after the version is 14 days old, not 14 days after the trash:
-//     CleanupTrashedVersions counts its 14 days from the version's creation.
-//     Every version this pass links was created before 2026-10-10, so for an
-//     import more than two weeks old that is the next cleanup, and for a
-//     newer one still well short of 14 days after the trash. A separate fix
-//     (fix/trash-cleanup-from-trashed-at) is pending; until it lands, trashing
-//     one of these versions is nearly as final as purging it. This is the
-//     model every post-fix import already has; the trial output says so.
+//     (handlePurgeVersion) does that at once, but only for a version that is
+//     already in the trash. Trashing a linked version does it at the first
+//     daily trash cleanup (06:00) after the version has been in the trash for
+//     14 days: CleanupTrashedVersions counts its 14 days from TrashedAt, the
+//     moment the version was trashed, not from when it was created. So a
+//     trash can be undone (restore) for the whole 14 days. This is the model
+//     every post-fix import already has; the trial output says so.
 //   - MarkFileImportedFromDeluge matching, whose only caller is dormant.
 //
 // Nearly every pre-fix row in prod is hashless: until 2026-10-10 the importer
@@ -167,9 +164,9 @@ const (
 // compare-and-set and refuses one no longer live, but the version trash
 // handler takes no lock this pass can hold, so a trash committed in the same
 // instant as the link can still win. The row is then linked to a trashed
-// version, and until the trash-window fix lands its file is deleted at the
-// first daily cleanup after the version is 14 days old -- for most of these
-// rows the next one (see PurgeVersion above).
+// version, and its file is deleted at the first daily cleanup after the version
+// has been in the trash for 14 days (see PurgeVersion above), unless it is
+// restored first.
 //
 // CONCURRENCY. Rows are book_file rows and BookIDs is the one book, so the
 // engine's union-find runs every row of a book in one partition, in order: no
@@ -202,10 +199,10 @@ func (f *relinkPreFixFixer) Description() string {
 		"and fills the file's checksum when it has none; it changes nothing else on the file record, never creates " +
 		"or deletes a version or a file record, and never changes a version. Once a file is linked, purging that " +
 		"version DELETES the file from disk, usually a file in an import or download folder; before the link, " +
-		"purging deleted no audio. 'Purge now' deletes it at once, trashed or not. Trashing the version deletes it " +
-		"at the first daily cleanup (06:00) after the version is 14 days old, not 14 days after the trash: the " +
-		"cleanup counts from when the version was created (a fix is pending). For anything imported more than two " +
-		"weeks ago that is the next cleanup. A trash in the same instant as the link can still win the race. Rows marked review need a look before applying; each row's " +
+		"purging deleted no audio. 'Purge now' (which works only on a version already in the trash) deletes it at " +
+		"once. Trashing the version deletes it at the first daily cleanup (06:00) after the version has been in " +
+		"the trash for 14 days; until then it can be restored. A trash in the same instant as the link can " +
+		"still win the race. Rows marked review need a look before applying; each row's " +
 		"evidence says why (the version and the file disagree on date, format, location or presence). The " +
 		"trial groups them by the first check they fail (missing, then location, format, dates), one group per " +
 		"check with its count, and a row's evidence names any other check it fails; the trial's operation log " +
@@ -708,9 +705,11 @@ func pfrPrimaryCheck(disagree []string) string {
 // primary check; the chip counts therefore sum to the link rows and are not
 // "rows flagged by this check" -- that overlapping count stays in the
 // repairs.plan op log (pfrEvidenceSummary), and each row's evidence names
-// every check it fails. The class is a function of the decision class and the
-// disagreeing checks, both fingerprinted (pfrRow), so a row whose class would
-// move after planning is refused at apply.
+// every check it fails. The fingerprint (pfrRow) covers the decision's action
+// and its disagreeing checks, not this class: a row whose action or failing
+// checks change after planning is refused at apply, but a sibling's adoption
+// that turns would_link into same_book_version is applied. Do not add the
+// class to the fingerprint.
 func pfrRowClass(d *pfrDecision) string {
 	if !d.links() || len(d.disagree) == 0 {
 		return d.class

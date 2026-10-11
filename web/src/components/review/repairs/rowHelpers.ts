@@ -1,5 +1,5 @@
 // file: web/src/components/review/repairs/rowHelpers.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 21e5fc7d-cd22-4c0a-9773-b83015403a68
 // last-edited: 2026-10-11
 
@@ -156,12 +156,12 @@ const CLASS_LABELS: Record<string, string> = {
   would_link_review_missing: 'Link, review: file marked missing',
   would_link_review_location: 'Link, review: file not in an import folder',
   would_link_review_format: 'Link, review: format disagrees',
-  would_link_review_dates: 'Link, review: dates far apart',
-  same_book_version: 'Same-book link: every check agrees (review)',
+  would_link_review_dates: 'Link, review: import and file record dated far apart',
+  same_book_version: 'Same-book link (another file of this torrent is already linked): checks agree',
   same_book_version_review_missing: 'Same-book link, review: file marked missing',
   same_book_version_review_location: 'Same-book link, review: file not in an import folder',
   same_book_version_review_format: 'Same-book link, review: format disagrees',
-  same_book_version_review_dates: 'Same-book link, review: dates far apart',
+  same_book_version_review_dates: 'Same-book link, review: import and file record dated far apart',
   error: 'Error',
 };
 
