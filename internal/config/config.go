@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.147.0
+// version: 1.147.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package config
 
@@ -1788,7 +1788,11 @@ type Config struct {
 	// Enable the fields that are actually
 	// sorted by, and measure warmup afterwards.
 	//
-	// Defaults to {"year"}. Before any default existed this was empty, and the
+	// Defaults to {"year", "created_at"}. created_at was added 2026-10-11 (owner
+	// decision): ABS "Recently Added" and the Library tab's sort-by-date-added
+	// otherwise materialise and sort the whole ~16.5k visible set per request
+	// (~30-39 ms, ~78 MB allocated); measured ~7 µs with the index, for ~19 MB of
+	// memdb and slightly slower inserts. Before any default existed this was empty, and the
 	// ABS handler's sort keys resolved to indexes that were never registered,
 	// so every non-title sort returned unordered rows behind a 200 OK. Kept
 	// deliberately narrow because each index taxes scan insert throughput; see
@@ -2330,10 +2334,12 @@ func InitConfig() {
 	// arbitrary order, nothing logged. So the mapping in the ABS handler and
 	// this list have to move together.
 	//
-	// DELIBERATELY NARROW. "year" is the reported bug; "author" is the only
-	// other field anyone sorts a library by. The client's menu also offers
-	// Date Added / Last Updated / Duration / File Size, and the store could
-	// index all four -- they are left OFF because each memdb sorted index costs
+	// DELIBERATELY NARROW. "year" is the reported bug. "created_at" (Date Added,
+	// ABS "Recently Added") was switched ON 2026-10-11 by owner decision: it is
+	// the one newest-first browse sort, and unindexed it sorted the whole visible
+	// set per request (~30-39 ms, ~78 MB) versus ~7 µs indexed. The client's
+	// menu also offers Last Updated / Duration / File Size, and the store could
+	// index all three -- they are left OFF because each memdb sorted index costs
 	// ~19 MB at ~48.9k books AND go-memdb path-copies nodes on every insert, so
 	// each one taxes the scan write path. A library scan is the heaviest write
 	// workload here (~456k items in a full run), and scan ingest is the thing
@@ -2348,7 +2354,7 @@ func InitConfig() {
 	// name from the authors table on the materialise-and-sort path instead.
 	// Leaving it here would print an "unknown entry ignored" warning on every
 	// startup, for a value the application itself shipped.
-	viper.SetDefault("enabled_sort_indexes", []string{"year"})
+	viper.SetDefault("enabled_sort_indexes", []string{"year", "created_at"})
 	viper.SetDefault("search.result_cache.enabled", true)
 	viper.SetDefault("search.result_cache.max_bytes", int64(128<<20))
 	viper.SetDefault("search.result_cache.wait_seconds", 20)
