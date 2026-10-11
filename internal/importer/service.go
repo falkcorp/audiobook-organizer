@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-11
 
@@ -147,9 +147,11 @@ type ImportFileRequest struct {
 	// ImportFile does NOT verify the hash against Deluge. It checks only the
 	// shape (40 or 64 lower-case hex) and trusts the caller for the rest, so a
 	// new caller must do its own verification first. An empty value means "no
-	// torrent". A hash whose content was previously purged or blocked, or that
-	// a live version of another book already holds, is never linked (see
-	// ImportFileResponse.TorrentLinked). When it is linked it is
+	// torrent". A hash whose content was previously purged or blocked is
+	// imported but never linked (see ImportFileResponse.TorrentLinked). A hash
+	// a live version already holds is refused outright: ImportFile returns
+	// ErrTorrentAlreadyLinked and creates nothing, and a caller that sets a
+	// hash must handle that. When it is linked it is
 	// written onto the new BookVersion (TorrentHash, Source "deluge") and the
 	// new BookFile (DelugeHash, next to its VersionID). It does not mark the
 	// file as copied: the later copy into the library sets
@@ -228,15 +230,46 @@ const (
 	// the hash were both created, but the write linking them (VersionID and
 	// DelugeHash on the row) failed, so the row does not carry the hash.
 	TorrentLinkNoteLinkFailed = "book file row not linked to its version"
-	// TorrentLinkNoteAlreadyLinked: a live version of another book already
-	// holds the hash in the one-to-one torrent index. Linking again would move
-	// the index to the new book and orphan the existing link, so the file is
-	// imported unlinked and the existing link is left alone.
+	// TorrentLinkNoteAlreadyLinked: a live version of another book took the
+	// hash in the one-to-one torrent index AFTER the already-linked guard
+	// passed (only a writer that does not take the per-torrent lock can do
+	// that), when the book already exists and cannot be refused. Linking would
+	// move the index to the new book and orphan the existing link, so the file
+	// is imported unlinked and the existing link is left alone. A holder found
+	// BEFORE the book is created is refused with ErrTorrentAlreadyLinked
+	// instead, and sets no note.
 	TorrentLinkNoteAlreadyLinked = "torrent already linked to another book"
 	// TorrentLinkNoteLookupFailed: the torrent index could not be read, so
 	// whether the hash is already linked is unknown and it is not linked.
 	TorrentLinkNoteLookupFailed = "torrent index not readable"
 )
+
+// ErrTorrentAlreadyLinked is returned by ImportFile, before it creates
+// anything, when ImportFileRequest.TorrentHash is held by a live version. The
+// concrete error is a *TorrentAlreadyLinkedError naming the holder, so a
+// caller can both test errors.Is(err, ErrTorrentAlreadyLinked) and read the
+// book that owns the torrent with errors.As.
+//
+// It is a refusal, not a failure: the torrent is already in the library, so
+// the request is a retry or a duplicate, and importing it would only mint a
+// second, unlinked book. The discover handler maps it to the same 409 its own
+// pre-check returns. The handler's pre-check runs outside the per-torrent
+// lock, so a doubled request passes it twice; this is the check that holds.
+var ErrTorrentAlreadyLinked = errors.New("torrent already linked to a book in the library")
+
+// TorrentAlreadyLinkedError is the concrete error behind
+// ErrTorrentAlreadyLinked.
+type TorrentAlreadyLinkedError struct {
+	// BookID and VersionID name the live holder of the torrent.
+	BookID, VersionID string
+}
+
+func (e *TorrentAlreadyLinkedError) Error() string {
+	return fmt.Sprintf("%s: held by version %s of book %s", ErrTorrentAlreadyLinked, e.VersionID, e.BookID)
+}
+
+// Is makes errors.Is(err, ErrTorrentAlreadyLinked) hold for every holder.
+func (e *TorrentAlreadyLinkedError) Is(target error) bool { return target == ErrTorrentAlreadyLinked }
 
 func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse, error) {
 	if req.TorrentHash != "" && !validTorrentHash(req.TorrentHash) {
@@ -418,13 +451,16 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// Per-torrent link lock, held from the guards below through
 	// CreateIngestVersion's return (see versions.LockTorrent). Without it two
 	// concurrent imports of one torrent both pass the already-linked guard,
-	// both create a version carrying the hash, and the index ends up on the
-	// second book while the first book's row still claims the torrent. With
-	// it the second waits, then finds the first as the live holder and is
-	// imported unlinked (TorrentLinkNoteAlreadyLinked), exactly like a
-	// sequential retry. An empty hash takes no lock. releaseTorrent is
-	// idempotent: called once the version exists, and deferred for the early
-	// returns in between.
+	// both create a book, and both create a version carrying the hash, so the
+	// index ends up on the second book while the first book's row still claims
+	// the torrent. With it the second waits, then finds the first as the live
+	// holder and is refused with ErrTorrentAlreadyLinked before it creates
+	// anything: one book, as a sequential retry through the discover handler
+	// (a 409 from its own pre-check) already gave. The handler's pre-check
+	// runs outside this lock, so it cannot stop a doubled request; this guard
+	// can. An empty hash takes no lock. releaseTorrent is idempotent: called
+	// once the version exists, and deferred for the early returns in between
+	// (the refusal included).
 	releaseTorrent := sync.OnceFunc(versions.LockTorrent(req.TorrentHash))
 	defer releaseTorrent()
 
@@ -452,12 +488,14 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// is one-to-one and CreateBookVersion overwrites it unconditionally, so a
 	// second link (a retried or doubled discover import) would move the index
 	// from the book that owns the torrent to this new one, orphaning the first
-	// link. The discover handler refuses such a request with 409 before calling
-	// here; this guard keeps any other caller, or a request that raced past the
-	// handler's check, from stealing the index. Unlike the purge guard the new
-	// book still gets an ordinary unlinked version: nothing about the content
-	// is refused, only the second link. A concurrent pair is serialized by
-	// the per-torrent lock above, so the second sees the first as the holder.
+	// link. The torrent is already in the library, so the request is refused
+	// with ErrTorrentAlreadyLinked rather than imported as a second, unlinked
+	// copy: the duplicate book is the harm, not just the link. The discover
+	// handler's own pre-check returns the same 409 for the sequential case;
+	// this guard is what catches a request that raced past it, because it runs
+	// under the per-torrent lock, where the first import's link is already
+	// visible. A failed index read is different: it says nothing about the
+	// content, so the import goes ahead unlinked (TorrentLinkNoteLookupFailed).
 	if linkHash != "" {
 		holder, holdErr := versions.LiveTorrentHolder(is.db, linkHash)
 		switch {
@@ -467,11 +505,10 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			linkHash = ""
 			linkNote = TorrentLinkNoteLookupFailed
 		case holder != nil:
-			logger.New("importer").Warn("torrent %s is already linked to book %s (version %s); importing %s without the torrent link",
+			logger.New("importer").Warn("torrent %s is already linked to book %s (version %s); refusing to import %s as a duplicate",
 				linkHash, logger.SanitizeLogValue(holder.BookID), logger.SanitizeLogValue(holder.ID),
 				logger.SanitizeLogValue(req.FilePath))
-			linkHash = ""
-			linkNote = TorrentLinkNoteAlreadyLinked
+			return nil, &TorrentAlreadyLinkedError{BookID: holder.BookID, VersionID: holder.ID}
 		}
 	}
 
@@ -596,7 +633,9 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			Format: created.Format, Source: versionSource,
 			TorrentHash: linkHash,
 			// Created above: nothing can be stranded, so CreateIngestVersion
-			// skips the lookup and a failed read cannot cost the version.
+			// skips the stranded-version lookup, and a failure of that one
+			// read cannot cost the version. Its holder read (hash set) still
+			// runs and can fail on its own; see IngestVersionParams.NewBook.
 			NewBook: true,
 		}
 		if bfWritten {

@@ -1,5 +1,5 @@
 // file: internal/importer/service_torrent_hash_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b0f6d2e-3a41-4c85-9e17-5d8a2c4b1f90
 // last-edited: 2026-10-10
 
@@ -283,10 +283,12 @@ func alreadyLinkedStore(dir string, rows *[]*database.BookFile, vers *[]*databas
 	return st
 }
 
-// A hash a live version already holds is not linked a second time: the import
-// goes ahead with an ordinary unlinked version, so CreateBookVersion never
-// sees the hash and cannot move the one-to-one torrent index to the new book.
-func TestImportFile_TorrentHashAlreadyLinkedImportsUnlinked(t *testing.T) {
+// A hash a live version already holds is refused before anything is created:
+// no second book (it would be an unlinked duplicate), no file row, no version.
+// CreateBookVersion therefore never sees the hash and cannot move the
+// one-to-one torrent index to a new book. The sentinel names the holder so the
+// discover handler can answer 409 with the same body its own pre-check gives.
+func TestImportFile_TorrentHashAlreadyLinkedIsRefused(t *testing.T) {
 	withSupportedExt(t)
 	dir, path := stageFixture(t)
 
@@ -296,26 +298,18 @@ func TestImportFile_TorrentHashAlreadyLinkedImportsUnlinked(t *testing.T) {
 	is := NewImportService(alreadyLinkedStore(dir, &rows, &vers, &created, true))
 
 	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
-	if err != nil {
-		t.Fatalf("an already-linked hash must not fail the import: %v", err)
+	if !errors.Is(err, ErrTorrentAlreadyLinked) {
+		t.Fatalf("err = %v, want ErrTorrentAlreadyLinked (resp %+v)", err, resp)
 	}
-	if created != 1 {
-		t.Errorf("the book is created exactly once, got %d CreateBook calls", created)
+	if resp != nil {
+		t.Errorf("a refusal returns no response, got %+v", resp)
 	}
-	if len(vers) != 1 {
-		t.Fatalf("the new book still gets one ordinary version, got %d", len(vers))
+	var linkedErr *TorrentAlreadyLinkedError
+	if !errors.As(err, &linkedErr) || linkedErr.BookID != "b-old" || linkedErr.VersionID != "v-old" {
+		t.Errorf("the refusal must name the holder b-old / v-old, got %+v", err)
 	}
-	if vers[0].TorrentHash != "" {
-		t.Errorf("the new version must not carry the hash (it would steal the index): TorrentHash = %q", vers[0].TorrentHash)
-	}
-	if vers[0].Source != "imported" {
-		t.Errorf("version Source = %q, want imported", vers[0].Source)
-	}
-	if len(rows) != 1 || rows[0].DelugeHash != "" {
-		t.Fatalf("the file row must be written without the hash, got %+v", rows)
-	}
-	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteAlreadyLinked {
-		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteAlreadyLinked, resp.TorrentLinked, resp.TorrentLinkNote)
+	if created != 0 || len(rows) != 0 || len(vers) != 0 {
+		t.Errorf("a refusal creates nothing, got %d books, %d file rows, %d versions", created, len(rows), len(vers))
 	}
 }
 

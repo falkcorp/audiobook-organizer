@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discover_import_link_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2d9c4e61-8b57-4f03-a1e8-6c3b7d905a42
 // last-edited: 2026-10-10
 //
@@ -500,6 +500,54 @@ func TestDiscoverImport_AlreadyLinked_409(t *testing.T) {
 
 	assert.Equal(t, books, env.bookCount(t), "no second book may be created")
 	assert.Equal(t, callsBefore, fake.calls.Load(), "the refusal comes before any Deluge request")
+	after, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, owner.ID, after.ID, "the torrent index must still name the first book's version")
+}
+
+// blindTorrentIndexStore hides the torrent index from the handler's pre-check
+// the way a doubled request sees it: the check runs before the first import
+// has written anything. The importer keeps the real store, so its guard under
+// the per-torrent lock sees the link.
+type blindTorrentIndexStore struct{ database.Store }
+
+func (blindTorrentIndexStore) GetBookVersionByTorrentHash(string) (*database.BookVersion, error) {
+	return nil, nil
+}
+
+// A request that gets past the handler's pre-check (the second of a doubled
+// click: the check runs outside the importer's per-torrent lock, before the
+// first request has linked anything) is still refused: ImportFile returns
+// ErrTorrentAlreadyLinked before it creates a book, and the handler answers
+// with the same 409 and TORRENT_ALREADY_LINKED body as the pre-check. Without
+// the mapping this was a 500; without the refusal, a 201 and a duplicate book.
+func TestDiscoverImport_RacedPastPreCheck_409(t *testing.T) {
+	env := newLinkImportEnv(t)
+	fake := newLinkFakeDeluge(t, env.dlDir, "Example Book.m4b")
+	env.useClient(t, fake.srv.URL)
+
+	first := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	require.Equal(t, http.StatusCreated, first.Code, "body: %s", first.Body.String())
+	firstResp := decodeLinkResp(t, first)
+	require.True(t, firstResp.TorrentLinked, "control: the first import links the torrent")
+	owner, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	require.NotNil(t, owner)
+	books := env.bookCount(t)
+
+	env.srv.store = blindTorrentIndexStore{Store: env.store}
+	w := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	var body struct {
+		Code   string `json:"code"`
+		BookID string `json:"book_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "TORRENT_ALREADY_LINKED", body.Code)
+	assert.Equal(t, firstResp.Book.ID, body.BookID, "the 409 names the book that holds the torrent")
+
+	assert.Equal(t, books, env.bookCount(t), "the refused request must not create a second book")
 	after, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
 	require.NoError(t, err)
 	require.NotNil(t, after)
