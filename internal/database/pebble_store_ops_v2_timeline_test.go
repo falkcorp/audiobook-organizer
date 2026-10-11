@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package database
 
@@ -976,7 +976,7 @@ var opv2OpKeyAllowlist = map[string]string{
 	"internal/database/pebble_store_ops_v2_timeline.go:var opv2RawRefusedPrefixes":                  "read", // the raw-key guard's refused families
 	"internal/database/keyfamilies.go:var keyFamilies":                                              "read", // the db census registry's family prefix; declares the prefix, never writes a row
 	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).commitOpV2Row":                "stage",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).UpdateOperationV2Status":               "stage",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).updateOperationV2Status":               "stage", // body of UpdateOperationV2Status and UpdateOperationV2StatusIf
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ResetOperationV2ForResume":             "stage",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOperationV2StatusIfQueued":          "stage",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).DeleteOperationV2":                     "stage",

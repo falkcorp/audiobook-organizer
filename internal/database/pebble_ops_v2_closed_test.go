@@ -1,7 +1,7 @@
 // file: internal/database/pebble_ops_v2_closed_test.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 9e4b2c17-5a6d-4f38-8c01-7d2e9f4a6b53
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 // pebble_ops_v2_closed_test.go covers the PEBBLE-CLOSED-SWEEPTICK-RESIDUAL
 // defense-in-depth guard: every opv2 read/write on a closed PebbleStore must
@@ -83,6 +83,8 @@ func TestOpsV2ClosedStore_AllPathsReturnErrors(t *testing.T) {
 		store.InsertOperationV2(OperationV2Row{ID: "op-1", Status: "queued", QueuedAt: now}))
 	requireClosedErr(t, "UpdateOperationV2Status",
 		store.UpdateOperationV2Status("op-1", "running", &now, nil, nil))
+	_, err = store.UpdateOperationV2StatusIf("op-1", "queued", "running", &now, nil, nil)
+	requireClosedErr(t, "UpdateOperationV2StatusIf", err)
 	_, err = store.SetOperationV2StatusIfQueued("op-1", "running")
 	requireClosedErr(t, "SetOperationV2StatusIfQueued", err)
 	_, err = store.ListActiveOperationsV2()
