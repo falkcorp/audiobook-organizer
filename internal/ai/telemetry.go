@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: c3d4e5f6-a7b8-0004-cdef-000000000004
 // last-edited: 2026-10-11
 
@@ -101,8 +101,11 @@ func (r *attemptRecorder) snapshot() []attemptRecord {
 
 type attemptRecorderKey struct{}
 
-// attemptMiddleware is installed on every client (newOpenAIParser). The SDK
-// runs it once per HTTP attempt, inside its retry loop. It records the attempt
+// attemptMiddleware is installed on every parser client (newOpenAIParser); the
+// embedding clients build their own and do not carry it, which is harmless only
+// because embedWithRetry passes WithMaxRetries(0) per request, so the SDK never
+// absorbs an attempt there. The SDK runs it once per HTTP attempt, inside its
+// retry loop. It records the attempt
 // only when the request belongs to an observed call (a recorder is in the
 // context): batch submissions and anything else sharing a client pass through
 // untouched. It never reads a body except a 429's, and then only a bounded
@@ -177,6 +180,43 @@ func classifyAttempt(a attemptRecord) (outcome, reason string) {
 	return outcomeError, reason
 }
 
+// endedInBackoff reports whether err, a context error, ended the call while the
+// SDK slept before retrying a: the response (or transport error) a had already
+// arrived and was being retried, so a is the attempt err really describes, not
+// the context error. Without this a throttle that the caller's deadline or
+// cancel cuts off mid-backoff would be counted as a timeout or a cancellation
+// with the backoff sleep inside its duration, and the 429 would never be seen.
+//
+// A response the SDK does not retry (2xx, or a 4xx other than 408, 409 and 429)
+// is not a backoff: a context error after it came from reading its body. A
+// transport error that is itself a context error is the attempt being cut off,
+// also not a backoff.
+func endedInBackoff(a attemptRecord, err error) bool {
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if a.err != nil {
+		return !errors.Is(a.err, context.Canceled) && !errors.Is(a.err, context.DeadlineExceeded)
+	}
+	return a.status == http.StatusRequestTimeout ||
+		a.status == http.StatusConflict ||
+		a.status == http.StatusTooManyRequests ||
+		a.status >= http.StatusInternalServerError
+}
+
+// classifyFinal classifies the call as a whole from the attempts recorded and
+// the error fn returned. inBackoff is true when the call ended while the SDK
+// waited to retry its last attempt (see endedInBackoff): the classification is
+// then that attempt's, and no further request was made.
+func classifyFinal(attempts []attemptRecord, err error) (outcome, reason string, inBackoff bool) {
+	if n := len(attempts); n > 0 && endedInBackoff(attempts[n-1], err) {
+		outcome, reason = classifyAttempt(attempts[n-1])
+		return outcome, reason, true
+	}
+	outcome, reason = classifyCall(err)
+	return outcome, reason, false
+}
+
 // observe is the one place a direct AI request is timed, counted and traced.
 // fn is the single SDK call and nothing else (the caller reads the reply, and
 // parses it, outside): a reply that arrives but cannot be used is not a
@@ -189,6 +229,10 @@ func classifyAttempt(a attemptRecord) (outcome, reason string) {
 // Every attempt but the last was retried, so it is an "error" (or "timeout")
 // request; the last is classified by the error fn returned. A call that
 // reached no transport (no attempt recorded) counts once, timed end to end.
+// One exception: when the caller's context ends while the SDK is waiting to
+// retry, fn returns the context error but the last attempt got a response, so
+// that attempt is classified by its own response and timed to its headers, and
+// the context error is not a further request (classifyFinal).
 //
 // It records: ai_requests_total (by outcome), ai_request_duration_seconds,
 // ai_tokens_total from usage of the final reply (nothing when it carries no
@@ -229,7 +273,7 @@ func observe[T any](ctx context.Context, m callMeta, fn func(context.Context) (T
 		if e != nil {
 			// The classification only: never the error, which carries the
 			// endpoint URL and the provider's raw body (see WithAISpan).
-			outcome, reason := classifyCall(e)
+			outcome, reason, _ := classifyFinal(rec.snapshot(), e)
 			span.SetAttributes(attribute.String("ai.outcome", outcome))
 			if reason != "" {
 				span.SetAttributes(attribute.String("ai.failure_reason", reason))
@@ -242,15 +286,17 @@ func observe[T any](ctx context.Context, m callMeta, fn func(context.Context) (T
 	}, m.spanAttributes()...)
 
 	attempts := rec.snapshot()
-	last := len(attempts) - 1
-	for i, a := range attempts {
-		if i == last {
-			// The final attempt runs until fn returns, which includes reading
-			// the reply body; an absorbed one is timed to its response headers.
-			elapsed = end.Sub(a.start)
-			break
-		}
-		// Retried by the SDK, so it failed.
+	outcome, reason, inBackoff := classifyFinal(attempts, err)
+	// The attempts to count as retried (absorbed) ones. Normally the last is
+	// left out: it is the attempt fn's own result describes, timed until fn
+	// returned (which includes reading the reply body). Ended in backoff, the
+	// last attempt was retried too and is the one the classification is of.
+	retried := attempts
+	if len(attempts) > 0 && !inBackoff {
+		retried = attempts[:len(attempts)-1]
+		elapsed = end.Sub(attempts[len(attempts)-1].start)
+	}
+	for _, a := range retried {
 		ao, ar := classifyAttempt(a)
 		ins.duration.Record(ctx, a.elapsed.Seconds(), metric.WithAttributeSet(m.labels()))
 		ins.requests.Add(ctx, 1, metric.WithAttributes(append(m.labelList(), attrOutcome.String(ao))...))
@@ -258,8 +304,10 @@ func observe[T any](ctx context.Context, m callMeta, fn func(context.Context) (T
 			ins.failures.Add(ctx, 1, metric.WithAttributes(append(m.labelList(), attrReason.String(ar))...))
 		}
 	}
+	if inBackoff {
+		return res, err
+	}
 
-	outcome, reason := classifyCall(err)
 	ins.duration.Record(ctx, elapsed.Seconds(), metric.WithAttributeSet(m.labels()))
 	ins.requests.Add(ctx, 1, metric.WithAttributes(append(m.labelList(), attrOutcome.String(outcome))...))
 	if inTok > 0 {

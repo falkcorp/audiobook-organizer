@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
 // last-edited: 2026-10-10
 
@@ -430,8 +430,17 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				}
 
 				// Rate-limit shaped error: back off before this worker takes
-				// its next batch.
-				time.Sleep(5 * time.Second)
+				// its next batch. The wait ends early when the phase is
+				// cancelled or aborted: nothing is left for this worker to do
+				// then, and an unconditional sleep held a cancelled scan's
+				// worker for the full five seconds.
+				backoff := time.NewTimer(5 * time.Second)
+				defer backoff.Stop()
+				select {
+				case <-backoff.C:
+				case <-aborted:
+				case <-aiGroupCtx.Done():
+				}
 				return nil
 			}
 			if out.stopped {

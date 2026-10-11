@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -748,6 +749,96 @@ func TestSDKRetriedQuota429IsQuotaAndBodyIsIntact(t *testing.T) {
 	}
 }
 
+// histogramSum is the sum of every observation of the named histogram whose
+// attributes include all of want.
+func histogramSum(rm metricdata.ResourceMetrics, name string, want map[string]string) float64 {
+	m := metricByName(rm, name)
+	if m == nil {
+		return 0
+	}
+	h, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		return 0
+	}
+	var total float64
+	for _, dp := range h.DataPoints {
+		if attrsMatch(dp.Attributes, want) {
+			total += dp.Sum
+		}
+	}
+	return total
+}
+
+// SF1: a call whose context ends while the SDK waits to retry a 429 is a
+// throttle, not a timeout or a cancellation. The 429 arrived; the context
+// error is only how the wait was cut short. It counts as one error request and
+// one rate_limit failure, with the attempt's own duration (to its headers) and
+// not the backoff sleep, and the context error is not a second request.
+func TestContextEndedDuringSDKBackoffStillCountsTheThrottle(t *testing.T) {
+	const ctxLife = 600 * time.Millisecond
+	for name, newCtx := range map[string]func() (context.Context, context.CancelFunc){
+		"deadline": func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), ctxLife)
+		},
+		"cancel": func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(ctxLife, cancel)
+			return ctx, cancel
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tel := installAITelemetry(t)
+			srv := newStubEndpoint(t, "", func(_ int64, w http.ResponseWriter) bool {
+				// A wait far longer than the context lives: the SDK is asleep
+				// when the context ends.
+				w.Header().Set("Retry-After-Ms", "10000")
+				http.Error(w, `{"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}}`, http.StatusTooManyRequests)
+				return true
+			})
+			ctx, cancel := newCtx()
+			defer cancel()
+			if _, err := newTestParser(t, srv).ParseFilename(ctx, "x"); err == nil {
+				t.Fatal("ParseFilename succeeded against a 429 and a dead context")
+			}
+			if got := srv.requests.Load(); got != 1 {
+				t.Fatalf("server saw %d requests, want 1 (the context ended in the SDK's backoff)", got)
+			}
+			rm := tel.collect(t)
+			task := map[string]string{"task": TaskFilenameParse}
+			if got := counterSum(rm, "ai.requests", task); got != 1 {
+				t.Errorf("ai.requests = %d, want 1 (no second request for the context error)", got)
+			}
+			if got := counterSum(rm, "ai.requests", map[string]string{"task": TaskFilenameParse, "outcome": "error"}); got != 1 {
+				t.Errorf("ai.requests{outcome=error} = %d, want 1 (the 429), not timeout or canceled", got)
+			}
+			if got := counterSum(rm, "ai.failures", map[string]string{"task": TaskFilenameParse, "reason": "rate_limit"}); got != 1 {
+				t.Errorf("ai.failures{reason=rate_limit} = %d, want 1", got)
+			}
+			if got := counterSum(rm, "ai.failures", task); got != 1 {
+				t.Errorf("ai.failures = %d in total, want 1 (no timeout failure besides the throttle)", got)
+			}
+			if got := histogramCount(rm, "ai.request.duration", task); got != 1 {
+				t.Fatalf("duration observations = %d, want 1", got)
+			}
+			if sum := histogramSum(rm, "ai.request.duration", task); sum >= ctxLife.Seconds()/2 {
+				t.Errorf("duration = %.3fs, want the attempt's own time, well under the %s the SDK slept", sum, ctxLife)
+			}
+			for _, sp := range tel.spans.Ended() {
+				if sp.Name() != "ai."+TaskFilenameParse {
+					continue
+				}
+				got := map[string]string{}
+				for _, kv := range sp.Attributes() {
+					got[string(kv.Key)] = kv.Value.String()
+				}
+				if got["ai.outcome"] != outcomeError || got["ai.failure_reason"] != reasonRateLimit {
+					t.Errorf("span classification = %v, want outcome=error reason=rate_limit", got)
+				}
+			}
+		})
+	}
+}
+
 // S4: a cover-text reply that cannot be parsed is an ok request plus a
 // reply_parse failure, so the reply-quality panel can show cover_text.
 func TestCoverTextUnparseableReplyRecordsReplyParse(t *testing.T) {
@@ -856,6 +947,33 @@ func TestModelLabelIsBounded(t *testing.T) {
 	// The same name under the other provider is a different pair.
 	if got := (callMeta{provider: providerOpenAI, model: "model-a"}).normalized().model; got != modelOther {
 		t.Errorf("a new (provider, model) pair past the limit = %q, want %q", got, modelOther)
+	}
+}
+
+// The span carries the real model name: the cap protects metric series, and a
+// trace attribute is not a series. The label still folds.
+func TestSpanModelIsNotCapped(t *testing.T) {
+	modelLabels.reset()
+	t.Cleanup(modelLabels.reset)
+	for i := range maxModelLabels {
+		(callMeta{provider: providerLocal, model: "model-" + string(rune('a'+i))}).normalized()
+	}
+	spanModel := func(m callMeta) string {
+		for _, kv := range m.normalized().spanAttributes() {
+			if kv.Key == "ai.model" {
+				return kv.Value.AsString()
+			}
+		}
+		return ""
+	}
+	if got := spanModel(callMeta{provider: providerLocal, model: "model-extra"}); got != "model-extra" {
+		t.Errorf("span ai.model past the cap = %q, want the real name", got)
+	}
+	if got := (callMeta{provider: providerLocal, model: "model-extra"}).normalized().model; got != modelOther {
+		t.Errorf("label past the cap = %q, want %q", got, modelOther)
+	}
+	if got := spanModel(callMeta{provider: providerLocal, model: "free text here"}); got != modelOther {
+		t.Errorf("span ai.model for free text = %q, want %q (the whitespace fold still applies)", got, modelOther)
 	}
 }
 

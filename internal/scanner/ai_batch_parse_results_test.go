@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_parse_results_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a3c9e51-2d84-4b06-b1f7-5e0a9c63d842
 // last-edited: 2026-10-10
 
@@ -77,6 +77,18 @@ func TestParseResults_Disposition(t *testing.T) {
 		// cancels needs it non-zero: with a zero delay the timer and the
 		// cancelled context are both ready and the select picks either.
 		splitDelay time.Duration
+		// wantBatchHeads, when set, pins that batching happened: the first
+		// filename of every call asked about exactly batchSize files, sorted.
+		// A split call is smaller than a batch, so these are the batches' first
+		// calls, one per batch. Without it a case with a batch size override
+		// would still pass if the override were ignored and one big batch split
+		// its way down to the same counts.
+		wantBatchHeads []string
+		// callDelay is how long each ParseBatch call takes. A case that asserts
+		// concurrency needs the calls to overlap long enough to be seen.
+		callDelay time.Duration
+		// wantConcurrent asserts more than one call was in flight at once.
+		wantConcurrent bool
 	}{
 		{
 			name:  "result merged into an empty book",
@@ -143,12 +155,17 @@ func TestParseResults_Disposition(t *testing.T) {
 			wantFalse: 3,
 		},
 		{
+			// The phase context is really cancelled by the first call, which then
+			// returns the cancellation, so the phase takes its stopped path (and
+			// does not back off) rather than the retry-later path of a backend
+			// that merely failed.
 			name:  "first call cancelled: every item unresolved with no error of its own",
 			books: []Book{{FilePath: "/x/a.m4b"}, {FilePath: "/x/b.m4b"}, {FilePath: "/x/c.m4b"}},
 			parser: func(n []string) ([]*ai.ParsedMetadata, error) {
 				return nil, context.Canceled
 			},
-			wantFalse: 3,
+			cancelAfterCalls: 1,
+			wantFalse:        3,
 		},
 		{
 			// The same situation as the case above reached the other way: the
@@ -192,6 +209,9 @@ func TestParseResults_Disposition(t *testing.T) {
 			},
 			batchSize: 4,
 			wantTrue:  11, wantFalse: 1,
+			wantBatchHeads: []string{"a0.m4b", "p0.m4b", "s0.m4b"},
+			callDelay:      150 * time.Millisecond,
+			wantConcurrent: true,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -226,6 +246,27 @@ func TestParseResults_Disposition(t *testing.T) {
 				}
 			}
 
+			// Records every call's filenames and how many were in flight at once.
+			var callMu sync.Mutex
+			var callNames [][]string
+			var inFlight, peakInFlight atomic.Int32
+			inner := parser
+			parser = func(n []string) ([]*ai.ParsedMetadata, error) {
+				cur := inFlight.Add(1)
+				defer inFlight.Add(-1)
+				for {
+					peak := peakInFlight.Load()
+					if cur <= peak || peakInFlight.CompareAndSwap(peak, cur) {
+						break
+					}
+				}
+				callMu.Lock()
+				callNames = append(callNames, slices.Clone(n))
+				callMu.Unlock()
+				time.Sleep(c.callDelay)
+				return inner(n)
+			}
+
 			cands := make([]int, len(c.books))
 			for i := range cands {
 				cands[i] = i
@@ -245,6 +286,25 @@ func TestParseResults_Disposition(t *testing.T) {
 			if nTrue != c.wantTrue || nFalse != c.wantFalse {
 				t.Errorf("accepted=true %d, accepted=false %d; want %d and %d (items %d, counts %d)",
 					nTrue, nFalse, c.wantTrue, c.wantFalse, len(c.books), len(got))
+			}
+
+			if c.wantBatchHeads != nil {
+				callMu.Lock()
+				var heads []string
+				for _, names := range callNames {
+					if len(names) == c.batchSize {
+						heads = append(heads, names[0])
+					}
+				}
+				callMu.Unlock()
+				slices.Sort(heads)
+				if !slices.Equal(heads, c.wantBatchHeads) {
+					t.Errorf("first calls of %d files began with %v, want %v (the batch size override did not cut the batches)",
+						c.batchSize, heads, c.wantBatchHeads)
+				}
+			}
+			if c.wantConcurrent && peakInFlight.Load() < 2 {
+				t.Errorf("peak calls in flight = %d, want more than 1 (the batches did not run concurrently)", peakInFlight.Load())
 			}
 		})
 	}

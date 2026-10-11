@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.6.2 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -478,7 +478,7 @@ Every direct AI request (the seven chat sites in `openai_parser.go`, `scoreMetad
 
 | Series | Labels | Meaning |
 |---|---|---|
-| `ai_requests_total` | `provider`, `model`, `task`, `outcome` | One per HTTP attempt. A retry is a new attempt whoever retries: the retry layer (`DoWithRetry`) or the SDK's own two retries, which every constructor except the routed parser keeps and which `attemptMiddleware` records, so a 429 or 5xx the SDK absorbs is counted as an `error` request with its `ai_failures_total` reason. `outcome` is `ok`, `error`, `timeout` or `canceled`. |
+| `ai_requests_total` | `provider`, `model`, `task`, `outcome` | One per HTTP attempt. A retry is a new attempt whoever retries: the retry layer (`DoWithRetry`) or the SDK's own two retries, which every constructor except the routed parser keeps and which `attemptMiddleware` records (it is on every parser client; the embedding clients build their own and disable SDK retries per request with `WithMaxRetries(0)`, so they have no absorbed attempt to record), so a 429 or 5xx the SDK absorbs is counted as an `error` request with its `ai_failures_total` reason. If the caller's context ends while the SDK waits to retry, that last response is still what is counted (an `error` request and, for a 429, `rate_limit`), not a `timeout` or `canceled` one. `outcome` is `ok`, `error`, `timeout` or `canceled`. |
 | `ai_request_duration_seconds` | `provider`, `model`, `task` | Wall time of one HTTP attempt (to the end of the reply for the final attempt), excluding the SDK's retry backoff. Buckets come from the view in `internal/telemetry/views.go`. |
 | `ai_tokens_total` | `provider`, `model`, `task`, `direction` | `direction` is `input` or `output`, from the usage block the provider returned. A reply with all-zero usage (some local servers omit it) records nothing. Embeddings record `input` only. |
 | `ai_failures_total` | `provider`, `model`, `task`, `reason` | `reason` is `rate_limit`, `quota`, `unreachable`, `timeout`, `permanent`, `reply_parse`, `count_mismatch` or `other`. |
@@ -490,7 +490,7 @@ Closed enums. `task` is one of `filename_parse`, `audiobook_parse`, `batch_parse
 - A cancellation is `outcome="canceled"` and no failure; a deadline is `outcome="timeout"` with `reason="timeout"`.
 - Batch-API submissions (`embedding_batch.go`, `openai_batch.go`) and `internal/server/bench.go` are not wrapped, and the tokens of a batch job arrive in its result file, so they are not recorded. Pool-routed calls reach the same wrapped SDK sites, so they are counted here as well as in `ai_dispatch_*`, which measures the routing layer.
 - `endpoint` and `node` are deliberately not labels: the pool is growable and the histogram multiplies every label by its bucket count. The pool endpoint id, which a pool-routed parser knows, is a span attribute (`ai.endpoint_id`) only. No filename, prompt, reply or title is ever a label or span attribute.
-- Spans are named `ai.<task>`, nest under the caller's context, and carry `ai.provider`, `ai.model`, `ai.task`, `ai.endpoint_id` (routed parsers), the token counts and, when the SDK retried, `ai.http_attempts`. A failed call sets the span status to Error with `error=true` and only a classification (`ai.outcome`, `ai.failure_reason`, `http.response.status_code`); the error text is never recorded, because it can carry the endpoint URL and the provider's response body. A cancellation leaves the span status alone. A reply failure is an `ai.reply_failure` event on the caller's span, never an error status, since the batch split recovers a count mismatch by design.
+- Spans are named `ai.<task>`, nest under the caller's context, and carry `ai.provider`, `ai.model` (the real model name; only the metric label is capped), `ai.task`, `ai.endpoint_id` (routed parsers), the token counts and, when the SDK retried, `ai.http_attempts`. A failed call sets the span status to Error with `error=true` and only a classification (`ai.outcome`, `ai.failure_reason`, `http.response.status_code`); the error text is never recorded, because it can carry the endpoint URL and the provider's response body. A cancellation leaves the span status alone. A reply failure is an `ai.reply_failure` event on the caller's span, never an error status, since the batch split recovers a count mismatch by design.
 - Dashboard: `deploy/grafana/dashboards/audiobook-organizer-ai.json`. Alert: `AudiobookOrganizerAIFailureRatioHigh` in `deploy/prometheus/alert-rules.yml`.
 
 ---
