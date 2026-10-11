@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_bench_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b5d2c8e4-1f6a-4a37-9c08-7e4b3d2a6f91
 // last-edited: 2026-10-10
 
@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
@@ -172,8 +173,20 @@ func TestReviewQuery_ResponseSizes40k(t *testing.T) {
 	allBase := newReviewQueryBase(reviewBaseKey{snap: allSnap}, allSet, time.Now())
 	idsQ := mustReviewQuery(t, map[string]string{"ids": "all"})
 	ids := mustEvaluate(t, allBase, idsQ)
-	idsBody, err := json.Marshal(gin.H{"data": reviewIDsResponse(ids)})
+	idsBody, err := json.Marshal(gin.H{"data": reviewIDsResponse(ids, false, 0)})
 	require.NoError(t, err)
+
+	// ids=all&pins=true at the bulk apply cap's default: the largest list the
+	// server sends pins for.
+	pinSnap := syntheticReviewSnapshot(applycap.Default, true)
+	pinSet, err := overlayLiveBooks(pinSnap, nil, nil, changedIDs())
+	require.NoError(t, err)
+	pinBase := newReviewQueryBase(reviewBaseKey{snap: pinSnap}, pinSet, time.Now())
+	pinList := mustEvaluate(t, pinBase, mustReviewQuery(t, map[string]string{"ids": "all", "pins": "true"}))
+	pinsBody, err := json.Marshal(gin.H{"data": reviewIDsResponse(pinList, true, applycap.Default)})
+	require.NoError(t, err)
+	t.Logf("ids=all&pins=true: %d bytes (%.2f MB) for %d ids", len(pinsBody), float64(len(pinsBody))/(1024*1024), len(pinList.refs))
+	require.LessOrEqual(t, len(pinsBody), 2*1024*1024)
 
 	t.Logf("view=page 50 rows: %d bytes (%.1f KB) over %d listed rows", len(pageBody), float64(len(pageBody))/1024, len(page.refs))
 	t.Logf("ids=all: %d bytes (%.2f MB) for %d ids", len(idsBody), float64(len(idsBody))/(1024*1024), len(ids.refs))

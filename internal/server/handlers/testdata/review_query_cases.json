@@ -17,7 +17,7 @@
       },
       "candidate": {
         "source": "Audible",
-        "score": 0.95,
+        "score": 1.95,
         "title": "Work 01",
         "author": "Author 01",
         "asin": "B000000001",
@@ -179,7 +179,7 @@
       },
       "candidate": {
         "source": "Audible",
-        "score": 0.9,
+        "score": 1.5,
         "title": "Shared Work",
         "author": "Author 07",
         "asin": "B0SHARED00",
@@ -844,10 +844,45 @@
         "b14",
         "b15"
       ],
-      "why": "score*100 >= 90 for matched: 0.95, 0.90 (x4); 0.88, 0.85, 0.80, 0.75, 0.70, 0.40 fail",
+      "why": "score*100 >= 90 for matched: 1.95, 1.50, 0.90 (x3); 0.88, 0.85, 0.80, 0.75, 0.70, 0.40 fail",
       "want_runtime_hidden": 0,
       "server_only": false,
       "want_total": 9
+    },
+    {
+      "name": "min confidence 150 boundary, above 100",
+      "query": {
+        "min_confidence": "150"
+      },
+      "want_ids": [
+        "b01",
+        "b07",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "a score is a sum that exceeds 1.0: matched 1.95 and 1.50 reach 150, every other matched row fails; no_match and applied rows are not filtered",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 6
+    },
+    {
+      "name": "min confidence 190, the lane's Normal level",
+      "query": {
+        "min_confidence": "190"
+      },
+      "want_ids": [
+        "b01",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "NORMAL_PRESET.confidenceThreshold is 190: only matched 1.95 reaches it (1.50 does not, so a threshold clamped to 100 would list b07 too); no_match and applied rows are not filtered",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 5
     },
     {
       "name": "hide runtime differences",
@@ -1177,10 +1212,10 @@
         "sort": "confidence"
       },
       "want_ids": [
-        "b14",
         "b01",
-        "b05",
         "b07",
+        "b14",
+        "b05",
         "b08",
         "b09",
         "b15",
