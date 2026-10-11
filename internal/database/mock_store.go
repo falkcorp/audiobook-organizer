@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.142.0
+// version: 1.143.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -272,8 +272,8 @@ type MockStore struct {
 	// System activity log
 	AddSystemActivityLogFunc  func(source, level, message string) error
 	GetSystemActivityLogsFunc func(source string, limit int) ([]SystemActivityLog, error)
-	PruneOperationLogsFunc    func(olderThan time.Time) (int, error)
-	PruneOperationChangesFunc func(olderThan time.Time) (int, error)
+	PruneOperationLogsFunc    func(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
+	PruneOperationChangesFunc func(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
 	// CreateOperationChangeFunc lets a test observe the change rows an
 	// operation writes. CreateOperationChange returned a bare nil with no hook,
 	// so a test could assert an operation's SUMMARY but never its CHANGE LOG —
@@ -282,7 +282,7 @@ type MockStore struct {
 	GetOperationChangesFunc          func(operationID string) ([]*OperationChange, error)
 	GetBookChangesFunc               func(bookID string) ([]*OperationChange, error)
 	MarkOperationChangesRevertedFunc func(operationID string, changeIDs []string) error
-	PruneSystemActivityLogsFunc      func(olderThan time.Time) (int, error)
+	PruneSystemActivityLogsFunc      func(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
 
 	// AI jobs
 	CreateAIJobFunc          func(job AIJob, payloadJSON []byte) error
@@ -2778,23 +2778,23 @@ func (m *MockStore) GetSystemActivityLogs(source string, limit int) ([]SystemAct
 	return nil, nil
 }
 
-func (m *MockStore) PruneOperationLogs(olderThan time.Time) (int, error) {
+func (m *MockStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error) {
 	if m.PruneOperationLogsFunc != nil {
-		return m.PruneOperationLogsFunc(olderThan)
+		return m.PruneOperationLogsFunc(ctx, olderThan, onChunk)
 	}
 	return 0, nil
 }
 
-func (m *MockStore) PruneOperationChanges(olderThan time.Time) (int, error) {
+func (m *MockStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error) {
 	if m.PruneOperationChangesFunc != nil {
-		return m.PruneOperationChangesFunc(olderThan)
+		return m.PruneOperationChangesFunc(ctx, olderThan, onChunk)
 	}
 	return 0, nil
 }
 
-func (m *MockStore) PruneSystemActivityLogs(olderThan time.Time) (int, error) {
+func (m *MockStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error) {
 	if m.PruneSystemActivityLogsFunc != nil {
-		return m.PruneSystemActivityLogsFunc(olderThan)
+		return m.PruneSystemActivityLogsFunc(ctx, olderThan, onChunk)
 	}
 	return 0, nil
 }

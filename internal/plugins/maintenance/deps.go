@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.81.2
+// version: 1.82.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-11
 
@@ -624,8 +624,12 @@ type CleanupRunners interface {
 	RunAutoPurgeSoftDeleted(opID string)
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
 	CleanupTrashedVersions() int
-	// PruneOldLogs prunes operation logs older than retentionDays.
-	PruneOldLogs(retentionDays int) error
+	// PruneOldLogs prunes operation logs, operation changes and system activity
+	// logs older than retentionDays, in bounded chunks. It stops between chunks
+	// when ctx is cancelled (returning the count already pruned and an error
+	// wrapping ctx.Err()), and calls onProgress, if non-nil, after each committed
+	// chunk with the kind just pruned and the running total across all kinds.
+	PruneOldLogs(ctx context.Context, retentionDays int, onProgress func(kind string, totalPruned int)) (int, error)
 }
 
 // ActivityLogOps covers the activity log.

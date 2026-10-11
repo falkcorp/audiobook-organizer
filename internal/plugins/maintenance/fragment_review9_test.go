@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -244,7 +244,7 @@ func changeLiveMember(t *testing.T, f *fragFixture, r repairs.Row) bool {
 
 func pruneAll(t *testing.T, f *fragFixture) {
 	t.Helper()
-	_, err := f.s.PruneOperationChanges(time.Now().Add(time.Hour))
+	_, err := f.s.PruneOperationChanges(context.Background(), time.Now().Add(time.Hour), nil)
 	require.NoError(t, err)
 }
 

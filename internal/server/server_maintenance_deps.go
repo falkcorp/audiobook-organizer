@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.60.1
+// version: 1.61.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-11
 
@@ -297,10 +297,9 @@ func (s *Server) OLStoreCompactionStats() (compactprogress.Stats, bool) {
 	return s.olService.CompactionStats()
 }
 
-func (s *Server) PruneOldLogs(retentionDays int) error {
+func (s *Server) PruneOldLogs(ctx context.Context, retentionDays int, onProgress func(kind string, totalPruned int)) (int, error) {
 	retLog := logger.New("purge_old_logs")
-	_, err := logger.PruneOldLogs(s.storeForWiring(), retentionDays, retLog)
-	return err
+	return logger.PruneOldLogs(ctx, s.storeForWiring(), retentionDays, retLog, onProgress)
 }
 
 // MaintainActivityLog runs the non-compaction half of the nightly activity-log

@@ -1,11 +1,14 @@
 // file: internal/database/iface_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b93b0da0-8afb-46fb-983e-c43f238ea67c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package database
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // OperationLifecycleStore creates operations and moves them through their statuses.
 type OperationLifecycleStore interface {
@@ -71,8 +74,11 @@ type OperationResultStore interface {
 // DELETE /operations/history (SV-01, 2026-09-11) and went with it.
 type OperationPruner interface {
 	// Retention
-	PruneOperationLogs(olderThan time.Time) (int, error)
-	PruneOperationChanges(olderThan time.Time) (int, error)
+	// Both delete in bounded chunks (one commit per chunk), stop between chunks
+	// when ctx is cancelled (returning ctx.Err() and the rows already deleted),
+	// and call onChunk, if non-nil, after each committed chunk.
+	PruneOperationLogs(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
+	PruneOperationChanges(ctx context.Context, olderThan time.Time, onChunk PruneChunkFunc) (int, error)
 	// DeleteOperationWithLogs removes the operation record (operation:<id>) and all
 	// associated log lines (operationlog:<id>:*) in a single atomic batch.
 	// This is the correct deletion primitive for the retention sweep — deleting the

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-11
 
@@ -330,34 +330,52 @@ func (p *Plugin) runOptimizeActivityDB(ctx context.Context, _ json.RawMessage, r
 func (p *Plugin) purgeOldLogsDef() sdk.OperationDef {
 	sched := "0 2 * * 0" // 02:00 every Sunday
 	return sdk.OperationDef{
-		ID:              "maintenance.purge-old-logs",
-		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
+		ID: "maintenance.purge-old-logs",
+		// LivenessManual: runPurgeOldLogs reports after every committed chunk
+		// (5,000 rows). Before 2026-10-11 the whole backlog went in one commit
+		// and the op could not report, so it was LivenessNone with a 30-minute
+		// silence budget. A chunk commits in milliseconds; the longest silent
+		// stretch is the scan to the next 5,000 expired rows, so 10 minutes is
+		// ample without letting a wedged scan run unnoticed for half an hour.
+		Liveness:        sdk.LivenessManual,
+		ProgressTimeout: 10 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Prune old operation logs",
 		Description:     "Prunes operation logs and system activity logs older than the configured retention period.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.purge-old-logs",
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         30 * time.Minute,
-		Schedule:        &sched,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runPurgeOldLogs,
+		// Cancellable: the prune checks ctx between chunks, so a cancel (or the
+		// Timeout below) stops it with every committed chunk kept and the rest
+		// left for the next run. It was false while one batch could not be
+		// interrupted.
+		Cancellable:  true,
+		Isolate:      false,
+		Timeout:      30 * time.Minute,
+		Schedule:     &sched,
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runPurgeOldLogs,
 	}
 }
 
-func (p *Plugin) runPurgeOldLogs(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runPurgeOldLogs(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	retentionDays := p.deps.LogRetentionDays()
 	if retentionDays <= 0 {
 		_ = reporter.Log(slog.LevelInfo, "Log purge disabled (log_retention_days is -1, keep forever), skipping")
 		return nil
 	}
-	if err := p.deps.PruneOldLogs(retentionDays); err != nil {
+	_ = reporter.UpdateProgress(0, 0, fmt.Sprintf("Pruning logs older than %d days", retentionDays))
+	total, err := p.deps.PruneOldLogs(ctx, retentionDays, func(kind string, totalPruned int) {
+		_ = reporter.UpdateProgress(totalPruned, 0, fmt.Sprintf("Pruned %d records so far (latest chunk: %s)", totalPruned, kind))
+	})
+	if err != nil {
+		// Chunks committed before the failure or cancel stay deleted; say how
+		// many, then return the error unchanged so the run is recorded as
+		// failed or canceled rather than as a clean prune.
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Log purge stopped after pruning %d records: %v", total, err))
 		return err
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Pruned logs older than %d days", retentionDays))
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Pruned %d records older than %d days", total, retentionDays))
 	return nil
 }
 

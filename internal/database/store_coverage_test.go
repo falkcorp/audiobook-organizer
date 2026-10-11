@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.10.1
+// version: 2.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -605,13 +605,13 @@ func TestCoverage_PruneOperationLogs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Prune with past time (should delete nothing — exercises the code path)
-	n, err := store.PruneOperationLogs(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	n, err := store.PruneOperationLogs(context.Background(), time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 
 	// Prune with far-future time — deletes all
 	// SQLite stores created_at as text via CURRENT_TIMESTAMP; pass a far-future time string
-	n, err = store.PruneOperationLogs(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	n, err = store.PruneOperationLogs(context.Background(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, n, 1)
 }
@@ -633,7 +633,7 @@ func TestCoverage_PruneOperationChanges(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	n, err := store.PruneOperationChanges(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	n, err := store.PruneOperationChanges(context.Background(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, n, 1)
 }
@@ -644,7 +644,7 @@ func TestCoverage_PruneSystemActivityLogs(t *testing.T) {
 	err := store.AddSystemActivityLog("test", "info", "prunable")
 	require.NoError(t, err)
 
-	n, err := store.PruneSystemActivityLogs(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	n, err := store.PruneSystemActivityLogs(context.Background(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, n, 1)
 }
