@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-10-11
 
@@ -614,14 +614,14 @@ func TestIsGenreTagline(t *testing.T) {
 // can relink to that author instead of unlinking. Synthetic names only.
 func TestCleanedName_ReleaseTagTail(t *testing.T) {
 	for in, want := range map[string]string{
-		"Synthetic Writer [32k 08;53;59 122MB]": "Synthetic Writer",
-		"Synthetic Writer {497mb}":              "Synthetic Writer",
-		"Synthetic Writer (120 MB)":             "Synthetic Writer",
-		"Synthetic Writer [64k #Winner]":        "Synthetic Writer",
+		"Synthetic Writer [32k 01;02;03 250MB]": "Synthetic Writer",
+		"Synthetic Writer {300mb}":              "Synthetic Writer",
+		"Synthetic Writer (150 MB)":             "Synthetic Writer",
+		"Synthetic Writer [64k #Tag]":           "Synthetic Writer",
 		"Q. R. Synthetic [64k 100MB]":           "Q. R. Synthetic",
 		// Several groups, and a no-break space before the group.
-		"Synthetic Writer [32k 122MB] {497mb}": "Synthetic Writer",
-		"Synthetic Writer\u00a0[32k 122MB]":    "Synthetic Writer",
+		"Synthetic Writer [32k 250MB] {300mb}": "Synthetic Writer",
+		"Synthetic Writer\u00a0[32k 250MB]":    "Synthetic Writer",
 	} {
 		got, ok := CleanedName(in)
 		if !ok || got != want {
@@ -636,14 +636,14 @@ func TestCleanedName_ReleaseTagTail(t *testing.T) {
 	// Nothing plausible remains, or the group is not a release tag: no clean
 	// name, so the repair's unlink path is unchanged.
 	for _, in := range []string{
-		"[32k 08;53;59 122MB]",
-		"{497mb}",
+		"[32k 01;02;03 250MB]",
+		"{300mb}",
 		"64k 01;02;03 100MB",
-		"10 831MB] #Winner",
-		"1234 [32k 122MB]",
+		"10 555MB] #SyntheticTag",
+		"1234 [32k 250MB]",
 		"Synthetic Writer [Some Series]", // not a release tag
-		"Synthetic Writer [#Winner]",     // the gate does not refuse this one either
-		"Synthetic Writer [64k] {497mb}", // an inner group that is not a release tag stays
+		"Synthetic Writer [#Tag]",        // the gate does not refuse this one either
+		"Synthetic Writer [64k] {300mb}", // an inner group that is not a release tag stays
 		"Synthetic Writer #Audiobook",    // a hashtag outside a group
 	} {
 		if got, ok := CleanedName(in); ok {

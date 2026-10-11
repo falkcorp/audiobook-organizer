@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/personalized_newest_authors_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: beae48ac-f2a3-4e1d-8f13-e9b94078227b
 // last-edited: 2026-10-11
 
@@ -14,8 +14,8 @@ import (
 
 // Until 2026-10-11 the Newest Authors shelf was the first ten authors BY NAME,
 // every one stamped "added now". Names led by punctuation or a digit sort first,
-// so the shelf on prod was junk like "&#169", "(c) 2001 …", "10 831MB] …" and
-// "13 short stories", all "added today".
+// so the shelf on prod was junk like "&#<code>", "(c) <year> …", "<digits> <size>] …" and
+// "<n> short <plural noun>", all "added today".
 //
 // This fixture gives every kind of author that must NOT lead the shelf a name
 // that sorts BEFORE the real new authors ("Zed …"), so a name-ordered shelf
@@ -68,13 +68,13 @@ func TestPersonalized_NewestAuthorsAreTheNewestVisibleAuthors(t *testing.T) {
 	lib := f.lib
 
 	// Junk names on OLD visible books. A name-ordered shelf leads with these.
-	lib.addAuthor(1, "&#169", shelfBookID(0))
-	lib.addAuthor(2, "(c) 2001 Synthetic Writer", shelfBookID(1))
-	lib.addAuthor(3, "10 831MB] #SyntheticTag", shelfBookID(2))
-	lib.addAuthor(4, "13 short stories", shelfBookID(3))
+	lib.addAuthor(1, "&#174", shelfBookID(0))
+	lib.addAuthor(2, "(c) 1999 Synthetic Press", shelfBookID(1))
+	lib.addAuthor(3, "10 555MB] #SyntheticTag", shelfBookID(2))
+	lib.addAuthor(4, "12 short tales", shelfBookID(3))
 	// Junk whose only books are hidden (alternate version, unorganized,
 	// quarantined) — and those books are the NEWEST rows in the store.
-	lib.addAuthor(5, "&#174", "shelf-alt-version")
+	lib.addAuthor(5, "&#182", "shelf-alt-version")
 	lib.addAuthor(6, "(c) 1999 Hidden Writer", "shelf-unorganized")
 	lib.addAuthor(7, "#hidden", "shelf-quarantined")
 	// Visible, but no visible book is dated: its date is unknown, not new.

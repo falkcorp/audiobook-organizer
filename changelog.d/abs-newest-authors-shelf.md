@@ -6,7 +6,7 @@ The Audiobookshelf-compatible home screen's Newest Authors shelf was the first
 ten authors in alphabetical order, each marked as added at the moment of the
 request. Names that start with punctuation or a digit sort before letters, so
 the shelf was led by leftover tag text stored as authors (an HTML entity, a
-copyright line, a file-size fragment, "13 short stories"), all shown as added
+copyright line, a file-size fragment, a story-count phrase), all shown as added
 today.
 
 The shelf now lists the ten authors who most recently arrived in the visible
@@ -21,9 +21,9 @@ is chosen when the shared author list is built, so the home page does no extra
 library scan.
 
 The author-name creation check now also refuses release-post text such as a
-file size ("831MB", "1.2 GB") or a hashtag after a space ("#Winner"), which it
+file size (a number and a byte unit) or a hashtag after a space, which it
 used to accept, including when the space is a non-breaking or full-width space.
-A real name with such a group appended ("Name [32k 08;53;59 122MB]") is now
+A real name with such a group appended ("Name [<bitrate> <timecode> <size>]") is now
 treated as a junk row too, and the junk-author repair reads the name out of the
 group and, when that author already exists, proposes moving the books to them
 instead of removing the credit.

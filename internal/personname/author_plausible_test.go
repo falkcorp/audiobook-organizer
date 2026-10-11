@@ -1,5 +1,5 @@
 // file: internal/personname/author_plausible_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3d0c9a8e-6f41-4b7a-9e25-8c1f4b6d2a70
 // last-edited: 2026-10-11
 
@@ -73,7 +73,7 @@ func TestIsPlausibleAuthorName_Junk(t *testing.T) {
 		{strings.Repeat("Listening-to-Web-Of-Worlds-", 4), RejectTooLong},
 		// Release-post shrapnel (2026-10-11): the shape of a prod author row
 		// the gate used to accept, plus its two halves on their own.
-		{"10 831MB] #SyntheticTag", RejectReleaseTag},
+		{"10 555MB] #SyntheticTag", RejectReleaseTag},
 		{"Synthetic Writer 1.2 GB", RejectReleaseTag},
 		{"700mb", RejectReleaseTag},
 		{"Synthetic Writer #Award", RejectReleaseTag},
@@ -185,23 +185,23 @@ func TestIsPlausibleAuthorName_ReleaseTagUnicodeSpace(t *testing.T) {
 
 func TestStripTrailingReleaseTag(t *testing.T) {
 	for in, want := range map[string]string{
-		"Synthetic Writer [32k 08;53;59 122MB]": "Synthetic Writer",
-		"Synthetic Writer {497mb}":              "Synthetic Writer",
-		"Synthetic Writer (120 MB)":             "Synthetic Writer",
-		"Synthetic Writer\u00a0(120\u00a0MB)":   "Synthetic Writer",
-		"Synthetic Writer [32k 122MB] {497mb}":  "Synthetic Writer",
-		"  Synthetic Writer [64k #Winner]  ":    "Synthetic Writer",
+		"Synthetic Writer [32k 01;02;03 250MB]": "Synthetic Writer",
+		"Synthetic Writer {300mb}":              "Synthetic Writer",
+		"Synthetic Writer (150 MB)":             "Synthetic Writer",
+		"Synthetic Writer\u00a0(150\u00a0MB)":   "Synthetic Writer",
+		"Synthetic Writer [32k 250MB] {300mb}":  "Synthetic Writer",
+		"  Synthetic Writer [64k #Tag]  ":       "Synthetic Writer",
 	} {
 		if got, ok := StripTrailingReleaseTag(in); !ok || got != want {
 			t.Errorf("StripTrailingReleaseTag(%q) = %q, %v; want %q", in, got, ok, want)
 		}
 	}
 	for _, in := range []string{
-		"", "Synthetic Writer", "[32k 122MB]", "{497mb}", " (120 MB) ",
-		"Synthetic Writer (Some Series)", "Synthetic Writer [#Winner]",
-		"Synthetic Writer [122MB}",       // mismatched marks
-		"Synthetic Writer [32k 122MB] x", // the group is not at the end
-		"Synthetic Writer 122MB",         // no group
+		"", "Synthetic Writer", "[32k 250MB]", "{300mb}", " (150 MB) ",
+		"Synthetic Writer (Some Series)", "Synthetic Writer [#Tag]",
+		"Synthetic Writer [250MB}",       // mismatched marks
+		"Synthetic Writer [32k 250MB] x", // the group is not at the end
+		"Synthetic Writer 250MB",         // no group
 	} {
 		if got, ok := StripTrailingReleaseTag(in); ok {
 			t.Errorf("StripTrailingReleaseTag(%q) = %q, true; want no strip", in, got)
