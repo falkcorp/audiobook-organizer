@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -13,7 +13,7 @@
 // no-match row) so a chip that only filtered the already-filtered list would
 // come up short.
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -134,6 +134,19 @@ function listedIds(): string[] {
   return within(list)
     .queryAllByRole('checkbox')
     .map((cb) => (cb.getAttribute('aria-label') ?? '').replace(/^Select Book /, ''));
+}
+
+/**
+ * Puts `text` in the Title filter in ONE input event. `user.type` sends a
+ * keystroke per character and the workspace re-renders in full on each one
+ * (the filter lives in the lane hook), so an 11-character string cost about
+ * 11 full renders, roughly 4x a single paste, and that multiplies under CI
+ * load. These tests are about what a filter value does, not about typing, and
+ * paste also leaves `{`, `[` and `/` literal where `type` parses them.
+ */
+async function enterTitleFilter(user: ReturnType<typeof userEvent.setup>, text: string) {
+  await user.click(screen.getByLabelText('Title filter'));
+  await user.paste(text);
 }
 
 /**
@@ -368,7 +381,9 @@ describe('review level slider in the rail', () => {
     expect(screen.getByRole('switch', { name: 'Hide runtime differences' })).toBeChecked();
     expect(screen.getByRole('switch', { name: 'Has transcription' })).not.toBeChecked();
 
-    slider.focus();
+    // focus() updates MUI Slider's focus-visible state; outside act() React
+    // logs a "not wrapped in act" warning.
+    act(() => slider.focus());
     await user.keyboard('{ArrowRight}');
 
     await waitFor(() => expect(slider).toHaveAttribute('aria-valuetext', 'Strict review'));
@@ -434,7 +449,7 @@ describe('selection bar: always on screen', () => {
     const user = userEvent.setup();
     await openWorkspace();
     await user.click(screen.getByTestId('chip-matched'));
-    await user.type(screen.getByLabelText('Title filter'), 'zzz-nothing');
+    await enterTitleFilter(user, 'zzz-nothing');
     await waitFor(() => expect(listedIds()).toHaveLength(0));
 
     expect(screen.getByTestId('main-selection-bar')).toBeInTheDocument();
@@ -480,7 +495,7 @@ describe('chips combine with the title regex', () => {
     // m2 is below every preset's score floor: a paused filter, so it shows.
     await waitFor(() => expect(listedIds().sort()).toEqual(['m1', 'm2']));
 
-    await user.type(screen.getByLabelText('Title filter'), '/m2$/');
+    await enterTitleFilter(user, '/m2$/');
     await waitFor(() => expect(listedIds()).toEqual(['m2']));
     expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(
       'Showing the 1 matched books matching title /m2$/. Other filters are paused.'
@@ -505,7 +520,7 @@ describe('chips combine with the title regex', () => {
     await user.click(screen.getByTestId('main-select-page'));
     expect(screen.getByTestId('main-selection-count')).toHaveTextContent('2 selected');
 
-    await user.type(screen.getByLabelText('Title filter'), '/m1$/');
+    await enterTitleFilter(user, '/m1$/');
     await waitFor(() =>
       expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected')
     );
@@ -517,7 +532,7 @@ describe('chips combine with the title regex', () => {
     await openWorkspace();
     await user.click(screen.getByTestId('chip-matched'));
     await waitFor(() => expect(listedIds()).toHaveLength(2));
-    await user.type(screen.getByLabelText('Title filter'), '/Book (/');
+    await enterTitleFilter(user, '/Book (/');
     expect(await screen.findByText(/invalid regex/)).toBeInTheDocument();
     expect(screen.getByLabelText('Title filter')).toHaveAttribute('aria-invalid', 'true');
     // Nothing is filtered by a pattern that does not compile.
