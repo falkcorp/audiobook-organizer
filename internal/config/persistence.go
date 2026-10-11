@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.55.0
+// version: 1.55.1
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -248,10 +248,20 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	if err != nil {
 		return err
 	}
+	closed := false
 	defer func() {
-		if err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
+		if err == nil {
+			return
+		}
+		// Report a cleanup failure alongside the write error: a temp file left behind
+		// is worth knowing about, and it never hides the cause.
+		if !closed {
+			if cerr := tmp.Close(); cerr != nil {
+				err = errors.Join(err, fmt.Errorf("close temp %s: %w", tmp.Name(), cerr))
+			}
+		}
+		if rerr := os.Remove(tmp.Name()); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("remove temp %s: %w", tmp.Name(), rerr))
 		}
 	}()
 	if _, err = tmp.Write(data); err != nil {
@@ -263,6 +273,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	if err = tmp.Chmod(perm); err != nil {
 		return err
 	}
+	closed = true
 	if err = tmp.Close(); err != nil {
 		return err
 	}
@@ -272,8 +283,12 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	// Make the rename itself durable. Best effort: some filesystems cannot fsync a
 	// directory, and the file content is already safe by now.
 	if d, derr := os.Open(dir); derr == nil {
-		_ = d.Sync()
-		_ = d.Close()
+		if serr := d.Sync(); serr != nil {
+			configLog.Debug("fsync config dir %s after rename: %v", dir, serr)
+		}
+		if cerr := d.Close(); cerr != nil {
+			configLog.Debug("close config dir %s after fsync: %v", dir, cerr)
+		}
 	}
 	return nil
 }
