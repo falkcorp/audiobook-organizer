@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-28
+// last-edited: 2026-10-10
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -144,11 +144,17 @@ type LibraryBookReader interface {
 }
 
 // LibrarySummaryReader reads paged and filtered book summaries.
+//
+// There is deliberately no unfiltered GetAllBookSummaries here. Its last caller
+// was /personalized, which took the first 20 rows of it in storage order (the
+// library's OLDEST rows, hidden versions included) and built every home shelf
+// from that window, so Recently Added never showed a new book and Continue
+// Listening never saw most in-progress ones. It was removed on 2026-10-10 so
+// that shape cannot come back: every list on this surface goes through the
+// filtered variant with absItemFilterBase.
 type LibrarySummaryReader interface {
-	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
-	// The FILTERED pair is what the ABS item list uses. The unfiltered ones above
-	// remain for callers that genuinely want every row; this surface does not, and
-	// using them here is what showed 44,888 items instead of ~16,000.
+	// The FILTERED pair is what the ABS item list uses. Using unfiltered reads
+	// here is what showed 44,888 items instead of ~16,000.
 	GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
 	CountBookSummariesFiltered(f database.BookSummaryFilter) (int, error)
 	CountAllBooks() (int, error)

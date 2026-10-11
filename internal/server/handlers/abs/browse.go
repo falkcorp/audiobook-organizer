@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.33.1
+// version: 1.34.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-10-11
 
@@ -638,6 +638,21 @@ const personalizedShelfSize = 10
 //
 // The body is a BARE ARRAY of shelves. §1.8.6 is explicit: this endpoint decodes as
 // an array, and an object there throws.
+//
+// 🔴 EACH SHELF IS CHOSEN FROM ITS OWN WHOLE SOURCE, NEVER FROM A SHARED WINDOW.
+// Until 2026-10-10 all three book shelves were cut from ONE window: the first 20
+// rows of GetAllBookSummaries in storage order (book-id order, i.e. the OLDEST
+// books, with no visibility filter), which was then sorted by date added. So:
+//
+//   - "Recently Added" was the newest of the twenty oldest rows. On prod it showed
+//     books added in April while a book imported and organized that evening never
+//     appeared — the owner's "having to hunt for stuff".
+//   - "Continue Listening" only ever considered those same twenty rows, so a book
+//     the user was halfway through was on it only if it happened to be one of the
+//     library's twenty oldest. On prod the shelf was absent entirely.
+//
+// Sorting a window afterwards yields a convincingly ordered shelf of the wrong
+// books — the same failure memdb_summaries.go documents for paginated sorts.
 func (h *Handler) Personalized(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
@@ -648,48 +663,61 @@ func (h *Handler) Personalized(c *gin.Context) {
 		return
 	}
 
-	summaries, err := h.library.GetAllBookSummaries(personalizedShelfSize*2, 0)
+	// Continue Listening is the shelf the whole mission turns on, so it is driven by
+	// the user's stored progress records rather than by any slice of the library.
+	continueIDs, err := h.continueListeningIDs(user.ID)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not build home shelves")
 		return
 	}
-	ids := make([]string, 0, len(summaries))
-	for i := range summaries {
-		ids = append(ids, summaries[i].ID)
-	}
-	books, err := h.library.GetBooksByIDs(ids)
+	recentIDs, err := h.recentlyAddedIDs()
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not build home shelves")
 		return
 	}
-	views, err := h.loadItemViews(c.Request.Context(), books)
+	discoverIDs, err := h.discoverIDs(continueIDs)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not build home shelves")
 		return
 	}
 
-	// Continue Listening is the shelf the whole mission turns on, so it is driven by
-	// the real stored position rather than a heuristic.
-	var continueListening, discover []any
-	for i := range views {
-		item := h.minifiedItem(&views[i])
-		if h.hasProgress(user.ID, views[i].Book.ID) {
-			continueListening = append(continueListening, item)
-		} else {
-			discover = append(discover, item)
+	// One load for every shelf: a book on two shelves is read and rendered once.
+	seen := map[string]struct{}{}
+	var all []string
+	for _, shelf := range [][]string{continueIDs, recentIDs, discoverIDs} {
+		for _, id := range shelf {
+			if _, dup := seen[id]; !dup {
+				seen[id] = struct{}{}
+				all = append(all, id)
+			}
 		}
 	}
-
-	recentlyAdded := make([]any, 0, len(views))
-	byRecency := make([]int, 0, len(views))
-	for i := range views {
-		byRecency = append(byRecency, i)
+	rendered := map[string]any{}
+	if len(all) > 0 {
+		books, err := h.library.GetBooksByIDs(all)
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "could not build home shelves")
+			return
+		}
+		views, err := h.loadItemViews(c.Request.Context(), books)
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "could not build home shelves")
+			return
+		}
+		for i := range views {
+			rendered[views[i].Book.ID] = h.minifiedItem(&views[i])
+		}
 	}
-	sort.SliceStable(byRecency, func(a, b int) bool {
-		return msEpochPtr(views[byRecency[a]].Book.CreatedAt) > msEpochPtr(views[byRecency[b]].Book.CreatedAt)
-	})
-	for _, i := range byRecency {
-		recentlyAdded = append(recentlyAdded, h.minifiedItem(&views[i]))
+	// GetBooksByIDs makes no ordering promise, so each shelf is rendered in its
+	// own id order rather than in the order the store returned the books.
+	entities := func(ids []string) []any {
+		out := make([]any, 0, len(ids))
+		for _, id := range ids {
+			if item, ok := rendered[id]; ok {
+				out = append(out, item)
+			}
+		}
+		return out
 	}
 
 	authors, err := h.authorDTOsCached(c.Request.Context())
@@ -717,38 +745,182 @@ func (h *Handler) Personalized(c *gin.Context) {
 			Total: len(entities), Type: kind,
 		})
 	}
-	addShelf("continue-listening", "Continue Listening", "LabelContinueListening", "book", continueListening)
-	addShelf("recently-added", "Recently Added", "LabelRecentlyAdded", "book", recentlyAdded)
-	addShelf("discover", "Discover", "LabelDiscover", "book", discover)
+	addShelf("continue-listening", "Continue Listening", "LabelContinueListening", "book", entities(continueIDs))
+	addShelf("recently-added", "Recently Added", "LabelRecentlyAdded", "book", entities(recentIDs))
+	addShelf("discover", "Discover", "LabelDiscover", "book", entities(discoverIDs))
 	addShelf("newest-authors", "Newest Authors", "LabelNewestAuthors", "authors", newestAuthors)
 
 	respondJSON(c, http.StatusOK, shelves)
 }
 
-// hasProgress reports whether the user has a stored position for the book. It is
-// display-only and fails open through displayPosition: readable rows are used
-// when some are corrupt, an unreadable position counts as "no progress" (a
-// shelf is decoration; failing the whole home screen would be worse), and
-// either case is logged.
-func (h *Handler) hasProgress(userID, bookID string) bool {
-	if h.progress == nil {
-		return false
+// recentlyAddedPage is how many rows recentlyAddedIDs asks the store for at a
+// time. Larger than the shelf so that a few rows with no creation time (which
+// the store orders FIRST when descending, see below) do not cost a second call.
+const recentlyAddedPage = 4 * personalizedShelfSize
+
+// recentlyAddedIDs returns the newest visible books by date added, newest first,
+// chosen from the WHOLE visible library.
+//
+// It is the same store query as the Library tab's sort=addedAt&desc=1
+// (absSortFields maps addedAt to created_at): absItemFilterBase's visibility
+// predicate, ordered by Book.CreatedAt over the full match set before the page
+// is cut. Book.CreatedAt is also exactly what an item emits as addedAt
+// (mapper.go), so the shelf's order agrees with the dates the client shows.
+// For an organized book that is the primary version row's creation, stamped
+// when the book was organized into the library — so a book imported and
+// organized a minute ago lands at the top.
+//
+// Rows with no CreatedAt are skipped: compareSortInts puts a missing value
+// after every present one ascending, so a DESCENDING walk serves them first,
+// and a shelf headed by books with no date would hide the new ones again.
+func (h *Handler) recentlyAddedIDs() ([]string, error) {
+	f := absItemFilterBase()
+	f.SortBy = "created_at"
+	f.SortAscending = false
+	out := make([]string, 0, personalizedShelfSize)
+	for offset := 0; ; offset += recentlyAddedPage {
+		page, err := h.library.GetAllBookSummariesFiltered(recentlyAddedPage, offset, f)
+		if err != nil {
+			return nil, err
+		}
+		for i := range page {
+			if page[i].ID == "" || page[i].CreatedAt == nil || page[i].CreatedAt.IsZero() {
+				continue
+			}
+			out = append(out, page[i].ID)
+			if len(out) == personalizedShelfSize {
+				return out, nil
+			}
+		}
+		if len(page) < recentlyAddedPage {
+			return out, nil
+		}
 	}
-	pos := h.displayPosition("continue-listening shelf", userID, bookID)
-	if pos == nil || pos.PositionSeconds <= 0 {
-		return false
+}
+
+// discoverIDs fills the Discover shelf from the visible library in the store's
+// default order, skipping books already on Continue Listening. Same order the
+// shelf had before 2026-10-10, but drawn from the visible set rather than from
+// every stored row.
+func (h *Handler) discoverIDs(continueIDs []string) ([]string, error) {
+	skip := make(map[string]struct{}, len(continueIDs))
+	for _, id := range continueIDs {
+		skip[id] = struct{}{}
 	}
-	// 🔴 The user's "remove from Continue Listening" choice is what this shelf is
-	// FOR. Reading only the position ignores it, so the book reappears on the very
-	// next home-screen refresh and the feature looks broken — which is exactly how
-	// it was reported. Hiding deliberately KEEPS the position (the user tidied the
-	// shelf, they did not ask to lose their place), so the flag has to be consulted
-	// here rather than inferred from the absence of progress.
-	if state, serr := h.progress.GetUserBookState(userID, bookID); serr == nil && state != nil &&
-		state.HideFromContinueListening {
-		return false
+	page, err := h.library.GetAllBookSummariesFiltered(personalizedShelfSize+len(continueIDs), 0, absItemFilterBase())
+	if err != nil {
+		return nil, err
 	}
-	return true
+	out := make([]string, 0, personalizedShelfSize)
+	for i := range page {
+		if _, onShelf := skip[page[i].ID]; onShelf || page[i].ID == "" {
+			continue
+		}
+		out = append(out, page[i].ID)
+		if len(out) == personalizedShelfSize {
+			break
+		}
+	}
+	return out, nil
+}
+
+// continueListeningIDs returns the user's in-progress visible books, most
+// recently listened first, at most personalizedShelfSize of them.
+//
+// Source: UserDataProvider.MediaProgress, the ONE user-keyed prefix scan over the
+// stored positions that /api/me also serves — so the shelf costs the user's
+// progress rows (tens to hundreds), never a library scan. A book is on the shelf
+// when its row is started and not finished (ABS's "in-progress", the same rule as
+// the progress filter) and the user has not hidden it with "remove from Continue
+// Listening". Order is the row's lastUpdate, the same value the progress sort uses.
+//
+// Merge losers: a position stored under a book later merged away renders under
+// the loser's sync id, which redirects to the survivor. The row is shelved under
+// the LIVE book, unless the live book has a progress row of its own — then that
+// row decides, exactly as ClientMediaProgress drops the stale row.
+//
+// Visibility: only books the rest of the ABS surface lists are shelved, tested
+// with the same predicate (absItemFilterBase) on just the candidate rows.
+//
+// FAILS OPEN to an empty shelf on a provider or resolve error, logged: this shelf
+// is decoration and feeds no client sync, and failing the whole home screen over
+// it would be worse. A book-load error is still a 5xx, as for the other shelves.
+func (h *Handler) continueListeningIDs(userID string) ([]string, error) {
+	if h.userData == nil {
+		return nil, nil
+	}
+	raw, err := h.userData.MediaProgress(userID)
+	if err != nil {
+		progressLog.Warn("abs: continue-listening shelf: user progress unavailable, omitting the shelf: user_id=%s: %v",
+			logger.SanitizeLogValue(userID), err)
+		return nil, nil
+	}
+	rows := make([]progressFilterRow, 0, len(raw))
+	ownRow := map[string]struct{}{}
+	for _, r := range raw {
+		row, ok := decodeProgressRow(r)
+		if !ok {
+			continue
+		}
+		rows = append(rows, row)
+		if row.storedBookID != "" {
+			ownRow[row.storedBookID] = struct{}{}
+		}
+	}
+
+	lastUpdate := map[string]int64{}
+	for _, row := range rows {
+		if !row.started() || row.HideFromContinueListening {
+			continue
+		}
+		liveID, rerr := h.bookIDForSyncID(row.LibraryItemID)
+		if rerr != nil {
+			progressLog.Warn("abs: continue-listening shelf: could not resolve an item id, omitting the shelf: user_id=%s id=%s: %v",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(row.LibraryItemID), rerr)
+			return nil, nil
+		}
+		if liveID == "" {
+			continue
+		}
+		stale := row.storedBookID != "" && row.storedBookID != liveID
+		if _, liveHasRow := ownRow[liveID]; stale && liveHasRow {
+			continue
+		}
+		if prev, seen := lastUpdate[liveID]; !seen || row.LastUpdate > prev {
+			lastUpdate[liveID] = row.LastUpdate
+		}
+	}
+	if len(lastUpdate) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(lastUpdate))
+	for id := range lastUpdate {
+		ids = append(ids, id)
+	}
+	books, err := h.library.GetBooksByIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	visible := absItemFilterBase()
+	out := make([]string, 0, len(books))
+	for i := range books {
+		if visible.Matches(&books[i]) {
+			out = append(out, books[i].ID)
+		}
+	}
+	// Newest listen first; the id breaks ties so the shelf is stable across
+	// refreshes rather than following map iteration order.
+	sort.Slice(out, func(a, b int) bool {
+		if lastUpdate[out[a]] != lastUpdate[out[b]] {
+			return lastUpdate[out[a]] > lastUpdate[out[b]]
+		}
+		return out[a] < out[b]
+	})
+	if len(out) > personalizedShelfSize {
+		out = out[:personalizedShelfSize]
+	}
+	return out, nil
 }
 
 // ── /series, /authors, /narrators ───────────────────────────────────────────

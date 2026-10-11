@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress_write_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b7f4e91-8a05-4c63-b1d8-70e396a5cf42
-// last-edited: 2026-09-25
+// last-edited: 2026-10-10
 
 package abs_test
 
@@ -22,10 +22,16 @@ import (
 
 // ── fake capabilities the real provider needs ───────────────────────────────
 
-// ListUserPositionsSince backs MediaProgress's single user-keyed scan.
+// ListUserPositionsSince backs MediaProgress's single user-keyed scan. Like
+// GetUserPosition it reads realPositions when a test planted one, so the scan
+// and the point read agree about what is stored (PebbleStore's scan skips an
+// undecodable row rather than failing).
 func (f *fakeLibrary) ListUserPositionsSince(userID string, since time.Time) ([]database.UserPosition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.realPositions != nil {
+		return f.realPositions.ListUserPositionsSince(userID, since)
+	}
 	out := []database.UserPosition{}
 	for _, pos := range f.positions {
 		if pos == nil || pos.UserID != userID || !pos.UpdatedAt.After(since) {

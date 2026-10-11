@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package abs_test
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
+	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
 // newBrowseHarness wires the browse surface over the oracle seed and returns a
@@ -307,7 +308,20 @@ func TestLibraryRecentEpisodes_WrapperKey(t *testing.T) {
 // TestPersonalized_ConformsToOracle also pins §1.8.6: the body is a BARE ARRAY.
 // An object there throws in AudioBooth's decoder.
 func TestPersonalized_ConformsToOracle(t *testing.T) {
-	h, seed, tok := newBrowseHarness(t)
+	// The REAL progress provider, not fixtureUserData: Continue Listening is built
+	// from the user's stored progress list (UserDataProvider.MediaProgress), and
+	// the fixture's canned row names an item id this seed never minted.
+	seed := seedOracleLibrary(t)
+	provider, err := abshandler.NewUserData(abshandler.UserDataOptions{
+		Progress: seed.lib, Bookmarks: newFakeBookmarks(), Identity: seed.lib, Library: seed.lib,
+		AliasUses: seed.lib, AliasSeedCutoff: testAliasSeedCutoff,
+	})
+	if err != nil {
+		t.Fatalf("NewUserData: %v", err)
+	}
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(provider))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, h.login(t, "oracle", "pw-pw-pw-pw")), "accessToken")
 	// One in-progress book so continue-listening has exactly the oracle's single
 	// entity and discover has the remaining one.
 	if err := seed.lib.SetUserPosition("u1", seed.multiID, "abs", 42); err != nil {

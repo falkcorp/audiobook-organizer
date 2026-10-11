@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.25.1
+// version: 1.26.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-28
+// last-edited: 2026-10-10
 
 package abs_test
 
@@ -376,26 +376,6 @@ func (f *fakeLibrary) GetBooksByIDs(ids []string) ([]database.Book, error) {
 		if b, ok := f.books[id]; ok {
 			out = append(out, *b)
 		}
-	}
-	return out, nil
-}
-
-func (f *fakeLibrary) GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := []database.BookSummary{}
-	for i, id := range f.order {
-		if i < offset {
-			continue
-		}
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-		b := f.books[id]
-		out = append(out, database.BookSummary{ID: b.ID, Title: b.Title, CreatedAt: b.CreatedAt})
 	}
 	return out, nil
 }
