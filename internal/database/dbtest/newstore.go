@@ -1,7 +1,7 @@
 // file: internal/database/dbtest/newstore.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e8c1a27-3f94-4b60-a1d7-9c2e6b4f0a83
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package dbtest
 
@@ -38,8 +38,7 @@ func WithoutMemDB() Option { return func(o *options) { o.withoutMemDB = true } }
 // while warmup still iterates the database risks a -race report once the test
 // body or the cleanup touches it.
 //
-// Do not call Close on the returned store: the cleanup owns it, and a second
-// Close on a Pebble database panics. It has no global state and is safe with
+// Do not call Close on the returned store: the cleanup owns it. It has no global state and is safe with
 // t.Parallel().
 func NewStore(tb testing.TB, opts ...Option) *database.PebbleStore {
 	tb.Helper()
