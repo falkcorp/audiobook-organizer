@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.39.0
+// version: 1.40.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-10
 //
@@ -2501,8 +2501,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     ids: string[];
     pins: Record<string, Omit<CandidatePin, 'origin'>> | null;
     pageGeneration: string | null;
-    /** A refused action asked for the list again and the answer is not back. */
-    relisting?: boolean;
+    /**
+     * The listAllMatching request a refused action started to list these books
+     * again. It counts as "still being listed" only while it is the newest
+     * list request (selectAllSeqRef) and has not settled: every way it ends
+     * clears it, and a newer request (a Select all) supersedes it, so the lane
+     * can never be left refusing on it.
+     */
+    relistSeq?: number;
   } | null>(null);
   const matchingIdSet = useMemo(
     () => (matchingIds ? new Set(matchingIds.ids) : null),
@@ -2526,19 +2532,36 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // kept as they are.
   const selectAllSeqRef = useRef(0);
   const listAllMatching = useCallback(
-    (mode: 'add' | 'intersect' = 'add', previous?: ReadonlySet<string>) => {
+    (mode: 'add' | 'intersect' = 'add', previous?: ReadonlySet<string>): number => {
       const seq = ++selectAllSeqRef.current;
       const { params } = latestQueryRef.current;
       const key = latestQueryKeyRef.current;
+      // A re-list that does not land keeps the list it was replacing, pins and
+      // all: dropping it would turn every off-page book into "no pin" and send
+      // the reviewer to Select all, which re-adds what they unticked. Only the
+      // "being listed" mark is cleared, so the next click tries again.
+      const endRelist = () =>
+        setMatchingIds((prev) =>
+          prev && prev.relistSeq === seq ? { ...prev, relistSeq: undefined } : prev
+        );
       api
         .getReviewMatchingIds(params, undefined, { pins: true })
         .then((data) => {
-          if (seq !== selectAllSeqRef.current) return;
+          if (seq !== selectAllSeqRef.current) {
+            endRelist();
+            return;
+          }
           if (key !== latestQueryKeyRef.current) {
-            // The filters changed while a re-list was out: drop the old list
-            // rather than keep refusing on it. Its books then have no list pin
-            // and are refused as unpinned, never sent without one.
-            if (mode === 'intersect') setMatchingIds(null);
+            // The filters changed while the list was out; its ids answer a
+            // question the reviewer no longer asked. The selection prune
+            // re-checks membership, and the next click re-lists if needed.
+            if (mode === 'intersect') endRelist();
+            return;
+          }
+          if (mode === 'intersect' && selectedIdsRef.current.size === 0) {
+            // Cleared while the re-list was out: there is nothing to narrow,
+            // and no list to hold for an empty selection.
+            setMatchingIds(null);
             return;
           }
           setMatchingIds({
@@ -2560,13 +2583,17 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           }
           const old = previous ?? new Set<string>();
           const listed = new Set(data.ids);
+          const selected = selectedIdsRef.current;
           let left = 0;
-          selectedIdsRef.current.forEach((id) => {
+          selected.forEach((id) => {
             if (old.has(id) && !listed.has(id)) left += 1;
           });
+          // Joined AND not selected: a book that joined and was ticked by
+          // hand meanwhile is in the selection, so it is not reported as left
+          // out.
           let joined = 0;
           data.ids.forEach((id) => {
-            if (!old.has(id)) joined += 1;
+            if (!old.has(id) && !selected.has(id)) joined += 1;
           });
           setSelectedIds((prev) => {
             const next = new Set([...prev].filter((id) => !old.has(id) || listed.has(id)));
@@ -2575,10 +2602,21 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           toast(relistSummary(left, joined), 'info');
         })
         .catch(() => {
-          if (seq !== selectAllSeqRef.current) return;
-          if (mode === 'intersect') setMatchingIds(null);
+          if (seq !== selectAllSeqRef.current) {
+            endRelist();
+            return;
+          }
+          if (mode === 'intersect') {
+            endRelist();
+            toast(
+              'Could not list the matching books again; your selection is unchanged. Apply again to retry.',
+              'error'
+            );
+            return;
+          }
           toast('Could not list the matching books.', 'error');
         });
+      return seq;
     },
     [toast]
   );
@@ -2599,11 +2637,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const refuseStaleSelectAll = useCallback(
     (ids: string[]): boolean => {
       if (!pageMode || !matchingIds || !matchingIdSet) return false;
-      const onPage = new Set(pageRows.map((r) => r.book.id));
+      // Rows the reviewer can see: a row this session hid (Hide applied,
+      // rejected or skipped) is on the page but not shown.
+      const onPage = new Set(visiblePageRows.map((r) => r.book.id));
       const seen = tickedPinsRef.current;
       const relies = ids.some((id) => matchingIdSet.has(id) && !onPage.has(id) && !seen.has(id));
       if (!relies) return false;
-      if (matchingIds.relisting) {
+      if (
+        matchingIds.relistSeq !== undefined &&
+        matchingIds.relistSeq === selectAllSeqRef.current
+      ) {
         toast(
           'The matching books are still being listed again for the current queue; apply again in a moment.',
           'warning'
@@ -2611,8 +2654,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         return true;
       }
       if (matchingIds.pageGeneration === generationRef.current) return false;
-      setMatchingIds({ ...matchingIds, relisting: true });
-      listAllMatching('intersect', matchingIdSet);
+      const relistSeq = listAllMatching('intersect', matchingIdSet);
+      setMatchingIds({ ...matchingIds, relistSeq });
       toast(
         'The queue changed after you selected all, so the matching books are being listed again ' +
           'for the current queue. Your selection is only narrowed, never added to. Check it, then ' +
@@ -2621,7 +2664,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       );
       return true;
     },
-    [pageMode, matchingIds, matchingIdSet, pageRows, listAllMatching, toast]
+    [pageMode, matchingIds, matchingIdSet, visiblePageRows, listAllMatching, toast]
   );
   // The remembered list belongs to a selection; an emptied selection (Clear,
   // an apply, a search) forgets it.
@@ -2686,7 +2729,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     // Every selected row on screen is (re)captured, so the pin is the
     // candidate the reviewer saw LAST: a refresh that replaces a row's
     // candidate while it is on the page replaces its pin too.
-    for (const r of pageRows) {
+    // visiblePageRows, not pageRows: a row the session hid was not seen.
+    for (const r of visiblePageRows) {
       const id = r.book.id;
       if (!selectedIds.has(id)) continue;
       ticked.set(
@@ -2696,7 +2740,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           : null
       );
     }
-  }, [pageMode, selectedIds, pageRows]);
+  }, [pageMode, selectedIds, visiblePageRows]);
 
   // The pins a page-mode bulk apply sends. Each book's pin comes from, in
   // order: its row on the current page (what the reviewer is looking at now),
