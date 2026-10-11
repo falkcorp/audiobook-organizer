@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary_pebble_metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 340e1002-91fb-4e28-8165-2e0d4caee02b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -21,7 +21,7 @@ func TestPebbleMetricsSample_DoesNotBlockOnBusyMu(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	svc := &OpenLibraryService{OLStore: store}
+	svc := NewOpenLibraryServiceWithStore(store)
 
 	if _, ok := svc.PebbleMetricsSample(); !ok {
 		t.Fatal("idle service with an open store sampled as not ok")

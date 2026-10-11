@@ -1,5 +1,5 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.12.0
+// version: 2.12.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-11
 
@@ -31,7 +31,7 @@ func (s *Server) getOLStatus(c *gin.Context) {
 		"downloads": svc.Tracker.GetAll(),
 	}
 
-	// One load: reading svc.OLStore twice (check, then call) raced a delete or
+	// One load: reading the service's store twice (check, then call) raced a delete or
 	// factory reset niling it in between, and the nil deref in a handler is a
 	// 500 at best. A store closed after the load answers with an error.
 	if store := svc.LiveStore(); store != nil {

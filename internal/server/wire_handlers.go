@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.48.0
+// version: 2.48.1
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package server
 
@@ -296,8 +296,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// AFTER wiring to drive the SSE 503 guard — snapshotting it here would capture
 	// a live hub and invoke HandleSSE instead of 503 (mirrors the operations
 	// getScheduler seam). s.olService is passed as a CONCRETE
-	// pointer (factoryReset reaches its .Mu / .OLStore fields, which an interface
-	// cannot abstract); the handler nil-checks it directly. OperationLogsProvider is backed by
+	// pointer (factoryReset takes its .Mu field and calls CloseStoreLocked while
+	// holding it, which an interface cannot abstract; the store itself is
+	// unexported and only reached through those methods); the handler nil-checks
+	// it directly. OperationLogsProvider is backed by
 	// the v2 handler (see below). The store is passed as a LAZY
 	// provider closure (not a snapshot): the original handlers read s.Ops() at
 	// request time, and a router-integration test swaps server.store post-wire to

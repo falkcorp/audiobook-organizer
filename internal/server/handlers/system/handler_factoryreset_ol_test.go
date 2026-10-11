@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_factoryreset_ol_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e1b7a94-2d6c-4f03-9a8e-c4b0d7e3f125
 // last-edited: 2026-10-11
 
@@ -51,12 +51,8 @@ func newFactoryResetHandler(t *testing.T) (*system.Handler, *metafetch.OpenLibra
 	require.NoError(t, err)
 	it.First()
 
-	svc := &metafetch.OpenLibraryService{
-		OLStore:      openlibrary.NewOLStoreOnEngine(gated, closeDB),
-		Tracker:      openlibrary.NewDownloadTracker(),
-		Importing:    map[string]bool{},
-		CloseTimeout: 50 * time.Millisecond,
-	}
+	svc := metafetch.NewOpenLibraryServiceWithStore(openlibrary.NewOLStoreOnEngine(gated, closeDB))
+	svc.CloseTimeout = 50 * time.Millisecond
 
 	store := systemmocks.NewMockSystemStore(t)
 	store.EXPECT().Reset().Return(nil)
