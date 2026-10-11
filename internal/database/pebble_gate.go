@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-10-11
 
@@ -132,11 +132,12 @@ const (
 // releaser can decrement to zero BEFORE Close begins, be preempted, and then
 // read the flag AFTER Close began. Meanwhile a new lease was taken and Close
 // counted it. The releaser then signals the drain on a stale zero and the
-// engine closes under the new lease. With one word, release decides from the
-// value its own decrement produced: it signals only if that value is
-// "closing, zero leases", which is a state no later acquire can be hidden
-// from (an acquire after closing sees the bit in its own Add result and backs
-// out; an acquire before closing is counted in the word beginClose ORs).
+// engine closes under the new lease. With one word every transition decides
+// from the word it changes: acquire adds a lease only by a CAS from a value
+// without the closing bit, beginClose sets the bit by an OR that returns the
+// count at that instant, and release signals only when its own decrement
+// produced "closing, zero leases". No lease can be added after that value
+// exists, and no lease added before it can be missing from it.
 type dbGate struct {
 	state     atomic.Int64
 	drained   chan struct{}
@@ -153,22 +154,34 @@ func newDBGate() *dbGate {
 
 // acquire takes one ordinary lease, or refuses with errStoreClosing once
 // Close began. It never blocks.
+//
+// A refused acquire never touches the count. An earlier form incremented
+// first and backed out on seeing the flag; callers retrying in a tight loop
+// after Close began then kept the count above zero between them, so the
+// release of the last real lease never saw zero and the drain waited out its
+// whole timeout (measured: TestDBGate_ConcurrentAcquireRelease under -cpu 8).
 func (g *dbGate) acquire() error {
-	if g.state.Add(1)&(gateClosingBit|gateSealedBit) != 0 {
-		g.release()
-		return errStoreClosing
-	}
-	return nil
+	return g.acquireUnless(gateClosingBit | gateSealedBit)
 }
 
 // acquireSync takes a lease for a sync-only WAL write. It is admitted while
 // Close drains and refused only once the gate is sealed.
 func (g *dbGate) acquireSync() error {
-	if g.state.Add(1)&gateSealedBit != 0 {
-		g.release()
-		return errStoreClosing
+	return g.acquireUnless(gateSealedBit)
+}
+
+// acquireUnless adds one lease unless any of refuse is set, deciding on the
+// same word it updates.
+func (g *dbGate) acquireUnless(refuse int64) error {
+	for {
+		s := g.state.Load()
+		if s&refuse != 0 {
+			return errStoreClosing
+		}
+		if g.state.CompareAndSwap(s, s+1) {
+			return nil
+		}
 	}
-	return nil
 }
 
 // release returns one lease. The release that leaves a closing gate with no
@@ -224,7 +237,8 @@ func (g *dbGate) waitDrained(timeout time.Duration) bool {
 
 // seal moves a drained gate to sealed, refusing SyncWAL too. A SyncWAL
 // admitted after the drain may still hold a lease; seal waits for it (a WAL
-// fsync, milliseconds) until deadline. It reports whether the gate is sealed
+// fsync, milliseconds) until deadline. Refused acquires never touch the
+// count, so only such a sync can make it wait. It reports whether the gate is sealed
 // with no leases, the only state in which the engine may close.
 func (g *dbGate) seal(deadline time.Time) bool {
 	for {

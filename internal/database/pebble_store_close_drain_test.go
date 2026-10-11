@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_close_drain_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2e9b14-5d3a-4f8e-9a61-2b0c4d8e7f35
 // last-edited: 2026-10-11
 
@@ -587,5 +587,36 @@ func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
 		if n := g.inFlight(); n != 0 {
 			t.Errorf("%s left %d leases held", name, n)
 		}
+	}
+}
+
+// A refused acquire must not touch the lease count at all. If it counted
+// itself and backed out, callers retrying in a tight loop after Close began
+// would keep the count above zero between them and starve the drain (seen
+// under -race -cpu 8 as a drain that never signalled). The back-out would
+// show up here as a release.
+func TestDBGate_RefusedAcquireLeavesCountAlone(t *testing.T) {
+	g := newDBGate()
+	if err := g.acquire(); err != nil {
+		t.Fatal(err)
+	}
+	g.beginClose()
+	releases := 0
+	g.releaseHook = func(int64) { releases++ }
+	for range 100 {
+		if err := g.acquire(); !errors.Is(err, pebble.ErrClosed) {
+			t.Fatalf("acquire after beginClose returned %v; want ErrClosed", err)
+		}
+	}
+	g.releaseHook = nil
+	if releases != 0 {
+		t.Fatalf("refused acquires touched the count (%d back-out releases)", releases)
+	}
+	if n := g.inFlight(); n != 1 {
+		t.Fatalf("in flight %d after refused acquires; want 1", n)
+	}
+	g.release()
+	if !g.waitDrained(5 * time.Second) {
+		t.Fatal("drain not signalled after the last real lease was released")
 	}
 }
