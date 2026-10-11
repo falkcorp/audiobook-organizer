@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.27.0
+// version: 3.28.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 
@@ -278,15 +278,41 @@ func (p *PebbleStore) GetOperationV2(id string) (*OperationV2Row, error) {
 // index and the row disagreeing.
 func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) (err error) {
 	defer recoverPebbleClosed("UpdateOperationV2Status", &err)
+	_, err = p.updateOperationV2Status(id, nil, status, startedAt, completedAt, errMsg)
+	return err
+}
+
+// UpdateOperationV2StatusIf is UpdateOperationV2Status as a compare-and-set:
+// the write applies only when the row's current status is fromStatus, checked
+// and written under opsMu so no other status writer in this store can land in
+// between. Reports whether it applied; a missing row is (false, nil), the same
+// as a status mismatch. Index maintenance and the completed_at stamp are
+// exactly UpdateOperationV2Status's, because it is the same code path.
+func (p *PebbleStore) UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (updated bool, err error) {
+	defer recoverPebbleClosed("UpdateOperationV2StatusIf", &err)
+	return p.updateOperationV2Status(id, &fromStatus, status, startedAt, completedAt, errMsg)
+}
+
+// updateOperationV2Status is the body of UpdateOperationV2Status and
+// UpdateOperationV2StatusIf. A nil expect writes unconditionally and treats a
+// missing row as an error; a non-nil expect writes only when the row's status
+// equals *expect and reports a missing row as not applied.
+func (p *PebbleStore) updateOperationV2Status(id string, expect *string, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
 	var row OperationV2Row
 	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
-		return err
+		return false, err
 	}
 	if row.ID == "" {
-		return fmt.Errorf("opv2: operation not found: %s", id)
+		if expect != nil {
+			return false, nil
+		}
+		return false, fmt.Errorf("opv2: operation not found: %s", id)
+	}
+	if expect != nil && row.Status != *expect {
+		return false, nil
 	}
 
 	prev := row
@@ -311,44 +337,47 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 
 	data, err := json.Marshal(&row)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
-		return err
+		return false, err
 	}
 	if err := stageOpRow(batch, &prev, &row); err != nil {
-		return err
+		return false, err
 	}
 
 	// Maintain queue index.
 	if oldStatus == "queued" && status != "queued" {
 		if err := batch.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), nil); err != nil {
-			return err
+			return false, err
 		}
 	} else if status == "queued" && oldStatus != "queued" {
 		// resumeRestart transitions running→queued; must re-add the index entry
 		// or ListQueuedOperationsV2 never sees the op and it stalls forever.
 		if err := batch.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), nil); err != nil {
-			return err
+			return false, err
 		}
 	}
 	// Maintain active set.
 	if status == "running" {
 		if err := batch.Set(opv2ActKey(id), nil, nil); err != nil {
-			return err
+			return false, err
 		}
 	} else if status != "queued" {
 		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := p.runOpsV2BeforeCommitHook(); err != nil {
-		return err
+		return false, err
 	}
-	return batch.Commit(pebble.Sync)
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ResetOperationV2ForResume flips an interrupted op back to "queued" for a
