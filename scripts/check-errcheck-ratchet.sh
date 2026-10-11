@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/check-errcheck-ratchet.sh
-# version: 1.3.0
+# version: 1.3.1
 # guid: 9c3e7a1d-5b48-4f0a-8e6c-2d1a9f7b3c05
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 #
 # Ratchet on the number of `errcheck` findings, exactly as
 # scripts/check-interface-width.sh ratchets `interfacebloat`.
@@ -95,7 +95,7 @@ fi
 # started but died before linting (an "exec format error" from a binary built
 # for another GOOS, a panic, an OOM kill reported through a wrapper). Only a
 # run that reached its summary line produced a count.
-if [[ "$rc" -eq 1 ]] && ! printf '%s\n' "$output" | grep -qE '^[0-9]+ issues'; then
+if [[ "$rc" -eq 1 ]] && ! grep -qE '^[0-9]+ issues' <<< "$output"; then
   printf '%s\n' "$output" | tail -5 >&2
   cat >&2 <<MSG
 
@@ -113,7 +113,7 @@ fi
 # 2026-10-09: setup-go's floating '1.27' picked up go1.27.2, whose export data
 # (format version 5) golangci-lint v2.12.2's x/tools cannot read, and this gate
 # printed actual=0 against a baseline in the hundreds. Refuse the number.
-if printf '%s\n' "$output" | grep -qE '^\* typecheck: [0-9]+$|\(typecheck\)$'; then
+if grep -qE '^\* typecheck: [0-9]+$|\(typecheck\)$' <<< "$output"; then
   printf '%s\n' "$output" | grep -E '\(typecheck\)$|^\* typecheck:' | head -5 >&2
   cat >&2 <<MSG
 

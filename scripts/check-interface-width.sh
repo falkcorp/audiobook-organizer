@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.7.0
+# version: 1.7.1
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 #
 # Ratchet on the number of `interfacebloat` findings. See
 # .interface-width-baseline for why this counts rather than listing files.
@@ -102,7 +102,7 @@ fi
 # started but died before linting (an "exec format error" from a binary built
 # for another GOOS, a panic, an OOM kill reported through a wrapper). Only a
 # run that reached its summary line produced a count.
-if [[ "$rc" -eq 1 ]] && ! printf '%s\n' "$output" | grep -qE '^[0-9]+ issues'; then
+if [[ "$rc" -eq 1 ]] && ! grep -qE '^[0-9]+ issues' <<< "$output"; then
   printf '%s\n' "$output" | tail -5 >&2
   cat >&2 <<MSG
 
@@ -120,7 +120,7 @@ fi
 # 2026-10-09: setup-go's floating '1.27' picked up go1.27.2, whose export data
 # (format version 5) golangci-lint v2.12.2's x/tools cannot read, and this gate
 # printed actual=0 against a baseline in the hundreds. Refuse the number.
-if printf '%s\n' "$output" | grep -qE '^\* typecheck: [0-9]+$|\(typecheck\)$'; then
+if grep -qE '^\* typecheck: [0-9]+$|\(typecheck\)$' <<< "$output"; then
   printf '%s\n' "$output" | grep -E '\(typecheck\)$|^\* typecheck:' | head -5 >&2
   cat >&2 <<MSG
 
