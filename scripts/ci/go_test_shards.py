@@ -54,7 +54,12 @@ def _build_flags(go_args: list[str]) -> list[str]:
     # its own test binary).
     # Only flags that change the compiled binary; test flags such as -timeout
     # may take their value as a separate argument, which -list would misread.
-    return [a for a in go_args if a in ("-race", "-cover", "-trimpath") or a.startswith(("-covermode=", "-tags=", "-gcflags="))]
+    return [
+        a
+        for a in go_args
+        if a in ("-race", "-cover", "-trimpath")
+        or a.startswith(("-covermode=", "-tags=", "-gcflags="))
+    ]
 
 
 def list_tests(pkg: str, go_args: list[str]) -> list[str]:
@@ -174,12 +179,23 @@ def merge_profiles(paths: list[str], out: str) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Run Go test packages split into shards, then merge their coverage.")
-    ap.add_argument("--pkg", action="append", required=True, metavar="PKG:N",
-                    help="package and its shard count (repeatable)")
+    ap = argparse.ArgumentParser(
+        description="Run Go test packages split into shards, then merge their coverage."
+    )
+    ap.add_argument(
+        "--pkg",
+        action="append",
+        required=True,
+        metavar="PKG:N",
+        help="package and its shard count (repeatable)",
+    )
     ap.add_argument("--out", required=True, help="merged coverage profile")
-    ap.add_argument("--jobs", type=int, default=0, help="concurrent shards (default: min(shards, CPU count))")
-    ap.add_argument("--timings", default=os.path.join(os.path.dirname(__file__), "go_test_timings.json"))
+    ap.add_argument(
+        "--jobs", type=int, default=0, help="concurrent shards (default: min(shards, CPU count))"
+    )
+    ap.add_argument(
+        "--timings", default=os.path.join(os.path.dirname(__file__), "go_test_timings.json")
+    )
     ap.add_argument("go_args", nargs=argparse.REMAINDER)
     a = ap.parse_args()
     go_args = a.go_args[1:] if a.go_args[:1] == ["--"] else a.go_args
@@ -204,7 +220,10 @@ def main() -> int:
         for i, s in enumerate(shards):
             plan.append((pkg, i, s))
         est = [sum(timings.get(key, {}).get(t, 0.0) for t in s) for s in shards]
-        print(f"{pkg}: {len(names)} tests in {len(shards)} shards, est. {', '.join(f'{e:.0f}s' for e in est)}", flush=True)
+        print(
+            f"{pkg}: {len(names)} tests in {len(shards)} shards, est. {', '.join(f'{e:.0f}s' for e in est)}",
+            flush=True,
+        )
 
     tmp = tempfile.mkdtemp(prefix="go-shards-")
 
@@ -215,12 +234,16 @@ def main() -> int:
         start = time.monotonic()
         res = subprocess.run(
             ["go", "test", *go_args, f"-coverprofile={prof}", "-run", pattern, pkg],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         return pkg, i, res.returncode, time.monotonic() - start, res.stdout + res.stderr, prof
 
     # Longest shards first so the slowest one starts immediately.
-    order = sorted(plan, key=lambda it: -sum(timings.get(it[0].removeprefix("./"), {}).get(t, 0.0) for t in it[2]))
+    order = sorted(
+        plan,
+        key=lambda it: -sum(timings.get(it[0].removeprefix("./"), {}).get(t, 0.0) for t in it[2]),
+    )
     jobs = a.jobs if a.jobs > 0 else default_jobs(len(order))
     failed, profiles = 0, []
     try:
@@ -241,7 +264,10 @@ def main() -> int:
                     failed += 1
                     print(output, flush=True)
                     if empty:
-                        print(f"::error::shard {pkg}#{i} ran no tests; -list and the shard disagree", flush=True)
+                        print(
+                            f"::error::shard {pkg}#{i} ran no tests; -list and the shard disagree",
+                            flush=True,
+                        )
                 else:
                     for ln in output.splitlines():
                         if ln.startswith(("ok", "---", "FAIL")):
