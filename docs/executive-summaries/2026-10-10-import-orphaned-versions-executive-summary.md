@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-10-import-orphaned-versions-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 8c3f6a25-d4e1-4b97-a0c2-5e9d17b8f463 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -41,9 +41,11 @@ Branch `fix/import-orphaned-versions`.
   can build on it; it has not been written or run.
 - **Two imports of the same torrent at once can no longer both claim it.** A
   double click or a retried request used to be able to attach one torrent to
-  two books. Imports of the same torrent now take turns, and the second one
-  is imported without the torrent link, as a retry already was. The version
-  step also refuses on its own to take a torrent another live version holds.
+  two books, or to leave a second, unlinked copy of the book behind. Imports of
+  the same torrent now take turns, and the second one is turned away (the same
+  "already in the library" answer a plain retry gets) before it creates
+  anything. The version step also refuses on its own to take a torrent another
+  live version holds.
 - **Verified by tests that failed before the fix**, against the real database
   engine rather than a stand-in, which is how the problem had gone unnoticed.
 

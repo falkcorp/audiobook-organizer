@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-11
 //
@@ -56,10 +56,16 @@ type IngestVersionParams struct {
 	TorrentHash string
 	// NewBook tells CreateIngestVersion the caller created BookID moments ago
 	// (the importer does), so no earlier run can have stranded a version of
-	// it and the stranded-version lookup is skipped. Besides saving a read,
-	// that keeps a failed lookup from aborting the version create, and with it
-	// the torrent index entry that turns a retried discover import into a 409
-	// instead of a second book.
+	// it and the stranded-version lookup (GetBookVersionsByBookID) is skipped.
+	// Besides saving a read, that keeps a failure of THAT read from aborting
+	// the version create, and with it the torrent index entry that turns a
+	// retried discover import into a 409 instead of a second book.
+	//
+	// It narrows the failure surface; it does not remove it. A call with a
+	// TorrentHash still reads the torrent index and the holder's book
+	// (LiveTorrentHolder), and an error there is returned like any other, with
+	// nothing created. That read already succeeded once in the importer's own
+	// guard, so a second failure is unlikely, not impossible.
 	NewBook bool
 }
 
@@ -84,9 +90,15 @@ var torrentLocks keyedmutex.Mutex
 // both create a version carrying the hash, and the index ends up on whichever
 // wrote last while the other book's row still claims the torrent.
 // Process-local is enough: the store is single-process and
-// CreateIngestVersion is the only creator of book versions. CreateIngestVersion
-// does not take the lock itself, because the caller's guard has to sit inside
-// the same critical section and the lock is not reentrant.
+// CreateIngestVersion is the only creator of book versions. It is not the only
+// writer of the torrent index, though: UpdateBookVersion also rewrites it
+// (idx:bv:torrent:) without this lock whenever it changes a version's
+// TorrentHash. A holder can therefore appear between a
+// caller's guard and its create, which is why CreateIngestVersion re-checks
+// the holder itself and why the importer keeps a fallback for
+// ErrTorrentLinkedElsewhere. CreateIngestVersion does not take the lock
+// itself, because the caller's guard has to sit inside the same critical
+// section and the lock is not reentrant.
 func LockTorrent(hash string) (unlock func()) {
 	if hash == "" {
 		return func() {}

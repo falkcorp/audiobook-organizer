@@ -1,5 +1,5 @@
 // file: internal/versions/ingest_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 
@@ -624,5 +624,46 @@ func TestCreateIngestVersion_TwoStrandedCandidatesAreNotAdopted(t *testing.T) {
 	}
 	if got := storedRow(t, store, book.ID, "f1"); got.VersionID != ver.ID {
 		t.Errorf("row VersionID = %q, want the new version %q", got.VersionID, ver.ID)
+	}
+}
+
+// failStrandedLookupStore fails the one read strandedVersion makes.
+type failStrandedLookupStore struct{ *database.PebbleStore }
+
+func (failStrandedLookupStore) GetBookVersionsByBookID(string) ([]database.BookVersion, error) {
+	return nil, errors.New("synthetic version-list failure")
+}
+
+// NewBook means the caller created the book moments ago, so nothing can be
+// stranded and the stranded-version lookup is skipped: a failure of that read
+// must not cost the version, and with it the torrent index entry that turns a
+// retried discover import into a 409. Without NewBook the same failure aborts
+// the create (the control half), so the test cannot pass because the store
+// stopped failing.
+func TestCreateIngestVersion_NewBookSkipsStrandedLookup(t *testing.T) {
+	const torrent = "0123456789abcdef0123456789abcdef01234567"
+	pebble, book, filePath := ingestFixture(t, database.BookFile{})
+	store := failStrandedLookupStore{PebbleStore: pebble}
+	params := IngestVersionParams{
+		BookID: book.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "deluge", TorrentHash: torrent,
+	}
+
+	if _, _, err := CreateIngestVersion(store, params); err == nil {
+		t.Fatal("control: without NewBook a failed version-list read must abort the create")
+	}
+	if idx, _ := pebble.GetBookVersionByTorrentHash(torrent); idx != nil {
+		t.Fatalf("control: the aborted create must leave no torrent index entry, got %+v", idx)
+	}
+
+	params.NewBook = true
+	ver, linked, err := CreateIngestVersion(store, params)
+	if err != nil || !linked || ver == nil {
+		t.Fatalf("NewBook: ver=%v linked=%v err=%v, want a created, linked version", ver, linked, err)
+	}
+	if idx, _ := pebble.GetBookVersionByTorrentHash(torrent); idx == nil || idx.ID != ver.ID {
+		t.Errorf("torrent index must name the new version %q, got %+v", ver.ID, idx)
+	}
+	if got := storedRow(t, pebble, book.ID, "f1"); got.VersionID != ver.ID || got.DelugeHash != torrent {
+		t.Errorf("row: VersionID=%q DelugeHash=%q, want %q and %q", got.VersionID, got.DelugeHash, ver.ID, torrent)
 	}
 }

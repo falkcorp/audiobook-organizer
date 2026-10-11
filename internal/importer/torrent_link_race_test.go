@@ -1,5 +1,5 @@
 // file: internal/importer/torrent_link_race_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2a91c4-0b7d-4f53-a8e6-3d15c9b7f402
 // last-edited: 2026-10-10
 
@@ -48,12 +48,14 @@ func (s *raceStore) CreateBookVersion(v *database.BookVersion) (*database.BookVe
 }
 
 // Two concurrent imports of the same torrent (a double click, or a proxy retry
-// while the first is still running) must link it to exactly one book. The
-// second is imported unlinked with TorrentLinkNoteAlreadyLinked, the outcome
-// the sequential retry already had. Before the per-torrent lock, both passed
-// the already-linked guard while the first was still hashing and creating,
-// both versions carried the hash, and the index ended up on the second book
-// while the first book's row still claimed the torrent.
+// while the first is still running) must produce exactly ONE book, linked to
+// the torrent; the second is refused with ErrTorrentAlreadyLinked before it
+// creates anything. Before the per-torrent lock, both passed the already-linked
+// guard while the first was still hashing and creating, both versions carried
+// the hash, and the index ended up on the second book while the first book's
+// row still claimed the torrent. With the lock but without the refusal the
+// link was safe but the second request still minted a duplicate, unlinked book
+// and reported success.
 func TestImportFile_ConcurrentSameTorrentLinksOnce(t *testing.T) {
 	withSupportedExt(t)
 	dir, path := stageFixture(t)
@@ -80,36 +82,45 @@ func TestImportFile_ConcurrentSameTorrentLinksOnce(t *testing.T) {
 	go run(1)
 	wg.Wait()
 
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("import %d failed: %v", i, err)
-		}
-	}
-	var linked, refused []*ImportFileResponse
-	for _, r := range resps {
+	var linked *ImportFileResponse
+	var refusals []error
+	for i := range resps {
 		switch {
-		case r.TorrentLinked:
-			linked = append(linked, r)
-		case r.TorrentLinkNote == TorrentLinkNoteAlreadyLinked:
-			refused = append(refused, r)
+		case errs[i] == nil && resps[i].TorrentLinked:
+			if linked != nil {
+				t.Fatalf("both imports linked the torrent: %+v and %+v", linked, resps[i])
+			}
+			linked = resps[i]
+		case errors.Is(errs[i], ErrTorrentAlreadyLinked):
+			refusals = append(refusals, errs[i])
+		default:
+			t.Fatalf("import %d: resp=%+v err=%v, want linked or ErrTorrentAlreadyLinked", i, resps[i], errs[i])
 		}
 	}
-	if len(linked) != 1 || len(refused) != 1 {
-		t.Fatalf("want exactly 1 linked and 1 already-linked import, got linked=%d refused=%d (%+v, %+v)",
-			len(linked), len(refused), resps[0], resps[1])
+	if linked == nil || len(refusals) != 1 {
+		t.Fatalf("want exactly 1 linked import and 1 refusal, got linked=%v refusals=%d (errs %v, %v)", linked, len(refusals), errs[0], errs[1])
 	}
 
 	holder, err := store.PebbleStore.GetBookVersionByTorrentHash(testTorrentHash)
 	if err != nil || holder == nil {
 		t.Fatalf("torrent index: %v (err %v)", holder, err)
 	}
-	if holder.BookID != linked[0].ID {
-		t.Errorf("torrent index names book %q, want the linked book %q", holder.BookID, linked[0].ID)
+	if holder.BookID != linked.ID {
+		t.Errorf("torrent index names book %q, want the linked book %q", holder.BookID, linked.ID)
 	}
-	if row := storedImportRow(t, store.PebbleStore, refused[0].ID); row.DelugeHash != "" {
-		t.Errorf("the unlinked book's row must not claim the torrent: DelugeHash = %q", row.DelugeHash)
+	var linkedErr *TorrentAlreadyLinkedError
+	if !errors.As(refusals[0], &linkedErr) || linkedErr.BookID != linked.ID || linkedErr.VersionID != holder.ID {
+		t.Errorf("the refusal must name the holder (book %q, version %q), got %+v", linked.ID, holder.ID, refusals[0])
 	}
-	if row := storedImportRow(t, store.PebbleStore, linked[0].ID); row.DelugeHash != testTorrentHash || row.VersionID != holder.ID {
+	// The point of refusing rather than importing unlinked: no second book.
+	books, err := store.PebbleStore.GetAllBooksCore(0, 0)
+	if err != nil {
+		t.Fatalf("GetAllBooksCore: %v", err)
+	}
+	if len(books) != 1 || books[0].ID != linked.ID {
+		t.Errorf("want exactly the linked book, got %d books: %+v", len(books), books)
+	}
+	if row := storedImportRow(t, store.PebbleStore, linked.ID); row.DelugeHash != testTorrentHash || row.VersionID != holder.ID {
 		t.Errorf("linked row: DelugeHash=%q VersionID=%q, want %q and %q", row.DelugeHash, row.VersionID, testTorrentHash, holder.ID)
 	}
 }
@@ -144,5 +155,73 @@ func TestImportFile_FileWriteFailureKeepsTorrentIndexForRetry(t *testing.T) {
 	}
 	if holder == nil || holder.BookID != resp.ID {
 		t.Fatalf("the torrent index must still name the imported book %q so a retry is refused, got %+v", resp.ID, holder)
+	}
+}
+
+// lateHolderStore plants a live holder for the torrent the moment CreateBook
+// returns, i.e. AFTER the importer's already-linked guard passed and BEFORE
+// CreateIngestVersion runs. That is the one interleaving the per-torrent lock
+// cannot prevent: a writer that does not take it (UpdateBookVersion rewrites
+// the torrent index too) makes the torrent held mid-import.
+type lateHolderStore struct {
+	*database.PebbleStore
+	t        *testing.T
+	holderID string
+	bookID   string
+}
+
+func (s *lateHolderStore) CreateBook(b *database.Book) (*database.Book, error) {
+	created, err := s.PebbleStore.CreateBook(b)
+	if err != nil {
+		return nil, err
+	}
+	other, err := s.PebbleStore.CreateBook(&database.Book{Title: "Other Book", FilePath: b.FilePath + ".other", Format: "m4b"})
+	if err != nil {
+		s.t.Fatalf("plant holder book: %v", err)
+	}
+	v, err := s.PebbleStore.CreateBookVersion(&database.BookVersion{
+		BookID: other.ID, Status: database.BookVersionStatusActive, Format: "m4b", Source: "deluge", TorrentHash: testTorrentHash,
+	})
+	if err != nil {
+		s.t.Fatalf("plant holder version: %v", err)
+	}
+	s.holderID, s.bookID = v.ID, other.ID
+	return created, nil
+}
+
+// When a holder appears after the guard passed, the book already exists and can
+// no longer be refused: the importer falls back to an ordinary unlinked version
+// (Source "imported", no hash) and reports TorrentLinkNoteAlreadyLinked. The
+// version matters: with the fallback gone the import returned a book with no
+// version at all, and the row unlinked. The other book's link must be left
+// alone.
+func TestImportFile_HolderAppearsAfterGuardFallsBackToUnlinkedVersion(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+	store := &lateHolderStore{PebbleStore: pebbleImportStore(t, dir), t: t}
+	is := NewImportService(store)
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("a holder that appears mid-import must not fail the import: %v", err)
+	}
+	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteAlreadyLinked {
+		t.Fatalf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteAlreadyLinked, resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+
+	vers, err := store.PebbleStore.GetBookVersionsByBookID(resp.ID)
+	if err != nil || len(vers) != 1 {
+		t.Fatalf("want exactly one fallback version for the imported book, got %d (err %v)", len(vers), err)
+	}
+	if vers[0].TorrentHash != "" || vers[0].Source != "imported" {
+		t.Errorf("fallback version: TorrentHash=%q Source=%q, want empty and imported", vers[0].TorrentHash, vers[0].Source)
+	}
+	row := storedImportRow(t, store.PebbleStore, resp.ID)
+	if row.VersionID != vers[0].ID || row.DelugeHash != "" {
+		t.Errorf("row: VersionID=%q DelugeHash=%q, want it linked to %q without the torrent", row.VersionID, row.DelugeHash, vers[0].ID)
+	}
+	idx, err := store.PebbleStore.GetBookVersionByTorrentHash(testTorrentHash)
+	if err != nil || idx == nil || idx.ID != store.holderID || idx.BookID != store.bookID {
+		t.Errorf("the torrent index must still name the other book's version %q, got %+v (err %v)", store.holderID, idx, err)
 	}
 }

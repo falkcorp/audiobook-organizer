@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
 // last-edited: 2026-10-10
 //
@@ -114,6 +114,14 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 		TorrentHash: verifiedHash,
 	})
 	if err != nil {
+		// A doubled request passes the pre-check above twice (it runs outside
+		// ImportFile's per-torrent lock); the second one is refused there,
+		// before any book exists, and gets the same 409 as the sequential case.
+		var linkedErr *importer.TorrentAlreadyLinkedError
+		if errors.As(err, &linkedErr) {
+			respondDiscoverAlreadyLinked(c, linkedErr.BookID)
+			return
+		}
 		httputil.InternalError(c, "failed to import file", err)
 		return
 	}
@@ -155,6 +163,15 @@ const (
 // already holds; the response's book_id names that book.
 const discoverErrAlreadyLinked = "torrent is already linked to a book in the library"
 
+// respondDiscoverAlreadyLinked writes the 409 for a torrent a live book
+// already holds. Both refusals use it, the pre-check in
+// verifyDiscoveryTorrentHash and the one under ImportFile's per-torrent lock,
+// so a caller sees one response whichever caught the duplicate.
+func respondDiscoverAlreadyLinked(c *gin.Context, holderBookID string) {
+	httputil.RespondWithErrorFields(c, http.StatusConflict, discoverErrAlreadyLinked, "TORRENT_ALREADY_LINKED",
+		map[string]any{"book_id": holderBookID})
+}
+
 // verifyDiscoveryTorrentHash normalizes the caller's torrent hash and
 // cross-checks it against Deluge. It returns the hash to store (empty when the
 // import must proceed unlinked), a note explaining why it is empty, and
@@ -168,8 +185,10 @@ const discoverErrAlreadyLinked = "torrent is already linked to a book in the lib
 // runs whatever Deluge's state, because the duplicate book is the harm, not
 // the link. A discover content_path is the whole torrent (save_path/name), so
 // one torrent never legitimately feeds two single-file imports. ImportFile
-// keeps its own guard for any path that gets past this one (a concurrent
-// pair, or another caller).
+// keeps its own guard, under a per-torrent lock, for any path that gets past
+// this one (a concurrent pair, or another caller): it refuses with
+// importer.ErrTorrentAlreadyLinked before creating a book, and the handler
+// answers with the same 409.
 //
 // An unverifiable hash is dropped, never stored: Deluge not configured,
 // unreachable or not answering within discoverVerifyTimeout proceeds unlinked
@@ -191,8 +210,7 @@ func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash
 			return "", "", false
 		}
 		if holder != nil {
-			httputil.RespondWithErrorFields(c, http.StatusConflict, discoverErrAlreadyLinked, "TORRENT_ALREADY_LINKED",
-				map[string]any{"book_id": holder.BookID})
+			respondDiscoverAlreadyLinked(c, holder.BookID)
 			return "", "", false
 		}
 	}
