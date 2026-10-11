@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
@@ -394,6 +395,39 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		book.ISBN13 = new(meta.ISBN13)
 	}
 
+	// Identity hash, computed ONCE per import and written onto the book_file
+	// row at creation; versions.CreateIngestVersion trusts a row that already
+	// carries one and does not read the file again. filehash.BookFileHash is
+	// the algorithm dedup's exact-file collector expects. Its cost is
+	// bounded: a whole-file read at or below its 100 MB threshold, 10 MB from
+	// each end above it, so a multi-GB file is never read in full. This is the
+	// same read CreateIngestVersion did before; it moved, it was not added.
+	//
+	// Hashed HERE, before the torrent guards and the per-torrent lock below,
+	// so the lock is never held across a read that can take seconds on a NAS,
+	// and so the window in which a book has no file row stays short. A
+	// failure leaves the hash empty (CreateIngestVersion retries it once, a
+	// backfill after that) and never fails the import.
+	fileHash, hashErr := filehash.BookFileHash(req.FilePath)
+	if hashErr != nil {
+		slog.Warn("import: identity hash failed; file_hash left empty for backfill",
+			"path", logger.SanitizeLogValue(req.FilePath), "err", hashErr)
+		fileHash = ""
+	}
+
+	// Per-torrent link lock, held from the guards below through
+	// CreateIngestVersion's return (see versions.LockTorrent). Without it two
+	// concurrent imports of one torrent both pass the already-linked guard,
+	// both create a version carrying the hash, and the index ends up on the
+	// second book while the first book's row still claims the torrent. With
+	// it the second waits, then finds the first as the live holder and is
+	// imported unlinked (TorrentLinkNoteAlreadyLinked), exactly like a
+	// sequential retry. An empty hash takes no lock. releaseTorrent is
+	// idempotent: called once the version exists, and deferred for the early
+	// returns in between.
+	releaseTorrent := sync.OnceFunc(versions.LockTorrent(req.TorrentHash))
+	defer releaseTorrent()
+
 	// Purge guard for the torrent link, BEFORE the book row exists. Content
 	// the owner purged or blocked must never come back linked to its torrent:
 	// a linked row joins the bulk-import candidates and later cleanup trusts
@@ -422,8 +456,8 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// here; this guard keeps any other caller, or a request that raced past the
 	// handler's check, from stealing the index. Unlike the purge guard the new
 	// book still gets an ordinary unlinked version: nothing about the content
-	// is refused, only the second link. A concurrent pair can still both pass
-	// this check (check-then-create, no lock); the sequential retry cannot.
+	// is refused, only the second link. A concurrent pair is serialized by
+	// the per-torrent lock above, so the second sees the first as the holder.
 	if linkHash != "" {
 		holder, holdErr := versions.LiveTorrentHolder(is.db, linkHash)
 		switch {
@@ -439,24 +473,6 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			linkHash = ""
 			linkNote = TorrentLinkNoteAlreadyLinked
 		}
-	}
-
-	// Identity hash, computed ONCE per import and written onto the book_file
-	// row at creation; versions.CreateIngestVersion trusts a row that already
-	// carries one and does not read the file again. filehash.BookFileHash is
-	// the algorithm dedup's exact-file collector expects. Its cost is
-	// bounded: a whole-file read at or below its 100 MB threshold, 10 MB from
-	// each end above it, so a multi-GB file is never read in full. This is the
-	// same read CreateIngestVersion did before; it moved, it was not added.
-	// Hashed before the book row exists so the
-	// window in which a book has no file row stays short. A failure leaves
-	// the hash empty (CreateIngestVersion retries it once, a backfill after
-	// that) and never fails the import.
-	fileHash, hashErr := filehash.BookFileHash(req.FilePath)
-	if hashErr != nil {
-		slog.Warn("import: identity hash failed; file_hash left empty for backfill",
-			"path", logger.SanitizeLogValue(req.FilePath), "err", hashErr)
-		fileHash = ""
 	}
 
 	// Create book in database
@@ -579,11 +595,26 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			BookID: created.ID, FilePath: created.FilePath,
 			Format: created.Format, Source: versionSource,
 			TorrentHash: linkHash,
+			// Created above: nothing can be stranded, so CreateIngestVersion
+			// skips the lookup and a failed read cannot cost the version.
+			NewBook: true,
 		}
 		if bfWritten {
 			params.BookFileID = bf.ID
 		}
 		ver, linked, verErr := versions.CreateIngestVersion(is.db, params)
+		if errors.Is(verErr, versions.ErrTorrentLinkedElsewhere) {
+			// The guard above passed under the lock, so only a writer that
+			// does not take the lock can get here. Same outcome as the guard:
+			// an ordinary unlinked version, and the existing link left alone.
+			slog.Warn("import: torrent linked elsewhere after the guard passed; importing without the link",
+				"id", created.ID, "err", verErr)
+			linkNote = TorrentLinkNoteAlreadyLinked
+			linkHash = ""
+			params.TorrentHash, params.Source = "", "imported"
+			ver, linked, verErr = versions.CreateIngestVersion(is.db, params)
+		}
+		releaseTorrent()
 		switch {
 		case verErr != nil:
 			slog.Warn("create ingest version", "id", created.ID, "err", verErr)

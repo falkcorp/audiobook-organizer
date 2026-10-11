@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-10
 
@@ -55,7 +55,9 @@ type TrashedVersionCleaner interface {
 
 // Exported: internal/importer forwards its store into CreateIngestVersion.
 type IngestStore interface {
-	FingerprintReader
+	// CheckFingerprint, plus LiveTorrentHolder's book lookup, so the function
+	// refuses a torrent another live version holds on its own.
+	TorrentHolderReader
 	bookFileLister
 
 	// CreateIngestVersion hands the store to fileops.ValidateUserPath, which
