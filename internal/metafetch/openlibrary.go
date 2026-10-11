@@ -1,5 +1,5 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-11
 
@@ -95,13 +95,13 @@ func (svc *OpenLibraryService) setStoreLocked(store *openlibrary.OLStore) {
 // blocks. Metadata lookups call it on every request instead of holding a
 // store: the store is replaced at runtime, and a holder of the old pointer
 // would keep asking one that refuses all work.
+//
+// A caller that needs the store more than once in a row loads it ONCE into a
+// local: a second call can see nil where the first saw a store (a delete or
+// factory reset closing it in between). The OLStore field is guarded by Mu;
+// code that does not hold Mu reads this instead.
 func (svc *OpenLibraryService) LiveStore() *openlibrary.OLStore {
 	return svc.live.Load()
-}
-
-// Store returns the underlying OLStore (may be nil).
-func (svc *OpenLibraryService) Store() *openlibrary.OLStore {
-	return svc.OLStore
 }
 
 // CompactionStats samples the OL store's Pebble counters under Mu, the lock
@@ -246,6 +246,12 @@ func (svc *OpenLibraryService) Import(ctx context.Context, progress operations.P
 		}
 
 		dt, idx := dumpType, i
+		// Load the store once, here, and let the goroutine use that local. A
+		// read of svc.OLStore inside the goroutine raced a delete or factory
+		// reset niling it: a nil deref there is a panic on a goroutine, which
+		// takes the whole process down. A store closed after this load
+		// refuses the import with pebble.ErrClosed, which is reported below.
+		store := svc.LiveStore()
 		importWg.Go(func() {
 			defer func() {
 				svc.Mu.Lock()
@@ -257,16 +263,21 @@ func (svc *OpenLibraryService) Import(ctx context.Context, progress operations.P
 			slog.Info("Starting OL dump import from", "value", dt, "path", filePath)
 
 			lastReported := 0
-			err := svc.OLStore.ImportDump(dt, filePath, func(count int) {
-				if count-lastReported >= 50000 {
-					lastReported = count
-					if progress != nil {
-						msg := fmt.Sprintf("Importing %s: %dk records", dt, count/1000)
-						_ = progress.UpdateProgress(idx, len(types), msg)
+			var err error
+			if store == nil {
+				err = fmt.Errorf("the Open Library store is not open (it was closed or deleted before the %s import started)", dt)
+			} else {
+				err = store.ImportDump(dt, filePath, func(count int) {
+					if count-lastReported >= 50000 {
+						lastReported = count
+						if progress != nil {
+							msg := fmt.Sprintf("Importing %s: %dk records", dt, count/1000)
+							_ = progress.UpdateProgress(idx, len(types), msg)
+						}
+						slog.Info("OL import progress records", "value", dt, "count", count)
 					}
-					slog.Info("OL import progress records", "value", dt, "count", count)
-				}
-			})
+				})
+			}
 
 			if err != nil {
 				slog.Error("OL dump import failed for", "value", dt, "error", err)
