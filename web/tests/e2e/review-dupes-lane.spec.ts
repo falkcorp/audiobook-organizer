@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
-// last-edited: 2026-09-01
+// last-edited: 2026-10-11
 
 // End-to-end coverage for the dupes lane of /review.
 //
@@ -209,6 +209,49 @@ test.describe('the dupes lane of /review', () => {
     await expect(page.locator('[data-testid="band-chip-HIGH"]')).toBeVisible();
     await expect(page.locator('[data-testid="band-chip-MEDIUM"]')).toBeVisible();
     await expect(page.locator('[data-testid="band-chip-REVIEW"]')).toBeVisible();
+  });
+
+  test('clicking the Acoustic layer chip filters the list to the count on the chip', async ({
+    page,
+  }) => {
+    await setupPhase2Interactive(page);
+    await mockDedupRoutes(page);
+    // Registered after the shared mocks, so it wins: only the acoustic layer
+    // holds a pair, which is how the layer filter shows up in the list.
+    await page.route('**/api/v1/dedup/stats', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: { stats: [{ entity_type: 'book', layer: 'acoustid', status: 'pending', count: 1 }] },
+        }),
+      })
+    );
+    await page.route('**/api/v1/dedup/candidates?**', (route) => {
+      const acoustic = new URL(route.request().url()).searchParams.get('layer') === 'acoustid';
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: acoustic
+            ? { candidates: [{ ...MOCK_CANDIDATE, layer: 'acoustid' }], total: 1 }
+            : { candidates: [], total: 0 },
+        }),
+      });
+    });
+
+    await page.goto('/review?lane=dupes');
+    await page.waitForLoadState('domcontentloaded');
+
+    const chip = page.locator('[data-testid="layer-chip-acoustid"]');
+    await expect(chip).toHaveText('Acoustic (1)');
+    await expect(page.locator('[data-testid="dupes-total"]')).toContainText('0 candidates');
+
+    await chip.click();
+    await expect(bookALink(page)).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-total"]')).toContainText('1 candidate match');
+    // Seeded from the URL only: choosing a chip does not write it back.
+    await expect(page).not.toHaveURL(/layer=/);
   });
 
   test('filtering by CERTAIN band updates the table', async ({ page }) => {

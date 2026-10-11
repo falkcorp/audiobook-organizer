@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.5.1
+// version: 1.6.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -34,6 +34,7 @@ import {
   Chip,
   Link,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import StarIcon from '@mui/icons-material/Star';
@@ -147,6 +148,51 @@ const SX_EVIDENCE = { mt: 2 } as const;
 
 const stopPropagation = (e: MouseEvent) => e.stopPropagation();
 
+/**
+ * Whether a book is an iTunes copy, for the read-only chip. Mirrors the
+ * book-level part of the predicate the duplicate-copies fixer uses
+ * (internal/plugins/maintenance/duplicate_copies_fixer.go, itunesguard): a book
+ * under books/itunes/**, or carrying a book iTunes persistent id or iTunes path.
+ * The fixer also consults per-file rows and external ids; the candidate payload
+ * carries neither, so a book that is an iTunes copy ONLY through those shows no
+ * chip. The chip is a hint for the reviewer and decides nothing.
+ */
+export function isITunesBook(book: Book | null | undefined): boolean {
+  if (!book) return false;
+  if (book.itunes_persistent_id || book.itunes_path) return true;
+  return /(^|[\\/])books[\\/]itunes([\\/]|$)/i.test(book.file_path ?? '');
+}
+
+function SideChips({ book }: { book: Book | null | undefined }) {
+  const coverage = book?.book_sig_coverage_pct;
+  return (
+    <>
+      {isITunesBook(book) && (
+        <Chip
+          label="iTunes"
+          size="small"
+          variant="outlined"
+          title="This book is an iTunes copy. Dedup never writes to it."
+          data-testid="itunes-chip"
+        />
+      )}
+      {coverage != null && coverage < 100 && (
+        <Tooltip
+          title={`Book signature was synthesized from partial audio (${coverage}% real, rest is silence-padded). Similarity matches against this book may be less reliable than full-coverage matches.`}
+        >
+          <Chip
+            label={`partial fp ${coverage}%`}
+            size="small"
+            color="warning"
+            variant="outlined"
+            data-testid="partial-fp-chip"
+          />
+        </Tooltip>
+      )}
+    </>
+  );
+}
+
 function QualityChip({ book }: { book: Book | null | undefined }) {
   const band = qualityBand(metadataQuality(book));
   if (band === 'rich') {
@@ -222,6 +268,7 @@ const BookSide = memo(function BookSide({
             </Link>
           )}
           <QualityChip book={book} />
+          <SideChips book={book} />
           {recommended && (
             <Chip
               icon={<StarIcon />}

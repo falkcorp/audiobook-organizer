@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -58,7 +58,14 @@ export type DupesAction =
    * N matching" + Dismiss path. Resolved on the server (bulk-reject), like
    * mergeAllFiltered, so its count is not knowable from the action.
    */
-  | { lane: 'dupes'; type: 'dismissAllFiltered'; expectedTotal: number };
+  | { lane: 'dupes'; type: 'dismissAllFiltered'; expectedTotal: number }
+  /**
+   * Links every pending pair the current filter matches, keeping the A side
+   * (`keepAAllFiltered`, the older record: the pair is canonicalised with the
+   * smaller ULID as A) or the B side (`keepBAllFiltered`, the newer one). Same
+   * server-resolved, `expectedTotal`-guarded path as mergeAllFiltered.
+   */
+  | { lane: 'dupes'; type: 'keepAAllFiltered' | 'keepBAllFiltered'; expectedTotal: number };
 
 /**
  * Metadata lane. Ids are book ids.
@@ -185,6 +192,8 @@ export function needsConfirmation(action: ReviewAction): boolean {
     case 'merge':
     case 'mergeSelected':
     case 'mergeAllFiltered':
+    case 'keepAAllFiltered':
+    case 'keepBAllFiltered':
     case 'dismissAllFiltered':
       return true;
     case 'dismissSelected':
@@ -223,6 +232,8 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'applyRows':
       return action.rowIds.length;
     case 'mergeAllFiltered':
+    case 'keepAAllFiltered':
+    case 'keepBAllFiltered':
     case 'dismissAllFiltered':
     case 'skipAllUnmatched':
     case 'bulk':

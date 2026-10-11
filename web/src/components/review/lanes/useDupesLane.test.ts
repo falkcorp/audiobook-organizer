@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 //
 // The behaviour under test is mostly the behaviour that a port loses silently:
 // eight keyboard shortcuts, a suppression guard, a keep-side decision shared
@@ -17,6 +17,7 @@ import {
   MERGE_ALL_BLOCKED_REASON,
   MERGE_ALL_SEARCH_PENDING_REASON,
   DEDUP_SHORTCUTS,
+  SELECT_ALL_MATCHING_PENDING_ONLY_REASON,
 } from './useDupesLane';
 
 vi.mock('../../../services/api');
@@ -946,5 +947,146 @@ describe('a page change drops the selection', () => {
     act(() => result.current.toggleSelect(3, 2, true));
 
     expect([...result.current.selectedIds]).toEqual([3]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Layer filter, bulk keep-side (03-PR2)
+// ---------------------------------------------------------------------------
+
+describe('layer filter', () => {
+  it('layer filter is sent on list and bulk filter', async () => {
+    vi.mocked(api.bulkLinkDedupCandidates).mockResolvedValue({
+      attempted: 2,
+      merged: 2,
+      failed: 0,
+    } as unknown as api.BulkMergeDedupResult);
+    const { result } = await renderLane();
+    // No layer until one is chosen: the list call must not carry the key.
+    expect(vi.mocked(api.getDedupCandidates).mock.calls[0][0]).not.toHaveProperty('layer');
+
+    act(() => result.current.setFilters({ layer: 'acoustid' }));
+    await waitFor(() =>
+      expect(api.getDedupCandidates).toHaveBeenLastCalledWith(
+        expect.objectContaining({ layer: 'acoustid' }),
+        expect.anything()
+      )
+    );
+    await waitFor(() => expect(result.current.mergeAllFilteredDisabledReason).toBeNull());
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 2 });
+    });
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ layer: 'acoustid', status: 'pending', expected_total: 2 })
+    );
+  });
+
+  it('is seeded from the URL value once and never re-read', async () => {
+    const { result, rerender } = await renderLane({ band: null, entityId: null, layer: 'exact' });
+    expect(result.current.filters.layer).toBe('exact');
+    // The router handing a different value later must not move the filter.
+    rerender({ uf: { band: null, entityId: null, layer: 'embedding' } });
+    expect(result.current.filters.layer).toBe('exact');
+  });
+
+  it('changing layer resets page and selection', async () => {
+    mockList([makeCandidate(1), makeCandidate(2)], 300);
+    const { result } = await renderLane();
+    act(() => result.current.setPage(3));
+    await waitFor(() => expect(result.current.page).toBe(3));
+    act(() => result.current.toggleSelect(1, 0));
+    expect(result.current.selectedIds.size).toBe(1);
+
+    act(() => result.current.setFilters({ layer: 'exact' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.page).toBe(1);
+    expect(result.current.selectedIds.size).toBe(0);
+  });
+
+  it('counts pending book pairs per layer from the stats it already fetched', async () => {
+    vi.mocked(api.getDedupStats).mockResolvedValue({
+      stats: [
+        { entity_type: 'book', layer: 'acoustid', status: 'pending', count: 12 },
+        { entity_type: 'book', layer: 'acoustid', status: 'merged', count: 99 },
+        { entity_type: 'book', layer: 'exact', status: 'pending', count: 3 },
+        { entity_type: 'author', layer: 'exact', status: 'pending', count: 50 },
+      ],
+    });
+    const { result } = await renderLane();
+    await waitFor(() => expect(result.current.pendingByLayer.acoustid).toBe(12));
+    expect(result.current.pendingByLayer).toEqual({ exact: 3, acoustid: 12, embedding: 0 });
+  });
+});
+
+describe('bulk keep-older / keep-newer', () => {
+  it('keep-older sends keep_side a with expected_total', async () => {
+    vi.mocked(api.bulkLinkDedupCandidates).mockResolvedValue({
+      attempted: 2,
+      merged: 2,
+      failed: 0,
+    } as unknown as api.BulkMergeDedupResult);
+    const { result } = await renderLane({ band: null, entityId: null, layer: 'acoustid' });
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'keepAAllFiltered', expectedTotal: 2 });
+    });
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith({
+      entity_type: 'book',
+      status: 'pending',
+      band: undefined,
+      layer: 'acoustid',
+      entity_id: undefined,
+      q: undefined,
+      keep_side: 'a',
+      expected_total: 2,
+    });
+  });
+
+  it('keep-newer sends keep_side b', async () => {
+    vi.mocked(api.bulkLinkDedupCandidates).mockResolvedValue({
+      attempted: 2,
+      merged: 2,
+      failed: 0,
+    } as unknown as api.BulkMergeDedupResult);
+    const { result } = await renderLane();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'keepBAllFiltered', expectedTotal: 2 });
+    });
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ keep_side: 'b', expected_total: 2 })
+    );
+  });
+
+  it('keep-older/newer refused when status is not pending', async () => {
+    const { result } = await renderLane();
+    act(() => result.current.setFilters({ status: 'merged' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() =>
+      result.current.dispatch({ lane: 'dupes', type: 'keepAAllFiltered', expectedTotal: 2 })
+    );
+    act(() =>
+      result.current.dispatch({ lane: 'dupes', type: 'keepBAllFiltered', expectedTotal: 2 })
+    );
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(SELECT_ALL_MATCHING_PENDING_ONLY_REASON, 'warning');
+  });
+});
+
+describe('mergeSelected outcome report', () => {
+  it('mergeSelected keeps partial-failure report after refetch', async () => {
+    vi.mocked(api.linkDedupCandidate).mockImplementation(async (id) => {
+      if (id === 2) throw new Error('boom');
+    });
+    // After the refetch the server still lists the pair that failed.
+    const { result } = await renderLane();
+    mockList([makeCandidate(2)]);
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: [1, 2] });
+    });
+    await waitFor(() => expect(result.current.candidates.map((c) => c.id)).toEqual([2]));
+    // The report was raised once, with both counts, and the refetch did not
+    // replace or repeat it; the failed pair is back on screen to retry.
+    const reports = toast.mock.calls.filter((c) => String(c[0]).startsWith('Merged'));
+    expect(reports).toEqual([['Merged 1, failed 1', 'warning']]);
   });
 });
