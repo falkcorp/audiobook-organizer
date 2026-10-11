@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -27,8 +27,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	taglib "go.senan.xyz/taglib"
@@ -106,6 +109,12 @@ type SafeWriteDeps struct {
 	// this same row, which ImportToLibrary has repointed to the copy.
 	BookFileID string
 	HashStore  fileops.BookFileHashRecorder
+
+	// Provenance, when set, receives a FileEventObserved event with the diff
+	// when verify_after_write finds the file differs from what was written.
+	// When nil, a HashStore that also implements database.FileProvenanceRecorder
+	// (the production store does) is used.
+	Provenance database.FileProvenanceRecorder
 }
 
 // noBackupKey is the context key WithoutBackup sets. Unexported so only this
@@ -165,13 +174,100 @@ func WriteTagsSafe(ctx context.Context, path string, tags map[string][]string, o
 		return fmt.Errorf("WriteTagsSafe: resolve path: %w", err)
 	}
 
+	writeOpts := deps.writeOptions(ctx, path, effectivePath)
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
-		return taglib.WriteTags(tmpPath, tags, opts)
-	}, deps.writeOptions(ctx, path, effectivePath))
+		return tagWriter(tmpPath, tags, opts)
+	}, writeOpts)
 	if err != nil {
 		return fmt.Errorf("WriteTagsSafe: %w", err)
 	}
+	if config.Snapshot().VerifyAfterWrite {
+		if verr := verifyWrittenTags(effectivePath, tags); verr != nil {
+			deps.recordVerifyFailure(writeOpts.BookFileID, verr)
+			return verr
+		}
+	}
 	return nil
+}
+
+// tagWriter is the taglib write WriteTagsSafe performs on its temp copy. It is
+// a variable so tests can substitute a writer that silently drops a tag.
+var tagWriter = taglib.WriteTags
+
+// tagReader reads the tags back for verification; a variable for the same reason.
+var tagReader = taglib.ReadTags
+
+// ErrVerifyAfterWrite is returned (wrapped in *VerifyAfterWriteError) when the
+// verify_after_write read-back finds a written tag missing or different. The
+// write itself succeeded: the file stays as written.
+var ErrVerifyAfterWrite = errors.New("tag write verification failed")
+
+// VerifyAfterWriteError names the tag keys whose read-back differed.
+type VerifyAfterWriteError struct {
+	Path string
+	// Keys are the differing keys, upper-cased and sorted.
+	Keys []string
+}
+
+func (e *VerifyAfterWriteError) Error() string {
+	return fmt.Sprintf("%s: %s: %s", ErrVerifyAfterWrite.Error(), e.Path, strings.Join(e.Keys, ", "))
+}
+
+func (e *VerifyAfterWriteError) Unwrap() error { return ErrVerifyAfterWrite }
+
+// verifyWrittenTags re-reads path and compares every key in want.
+//
+// Keys match case-insensitively, because taglib upper-cases the keys it reads
+// back. Values must be equal as ordered slices; the one tolerated difference
+// is that a key written with no values (a delete) must read back absent or
+// empty. Keys not in want are ignored, so a merge write is not blamed for tags
+// it did not touch. A read failure is itself a verification failure, reported
+// against every written key.
+func verifyWrittenTags(path string, want map[string][]string) *VerifyAfterWriteError {
+	got, rerr := tagReader(path)
+	var bad []string
+	if rerr != nil {
+		for k := range want {
+			bad = append(bad, strings.ToUpper(k))
+		}
+	} else {
+		have := make(map[string][]string, len(got))
+		for k, v := range got {
+			have[strings.ToUpper(k)] = v
+		}
+		for k, w := range want {
+			if !equalValues(w, have[strings.ToUpper(k)]) {
+				bad = append(bad, strings.ToUpper(k))
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return &VerifyAfterWriteError{Path: path, Keys: bad}
+}
+
+func equalValues(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// recordVerifyFailure appends the FileEventObserved event carrying the diff.
+func (deps SafeWriteDeps) recordVerifyFailure(bookFileID string, verr *VerifyAfterWriteError) {
+	rec := deps.Provenance
+	if rec == nil {
+		rec, _ = deps.HashStore.(database.FileProvenanceRecorder)
+	}
+	fileops.RecordObserved(rec, bookFileID, "tagger", verr.Path,
+		"verify_after_write mismatch: "+strings.Join(verr.Keys, ", "))
 }
 
 // WriteTagsInPlace writes tags directly to path with NO copy-and-rename wrapper
