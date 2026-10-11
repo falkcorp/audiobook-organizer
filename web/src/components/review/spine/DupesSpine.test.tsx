@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 2.3.0
+// version: 2.4.0
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
 // last-edited: 2026-10-11
 //
@@ -26,10 +26,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
 import { MemoryRouter } from 'react-router-dom';
-import { DupesSpine, type DupesSpineContext } from './DupesSpine';
+import { DupesSpine, isITunesBook, type DupesSpineContext } from './DupesSpine';
 import { appTheme } from '../../../theme';
 import * as api from '../../../services/api';
-import type { Config, DedupCandidate, PathAlias } from '../../../services/api';
+import type { Book, Config, DedupCandidate, PathAlias } from '../../../services/api';
 import { __resetPathVarsCacheForTests } from '../../../utils/formatPath';
 import { __resetPathAliasesCacheForTests } from '../../common/PathLinks';
 
@@ -282,6 +282,52 @@ describe('side chips', () => {
     expect(screen.getAllByTestId('itunes-chip')).toHaveLength(2);
   });
 
+  it('iTunes chip follows the server is_itunes flag over what the book payload shows', () => {
+    // The flag exists because the candidate payload cannot see book_file rows or
+    // external ids: a book that is an iTunes copy only through those carries no
+    // persistent id and no iTunes path, and the chip must still show.
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', file_path: '/lib/books/Author A/Book A.m4b', is_itunes: true },
+        // The client-side check alone would say yes here; the server said no.
+        book_b: { id: 'b1', title: 'Book B', itunes_persistent_id: 'PID0002', is_itunes: false },
+      } as Partial<DedupCandidate>),
+    ]);
+    const chips = screen.getAllByTestId('itunes-chip');
+    expect(chips).toHaveLength(1);
+  });
+
+  it('iTunes chip falls back to the book fields when the flag is absent', () => {
+    const book = (over: Partial<Book>): Book => ({
+      id: 'a',
+      title: 'A',
+      file_path: '/lib/books/x/A.m4b',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      ...over,
+    });
+    expect(isITunesBook(book({ itunes_persistent_id: 'PID0001' }))).toBe(true);
+    expect(isITunesBook(book({ file_path: '/lib/books/itunes/x/A.m4b' }))).toBe(true);
+    expect(isITunesBook(book({}))).toBe(false);
+    // The server's answer wins in both directions.
+    expect(isITunesBook(book({ itunes_persistent_id: 'PID0001', is_itunes: false }))).toBe(false);
+    expect(isITunesBook(book({ is_itunes: true }))).toBe(true);
+    expect(isITunesBook(null)).toBe(false);
+  });
+
+  it('iTunes chip describes where the book came from and does not claim dedup avoids it', () => {
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', is_itunes: true },
+        book_b: { id: 'b1', title: 'Book B' },
+      } as Partial<DedupCandidate>),
+    ]);
+    const title = screen.getByTestId('itunes-chip').getAttribute('title') ?? '';
+    expect(title).toMatch(/came from iTunes/);
+    // A book with only a persistent id can be merged: the old text said otherwise.
+    expect(title).not.toMatch(/never writes/i);
+  });
+
   it('iTunes chip is absent for an ordinary book', () => {
     renderSpine([
       candidate({
@@ -302,6 +348,11 @@ describe('side chips', () => {
     const chips = screen.getAllByTestId('partial-fp-chip');
     expect(chips).toHaveLength(1);
     expect(chips[0]).toHaveTextContent('partial fp 62%');
+    // MUI's Tooltip puts a string title on its child as aria-label.
+    expect(chips[0]).toHaveAttribute(
+      'aria-label',
+      'Book signature was synthesized from partial audio (62% real, rest is silence-padded). Similarity matches against this book may be less reliable than full-coverage matches.'
+    );
   });
 
   it('partial fp chip is absent at full or unknown coverage', () => {

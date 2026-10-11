@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-10-11
 //
@@ -61,6 +61,10 @@ const LAYER_LABELS: Record<DedupLayer, string> = {
   exact: 'Exact',
   acoustid: 'Acoustic',
   embedding: 'Embedding',
+  book_signature: 'Book signature',
+  metadata_hash_match: 'Metadata hash',
+  llm: 'LLM',
+  manual: 'Manual',
 };
 
 /** A filter-scoped bulk action awaiting confirmation. */
@@ -111,6 +115,10 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
       : dupes.matchingCount.state === 'error'
         ? ('approximate' as const)
         : ('counting' as const);
+  // The server's count of the filter once it has arrived, the list's `total`
+  // (a paging hint) until then. One value for the select-all banner and the
+  // "(all N)" buttons so the two cannot name different numbers.
+  const matchingN = dupes.matchingCount.state === 'ready' ? dupes.matchingCount.n : dupes.total;
   const selectedLabel = !crossPage
     ? selectedCount.toLocaleString()
     : matchingCountState === 'counting'
@@ -216,20 +224,25 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               </Typography>
               <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap', mt: 0.5 }}>
                 <Chip
-                  label="All layers"
+                  label={`All layers (${dupes.layerTotal.toLocaleString()})`}
                   size="small"
                   data-testid="layer-chip-all"
                   color={dupes.filters.layer === null ? 'primary' : 'default'}
                   variant={dupes.filters.layer === null ? 'filled' : 'outlined'}
-                  onClick={() => dupes.setFilters({ layer: null })}
+                  // A no-op while already active: setFilters resets the page and
+                  // the selection, which clicking the chip you are on must not.
+                  onClick={() => {
+                    if (dupes.filters.layer !== null) dupes.setFilters({ layer: null });
+                  }}
                 />
                 {DEDUP_LAYERS.map((l) => (
-                  // The count is the pending number from the stats the lane
-                  // already fetched; clicking the chip opens exactly those
-                  // rows, and clicking the active chip clears the filter.
+                  // The count is from the stats the lane already fetched, at the
+                  // status filter in force, so clicking the chip opens exactly
+                  // the rows it counts; clicking the active chip clears the
+                  // filter.
                   <Chip
                     key={l}
-                    label={`${LAYER_LABELS[l]} (${dupes.pendingByLayer[l].toLocaleString()})`}
+                    label={`${LAYER_LABELS[l]} (${dupes.countByLayer[l].toLocaleString()})`}
                     size="small"
                     data-testid={`layer-chip-${l}`}
                     color={dupes.filters.layer === l ? 'primary' : 'default'}
@@ -369,9 +382,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               <SelectAllMatchingBanner
                 selection={sel}
                 pageCount={dupes.candidates.length}
-                totalMatching={
-                  dupes.matchingCount.state === 'ready' ? dupes.matchingCount.n : dupes.total
-                }
+                totalMatching={matchingN}
                 countState={matchingCountState}
                 noun="pairs"
                 unavailableReason={dupes.selectAllMatchingDisabledReason}
@@ -451,7 +462,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
                   disabled={Boolean(dupes.mergeAllFilteredDisabledReason) || dupes.busy}
                   onClick={() => setPendingBulk(type)}
                 >
-                  {dupes.verbs[type]} (all {dupes.total.toLocaleString()})
+                  {dupes.verbs[type]} (all {matchingN.toLocaleString()})
                 </Button>
               </span>
             </Tooltip>

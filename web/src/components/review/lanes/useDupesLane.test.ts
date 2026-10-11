@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-10-11
 //
@@ -14,6 +14,9 @@ import * as api from '../../../services/api';
 import type { DupesUrlFilters } from './useDupesLane';
 import {
   useDupesLane,
+  DEDUP_LAYERS,
+  parseDedupLayer,
+  filterChangedMessage,
   MERGE_ALL_BLOCKED_REASON,
   MERGE_ALL_SEARCH_PENDING_REASON,
   DEDUP_SHORTCUTS,
@@ -1004,18 +1007,53 @@ describe('layer filter', () => {
     expect(result.current.selectedIds.size).toBe(0);
   });
 
-  it('counts pending book pairs per layer from the stats it already fetched', async () => {
+  it('counts book pairs per layer, at the status filter, from the stats it already fetched', async () => {
     vi.mocked(api.getDedupStats).mockResolvedValue({
       stats: [
         { entity_type: 'book', layer: 'acoustid', status: 'pending', count: 12 },
         { entity_type: 'book', layer: 'acoustid', status: 'merged', count: 99 },
         { entity_type: 'book', layer: 'exact', status: 'pending', count: 3 },
+        { entity_type: 'book', layer: 'llm', status: 'pending', count: 2 },
+        { entity_type: 'book', layer: 'llm', status: 'dismissed', count: 5 },
+        { entity_type: 'book', layer: 'manual', status: 'pending', count: 1 },
+        { entity_type: 'book', layer: 'book_signature', status: 'pending', count: 4 },
+        { entity_type: 'book', layer: 'metadata_hash_match', status: 'pending', count: 6 },
+        // A layer the lane has no chip for: in the total, in no chip.
+        { entity_type: 'book', layer: 'from_the_future', status: 'pending', count: 7 },
         { entity_type: 'author', layer: 'exact', status: 'pending', count: 50 },
       ],
     });
     const { result } = await renderLane();
-    await waitFor(() => expect(result.current.pendingByLayer.acoustid).toBe(12));
-    expect(result.current.pendingByLayer).toEqual({ exact: 3, acoustid: 12, embedding: 0 });
+    await waitFor(() => expect(result.current.countByLayer.acoustid).toBe(12));
+    expect(result.current.countByLayer).toEqual({
+      exact: 3,
+      acoustid: 12,
+      embedding: 0,
+      book_signature: 4,
+      metadata_hash_match: 6,
+      llm: 2,
+      manual: 1,
+    });
+    expect(result.current.layerTotal).toBe(12 + 3 + 2 + 1 + 4 + 6 + 7);
+
+    act(() => result.current.setFilters({ status: 'merged' }));
+    await waitFor(() => expect(result.current.countByLayer.acoustid).toBe(99));
+    expect(result.current.countByLayer.exact).toBe(0);
+    expect(result.current.layerTotal).toBe(99);
+
+    // '' is every status.
+    act(() => result.current.setFilters({ status: '' }));
+    await waitFor(() => expect(result.current.countByLayer.llm).toBe(7));
+    expect(result.current.layerTotal).toBe(12 + 99 + 3 + 2 + 5 + 1 + 4 + 6 + 7);
+  });
+
+  it('accepts every layer a candidate can carry from the URL and drops anything else', () => {
+    for (const l of DEDUP_LAYERS) expect(parseDedupLayer(l)).toBe(l);
+    expect(DEDUP_LAYERS).toEqual(
+      expect.arrayContaining(['llm', 'book_signature', 'metadata_hash_match', 'manual'])
+    );
+    expect(parseDedupLayer('bogus')).toBeNull();
+    expect(parseDedupLayer(null)).toBeNull();
   });
 });
 
@@ -1056,6 +1094,59 @@ describe('bulk keep-older / keep-newer', () => {
       expect.objectContaining({ keep_side: 'b', expected_total: 2 })
     );
   });
+
+  it('keep-older/newer are refused while both-unmatched is on, in dispatch', async () => {
+    // The bulk endpoint cannot express both_unmatched, so a keep-side merge
+    // would act on a larger set than the one on screen. Same refusal as
+    // mergeAllFiltered, and it has to hold for a dispatch that skipped the button.
+    const { result } = await renderLane();
+    act(() => result.current.setFilters({ bothUnmatched: true }));
+    await waitFor(() =>
+      expect(result.current.mergeAllFilteredDisabledReason).toBe(MERGE_ALL_BLOCKED_REASON)
+    );
+    act(() =>
+      result.current.dispatch({ lane: 'dupes', type: 'keepAAllFiltered', expectedTotal: 2 })
+    );
+    act(() =>
+      result.current.dispatch({ lane: 'dupes', type: 'keepBAllFiltered', expectedTotal: 2 })
+    );
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledTimes(2);
+    expect(toast).toHaveBeenNthCalledWith(1, MERGE_ALL_BLOCKED_REASON, 'warning');
+    expect(toast).toHaveBeenNthCalledWith(2, MERGE_ALL_BLOCKED_REASON, 'warning');
+  });
+
+  it.each([
+    ['keepAAllFiltered', 'a'],
+    ['keepBAllFiltered', 'b'],
+  ] as const)(
+    '%s through a 409 FILTER_CHANGED asks to re-confirm, refreshes, and reports no merge',
+    async (type, keepSide) => {
+      vi.mocked(api.bulkLinkDedupCandidates).mockRejectedValue(
+        new Error('the filter moved')
+      );
+      // services/api is auto-mocked, so the real filterChangedOf (unit-tested
+      // in filterChangedOf.test.ts) is stubbed to recognise this rejection.
+      vi.mocked(api.filterChangedOf).mockReturnValue({ expected: 2, matched: 5 });
+      const { result } = await renderLane();
+      const fetchesBefore = vi.mocked(api.getDedupCandidates).mock.calls.length;
+
+      await act(async () => {
+        result.current.dispatch({ lane: 'dupes', type, expectedTotal: 2 });
+      });
+
+      expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ keep_side: keepSide, expected_total: 2 })
+      );
+      expect(toast).toHaveBeenCalledWith(filterChangedMessage(5), 'warning');
+      // No success or failure report for a merge that did not run.
+      expect(toast.mock.calls.filter((c) => String(c[0]).startsWith('Bulk merge'))).toEqual([]);
+      await waitFor(() =>
+        expect(vi.mocked(api.getDedupCandidates).mock.calls.length).toBeGreaterThan(fetchesBefore)
+      );
+      await waitFor(() => expect(result.current.busy).toBe(false));
+    }
+  );
 
   it('keep-older/newer refused when status is not pending', async () => {
     const { result } = await renderLane();

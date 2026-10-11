@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
 // last-edited: 2026-10-11
 //
@@ -149,16 +149,21 @@ const SX_EVIDENCE = { mt: 2 } as const;
 const stopPropagation = (e: MouseEvent) => e.stopPropagation();
 
 /**
- * Whether a book is an iTunes copy, for the read-only chip. Mirrors the
- * book-level part of the predicate the duplicate-copies fixer uses
- * (internal/plugins/maintenance/duplicate_copies_fixer.go, itunesguard): a book
- * under books/itunes/**, or carrying a book iTunes persistent id or iTunes path.
- * The fixer also consults per-file rows and external ids; the candidate payload
- * carries neither, so a book that is an iTunes copy ONLY through those shows no
- * chip. The chip is a hint for the reviewer and decides nothing.
+ * Whether a book is an iTunes copy, for the read-only chip.
+ *
+ * The server decides: the candidate list computes `is_itunes` for each side with
+ * itunesguard.OwnershipWhy, which also sees the per-file rows and external ids
+ * the candidate payload does not carry. The check below runs only when that
+ * field is ABSENT (a payload from a server that predates it, or a book that did
+ * not come through include_books) and mirrors the book-level part of that
+ * predicate: a book under books/itunes/**, or carrying a book iTunes persistent
+ * id or iTunes path. A book that is an iTunes copy only through its file rows
+ * or external ids shows no chip on that path. The chip is a label for the
+ * reviewer and decides nothing.
  */
 export function isITunesBook(book: Book | null | undefined): boolean {
   if (!book) return false;
+  if (typeof book.is_itunes === 'boolean') return book.is_itunes;
   if (book.itunes_persistent_id || book.itunes_path) return true;
   return /(^|[\\/])books[\\/]itunes([\\/]|$)/i.test(book.file_path ?? '');
 }
@@ -172,7 +177,7 @@ function SideChips({ book }: { book: Book | null | undefined }) {
           label="iTunes"
           size="small"
           variant="outlined"
-          title="This book is an iTunes copy. Dedup never writes to it."
+          title="This book came from iTunes (persistent ID, iTunes path, or a file in an iTunes folder)."
           data-testid="itunes-chip"
         />
       )}
