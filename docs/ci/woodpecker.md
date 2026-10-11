@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Woodpecker CI: install runbook
 
@@ -30,23 +30,28 @@ test a branch with no PR, use `make ci-woodpecker`.
 
 | workflow | agent label | runs | measured time |
 |---|---|---|---|
-| `test-database` | `host=u1` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
-| `test-server-scanner` | `host=u1` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
-| `test-rest` | `host=u1` | every other package, including maintenance, registry and applygate | about 450–600 s |
-| `test-fixtures` | `host=u1` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
+| `test-database` | `heavy=true` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
+| `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
+| `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
+| `test-fixtures` | `heavy=true` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
-| `checks-build` | `host=u1` | vet, fmt-check, sdkguard, bench-check, web tests | split out of `checks` on 2026-09-29 |
+| `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, web tests | split out of `checks` on 2026-09-29 |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
 
 Placement follows three rules. First, packages whose tests decode audio
 (server, scanner and the decode set in `test-rest`) never run on the prod
 host, which must not decode; its Docker image has no ffmpeg. Second, the test
 workflows start together, so the wall time is roughly the slowest of them.
-Third, since 2026-09-29 no workflow runs on llm1: it is kept free for Whisper
-transcription, and its 10 cores were the slowest host (538 s for
-`test-server-scanner`, against under 55 s per shard on U1). The llm1 agent
-stays installed but idle, and can take a workflow again by changing that
-workflow's `host` label. An ssh-based prototype (`scripts/ci_remote.py`)
+Third, the five heavy workflows (`test-database`, `test-server-scanner`,
+`test-rest`, `test-fixtures`, `checks-build`) are labelled `heavy=true`, not
+`host=u1`, so either local-backend agent can take them: U1 and llm1 both carry
+that label (owner decision 2026-10-11, so CI keeps working when U1 is paused at
+night). U1 is the fast host (48 cores; under 55 s per shard), and llm1's 10
+cores were the slowest (538 s for `test-server-scanner` with 4 shards each), so
+expect llm1 runs to be slower and to compete with Whisper transcription. The
+server hands a workflow to whichever eligible agent is free; to force a
+host, pause the other agent. `checks-lint` stays on `host=u0`; `u0` has no
+`heavy` label, so heavy work can never be routed to the prod host. An ssh-based prototype (`scripts/ci_remote.py`)
 measured an earlier layout at **753 s** for a full run on 2026-09-26; a local
 `make ci` of the same commit on the loaded Mac took **2099 s**.
 
@@ -233,11 +238,15 @@ golangci-lint caches (under `XDG_CACHE_HOME`) there.
   runs that branch's code, so this is only as safe as the rule on who can
   start one. The repo has `require_approval: forks`: a pull request from a
   fork waits for a maintainer's approval before any agent runs it. Keep that
-  setting. U1's shared `/tank/ci/cache` has the same exposure.
+  setting. The shared `/tank/ci/cache` on U1 and `/Users/jdfalk/ci/cache` on llm1 have the same exposure.
 
-### llm1: local backend (idle since 2026-09-29)
+### llm1: local backend (takes `heavy=true` workflows)
 
-No workflow targets `host=llm1`; see Pipeline layout. This agent runs steps directly on macOS (`WOODPECKER_BACKEND=local`). The
+No workflow targets `host=llm1` by name, but it carries `heavy=true`, so it
+runs the five heavy workflows whenever it is free and U1 is busy or paused; see
+Pipeline layout. Its tools (Homebrew Go, node/npm, ffmpeg, ffprobe, fpcalc,
+python3, golangci-lint, make) must be on the agent's PATH. Its cache root is
+`/Users/jdfalk/ci/cache/{gomod,go-build,npm}`. This agent runs steps directly on macOS (`WOODPECKER_BACKEND=local`). The
 decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
 Docker backend.
 
@@ -263,7 +272,8 @@ pipelines would run as root.
 
 ### U1: local backend on Linux
 
-U1 runs `test-rest`, `test-database` and `checks-build` with the local
+U1 runs the `heavy=true` workflows (`test-rest`, `test-database`,
+`test-server-scanner`, `test-fixtures` and `checks-build`) with the local
 backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
 fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies
 the C compiler `-race` needs, and `golang-go` is only a bootstrap:
@@ -274,11 +284,17 @@ the C compiler `-race` needs, and `golang-go` is only a bootstrap:
 - **Install layout:** `/tank/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`
   (agent v3.19.0 since 2026-10-10, plugin-git 2.10.1; linux/amd64). `/tank/ci` is its own ZFS dataset and the
   user's HOME.
-- **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in every U1 workflow;
-  `checks-build.yaml` also keeps the npm cache in `/tank/ci/cache/npm`.
+- **Caches:** `/tank/ci/cache/{go-build,gomod,npm}`. The workflows do not
+  hard-code a cache path: each step sources `scripts/ci/cache_env.sh`, which
+  uses the first existing root of `/tank/ci/cache` (U1) and
+  `/Users/jdfalk/ci/cache` (llm1) and exports `GOMODCACHE`, `GOCACHE` and
+  `npm_config_cache` from it. It is a script rather than an agent env var
+  because `environment:` takes literals, and the local backend gives every
+  pipeline a fresh HOME and is not relied on to pass the agent's environment.
 - **Node (web tests):** the official `node-v26.10.0-linux-x64` tarball, checked
   against the release's `SHASUMS256.txt`, unpacked in `/tank/ci/tools` with a
-  `/tank/ci/tools/node` symlink that `checks-build` puts on PATH. To upgrade,
+  `/tank/ci/tools/node` symlink that `checks-build` puts on PATH when the
+  directory exists (llm1 uses the node on its PATH). To upgrade,
   unpack the new version beside it and repoint the symlink.
 - **gofmt:** `/usr/bin/gofmt` is Ubuntu's older Go; `checks-build` puts the
   pinned toolchain's `$(go env GOROOT)/bin` first so `fmt-check` matches.
@@ -320,7 +336,8 @@ Set these on the repo in the Woodpecker UI:
 ## Troubleshooting
 
 - **A workflow sits in "pending".** No online agent has matching labels. Check
-  the Agents page. Each agent runs at most 2 workflows at a time.
+  the Agents page. Each agent runs at most 2 workflows at a time. A
+  `heavy=true` workflow waits when both U1 and llm1 are paused or offline.
 - **The coverage gate fails with "no CI-COVERAGE line".** That test workflow
   failed or never ran. Its own log shows why.
 - **Webhooks fail with 403.** The GitHub `hooks` IP list in the WAF rule is

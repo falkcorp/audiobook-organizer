@@ -1,7 +1,7 @@
 # file: .woodpecker/test-fixtures.yaml
-# version: 1.0.1
+# version: 1.1.0
 # guid: cf4b2a0b-48ac-4607-b815-6816d2cbc041
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 #
 # The tests that -short skips, run WITHOUT -short and with -race: the mirror of
 # ci.yml's fixture-tests job. The other three test workflows pass -short, so
@@ -11,12 +11,14 @@
 # discovers the packages at run time (scripts/ci/fixture_test_packages.py).
 #
 # Several of those packages decode audio (scanner, server, audiobooks,
-# organizer, plugins/maintenance), so this runs on U1 like test-rest, never on
-# the prod host. Clone, environment, trigger and cleanup are copied from
-# test-rest.yaml; see that file for why each setting is there.
+# organizer, plugins/maintenance), so this runs on a heavy agent (U1 or llm1)
+# like test-rest, never on the prod host. Clone, environment, trigger and
+# cleanup are copied from test-rest.yaml; see that file for why each setting
+# is there.
 
 labels:
-  host: u1
+  # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
+  heavy: "true"
 
 when:
   # Manual only (owner 2026-10-02). Automatic push and pull_request runs let
@@ -41,15 +43,6 @@ steps:
     image: bash
     environment:
       GOTOOLCHAIN: go1.27.2
-      # The local backend gives every pipeline a fresh HOME, so Go's default
-      # caches ($HOME/go/pkg/mod, which also holds the downloaded toolchain, and
-      # the per-user build cache: $HOME/.cache/go-build on Linux) were re-created
-      # per run and never removed on the Mac agents:
-      # 107 leftover workdirs held 117 GB on 2026-09-28 and filled the disk.
-      # One host-wide cache is shared instead; Go locks both, so concurrent
-      # pipelines are safe.
-      GOMODCACHE: /tank/ci/cache/gomod
-      GOCACHE: /tank/ci/cache/go-build
       # Every pipeline clones into a new random workdir
       # (woodpecker-local-<n>), and without -trimpath Go keys each package's
       # cache entry on its directory: nothing was ever reused and the cache
@@ -57,6 +50,16 @@ steps:
       # 2026-09-29). -trimpath drops the directory from the key.
       GOFLAGS: -trimpath
     commands:
+      # GOMODCACHE and GOCACHE are set by the first command, not here: the two
+      # heavy agents keep the cache in different places (/tank/ci/cache on U1,
+      # /Users/jdfalk/ci/cache on llm1), and `environment:` takes only literals.
+      # The local backend gives every pipeline a fresh HOME, so Go's default
+      # caches (under $HOME, including the downloaded toolchain) were
+      # re-created per run and never removed on the Mac agents:
+      # 107 leftover workdirs held 117 GB on 2026-09-28 and filled the disk.
+      # One host-wide cache per host is shared instead; Go locks both, so
+      # concurrent pipelines are safe. See scripts/ci/cache_env.sh.
+      - . scripts/ci/cache_env.sh || exit 1
       # python3 runs the cache cap in cleanup; fail here, loudly, if it is missing.
       - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
       # No -short, no CI-COVERAGE line: these packages' short runs are already
@@ -71,9 +74,9 @@ steps:
     image: bash
     when:
       - status: [success, failure]
-    environment:
-      GOCACHE: /tank/ci/cache/go-build
     commands:
+      # Sets GOCACHE for this host; see the test step.
+      - . scripts/ci/cache_env.sh || true
       # Cap the shared GOCACHE by size, least recently used first. The age rule
       # this replaces (drop entries unused for a day) never fired: the cache
       # hit 164 GB in under a day on 2026-09-29. Runs before the workspace is

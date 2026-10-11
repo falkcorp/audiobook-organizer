@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.4.1
+# version: 1.5.0
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
-# last-edited: 2026-10-10
+# last-edited: 2026-10-11
 #
 # The non-linter gates of `make ci`: vet (test-short's prerequisite),
 # fmt-check, sdkguard, bench-check, and the web tests, each step running the
@@ -10,15 +10,19 @@
 # `checks` workflow on U0 until 2026-09-29 and are split so they run on both
 # hosts at once. None of these steps needs the installed linters.
 #
-# Runs on the U1 agent (local backend, Linux amd64, 48 cores). `image` names
-# the shell that runs the commands. The caches are host directories on U1's
-# tank/ci dataset, shared with test-rest and test-database. Node is the
-# official v26 tarball under /tank/ci/tools/node (checksum-verified; see
-# docs/ci/woodpecker.md). PATH puts the pinned Go toolchain's own bin first so
-# fmt-check runs gofmt 1.27.2, not the older /usr/bin/gofmt from Ubuntu's Go.
+# Runs on any heavy local-backend agent (`heavy=true`): usually U1 (Linux
+# amd64, 48 cores), or llm1 (macOS arm64) while U1 is paused. `image` names the
+# shell that runs the commands. The caches are host directories shared with
+# the test workflows; scripts/ci/cache_env.sh picks /tank/ci/cache on U1 and
+# /Users/jdfalk/ci/cache on llm1. Node on U1 is the official v26 tarball under
+# /tank/ci/tools/node (checksum-verified; see docs/ci/woodpecker.md); llm1 uses
+# the node on the agent's PATH (Homebrew). PATH puts the pinned Go toolchain's
+# own bin first so fmt-check runs gofmt 1.27.2, not whatever gofmt the host's
+# own Go ships (Ubuntu's older /usr/bin/gofmt on U1).
 
 labels:
-  host: u1
+  # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
+  heavy: "true"
 
 when:
   # Manual only (owner 2026-10-02). Automatic push and pull_request runs let
@@ -43,20 +47,22 @@ variables:
     # without it Go keys each package's cache entry on that directory, so the
     # shared cache would never hit (see test-server-scanner.yaml).
     GOFLAGS: -buildvcs=false -trimpath
-    GOCACHE: /tank/ci/cache/go-build
-    GOMODCACHE: /tank/ci/cache/gomod
+    # GOCACHE and GOMODCACHE are not set here: they differ per host, so each
+    # step's first command sources scripts/ci/cache_env.sh.
 
 steps:
   - name: vet
     image: bash
     environment: *go_env
     commands:
+      - . scripts/ci/cache_env.sh || exit 1
       - make --no-print-directory vet
 
   - name: fmt-sdkguard-bench
     image: bash
     environment: *go_env
     commands:
+      - . scripts/ci/cache_env.sh || exit 1
       - export PATH="$$(go env GOROOT)/bin:$$PATH"
       - command -v gofmt && go version
       - make --no-print-directory fmt-check
@@ -66,10 +72,12 @@ steps:
 
   - name: web-test
     image: bash
-    environment:
-      npm_config_cache: /tank/ci/cache/npm
     commands:
-      - export PATH="/tank/ci/tools/node/bin:$$PATH"
+      # Sets npm_config_cache (the shared npm cache) for this host.
+      - . scripts/ci/cache_env.sh || exit 1
+      # U1 pins node to the checksum-verified tarball; other hosts (llm1) use
+      # the node already on the agent's PATH.
+      - if [ -d /tank/ci/tools/node/bin ]; then export PATH="/tank/ci/tools/node/bin:$$PATH"; fi
       - node --version
       - npm ci --prefix web --no-audit --no-fund
       # vitest defaults to availableParallelism()-1 workers (47 on U1). Beside
@@ -84,9 +92,9 @@ steps:
     depends_on: [vet, fmt-sdkguard-bench, web-test]
     when:
       - status: [success, failure]
-    environment:
-      GOCACHE: /tank/ci/cache/go-build
     commands:
+      # Sets GOCACHE for this host; see the other steps.
+      - . scripts/ci/cache_env.sh || true
       - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
       - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
       - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
