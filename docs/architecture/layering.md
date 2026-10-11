@@ -1,7 +1,7 @@
 <!-- file: docs/architecture/layering.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 988432fb-4249-462f-8415-5b8a97e914bf -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Package layering
 
@@ -11,7 +11,7 @@
 
 | Layer | Packages | May import |
 |---|---|---|
-| 0 leaf | `util`, `pathutil`, `personname`, `titleutil`, `authorname`, `audioext`, `httputil`, `logger`, `logging`, `metrics`, `cache`, `models`, `seqnum`, `querygrammar`, plus `matcher` and `fingerprint` (reclassified, see below) and every package that imports no module package | layer 0, standard library and third-party |
+| 0 leaf | `util`, `pathutil`, `personname`, `titleutil`, `authorname`, `audioext`, `httputil`, `logger`, `logging`, `metrics`, `cache`, `models`, `seqnum`, `querygrammar`, `keyedmutex`, plus `matcher` and `fingerprint` (reclassified, see below) and every package that imports no module package | layer 0, standard library and third-party |
 | 1 config | `config` (becomes a true leaf after 07-M1) | layer 0 |
 | 2 storage | `database`, `openlibrary`, `search` | layers 0-1; not domain packages |
 | 3 domain | `merge`, `versionprimary`, `versions`, `dedup`, `metadata`, `organizer`, `scanner`, `itunes`, `audiobooks`, `metafetch`, `reconcile`, `repairs`, `undo`, `writeback` and the rest | layers 0-3 |

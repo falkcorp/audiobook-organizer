@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package importer
 
@@ -410,8 +410,8 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// backfill after that) and never fails the import.
 	fileHash, hashErr := filehash.BookFileHash(req.FilePath)
 	if hashErr != nil {
-		slog.Warn("import: identity hash failed; file_hash left empty for backfill",
-			"path", logger.SanitizeLogValue(req.FilePath), "err", hashErr)
+		logger.New("importer").Warn("identity hash failed for %s; file_hash left empty for backfill: %s",
+			logger.SanitizeLogValue(req.FilePath), logger.SanitizeLogValue(hashErr.Error()))
 		fileHash = ""
 	}
 
@@ -556,8 +556,8 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	bfErr := is.db.CreateBookFile(bf)
 	bfWritten := bfErr == nil || errors.Is(bfErr, database.ErrBookFileDurabilityUnknown)
 	if bfErr != nil {
-		slog.Warn("import: book_file row write reported an error",
-			"book_id", created.ID, "path", created.FilePath, "written", bfWritten, "err", bfErr)
+		logger.New("importer").Warn("book_file row write for book %s (%s) reported an error (row written: %t): %s",
+			created.ID, logger.SanitizeLogValue(created.FilePath), bfWritten, logger.SanitizeLogValue(bfErr.Error()))
 	}
 	if !bfWritten {
 		slog.Warn("import: could not create book_file row — the book has no route to its audio, and organize will skip it",
@@ -607,8 +607,8 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			// The guard above passed under the lock, so only a writer that
 			// does not take the lock can get here. Same outcome as the guard:
 			// an ordinary unlinked version, and the existing link left alone.
-			slog.Warn("import: torrent linked elsewhere after the guard passed; importing without the link",
-				"id", created.ID, "err", verErr)
+			logger.New("importer").Warn("torrent linked elsewhere after the guard passed for book %s; importing without the link: %s",
+				created.ID, logger.SanitizeLogValue(verErr.Error()))
 			linkNote = TorrentLinkNoteAlreadyLinked
 			linkHash = ""
 			params.TorrentHash, params.Source = "", "imported"
