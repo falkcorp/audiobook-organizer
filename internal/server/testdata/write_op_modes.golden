@@ -68,6 +68,7 @@ dedup.series-normalize	no-mode
 dedup.series-prune	no-mode
 dedup.split-book-bulk-merge	preview
 deluge.centralize	no-mode
+deluge.link-backfill	preview
 deluge.protected-paths-sync	no-mode
 entities.author-merge	no-mode
 entities.resolve-production-author	no-mode

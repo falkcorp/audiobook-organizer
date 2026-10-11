@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -118,7 +118,8 @@ const (
 //     moment the version was trashed, not from when it was created. So a
 //     trash can be undone (restore) for the whole 14 days. This is the model
 //     every post-fix import already has; the trial output says so.
-//   - MarkFileImportedFromDeluge matching, whose only caller is dormant.
+//   - MarkFileImportedFromDeluge matching, which has no caller (its one dormant
+//     caller, the deluge plugin's importToLibrary, was deleted in 10-PR2).
 //
 // Nearly every pre-fix row in prod is hashless: until 2026-10-10 the importer
 // passed no TorrentHash, so the version and the row both carry none and the

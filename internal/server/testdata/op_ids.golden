@@ -1,7 +1,7 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.9.0
+# version: 1.10.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
-# last-edited: 2026-10-04
+# last-edited: 2026-10-11
 #
 # Ledger of every operation def ID this server has registered, canonical IDs
 # and FormerIDs (aliases) alike. APPEND-ONLY. Read by
@@ -66,6 +66,7 @@ dedup.series-scan
 dedup.split-book-bulk-merge
 dedup.split-book-scan
 deluge.centralize
+deluge.link-backfill
 deluge.path-update
 deluge.protected-paths-sync
 diagnostics.ai-analyze
