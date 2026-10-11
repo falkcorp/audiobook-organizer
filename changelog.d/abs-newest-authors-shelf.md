@@ -22,7 +22,11 @@ library scan.
 
 The author-name creation check now also refuses release-post text such as a
 file size ("831MB", "1.2 GB") or a hashtag after a space ("#Winner"), which it
-used to accept.
+used to accept, including when the space is a non-breaking or full-width space.
+A real name with such a group appended ("Name [32k 08;53;59 122MB]") is now
+treated as a junk row too, and the junk-author repair reads the name out of the
+group and, when that author already exists, proposes moving the books to them
+instead of removing the credit.
 
 Leftover junk author rows that already exist are not hidden by this change if
 their books are recent; cleaning them up goes through the existing review-gated

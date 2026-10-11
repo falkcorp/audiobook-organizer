@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -16,7 +16,7 @@
 //
 //   - personname.IsPlausibleAuthorName, the author-creation gate, already
 //     refuses copyright shrapnel, story counts, era tags, edition markers,
-//     "read by", timecodes, pure numbers, placeholders, structural labels and
+//     "read by", timecodes, release-post sizes and hashtags, pure numbers, placeholders, structural labels and
 //     positional artifacts. A row it refuses is junk by the system's own
 //     definition; it only predates the gate.
 //   - authorname.IsPlaceholderAuthor is the placeholder list dedup uses.
@@ -1093,6 +1093,9 @@ var byRoleWords = map[string]bool{
 //     "Dante King (Dragon Born)", "Daniel Pierce(Future Reborn)" (only junk
 //     rows are cleaned, so "Kevin Hearne (Luke Daniels)", a narrator credit
 //     the classifier leaves alone, never gets here);
+//   - a release-post group at the end, which the creation gate refuses as
+//     release_tag: "Name [32k 08;53;59 122MB]", "Name {497mb}", "Name (120 MB)"
+//     (a file size or a hashtag inside the group; personname.StripTrailingReleaseTag);
 //   - a writer's "by" tail: "Listening to Final Strife, The (The Final
 //     Strife, Book 1) by Saara El-Arifi_7" (a trailing "_N" dropped; not
 //     after "read", "translated" and the other role words in byRoleWords).
@@ -1110,6 +1113,11 @@ func CleanedName(name string) (string, bool) {
 	}
 	var out string
 	switch {
+	case hasReleaseTagTail(s):
+		// Before the studio forms: "Name [32k 08;53;59 122MB]" has the
+		// "Head [bracket]" shape, and the studio case would refuse it because
+		// its head is a person, not a studio.
+		out, _ = personname.StripTrailingReleaseTag(s)
 	case studioBracketRe.MatchString(s):
 		m := studioBracketRe.FindStringSubmatch(s)
 		if classifyBase(m[1]).Class != ClassPublisher {
@@ -1165,6 +1173,13 @@ func CleanedName(name string) (string, bool) {
 		return "", false
 	}
 	return out, true
+}
+
+// hasReleaseTagTail reports whether s ends in a release-post group
+// (personname.StripTrailingReleaseTag).
+func hasReleaseTagTail(s string) bool {
+	_, ok := personname.StripTrailingReleaseTag(s)
+	return ok
 }
 
 // parenCleanable: "Head (Paren)" whose head is one person and whose

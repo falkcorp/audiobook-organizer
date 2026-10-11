@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package authorjunk
 
@@ -605,6 +605,49 @@ func TestIsGenreTagline(t *testing.T) {
 		"The Apocalypse", "An Ordinary Apocalypse", "Apocalypse"} {
 		if IsGenreTagline(s) {
 			t.Errorf("IsGenreTagline(%q) = true, want false", s)
+		}
+	}
+}
+
+// A release-post group after a real name (the creation gate's release_tag rule
+// refuses it) is junk, and CleanedName reads the name out of it so the repair
+// can relink to that author instead of unlinking. Synthetic names only.
+func TestCleanedName_ReleaseTagTail(t *testing.T) {
+	for in, want := range map[string]string{
+		"Synthetic Writer [32k 08;53;59 122MB]": "Synthetic Writer",
+		"Synthetic Writer {497mb}":              "Synthetic Writer",
+		"Synthetic Writer (120 MB)":             "Synthetic Writer",
+		"Synthetic Writer [64k #Winner]":        "Synthetic Writer",
+		"Q. R. Synthetic [64k 100MB]":           "Q. R. Synthetic",
+		// Several groups, and a no-break space before the group.
+		"Synthetic Writer [32k 122MB] {497mb}": "Synthetic Writer",
+		"Synthetic Writer\u00a0[32k 122MB]":    "Synthetic Writer",
+	} {
+		got, ok := CleanedName(in)
+		if !ok || got != want {
+			t.Errorf("CleanedName(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+		// The verdict stays strong and names the rule that fired.
+		v := ClassifyName(in)
+		if !v.Junk() || v.Rule != RuleCreationGate {
+			t.Errorf("ClassifyName(%q) = %+v; want junk by %s", in, v, RuleCreationGate)
+		}
+	}
+	// Nothing plausible remains, or the group is not a release tag: no clean
+	// name, so the repair's unlink path is unchanged.
+	for _, in := range []string{
+		"[32k 08;53;59 122MB]",
+		"{497mb}",
+		"64k 01;02;03 100MB",
+		"10 831MB] #Winner",
+		"1234 [32k 122MB]",
+		"Synthetic Writer [Some Series]", // not a release tag
+		"Synthetic Writer [#Winner]",     // the gate does not refuse this one either
+		"Synthetic Writer [64k] {497mb}", // an inner group that is not a release tag stays
+		"Synthetic Writer #Audiobook",    // a hashtag outside a group
+	} {
+		if got, ok := CleanedName(in); ok {
+			t.Errorf("CleanedName(%q) = %q, want no clean name", in, got)
 		}
 	}
 }
