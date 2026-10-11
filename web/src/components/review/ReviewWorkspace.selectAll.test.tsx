@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 //
 // "Select all N matching" across pages (Gmail pattern), and bulk actions that
 // work on that whole set: chunked to what the server accepts, one progress
@@ -113,38 +113,47 @@ beforeEach(() => {
 });
 
 describe('select all matching', () => {
-  it('offers every matching book without ticking the page first, keeps it across pages, and clears', async () => {
-    const user = await openNoCandidates();
+  // Inherently heavy: one walk through eight interactions over a 1,203-id
+  // selection set, each re-rendering the whole workspace. About 1 s on an idle
+  // machine, 10 s with the CPU oversubscribed tenfold (40 busy processes under
+  // --maxWorkers=8), so it gets more than the 30 s default instead of a flake.
+  // The other tests in this file are not this long.
+  it(
+    'offers every matching book without ticking the page first, keeps it across pages, and clears',
+    { timeout: 90_000 },
+    async () => {
+      const user = await openNoCandidates();
 
-    // Visible before anything is ticked: the owner could not find it when it
-    // only appeared after the page checkbox.
-    const bar = screen.getByTestId('main-selection-bar');
-    expect(within(bar).getByTestId('main-select-all-matching')).toHaveTextContent(
-      'Select all 1,203 matching'
-    );
-    await user.click(screen.getByTestId('select-page'));
-    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('25 selected');
-    await user.click(within(bar).getByTestId('main-select-all-matching'));
+      // Visible before anything is ticked: the owner could not find it when it
+      // only appeared after the page checkbox.
+      const bar = screen.getByTestId('main-selection-bar');
+      expect(within(bar).getByTestId('main-select-all-matching')).toHaveTextContent(
+        'Select all 1,203 matching'
+      );
+      await user.click(screen.getByTestId('select-page'));
+      expect(screen.getByTestId('main-selection-count')).toHaveTextContent('25 selected');
+      await user.click(within(bar).getByTestId('main-select-all-matching'));
 
-    expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
-    expect(screen.getByTestId('main-selection-count')).toHaveTextContent(
-      '1,203 selected (all 1,203 matching)'
-    );
-    expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (1203)');
+      expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
+      expect(screen.getByTestId('main-selection-count')).toHaveTextContent(
+        '1,203 selected (all 1,203 matching)'
+      );
+      expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (1203)');
 
-    // Page two: still the whole set.
-    await user.click(screen.getByRole('button', { name: 'Go to page 2' }));
-    expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
-    expect(screen.getByLabelText('Select Book e25')).toBeChecked();
+      // Page two: still the whole set.
+      await user.click(screen.getByRole('button', { name: 'Go to page 2' }));
+      expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
+      expect(screen.getByLabelText('Select Book e25')).toBeChecked();
 
-    // A chip toggle does not drop it either.
-    await user.click(screen.getByTestId('chip-matched'));
-    expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
-    await user.click(screen.getByTestId('chip-matched'));
+      // A chip toggle does not drop it either.
+      await user.click(screen.getByTestId('chip-matched'));
+      expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
+      await user.click(screen.getByTestId('chip-matched'));
 
-    await user.click(screen.getByTestId('clear-selection'));
-    expect(screen.getByTestId('selected-count')).toHaveTextContent('Nothing selected');
-  });
+      await user.click(screen.getByTestId('clear-selection'));
+      expect(screen.getByTestId('selected-count')).toHaveTextContent('Nothing selected');
+    }
+  );
 
   it('Search again sends the whole set in chunks the server accepts, one op each', async () => {
     const user = await openNoCandidates();

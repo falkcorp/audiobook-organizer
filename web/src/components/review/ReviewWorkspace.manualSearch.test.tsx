@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.manualSearch.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c04b7e2-5d13-49af-b026-3f7159ea840c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 //
 // The manual-search escape hatch on the metadata lane.
 //
@@ -16,7 +16,7 @@
 // the Library page, which is why deleting that dialog in Phase 7 would have
 // left the cache able to drain but never refill.
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -147,7 +147,7 @@ describe('manual metadata search from /review', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('a background apply finishing later neither closes the next book\'s search nor blocks it', async () => {
+  it("a background apply finishing later neither closes the next book's search nor blocks it", async () => {
     const user = userEvent.setup();
     seed([
       makeResult('na', { status: 'no_match', candidate: undefined }),
@@ -190,14 +190,29 @@ describe('manual metadata search from /review', () => {
     expect(dialogB).toHaveTextContent('Book nb');
 
     // A finishes: B's dialog stays open, and the lane reloads once.
-    finishA({ id: 'op-a', status: 'completed', error_message: null } as api.OperationV2);
-    await waitFor(
-      () =>
-        expect(vi.mocked(api.getCachedReviewResults).mock.calls.length).toBeGreaterThan(
-          loadsBefore
-        ),
-      { timeout: 4000 }
-    );
+    //
+    // The reload is debounced by MetadataPanel's APPLIED_REFRESH_DEBOUNCE_MS
+    // (1.5 s). Waiting that out in real time made this the slowest test in the
+    // file, and its own `timeout: 4000` (shorter than the 10 s asyncUtilTimeout
+    // setup.ts sets for CI load) expired whenever the machine was busy. Fake
+    // only setTimeout/clearTimeout (React's scheduler stays real) and step the
+    // clock until the reload lands, rather than sleeping. This is a manual loop
+    // and not waitFor on purpose: Testing Library's async wrapper schedules its
+    // own setTimeout and, without Jest's fake timers, never sees a faked one
+    // fire.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      finishA({ id: 'op-a', status: 'completed', error_message: null } as api.OperationV2);
+      for (let i = 0; i < 100; i++) {
+        if (vi.mocked(api.getCachedReviewResults).mock.calls.length > loadsBefore) break;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(vi.mocked(api.getCachedReviewResults).mock.calls.length).toBeGreaterThan(loadsBefore);
     expect(screen.getByRole('dialog')).toHaveTextContent('Book nb');
   });
 });
