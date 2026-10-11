@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate_shutdown_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b3e5d70-2c1a-4f68-8e47-d5a0c6b1f293
 // last-edited: 2026-10-11
 
@@ -198,6 +198,80 @@ func TestOwnedGatedDB_TimedOutCloseLeavesEngineOpenThenRetryCloses(t *testing.T)
 	}
 	if _, _, gerr := g.Get([]byte("owned:000")); !errors.Is(gerr, pebble.ErrClosed) {
 		t.Fatalf("Get after a successful close returned %v; want ErrClosed", gerr)
+	}
+}
+
+// Callers that arrive while a close attempt is running share it. N callers
+// against a held straggler used to run N attempts back to back, each waiting
+// its own timeout plus syncGrace (N x 11 s with the production default).
+// Now they all get the result of the one attempt, so the whole herd costs one
+// bound; a call made after that attempt finished is still a fresh retry, and
+// a successful close stays idempotent.
+func TestOwnedGatedDB_ConcurrentClosersShareOneAttempt(t *testing.T) {
+	const callers = 8
+	const timeout = 400 * time.Millisecond
+
+	g, closeDB := openOwnedMem(t, vfs.NewMem())
+	seedOwned(t, g, 4)
+	it, err := g.NewIter(&pebble.IterOptions{LowerBound: []byte("owned:"), UpperBound: []byte("owned;")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var attempts atomic.Int32
+	g.gate.setShutdownHook(func(st shutdownStage) {
+		if st == stageRefusedAndSynced {
+			attempts.Add(1)
+		}
+	})
+	t.Cleanup(func() { g.gate.setShutdownHook(nil) })
+
+	start := make(chan struct{})
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Go(func() {
+			<-start
+			errs[i] = closeDB(timeout)
+		})
+	}
+	begin := time.Now()
+	close(start)
+	wg.Wait()
+	elapsed := time.Since(begin)
+
+	for i, e := range errs {
+		if e == nil || !errors.Is(e, pebble.ErrClosed) {
+			t.Fatalf("caller %d: close with a held iterator returned %v; want an error wrapping pebble.ErrClosed", i, e)
+		}
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("%d callers ran %d close attempts; want 1 shared attempt", callers, got)
+	}
+	// One attempt is ~timeout; serialised attempts would be ~callers x timeout.
+	if limit := 3 * timeout; elapsed > limit {
+		t.Fatalf("%d concurrent closers took %s; want about one bound (%s), not %d of them", callers, elapsed, timeout, callers)
+	}
+
+	// The failed attempt has finished, so a new call retries (and fails again
+	// while the straggler is held), then succeeds once it lets go.
+	if e := closeDB(50 * time.Millisecond); e == nil {
+		t.Fatal("a close after the shared attempt, with the straggler still held, returned nil")
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("a new call after a failed attempt ran %d total attempts; want 2 (it must retry)", got)
+	}
+	if e := releaseNoPanic(it.Close); e != nil {
+		t.Fatalf("releasing the iterator: %v", e)
+	}
+	if e := closeDB(10 * time.Second); e != nil {
+		t.Fatalf("close after the straggler released: %v", e)
+	}
+	if e := closeDB(time.Second); e != nil {
+		t.Fatalf("close after a successful close: %v", e)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("%d total attempts; want 3 (a close after success must not run another)", got)
 	}
 }
 
