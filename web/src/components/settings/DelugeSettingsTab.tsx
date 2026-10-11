@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -151,7 +151,7 @@ export default function DelugeSettingsTab() {
             placeholder="http://<deluge-host>:8112"
             value={status?.url || ''}
             disabled
-            helperText="Set deluge_web_url in server config or environment. Default password: deluge"
+            helperText="Set deluge_web_url with PUT /api/v1/config. The server config file or environment applies only until saved settings contain it (a saved value wins on restart). Default password: deluge"
             size="small"
           />
         </Grid>

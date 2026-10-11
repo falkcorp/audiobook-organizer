@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package config
 
@@ -30,6 +30,7 @@ func resetConfigTestState() {
 func setupMigrationExpectations(store *mocks.MockStore) {
 	store.On("GetSetting", "maintenance_window_migrated").Return(nil, fmt.Errorf("not found")).Maybe()
 	store.On("SetSetting", "maintenance_window_migrated", "true", "bool", false).Return(nil).Maybe()
+	store.On("SetSetting", logRetentionZeroMigratedKey, "true", "bool", false).Return(nil).Maybe()
 }
 
 func TestLoadConfigFromDatabase(t *testing.T) {

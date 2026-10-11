@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.81.1
+// version: 1.81.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -789,6 +789,8 @@ type CapabilityProbes interface {
 // RuntimeConfig exposes the retention and path settings the jobs read.
 type RuntimeConfig interface {
 	RootDir() string
+	// LogRetentionDays is the EFFECTIVE purge window (config.ResolveLogRetentionDays):
+	// the configured days, 90 for an unset 0, and 0 only when the operator set -1.
 	LogRetentionDays() int
 	PurgeSoftDeletedAfterDays() int
 	BackupRetentionDays() int

@@ -882,6 +882,30 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 				"on defaults because the next settings save would overwrite it: %w", err)
 		}
 
+		// One-shot: a stored log_retention_days=0 is the value every install
+		// ran with while InitConfig never read the key (it disabled the log
+		// purge everywhere), not an operator choice. Drop it so the startup
+		// value (default 90) applies. Same marker discipline as embed_cover_art:
+		// the marker is written only when the rewrite persisted (or none was
+		// needed), so a failed save is retried on the next boot.
+		if _, done := settingsMap[logRetentionZeroMigratedKey]; !done {
+			persisted := true
+			if migrated, changed := migrateLogRetentionBlob(blobStr); changed {
+				configLog.Info("dropped stale log_retention_days=0 from the stored blob; the startup value (default %d days) now applies to the log purge (set %d to keep logs forever)",
+					DefaultLogRetentionDays, LogRetentionKeepForever)
+				blobStr = migrated
+				if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+					persisted = false
+					configLog.Warn("failed to persist log_retention_days blob migration, will retry next boot: %v", saveErr)
+				}
+			}
+			if persisted {
+				if markErr := store.SetSetting(logRetentionZeroMigratedKey, "true", "bool", false); markErr != nil {
+					configLog.Warn("failed to record log_retention_days migration marker: %v", markErr)
+				}
+			}
+		}
+
 		// One-shot: a stored embed_cover_art=false predates the setting doing
 		// anything, so drop it and let the new default (true) apply.
 		if _, done := settingsMap[embedCoverArtMigratedKey]; !done {
@@ -1060,6 +1084,7 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// rather than left for the caller's Validate. Every layer above can
 		// carry it, and the blob that produced it is healed on the next save.
 		normalizeChapterConsolidationThreshold(c, "the settings database")
+		normalizeLogRetentionDays(c, "the settings database")
 		pinBootOnlySettings(c, bootSortIndexes)
 	})
 

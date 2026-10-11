@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-10-08
+// last-edited: 2026-10-11
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -287,7 +287,7 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		}), true
 	case "purge_old_logs":
 		return windowOnly(&maint.PurgeOldLogs, map[string]string{
-			"enabled":          "derived from log_retention_days; set that key via PUT /config, 0 disables the purge",
+			"enabled":          "derived from log_retention_days; set that key via PUT /config, -1 disables the purge (0 means the default, 90 days)",
 			"interval_minutes": "fixed at 7d",
 			"run_on_startup":   fixedScheduleHint,
 		}), true

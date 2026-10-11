@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -351,7 +351,7 @@ func (p *Plugin) purgeOldLogsDef() sdk.OperationDef {
 func (p *Plugin) runPurgeOldLogs(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	retentionDays := p.deps.LogRetentionDays()
 	if retentionDays <= 0 {
-		_ = reporter.Log(slog.LevelInfo, "Log retention not configured, skipping")
+		_ = reporter.Log(slog.LevelInfo, "Log purge disabled (log_retention_days is -1, keep forever), skipping")
 		return nil
 	}
 	if err := p.deps.PruneOldLogs(retentionDays); err != nil {
