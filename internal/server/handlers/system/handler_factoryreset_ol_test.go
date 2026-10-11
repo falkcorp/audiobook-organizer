@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_factoryreset_ol_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e1b7a94-2d6c-4f03-9a8e-c4b0d7e3f125
 // last-edited: 2026-10-11
 
@@ -126,4 +126,37 @@ func TestFactoryReset_DeletesOLDataAfterACleanClose(t *testing.T) {
 	_, err := os.Stat(dumpDir)
 	assert.True(t, os.IsNotExist(err), "data not removed after a clean close (stat error %v)", err)
 	assert.Nil(t, svc.LiveStore())
+}
+
+// Factory reset must keep the service's Mu held from the close through the
+// RemoveAll. With the lock dropped in between, an import's EnsureStore can open
+// a new engine in the directory the reset is about to delete. The hook runs in
+// exactly that window.
+func TestFactoryReset_HoldsTheOLLockThroughTheRemoval(t *testing.T) {
+	h, svc, dumpDir, it := newFactoryResetHandler(t)
+	require.NoError(t, it.Close())
+	svc.Mu.Lock()
+	svc.CloseTimeout = 0
+	svc.Mu.Unlock()
+
+	ran := 0
+	var lockFree bool
+	var dirGone bool
+	restore := system.SetAfterOLCloseHook(func() {
+		ran++
+		if svc.Mu.TryLock() {
+			lockFree = true
+			svc.Mu.Unlock()
+		}
+		_, err := os.Stat(dumpDir)
+		dirGone = os.IsNotExist(err)
+	})
+	t.Cleanup(restore)
+
+	assert.Equal(t, http.StatusOK, postFactoryReset(h))
+	require.Equal(t, 1, ran, "the hook between the close and the RemoveAll did not run once")
+	assert.False(t, lockFree, "Mu was free between the Open Library close and the RemoveAll: an EnsureStore could open an engine in the directory about to be deleted")
+	assert.False(t, dirGone, "the data directory was already gone when the hook ran; it must run before the RemoveAll")
+	_, err := os.Stat(dumpDir)
+	assert.True(t, os.IsNotExist(err), "data not removed after a clean close (stat error %v)", err)
 }
