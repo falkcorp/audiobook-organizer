@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: c3d4e5f6-a7b8-0004-cdef-000000000004
 // last-edited: 2026-10-11
 
@@ -70,11 +70,23 @@ func WithAISpan[T any](ctx context.Context, opName string, fn func(context.Conte
 
 // attemptRecord is one HTTP attempt the SDK made for a call.
 type attemptRecord struct {
-	status  int   // 0 when no response arrived
-	quota   bool  // a 429 whose body carries a quota-exhaustion marker
-	err     error // transport error, nil when a response arrived
-	start   time.Time
-	elapsed time.Duration // to the response headers, excluding the SDK's backoff
+	status int   // 0 when no response arrived
+	quota  bool  // a 429 whose body carries a quota-exhaustion marker
+	err    error // transport error, nil when a response arrived
+	// cutOff is true when the attempt's own request context was already done
+	// when the transport returned its error. It is what separates "the caller
+	// ended this attempt" from "the attempt failed and the SDK will retry it",
+	// and unlike inspecting err it does not depend on what the transport put in
+	// the error: net/http returns context.Cause(ctx) for a cancelled request,
+	// which is not a context error when the context was cancelled with a cause
+	// (errgroup.WithContext does exactly that, with the first failing callback's
+	// error).
+	cutOff bool
+	// retryHeader is the response's x-should-retry value, which the SDK honors
+	// over the status ("true" or "false"; empty when absent or another value).
+	retryHeader string
+	start       time.Time
+	elapsed     time.Duration // to the response headers, excluding the SDK's backoff
 }
 
 // attemptRecorder collects the HTTP attempts of one observed call. The SDK
@@ -117,9 +129,18 @@ func attemptMiddleware(req *http.Request, next func(*http.Request) (*http.Respon
 	}
 	start := time.Now()
 	res, err := next(req)
-	a := attemptRecord{start: start, elapsed: time.Since(start), err: err}
+	a := attemptRecord{
+		start:   start,
+		elapsed: time.Since(start),
+		err:     err,
+		cutOff:  err != nil && req.Context().Err() != nil,
+	}
 	if res != nil {
 		a.status = res.StatusCode
+		switch v := res.Header.Get("x-should-retry"); v {
+		case "true", "false":
+			a.retryHeader = v
+		}
 		if res.StatusCode == http.StatusTooManyRequests {
 			a.quota = peekQuota429(res)
 		}
@@ -187,16 +208,26 @@ func classifyAttempt(a attemptRecord) (outcome, reason string) {
 // cancel cuts off mid-backoff would be counted as a timeout or a cancellation
 // with the backoff sleep inside its duration, and the 429 would never be seen.
 //
-// A response the SDK does not retry (2xx, or a 4xx other than 408, 409 and 429)
-// is not a backoff: a context error after it came from reading its body. A
-// transport error that is itself a context error is the attempt being cut off,
-// also not a backoff.
+// The retry decision is the SDK's shouldRetry (openai-go/v3
+// internal/requestconfig/requestconfig.go), which this mirrors: no response is
+// retried; otherwise an x-should-retry header of "true" or "false" decides, and
+// without one the status does (408, 409, 429 and 5xx are retried). So a response
+// the SDK does not retry (a 2xx, a 4xx other than those, or any status with
+// x-should-retry: false) is not a backoff: a context error after it came from
+// reading its body. A transport error is a backoff unless the caller's context
+// had already ended the attempt (attemptRecord.cutOff).
 func endedInBackoff(a attemptRecord, err error) bool {
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	if a.err != nil {
-		return !errors.Is(a.err, context.Canceled) && !errors.Is(a.err, context.DeadlineExceeded)
+		return !a.cutOff
+	}
+	switch a.retryHeader {
+	case "true":
+		return true
+	case "false":
+		return false
 	}
 	return a.status == http.StatusRequestTimeout ||
 		a.status == http.StatusConflict ||
@@ -259,7 +290,8 @@ func observe[T any](ctx context.Context, m callMeta, fn func(context.Context) (T
 		end = time.Now()
 		elapsed = end.Sub(start)
 		span := trace.SpanFromContext(spanCtx)
-		if n := len(rec.snapshot()); n > 1 {
+		spanAttempts := rec.snapshot()
+		if n := len(spanAttempts); n > 1 {
 			span.SetAttributes(attribute.Int("ai.http_attempts", n))
 		}
 		if e == nil && usage != nil {
@@ -273,12 +305,18 @@ func observe[T any](ctx context.Context, m callMeta, fn func(context.Context) (T
 		if e != nil {
 			// The classification only: never the error, which carries the
 			// endpoint URL and the provider's raw body (see WithAISpan).
-			outcome, reason, _ := classifyFinal(rec.snapshot(), e)
+			outcome, reason, inBackoff := classifyFinal(spanAttempts, e)
 			span.SetAttributes(attribute.String("ai.outcome", outcome))
 			if reason != "" {
 				span.SetAttributes(attribute.String("ai.failure_reason", reason))
 			}
-			if status, _ := aiHTTPFailure(e); status != 0 {
+			status, _ := aiHTTPFailure(e)
+			if inBackoff {
+				// The context error describes no response; the attempt the
+				// classification is of does.
+				status = spanAttempts[len(spanAttempts)-1].status
+			}
+			if status != 0 {
 				span.SetAttributes(attribute.Int("http.response.status_code", status))
 			}
 		}
