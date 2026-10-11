@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package abs_test
 
@@ -402,6 +402,11 @@ func (f *fakeLibrary) matchesFilter(b *database.Book, sum database.BookSummary, 
 	if fl.ExcludeQuarantined && b.QuarantinedAt != nil {
 		return false
 	}
+	// Predicate is applied with the other row predicates, BEFORE ordering and
+	// paging, exactly as memdb_summaries.go and bookMatchesSummaryFilter do.
+	if fl.Predicate != nil && !fl.Predicate(b) {
+		return false
+	}
 	_ = sum
 	return true
 }
@@ -410,12 +415,28 @@ func (f *fakeLibrary) matchesFilter(b *database.Book, sum database.BookSummary, 
 func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []database.BookSummary {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []database.BookSummary{}
+	// Rows matching the filter, as copies so ordering them cannot disturb f.order.
+	matched := []database.Book{}
 	for _, id := range f.order {
 		b := f.books[id]
 		if b == nil {
 			continue
 		}
+		if f.matchesFilter(b, database.BookSummary{}, fl) {
+			matched = append(matched, *b)
+		}
+	}
+	// created_at / updated_at are ordered by database.SortBooks, the one ordering
+	// authority the real store uses: a row with no time sorts LAST ascending and
+	// so FIRST descending (compareSortInts, missing key). A hand-rolled
+	// comparator here that mapped a nil time to 0 put such rows at the opposite
+	// end, which hid every bug that depends on where undated rows land.
+	if fl.SortBy == "created_at" || fl.SortBy == "updated_at" {
+		database.SortBooks(matched, fl.SortBy, fl.SortAscending)
+	}
+	out := make([]database.BookSummary, 0, len(matched))
+	for i := range matched {
+		b := &matched[i]
 		// Mirror the REAL summary projection for the narrator tiers. Without
 		// these two fields the fake silently cannot represent a book whose
 		// narrator lives outside the junction table, and any test asserting
@@ -438,9 +459,7 @@ func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []databas
 			CreatedAt:      b.CreatedAt,
 			UpdatedAt:      b.UpdatedAt,
 		}
-		if f.matchesFilter(b, sum, fl) {
-			out = append(out, sum)
-		}
+		out = append(out, sum)
 	}
 	switch fl.SortBy {
 	case "title":
@@ -450,28 +469,18 @@ func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []databas
 			}
 			return out[i].Title > out[j].Title
 		})
-	case "created_at", "updated_at":
-		// Mirrors the store's created_at/updated_at comparators closely enough to
-		// prove a client key reached the right field: a missing time sorts first
-		// ascending, as a zero value.
-		at := func(s database.BookSummary) int64 {
-			ts := s.CreatedAt
-			if fl.SortBy == "updated_at" {
-				ts = s.UpdatedAt
-			}
-			if ts == nil {
-				return 0
-			}
-			return ts.UnixMilli()
-		}
-		sort.SliceStable(out, func(i, j int) bool {
-			if fl.SortAscending {
-				return at(out[i]) < at(out[j])
-			}
-			return at(out[i]) > at(out[j])
-		})
 	}
 	return out
+}
+
+// setResolveErr makes ResolveSyncItem (and so every id translation) fail for one sync id.
+func (f *fakeLibrary) setResolveErr(syncID string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resolveErr == nil {
+		f.resolveErr = map[string]error{}
+	}
+	f.resolveErr[syncID] = err
 }
 
 // setBookFilesErr makes GetBookFiles fail for one book id.

@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/personalized_shelves_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bfebef16-8d78-4765-909a-90ec835b61f4
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package abs_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -40,7 +41,12 @@ func shelfBookID(i int) string { return fmt.Sprintf("shelf-bk-%02d", i) }
 // rises with storage order (so the newest are the LAST rows), followed by three
 // books that are newer still but must never appear: a non-primary version, an
 // unorganized import, and a quarantined file.
-func newShelfFixture(t *testing.T) *shelfFixture {
+func newShelfFixture(t *testing.T) *shelfFixture { return newShelfFixtureUndated(t, 0) }
+
+// newShelfFixtureUndated is newShelfFixture plus `undated` visible, primary,
+// organized books with NO CreatedAt. The real store orders a missing created_at
+// FIRST when descending, so these sit at the head of a plain newest-first walk.
+func newShelfFixtureUndated(t *testing.T, undated int) *shelfFixture {
 	t.Helper()
 	lib := newFakeLibrary()
 	strp := func(s string) *string { return &s }
@@ -67,6 +73,9 @@ func newShelfFixture(t *testing.T) *shelfFixture {
 	}
 	for i := range shelfFixtureVisible {
 		add(shelfBookID(i), base.Add(time.Duration(i)*time.Hour), nil)
+	}
+	for i := range undated {
+		add(fmt.Sprintf("shelf-undated-%03d", i), base, func(b *database.Book) { b.CreatedAt = nil })
 	}
 	newest := base.Add(time.Duration(shelfFixtureVisible+10) * time.Hour)
 	add("shelf-alt-version", newest, func(b *database.Book) { b.IsPrimaryVersion = boolp(false) })
@@ -260,5 +269,69 @@ func TestPersonalized_ContinueListeningFollowsAMergedBook(t *testing.T) {
 	})
 	if ids := entityIDs(f.shelves(t)["continue-listening"]); len(ids) != 0 {
 		t.Fatalf("continue-listening = %v; a stale merge-loser row overrode the survivor's finished row", ids)
+	}
+}
+
+// TestPersonalized_RecentlyAddedSkipsUndatedBooks: more undated visible books
+// than one page of the shelf query (and than the shelf itself) must not push the
+// dated books off Recently Added. The store orders a missing created_at first
+// when descending, so only a query that excludes undated rows BEFORE the page is
+// cut shows the ten newest dated books, newest first.
+func TestPersonalized_RecentlyAddedSkipsUndatedBooks(t *testing.T) {
+	f := newShelfFixtureUndated(t, 45)
+	got := f.shelves(t)["recently-added"]
+
+	var want []string
+	for i := shelfFixtureVisible - 1; i >= shelfFixtureVisible-10; i-- {
+		want = append(want, f.sync[shelfBookID(i)])
+	}
+	if ids := entityIDs(got); !slices.Equal(ids, want) {
+		t.Fatalf("recently-added = %v\nwant only the ten newest DATED books, newest first: %v", ids, want)
+	}
+}
+
+// TestPersonalized_ContinueListeningSkipsABookThatCannotBeRendered: the shelf is
+// display-only, so one book whose progress row cannot be read (or whose item id
+// cannot be resolved) drops off the shelf and the other in-progress books stay.
+// /api/me keeps the all-or-nothing list: see TestPersonalized_MeStillFailsWholeOnABadRow.
+func TestPersonalized_ContinueListeningSkipsABookThatCannotBeRendered(t *testing.T) {
+	for name, breakBook := range map[string]func(f *shelfFixture, bookID string){
+		"book files unreadable": func(f *shelfFixture, bookID string) {
+			f.lib.setBookFilesErr(bookID, errors.New("injected book_file read failure"))
+		},
+		"item id unresolvable": func(f *shelfFixture, bookID string) {
+			f.lib.setResolveErr(f.sync[bookID], errors.New("injected sync-id resolve failure"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newShelfFixture(t)
+			// Book 12 is on no other shelf (Discover is books 0-9, Recently Added 22-31),
+			// so it only fails if Continue Listening cannot cope with it.
+			base := time.UnixMilli(1786000000000)
+			f.listen(t, shelfBookID(25), base.Add(3*time.Minute), nil)
+			f.listen(t, shelfBookID(12), base.Add(2*time.Minute), nil)
+			f.listen(t, shelfBookID(3), base.Add(time.Minute), nil)
+			breakBook(f, shelfBookID(12))
+
+			want := f.syncIDs(shelfBookID(25), shelfBookID(3))
+			if ids := entityIDs(f.shelves(t)["continue-listening"]); !slices.Equal(ids, want) {
+				t.Fatalf("continue-listening = %v\nwant the readable books to stay: %v", ids, want)
+			}
+		})
+	}
+}
+
+// TestPersonalized_MeStillFailsWholeOnABadRow pins the other half of the split:
+// the display-only shelf skips a bad row, but /api/me's mediaProgress is still
+// complete-or-error, because a short list there makes the client delete progress.
+func TestPersonalized_MeStillFailsWholeOnABadRow(t *testing.T) {
+	f := newShelfFixture(t)
+	f.listen(t, shelfBookID(25), time.UnixMilli(1786000000000), nil)
+	f.listen(t, shelfBookID(12), time.UnixMilli(1786000100000), nil)
+	f.lib.setBookFilesErr(shelfBookID(12), errors.New("injected book_file read failure"))
+
+	code, _ := f.h.doAny(t, request{method: http.MethodGet, path: "/api/me", headers: bearer(f.tok)})
+	if code < 500 {
+		t.Fatalf("/api/me = %d with one unreadable progress row; want a 5xx, never a short mediaProgress list", code)
 	}
 }

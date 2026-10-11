@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -86,6 +86,12 @@ type Store interface {
 // rather than a lying 200.
 type UserDataProvider interface {
 	MediaProgress(userID string) ([]any, error)
+	// MediaProgressDisplay is MediaProgress for surfaces that only DISPLAY the
+	// rows and feed no client sync (the Continue Listening shelf): the same rows,
+	// but a row that cannot be rendered is logged and skipped rather than failing
+	// the list. Never use it for anything a client syncs from: a short list there
+	// deletes the user's progress (see above).
+	MediaProgressDisplay(userID string) ([]any, error)
 	// ClientMediaProgress is MediaProgress plus one row per merge-loser alias
 	// id of each item with progress: the list every CLIENT-FACING response
 	// carries (userPayload). Server-side consumers (browse filters, sorts) use
