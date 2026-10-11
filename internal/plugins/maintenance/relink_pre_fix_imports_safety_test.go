@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_safety_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 17b88502-dcdd-4723-9e9b-a13d2548dac6
 // last-edited: 2026-10-11
 
@@ -320,11 +320,12 @@ func TestRelinkPreFixImports_EvidenceDisagreeIsReview(t *testing.T) {
 			tc.seed(t, f)
 			res := f.fixerPlan(t, relinkPreFixFixerID, "op-plan", nil)
 			r := findRow(t, res, f.rowIDs["x"])
-			require.Equal(t, pfrClassLink, r.Class, r.Reason)
+			check, _, _ := strings.Cut(tc.check, " ")
+			// Listed under its own check's class (pfrRowClass).
+			require.Equal(t, pfrClassLink+"_review_"+check, r.Class, r.Reason)
 			require.True(t, r.Applicable())
 			require.Equal(t, repairs.RiskReview, r.Risk, "%v", r.Evidence)
 			ev := strings.Join(r.Evidence, "\n")
-			check, _, _ := strings.Cut(tc.check, " ")
 			require.Contains(t, ev, "REVIEW ("+check+")")
 			require.Equal(t, 1, strings.Count(ev, "REVIEW"), "only %s should disagree: %s", check, ev)
 		})
@@ -339,6 +340,7 @@ func TestRelinkPreFixImports_RiskChangeSincePlanIsRefused(t *testing.T) {
 	book, _ := f.preFixImport(t, "risk", "")
 	res := f.fixerPlan(t, relinkPreFixFixerID, "op-plan", nil)
 	require.Equal(t, repairs.RiskLow, findRow(t, res, f.rowIDs["risk"]).Risk)
+	require.Equal(t, pfrClassLink, findRow(t, res, f.rowIDs["risk"]).Class)
 	_, err := f.s.ModifyBookFile(book, f.rowIDs["risk"], func(r *database.BookFile) error { r.Missing = true; return nil })
 	require.NoError(t, err)
 	out := f.fixerApply(t, relinkPreFixFixerID, "op-plan", "op-apply", applicableIDs(res))

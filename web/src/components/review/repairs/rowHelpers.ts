@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/rowHelpers.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 21e5fc7d-cd22-4c0a-9773-b83015403a68
-// last-edited: 2026-10-08
+// last-edited: 2026-10-11
 
 /**
  * Pure helpers shared by the three repairs row views (Compact, Details,
@@ -148,6 +148,20 @@ const CLASS_LABELS: Record<string, string> = {
   split_new_authors: 'Creates a missing author',
   by_prefix: 'Byline ("By: ...") removed',
   single_word_name: 'Single-word pen name',
+  // maintenance.relink-pre-fix-imports: a link row is listed under the first
+  // evidence check it fails (missing, location, format, dates), so each chip's
+  // count opens the rows that check put there. A row failing several checks is
+  // counted once; its evidence names the rest.
+  would_link: 'Link: every check agrees (low risk)',
+  would_link_review_missing: 'Link, review: file marked missing',
+  would_link_review_location: 'Link, review: file not in an import folder',
+  would_link_review_format: 'Link, review: format disagrees',
+  would_link_review_dates: 'Link, review: dates far apart',
+  same_book_version: 'Same-book link: every check agrees (review)',
+  same_book_version_review_missing: 'Same-book link, review: file marked missing',
+  same_book_version_review_location: 'Same-book link, review: file not in an import folder',
+  same_book_version_review_format: 'Same-book link, review: format disagrees',
+  same_book_version_review_dates: 'Same-book link, review: dates far apart',
   error: 'Error',
 };
 

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-relink-pre-fix-imports-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: c8b260fc-3025-4657-b8a0-573cbea538a5 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -53,10 +53,19 @@ Branch `feat/relink-pre-fix-imports`.
   recorded a format on the version, so the format check compares the file
   record's format with the file's own extension. A row where any of these
   disagree is marked **review**, with the reason, and needs a look before it
-  is applied. The trial's operation log says how many rows each check flags,
-  so the owner can see before applying whether one check flags nearly every
-  row (for example, every import from before 2026-08-25 fails the date check,
-  because its file record was created later by a scan).
+  is applied. The trial sorts these rows into groups by the first check they
+  fail, checked in this order: file marked missing, file not in an import
+  folder, format disagrees, dates far apart. Each group is a button in the
+  Repairs tab with its count, and clicking it lists exactly those rows; rows
+  where every check agrees are their own group. A row that fails several
+  checks is counted once, in the first group, and its details name the others.
+  The dates check goes last because it is the noisiest: every import from
+  before 2026-08-25 fails it, because its file record was created later by a
+  scan, so a row is grouped under it only when nothing else is wrong. The same
+  groups exist for the second kind of file below ("same-book link"). The
+  trial's operation log still says how many rows each check flags in total,
+  counting a row under every check it fails, so the owner can see before
+  applying whether one check flags nearly every row.
 - **Everything else is listed and left alone.** That covers files whose
   torrent belongs to a different book, files that point at another book's
   version (usually left behind by a merge), files that point at a version

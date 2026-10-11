@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
 // last-edited: 2026-10-11
 
@@ -36,6 +36,11 @@ const relinkPreFixFixerID = "maintenance.relink-pre-fix-imports"
 // Classes of a relink row. Every row carries one in Row.Class, so the plan
 // counts each (PlanResult.ByClass) and the rows endpoint lists each; a row
 // apply never writes carries the same string in Row.Skipped.
+//
+// The two link classes below are the DECISION (pfrDecision.class). A link row
+// whose evidence checks disagree is listed under a finer Row.Class
+// (pfrRowClass: the decision class plus "_review_<check>"), so the lane's
+// class chips count and filter each check; see pfrRowClass.
 const (
 	// pfrClassLink: the book has exactly one live (active or alt) version
 	// no row names, carrying the row's torrent hash (both empty for a manual
@@ -125,7 +130,9 @@ const (
 // version with the row on what one import would have made agree -- dates,
 // format, location, presence -- and is Review risk when any disagrees. The
 // plan logs how many link rows each check flags (pfrEvidenceSummary) to the
-// repairs.plan op log, so the owner can size each group before applying.
+// repairs.plan op log, so the owner can size each group before applying, and
+// lists each row under its primary failing check (pfrRowClass), so the Repairs
+// lane's class chips show a clickable count per check.
 //
 // PLAN (read-only; repairs.plan is the dry run). One bulk read of every
 // book_file row finds the books worth looking at; each book is then
@@ -199,8 +206,10 @@ func (f *relinkPreFixFixer) Description() string {
 		"at the first daily cleanup (06:00) after the version is 14 days old, not 14 days after the trash: the " +
 		"cleanup counts from when the version was created (a fix is pending). For anything imported more than two " +
 		"weeks ago that is the next cleanup. A trash in the same instant as the link can still win the race. Rows marked review need a look before applying; each row's " +
-		"evidence says why (the version and the file disagree on date, format, location or presence), and the " +
-		"trial's operation log counts the rows each check flags."
+		"evidence says why (the version and the file disagree on date, format, location or presence). The " +
+		"trial groups them by the first check they fail (missing, then location, format, dates), one group per " +
+		"check with its count, and a row's evidence names any other check it fails; the trial's operation log " +
+		"counts every row each check flags."
 }
 
 // pfrStores returns the fixer's two store views.
@@ -331,7 +340,8 @@ func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 // signal. The checks overlap (one row may fail several), so they do not sum
 // to the Review total; same_book_version rows are Review by class. Counted
 // before the framework guards, which may still skip a row. Logged to the
-// repairs.plan op log: the Repairs lane tallies rows by class only.
+// repairs.plan op log: the lane's class chips (pfrRowClass) count each row once,
+// under its primary check, so this overlapping per-check total is only here.
 func pfrEvidenceSummary(rows []repairs.Row) string {
 	byCheck := map[string]int{}
 	var links, low, sameBook int
@@ -657,6 +667,57 @@ const (
 	pfrCheckMissing  = "missing"
 )
 
+// pfrReviewClassInfix joins a link decision class and its primary failing
+// check in Row.Class: would_link_review_dates, same_book_version_review_missing.
+const pfrReviewClassInfix = "_review_"
+
+// pfrCheckPriority orders the evidence checks for a row that fails several:
+// the row is listed under the FIRST of these it fails (pfrPrimaryCheck), and
+// its evidence names the others. Most telling first: a file marked missing or
+// sitting in the library says the row may not be this import's file at all;
+// a format mismatch says the pair is wrong; the dates check goes last because
+// it is the noisiest (every import before the 2026-08-25 single-file backfill
+// fails it, because its row was created later by a scan), so it classes a row
+// only when nothing else is wrong with it. This is not the order the checks
+// run or are logged in (pfrLinkEvidence, pfrEvidenceSummary).
+var pfrCheckPriority = []string{pfrCheckMissing, pfrCheckLocation, pfrCheckFormat, pfrCheckDates}
+
+// pfrPrimaryCheck returns the highest-priority check in disagree (""
+// when empty). A check not in pfrCheckPriority ranks last, in input order, so
+// a future check still gets a deterministic class.
+func pfrPrimaryCheck(disagree []string) string {
+	for _, c := range pfrCheckPriority {
+		for _, got := range disagree {
+			if got == c {
+				return c
+			}
+		}
+	}
+	if len(disagree) > 0 {
+		return disagree[0]
+	}
+	return ""
+}
+
+// pfrRowClass is the Row.Class of d. A non-link decision keeps its class. A
+// link decision (would_link or same_book_version) whose checks all agree keeps
+// it too; one with disagreeing checks is split by its primary check
+// (pfrPrimaryCheck) into "<class>_review_<check>", so the Repairs lane shows
+// one chip per check with the count of rows listed under it and the chip opens
+// exactly those rows. A row failing several checks is counted once, under its
+// primary check; the chip counts therefore sum to the link rows and are not
+// "rows flagged by this check" -- that overlapping count stays in the
+// repairs.plan op log (pfrEvidenceSummary), and each row's evidence names
+// every check it fails. The class is a function of the decision class and the
+// disagreeing checks, both fingerprinted (pfrRow), so a row whose class would
+// move after planning is refused at apply.
+func pfrRowClass(d *pfrDecision) string {
+	if !d.links() || len(d.disagree) == 0 {
+		return d.class
+	}
+	return d.class + pfrReviewClassInfix + pfrPrimaryCheck(d.disagree)
+}
+
 // pfrLinkEvidence compares d's target version with its row on what one
 // import would have made agree, appends one evidence line per check, and
 // returns the checks that disagree, in a fixed order (empty: all agree). A
@@ -713,6 +774,27 @@ func pfrLinkEvidence(d *pfrDecision, env pfrEnvironment) []string {
 		true:  "the file record is marked missing; nothing on disk confirms which file it is",
 		false: "the file record is not marked missing",
 	}[fl.Missing])
+
+	if len(disagree) > 0 {
+		primary := pfrPrimaryCheck(disagree)
+		line := "listed under " + d.class + pfrReviewClassInfix + primary + ": " + primary +
+			" is the first failing check in the order " + strings.Join(pfrCheckPriority, ", ")
+		var others []string
+		for _, c := range pfrCheckPriority {
+			if c == primary {
+				continue
+			}
+			for _, got := range disagree {
+				if got == c {
+					others = append(others, c)
+				}
+			}
+		}
+		if len(others) > 0 {
+			line += "; also fails: " + strings.Join(others, ", ")
+		}
+		d.evidence = append(d.evidence, line)
+	}
 	return disagree
 }
 
@@ -798,7 +880,7 @@ func pfrHashWords(h string) string {
 // pfrRow builds the plan row for d.
 func pfrRow(d *pfrDecision) repairs.Row {
 	fl := d.file
-	r := repairs.Row{RowID: fl.ID, BookIDs: []string{fl.BookID}, Class: d.class, Reason: d.reason,
+	r := repairs.Row{RowID: fl.ID, BookIDs: []string{fl.BookID}, Class: pfrRowClass(d), Reason: d.reason,
 		Risk: repairs.RiskLow, Evidence: d.evidence, Detail: d}
 	if d.book != nil {
 		r.Title = d.book.Title
@@ -830,8 +912,10 @@ func pfrRow(d *pfrDecision) repairs.Row {
 	} else {
 		r.Skipped, r.SkipReason = d.class, d.reason
 	}
-	// The disagreeing checks are fingerprinted: a row whose risk would change
-	// between the plan the owner reviewed and the apply is refused.
+	// The disagreeing checks are fingerprinted: a row whose risk, or the
+	// evidence class it is listed under (pfrRowClass, a function of d.class and
+	// d.disagree), would change between the plan the owner reviewed and the
+	// apply is refused.
 	sum := sha256.Sum256([]byte(strings.Join([]string{fl.ID, fl.BookID, fl.VersionID, fl.DelugeHash, fl.FilePath, d.action,
 		strings.Join(d.disagree, ",")}, "\n")))
 	r.Fingerprint = hex.EncodeToString(sum[:])[:32]
