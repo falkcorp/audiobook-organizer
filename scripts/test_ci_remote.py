@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_ci_remote.py
-# version: 1.1.1
+# version: 1.1.2
 # guid: b886cb9e-2020-4cfc-806d-6002504520df
 # last-edited: 2026-10-11
 
@@ -30,10 +30,15 @@ _spec.loader.exec_module(cr)
 
 class ParseNodesTest(unittest.TestCase):
     def test_flags(self):
-        nodes = cr.parse_ci_nodes("user@node-a.example:max=2  user@192.0.2.10:prod,nodecode,max=3 node-c.example")
+        nodes = cr.parse_ci_nodes(
+            "user@node-a.example:max=2  user@192.0.2.10:prod,nodecode,max=3 node-c.example"
+        )
         self.assertEqual(len(nodes), 3)
         a, b, c = nodes
-        self.assertEqual((a.user, a.host, a.max_jobs, a.prod, a.nodecode), ("user", "node-a.example", 2, False, False))
+        self.assertEqual(
+            (a.user, a.host, a.max_jobs, a.prod, a.nodecode),
+            ("user", "node-a.example", 2, False, False),
+        )
         self.assertEqual((b.host, b.max_jobs, b.prod, b.nodecode), ("192.0.2.10", 3, True, True))
         self.assertEqual(b.target, "user@192.0.2.10")
         self.assertEqual((c.user, c.host, c.max_jobs), ("", "node-c.example", 1))
@@ -56,8 +61,12 @@ class ParseNodesTest(unittest.TestCase):
 class MakefileLookupTest(unittest.TestCase):
     def test_assignment_forms(self):
         for op in ("=", "?=", ":=", "::="):
-            text = f"FOO = 1\nCI_NODES {op} user@node-a.example:max=2 user@node-b.example  # comment\n"
-            self.assertEqual(cr.ci_nodes_from_makefile(text), "user@node-a.example:max=2 user@node-b.example", op)
+            text = (
+                f"FOO = 1\nCI_NODES {op} user@node-a.example:max=2 user@node-b.example  # comment\n"
+            )
+            self.assertEqual(
+                cr.ci_nodes_from_makefile(text), "user@node-a.example:max=2 user@node-b.example", op
+            )
 
     def test_continuation_and_append(self):
         text = "CI_NODES ?= user@node-a.example \\\n   user@node-b.example:nodecode\nCI_NODES += user@node-c.example\n"
@@ -99,7 +108,7 @@ class DecodeDetectionTest(unittest.TestCase):
     def test_negative(self):
         for src in (
             'cfg.FFmpegPath = "ffmpeg-custom"',
-            '// mentions ffmpeg in a comment only',
+            "// mentions ffmpeg in a comment only",
             'exec.Command("git", "status")',
             'name := "ffmpeg"',
         ):
@@ -138,14 +147,17 @@ class ShardingTest(unittest.TestCase):
         self.assertEqual(cr.partition_lpt(items, 4), cr.partition_lpt(list(reversed(items)), 4))
 
     def test_decode_packages_only_in_decode_shards(self):
-        pkgs = [_pkg(f"p{i}") for i in range(10)] + [_pkg("dec1", decode=True), _pkg("dec2", decode=True)]
+        pkgs = [_pkg(f"p{i}") for i in range(10)] + [
+            _pkg("dec1", decode=True),
+            _pkg("dec2", decode=True),
+        ]
         legs = cr.build_shards(pkgs, cr.Timings(None), ["darwin"], ["darwin", "linux"], 2, 4)
-        decode_legs = [l for l in legs if l.needs_decode]
-        plain_legs = [l for l in legs if not l.needs_decode]
-        self.assertEqual(sorted(p for l in decode_legs for p in l.packages), ["dec1", "dec2"])
-        self.assertFalse(any(p.startswith("dec") for l in plain_legs for p in l.packages))
+        decode_legs = [leg for leg in legs if leg.needs_decode]
+        plain_legs = [leg for leg in legs if not leg.needs_decode]
+        self.assertEqual(sorted(p for leg in decode_legs for p in leg.packages), ["dec1", "dec2"])
+        self.assertFalse(any(p.startswith("dec") for leg in plain_legs for p in leg.packages))
         # every package lands in exactly one shard
-        all_pkgs = [p for l in legs for p in l.packages]
+        all_pkgs = [p for leg in legs for p in leg.packages]
         self.assertEqual(sorted(all_pkgs), sorted(p.path for p in pkgs))
         self.assertEqual(len(plain_legs), 4)
 
@@ -160,7 +172,9 @@ class ShardingTest(unittest.TestCase):
         self.assertAlmostEqual(cr.package_weight(p, t, ["darwin", "linux"]), 501.0)
         # unmeasured: size heuristic
         q = _pkg("new", size=40000)
-        self.assertAlmostEqual(cr.package_weight(q, t, ["linux"]), 3.0 + cr.heuristic_seconds(40000))
+        self.assertAlmostEqual(
+            cr.package_weight(q, t, ["linux"]), 3.0 + cr.heuristic_seconds(40000)
+        )
 
     def test_timings_roundtrip_and_ewma(self):
         with tempfile.TemporaryDirectory() as td:
@@ -177,12 +191,21 @@ class ShardingTest(unittest.TestCase):
 
     def test_build_legs_covers_make_ci(self):
         legs = cr.build_legs([], cr.Timings(None), ["linux"])
-        names = {l.name for l in legs}
+        names = {leg.name for leg in legs}
         # every non-test prerequisite of `make ci` (coverage-check runs after the merge)
-        for want in ("vet", "staticcheck", "errcheck-ratchet", "deadcode-ratchet", "sdkguard", "bench-check",
-                     "fmt-check", "web-test", "mocks-check"):
+        for want in (
+            "vet",
+            "staticcheck",
+            "errcheck-ratchet",
+            "deadcode-ratchet",
+            "sdkguard",
+            "bench-check",
+            "fmt-check",
+            "web-test",
+            "mocks-check",
+        ):
             self.assertIn(want, names)
-        self.assertTrue(next(l for l in legs if l.name == "mocks-check").local_only)
+        self.assertTrue(next(leg for leg in legs if leg.name == "mocks-check").local_only)
 
 
 class HeavyPackageTest(unittest.TestCase):
@@ -198,28 +221,41 @@ class HeavyPackageTest(unittest.TestCase):
 
     def test_seeded_slow_packages_get_their_own_shard(self):
         legs = cr.build_shards(self.pkgs(), cr.Timings(None), ["darwin"], ["darwin", "linux"], 2, 4)
-        heavy = [l for l in legs if l.heavy]
+        heavy = [leg for leg in legs if leg.heavy]
         self.assertEqual(
-            [l.packages[0].removeprefix(self.MOD) for l in heavy],
-            ["internal/database", "internal/server", "internal/plugins/maintenance", "internal/operations/registry"],
+            [leg.packages[0].removeprefix(self.MOD) for leg in heavy],
+            [
+                "internal/database",
+                "internal/server",
+                "internal/plugins/maintenance",
+                "internal/operations/registry",
+            ],
         )
-        self.assertTrue(all(len(l.packages) == 1 for l in heavy))
-        self.assertEqual([l.needs_decode for l in heavy], [False, True, True, False])
-        self.assertFalse(any(p.endswith(("database", "server", "maintenance", "registry"))
-                             for l in legs if not l.heavy for p in l.packages))
+        self.assertTrue(all(len(leg.packages) == 1 for leg in heavy))
+        self.assertEqual([leg.needs_decode for leg in heavy], [False, True, True, False])
+        self.assertFalse(
+            any(
+                p.endswith(("database", "server", "maintenance", "registry"))
+                for leg in legs
+                if not leg.heavy
+                for p in leg.packages
+            )
+        )
 
     def test_database_timeout_at_least_50m(self):
         legs = cr.build_shards(self.pkgs(), cr.Timings(None), ["darwin"], ["darwin"], 1, 2)
-        db = next(l for l in legs if l.packages == (self.MOD + "internal/database",))
+        db = next(leg for leg in legs if leg.packages == (self.MOD + "internal/database",))
         self.assertGreaterEqual(db.timeout_min, 50)
         self.assertIn("-timeout 50m", cr.go_test_command(db.packages, "c.out", 4, db.timeout_min))
-        small = next(l for l in legs if not l.heavy)
+        small = next(leg for leg in legs if not leg.heavy)
         self.assertEqual(small.timeout_min, 25)
 
     def test_timeout_scales_with_measured_time(self):
         t = cr.Timings(None)
         t.record_pkg("darwin", self.MOD + "internal/slowpoke", 1000.0)  # 2x = 2000s -> 34m
-        self.assertEqual(cr.shard_timeout_minutes([self.MOD + "internal/slowpoke"], t, ["darwin"]), 34)
+        self.assertEqual(
+            cr.shard_timeout_minutes([self.MOD + "internal/slowpoke"], t, ["darwin"]), 34
+        )
 
 
 class SpreadTest(unittest.TestCase):
@@ -277,8 +313,14 @@ class SpreadTest(unittest.TestCase):
 
 class CapacityTest(unittest.TestCase):
     def probe(self, **kw):
-        base = dict(ok=True, goos="linux", ncpu=48, load1=4.0, mem_avail_gb=60.0,
-                    tools=frozenset({"go", "make", "git", "ffmpeg", "ffprobe", "fpcalc"}))
+        base = {
+            "ok": True,
+            "goos": "linux",
+            "ncpu": 48,
+            "load1": 4.0,
+            "mem_avail_gb": 60.0,
+            "tools": frozenset({"go", "make", "git", "ffmpeg", "ffprobe", "fpcalc"}),
+        }
         base.update(kw)
         return cr.Probe(**base)
 
@@ -312,14 +354,18 @@ class CapacityTest(unittest.TestCase):
     def test_tunnelled_ollama_is_not_local_load(self):
         ps1 = json.dumps({"models": [{"name": "m", "expires_at": "a"}]})
         ps2 = json.dumps({"models": [{"name": "m", "expires_at": "b"}]})
-        self.assertFalse(cr.ollama_busy(self.probe(ollama_local=False, ollama_ps=(ps1, ps2), ollama_cpu=900)))
+        self.assertFalse(
+            cr.ollama_busy(self.probe(ollama_local=False, ollama_ps=(ps1, ps2), ollama_cpu=900))
+        )
 
     def test_can_decode(self):
         a = cr.parse_ci_nodes("u@node-a.example")[0]
         b = cr.parse_ci_nodes("u@node-b.example:nodecode")[0]
         self.assertTrue(cr.can_decode(a, self.probe()))
         self.assertFalse(cr.can_decode(b, self.probe()))
-        self.assertFalse(cr.can_decode(a, self.probe(tools=frozenset({"go", "make", "git", "ffmpeg"}))))
+        self.assertFalse(
+            cr.can_decode(a, self.probe(tools=frozenset({"go", "make", "git", "ffmpeg"})))
+        )
 
     def test_parse_probe(self):
         out = "goos=darwin\nncpu=10\nload1=2.5\nmemkb=-1\ntools= go make git ffmpeg\nbare=1\nollama_local=0\n"
@@ -348,49 +394,68 @@ class SchedulingTest(unittest.TestCase):
         ]
 
     def test_nodecode_never_gets_decode(self):
-        q = [l for l in self.queue() if l.needs_decode]
+        q = [leg for leg in self.queue() if leg.needs_decode]
         self.assertIsNone(cr.pick_leg(q, self.wb, [self.wa, self.wb], 0, -1))
 
     def test_decode_node_takes_decode_first(self):
-        self.assertEqual(cr.pick_leg(self.queue(), self.wa, [self.wa, self.wb], 0, -1).name, "test-decode-01")
+        self.assertEqual(
+            cr.pick_leg(self.queue(), self.wa, [self.wa, self.wb], 0, -1).name, "test-decode-01"
+        )
 
     def test_other_node_takes_heaviest(self):
-        self.assertEqual(cr.pick_leg(self.queue(), self.wb, [self.wa, self.wb], 0, -1).name, "test-go-01")
+        self.assertEqual(
+            cr.pick_leg(self.queue(), self.wb, [self.wa, self.wb], 0, -1).name, "test-go-01"
+        )
 
     def test_remote_never_takes_local_only(self):
-        q = [l for l in self.queue() if l.local_only]
+        q = [leg for leg in self.queue() if leg.local_only]
         self.assertIsNone(cr.pick_leg(q, self.wa, [self.wa, self.wb], 0, -1))
 
     def test_local_takes_local_only_then_nothing(self):
         q = self.queue()
         self.assertEqual(cr.pick_leg(q, self.local, [self.wa, self.wb], 0, -1).name, "mocks-check")
-        q = [l for l in q if not l.local_only]
+        q = [leg for leg in q if not leg.local_only]
         self.assertIsNone(cr.pick_leg(q, self.local, [self.wa, self.wb], 0, -1))
 
     def test_local_takes_decode_when_no_live_decode_node(self):
-        q = [l for l in self.queue() if not l.local_only]
+        q = [leg for leg in self.queue() if not leg.local_only]
         self.wa.alive = False
-        self.assertEqual(cr.pick_leg(q, self.local, [self.wa, self.wb], 0, -1).name, "test-decode-01")
+        self.assertEqual(
+            cr.pick_leg(q, self.local, [self.wa, self.wb], 0, -1).name, "test-decode-01"
+        )
 
     def test_local_after(self):
-        q = [l for l in self.queue() if not l.local_only and not l.needs_decode]
-        for l in q:
-            l.queued_at = 100.0
+        q = [leg for leg in self.queue() if not leg.local_only and not leg.needs_decode]
+        for leg in q:
+            leg.queued_at = 100.0
         self.assertIsNone(cr.pick_leg(q, self.local, [self.wa, self.wb], 150.0, 60))
         self.assertIsNotNone(cr.pick_leg(q, self.local, [self.wa, self.wb], 161.0, 60))
 
 
 class GoOutputTest(unittest.TestCase):
     def test_parse_lines(self):
-        P = cr.parse_go_test_line
-        self.assertEqual(P("ok  \texample.com/m/a\t12.345s\tcoverage: 40.0% of statements"), ("ok", "example.com/m/a", 12.345))
-        self.assertEqual(P("FAIL\texample.com/m/b\t3.2s"), ("FAIL", "example.com/m/b", 3.2))
-        self.assertEqual(P("FAIL\texample.com/m/c [build failed]"), ("FAIL", "example.com/m/c", None))
-        self.assertEqual(P("ok  \texample.com/m/d\t(cached)\tcoverage: 1.0% of statements"), ("ok", "example.com/m/d", None))
-        self.assertEqual(P("?   \texample.com/m/e\t[no test files]"), ("?", "example.com/m/e", None))
-        self.assertEqual(P("\texample.com/m/f\t\tcoverage: 0.0% of statements"), ("?", "example.com/m/f", None))
-        self.assertIsNone(P("--- FAIL: TestX (0.00s)"))
-        self.assertIsNone(P("PASS"))
+        parse = cr.parse_go_test_line
+        self.assertEqual(
+            parse("ok  \texample.com/m/a\t12.345s\tcoverage: 40.0% of statements"),
+            ("ok", "example.com/m/a", 12.345),
+        )
+        self.assertEqual(parse("FAIL\texample.com/m/b\t3.2s"), ("FAIL", "example.com/m/b", 3.2))
+        self.assertEqual(
+            parse("FAIL\texample.com/m/c [build failed]"), ("FAIL", "example.com/m/c", None)
+        )
+        self.assertEqual(
+            parse("ok  \texample.com/m/d\t(cached)\tcoverage: 1.0% of statements"),
+            ("ok", "example.com/m/d", None),
+        )
+        self.assertEqual(
+            parse("?   \texample.com/m/e\t[no test files]"), ("?", "example.com/m/e", None)
+        )
+        self.assertEqual(
+            parse("\texample.com/m/f\t\tcoverage: 0.0% of statements"),
+            ("?", "example.com/m/f", None),
+        )
+        self.assertIsNone(parse("--- FAIL: TestX (0.00s)"))
+        self.assertIsNone(parse("PASS"))
 
 
 class CoverageMergeTest(unittest.TestCase):
@@ -425,12 +490,34 @@ class RemoteScriptTest(unittest.TestCase):
         self.bash_n(cr.setup_script("$HOME/ci/jobs/abc-1", "a" * 40, nodecode=True))
         self.bash_n(cr.setup_script("$HOME/ci/jobs/abc-1", "a" * 40, nodecode=False))
         self.bash_n(cr.setup_script("$HOME/ci/jobs/abc-1", "a" * 40, nodecode=True, prod=True))
-        iso = cr.leg_script("$HOME/ci/jobs/j", "$HOME/ci/locks/slots", 2, "me", "go test ./x", True, True, 12,
-                            "c.out", isolate_net=True)
+        iso = cr.leg_script(
+            "$HOME/ci/jobs/j",
+            "$HOME/ci/locks/slots",
+            2,
+            "me",
+            "go test ./x",
+            True,
+            True,
+            12,
+            "c.out",
+            isolate_net=True,
+        )
         self.bash_n(iso)
         self.assertIn("unshare -rn", iso)
         self.assertIn("GOPROXY=off", iso)
-        self.bash_n(cr.leg_script("$HOME/ci/jobs/j", "$HOME/ci/locks/slots", 2, "me", "go test ./x", True, True, 12, "c.out"))
+        self.bash_n(
+            cr.leg_script(
+                "$HOME/ci/jobs/j",
+                "$HOME/ci/locks/slots",
+                2,
+                "me",
+                "go test ./x",
+                True,
+                True,
+                12,
+                "c.out",
+            )
+        )
         self.bash_n(cr.cleanup_script("$HOME/ci/jobs/j", "refs/ci-jobs/1", failed=True))
         self.bash_n(cr.cleanup_script("$HOME/ci/jobs/j", "refs/ci-jobs/1", failed=False))
         self.bash_n(cr.PROBE_SCRIPT)
@@ -440,20 +527,28 @@ class RemoteScriptTest(unittest.TestCase):
             job = Path(td) / "job"
             job.mkdir()
             locks = Path(td) / "locks"
-            script = cr.leg_script(str(job), str(locks), 1, "owner-a", "echo ran", False, False, None, None)
+            script = cr.leg_script(
+                str(job), str(locks), 1, "owner-a", "echo ran", False, False, None, None
+            )
             env = dict(os.environ, HOME=td)
-            p = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, env=env)
+            p = subprocess.run(
+                ["bash", "-s"], input=script, text=True, capture_output=True, env=env
+            )
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn("ran", p.stdout)
             self.assertFalse((locks / "slot-0").exists(), "lock must be released on exit")
             # a fresh lock held by someone else -> busy
             (locks / "slot-0").mkdir()
-            p = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, env=env)
+            p = subprocess.run(
+                ["bash", "-s"], input=script, text=True, capture_output=True, env=env
+            )
             self.assertEqual(p.returncode, cr.LOCK_BUSY_RC)
             # a stale one is expired and taken over
             old = 1_000_000_000
             os.utime(locks / "slot-0", (old, old))
-            p = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, env=env)
+            p = subprocess.run(
+                ["bash", "-s"], input=script, text=True, capture_output=True, env=env
+            )
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn("expired stale lock", p.stderr)
 
@@ -461,9 +556,24 @@ class RemoteScriptTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             job = Path(td) / "job"
             job.mkdir()
-            script = cr.leg_script(str(job), str(Path(td) / "l"), 1, "o",
-                                   "printf 'mode: atomic\\n' > c.out; exit 3", False, False, None, "c.out")
-            p = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, env=dict(os.environ, HOME=td))
+            script = cr.leg_script(
+                str(job),
+                str(Path(td) / "l"),
+                1,
+                "o",
+                "printf 'mode: atomic\\n' > c.out; exit 3",
+                False,
+                False,
+                None,
+                "c.out",
+            )
+            p = subprocess.run(
+                ["bash", "-s"],
+                input=script,
+                text=True,
+                capture_output=True,
+                env=dict(os.environ, HOME=td),
+            )
             self.assertEqual(p.returncode, 3)
             self.assertIn(cr.COVERAGE_BEGIN + "\nmode: atomic\n" + cr.COVERAGE_END, p.stdout)
             self.assertFalse((job / "c.out").exists())
@@ -485,13 +595,23 @@ class RemoteScriptTest(unittest.TestCase):
             tail = script.split('echo "checked out', 1)[1].split("\n", 1)[1]
             env = dict(os.environ, HOME=td, PATH=f"{bindir}:/usr/bin:/bin")
             if any(Path(d, t).exists() for d in ("/usr/bin", "/bin") for t in cr.DECODE_TOOLS):
-                self.skipTest("host has a decoder in /usr/bin; filter covers it but the assertion below would too")
-            p = subprocess.run(["bash", "-c", "set -eu\n" + tail], text=True, capture_output=True, env=env)
+                self.skipTest(
+                    "host has a decoder in /usr/bin; filter covers it but the assertion below would too"
+                )
+            p = subprocess.run(
+                ["bash", "-c", "set -eu\n" + tail], text=True, capture_output=True, env=env
+            )
             self.assertEqual(p.returncode, 0, p.stderr)
             path = (job / ".ci-remote-nodecode-path").read_text()
             check = subprocess.run(
-                ["bash", "-c", "command -v ffmpeg || command -v fpcalc || command -v ffprobe; keepme"],
-                text=True, capture_output=True, env=dict(os.environ, PATH=path),
+                [
+                    "bash",
+                    "-c",
+                    "command -v ffmpeg || command -v fpcalc || command -v ffprobe; keepme",
+                ],
+                text=True,
+                capture_output=True,
+                env=dict(os.environ, PATH=path),
             )
             self.assertEqual(check.stdout.strip(), "keepme")
 

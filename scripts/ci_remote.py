@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
 # last-edited: 2026-10-11
 
@@ -54,6 +54,7 @@ Full docs: docs/process/ci-remote.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime as _dt
 import json
@@ -67,7 +68,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Iterable
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -81,8 +82,7 @@ DECODE_TOOLS = ("ffmpeg", "ffprobe", "fpcalc")
 # macOS nodes, where a non-interactive ssh session does not have them and every
 # decode test would silently skip.
 REMOTE_PATH_PREFIX = (
-    "$HOME/ci/opt/go/bin:$HOME/ci/opt/node/bin:$HOME/go/bin:"
-    "/opt/homebrew/bin:/usr/local/bin"
+    "$HOME/ci/opt/go/bin:$HOME/ci/opt/node/bin:$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin"
 )
 TEST_SHORT_TIMEOUT = "25m"  # same as the Makefile's test-short
 LEG_TIMEOUT_S = 45 * 60  # hard kill for one leg (ssh side)
@@ -194,10 +194,7 @@ def ci_nodes_from_makefile(text: str) -> str | None:
         m = _MAKE_ASSIGN_RE.match(line)
         if m:
             v = m.group(1).split("#", 1)[0].strip()
-            if "+=" in line.split("CI_NODES", 1)[1][:4] and value:
-                value = f"{value} {v}"
-            else:
-                value = v
+            value = f"{value} {v}" if "+=" in line.split("CI_NODES", 1)[1][:4] and value else v
         i += 1
     return " ".join(value.split()) if value is not None else None
 
@@ -287,7 +284,10 @@ def node_capacity(node: Node, probe: Probe) -> Capacity:
             return Capacity(0, 1, None, notes, skip=f"prod load {probe.load1:.1f} > {limit:.1f}")
         if 0 <= probe.mem_avail_gb < PROD_MIN_MEM_GB:
             return Capacity(
-                0, 1, None, notes,
+                0,
+                1,
+                None,
+                notes,
                 skip=f"prod MemAvailable {probe.mem_avail_gb:.1f}G < {PROD_MIN_MEM_GB:.0f}G",
             )
         par = max(1, (ncpu // 2) // slots)
@@ -382,7 +382,7 @@ def rel_pkg(pkg: str) -> str:
     return pkg[i + 1 :] if i >= 0 else pkg
 
 
-def shard_timeout_minutes(packages: Iterable[str], timings: "Timings", goos_list: list[str]) -> int:
+def shard_timeout_minutes(packages: Iterable[str], timings: Timings, goos_list: list[str]) -> int:
     minutes = int(TEST_SHORT_TIMEOUT.rstrip("m"))
     for pkg in packages:
         minutes = max(minutes, PACKAGE_TIMEOUT_MIN.get(rel_pkg(pkg), 0))
@@ -518,7 +518,9 @@ MAKE_LEGS = (
 )
 
 
-def go_test_command(packages: Iterable[str], cover_file: str, par: int, timeout_min: int = 25) -> str:
+def go_test_command(
+    packages: Iterable[str], cover_file: str, par: int, timeout_min: int = 25
+) -> str:
     pkgs = " ".join(shlex.quote(p) for p in packages)
     return (
         f"go test -short -race -coverprofile={shlex.quote(cover_file)} -covermode=atomic "
@@ -538,7 +540,9 @@ def build_shards(
     (weighted with the decode-capable nodes' GOOS timings) so they can only be
     picked up by a node that may decode."""
     weights = {
-        p.path: package_weight(p, timings, decode_goos or all_goos) if p.decode else package_weight(p, timings, all_goos)
+        p.path: package_weight(p, timings, decode_goos or all_goos)
+        if p.decode
+        else package_weight(p, timings, all_goos)
         for p in packages
     }
     legs: list[Leg] = []
@@ -557,7 +561,10 @@ def build_shards(
         )
     decode = [(p.path, weights[p.path]) for p in packages if p.decode and p.path not in heavy]
     plain = [(p.path, weights[p.path]) for p in packages if not p.decode and p.path not in heavy]
-    for tag, items, k, needs in (("decode", decode, decode_bins, True), ("go", plain, plain_bins, False)):
+    for tag, items, k, needs in (
+        ("decode", decode, decode_bins, True),
+        ("go", plain, plain_bins, False),
+    ):
         for i, b in enumerate(partition_lpt(items, k)):
             legs.append(
                 Leg(
@@ -696,7 +703,10 @@ def pick_leg(
         for leg in queue:
             if leg.remote_only:
                 continue
-            if not any((w.decode_ok or not leg.needs_decode) and (w.tests_ok or not leg.packages) for w in live):
+            if not any(
+                (w.decode_ok or not leg.needs_decode) and (w.tests_ok or not leg.packages)
+                for w in live
+            ):
                 return leg
         if local_after >= 0:
             for leg in queue:
@@ -704,8 +714,11 @@ def pick_leg(
                     return leg
         return None
     runnable = [
-        l for l in queue
-        if not l.local_only and (worker.decode_ok or not l.needs_decode) and (worker.tests_ok or not l.packages)
+        leg
+        for leg in queue
+        if not leg.local_only
+        and (worker.decode_ok or not leg.needs_decode)
+        and (worker.tests_ok or not leg.packages)
     ]
     if not runnable:
         return None
@@ -713,24 +726,27 @@ def pick_leg(
 
     def free_elsewhere(leg: Leg) -> bool:
         return any(
-            w.alive and w.host != worker.host and running.get(w.host, 0) == 0
-            and (w.decode_ok or not leg.needs_decode) and (w.tests_ok or not leg.packages)
+            w.alive
+            and w.host != worker.host
+            and running.get(w.host, 0) == 0
+            and (w.decode_ok or not leg.needs_decode)
+            and (w.tests_ok or not leg.packages)
             for w in remote_workers
         )
 
     heavy = sorted(
-        (l for l in runnable if l.heavy),
-        key=lambda l: (not (worker.decode_ok and l.needs_decode), -l.est, l.name),
+        (leg for leg in runnable if leg.heavy),
+        key=lambda leg: (not (worker.decode_ok and leg.needs_decode), -leg.est, leg.name),
     )
     for leg in heavy:
         if running.get(worker.host, 0) == 0 or not free_elsewhere(leg):
             return leg
-    runnable = [l for l in runnable if not l.heavy] or runnable
+    runnable = [leg for leg in runnable if not leg.heavy] or runnable
     if worker.decode_ok:
-        decode = [l for l in runnable if l.needs_decode]
+        decode = [leg for leg in runnable if leg.needs_decode]
         if decode:
-            return max(decode, key=lambda l: l.est)
-    return max(runnable, key=lambda l: l.est)
+            return max(decode, key=lambda leg: leg.est)
+    return max(runnable, key=lambda leg: leg.est)
 
 
 # ---------------------------------------------------------------------------
@@ -813,15 +829,17 @@ def setup_script(job: str, sha: str, nodecode: bool, prod: bool = False) -> str:
             f'fdir="{job}/.ci-remote-nodecode-bin"; rm -rf "$fdir"; mkdir -p "$fdir"',
             'out=""; n=0; oldifs=$IFS; IFS=:',
             "for d in $PATH; do",
-            '  hit=0; for t in ' + tools + '; do [ -e "$d/$t" ] && hit=1; done',
-            '  if [ $hit = 1 ]; then',
+            "  hit=0; for t in " + tools + '; do [ -e "$d/$t" ] && hit=1; done',
+            "  if [ $hit = 1 ]; then",
             '    n=$((n+1)); nd="$fdir/$n"; mkdir -p "$nd"',
             '    for f in "$d"/*; do b=${f##*/}; case "$b" in ffmpeg|ffprobe|fpcalc) ;; *) ln -s "$f" "$nd/$b" 2>/dev/null || true;; esac; done',
             '    out="$out:$nd"',
             '  else out="$out:$d"; fi',
             "done; IFS=$oldifs",
             'PATH="${out#:}"; export PATH',
-            'for t in ' + tools + '; do if command -v "$t" >/dev/null 2>&1; then echo "nodecode PATH still has $t" >&2; exit 1; fi; done',
+            "for t in "
+            + tools
+            + '; do if command -v "$t" >/dev/null 2>&1; then echo "nodecode PATH still has $t" >&2; exit 1; fi; done',
             f'printf "%s" "$PATH" > "{job}/.ci-remote-nodecode-path"',
             'echo "nodecode: filtered PATH has no ' + "/".join(DECODE_TOOLS) + '"',
         ]
@@ -866,7 +884,9 @@ def leg_script(
     if nodecode:
         s += [
             f'PATH="$(cat "{job}/.ci-remote-nodecode-path")"; export PATH',
-            "for t in " + " ".join(DECODE_TOOLS) + '; do if command -v "$t" >/dev/null 2>&1; then echo "ci-remote: refusing, $t is on PATH of a nodecode node" >&2; exit '
+            "for t in "
+            + " ".join(DECODE_TOOLS)
+            + '; do if command -v "$t" >/dev/null 2>&1; then echo "ci-remote: refusing, $t is on PATH of a nodecode node" >&2; exit '
             + str(NODECODE_REFUSE_RC)
             + "; fi; done",
             "export CI_REMOTE_NODECODE=1",
@@ -884,7 +904,9 @@ def leg_script(
         'if command -v ionice >/dev/null 2>&1; then PRIO="ionice -c3 nice -n 19"; fi',
     ]
     if prod:
-        s.append('echo "ci-remote: prod node, running under: $PRIO GOMAXPROCS=${GOMAXPROCS:-unset}"')
+        s.append(
+            'echo "ci-remote: prod node, running under: $PRIO GOMAXPROCS=${GOMAXPROCS:-unset}"'
+        )
     if isolate_net:
         # A test that dials localhost must not reach the node's own services
         # (on the prod host: the app, Deluge on 8112, the Ollama tunnel). Run
@@ -1011,7 +1033,11 @@ class Runner:
                     self.pkg_results[pkg] = (status, prefix)
                 if secs is not None and goos:
                     self.timings.record_pkg(goos, pkg, secs)
-            if not self.args.quiet or line.startswith(("FAIL", "---", "panic", "❌")) or "FAIL" in line[:8]:
+            if (
+                not self.args.quiet
+                or line.startswith(("FAIL", "---", "panic", "❌"))
+                or "FAIL" in line[:8]
+            ):
                 self.say(f"[{prefix}] {line}")
         return cover
 
@@ -1020,11 +1046,15 @@ class Runner:
         prefix = f"{leg.name}@{where}"
         log_path = self.out_dir / f"{leg.name}.log"
         cover_file = f".ci-remote-{leg.name}.cover.out" if leg.packages else None
-        command = leg.command or go_test_command(leg.packages, cover_file or "", w.par, leg.timeout_min)
+        command = leg.command or go_test_command(
+            leg.packages, cover_file or "", w.par, leg.timeout_min
+        )
         start = time.monotonic()
         goos = self.node_goos.get(where, "")
         with open(log_path, "a") as log:
-            log.write(f"# {prefix} started {_dt.datetime.now().isoformat(timespec='seconds')}\n# $ {command}\n")
+            log.write(
+                f"# {prefix} started {_dt.datetime.now().isoformat(timespec='seconds')}\n# $ {command}\n"
+            )
             log.flush()
             if w.is_local:
                 full = command
@@ -1032,20 +1062,35 @@ class Runner:
                     full = f"{command}; rc=$?; if [ -f {cover_file} ]; then echo {COVERAGE_BEGIN}; cat {cover_file}; echo {COVERAGE_END}; rm -f {cover_file}; fi; exit $rc"
                 env = dict(os.environ, GOTOOLCHAIN=GO_TOOLCHAIN)
                 proc = subprocess.Popen(
-                    ["bash", "-c", full], cwd=self.tree, env=env, text=True,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                    ["bash", "-c", full],
+                    cwd=self.tree,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
                 )
             else:
                 assert w.node is not None
                 owner = f"{os.environ.get('USER', '?')}@{os.uname().nodename} pid={os.getpid()} run={self.run_id} leg={leg.name}"
                 script = leg_script(
-                    self.job, f"$HOME/{REMOTE_ROOT}/locks/slots", w.node.max_jobs, owner, command,
-                    w.node.nodecode, w.node.prod, w.gomaxprocs, cover_file,
+                    self.job,
+                    f"$HOME/{REMOTE_ROOT}/locks/slots",
+                    w.node.max_jobs,
+                    owner,
+                    command,
+                    w.node.nodecode,
+                    w.node.prod,
+                    w.gomaxprocs,
+                    cover_file,
                     isolate_net=bool(leg.packages) and w.node.prod,
                 )
                 proc = subprocess.Popen(
-                    ["ssh", *SSH_OPTS, w.node.target, "bash", "-s"], text=True,
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    ["ssh", *SSH_OPTS, w.node.target, "bash", "-s"],
+                    text=True,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                 )
                 assert proc.stdin is not None
                 proc.stdin.write(script)
@@ -1080,7 +1125,12 @@ class Runner:
                     if not w.alive:
                         return
                     leg = pick_leg(
-                        self.queue, w, remote_workers, time.monotonic(), self.args.local_after, self.heavy_running
+                        self.queue,
+                        w,
+                        remote_workers,
+                        time.monotonic(),
+                        self.args.local_after,
+                        self.heavy_running,
                     )
                     if leg:
                         self.queue.remove(leg)
@@ -1092,14 +1142,18 @@ class Runner:
             try:
                 res = self.run_leg(leg, w)
             except Exception as exc:  # noqa: BLE001 - report and keep going
-                res = LegResult(leg.name, w.label, 0.0, 1, leg.packages, note=f"runner error: {exc}")
+                res = LegResult(
+                    leg.name, w.label, 0.0, 1, leg.packages, note=f"runner error: {exc}"
+                )
             requeue_after = 0.0
             with self.cond:
                 self.in_flight -= 1
                 if leg.heavy:
                     self.heavy_running[w.host] -= 1
                 if not w.is_local and res.rc == LOCK_BUSY_RC:
-                    self.say(f"[{leg.name}@{w.label}] all {w.node.max_jobs} slots held by other runs; requeued")
+                    self.say(
+                        f"[{leg.name}@{w.label}] all {w.node.max_jobs} slots held by other runs; requeued"
+                    )
                     leg.queued_at = leg.queued_at or time.monotonic()
                     self.queue.append(leg)
                     requeue_after = backoff
@@ -1107,7 +1161,9 @@ class Runner:
                 elif not w.is_local and res.rc == 255 and leg.attempts < 2:
                     leg.attempts += 1
                     w.alive = False
-                    self.say(f"[{leg.name}@{w.label}] ssh failed (rc 255); worker retired, leg requeued")
+                    self.say(
+                        f"[{leg.name}@{w.label}] ssh failed (rc 255); worker retired, leg requeued"
+                    )
                     self.queue.append(leg)
                 else:
                     backoff = 5.0
@@ -1126,10 +1182,8 @@ class Runner:
     def kill_all(self) -> None:
         with self.cond:
             for p in list(self.procs):
-                try:
+                with contextlib.suppress(OSError):
                     p.kill()
-                except OSError:
-                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1159,7 +1213,10 @@ def snapshot_dirty_tree(repo: Path) -> str:
 def list_packages(tree: Path) -> list[Package]:
     p = subprocess.run(
         ["go", "list", "-f", "{{.ImportPath}}\t{{.Dir}}", "./..."],
-        cwd=tree, text=True, capture_output=True, env=dict(os.environ, GOTOOLCHAIN=GO_TOOLCHAIN),
+        cwd=tree,
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, GOTOOLCHAIN=GO_TOOLCHAIN),
     )
     if p.returncode != 0:
         raise RuntimeError(f"go list ./... failed:\n{p.stderr}")
@@ -1196,17 +1253,28 @@ def local_make_ci(tree: Path, reason: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--allow-dirty", action="store_true", help="snapshot uncommitted changes into a temp commit")
-    ap.add_argument("--ref", help="test this commit-ish instead of HEAD (checked out to a temp tree for local legs)")
+    ap.add_argument(
+        "--allow-dirty", action="store_true", help="snapshot uncommitted changes into a temp commit"
+    )
+    ap.add_argument(
+        "--ref",
+        help="test this commit-ish instead of HEAD (checked out to a temp tree for local legs)",
+    )
     ap.add_argument("--nodes", help="override CI_NODES")
     ap.add_argument("--dry-run", action="store_true", help="probe and plan, run nothing")
-    ap.add_argument("--quiet", action="store_true", help="stream only failure lines (full logs still saved)")
     ap.add_argument(
-        "--local-after", type=float, default=-1,
+        "--quiet", action="store_true", help="stream only failure lines (full logs still saved)"
+    )
+    ap.add_argument(
+        "--local-after",
+        type=float,
+        default=-1,
         help="let this machine take any leg queued this many seconds (default: never; "
         "it still takes mocks-check and anything no node can run)",
     )
-    ap.add_argument("--no-fallback", action="store_true", help="fail instead of running local make ci")
+    ap.add_argument(
+        "--no-fallback", action="store_true", help="fail instead of running local make ci"
+    )
     ap.add_argument("--keep-jobs", action="store_true", help="leave remote job dirs in place")
     args = ap.parse_args(argv)
 
@@ -1220,7 +1288,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         dirty = git(repo, "status", "--porcelain")
         if dirty and not args.allow_dirty:
-            print("ci-remote: working tree is dirty; commit first or pass --allow-dirty", file=sys.stderr)
+            print(
+                "ci-remote: working tree is dirty; commit first or pass --allow-dirty",
+                file=sys.stderr,
+            )
             return 2
         sha = snapshot_dirty_tree(repo) if dirty else git(repo, "rev-parse", "HEAD")
     head = git(repo, "rev-parse", "HEAD")
@@ -1261,10 +1332,16 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
     probes: dict[Node, Probe] = {}
 
     def probe(n: Node) -> None:
-        script = PROBE_SCRIPT.replace("__PREFIX__", REMOTE_PATH_PREFIX).replace("__BARE__", BARE_REPO)
+        script = PROBE_SCRIPT.replace("__PREFIX__", REMOTE_PATH_PREFIX).replace(
+            "__BARE__", BARE_REPO
+        )
         try:
             p = ssh_script(n, script, timeout=30)
-            probes[n] = parse_probe(p.stdout) if p.returncode == 0 else Probe(False, error=(p.stderr.strip() or f"rc {p.returncode}")[:200])
+            probes[n] = (
+                parse_probe(p.stdout)
+                if p.returncode == 0
+                else Probe(False, error=(p.stderr.strip() or f"rc {p.returncode}")[:200])
+            )
         except subprocess.TimeoutExpired:
             probes[n] = Probe(False, error="ssh timed out")
 
@@ -1280,15 +1357,27 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
         pr = probes[n]
         cap = node_capacity(n, pr)
         if not cap.skip and "bare" not in pr.tools:
-            cap = Capacity(0, 1, None, cap.notes, skip=f"no ~/{BARE_REPO} (see docs/process/ci-remote.md)")
+            cap = Capacity(
+                0, 1, None, cap.notes, skip=f"no ~/{BARE_REPO} (see docs/process/ci-remote.md)"
+            )
         caps[n] = cap
         flags = ",".join(f for f, on in (("nodecode", n.nodecode), ("prod", n.prod)) if on) or "-"
-        rows.append((
-            n.name, flags, pr.goos or "?", str(pr.ncpu if pr.ok else "?"),
-            f"{pr.load1:.1f}" if pr.ok else "?", "yes" if pr.ok and can_decode(n, pr) else "no",
-            str(cap.slots), cap.skip or "; ".join(cap.notes) or "ok",
-        ))
-    print(fmt_table(rows, ("node", "flags", "goos", "cpus", "load1", "decode", "slots", "status")), flush=True)
+        rows.append(
+            (
+                n.name,
+                flags,
+                pr.goos or "?",
+                str(pr.ncpu if pr.ok else "?"),
+                f"{pr.load1:.1f}" if pr.ok else "?",
+                "yes" if pr.ok and can_decode(n, pr) else "no",
+                str(cap.slots),
+                cap.skip or "; ".join(cap.notes) or "ok",
+            )
+        )
+    print(
+        fmt_table(rows, ("node", "flags", "goos", "cpus", "load1", "decode", "slots", "status")),
+        flush=True,
+    )
     usable = [n for n in nodes if caps[n].slots > 0]
     if not usable:
         return 1 if args.no_fallback else local_make_ci(tree, "no node is usable")
@@ -1297,30 +1386,61 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
     packages = list_packages(tree)
     decode_nodes = [n for n in usable if can_decode(n, probes[n])]
     all_goos = sorted({probes[n].goos for n in usable})
-    decode_goos = sorted({probes[n].goos for n in decode_nodes}) or ["darwin" if sys.platform == "darwin" else "linux"]
+    decode_goos = sorted({probes[n].goos for n in decode_nodes}) or [
+        "darwin" if sys.platform == "darwin" else "linux"
+    ]
     total_slots = sum(caps[n].slots for n in usable)
     decode_slots = sum(caps[n].slots for n in decode_nodes) or 1
     timings_path = (primary / ".git" / "ci-remote" / "timings.json") if primary else None
     runner_timings = Timings(timings_path) if timings_path else Timings(None)
-    shards = build_shards(packages, runner_timings, decode_goos, all_goos, decode_slots, total_slots)
+    shards = build_shards(
+        packages, runner_timings, decode_goos, all_goos, decode_slots, total_slots
+    )
     legs = build_legs(shards, runner_timings, all_goos)
 
     dec = sorted(p.path for p in packages if p.decode)
-    print(f"ci-remote: {len(packages)} packages, {len(dec)} need a decoder (never sent to a nodecode node):", flush=True)
+    print(
+        f"ci-remote: {len(packages)} packages, {len(dec)} need a decoder (never sent to a nodecode node):",
+        flush=True,
+    )
     for p in dec:
         print(f"    {p}", flush=True)
     if not decode_nodes:
         print("ci-remote: no decode-capable node; decode shards run on this machine", flush=True)
-    print(fmt_table(
-        [(l.name, f"{l.est:.0f}s", str(len(l.packages)) if l.packages else "-",
-          "decode-only" if l.needs_decode else ("local" if l.local_only else "any"),
-          f"{l.timeout_min}m" if l.packages else "-") for l in legs],
-        ("leg", "est", "pkgs", "placement", "timeout"),
-    ), flush=True)
-    (out_dir / "plan.json").write_text(json.dumps({
-        "sha": sha, "decode_packages": dec,
-        "legs": [{"name": l.name, "est": l.est, "packages": list(l.packages), "needs_decode": l.needs_decode} for l in legs],
-    }, indent=1))
+    print(
+        fmt_table(
+            [
+                (
+                    leg.name,
+                    f"{leg.est:.0f}s",
+                    str(len(leg.packages)) if leg.packages else "-",
+                    "decode-only" if leg.needs_decode else ("local" if leg.local_only else "any"),
+                    f"{leg.timeout_min}m" if leg.packages else "-",
+                )
+                for leg in legs
+            ],
+            ("leg", "est", "pkgs", "placement", "timeout"),
+        ),
+        flush=True,
+    )
+    (out_dir / "plan.json").write_text(
+        json.dumps(
+            {
+                "sha": sha,
+                "decode_packages": dec,
+                "legs": [
+                    {
+                        "name": leg.name,
+                        "est": leg.est,
+                        "packages": list(leg.packages),
+                        "needs_decode": leg.needs_decode,
+                    }
+                    for leg in legs
+                ],
+            },
+            indent=1,
+        )
+    )
     if args.dry_run:
         return 0
 
@@ -1333,18 +1453,33 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
         env = dict(os.environ, GIT_SSH_COMMAND="ssh " + " ".join(SSH_OPTS))
         t0 = time.monotonic()
         p = subprocess.run(
-            ["git", "-C", str(repo), "push", "--no-verify", "--quiet", f"{n.target}:{BARE_REPO}",
-             f"+{sha}:{runner.run_ref}"],
-            text=True, capture_output=True, env=env, timeout=1800,
+            [
+                "git",
+                "-C",
+                str(repo),
+                "push",
+                "--no-verify",
+                "--quiet",
+                f"{n.target}:{BARE_REPO}",
+                f"+{sha}:{runner.run_ref}",
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=1800,
         )
         if p.returncode != 0:
             runner.say(f"ci-remote: push to {n.name} failed: {p.stderr.strip()[:300]}")
             return
         s = ssh_script(n, setup_script(runner.job, sha, n.nodecode, n.prod), timeout=900)
         if s.returncode != 0:
-            runner.say(f"ci-remote: checkout on {n.name} failed: {(s.stderr or s.stdout).strip()[:300]}")
+            runner.say(
+                f"ci-remote: checkout on {n.name} failed: {(s.stderr or s.stdout).strip()[:300]}"
+            )
             return
-        runner.say(f"ci-remote: {n.name} ready in {time.monotonic() - t0:.0f}s ({s.stdout.strip().splitlines()[-1]})")
+        runner.say(
+            f"ci-remote: {n.name} ready in {time.monotonic() - t0:.0f}s ({s.stdout.strip().splitlines()[-1]})"
+        )
         with runner.cond:
             ready.append(n)
             runner.node_goos[n.name] = probes[n].goos
@@ -1359,22 +1494,30 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
     runner.node_goos["local"] = "darwin" if sys.platform == "darwin" else "linux"
 
     remote_workers = [
-        Worker(f"{n.name}" + (f"#{i + 1}" if caps[n].slots > 1 else ""), n,
-               can_decode(n, probes[n]), caps[n].par, caps[n].gomaxprocs,
-               tests_ok=(not n.prod) or ("netns" in probes[n].tools))
-        for n in ready for i in range(caps[n].slots)
+        Worker(
+            f"{n.name}" + (f"#{i + 1}" if caps[n].slots > 1 else ""),
+            n,
+            can_decode(n, probes[n]),
+            caps[n].par,
+            caps[n].gomaxprocs,
+            tests_ok=(not n.prod) or ("netns" in probes[n].tools),
+        )
+        for n in ready
+        for i in range(caps[n].slots)
     ]
     for w in remote_workers:
         runner.node_goos[w.label] = probes[w.node].goos
     local = Worker("local", None, True, max(1, (os.cpu_count() or 2) // 2))
     now = time.monotonic()
-    for l in legs:
-        l.queued_at = now
-    runner.queue = sorted(legs, key=lambda l: -l.est)
+    for leg in legs:
+        leg.queued_at = now
+    runner.queue = sorted(legs, key=lambda leg: -leg.est)
 
     wall0 = time.monotonic()
-    threads = [threading.Thread(target=runner.worker_loop, args=(w, remote_workers), daemon=True)
-               for w in [*remote_workers, local]]
+    threads = [
+        threading.Thread(target=runner.worker_loop, args=(w, remote_workers), daemon=True)
+        for w in [*remote_workers, local]
+    ]
     try:
         for t in threads:
             t.start()
@@ -1402,7 +1545,9 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
         cleg = Leg("coverage-check-short", "make --no-print-directory coverage-check-short", 5.0)
         runner.results.append(runner.run_leg(cleg, local))
     else:
-        runner.results.append(LegResult("coverage-check-short", "-", 0.0, 1, note="skipped: a test shard failed"))
+        runner.results.append(
+            LegResult("coverage-check-short", "-", 0.0, 1, note="skipped: a test shard failed")
+        )
     if cov_note:
         runner.results.append(LegResult("package-census", "-", 0.0, 1, note=cov_note))
     wall = time.monotonic() - wall0
@@ -1419,7 +1564,7 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
             print(f"ci-remote: cleanup on {n.name} timed out", file=sys.stderr)
 
     # --- summary ------------------------------------------------------------
-    order = {l.name: i for i, l in enumerate(legs)}
+    order = {leg.name: i for i, leg in enumerate(legs)}
     rows = [
         (r.leg, r.where, f"{r.seconds:.0f}s", "PASS" if r.ok else (r.note or f"FAIL rc={r.rc}"))
         for r in sorted(runner.results, key=lambda r: order.get(r.leg, 999))
@@ -1429,14 +1574,22 @@ def _main_inner(args, repo: Path, primary: Path | None, tree: Path, sha: str, ou
     placement = {}
     for pkg, (status, where) in sorted(runner.pkg_results.items()):
         placement[pkg] = {"status": status, "where": where}
-    (out_dir / "summary.json").write_text(json.dumps({
-        "sha": sha, "wall_seconds": round(wall, 1),
-        "results": [dataclasses.asdict(r) for r in runner.results],
-        "packages": placement,
-    }, indent=1))
+    (out_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "sha": sha,
+                "wall_seconds": round(wall, 1),
+                "results": [dataclasses.asdict(r) for r in runner.results],
+                "packages": placement,
+            },
+            indent=1,
+        )
+    )
     print("\n" + table)
-    print(f"\nci-remote: {len(runner.results) - len(failed)}/{len(runner.results)} legs passed "
-          f"in {wall:.0f}s wall; logs in {out_dir}")
+    print(
+        f"\nci-remote: {len(runner.results) - len(failed)}/{len(runner.results)} legs passed "
+        f"in {wall:.0f}s wall; logs in {out_dir}"
+    )
     return 1 if failed else 0
 
 

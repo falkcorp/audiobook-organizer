@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/deadcode-ratchet.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 5d0c7f2e-8a41-4b6d-9e13-c7a2f4b86d90
 # last-edited: 2026-10-11
 """Ratchet on production functions unreachable from every `main`.
@@ -45,6 +45,7 @@ internal/writeback/ (the iTunes writer), test files, test helper packages
 (testutil, conformance, rapidgen and the explicit TEST_HELPER_DIRS list), mock_store.go, and any name
 containing `ForTest` (test seams).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -86,10 +87,7 @@ def excluded(file: str, name: str) -> bool:
         return True
     if file.startswith(EXCLUDED_DIR_PREFIXES):
         return True
-    for part in file.split("/")[:-1]:
-        if part in EXCLUDED_PKG_NAMES:
-            return True
-    return False
+    return any(part in EXCLUDED_PKG_NAMES for part in file.split("/")[:-1])
 
 
 def parse(output: str) -> set[str]:
@@ -162,7 +160,11 @@ def build_from_tools_module(root: Path, dest: str) -> str:
     try:
         subprocess.run(
             ["go", "-C", str(root / "tools" / "deadcode"), "install", "tool"],
-            check=True, env=env, timeout=INSTALL_TIMEOUT_S, capture_output=True, text=True,
+            check=True,
+            env=env,
+            timeout=INSTALL_TIMEOUT_S,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         raise ToolError(
@@ -190,7 +192,9 @@ def check_binary_version(binary: str) -> None:
         raise ToolError(f"cannot inspect {binary} with `go version -m`: {e}") from e
     if res.returncode != 0:
         raise ToolError(f"{binary} is not a Go binary or does not exist: {res.stderr.strip()}")
-    want = re.compile(r"^\s*mod\s+golang\.org/x/tools\s+" + re.escape(DEADCODE_TOOLS_VERSION) + r"\b", re.M)
+    want = re.compile(
+        r"^\s*mod\s+golang\.org/x/tools\s+" + re.escape(DEADCODE_TOOLS_VERSION) + r"\b", re.M
+    )
     if not want.search(res.stdout):
         raise ToolError(
             f"{binary} was not built from golang.org/x/tools {DEADCODE_TOOLS_VERSION} "
@@ -206,7 +210,11 @@ def run_deadcode(root: Path) -> str:
         env = dict(os.environ, GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
         try:
             res = subprocess.run(
-                [binary, "./..."], cwd=root, env=env, capture_output=True, text=True,
+                [binary, "./..."],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
                 timeout=RUN_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired as e:
@@ -221,7 +229,10 @@ def run_deadcode(root: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
-        "--prune", "--write-baseline", dest="prune", action="store_true",
+        "--prune",
+        "--write-baseline",
+        dest="prune",
+        action="store_true",
         help="lower-only: rewrite the baseline as baseline ∩ current (never adds; bot only)",
     )
     ap.add_argument("--baseline", default="scripts/deadcode-baseline.txt")
@@ -253,7 +264,9 @@ def main(argv: list[str] | None = None) -> int:
             f"the bot (or `python3 scripts/deadcode-ratchet.py --prune`, lower-only) prunes the baseline"
         )
     if new:
-        print(f"FAIL: {len(new)} new unreachable function(s) not in {args.baseline}:", file=sys.stderr)
+        print(
+            f"FAIL: {len(new)} new unreachable function(s) not in {args.baseline}:", file=sys.stderr
+        )
         for ident in new:
             print(f"  {ident}", file=sys.stderr)
         print(

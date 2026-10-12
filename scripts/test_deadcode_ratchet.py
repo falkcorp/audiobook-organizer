@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # file: scripts/test_deadcode_ratchet.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 2b8e41c7-6d09-4f3a-a5e2-90c1d7f3b648
 # last-edited: 2026-10-11
 """Unit tests for scripts/deadcode-ratchet.py (stdlib unittest, no Go needed)."""
+
 import importlib.util
 import io
 import os
@@ -109,7 +110,9 @@ class MainTest(unittest.TestCase):
     def test_exit_codes(self):
         self.assertEqual(self._run("internal/foo.Used\ninternal/foo.T.Method\n", SAMPLE), 0)
         self.assertEqual(self._run("internal/foo.Used\n", SAMPLE), 1)
-        self.assertEqual(self._run("internal/foo.Used\ninternal/foo.T.Method\ninternal/foo.Gone\n", SAMPLE), 0)
+        self.assertEqual(
+            self._run("internal/foo.Used\ninternal/foo.T.Method\ninternal/foo.Gone\n", SAMPLE), 0
+        )
 
 
 class ParseMismatchTest(unittest.TestCase):
@@ -160,10 +163,11 @@ class InstallFailureTest(unittest.TestCase):
             base = Path(d) / "b.txt"
             base.write_text("internal/foo.Used\n")
             err = io.StringIO()
-            with mock.patch.dict(os.environ, {"DEADCODE_BIN": ""}), \
-                 mock.patch.object(dr, "find_binary", return_value=None), \
-                 mock.patch.object(dr.subprocess, "run", side_effect=side_effect), \
-                 redirect_stderr(err):
+            with mock.patch.dict(os.environ, {"DEADCODE_BIN": ""}), mock.patch.object(
+                dr, "find_binary", return_value=None
+            ), mock.patch.object(dr.subprocess, "run", side_effect=side_effect), redirect_stderr(
+                err
+            ):
                 rc = dr.main(["--baseline", str(base)])
             return rc, err.getvalue()
 
@@ -196,13 +200,14 @@ class InstallFailureTest(unittest.TestCase):
                 cmd, 0, stdout="\tmod\tgolang.org/x/tools\tv0.1.0\t\n", stderr=""
             )
 
-        with mock.patch.object(dr, "find_binary", return_value="/x/deadcode"):
-            with tempfile.TemporaryDirectory() as d:
-                base = Path(d) / "b.txt"
-                base.write_text("")
-                err = io.StringIO()
-                with mock.patch.object(dr.subprocess, "run", side_effect=run), redirect_stderr(err):
-                    rc = dr.main(["--baseline", str(base)])
+        with mock.patch.object(
+            dr, "find_binary", return_value="/x/deadcode"
+        ), tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "b.txt"
+            base.write_text("")
+            err = io.StringIO()
+            with mock.patch.object(dr.subprocess, "run", side_effect=run), redirect_stderr(err):
+                rc = dr.main(["--baseline", str(base)])
         self.assertEqual(rc, 2)
         self.assertIn("was not built from golang.org/x/tools", err.getvalue())
 
