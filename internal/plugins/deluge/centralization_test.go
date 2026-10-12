@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
 // last-edited: 2026-10-11
 
@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -37,6 +38,18 @@ func (r *centralizationTestReporter) RunPhase(ctx context.Context, _ string, fn 
 }
 func (r *centralizationTestReporter) Trigger(context.Context, string, any) error { return nil }
 func (r *centralizationTestReporter) SetCurrentItem(string)                      {}
+
+// progressCapturingReporter keeps the last progress message: runCentralization
+// ends with its summary there.
+type progressCapturingReporter struct {
+	centralizationTestReporter
+	last string
+}
+
+func (r *progressCapturingReporter) UpdateProgress(_, _ int, msg string) error {
+	r.last = msg
+	return nil
+}
 
 // TestRunCentralization_HydratesBeforeWriteback is a regression test for
 // STOREFID PR-D: GetBookFilesNeedingDelugeImportCore returns a memdb-slim
@@ -215,8 +228,21 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)
 			}
 
-			if err := p.runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+			rep := &progressCapturingReporter{}
+			if err := p.runCentralization(context.Background(), nil, rep); err != nil {
 				t.Fatalf("runCentralization: %v", err)
+			}
+			// An unloaded list is counted on its own, not as protected:
+			// Deluge being down is no verdict on the file.
+			wantSummary := "1 protected (left pending), 0 left pending (Deluge protected list not loaded)"
+			switch {
+			case tc.wantMark:
+				wantSummary = "0 protected (left pending), 0 left pending (Deluge protected list not loaded)"
+			case tc.unloaded:
+				wantSummary = "0 protected (left pending), 1 left pending (Deluge protected list not loaded)"
+			}
+			if !strings.Contains(rep.last, wantSummary) {
+				t.Errorf("summary %q, want it to contain %q", rep.last, wantSummary)
 			}
 			if marked := row.ImportedFromDelugeAt != nil; marked != tc.wantMark {
 				t.Errorf("marked imported = %v, want %v", marked, tc.wantMark)
