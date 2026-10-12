@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/split_books_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 946919fd-5279-41f2-bb7e-1331ea924e5e
 // last-edited: 2026-10-12
 
@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,6 +391,24 @@ func TestSplitBooksFixer_LeaseLostWhileWaitingForTheMergeLock(t *testing.T) {
 		err error
 	}
 	done := make(chan out, 1)
+	// parked closes on the first renewal after the decision row is journaled:
+	// LockWaiting's beat before it blocks, the last thing the apply does
+	// before it waits on the lock this test holds. (noWait stops LockWaiting's
+	// ticker, so no other beat can follow until the lock is released.) lost
+	// refuses every renewal from then on: armed only once parked is seen, so
+	// the first refusal is the beat after the lock was taken.
+	var parkedOnce sync.Once
+	parked := make(chan struct{})
+	var lost atomic.Bool
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.failWhen = lost.Load
+	scan.mu.Unlock()
+	scan.afterRenew = func(int) {
+		if changes, err := f.s.GetOperationChanges("op-held"); err == nil && len(changes) > 0 {
+			parkedOnce.Do(func() { close(parked) })
+		}
+	}
 	merge.LockMergeRMW()
 	locked := true
 	defer func() {
@@ -401,23 +420,12 @@ func TestSplitBooksFixer_LeaseLostWhileWaitingForTheMergeLock(t *testing.T) {
 		r, err := sbApplyHeld(f, fx, res, "op-held", row.RowID)
 		done <- out{r, err}
 	}()
-	// The decision row is journaled immediately before the merge, which then
-	// blocks on the lock this test holds.
-	deadline := time.Now().Add(time.Minute)
-	for {
-		changes, err := f.s.GetOperationChanges("op-held")
-		require.NoError(t, err)
-		if len(changes) > 0 {
-			break
-		}
-		require.True(t, time.Now().Before(deadline), "the apply never journaled its decision")
-		time.Sleep(time.Millisecond)
+	select {
+	case <-parked:
+	case <-time.After(time.Minute):
+		t.Fatal("the apply never reached the merge lock wait")
 	}
-	time.Sleep(20 * time.Millisecond) // let it park on the lock
-	scan := f.scan()
-	scan.mu.Lock()
-	scan.renewsLeft = 0
-	scan.mu.Unlock()
+	lost.Store(true)
 	merge.UnlockMergeRMW()
 	locked = false
 
@@ -426,6 +434,8 @@ func TestSplitBooksFixer_LeaseLostWhileWaitingForTheMergeLock(t *testing.T) {
 	require.NotNil(t, o.res)
 	require.Len(t, o.res.Rows, 1)
 	assert.Equal(t, repairs.OutcomeAborted, o.res.Rows[0].Outcome, o.res.Rows[0].Error)
+	assert.Contains(t, o.res.Rows[0].Error, "after waiting for the merge lock not written",
+		"the stop is LockWaiting's beat after it took the lock")
 	for _, src := range ids[1:] {
 		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "source %s is not retired", src)
 	}
@@ -594,22 +604,20 @@ func TestSplitBooksFixer_CompleteMergeDropsItsCandidateRow(t *testing.T) {
 // that was made.
 func TestSplitBooksFixer_LeaseLostBetweenSourcesStopsTheMerge(t *testing.T) {
 	t.Parallel()
-	probe := newFragFixture(t)
-	sbCluster(t, probe, "lib/Author A/Book One", "Book One", 4, 300)
-	pfx := sbFixer(probe)
-	pres := sbPlan(t, probe, pfx)
-	pout, err := sbApplyHeld(probe, pfx, pres, "op-probe", pres.Rows[0].RowID)
-	require.NoError(t, err)
-	require.Equal(t, repairs.OutcomeApplied, pout.Rows[0].Outcome, pout.Rows[0].Error)
-	total := probe.scan().renews
-
 	f := newFragFixture(t)
 	ids := sbCluster(t, f, "lib/Author A/Book One", "Book One", 4, 300)
 	fx := sbFixer(f)
 	res := sbPlan(t, f, fx)
 	scan := f.scan()
+	// The lease is refused at the first beat after the first source was
+	// retired: BeforeSource's beat for the second. Named by library state,
+	// not by counting renewals, so a beat added to or dropped from the apply
+	// elsewhere cannot move the stop to another place unnoticed.
 	scan.mu.Lock()
-	scan.renewsLeft = total - 2 // the beats before the last two sources' are allowed
+	scan.failWhen = func() bool {
+		b, err := f.s.GetBookByID(ids[1])
+		return err == nil && b != nil && b.IsSoftDeleted()
+	}
 	scan.mu.Unlock()
 	out, err := sbApplyHeld(f, fx, res, "op-stop", res.Rows[0].RowID)
 	require.ErrorIs(t, err, repairs.ErrStandDownLost)
@@ -617,6 +625,8 @@ func TestSplitBooksFixer_LeaseLostBetweenSourcesStopsTheMerge(t *testing.T) {
 	r := out.Rows[0]
 	assert.Equal(t, repairs.OutcomeAborted, r.Outcome, r.Error)
 	assert.Contains(t, r.Error, "1 of 3 books merged")
+	assert.Contains(t, r.Error, "split-book merge of "+ids[2]+" into "+ids[0]+" not written",
+		"the stop is the beat before the second source")
 	assert.True(t, sbBook(t, f, ids[1]).IsSoftDeleted(), "the source absorbed before the stop stays merged")
 	for _, src := range ids[2:] {
 		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "source %s is not attempted", src)
@@ -628,7 +638,7 @@ func TestSplitBooksFixer_LeaseLostBetweenSourcesStopsTheMerge(t *testing.T) {
 	}, sbLiveJournal(t, f, "op-stop"), "the decision and the pointer stand")
 
 	scan.mu.Lock()
-	scan.renewsLeft = -1
+	scan.failWhen = nil
 	scan.mu.Unlock()
 	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-stop")
 	require.NoError(t, err)
