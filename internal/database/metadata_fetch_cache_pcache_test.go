@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache_pcache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c8f6a17-9d43-4e0b-b71a-5e3d90c4a2f8
 // last-edited: 2026-10-11
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -119,8 +120,8 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 	}, t0))
 	keys, err := PCachePointedKeys(s, "book-a")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"pcache:q:audible:search_title:1", "pcache:q:audible:search_title:2", "pcache:q:audible:search_title:0"},
-		keys["audible"], "a union, newest last")
+	assert.Equal(t, []string{"pcache:q:audible:search_title:0", "pcache:q:audible:search_title:1", "pcache:q:audible:search_title:2"},
+		keys["audible"], "a union, in first-recorded order")
 
 	// A bust limited to one provider leaves the other's rows and pointer.
 	n, err := DeletePCacheForBook(s, "book-a", []string{"audible"})
@@ -143,7 +144,7 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, raw)
 
-	// The cap keeps the newest keys.
+	// The cap keeps the most recently recorded keys.
 	many := make([]string, 0, pcachePointerMaxPerProvider+5)
 	for i := 0; i < pcachePointerMaxPerProvider+5; i++ {
 		many = append(many, fmt.Sprintf("pcache:q:audible:search_title:k%03d", i))
@@ -166,4 +167,61 @@ func TestPCache_BustNeverLeavesTheFamily(t *testing.T) {
 	raw, err := s.GetRaw("setting:synthetic")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("keep"), raw)
+}
+
+// failingPointerStore fails every read of a pointer row, and counts the
+// writes that reach the store.
+type failingPointerStore struct {
+	*PebbleStore
+	failPointerReads bool
+	sets             int
+}
+
+func (f *failingPointerStore) GetRaw(key string) ([]byte, error) {
+	if f.failPointerReads && strings.HasPrefix(key, PCacheBookPrefix) {
+		return nil, errors.New("synthetic pointer read failure")
+	}
+	return f.PebbleStore.GetRaw(key)
+}
+
+func (f *failingPointerStore) SetRaw(key string, value []byte) error {
+	f.sets++
+	return f.PebbleStore.SetRaw(key, value)
+}
+
+// A failed shared-cache bust does not skip the book's own rows: both deletes
+// are attempted and the failure is still reported.
+func TestInvalidateAllForBook_SharedBustFailureStillDeletesPerBookRows(t *testing.T) {
+	s := newPCacheTestStore(t)
+	require.NoError(t, PutCachedMetadataFetch(s, "book-a", "audible", "v1:book-a", json.RawMessage(`[{"title":"Title 000123"}]`), 0))
+	require.NoError(t, PutCachedMetadataFetch(s, "book-a", "openlibrary", "v1:book-a", json.RawMessage(`[{"title":"Title 000123"}]`), 0))
+	f := &failingPointerStore{PebbleStore: s, failPointerReads: true}
+
+	err := InvalidateAllCachedMetadataFetchesForBook(f, "book-a")
+	require.Error(t, err, "the shared bust failure is reported")
+	assert.Contains(t, err.Error(), "synthetic pointer read failure")
+	left, err := s.ScanPrefix("metadata_fetch_cache:book-a:")
+	require.NoError(t, err)
+	assert.Empty(t, left, "the per-book rows are deleted anyway")
+}
+
+// Re-recording keys the pointer row already lists is no write, in any order.
+func TestRecordPCachePointer_RepeatRecordsZeroWrites(t *testing.T) {
+	s := newPCacheTestStore(t)
+	f := &failingPointerStore{PebbleStore: s}
+	t0 := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+	first := map[string][]string{"audible": {"pcache:q:audible:search_title:0", "pcache:q:audible:search_title:1"}}
+	require.NoError(t, RecordPCachePointer(f, "book-a", first, t0))
+	require.Equal(t, 1, f.sets)
+
+	require.NoError(t, RecordPCachePointer(f, "book-a", first, t0.Add(time.Hour)))
+	require.NoError(t, RecordPCachePointer(f, "book-a", map[string][]string{
+		"audible": {"pcache:q:audible:search_title:1", "pcache:q:audible:search_title:0"},
+	}, t0.Add(2*time.Hour)))
+	assert.Equal(t, 1, f.sets, "the same key set, in either order, records zero writes")
+
+	require.NoError(t, RecordPCachePointer(f, "book-a", map[string][]string{
+		"audible": {"pcache:q:audible:search_title:0", "pcache:q:audible:search_title:2"},
+	}, t0.Add(3*time.Hour)))
+	assert.Equal(t, 2, f.sets, "a new key is one write")
 }
