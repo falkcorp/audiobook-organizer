@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-12
+// last-edited: 2026-10-11
 
 package database
 
