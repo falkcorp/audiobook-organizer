@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-12
 
@@ -258,10 +258,10 @@ func splitCompiledFilters(filters []compiledFilter) (cheap, stripped []compiledF
 }
 
 // matchesCompiledFilters ANDs every filter (with negation) against book.
-// creditNames (nil = none) gives a book's ordered credited-author names, which
-// the "author" field matches in addition to the primary author.
+// credits (nil = none) gives a book's author-role credit names, which the
+// "author" field matches in addition to the primary author.
 // It never mutates *book: callers may pass a pointer into memdb-resident data.
-func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt runtimeFunc, creditNames func(bookID string) []string) bool {
+func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt runtimeFunc, credits *creditLookup) bool {
 	for i := range filters {
 		f := &filters[i]
 		// A spent budget: the scan's result is discarded (the caller returns
@@ -273,7 +273,7 @@ func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt ru
 		if f.Value == "" {
 			return false
 		}
-		matches := fieldMatchesCompiled(book, f, rt, creditNames)
+		matches := fieldMatchesCompiled(book, f, rt, credits)
 		if f.Negated == matches {
 			return false
 		}
@@ -282,7 +282,7 @@ func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt ru
 }
 
 // fieldMatchesCompiled evaluates one compiled filter against a book.
-func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc, creditNames func(bookID string) []string) bool {
+func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc, credits *creditLookup) bool {
 	switch {
 	case durationFilterFields[f.Field]:
 		return durationMatchesExpr(book, f.dur, rt)
@@ -322,18 +322,18 @@ func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc
 		}
 		return false
 	}
-	bookValues, known := bookFieldValues(*book, f.Field, creditNames)
+	// author has one value per credited author, and any of them matching is
+	// a match; a negated filter is therefore true only when none matches
+	// (matchesCompiledFilters inverts this result). Every other field has
+	// exactly one value and is matched without building a slice.
+	if f.Field == "author" {
+		return authorFieldMatches(book, credits, f, ref)
+	}
+	bookValue, known := bookFieldValue(*book, f.Field)
 	if !known {
 		return false
 	}
-	// Any value matching is a match; a negated filter is therefore true only
-	// when none matches (matchesCompiledFilters inverts this result).
-	for _, v := range bookValues {
-		if f.budget.MatchRow(f.text, v, ref) {
-			return true
-		}
-	}
-	return false
+	return f.budget.MatchRow(f.text, bookValue, ref)
 }
 
 // numericFieldValues returns a field's KNOWN numeric values. Empty means

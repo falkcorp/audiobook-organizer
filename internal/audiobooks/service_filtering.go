@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-10-12
 
@@ -282,9 +282,9 @@ func FirstEmptyFilterValue(filters []FieldFilter) (string, bool) {
 // when the filter set doesn't reference author/series, so callers pay
 // nothing extra for the common case.
 //
-// creditNames (nil = none) returns a book's ordered credited-author names, so
-// an "author" filter matches any credit and not only the primary; see
-// buildAuthorSeriesNameMaps and bookFieldValues.
+// credits (nil = none) gives a book's ordered author-role credit names, so an
+// "author" filter matches any credited author and not only the primary; see
+// buildAuthorSeriesNameMaps and creditLookup.
 //
 // pebbleLookups is incremented once per actual GetBookByID call so the
 // caller can log a per-query count at DEBUG.
@@ -295,7 +295,7 @@ func matchesFieldFiltersWithStrippedFallback(
 	pebbleLookups *int64,
 	warnOnce func(id string, err error),
 	authorNames, seriesNames map[int]string,
-	creditNames func(bookID string) []string,
+	credits *creditLookup,
 	rt runtimeFunc,
 	scratch *database.Book,
 ) bool {
@@ -304,7 +304,7 @@ func matchesFieldFiltersWithStrippedFallback(
 		if authorNames != nil || seriesNames != nil {
 			cheapBook = hydrateAuthorSeriesNames(scratch, memBook, authorNames, seriesNames)
 		}
-		if !matchesCompiledFilters(cheapBook, cheap, rt, creditNames) {
+		if !matchesCompiledFilters(cheapBook, cheap, rt, credits) {
 			return false
 		}
 	}
@@ -321,7 +321,7 @@ func matchesFieldFiltersWithStrippedFallback(
 		}
 		return false
 	}
-	return matchesCompiledFilters(full, stripped, rt, creditNames)
+	return matchesCompiledFilters(full, stripped, rt, credits)
 }
 
 // hydrateAuthorSeriesNames copies *src into *dst and returns dst, with Author/Series
@@ -355,14 +355,14 @@ func hydrateAuthorSeriesNames(dst, src *database.Book, authorNames, seriesNames 
 // inside the filter loop (see CLAUDE.md's concurrency/per-item-DB-call
 // guidance).
 //
-// When an "author" filter is present it also returns creditNames, the lookup
-// of a book's ordered credited-author names (bookID → names, resolved through
-// authorNames). The whole credit table is loaded ONCE here, through the
-// database.BookCreditIndexStore capability, never per book. creditNames is
-// nil when the store cannot supply the index or the load failed; the matcher
-// then falls back to the primary author alone (the pre-credit behaviour) and
-// the failure is logged.
-func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (authorNames, seriesNames map[int]string, creditNames func(bookID string) []string) {
+// When an "author" filter is present it also returns credits, the lookup of a
+// book's author-role credit names (resolved through authorNames). The whole
+// credit table is loaded ONCE here, through the database.BookCreditIndexStore
+// capability (loadCreditLookup), never per book. credits is nil when the store
+// cannot supply the index or the load failed; the matcher then falls back to
+// the primary author alone (the pre-credit behaviour) and the failure is
+// logged once per process.
+func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (authorNames, seriesNames map[int]string, credits *creditLookup) {
 	needAuthor, needSeries := false, false
 	for _, f := range filters {
 		switch f.Field {
@@ -378,7 +378,7 @@ func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (a
 			for _, a := range authors {
 				authorNames[a.ID] = a.Name
 			}
-			creditNames = svc.loadCreditNames(authorNames)
+			credits = svc.loadCreditLookup(authorNames)
 		}
 	}
 	if needSeries {
@@ -389,66 +389,104 @@ func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (a
 			}
 		}
 	}
-	return authorNames, seriesNames, creditNames
+	return authorNames, seriesNames, credits
 }
 
-// loadCreditNames loads every book's credited author IDs once and returns a
-// lookup of bookID → credited author names in credit order. Credits naming an
-// author absent from authorNames are skipped. It returns nil when the store
-// has no credit index or the load fails.
-func (svc *AudiobookService) loadCreditNames(authorNames map[int]string) func(bookID string) []string {
+// creditLookupUnavailableOnce and creditLoadFailedOnce keep the two "author:
+// is matching the primary author only" warnings to one line per process: the
+// condition holds for every author: query until it is fixed, and a line per
+// query would bury the rest of the log.
+var (
+	creditLookupUnavailableOnce sync.Once
+	creditLoadFailedOnce        sync.Once
+)
+
+// loadCreditLookup loads every book's author-role credits once for a query.
+// It returns nil when the store has no credit index or the load fails; the
+// author field then matches the primary author alone, and that is logged.
+func (svc *AudiobookService) loadCreditLookup(authorNames map[int]string) *creditLookup {
 	idx, ok := database.AsCapability[database.BookCreditIndexStore](svc.store)
 	if !ok {
+		creditLookupUnavailableOnce.Do(func() {
+			filterCompiledLog.Warn("author filter: store %T has no book credit index; author: matches the primary author only (logged once per process)", svc.store)
+		})
 		return nil
 	}
-	idsByBook, err := idx.GetAllBookCreditAuthorIDs()
+	rows, err := idx.GetAllBookAuthorRoleCredits()
 	if err != nil {
-		filterCompiledLog.Warn("author filter: loading book credits failed; matching the primary author only: err=%v", err)
+		creditLoadFailedOnce.Do(func() {
+			filterCompiledLog.Warn("author filter: loading book credits failed; author: matches the primary author only until it loads (logged once per process): err=%v", err)
+		})
 		return nil
 	}
-	namesByBook := make(map[string][]string, len(idsByBook))
-	for bookID, ids := range idsByBook {
-		names := make([]string, 0, len(ids))
-		for _, id := range ids {
-			if name, ok := authorNames[id]; ok && name != "" {
-				names = append(names, name)
-			}
-		}
-		if len(names) > 0 {
-			namesByBook[bookID] = names
-		}
-	}
-	return func(bookID string) []string { return namesByBook[bookID] }
+	return &creditLookup{rows: rows, authorNames: authorNames}
 }
 
-// bookFieldValues is bookFieldValue for matching: the values a filter pattern
-// is tried against. Every field has exactly one value except "author", which
-// has one per credited author — the primary first, then creditNames(book.ID)
-// in credit order, each distinct name once. The names are NEVER joined: a
-// regex must not match across two authors. A book with no author at all
-// yields [""] so an empty-matching pattern behaves as it always has.
-// creditNames may be nil.
-func bookFieldValues(book database.Book, field string, creditNames func(bookID string) []string) ([]string, bool) {
-	single, known := bookFieldValue(book, field)
-	if field != "author" || !known {
-		return []string{single}, known
+// creditLookup gives a book's author-role credit names for one query. It holds
+// the raw rows and resolves a book's names only when the matcher asks, so a
+// query pays for name resolution only on the books whose credits add someone
+// beyond the primary author.
+type creditLookup struct {
+	rows        map[string][]database.BookAuthor
+	authorNames map[int]string
+}
+
+// names returns book's credited author names in credit order: the rows ordered
+// by database.NormalizeBookAuthors with book.AuthorID as the tie-breaker (the
+// order a credit write stores), each name once. It returns nil, without
+// allocating, when the credits name no one but the primary author, whose
+// name the matcher already has. Credits naming an author absent from
+// authorNames are skipped. Nil-safe.
+func (c *creditLookup) names(book *database.Book) []string {
+	if c == nil {
+		return nil
 	}
-	var values []string
-	if single != "" {
-		values = append(values, single)
+	rows := c.rows[book.ID]
+	if len(rows) == 0 {
+		return nil
 	}
-	if creditNames != nil {
-		for _, name := range creditNames(book.ID) {
-			if name == "" || slices.Contains(values, name) {
-				continue
+	if book.AuthorID != nil {
+		onlyPrimary := true
+		for _, r := range rows {
+			if r.AuthorID != *book.AuthorID {
+				onlyPrimary = false
+				break
 			}
-			values = append(values, name)
+		}
+		if onlyPrimary {
+			return nil
 		}
 	}
-	if len(values) == 0 {
-		values = []string{""}
+	ordered := database.NormalizeBookAuthors(rows, book.AuthorID)
+	names := make([]string, 0, len(ordered))
+	for _, r := range ordered {
+		if name := c.authorNames[r.AuthorID]; name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
 	}
-	return values, true
+	return names
+}
+
+// authorFieldMatches reports whether match accepts any value of book's
+// "author" field: the primary author's name, then each credited name. The
+// names are tried one at a time and NEVER joined, so a regex cannot match
+// across two authors. A book with no author at all is tried as "", so an
+// empty-matching pattern behaves as it did before credits counted; a book
+// with credits but no primary is tried on its credits alone.
+func authorFieldMatches(book *database.Book, credits *creditLookup, f *compiledFilter, ref querygrammar.RowRef) bool {
+	primary, _ := bookFieldValue(*book, "author")
+	names := credits.names(book)
+	if primary != "" || len(names) == 0 {
+		if f.budget.MatchRow(f.text, primary, ref) {
+			return true
+		}
+	}
+	for _, name := range names {
+		if name != primary && f.budget.MatchRow(f.text, name, ref) {
+			return true
+		}
+	}
+	return false
 }
 
 // bookFieldValue renders a book field as the string the substring matcher
@@ -1079,7 +1117,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				"stripped_fields", strippedCompiledFieldNames(strippedFF),
 				"cheap_filter_count", len(cheapFF))
 		}
-		authorNames, seriesNames, creditNames := svc.buildAuthorSeriesNameMaps(remainingFF)
+		authorNames, seriesNames, credits := svc.buildAuthorSeriesNameMaps(remainingFF)
 		rtFn := svc.runtimeFuncFor(remainingFF)
 		// Per-query Pebble-lookup counter + once-per-query warn for
 		// nil/err. The walker invokes the predicate row-by-row on the
@@ -1104,7 +1142,7 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				return false // fail closed; see mustCompileForPredicate
 			}
 			if len(remainingFF) > 0 {
-				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames, creditNames, rtFn, &scratch) {
+				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames, credits, rtFn, &scratch) {
 					return false
 				}
 			}

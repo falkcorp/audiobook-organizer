@@ -1,7 +1,7 @@
 // file: internal/database/credits.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3cb12a4a-40b2-48b2-ad10-67e6e1ccdf9d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-12
 
 package database
 
@@ -117,6 +117,23 @@ func JoinCreditNames(names []string) string {
 // names dropped.
 func JoinCreditNamesABS(names []string) string {
 	return strings.Join(cleanNames(names), ", ")
+}
+
+// IsAuthorCreditRole reports whether a book_authors row's role credits the
+// person as an author of the book: "author", "co-author" (also spelled
+// "coauthor"), "primary", or an unlabelled row (older rows carry no role).
+// Narrators, editors, translators and the like are credited on the book but
+// did not write it. Case and surrounding space are ignored.
+//
+// This is the one list of author roles for readers that must tell an author
+// from another contributor: the catalog harvest scope and the author: search
+// filter both decide through it.
+func IsAuthorCreditRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "", "author", "co-author", "coauthor", "primary":
+		return true
+	}
+	return false
 }
 
 // NormalizeBookAuthors returns rows in canonical form: ordered by Position,

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.18.2
+// version: 1.19.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -797,7 +797,13 @@ func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) 
 	if err := p.db.Set(bookAuthorsKey(bookID), data, pebble.Sync); err != nil {
 		return nil, err
 	}
-	p.ReplaceBookAuthorsInMemDB(bookID, authors)
+	// A credit change is a change to the book as every list reads it: an
+	// author: filter matches the credited authors, and the library-list
+	// caches are keyed on the library generation. Without the bump a cached
+	// author: page kept listing (or missing) the book until its TTL ran out
+	// whenever only the credits changed. The bump follows the memdb
+	// write-through, as writeThroughThenBump requires.
+	p.writeThroughThenBump(bookID, func() { p.ReplaceBookAuthorsInMemDB(bookID, authors) })
 	return authors, nil
 }
 
