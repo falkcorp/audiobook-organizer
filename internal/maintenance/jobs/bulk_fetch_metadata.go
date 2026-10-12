@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package jobs
 
@@ -190,25 +190,16 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 			return metafetch.AllThrottledMidRunError(sourceChain)
 		}
 		sourceName := out.SourceName
-		cacheHit := out.CacheHit
 
 		resultStatus := out.Status()
 		switch resultStatus {
 		case metafetch.FetchStatusCached:
-			if !cacheHit {
-				if blob, merr := json.Marshal(out.Results); merr == nil {
-					if perr := database.PutCachedMetadataFetch(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0); perr != nil {
-						// The result still counts as found; only the cache row is
-						// missing, so the next run refetches this book.
-						cacheWriteFailed++
-						bulkFetchLog.Warn("bulk-fetch-metadata: caching the result for book %s failed: %v",
-							logger.SanitizeLogValue(bookID), perr)
-					}
-				} else {
-					cacheWriteFailed++
-					bulkFetchLog.Warn("bulk-fetch-metadata: encoding the result for book %s failed: %v",
-						logger.SanitizeLogValue(bookID), merr)
-				}
+			if perr := metafetch.WriteBackOutcome(store, bookID, out); perr != nil {
+				// The result still counts as found; only the cache row is
+				// missing, so the next run refetches this book.
+				cacheWriteFailed++
+				bulkFetchLog.Warn("bulk-fetch-metadata: caching the result for book %s failed: %v",
+					logger.SanitizeLogValue(bookID), perr)
 			}
 			found++
 		case metafetch.FetchStatusFetchError:
@@ -232,8 +223,8 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		atomic.AddInt64(&completed, 1)
 		reporter.Increment()
 
-		// Rate-limit live API calls.
-		if !cacheHit && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
+		// Rate-limit live API calls; an answer from either cache made none.
+		if !out.FromCache() && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c6c22a1e-80d9-4499-b80a-4a4d4112fa4d
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 //
 // Per-book outcome lines and count wording for the bulk metadata fetch
 // (runBulkMetadataFetchAll / runBulkMetadataFetchForBookIDs) op log.
@@ -72,7 +72,7 @@ func (b bulkFetchBook) authorPhrase() string {
 func bulkFetchOutcomeLine(b bulkFetchBook, out metafetch.ChainOutcome, status string) (level, msg string) {
 	book := b.label()
 	cache := ""
-	if out.CacheHit {
+	if out.FromCache() {
 		cache = " (from cache)"
 	}
 	switch status {

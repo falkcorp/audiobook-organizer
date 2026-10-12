@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package server
 
@@ -269,6 +269,26 @@ func TestBulkFetchOutcomeLine_FoundAndError(t *testing.T) {
 	}
 	if strings.Contains(msg, "\n") {
 		t.Errorf("error line carries a raw newline: %q", msg)
+	}
+}
+
+// An answer from the shared provider-answer cache made no provider call, so
+// its line is labelled "(from cache)" like a per-book row hit.
+func TestBulkFetchOutcomeLine_SharedCacheHitIsFromCache(t *testing.T) {
+	found := []metadata.BookMetadata{{Title: "Title 000123", Author: "Author 07"}}
+	for _, tc := range []struct {
+		name string
+		out  metafetch.ChainOutcome
+		want bool
+	}{
+		{"per-book row", metafetch.ChainOutcome{Results: found, SourceName: "Audible", CacheHit: true}, true},
+		{"shared cache", metafetch.ChainOutcome{Results: found, SourceName: "Audible", SharedCacheHit: true}, true},
+		{"live", metafetch.ChainOutcome{Results: found, SourceName: "Audible"}, false},
+	} {
+		_, msg := bulkFetchOutcomeLine(bulkFetchBook{title: "Title 000123", author: "Author 07"}, tc.out, metafetch.FetchStatusCached)
+		if got := strings.HasSuffix(msg, " (from cache)"); got != tc.want {
+			t.Errorf("%s: line %q, from-cache label = %v, want %v", tc.name, msg, got, tc.want)
+		}
 	}
 }
 

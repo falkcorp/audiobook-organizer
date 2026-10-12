@@ -1,5 +1,5 @@
 // file: internal/metafetch/pcache.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e7a4c92-3b15-4d68-8f2e-a91c5d73b046
 // last-edited: 2026-10-11
 
@@ -131,13 +131,23 @@ func decodeEntry[T any](e *database.PCacheEntry) ([]T, bool) {
 	return out, true
 }
 
+// cacheUse says how one call may use the shared cache.
+type cacheUse struct {
+	// bypass skips the read (a forced refresh); the fresh answer is still
+	// written unless readOnly.
+	bypass bool
+	// readOnly writes nothing: no answer row (a dry run's contract is that it
+	// writes nothing). The read still happens unless bypass.
+	readOnly bool
+}
+
 // cachedCall answers one provider question from P1, else asks live and
 // stores the raw answer (empty included) when, and only when, the call
 // returned no error. It reports whether the answer came from the cache.
-// bypass skips the read but still writes.
-func cachedCall[T any](store database.PCacheStore, provider, endpoint, key string, bypass bool, call func() ([]T, error)) ([]T, bool, error) {
+// use.bypass skips the read; use.readOnly skips the write.
+func cachedCall[T any](store database.PCacheStore, provider, endpoint, key string, use cacheUse, call func() ([]T, error)) ([]T, bool, error) {
 	ttl := questionTTL(provider)
-	if bypass {
+	if use.bypass {
 		metrics.RecordCacheMiss(pcacheName, pcacheMissBypass)
 	} else if e, ok := pcacheRead(store, key, ttl); ok {
 		if rs, ok := decodeEntry[T](e); ok {
@@ -148,7 +158,9 @@ func cachedCall[T any](store database.PCacheStore, provider, endpoint, key strin
 	if err != nil {
 		return rs, false, err
 	}
-	pcacheWrite(store, key, provider, endpoint, rs, len(rs) == 0, ttl, time.Time{})
+	if !use.readOnly {
+		pcacheWrite(store, key, provider, endpoint, rs, len(rs) == 0, ttl, time.Time{})
+	}
 	return rs, false, nil
 }
 
@@ -192,16 +204,30 @@ type IdentitySearcher interface {
 	SearchIdentities(ctx context.Context, q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error)
 }
 
+// IdentitySearchCache says how CachedIdentitySearch may use the shared
+// cache for one book.
+type IdentitySearchCache struct {
+	// Refresh skips the read and asks Audible live: the caller wants a fresh
+	// answer (the ASIN backfill's retry window for the book has passed, or
+	// retry_after_days is 0). The fresh answer is still stored unless
+	// ReadOnly, so it serves the next asker.
+	Refresh bool
+	// ReadOnly writes nothing, neither the answer row nor the book's pointer
+	// row: a dry run writes nothing. A stored answer is still read.
+	ReadOnly bool
+}
+
 // CachedIdentitySearch is the ASIN backfill's Audible identity search behind
 // the shared cache (P1, endpoint identity_search): the same question for
 // another book, or for this book on a later run, replays the stored answer,
-// an empty one included, inside its TTL. Errors are never stored. With
-// metadata_fetch.shared_cache off it is the bare call, as before. A hit makes
-// no request, so it takes no token from Audible's bucket.
+// an empty one included, inside its TTL, unless use.Refresh. Errors are never
+// stored, and use.ReadOnly stores nothing. With metadata_fetch.shared_cache
+// off it is the bare call, as before. A hit makes no request, so it takes no
+// token from Audible's bucket.
 //
 // The key hashes exactly what the call sends: the title, the one author
 // credit (q.Author), the keywords and the result count.
-func CachedIdentitySearch(ctx context.Context, store database.PCacheStore, bookID string, s IdentitySearcher, q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error) {
+func CachedIdentitySearch(ctx context.Context, store database.PCacheStore, bookID string, s IdentitySearcher, q metadata.AudibleIdentityQuery, use IdentitySearchCache) ([]metadata.AudibleIdentity, error) {
 	if !sharedCacheEnabled() {
 		return s.SearchIdentities(ctx, q)
 	}
@@ -210,10 +236,10 @@ func CachedIdentitySearch(ctx context.Context, store database.PCacheStore, bookI
 	key := NormalizeQuestion(provider, endpoint, Question{
 		Title: q.Title, Authors: CreditsFromFlat(q.Author), Keywords: q.Keywords, NumResults: q.NumResults,
 	})
-	rs, _, err := cachedCall(store, provider, endpoint, key, false, func() ([]metadata.AudibleIdentity, error) {
+	rs, _, err := cachedCall(store, provider, endpoint, key, cacheUse{bypass: use.Refresh, readOnly: use.ReadOnly}, func() ([]metadata.AudibleIdentity, error) {
 		return s.SearchIdentities(ctx, q)
 	})
-	if err == nil {
+	if err == nil && !use.ReadOnly {
 		if perr := database.RecordPCachePointer(store, bookID, map[string][]string{provider: {key}}, pcacheNow()); perr != nil {
 			pcacheLog.Warn("pointer row write failed: book=%s err=%v", logger.SanitizeLogValue(bookID), perr)
 		}

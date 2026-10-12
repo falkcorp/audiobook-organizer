@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-10-11
 
@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -132,9 +133,14 @@ type ChainOutcome struct {
 	CacheHit bool
 	// SharedCacheHit: the winning answer came from the shared provider-answer
 	// cache (P1), with no provider call. CacheHit stays false for it, so the
-	// callers still write the book's per-book row, which the review UI and
-	// the bulk "already cached" skip read.
+	// callers still write the book's per-book row (WriteBackOutcome), which
+	// the review UI and the bulk "already cached" skip read.
 	SharedCacheHit bool
+	// SharedAskedAt is when the provider gave the shared answer
+	// (SharedCacheHit only; zero otherwise). The per-book row copied from it
+	// is stamped with this age, not with the copy time: a copy stamped "now"
+	// would let an answer outlive its TTL by up to the TTL again.
+	SharedAskedAt time.Time
 	// SearchIdentity is the book's database.MetadataSearchIdentity the walk
 	// read the cache with. Callers stamp their write-back with it, so the read
 	// and the write can never derive the identity two different ways.
@@ -170,6 +176,35 @@ type ChainOutcome struct {
 	// happen -- which is the incident the throttle exists to prevent, minus only
 	// the outbound HTTP. The caller aborts the run on this.
 	AllThrottled bool
+}
+
+// FromCache reports whether the outcome was answered with no provider call:
+// from the book's own row or from the shared cache. The bulk callers skip
+// the inter-book pause and label the op-log line "(from cache)" on it.
+func (o ChainOutcome) FromCache() bool {
+	return o.CacheHit || o.SharedCacheHit
+}
+
+// WriteBackOutcome writes a found outcome's results to the book's own
+// per-provider row (metadata_fetch_cache:<book>:<provider>), which the review
+// UI and the bulk "already cached" skip read. Nothing is written when the
+// book's own row answered (CacheHit) or there are no results. A shared-cache
+// hit is copied with the shared answer's age (SharedAskedAt), so the copy
+// expires when the answer does. The three bulk-fetch paths share this one
+// write so the rule cannot drift between them.
+func WriteBackOutcome(store database.RawKVStore, bookID string, out ChainOutcome) error {
+	if out.CacheHit || len(out.Results) == 0 {
+		return nil
+	}
+	blob, err := json.Marshal(out.Results)
+	if err != nil {
+		return fmt.Errorf("encode results: %w", err)
+	}
+	var cachedAt time.Time
+	if out.SharedCacheHit {
+		cachedAt = out.SharedAskedAt
+	}
+	return database.PutCachedMetadataFetchAt(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0, cachedAt)
 }
 
 // status maps a completed walk onto the ledger status. Order matters: results
@@ -265,6 +300,7 @@ func WalkSourceChain(
 					markReleaseYear(res, name)
 					metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheHit)
 					out.Results, out.SourceName, out.ProviderKey, out.SharedCacheHit = res, name, slotKey, true
+					out.SharedAskedAt = e.AskedAt
 					if a.variant != nil {
 						out.Variant = a.query
 					}
@@ -325,7 +361,7 @@ func WalkSourceChain(
 						pcacheWrite(store, a.key, slotKey, a.endpoint, res, len(res) == 0, questionTTL(slotKey), time.Time{})
 					}
 				default:
-					res, _, err = cachedCall(store, slotKey, a.endpoint, a.key, false, a.run)
+					res, _, err = cachedCall(store, slotKey, a.endpoint, a.key, cacheUse{}, a.run)
 				}
 				if shared && err == nil {
 					pkeys.add(slotKey, a.key)

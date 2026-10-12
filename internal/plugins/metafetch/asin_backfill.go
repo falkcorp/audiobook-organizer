@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-10-11
 
@@ -678,8 +678,13 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		return nil
 	}
 
+	// refresh: the book is being looked at again on purpose (its no-match
+	// marker is past the retry window, or retry_after_days is 0), so its
+	// Audible searches skip the shared cache and ask live; replaying a stored
+	// answer would only repeat the miss the window exists to retry.
+	refresh := r.retry == 0
 	if r.retry > 0 {
-		recent, err := r.recentMiss(b.ID)
+		present, recent, err := r.markerAge(asinMissKey(b.ID))
 		if err != nil {
 			r.bookError(b.ID, "read no-match marker", err)
 			return nil
@@ -688,6 +693,7 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 			t.skippedRecentMiss.Add(1)
 			return nil
 		}
+		refresh = present
 	}
 
 	title := searchTitle
@@ -721,7 +727,7 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		return nil
 	}
 
-	cands, err := r.search(ctx, b.ID, facts)
+	cands, err := r.search(ctx, b.ID, facts, refresh)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -818,15 +824,19 @@ func (r *asinBackfillRun) bookFacts(b *database.Book, title string, authors []st
 //
 // Every search goes through the shared provider-answer cache
 // (metafetch.CachedIdentitySearch): candidate-fetch and this op ask Audible
-// about the same books, and a book searched on an earlier run, or a
-// duplicate copy of it, replays the stored answer -- an empty one included,
-// until Audible's negative TTL -- with no request and no token from Audible's
-// bucket. A failed search stores nothing. The no-match marker below is
-// unchanged: it still skips the book entirely inside retry_after_days.
-func (r *asinBackfillRun) search(ctx context.Context, bookID string, f asinBookFacts) ([]metadata.AudibleIdentity, error) {
+// about the same books, and a book first looked at here, or a duplicate copy
+// of one, replays the stored answer -- an empty one included, until Audible's
+// negative TTL -- with no request and no token from Audible's bucket. The
+// no-match marker still skips the book entirely inside retry_after_days; once
+// that window has passed (refresh), or with retry_after_days 0, the read is
+// skipped and Audible is asked live, so a retry is a real retry. A failed
+// search stores nothing, and a dry run stores nothing at all: no answer row
+// and no pointer row.
+func (r *asinBackfillRun) search(ctx context.Context, bookID string, f asinBookFacts, refresh bool) ([]metadata.AudibleIdentity, error) {
 	client := r.newClient()
+	use := metafetch.IdentitySearchCache{Refresh: refresh, ReadOnly: r.dry}
 	ask := func(q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error) {
-		return metafetch.CachedIdentitySearch(ctx, r.store, bookID, client, q)
+		return metafetch.CachedIdentitySearch(ctx, r.store, bookID, client, q, use)
 	}
 	var out []metadata.AudibleIdentity
 	seenISBN := map[string]bool{}
@@ -984,28 +994,30 @@ func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, tit
 
 func asinMissKey(bookID string) string { return asinMissKeyPrefix + bookID }
 
-// recentMiss reports whether the book has an ASIN no-match marker younger
-// than the retry window.
-func (r *asinBackfillRun) recentMiss(bookID string) (bool, error) {
-	return r.recentMarker(asinMissKey(bookID))
-}
-
 // recentMarker reports whether the marker at key is younger than the retry
 // window. A malformed marker is treated as absent (the book is simply looked
 // at again); a read error is returned.
 func (r *asinBackfillRun) recentMarker(key string) (bool, error) {
+	_, recent, err := r.markerAge(key)
+	return recent, err
+}
+
+// markerAge reports whether a marker is at key (present) and whether it is
+// younger than the retry window (recent). A malformed marker is treated as
+// absent; a read error is returned.
+func (r *asinBackfillRun) markerAge(key string) (present, recent bool, err error) {
 	raw, err := r.store.GetRaw(key)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if len(raw) == 0 {
-		return false, nil
+		return false, false, nil
 	}
 	var m asinMissMarker
 	if json.Unmarshal(raw, &m) != nil || m.At.IsZero() {
-		return false, nil
+		return false, false, nil
 	}
-	return r.now().Sub(m.At) < r.retry, nil
+	return true, r.now().Sub(m.At) < r.retry, nil
 }
 
 // markMiss records a genuine (error-free) no-match or ambiguous search. A dry
