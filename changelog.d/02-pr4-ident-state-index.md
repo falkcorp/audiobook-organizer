@@ -15,11 +15,15 @@ of the book or cache keyspace rebuilds it.
 
 The per-state counts are held in memory, not stored: a writer adds its move
 after its commit succeeds, and every open (and every rebuild) recounts them
-from the `ident:by:` keys (a keys-only scan, about 4 ms at 40,000 books). A
+from the `ident:by:` keys (a keys-only scan: 2.9 ms at 40,000 books, 8.1 ms at
+120,000). A
 read-write lock lets writers of different books commit and fsync concurrently;
-only a rebuild's final recount, Reset and the drift check exclude them. Write
-throughput on a disk store stays at the pre-index level (measured with 1, 8 and
-32 concurrent writers).
+only a rebuild's final recount, Reset and the drift check exclude them. On a
+disk store, five interleaved rounds against the pre-index build put the median
+throughput ratio of CreateBook and of a state-changing PutMetadataCache at
+0.88-1.11 of it with 1, 8 and 32 concurrent writers (a first draft that held
+one exclusive lock across every synced commit was 2.5-4x slower at 8 writers
+and about 10x at 32).
 
 The counts have two scopes: every book, and the Library's default view
 (primary versions, a nil flag counting as primary; trash and quarantined books
@@ -33,9 +37,9 @@ asked_empty.
 - The Library search bar accepts `ident:` with `unasked`, `asked_empty`,
   `has_candidates`, `applied`, `held` or `missing`, negatable (`-ident:applied`).
   An unknown value or a pattern is a 400 that lists the valid values. Over the
-  default view with no other filter the count is the counter (0.2 µs on 40,000
-  books); anything else walks only the books in the wanted states (first page
-  of `ident:missing` over 40,000 books in 3.8 ms).
+  default view with no other filter the count is the counter (about 0.1 µs on
+  40,000 books); anything else walks only the books in the wanted states (first
+  page of `ident:missing` over 40,000 books in 3.8-5.5 ms on a loaded machine).
 - The review summary (index and page views) carries `ident_counts`
   (`unasked`, `asked_empty`, `has_candidates`, `applied`, `held`, `missing`,
   `ready`) for the default view, and the review rail shows each count as a link

@@ -41,9 +41,11 @@ identification plan).
 ## Details
 
 - **Speed, measured on 40,000 synthetic books:** the missing count takes under a
-  microsecond; the first page of `ident:missing` takes about 4 ms. Keeping the
-  counts does not slow down saving books or fetched suggestions when many
-  happen at once (an earlier draft did, by up to ten times, and was redesigned).
+  microsecond; the first page of `ident:missing` takes about 4-6 ms. Keeping
+  the counts costs little when many books or fetched suggestions are saved at
+  once: in testing, within about 12% of the speed before the change, either
+  way (an earlier draft slowed this down by up to ten times and was
+  redesigned).
 - **Kept correct by every change.** A fetch of suggestions, an applied match,
   a "no match" ruling, a retitle, a book moved to the trash or out of it, a
   book deleted: each updates the count in the same database write as the
