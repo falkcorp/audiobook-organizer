@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package handlers_test
 
@@ -448,6 +448,7 @@ func TestDiagnosticsHandler_GetDBHealth_MockStore(t *testing.T) {
 
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().CountPrefix("metadata_fetch_cache:").Return(int64(7), nil)
+	store.EXPECT().CountPrefix("pcache:").Return(int64(3), nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/db-health", "", nil)
@@ -455,4 +456,5 @@ func TestDiagnosticsHandler_GetDBHealth_MockStore(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"total_entries":7`)
+	assert.Contains(t, w.Body.String(), `"provider_answer_cache":{"total_entries":3`)
 }

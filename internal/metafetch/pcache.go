@@ -1,5 +1,5 @@
 // file: internal/metafetch/pcache.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0e7a4c92-3b15-4d68-8f2e-a91c5d73b046
 // last-edited: 2026-10-11
 

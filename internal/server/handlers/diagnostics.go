@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -109,12 +109,14 @@ type diagnosticsSuggestion struct {
 // preserve the JSON contract of GET /api/v1/diagnostics/db-health.
 
 type dbHealthResponse struct {
-	SQLite           *dbHealthSQLite           `json:"sqlite,omitempty"`
-	Pebble           *dbHealthPebble           `json:"pebble,omitempty"`
-	Embeddings       dbHealthEmbeddings        `json:"embeddings"`
-	AiScans          dbHealthAiScans           `json:"ai_scans"`
-	MetadataCache    dbHealthMetadataCache     `json:"metadata_cache"`
-	BookPathPrefixes []database.BookPathPrefix `json:"book_path_prefixes,omitempty"`
+	SQLite        *dbHealthSQLite       `json:"sqlite,omitempty"`
+	Pebble        *dbHealthPebble       `json:"pebble,omitempty"`
+	Embeddings    dbHealthEmbeddings    `json:"embeddings"`
+	AiScans       dbHealthAiScans       `json:"ai_scans"`
+	MetadataCache dbHealthMetadataCache `json:"metadata_cache"`
+	// ProviderAnswerCache is the shared provider-answer cache (pcache:).
+	ProviderAnswerCache dbHealthProviderAnswerCache `json:"provider_answer_cache"`
+	BookPathPrefixes    []database.BookPathPrefix   `json:"book_path_prefixes,omitempty"`
 }
 
 type dbHealthSQLite struct {
@@ -169,6 +171,28 @@ type dbHealthMetadataCache struct {
 	ExpiredPagesWalked int   `json:"expired_entries_pages_walked,omitempty"`
 }
 
+// dbHealthProviderAnswerCache is the shared provider-answer cache (pcache:):
+// its row count always, and on ?deep=true the walk that decodes every row --
+// rows by kind and the expired rows (past TTL, empty while negative caching
+// is off, or undecodable: the rows metafetch.pcache-sweep deletes).
+type dbHealthProviderAnswerCache struct {
+	TotalEntries int64 `json:"total_entries"`
+	// Estimated: TotalEntries is the census estimate (sum of the pcache:
+	// families).
+	Estimated      bool  `json:"estimated"`
+	ErrorBoundKeys int64 `json:"error_bound_keys"`
+	// The deep walk's figures; zero (omitted) unless ExpiredComputed.
+	Questions int64 `json:"questions,omitempty"`
+	Products  int64 `json:"products,omitempty"`
+	Pointers  int64 `json:"pointers,omitempty"`
+	// ExpiredEntries is -1 (ExpiredComputed false) unless ?deep=true.
+	ExpiredEntries     int64  `json:"expired_entries"`
+	ExpiredComputed    bool   `json:"expired_entries_computed"`
+	ExpiredError       string `json:"expired_entries_error,omitempty"`
+	ExpiredElapsedMS   int64  `json:"expired_entries_elapsed_ms,omitempty"`
+	ExpiredPagesWalked int    `json:"expired_entries_pages_walked,omitempty"`
+}
+
 // diagnosticsStore is everything the diagnostics endpoints need from the store.
 // Was database.Store (398 methods) until 2026-08-19, on a comment claiming a
 // "db-health type switch" required the full surface. Verified before believing:
@@ -219,6 +243,7 @@ type DiagnosticsHandler struct {
 	aiScanStore    *database.AIScanStore    // ai-scan health stats; may be nil
 	registry       OperationsRegistry       // shared ops registry (EnqueueOp only)
 	expired        expiredCounter           // ?deep=true expired-row count: single-flight + short cache
+	pcache         pcacheCounter            // ?deep=true shared provider-answer cache count
 }
 
 // NewDiagnosticsHandler constructs a DiagnosticsHandler. Field/param order:
@@ -813,13 +838,39 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 			diagnosticsLog.Warn("db-health metadata cache expired count: %v", err)
 			mc.ExpiredError = err.Error()
 		} else {
-			mc.ExpiredEntries = res.Count
+			mc.ExpiredEntries = res.Value
 			mc.ExpiredComputed = true
 		}
 	}
 	resp.MetadataCache = mc
+	resp.ProviderAnswerCache = h.providerAnswerHealth(c, census)
 
 	httputil.RespondWithOK(c, resp)
+}
+
+// providerAnswerHealth is db-health's shared provider-answer cache section.
+func (h *DiagnosticsHandler) providerAnswerHealth(c *gin.Context, census *database.DBCensus) dbHealthProviderAnswerCache {
+	ctx := c.Request.Context()
+	pc := dbHealthProviderAnswerCache{ExpiredEntries: -1}
+	total, estimated, bound, err := pcacheSize(ctx, census, h.store)
+	if err != nil && ctx.Err() == nil {
+		diagnosticsLog.Warn("db-health shared cache count: %v", err)
+	}
+	pc.TotalEntries, pc.Estimated, pc.ErrorBoundKeys = total, estimated, bound
+	if c.Query("deep") != "true" {
+		return pc
+	}
+	res, err := h.pcache.count(ctx, h.store)
+	pc.ExpiredElapsedMS = res.Elapsed.Milliseconds()
+	pc.ExpiredPagesWalked = res.Pages
+	if err != nil {
+		diagnosticsLog.Warn("db-health shared cache expired count: %v", err)
+		pc.ExpiredError = err.Error()
+		return pc
+	}
+	pc.Questions, pc.Products, pc.Pointers = res.Value.Questions, res.Value.Products, res.Value.Pointers
+	pc.ExpiredEntries, pc.ExpiredComputed = res.Value.Expired, true
+	return pc
 }
 
 const (
@@ -883,18 +934,21 @@ const (
 	expiredCountPageSize = 1000
 )
 
-// expiredCountResult is one deep expired-row count and the measurements of
-// the walk behind it. Pages and Elapsed are filled on failure too, so a
-// timeout reports how far the walk got.
-type expiredCountResult struct {
-	Count   int64
+// deepWalkResult is one deep walk's value and the measurements of the walk
+// behind it. Pages and Elapsed are filled on failure too, so a timeout
+// reports how far the walk got.
+type deepWalkResult[R any] struct {
+	Value   R
 	Pages   int
 	Elapsed time.Duration
 }
 
-// expiredCountTimeoutError is the deep walk hitting expiredCountTimeout. It
-// reads "timed out after 2m, N pages walked" rather than the bare "context
-// deadline exceeded", and still matches context.DeadlineExceeded.
+// expiredCountResult is one deep expired-row count of the fetch cache.
+type expiredCountResult = deepWalkResult[int64]
+
+// expiredCountTimeoutError is a deep walk hitting its ceiling. It reads
+// "timed out after 2m, N pages walked" rather than the bare "context deadline
+// exceeded", and still matches context.DeadlineExceeded.
 type expiredCountTimeoutError struct {
 	limit time.Duration
 	pages int
@@ -918,26 +972,29 @@ func shortDuration(d time.Duration) string {
 	return s
 }
 
-// expiredCounter runs the deep expired-row count of ?deep=true. Concurrent
-// callers share one walk (it decodes every cache row, so N clicks must not
-// cost N walks), the walk is bounded by expiredCountTimeout independent of any
-// caller, and a finished result is served for expiredCountCacheTTL.
-type expiredCounter struct {
+// deepWalker runs a whole-family walk that decodes every row (the ?deep=true
+// counts). Concurrent callers asking the same key share one walk (N clicks
+// must not cost N walks), the walk is bounded by expiredCountTimeout
+// independent of any caller, and a finished result is served for
+// expiredCountCacheTTL while the key is unchanged.
+type deepWalker[R any] struct {
 	flight singleflight.Group
 	// timeout overrides expiredCountTimeout when non-zero (tests).
 	timeout time.Duration
 	mu      sync.Mutex
 	last    struct {
-		ttlDays int
-		result  expiredCountResult
-		at      time.Time
-		valid   bool
+		key    string
+		result deepWalkResult[R]
+		at     time.Time
+		valid  bool
 	}
 }
 
-func (e *expiredCounter) count(ctx context.Context, store database.RawKVStore, ttlDays int) (expiredCountResult, error) {
+// run returns the cached result for key, or runs walk (shared by every
+// concurrent caller of key) and caches it. name labels the log lines.
+func (e *deepWalker[R]) run(ctx context.Context, name, key string, walk func(context.Context) (R, int, error)) (deepWalkResult[R], error) {
 	e.mu.Lock()
-	if e.last.valid && e.last.ttlDays == ttlDays && time.Since(e.last.at) < expiredCountCacheTTL {
+	if e.last.valid && e.last.key == key && time.Since(e.last.at) < expiredCountCacheTTL {
 		res := e.last.result
 		e.mu.Unlock()
 		return res, nil
@@ -948,15 +1005,15 @@ func (e *expiredCounter) count(ctx context.Context, store database.RawKVStore, t
 	if limit <= 0 {
 		limit = expiredCountTimeout
 	}
-	ch := e.flight.DoChan(strconv.Itoa(ttlDays), func() (_ any, ferr error) {
+	ch := e.flight.DoChan(key, func() (_ any, ferr error) {
 		// This recover catches every panic, unlike AIScanStore.HealthStats,
 		// which recovers only pebble.ErrClosed and re-raises the rest: a panic
 		// here would be re-raised by DoChan on a fresh goroutine, where no
 		// recover can reach it, and kill the process.
 		defer func() {
 			if rec := recover(); rec != nil {
-				diagnosticsLog.Error("expired count panicked: %v\n%s", rec, debug.Stack())
-				ferr = fmt.Errorf("expired count panicked: %v", rec)
+				diagnosticsLog.Error("%s panicked: %v\n%s", name, rec, debug.Stack())
+				ferr = fmt.Errorf("%s panicked: %v", name, rec)
 			}
 		}()
 		// start precedes the deadline, so Elapsed covers the whole bounded
@@ -964,28 +1021,40 @@ func (e *expiredCounter) count(ctx context.Context, store database.RawKVStore, t
 		start := time.Now()
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
 		defer cancel()
-		n, pages, err := countExpiredMetadataFetches(fctx, store, start.Add(-time.Duration(ttlDays)*24*time.Hour))
-		res := expiredCountResult{Count: n, Pages: pages, Elapsed: time.Since(start)}
+		v, pages, err := walk(fctx)
+		res := deepWalkResult[R]{Value: v, Pages: pages, Elapsed: time.Since(start)}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				err = &expiredCountTimeoutError{limit: limit, pages: pages}
 			}
-			diagnosticsLog.Warn("expired count failed after %s, %d pages walked: %v", res.Elapsed, pages, err)
+			diagnosticsLog.Warn("%s failed after %s, %d pages walked: %v", name, res.Elapsed, pages, err)
 			return res, err
 		}
-		diagnosticsLog.Info("expired count: %d expired, %d pages walked in %s", n, pages, res.Elapsed)
+		diagnosticsLog.Info("%s: %v, %d pages walked in %s", name, v, pages, res.Elapsed)
 		e.mu.Lock()
-		e.last.ttlDays, e.last.result, e.last.at, e.last.valid = ttlDays, res, time.Now(), true
+		e.last.key, e.last.result, e.last.at, e.last.valid = key, res, time.Now(), true
 		e.mu.Unlock()
 		return res, nil
 	})
 	select {
 	case r := <-ch:
-		res, _ := r.Val.(expiredCountResult)
+		res, _ := r.Val.(deepWalkResult[R])
 		return res, r.Err
 	case <-ctx.Done():
-		return expiredCountResult{}, ctx.Err()
+		return deepWalkResult[R]{}, ctx.Err()
 	}
+}
+
+// expiredCounter runs the fetch cache's deep expired-row count of ?deep=true.
+type expiredCounter struct {
+	deepWalker[int64]
+}
+
+func (e *expiredCounter) count(ctx context.Context, store database.RawKVStore, ttlDays int) (expiredCountResult, error) {
+	return e.run(ctx, "expired count", strconv.Itoa(ttlDays), func(fctx context.Context) (int64, int, error) {
+		start := time.Now()
+		return countExpiredMetadataFetches(fctx, store, start.Add(-time.Duration(ttlDays)*24*time.Hour))
+	})
 }
 
 // countExpiredMetadataFetches counts fetch-cache rows cached before cutoff and

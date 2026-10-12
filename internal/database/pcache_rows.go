@@ -1,5 +1,5 @@
 // file: internal/database/pcache_rows.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 104f175e-f508-4329-b64f-008913b24061
 // last-edited: 2026-10-11
 
@@ -106,10 +106,16 @@ type PCacheCounts struct {
 	Expired int64 `json:"expired"`
 }
 
+// PrefixPageScanner is the one raw-store call a bounded family walk needs
+// (RawKVStore.ScanPrefixPage).
+type PrefixPageScanner interface {
+	ScanPrefixPage(prefix, after string, limit int) (pairs []KVPair, next string, err error)
+}
+
 // CountPCache walks the whole pcache: family pageSize rows at a time and
 // counts its rows by kind and the dead ones. Memory is bounded by pageSize;
 // ctx is checked between pages. pages is returned on failure too.
-func CountPCache(ctx context.Context, store RawKVStore, rule PCacheTTLRule, now time.Time, pageSize int) (c PCacheCounts, pages int, err error) {
+func CountPCache(ctx context.Context, store PrefixPageScanner, rule PCacheTTLRule, now time.Time, pageSize int) (c PCacheCounts, pages int, err error) {
 	if pageSize <= 0 {
 		pageSize = 1000
 	}
