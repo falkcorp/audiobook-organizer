@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-10-11
 
@@ -225,11 +225,14 @@ func matchesAllPerUserFilters(state *database.UserBookState, filters []FieldFilt
 // FirstEmptyFilterValue returns the field name of the first filter carrying an
 // empty value, and whether one was found.
 //
-// WHY this exists: the comparison at the bottom of fieldMatchesCompiled is
+// WHY this exists: a text filter is matched by querygrammar's TextMatcher,
+// whose substring form is
 //
 //	strings.Contains(strings.ToLower(bookValue), strings.ToLower(value))
 //
-// and strings.Contains(anything, "") is ALWAYS TRUE in Go. So a filter with an
+// and strings.Contains(anything, "") is ALWAYS TRUE in Go. querygrammar's
+// CompileText rejects an empty value up front, but a compiledFilter that
+// reached the matcher without going through it would match every book. So a filter with an
 // empty value does not narrow anything — it silently matches every book.
 //
 // Measured on production 2026-08-13, and the filter is otherwise working:

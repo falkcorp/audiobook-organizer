@@ -1,5 +1,5 @@
 // file: internal/diagnosis/probe.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
 // last-edited: 2026-10-11
 
@@ -20,7 +20,8 @@ import (
 )
 
 // FileDiagnostic holds the structured results from probing a single audio file.
-// The JSON representation is stored verbatim in BookFile.FingerprintDiagnosticJSON.
+// It is the JSON shape of a probe result. Nothing persists it today:
+// BookFile.FingerprintDiagnosticJSON is no longer written by any code.
 type FileDiagnostic struct {
 	// From file(1)
 	FileMagic string `json:"file_magic,omitempty"`
