@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -602,6 +602,73 @@ func (s *CatalogStore) EntryIDsByAuthorName(fold string, limit int) ([]string, e
 		}
 	}
 	return ids, iter.Error()
+}
+
+// HasAuthorKey reports whether any catalog entry is filed under the exact
+// author name key "name:"+fold, where fold is authorjunk.FoldKey of the
+// credit (letters and digits only; NOT catalog.AuthorNameKey, which already
+// carries the "name:" prefix this method adds). It reads one keys-only
+// iterator positioned at the first key of the exact prefix and stops there,
+// so it costs one seek however many entries the author has. Unlike
+// EntryIDsByAuthorName it never falls back to the substring walk over every
+// cat_author:name: key: "phelps" does not match a block filed under
+// "josephphelps".
+func (s *CatalogStore) HasAuthorKey(fold string) (bool, error) {
+	// A fold never holds ':' (FoldKey emits letters and digits only); one
+	// that does would make the prefix span a different key shape.
+	if fold == "" || strings.Contains(fold, ":") {
+		return false, nil
+	}
+	prefix := catAuthorPrefix + "name:" + fold + ":"
+	if s.scanHook != nil {
+		s.scanHook(prefix)
+	}
+	p := []byte(prefix)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixUpperBound(p)})
+	if err != nil {
+		return false, err
+	}
+	defer iter.Close()
+	found := iter.First()
+	if err := iter.Error(); err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
+// CountAuthorNameBlocks counts the distinct author name keys that have at
+// least one entry (the number of "blocks" HasAuthorKey can answer true for).
+// Keys-only: the cat_author:name: keys sort by fold, so a run of equal folds
+// is one block.
+func (s *CatalogStore) CountAuthorNameBlocks() (int, error) {
+	prefix := catAuthorPrefix + "name:"
+	if s.scanHook != nil {
+		s.scanHook(prefix)
+	}
+	p := []byte(prefix)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixUpperBound(p)})
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+	n := 0
+	var last []byte
+	have := false
+	for iter.First(); iter.Valid(); iter.Next() {
+		rest := bytes.TrimPrefix(iter.Key(), p)
+		i := bytes.IndexByte(rest, ':')
+		if i < 0 {
+			continue
+		}
+		fold := rest[:i]
+		if have && bytes.Equal(fold, last) {
+			continue
+		}
+		last = append(last[:0], fold...)
+		have = true
+		n++
+	}
+	return n, iter.Error()
 }
 
 // GetEntryByProviderID resolves (provider, marketplace, pid) to an entry.

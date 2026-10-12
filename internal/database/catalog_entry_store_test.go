@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -78,5 +78,68 @@ func TestCatalogList_UnfilteredUsesKeysOnlyIndex(t *testing.T) {
 	}
 	if n, _ := st.CountEntries(); n != 7 {
 		t.Errorf("CountEntries after re-upsert = %d; want 7", n)
+	}
+}
+
+// TestHasAuthorKey_ExactOnly: HasAuthorKey answers for the exact fold only. A
+// substring of a stored fold, a longer fold, and the "name:"-prefixed form
+// (catalog.AuthorNameKey's output, which the store prepends "name:" to again)
+// all miss; EntryIDsByAuthorName's substring fallback is never walked.
+func TestHasAuthorKey_ExactOnly(t *testing.T) {
+	st := openTestCatalogStore(t)
+	if _, err := st.UpsertEntries([]CatalogUpsert{
+		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P1", Title: "T1", AuthorKeys: []string{"name:author07"}}},
+		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P2", Title: "T2", AuthorKeys: []string{"name:author07", "asin:B000000001"}}},
+	}, "author07"); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var scanned []string
+	st.scanHook = func(p string) { mu.Lock(); scanned = append(scanned, p); mu.Unlock() }
+
+	for fold, want := range map[string]bool{
+		"author07":      true,
+		"thor07":        false, // substring of a stored fold
+		"author0":       false, // prefix of a stored fold
+		"author07x":     false, // longer than a stored fold
+		"name:author07": false, // the AuthorNameKey form, not a fold
+		"B000000001":    false, // an asin key is not a name key
+		"":              false,
+	} {
+		got, err := st.HasAuthorKey(fold)
+		if err != nil {
+			t.Fatalf("HasAuthorKey(%q): %v", fold, err)
+		}
+		if got != want {
+			t.Errorf("HasAuthorKey(%q) = %v; want %v", fold, got, want)
+		}
+	}
+	for _, p := range scanned {
+		if p == catAuthorPrefix+"name:" {
+			t.Errorf("HasAuthorKey walked every name key (%q)", p)
+		}
+	}
+	// The substring fallback of EntryIDsByAuthorName does find "thor07": the
+	// contrast that makes the exact-only contract worth testing.
+	if ids, err := st.EntryIDsByAuthorName("thor07", 0); err != nil || len(ids) != 2 {
+		t.Fatalf("EntryIDsByAuthorName(thor07) = %v, %v; want 2 ids via the substring walk", ids, err)
+	}
+}
+
+// TestCountAuthorNameBlocks counts distinct name keys, not entries or
+// non-name author keys.
+func TestCountAuthorNameBlocks(t *testing.T) {
+	st := openTestCatalogStore(t)
+	if n, err := st.CountAuthorNameBlocks(); err != nil || n != 0 {
+		t.Fatalf("empty catalog: %d, %v; want 0", n, err)
+	}
+	if _, err := st.UpsertEntries([]CatalogUpsert{
+		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P1", Title: "T1", AuthorKeys: []string{"name:ann", "name:bob", "asin:B000000001"}}},
+		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P2", Title: "T2", AuthorKeys: []string{"name:ann"}}},
+	}, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.CountAuthorNameBlocks(); err != nil || n != 2 {
+		t.Fatalf("CountAuthorNameBlocks = %d, %v; want 2 (ann, bob)", n, err)
 	}
 }
