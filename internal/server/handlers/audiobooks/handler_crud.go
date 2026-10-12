@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-11
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -124,8 +125,11 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 				opConfig := fileops.OperationConfig{VerifyChecksums: true}
 				// The request's ctx, as the per-book write-back passes it, so
 				// the create_backups decision follows the caller's context.
-				if writeErr := metadata.WriteMetadataToFileContext(c.Request.Context(), updatedBook.FilePath, tagMap, opConfig); writeErr != nil {
+				if writeErr := writeMetadataBack(c.Request.Context(), updatedBook.FilePath, tagMap, opConfig); writeErr != nil {
 					slog.Warn("write-back failed for", "updatedBook", logger.SanitizeLogValue(updatedBook.FilePath), "writeErr", logger.SanitizeLogValue(fmt.Sprint(writeErr)))
+					// The edit is committed, so this stays a 200; the warning
+					// is how the client learns the file does not hold it.
+					warnings = append(warnings, writeBackWarning(writeErr))
 				} else {
 					// Stamp last_written_at after successful write-back.
 					if stampErr := store.SetLastWrittenAt(updatedBook.ID, time.Now()); stampErr != nil {
@@ -151,6 +155,33 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, bookWithWarnings{book: h.enrichBook(updatedBook), warnings: warnings})
+}
+
+// writeMetadataBack is the file write-back of an edit; a variable so a test
+// can make it fail (a verify_after_write failure needs a lossy tag writer).
+var writeMetadataBack = metadata.WriteMetadataToFileContext
+
+// maxWriteBackWarningErr bounds the error text a write-back warning carries.
+const maxWriteBackWarningErr = 200
+
+// writeBackWarning is the PUT /audiobooks/:id warning for a failed file
+// write-back: the edit is saved in the library, the audio file does not hold
+// it. A verify_after_write failure (tagger.ErrVerifyAfterWrite) names the tag
+// keys that did not stick; any other failure carries the (bounded) error.
+func writeBackWarning(err error) string {
+	var verr *tagger.VerifyAfterWriteError
+	if errors.As(err, &verr) && len(verr.Keys) > 0 {
+		return fmt.Sprintf("the edit was saved, but these tags did not stick when written to the audio file: %s",
+			strings.Join(verr.Keys, ", "))
+	}
+	if errors.Is(err, tagger.ErrVerifyAfterWrite) {
+		return "the edit was saved, but the tags written to the audio file could not be verified"
+	}
+	msg := err.Error()
+	if r := []rune(msg); len(r) > maxWriteBackWarningErr {
+		msg = string(r[:maxWriteBackWarningErr]) + "..."
+	}
+	return "the edit was saved, but writing it to the audio file failed: " + msg
 }
 
 // bookWithWarnings is the PUT /audiobooks/:id response of an edit that
