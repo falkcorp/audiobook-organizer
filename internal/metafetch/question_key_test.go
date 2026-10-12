@@ -1,5 +1,5 @@
 // file: internal/metafetch/question_key_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c41f0d7-2a6e-4b93-b5d8-61e7a9c3f2b4
 // last-edited: 2026-10-11
 
@@ -48,8 +48,22 @@ func TestNormalizeQuestion_Table(t *testing.T) {
 			side{aud, EndpointSearchTitle, ta("STRASSE 000123")}, side{aud, EndpointSearchTitle, ta("straße 000123")}, true},
 		{"case fold: capital sharp s folds to ss",
 			side{aud, EndpointSearchTitle, ta("ẞ 000123")}, side{aud, EndpointSearchTitle, ta("ss 000123")}, true},
+		// U+0130 full-folds to "i" + U+0307; strings.ToLower maps it to a
+		// bare "i", so these pairs are equal (or not) only under a real case
+		// fold. The decomposed spelling "I" + U+0307 composes to U+0130 under
+		// NFKC first.
+		{"case fold: dotted capital I folds to i with a combining dot",
+			side{aud, EndpointSearchTitle, ta("\u0130TEM 000123")}, side{aud, EndpointSearchTitle, ta("i\u0307tem 000123")}, true},
 		{"case fold: dotted capital I, precomposed or not",
-			side{aud, EndpointSearchTitle, ta("İtem 000123")}, side{aud, EndpointSearchTitle, ta("İTEM 000123")}, true},
+			side{aud, EndpointSearchTitle, ta("\u0130tem 000123")}, side{aud, EndpointSearchTitle, ta("I\u0307TEM 000123")}, true},
+		{"case fold: dotted capital I is not a plain i",
+			side{aud, EndpointSearchTitle, ta("\u0130tem 000123")}, side{aud, EndpointSearchTitle, ta("item 000123")}, false},
+		{"a credit carrying the credit separator is not two credits",
+			side{aud, EndpointSearchTitleAuthor, ta("Title 000123", "Author 07\x1fAuthor 12")},
+			side{aud, EndpointSearchTitleAuthor, ta("Title 000123", "Author 07", "Author 12")}, false},
+		{"a value carrying the field separator cannot forge a field",
+			side{aud, EndpointIdentitySearch, Question{Title: "Title 000123\x1ek=kw 01", NumResults: 10}},
+			side{aud, EndpointIdentitySearch, Question{Title: "Title 000123", Keywords: "kw 01", NumResults: 10}}, false},
 		{"case fold: final sigma",
 			side{aud, EndpointSearchTitle, ta("ΛΟΓΟΣ 000123")}, side{aud, EndpointSearchTitle, ta("λογος 000123")}, true},
 		{"NFKC: fullwidth letters and the fi ligature",

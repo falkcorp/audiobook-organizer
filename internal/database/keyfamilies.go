@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-11
 
@@ -204,7 +204,6 @@ var keyFamilies = []KeyFamily{
 	{"pcache:", "shared metadata provider answers, keyed by question (P1) or product id (P2)", "internal/database/metadata_fetch_cache.go"},
 	{"pcache:asin:", "shared provider product lookups by provider and ASIN (P2), positive and negative", "internal/database/metadata_fetch_cache.go"},
 	{"pcache:book:", "per-book pointer rows: the shared P1 keys a book's questions map to, for the Search again bust", "internal/database/metadata_fetch_cache.go"},
-	{"pcache:isbn:", "shared provider product lookups by provider and ISBN (P2)", "internal/database/metadata_fetch_cache.go"},
 	{"pcache:q:", "shared provider answers by provider, endpoint and normalized-question hash (P1), including empty answers", "internal/database/metadata_fetch_cache.go"},
 	{"pref:", "per-user preferences", "internal/database/pebble_store_preferences.go"},
 	{"pref:_system:", "the _system user's records (other than the sub-families below)", "internal/database/pebble_store_preferences.go"},

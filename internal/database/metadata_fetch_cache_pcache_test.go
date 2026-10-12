@@ -32,7 +32,7 @@ func TestPCache_KeysAreProviderPrefixed(t *testing.T) {
 	assert.Equal(t, "pcache:asin:audible:B0SYNTH001", PCacheASINKey("audible", " b0synth001 ", ""))
 	assert.Equal(t, "pcache:asin:audnexus:B0SYNTH001", PCacheASINKey("audnexus", "B0SYNTH001", ""))
 	assert.Equal(t, "pcache:asin:audible:B0SYNTH001@api.example.invalid", PCacheASINKey("audible", "B0SYNTH001", "api.example.invalid"))
-	assert.Equal(t, "pcache:isbn:hardcover:978000000000X", PCacheISBNKey("hardcover", "978-0-00-000000-x", ""))
+	assert.Equal(t, "pcache:q:a_b:c_d:", PCacheQuestionKey("a\x1fb", "c\x1ed", "")[:len("pcache:q:a_b:c_d:")], "control characters never reach a clear-text segment")
 	assert.Equal(t, "pcache:q:a_b:c_d:", PCacheQuestionKey("a:b", "c d", "")[:len("pcache:q:a_b:c_d:")])
 }
 

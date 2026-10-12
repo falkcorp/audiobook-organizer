@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -366,14 +367,17 @@ func invalidatePerBookFetchRows(store RawKVStore, bookID string) error {
 //
 //	pcache:q:<provider>:<endpoint>:<hex sha256(normalized question)>
 //	pcache:asin:<provider>:<ASIN>
-//	pcache:isbn:<provider>:<ISBN>
 //	pcache:book:<bookID>            the book's pointer row (PCachePointer)
 //
 // The normalized question is built by metafetch.NormalizeQuestion (this
 // package cannot import metafetch); the provider id and endpoint stay outside
 // the hash so a bust by provider is a prefix delete. A configured marketplace
 // (a provider base URL other than the default) is appended to the endpoint
-// segment, or to the ASIN/ISBN, as "@<host>", so it is outside the hash too.
+// segment, or to the ASIN, as "@<host>", so it is outside the hash too.
+//
+// There is no ISBN product family: no cached path looks a product up by ISBN
+// (the ASIN backfill's ISBN searches are identity searches, keyed as P1
+// questions with the ISBN as their keywords).
 //
 // An entry holds the RAW answer the provider gave, before any per-book filter,
 // including an EMPTY answer (a negative entry). Errors, throttle refusals and
@@ -384,7 +388,6 @@ const (
 	PCachePrefix         = "pcache:"
 	PCacheQuestionPrefix = "pcache:q:"
 	PCacheASINPrefix     = "pcache:asin:"
-	PCacheISBNPrefix     = "pcache:isbn:"
 )
 
 // PCacheBookPrefix holds each book's pointer row (pcache:book:<bookID>): the
@@ -449,11 +452,12 @@ const PCacheMetricName = "provider_answer"
 const pcacheSegmentReplacements = ": \t\n"
 
 // pcacheSegment makes a provider or endpoint id safe as one key segment:
-// lower-cased, trimmed, and with the key separator and whitespace replaced.
+// lower-cased, trimmed, and with the key separator, whitespace and every
+// control character replaced.
 func pcacheSegment(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.Map(func(r rune) rune {
-		if strings.ContainsRune(pcacheSegmentReplacements, r) {
+		if strings.ContainsRune(pcacheSegmentReplacements, r) || unicode.IsControl(r) {
 			return '_'
 		}
 		return r
@@ -481,12 +485,6 @@ func PCacheQuestionProviderPrefix(provider string) string {
 // provider's default store.
 func PCacheASINKey(provider, asin, marketplace string) string {
 	return PCacheASINPrefix + pcacheSegment(provider) + ":" + pcacheIdentifier(asin) + pcacheMarketplace(marketplace)
-}
-
-// PCacheISBNKey is the P2 key of one product lookup by ISBN (hyphens and
-// spaces removed, upper-cased so a trailing 'x' check digit matches 'X').
-func PCacheISBNKey(provider, isbn, marketplace string) string {
-	return PCacheISBNPrefix + pcacheSegment(provider) + ":" + pcacheIdentifier(isbn) + pcacheMarketplace(marketplace)
 }
 
 func pcacheIdentifier(id string) string {
