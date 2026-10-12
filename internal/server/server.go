@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.89.0
+// version: 2.89.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-12
 
@@ -524,26 +524,24 @@ func (s *Server) publishEvent(ctx context.Context, event plugin.Event) {
 
 // opRegistryRunStateGate enforces the invariant that a Pebble-backed server's
 // operations registry has its ops v3 run state (opsregistry.Registry.
-// HasRunStateV3). bare is the store NewServer was given, before the
-// search-index decorator wraps it; it is the only place that sees both that
-// store and the registry built over the wrapped one. It is typed any, like
-// database.AsPebbleStore's argument, because the gate only asks whether a
-// *PebbleStore is in its chain (and a database.Store parameter would count
-// against TestStoreReferenceCount's baseline).
+// HasRunStateV3). ps is the *PebbleStore NewServer resolved from the store it
+// was given, before the search-index decorator wraps it (database.
+// AsPebbleStore); NewServer is the only place that sees both that store and
+// the registry built over the wrapped one.
 //
-// A store with no *PebbleStore in its chain (a mockery mock) passes: the
-// registry then runs the pre-05-PR4 v2-only paths, which is what those tests
-// expect. A nil registry passes too; nothing would run on it.
-func opRegistryRunStateGate(bare any, reg *opsregistry.Registry) error {
-	if reg == nil || database.AsPebbleStore(bare) == nil {
+// A nil ps is the lenient path: a store with no *PebbleStore in its chain (a
+// mockery mock) leaves the registry on the pre-05-PR4 v2-only paths, which is
+// what those tests expect. A nil registry passes too; nothing would run on it.
+func opRegistryRunStateGate(ps *database.PebbleStore, reg *opsregistry.Registry) error {
+	if reg == nil || ps == nil {
 		return nil
 	}
 	if reg.HasRunStateV3() {
 		return nil
 	}
-	return fmt.Errorf("operations registry did not resolve the ops v3 run state from the Pebble store "+
-		"(store type %T); a store decorator between them hides it without an Unwrap, "+
-		"so stopping runs, the boot sweep and requeue successors would silently be recorded v2-only", bare)
+	return errors.New("operations registry did not resolve the ops v3 run state from the Pebble store; " +
+		"a store decorator between them hides it without an Unwrap, " +
+		"so stopping runs, the boot sweep and requeue successors would silently be recorded v2-only")
 }
 
 // NewServer constructs a Server with an explicit Store dependency.
@@ -761,7 +759,7 @@ func NewServer(store database.Store) *Server {
 	// return, and the operation-runner child (cmd/child_mode.go) builds its
 	// server here without ever calling Start, so a Start-time gate such as
 	// opRegistrationGate would miss it: exit, as for a nil store above.
-	if err := opRegistryRunStateGate(store, server.opRegistry); err != nil {
+	if err := opRegistryRunStateGate(database.AsPebbleStore(store), server.opRegistry); err != nil {
 		lifecycleLog.Error("NewServer: %v", err)
 		os.Exit(1)
 	}
