@@ -1,7 +1,7 @@
 // file: internal/database/ident_state_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -40,7 +40,20 @@ func identCands(n int) []json.RawMessage {
 	return out
 }
 
-func TestDeriveIdentState_Table(t *testing.T) {
+// deriveIdentState maps a whole book and cache row through deriveIdent, the
+// way the live callers decode them, so the table can be written in rows.
+func deriveIdentState(book *Book, cache *MetadataCandidateCache) (IdentState, string) {
+	var status *string
+	if book != nil {
+		status = book.MetadataReviewStatus
+	}
+	if cache == nil {
+		return deriveIdent(status, false, 0, false)
+	}
+	return deriveIdent(status, true, len(cache.Candidates), cache.Stale)
+}
+
+func TestDeriveIdent_Table(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
 		name       string
@@ -65,7 +78,7 @@ func TestDeriveIdentState_Table(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, r := DeriveIdentState(tc.book, tc.cache)
+			s, r := deriveIdentState(tc.book, tc.cache)
 			require.Equal(t, tc.wantState, s)
 			require.Equal(t, tc.wantReason, r)
 		})

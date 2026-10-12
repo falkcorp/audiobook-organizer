@@ -1,7 +1,7 @@
 // file: internal/database/ident_state.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -84,7 +84,7 @@ const (
 	// holds.
 	IdentApplied IdentState = "applied"
 	// IdentHeld: the owner ruled the book has no match ("no_match"). See
-	// DeriveIdentState for why owner-rejected candidates do not put a book
+	// deriveIdent for why owner-rejected candidates do not put a book
 	// here yet.
 	IdentHeld IdentState = "held"
 )
@@ -99,7 +99,7 @@ const (
 	IdentReasonNoMatch = "no_match"
 	// IdentReasonRejected is reserved for a book the owner rejected. Nothing
 	// emits it yet: there is no book-level rejection marker, only
-	// per-candidate metadata_rejection rows. See DeriveIdentState.
+	// per-candidate metadata_rejection rows. See deriveIdent.
 	IdentReasonRejected = "rejected"
 )
 
@@ -186,8 +186,11 @@ func identInScope(b *Book) bool {
 	return b != nil && EffectiveIsPrimaryVersion(b.IsPrimaryVersion) && !bookIsSoftDeleted(b) && b.QuarantinedAt == nil
 }
 
-// DeriveIdentState is the one rule that maps a book and its metadata_cache
-// row to an identification state and reason. The rules, first match wins:
+// deriveIdent is the one rule that maps a book and its metadata_cache row to
+// an identification state and reason. It takes the few inputs it reads (the
+// book's MetadataReviewStatus; whether a cache row exists, its candidate
+// count and Stale flag) so the rebuild can derive from a partial decode of
+// the rows. The rules, first match wins:
 //
 //	book's MetadataReviewStatus is "matched" or "audio_confirmed"
 //	    (MetadataApplied)                    -> applied, whatever the row says
@@ -210,19 +213,6 @@ func identInScope(b *Book) bool {
 // can tell apart yet: it waits on a later manual_only reason. Until then
 // missing exceeds the goal number by the franchise books in those two
 // states.
-func DeriveIdentState(book *Book, cache *MetadataCandidateCache) (IdentState, string) {
-	var status *string
-	if book != nil {
-		status = book.MetadataReviewStatus
-	}
-	if cache == nil {
-		return deriveIdent(status, false, 0, false)
-	}
-	return deriveIdent(status, true, len(cache.Candidates), cache.Stale)
-}
-
-// deriveIdent is DeriveIdentState over the few inputs it reads, so the
-// rebuild can derive from a partial decode of the rows.
 func deriveIdent(status *string, hasRow bool, candidates int, stale bool) (IdentState, string) {
 	switch {
 	case MetadataApplied(status):
@@ -240,7 +230,7 @@ func deriveIdent(status *string, hasRow bool, candidates int, stale bool) (Ident
 }
 
 // identBookInputsChanged reports whether a book write changes anything
-// DeriveIdentState or the scope reads from the book row.
+// deriveIdent or the scope reads from the book row.
 func identBookInputsChanged(oldBook, newBook *Book) bool {
 	if (oldBook == nil) != (newBook == nil) {
 		return true
@@ -325,7 +315,7 @@ type IdentCounts struct {
 }
 
 // IdentMissing is a scope's "missing" count: unasked + asked_empty. It does
-// not exclude the franchise appendix C excludes (see DeriveIdentState).
+// not exclude the franchise appendix C excludes (see deriveIdent).
 func IdentMissing(m map[IdentState]int64) int64 {
 	return m[IdentUnasked] + m[IdentAskedEmpty]
 }

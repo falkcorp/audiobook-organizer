@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_ident.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 181ccbf7-b0ca-4392-83cf-f054eb73e20d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -30,7 +30,7 @@ const IdentFilterField = "ident"
 // IdentMissingValue selects the books with no fetched candidate and no
 // applied metadata, i.e. unasked or asked_empty (appendix C's definition,
 // before its exclusion of the franchise, which this filter cannot make yet;
-// see database.DeriveIdentState).
+// see deriveIdent in internal/database/ident_state.go).
 const IdentMissingValue = "missing"
 
 // IdentFilterValues lists every value ident: accepts.
