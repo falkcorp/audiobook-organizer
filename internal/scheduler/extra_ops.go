@@ -1,9 +1,9 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-11
 
-// extra_ops registers OperationDefs for 6 scheduler tasks that previously
+// extra_ops registers OperationDefs for 5 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
 // extracts the closure logic into a typed Run func so the UOS v2 dispatcher
 // can manage lifecycle, cancellation, and concurrency without the old
@@ -35,7 +35,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -50,19 +49,20 @@ type ExtraOpsDeps struct {
 	DedupCache           *cache.Cache[gin.H]
 	DedupEngine          *dedup.Engine
 	MetadataFetchService *metafetch.Service
-	// ScanStandDown is the scan stand-down gate the metadata refresh/upgrade ops
-	// hold while they apply (metadata is never applied during a library scan).
+	// ScanStandDown is the scan stand-down gate the metadata upgrade op
+	// holds while it applies (metadata is never applied during a library scan).
 	// Nil = ungated (tests).
 	ScanStandDown opsregistry.ScanStandDownGate
 }
 
-// ExtraOpsStore is everything the 6 scheduler OperationDefs need from the
+// ExtraOpsStore is everything the 5 scheduler OperationDefs need from the
 // store: metabatch.Store, which the metadata upgrade forwards into its
-// service, plus the author, author-link and book methods the author and
-// metadata-refresh ops call directly. Was database.Store (398 methods) until
-// 2026-08-19; versions.TrashedVersionCleaner and the db-optimize/tombstone
-// methods left with scheduler.trash-cleanup, scheduler.db-optimize and
-// scheduler.tombstone-cleanup on 2026-10-10.
+// service, plus the author, author-link and book methods the author ops call
+// directly. Was database.Store (398 methods) until 2026-08-19;
+// versions.TrashedVersionCleaner and the db-optimize/tombstone methods left
+// with scheduler.trash-cleanup, scheduler.db-optimize and
+// scheduler.tombstone-cleanup on 2026-10-10, and GetAllBooksCore left with
+// scheduler.metadata-refresh on 2026-10-11 (04-P4c).
 type ExtraOpsStore interface {
 	metabatch.Store // NewMetadataUpgradeService
 
@@ -72,9 +72,6 @@ type ExtraOpsStore interface {
 	// ModifyBook is the author split's primary-author write: a locked
 	// read-modify-write of AuthorID/Author, never GetBookByID -> UpdateBook.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	// GetAllBooksCore is the metadata refresh scan's listing. It used to
-	// arrive through sweep.ArchiveSweepStore, retired with the archive sweep.
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 }
 
 // extraOpsAuthorStore is the author-consolidation op's author-row half. Split
@@ -89,8 +86,8 @@ type extraOpsAuthorStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 }
 
-// extraOpsAuthorLinkStore is the book<->author join the consolidation and
-// metadata-refresh ops read and rewrite.
+// extraOpsAuthorLinkStore is the book<->author join the consolidation op
+// reads and rewrites.
 type extraOpsAuthorLinkStore interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
@@ -100,7 +97,7 @@ type extraOpsAuthorLinkStore interface {
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
-// ExtraOpsRegistrar holds a Store reference and typed Deps so the 6 scheduler
+// ExtraOpsRegistrar holds a Store reference and typed Deps so the 5 scheduler
 // OperationDefs can be registered without a *Server pointer.
 type ExtraOpsRegistrar struct {
 	Deps  ExtraOpsDeps
@@ -686,81 +683,4 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 			return nil
 		},
 	})
-}
-
-// --- metadata-refresh ---
-
-// RegisterMetadataRefreshOp registers the scheduler.metadata-refresh OperationDef.
-func (r *ExtraOpsRegistrar) RegisterMetadataRefreshOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.metadata-refresh",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "scheduler",
-		DisplayName:     "Metadata Refresh",
-		Description:     "Re-fetch metadata for incomplete books.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         4 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.metadata-refresh",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
-			// Metadata is never applied during a library scan: hold the scan stand-down
-			// before the first write (fails the op if the scan does not park).
-			hold, sdErr := opsregistry.HoldScanStandDown(ctx, r.Deps.ScanStandDown, reporter, "scheduler.metadata-refresh apply")
-			if sdErr != nil {
-				return sdErr
-			}
-			defer func() { retErr = hold.Finish(retErr) }()
-			ctx, reporter = hold.Context(), hold.Reporter()
-
-			progress := extraOpsProgressAdapter{r: reporter}
-			return r.runMetadataRefreshScan(ctx, progress)
-		},
-	})
-}
-
-// --- helper methods (extracted from server/metadata_handlers.go and server/audiobooks_handlers.go) ---
-
-// runMetadataRefreshScan reports books with incomplete metadata. Read-only,
-// safe to re-run on restart with no state.
-func (r *ExtraOpsRegistrar) runMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error {
-	store := r.Store
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	_ = progress.Log("info", "Starting metadata refresh scan", nil)
-	books, err := store.GetAllBooksCore(0, 0)
-	if err != nil {
-		return fmt.Errorf("failed to get books: %w", err)
-	}
-	total := len(books)
-	denom := total + 2
-	fmtPct := func(cur int) float64 {
-		if denom <= 0 {
-			return 0
-		}
-		return float64(cur) / float64(denom) * 100
-	}
-	_ = progress.UpdateProgress(0, denom, fmt.Sprintf("Scanning %d books for incomplete metadata (0/%d) (%.2f%%)", total, denom, fmtPct(0)))
-	_ = progress.Log("info", fmt.Sprintf("Checking %d books for incomplete metadata", total), nil)
-	incomplete := 0
-	for i, book := range books {
-		if err := opsregistry.ScanStandDownCheckpoint(ctx); err != nil {
-			return err
-		}
-		if book.AuthorID == nil || book.Title == "" {
-			incomplete++
-			_ = progress.Log("debug", fmt.Sprintf("Incomplete: %q (id=%s)", book.Title, book.ID), nil)
-		}
-		if (i+1)%200 == 0 {
-			_ = progress.UpdateProgress(i+1, denom, fmt.Sprintf("Checked %d/%d books (%.2f%%)", i+1, total, fmtPct(i+1)))
-		}
-	}
-	resultMsg := fmt.Sprintf("Found %d books with incomplete metadata out of %d total", incomplete, total)
-	_ = progress.Log("info", resultMsg, nil)
-	_ = progress.UpdateProgress(denom, denom, fmt.Sprintf("%s (%d/%d) (100.00%%)", resultMsg, denom, denom))
-	return nil
 }

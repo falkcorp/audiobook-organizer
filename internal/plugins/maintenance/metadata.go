@@ -1,25 +1,38 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // --- metadata-refresh ---
 
+// metadataRefreshDef is the only registration of the metadata refresh scan.
+// scheduler.metadata-refresh ran a second copy of the same read-only body under
+// its own ID and ConcurrencyKey until 2026-10-11 (04-P4c); it resolves here as
+// a FormerID, and the metadata_refresh scheduler task enqueues this def. The
+// 4h Timeout is the longer budget the scheduled copy carried (this def had
+// 120m), and Permissions is the gate that copy enforced, so the alias does not
+// widen who can run it. ResumeRequeue stays: the scan writes nothing, so
+// re-running it after a restart is safe. CapNetworkGeneric stays: the kept body
+// only lists books and calls no OpenAI-backed service, so the loser's
+// network.openai declaration gated nothing real.
 func (p *Plugin) metadataRefreshDef() sdk.OperationDef {
 	sched := "0 6 * * *" // 06:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.metadata-refresh",
+		FormerIDs:       []string{"scheduler.metadata-refresh"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Metadata refresh scan",
@@ -29,7 +42,7 @@ func (p *Plugin) metadataRefreshDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.metadata-refresh",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         120 * time.Minute,
+		Timeout:         4 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapNetworkGeneric},
 		Run:             p.runMetadataRefresh,
