@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.38.1
+// version: 1.38.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -779,9 +779,10 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 // by default), O(1), with missing = unasked + asked_empty, the same count the
 // Library shows for ident:missing. missing does not exclude appendix C's
 // franchise books, so it is the goal number plus those of them that are
-// unasked or asked_empty (database.DeriveIdentState). While the index is
-// being built ready is false and every count is 0; a store without the index
-// reports the same, so the block's shape never changes.
+// unasked or asked_empty (deriveIdent in internal/database/ident_state.go).
+// While the index is being built ready is false and every count is 0; a
+// store without the index reports the same, so the block's shape never
+// changes.
 func identCountsSummary(store any) gin.H {
 	out := gin.H{"ready": false}
 	var c database.IdentCounts
