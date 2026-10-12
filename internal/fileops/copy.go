@@ -1,7 +1,7 @@
 // file: internal/fileops/copy.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f6c1a58-9d2e-4b07-8c34-71ae5d9b0f42
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package fileops
 
@@ -56,8 +56,8 @@ import (
 // # Permission bits are a per-caller decision, not a package default
 //
 // The first version of this file applied the SOURCE's mode everywhere, which
-// re-introduced the very failure it was written to prevent. The three
-// operations want three different answers and none of them can be inferred:
+// re-introduced the very failure it was written to prevent. The
+// operations want different answers and none of them can be inferred:
 //
 //   - Copying a file to make a sibling of ITSELF — a backup, or a temp that
 //     will be renamed back over it — wants the source's mode, because the
@@ -68,11 +68,7 @@ import (
 //     0600 .m4b, and adopting that mode makes every organized file owner-only
 //     and takes the Samba share dark, with no error anywhere. Before this
 //     package the ingest paths used os.Create / a 0664 literal, both floored
-//     by our own umask, and were safe by accident. (CopyFileIngest)
-//   - REPLACING an existing file wants the DESTINATION's mode. Restoring a
-//     library from a backup written months ago under a different writer's
-//     hardcoded 0644 must not stamp that 0644 onto a live 0664 library.
-//     (CopyFileAtomic)
+//     by our own umask, and were safe by accident. (CopyFileIngestExclusive)
 
 // syncFile is a seam for testing. Durability cannot be asserted without
 // crashing the machine, but whether the fsync is still WIRED UP can be — and it
@@ -96,7 +92,7 @@ var syncFile = func(f *os.File) error { return f.Sync() }
 // the directory we just wrote into.
 //
 // It goes through a seam for the same reason syncFile does: deleting the
-// directory fsync from CopyFileAtomic left every test in this package green.
+// directory fsync from copyBytes left every test in this package green.
 var syncDir = func(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
@@ -128,9 +124,6 @@ const (
 	// modeLibraryDefault: dst is created at LibraryFileMode and left to the
 	// umask, exactly as os.Create/0664 did before this package existed.
 	modeLibraryDefault
-	// modeKeepDest: dst keeps the mode it already has; if it does not exist,
-	// falls back to the source's.
-	modeKeepDest
 )
 
 // CopyFile copies src to dst, creating dst or truncating it if it already
@@ -140,7 +133,7 @@ const (
 //
 // This is the "make a sibling copy of this file" operation: a backup, or a
 // second copy of something the library already owns. To bring a FOREIGN file
-// into the library, use CopyFileIngest — adopting an external file's mode is
+// into the library, use CopyFileIngestExclusive — adopting an external file's mode is
 // how a download client's umask becomes the library's permissions.
 func CopyFile(src, dst string) error {
 	return copyBytes(src, dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, modeFromSource, true, true)
@@ -158,7 +151,8 @@ func CopyFileExclusive(src, dst string) error {
 	return copyBytes(src, dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, modeFromSource, true, true)
 }
 
-// CopyFileIngest copies a file from OUTSIDE the library into it. dst is created
+// CopyFileIngestExclusive copies a file from OUTSIDE the library into it, with
+// an existing dst refused on the same terms as CopyFileExclusive. dst is created
 // at LibraryFileMode under the process umask and does NOT take src's mode.
 //
 // The source of an ingest is a download client, a watch folder, or another
@@ -168,13 +162,8 @@ func CopyFileExclusive(src, dst string) error {
 // paths this replaces (os.Create in organizer, a 0664 literal in the reflink
 // fallback) were umask-floored and so could never be more restrictive than the
 // library's own policy.
-func CopyFileIngest(src, dst string) error {
-	return copyBytes(src, dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, modeLibraryDefault, true, true)
-}
-
-// CopyFileIngestExclusive is CopyFileIngest with an existing dst refused, on
-// the same terms as CopyFileExclusive. This is the fallback under
-// ReflinkOrCopy, so it must match the reflink path's non-truncating contract.
+//
+// This is the fallback under ReflinkOrCopy, so it must match the reflink path's non-truncating contract.
 func CopyFileIngestExclusive(src, dst string) error {
 	return copyBytes(src, dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, modeLibraryDefault, true, true)
 }
@@ -203,17 +192,6 @@ func CopyFileInto(src, dst string) error {
 // function created dst, false when the caller did. syncParent controls the
 // directory fsync that makes a NEWLY CREATED dst's name durable.
 func copyBytes(src, dst string, flag int, mode modeSource, removeOnErr, syncParent bool) error {
-	return copyBytesTo(src, dst, dst, flag, mode, removeOnErr, syncParent)
-}
-
-// copyBytesTo is copyBytes with the mode resolved against modePath rather than
-// against the file being written. CopyFileAtomic writes a temp file that it
-// then renames over dst: the mode that matters is dst's, and the temp's own
-// 0600 is an artifact of os.CreateTemp. Resolving against the temp is how the
-// first version of CopyFileAtomic produced 0600 destinations — the exact bug
-// this package exists to fix, reproduced one function away from its own
-// changelog entry.
-func copyBytesTo(src, dst, modePath string, flag int, mode modeSource, removeOnErr, syncParent bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("fileops: cannot read source file %s: %w", src, err)
@@ -236,10 +214,7 @@ func copyBytesTo(src, dst, modePath string, flag int, mode modeSource, removeOnE
 		return fmt.Errorf("fileops: refusing to copy %s onto itself (%s is the same file)", src, dst)
 	}
 
-	perm, permErr := resolvePerm(modePath, info, mode)
-	if permErr != nil {
-		return permErr
-	}
+	perm := resolvePerm(info, mode)
 
 	out, err := os.OpenFile(dst, flag, perm)
 	if err != nil {
@@ -304,73 +279,9 @@ func copyBytesTo(src, dst, modePath string, flag int, mode modeSource, removeOnE
 }
 
 // resolvePerm answers "what mode should dst end up with" for one policy.
-func resolvePerm(dst string, srcInfo fs.FileInfo, mode modeSource) (fs.FileMode, error) {
-	switch mode {
-	case modeLibraryDefault:
-		return LibraryFileMode, nil
-	case modeKeepDest:
-		if dstInfo, err := os.Stat(dst); err == nil {
-			return dstInfo.Mode().Perm(), nil
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return 0, fmt.Errorf("fileops: stat destination %s: %w", dst, err)
-		}
-		// No destination yet — there is no mode to preserve, so the source's
-		// is the only defensible answer.
-		return srcInfo.Mode().Perm(), nil
-	default:
-		return srcInfo.Mode().Perm(), nil
+func resolvePerm(srcInfo fs.FileInfo, mode modeSource) fs.FileMode {
+	if mode == modeLibraryDefault {
+		return LibraryFileMode
 	}
-}
-
-// CopyFileAtomic copies src over dst so that dst is never observed truncated or
-// half-written: the bytes go to a temp file in dst's own directory, are fsynced,
-// and are then renamed over dst in one step. dst does not have to exist.
-//
-// This is the shape every "restore the live file from its backup" path needs.
-// Two of them had hand-rolled it without the fsync, and a third
-// (itunes/service/writeback_batcher's post-rename-validation rollback) used a
-// plain os.WriteFile over the LIVE iTunes library — a crash partway through
-// that write leaves neither a good library nor a good original, which is the
-// one outcome a rollback exists to prevent.
-//
-// The temp file is named ".<base>.tmp-*" so it can never be mistaken for a
-// ".bak-*" rotation candidate by the ITL retention sweeps.
-//
-// The parent directory fsync that makes the rename itself crash-durable is
-// best-effort: the rename has already succeeded by that point, and failing the
-// call would report a completed restore as a failure — the strictly worse
-// error. It is not silently swallowed for convenience; there is nothing left to
-// undo.
-func CopyFileAtomic(src, dst string) error {
-	dir := filepath.Dir(dst)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dst)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("fileops: create temp beside %s: %w", dst, err)
-	}
-	tmpPath := tmp.Name()
-	if cerr := tmp.Close(); cerr != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("fileops: close temp %s: %w", tmpPath, cerr)
-	}
-
-	// modeKeepDest: the temp is renamed OVER dst, so it must carry dst's own
-	// mode, not src's. This path restores a live iTunes library from a backup,
-	// and the backups already on disk were written by two earlier writers at a
-	// hardcoded 0644 and 0600 — stamping either onto a 0664 group-writable
-	// library takes the share down at exactly the moment a rollback runs.
-	// os.CreateTemp makes the temp 0600, so it must be chmodded either way.
-	if err := copyBytesTo(src, tmpPath, dst, os.O_TRUNC|os.O_WRONLY, modeKeepDest, false, false); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Rename(tmpPath, dst); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("fileops: rename %s -> %s: %w", tmpPath, dst, err)
-	}
-	// syncDir, not an inline best-effort open: routed through the same seam as
-	// every other durability call in this file so that deleting it fails a
-	// test. The first version of this function opened and synced the directory
-	// inline and discarded both errors — and removing all four lines left every
-	// test in the package green.
-	return syncDir(dir)
+	return srcInfo.Mode().Perm()
 }

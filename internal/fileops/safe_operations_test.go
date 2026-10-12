@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package fileops
 
@@ -176,49 +176,6 @@ func TestFileOperation_Execute_WithoutChecksumVerification(t *testing.T) {
 	}
 }
 
-func TestFileOperation_Rollback(t *testing.T) {
-	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "source.txt")
-	dstFile := filepath.Join(tmpDir, "dest.txt")
-
-	srcContent := []byte("New content")
-	oldContent := []byte("Old content")
-
-	if err := os.WriteFile(srcFile, srcContent, 0644); err != nil {
-		t.Fatalf("Failed to create source file: %v", err)
-	}
-	if err := os.WriteFile(dstFile, oldContent, 0644); err != nil {
-		t.Fatalf("Failed to create destination file: %v", err)
-	}
-
-	config := DefaultConfig()
-	config.BackupDir = filepath.Join(tmpDir, "backups")
-	config.PreserveOriginal = true
-
-	op, err := NewFileOperation(srcFile, dstFile, config)
-	if err != nil {
-		t.Fatalf("NewFileOperation failed: %v", err)
-	}
-
-	if err := op.Execute(); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	// Rollback the operation
-	if err := op.Rollback(); err != nil {
-		t.Fatalf("Rollback failed: %v", err)
-	}
-
-	// Verify destination has old content restored
-	dstContent, err := os.ReadFile(dstFile)
-	if err != nil {
-		t.Fatalf("Failed to read destination: %v", err)
-	}
-	if string(dstContent) != string(oldContent) {
-		t.Error("Rollback didn't restore old content")
-	}
-}
-
 func TestFileOperation_Commit(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "source.txt")
@@ -257,38 +214,6 @@ func TestFileOperation_Commit(t *testing.T) {
 	}
 }
 
-func TestSafeMove(t *testing.T) {
-	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "source.txt")
-	dstFile := filepath.Join(tmpDir, "dest.txt")
-
-	content := []byte("Test content for move")
-	if err := os.WriteFile(srcFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create source file: %v", err)
-	}
-
-	config := DefaultConfig()
-	config.BackupDir = filepath.Join(tmpDir, "backups")
-
-	if err := SafeMove(srcFile, dstFile, config); err != nil {
-		t.Fatalf("SafeMove failed: %v", err)
-	}
-
-	// Verify destination exists
-	dstContent, err := os.ReadFile(dstFile)
-	if err != nil {
-		t.Fatalf("Failed to read destination: %v", err)
-	}
-	if string(dstContent) != string(content) {
-		t.Error("Destination content doesn't match source")
-	}
-
-	// Verify source was removed (move operation)
-	if _, err := os.Stat(srcFile); !os.IsNotExist(err) {
-		t.Error("Source file should be removed after move")
-	}
-}
-
 func TestSafeCopy(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "source.txt")
@@ -321,51 +246,6 @@ func TestSafeCopy(t *testing.T) {
 	}
 	if string(dstContent) != string(content) {
 		t.Error("Destination content doesn't match source")
-	}
-}
-
-func TestVerifyFileIntegrity(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-
-	content := []byte("Test content for integrity check")
-	if err := os.WriteFile(testFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Calculate expected hash
-	expectedHash, err := calculateChecksum(testFile)
-	if err != nil {
-		t.Fatalf("Failed to calculate checksum: %v", err)
-	}
-
-	// Verify with correct hash
-	valid, err := VerifyFileIntegrity(testFile, expectedHash)
-	if err != nil {
-		t.Fatalf("VerifyFileIntegrity failed: %v", err)
-	}
-	if !valid {
-		t.Error("File should be valid with correct hash")
-	}
-
-	// Verify with incorrect hash
-	wrongHash := "0000000000000000000000000000000000000000000000000000000000000000"
-	valid, err = VerifyFileIntegrity(testFile, wrongHash)
-	if err != nil {
-		t.Fatalf("VerifyFileIntegrity failed: %v", err)
-	}
-	if valid {
-		t.Error("File should be invalid with incorrect hash")
-	}
-}
-
-func TestVerifyFileIntegrity_NonExistentFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	nonExistent := filepath.Join(tmpDir, "nonexistent.txt")
-
-	_, err := VerifyFileIntegrity(nonExistent, "somehash")
-	if err == nil {
-		t.Error("Expected error for non-existent file")
 	}
 }
 
@@ -419,32 +299,6 @@ func TestCalculateChecksum(t *testing.T) {
 	}
 	if len(hash) != 64 {
 		t.Errorf("Expected SHA256 hex string length 64, got %d", len(hash))
-	}
-}
-
-// Test Rollback when operation not completed
-func TestFileOperation_Rollback_NotCompleted(t *testing.T) {
-	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "source.txt")
-	dstFile := filepath.Join(tmpDir, "dest.txt")
-
-	content := []byte("Test content")
-	if err := os.WriteFile(srcFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create source file: %v", err)
-	}
-
-	config := DefaultConfig()
-	config.BackupDir = filepath.Join(tmpDir, "backups")
-
-	op, err := NewFileOperation(srcFile, dstFile, config)
-	if err != nil {
-		t.Fatalf("NewFileOperation failed: %v", err)
-	}
-
-	// Try to rollback without executing
-	err = op.Rollback()
-	if err == nil {
-		t.Error("Expected error when rolling back non-completed operation")
 	}
 }
 
@@ -591,22 +445,6 @@ func TestCleanupOldBackups_ExceedsLimit(t *testing.T) {
 	}
 }
 
-// Test SafeMove with error from NewFileOperation
-func TestSafeMove_NewFileOperationError(t *testing.T) {
-	tmpDir := t.TempDir()
-	nonExistentSrc := filepath.Join(tmpDir, "nonexistent.txt")
-	dstFile := filepath.Join(tmpDir, "dest.txt")
-
-	config := DefaultConfig()
-	config.BackupDir = filepath.Join(tmpDir, "backups")
-
-	// Should fail because source doesn't exist
-	err := SafeMove(nonExistentSrc, dstFile, config)
-	if err == nil {
-		t.Error("Expected error when source file doesn't exist")
-	}
-}
-
 // Test SafeCopy with error from NewFileOperation
 func TestSafeCopy_NewFileOperationError(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -738,41 +576,6 @@ func TestFileOperation_Execute_CreateDestDirError(t *testing.T) {
 	}
 }
 
-// Test Rollback with missing backup file
-func TestFileOperation_Rollback_MissingBackup(t *testing.T) {
-	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "source.txt")
-	dstFile := filepath.Join(tmpDir, "dest.txt")
-
-	content := []byte("Test content")
-	if err := os.WriteFile(srcFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create source file: %v", err)
-	}
-
-	config := DefaultConfig()
-	config.BackupDir = filepath.Join(tmpDir, "backups")
-	config.PreserveOriginal = true
-
-	op, err := NewFileOperation(srcFile, dstFile, config)
-	if err != nil {
-		t.Fatalf("NewFileOperation failed: %v", err)
-	}
-
-	if err := op.Execute(); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	// Remove the backup file
-	if err := os.Remove(op.backupPath); err != nil {
-		t.Fatalf("Failed to remove backup: %v", err)
-	}
-
-	// Rollback should succeed (it checks if backup exists before restoring)
-	if err := op.Rollback(); err != nil {
-		t.Fatalf("Rollback failed: %v", err)
-	}
-}
-
 // Test Commit with missing backup file
 func TestFileOperation_Commit_MissingBackup(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -805,33 +608,6 @@ func TestFileOperation_Commit_MissingBackup(t *testing.T) {
 	// Commit should succeed (it checks if backup exists before removing)
 	if err := op.Commit(); err != nil {
 		t.Fatalf("Commit failed: %v", err)
-	}
-}
-
-// Test SafeMove with Execute error
-func TestSafeMove_ExecuteError(t *testing.T) {
-	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "source.txt")
-
-	content := []byte("Test content")
-	if err := os.WriteFile(srcFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create source file: %v", err)
-	}
-
-	// Create a file where we want a directory
-	invalidPath := filepath.Join(tmpDir, "file_not_dir")
-	if err := os.WriteFile(invalidPath, []byte("block"), 0644); err != nil {
-		t.Fatalf("Failed to create blocking file: %v", err)
-	}
-
-	dstFile := filepath.Join(invalidPath, "dest.txt")
-
-	config := DefaultConfig()
-	config.BackupDir = filepath.Join(tmpDir, "backups")
-
-	err := SafeMove(srcFile, dstFile, config)
-	if err == nil {
-		t.Error("Expected error from SafeMove when Execute fails")
 	}
 }
 

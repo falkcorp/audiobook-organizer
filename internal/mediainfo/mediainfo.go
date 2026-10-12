@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
-// last-edited: 2026-07-18
+// last-edited: 2026-10-12
 
 package mediainfo
 
@@ -310,27 +310,4 @@ func generateQualityString(info *MediaInfo) string {
 	}
 
 	return fmt.Sprintf("%dkbps %s", info.Bitrate, info.Codec)
-}
-
-// GetQualityTier returns a numeric quality tier for comparison
-func GetQualityTier(info *MediaInfo) int {
-	if info.Codec == "FLAC" {
-		if info.BitDepth >= 24 {
-			return 100
-		}
-		return 90
-	}
-
-	switch {
-	case info.Bitrate >= 320:
-		return 80
-	case info.Bitrate >= 256:
-		return 70
-	case info.Bitrate >= 192:
-		return 60
-	case info.Bitrate >= 128:
-		return 50
-	default:
-		return 30
-	}
 }

@@ -1,7 +1,7 @@
 // file: internal/audioutil/timeline.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a87c956-6abc-4362-a3ac-578108f0387d
-// last-edited: 2026-07-29
+// last-edited: 2026-10-12
 
 package audioutil
 
@@ -28,24 +28,6 @@ type TrackInfo struct {
 	DurationSec float64
 }
 
-// CumulativeOffsets returns the running start offset of each duration in
-// durations: offsets[0] == 0, offsets[i] == sum(durations[0:i]). This is the
-// same arithmetic ABS uses to compute multi-file startOffset values (see
-// testdata/abs-fixtures/README.md item 3: "0, 1386.057143, 2788.702041, ...").
-// No rounding is applied at any step.
-func CumulativeOffsets(durations []float64) []float64 {
-	if len(durations) == 0 {
-		return nil
-	}
-	offsets := make([]float64, len(durations))
-	var running float64
-	for i, d := range durations {
-		offsets[i] = running
-		running += d
-	}
-	return offsets
-}
-
 // SynthesizeChapters builds one chapter per track with cumulative start/end
 // offsets, mirroring real ABS behavior for a multi-file book with no embedded
 // chapters (testdata/abs-fixtures/README.md item 4): chapter IDs start at 0,
@@ -67,26 +49,4 @@ func SynthesizeChapters(tracks []TrackInfo) []Chapter {
 		start = end
 	}
 	return chapters
-}
-
-// ShiftChapters returns a copy of chs with every StartSec/EndSec shifted by
-// offsetSec, leaving ID and Title untouched and the input slice unmodified.
-// Used when a multi-file book's individual files each carry their own
-// embedded chapters that must be rebased onto the whole-book timeline (e.g.
-// track 3 starts at cumulative offset X, so its embedded chapters must be
-// shifted by X before being merged into the book-level chapter list).
-func ShiftChapters(chs []Chapter, offsetSec float64) []Chapter {
-	if len(chs) == 0 {
-		return nil
-	}
-	shifted := make([]Chapter, len(chs))
-	for i, c := range chs {
-		shifted[i] = Chapter{
-			ID:       c.ID,
-			StartSec: c.StartSec + offsetSec,
-			EndSec:   c.EndSec + offsetSec,
-			Title:    c.Title,
-		}
-	}
-	return shifted
 }

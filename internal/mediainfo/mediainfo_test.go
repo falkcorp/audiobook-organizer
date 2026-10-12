@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-12
 
 package mediainfo
 
@@ -53,59 +53,6 @@ func TestGenerateQualityString(t *testing.T) {
 			result := generateQualityString(tt.info)
 			if result != tt.expected {
 				t.Errorf("expected %s, got %s", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestGetQualityTier(t *testing.T) {
-	tests := []struct {
-		name         string
-		info         *MediaInfo
-		expectedTier int
-	}{
-		{
-			name:         "FLAC 24-bit (highest)",
-			info:         &MediaInfo{Codec: "FLAC", BitDepth: 24},
-			expectedTier: 100,
-		},
-		{
-			name:         "FLAC 16-bit",
-			info:         &MediaInfo{Codec: "FLAC", BitDepth: 16},
-			expectedTier: 90,
-		},
-		{
-			name:         "MP3 320kbps",
-			info:         &MediaInfo{Codec: "MP3", Bitrate: 320},
-			expectedTier: 80,
-		},
-		{
-			name:         "AAC 256kbps",
-			info:         &MediaInfo{Codec: "AAC", Bitrate: 256},
-			expectedTier: 70,
-		},
-		{
-			name:         "MP3 192kbps",
-			info:         &MediaInfo{Codec: "MP3", Bitrate: 192},
-			expectedTier: 60,
-		},
-		{
-			name:         "AAC 128kbps",
-			info:         &MediaInfo{Codec: "AAC", Bitrate: 128},
-			expectedTier: 50,
-		},
-		{
-			name:         "Low bitrate",
-			info:         &MediaInfo{Codec: "MP3", Bitrate: 96},
-			expectedTier: 30,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tier := GetQualityTier(tt.info)
-			if tier != tt.expectedTier {
-				t.Errorf("expected %d, got %d", tt.expectedTier, tier)
 			}
 		})
 	}
@@ -410,30 +357,6 @@ func TestGenerateQualityString_EdgeCases(t *testing.T) {
 			result := generateQualityString(tt.info)
 			if result != tt.expected {
 				t.Errorf("expected %s, got %s", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestGetQualityTier_Boundaries(t *testing.T) {
-	tests := []struct {
-		name string
-		info *MediaInfo
-		tier int
-	}{
-		{"320kbps boundary", &MediaInfo{Bitrate: 320}, 80},
-		{"256kbps boundary", &MediaInfo{Bitrate: 256}, 70},
-		{"192kbps boundary", &MediaInfo{Bitrate: 192}, 60},
-		{"128kbps boundary", &MediaInfo{Bitrate: 128}, 50},
-		{"64kbps low", &MediaInfo{Bitrate: 64}, 30},
-		{"0kbps minimum", &MediaInfo{Bitrate: 0}, 30},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tier := GetQualityTier(tt.info)
-			if tier != tt.tier {
-				t.Errorf("expected %d, got %d", tt.tier, tier)
 			}
 		})
 	}
@@ -854,31 +777,6 @@ func TestExtract_FormatExtraction(t *testing.T) {
 			expectedFormat := ext[1:] // Remove leading dot
 			if info.Format != expectedFormat {
 				t.Errorf("Expected format %s, got %s", expectedFormat, info.Format)
-			}
-		})
-	}
-}
-
-func TestGetQualityTier_AboveBoundaries(t *testing.T) {
-	tests := []struct {
-		name string
-		info *MediaInfo
-		tier int
-	}{
-		{"400kbps (above 320)", &MediaInfo{Bitrate: 400}, 80},
-		{"350kbps (above 320)", &MediaInfo{Bitrate: 350}, 80},
-		{"260kbps (above 256)", &MediaInfo{Bitrate: 260}, 70},
-		{"200kbps (above 192)", &MediaInfo{Bitrate: 200}, 60},
-		{"150kbps (above 128)", &MediaInfo{Bitrate: 150}, 50},
-		{"FLAC 32-bit", &MediaInfo{Codec: "FLAC", BitDepth: 32}, 100},
-		{"FLAC 24-bit", &MediaInfo{Codec: "FLAC", BitDepth: 24}, 100},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tier := GetQualityTier(tt.info)
-			if tier != tt.tier {
-				t.Errorf("expected %d, got %d", tt.tier, tier)
 			}
 		})
 	}

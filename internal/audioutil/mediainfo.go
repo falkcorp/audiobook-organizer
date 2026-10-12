@@ -1,7 +1,7 @@
 // file: internal/audioutil/mediainfo.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9034c2e0-67ac-4ac2-9685-199093ff8406
-// last-edited: 2026-08-31
+// last-edited: 2026-10-12
 
 package audioutil
 
@@ -57,12 +57,6 @@ func LookupMediaInfo() (string, error) {
 		return "", ErrMediaInfoNotAvailable
 	}
 	return lookupMediaInfoOnce()
-}
-
-// MediaInfoAvailable reports whether LookupMediaInfo would succeed.
-func MediaInfoAvailable() bool {
-	_, err := LookupMediaInfo()
-	return err == nil
 }
 
 // probeDurationMediaInfo returns the container duration in seconds using

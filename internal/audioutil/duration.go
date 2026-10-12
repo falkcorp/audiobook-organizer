@@ -1,7 +1,7 @@
 // file: internal/audioutil/duration.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 03399668-0f87-4d27-b118-8315b574ef23
-// last-edited: 2026-09-02
+// last-edited: 2026-10-12
 
 // Package audioutil holds small, dependency-free helpers shared by the audio
 // processing packages (internal/mediainfo, internal/fingerprint,
@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 // ErrFFprobeNotAvailable is returned by LookupFFprobe when no ffprobe binary can
@@ -48,12 +47,6 @@ func LookupFFprobe() (string, error) {
 		return "", ErrFFprobeNotAvailable
 	}
 	return p, nil
-}
-
-// FFprobeAvailable reports whether LookupFFprobe would succeed.
-func FFprobeAvailable() bool {
-	_, err := LookupFFprobe()
-	return err == nil
 }
 
 // ProbeDurationSeconds returns the container's reported duration in seconds, as
@@ -90,7 +83,6 @@ func ProbeDurationSeconds(ctx context.Context, ffprobePath, filePath string) (fl
 	if bin, err := LookupMediaInfo(); err == nil {
 		secs, mierr := probeDurationMediaInfo(ctx, bin, filePath)
 		if mierr == nil {
-			mediaInfoHits.Add(1)
 			return secs, nil
 		}
 		noteMediaInfoFallback(filePath, mierr)
@@ -98,31 +90,19 @@ func ProbeDurationSeconds(ctx context.Context, ffprobePath, filePath string) (fl
 	return probeDurationFFprobe(ctx, ffprobePath, filePath)
 }
 
-// Fallback accounting. A per-file log line would be 60k lines of noise across a
+// Fallback warning. A per-file log line would be 60k lines of noise across a
 // library scan, but a SILENT fallback is worse: if mediainfo failed on every
 // file we would quietly do two subprocess calls per file instead of one, be
 // slower than before the change, and have no signal saying so. So: warn once
-// with the concrete reason, then count.
-var (
-	mediaInfoHits      atomic.Int64
-	mediaInfoFallbacks atomic.Int64
-	mediaInfoWarnOnce  sync.Once
-)
+// once with the concrete reason.
+var mediaInfoWarnOnce sync.Once
 
 func noteMediaInfoFallback(filePath string, err error) {
-	mediaInfoFallbacks.Add(1)
 	mediaInfoWarnOnce.Do(func() {
 		slog.Warn("audioutil: mediainfo duration probe failed, falling back to ffprobe "+
-			"(logged once; use DurationProbeStats for totals)",
+			"(logged once)",
 			"file", filePath, "err", err)
 	})
-}
-
-// DurationProbeStats reports how many duration probes mediainfo answered and how
-// many fell back to ffprobe. Exposed so an op can report the split rather than
-// leaving a systematic mediainfo failure invisible.
-func DurationProbeStats() (mediaInfo, fallback int64) {
-	return mediaInfoHits.Load(), mediaInfoFallbacks.Load()
 }
 
 // probeDurationFFprobe is the original ffprobe implementation, unchanged. It
@@ -149,12 +129,4 @@ func probeDurationFFprobe(ctx context.Context, ffprobePath, filePath string) (fl
 		return 0, fmt.Errorf("ffprobe duration parse %s: %w", filePath, err)
 	}
 	return secs, nil
-}
-
-// DurationProbeAvailable reports whether ANY duration prober is usable. Ops that
-// refuse to start without a prober should gate on this rather than on
-// FFprobeAvailable alone, or a box carrying only mediainfo refuses work it could
-// actually do.
-func DurationProbeAvailable() bool {
-	return MediaInfoAvailable() || FFprobeAvailable()
 }

@@ -1,7 +1,7 @@
 // file: internal/audioext/audioext.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1a53bbfc-4b40-45a6-9c37-135163864a11
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 // Package audioext owns the ONE list of file extensions that decide whether a
 // file on disk is part of this library.
@@ -34,13 +34,11 @@
 //     internal/remux and internal/transcode (ffmpeg containers),
 //     internal/tagger (TagLib), intro_transcribe (whisper). Widening those
 //     from config would be a regression, not a de-duplication: .aax and .aaxc
-//     are in the canonical list below and are DRM-protected — internal/audioutil
-//     .DetectDRM documents that this application cannot decode them at all.
-//     A capability list that excludes them is CORRECT.
+//     are in the canonical list below and are DRM-protected, so this application cannot
+//     decode them at all. A capability list that excludes them is CORRECT.
 //  3. "What MIME type / DRM scheme does this extension imply?" — a mapping
-//     table, not a predicate. internal/server/handlers/abs/mapper.go and
-//     internal/audioutil/drm.go. Widening a DRM test would make it claim every
-//     .mp3 is DRM-shaped.
+//     table, not a predicate. internal/server/handlers/abs/mapper.go.
+//     Widening a DRM test would make it claim every .mp3 is DRM-shaped.
 //
 // # .mp4
 //
@@ -140,9 +138,6 @@ func Resolve(configured []string) Set {
 	}
 	return s
 }
-
-// Has reports whether ext (with or without a leading dot, any case) is in s.
-func (s Set) Has(ext string) bool { return s[Normalize(ext)] }
 
 // MatchPath reports whether path carries an extension in s. A path with no
 // extension — a directory, typically — is not a match.

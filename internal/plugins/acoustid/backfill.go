@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-09-19
+// last-edited: 2026-10-12
 
 package acoustid
 
@@ -431,8 +431,7 @@ const fingerprintThrottle = 10 * time.Millisecond
 // CAPABILITY list, not the library's supported_extensions, and the two
 // deliberately disagree in both directions: it carries .alac/.ape/.wv, which
 // are not library extensions, and it omits .aax/.aaxc, which are — those are
-// DRM-encrypted and this application cannot decode them (internal/audioutil
-// .DetectDRM). Routing this through config would both drop three formats and
+// DRM-encrypted and this application cannot decode them. Routing this through config would both drop three formats and
 // queue every Audible file for a fingerprint that can only fail.
 var fpcalcDecodableExtensions = map[string]bool{
 	".aac":  true,

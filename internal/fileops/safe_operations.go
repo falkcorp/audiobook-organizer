@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-09-13
+// last-edited: 2026-10-12
 
 package fileops
 
@@ -221,22 +221,6 @@ func (op *FileOperation) Execute() error {
 	return nil
 }
 
-// Rollback restores the original state from backup
-func (op *FileOperation) Rollback() error {
-	if !op.completed {
-		return fmt.Errorf("operation not completed, nothing to rollback")
-	}
-
-	// Restore from backup if it exists
-	if _, err := os.Stat(op.backupPath); err == nil {
-		if err := copyFileMkdirAll(op.backupPath, op.targetPath); err != nil {
-			return fmt.Errorf("failed to restore from backup: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // Commit finalizes the operation and removes the backup
 func (op *FileOperation) Commit() error {
 	if !op.completed {
@@ -317,21 +301,6 @@ func calculateChecksum(path string) (string, error) {
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
-// SafeMove performs a safe file move operation with backup and verification
-func SafeMove(src, dst string, config OperationConfig) error {
-	op, err := NewFileOperation(src, dst, config)
-	if err != nil {
-		return err
-	}
-
-	if err := op.Execute(); err != nil {
-		return err
-	}
-
-	// Auto-commit if successful
-	return op.Commit()
-}
-
 // SafeCopy performs a safe file copy operation with verification
 func SafeCopy(src, dst string, config OperationConfig) error {
 	// For copy, always preserve original
@@ -349,13 +318,4 @@ func SafeCopy(src, dst string, config OperationConfig) error {
 
 	// Auto-commit if successful
 	return op.Commit()
-}
-
-// VerifyFileIntegrity checks if a file matches its expected checksum
-func VerifyFileIntegrity(path, expectedHash string) (bool, error) {
-	actualHash, err := calculateChecksum(path)
-	if err != nil {
-		return false, err
-	}
-	return actualHash == expectedHash, nil
 }

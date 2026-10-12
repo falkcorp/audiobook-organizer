@@ -1,7 +1,7 @@
 // file: internal/fileops/copy_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d4b0c19-5e83-4a26-9f10-2b6ce8417d3a
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package fileops
 
@@ -216,7 +216,7 @@ func TestCopyFileIntoKeepsDestinationIdentity(t *testing.T) {
 
 // TestCopyFileIntoDoesNotRemoveDestinationOnFailure: the caller created dst and
 // owns its lifetime, so a failed copy must leave it for the caller to clean up
-// (CopyFileAtomic relies on this to remove its own temp file).
+// (for example a temp file the caller will remove itself).
 func TestCopyFileIntoDoesNotRemoveDestinationOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "srcdir")
@@ -231,69 +231,6 @@ func TestCopyFileIntoDoesNotRemoveDestinationOnFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); err != nil {
 		t.Errorf("CopyFileInto removed a destination it did not create: %v", err)
-	}
-}
-
-func TestCopyFileAtomicReplacesExistingContent(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.bin")
-	dst := filepath.Join(dir, "dst.bin")
-	writeFileMode(t, src, "restored body", 0o640)
-	writeFileMode(t, dst, "a much longer corrupted body", 0o600)
-
-	if err := CopyFileAtomic(src, dst); err != nil {
-		t.Fatalf("CopyFileAtomic: %v", err)
-	}
-	if got := readAll(t, dst); got != "restored body" {
-		t.Errorf("dst = %q, want %q — a longer previous body must not survive as a tail", got, "restored body")
-	}
-	// Mode is asserted by TestCopyFileAtomicKeepsDestinationMode. This
-	// assertion used to demand the SOURCE's mode here, which was the wrong
-	// policy: it is what stamps an old backup's 0644 onto a live 0664 library.
-	if got := modeOf(t, dst); got != 0o600 {
-		t.Errorf("dst mode = %v, want its own %v preserved", got, fs.FileMode(0o600))
-	}
-}
-
-// TestCopyFileAtomicLeavesNoTempBehind covers both outcomes, because a temp
-// file left in the ITL directory is not inert: the retention sweeps there match
-// on name, and an orphan is a file an operator has to reason about.
-func TestCopyFileAtomicLeavesNoTempBehind(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.bin")
-	dst := filepath.Join(dir, "dst.bin")
-	writeFileMode(t, src, "body", 0o644)
-
-	if err := CopyFileAtomic(src, dst); err != nil {
-		t.Fatalf("CopyFileAtomic: %v", err)
-	}
-	assertNoTemps(t, dir)
-
-	srcDir := filepath.Join(dir, "srcdir")
-	if err := os.Mkdir(srcDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := CopyFileAtomic(srcDir, dst); err == nil {
-		t.Fatal("copying a directory must fail")
-	}
-	assertNoTemps(t, dir)
-
-	// The failed call must not have damaged the destination it was replacing.
-	if got := readAll(t, dst); got != "body" {
-		t.Errorf("dst = %q after a failed atomic copy, want the previous %q untouched", got, "body")
-	}
-}
-
-func assertNoTemps(t *testing.T, dir string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("readdir: %v", err)
-	}
-	for _, e := range entries {
-		if strings.Contains(e.Name(), ".tmp-") {
-			t.Errorf("temp file left behind: %s", e.Name())
-		}
 	}
 }
 
@@ -328,9 +265,6 @@ func TestCopyPathsFsyncBeforeClosing(t *testing.T) {
 			dst := filepath.Join(dir, "dst.bin")
 			writeFileMode(t, dst, "old", 0o644)
 			return CopyFileInto(src, dst)
-		}},
-		{"CopyFileAtomic", func(t *testing.T, dir, src string) error {
-			return CopyFileAtomic(src, filepath.Join(dir, "dst.bin"))
 		}},
 	}
 	for _, tc := range cases {
@@ -378,7 +312,7 @@ func TestCopyFileFailsAndCleansUpWhenFsyncFails(t *testing.T) {
 //
 // The first version of this package applied the SOURCE's mode on every path,
 // which re-introduced the exact failure it was written to prevent. These tests
-// pin the three policies apart so that collapsing them again fails.
+// pin the policies apart so that collapsing them again fails.
 
 // TestCopyFileIngestDoesNotAdoptSourceMode is the regression test for that.
 // An ingest source is a download client's output; a client on umask 077 hands
@@ -389,7 +323,6 @@ func TestCopyFileIngestDoesNotAdoptSourceMode(t *testing.T) {
 		name string
 		call func(src, dst string) error
 	}{
-		{"CopyFileIngest", CopyFileIngest},
 		{"CopyFileIngestExclusive", CopyFileIngestExclusive},
 	} {
 		t.Run(fn.name, func(t *testing.T) {
@@ -411,47 +344,6 @@ func TestCopyFileIngestDoesNotAdoptSourceMode(t *testing.T) {
 				t.Errorf("dst mode = %v, want a subset of %v", got, fs.FileMode(LibraryFileMode))
 			}
 		})
-	}
-}
-
-// TestCopyFileAtomicKeepsDestinationMode: this path restores a live library
-// from a backup, and the backups already on disk were written by two earlier
-// writers at a hardcoded 0644 and 0600. Stamping either onto a 0664
-// group-writable library takes the share down at the moment a rollback runs.
-func TestCopyFileAtomicKeepsDestinationMode(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "lib.itl.bak-old")
-	dst := filepath.Join(dir, "lib.itl")
-	writeFileMode(t, src, "restored body", 0o600) // a legacy owner-only backup
-	writeFileMode(t, dst, "corrupt live body", 0o664)
-
-	if err := CopyFileAtomic(src, dst); err != nil {
-		t.Fatalf("CopyFileAtomic: %v", err)
-	}
-	if got := readAll(t, dst); got != "restored body" {
-		t.Errorf("dst = %q, want %q", got, "restored body")
-	}
-	if got := modeOf(t, dst); got != 0o664 {
-		t.Errorf("dst mode = %v, want the live library's %v — a rollback must not "+
-			"stamp an old backup's mode onto the file it restores",
-			got, fs.FileMode(0o664))
-	}
-}
-
-// TestCopyFileAtomicUsesSourceModeWhenDestinationIsNew: with nothing at dst
-// there is no mode to preserve, so the source's is the only defensible answer.
-// This is the backup-creation direction.
-func TestCopyFileAtomicUsesSourceModeWhenDestinationIsNew(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "lib.itl")
-	dst := filepath.Join(dir, "lib.itl.bak-new")
-	writeFileMode(t, src, "library", 0o664)
-
-	if err := CopyFileAtomic(src, dst); err != nil {
-		t.Fatalf("CopyFileAtomic: %v", err)
-	}
-	if got := modeOf(t, dst); got != 0o664 {
-		t.Errorf("new backup mode = %v, want the library's %v", got, fs.FileMode(0o664))
 	}
 }
 
@@ -547,12 +439,6 @@ func TestCopyPathsFsyncTheParentDirectory(t *testing.T) {
 		}},
 		{"CopyFileExclusive", true, func(t *testing.T, dir, src string) error {
 			return CopyFileExclusive(src, filepath.Join(dir, "dst.bin"))
-		}},
-		{"CopyFileIngest", true, func(t *testing.T, dir, src string) error {
-			return CopyFileIngest(src, filepath.Join(dir, "dst.bin"))
-		}},
-		{"CopyFileAtomic", true, func(t *testing.T, dir, src string) error {
-			return CopyFileAtomic(src, filepath.Join(dir, "dst.bin"))
 		}},
 		// CopyFileInto writes into a name that already exists and is already
 		// durable, so there is nothing for a directory sync to commit.
