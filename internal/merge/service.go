@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.47.0
+// version: 1.47.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package merge
 
@@ -497,7 +497,7 @@ func refuseSharedAudioPaths(books []*database.Book, filesByID map[string][]datab
 func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (_ *Result, retErr error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
-	// /audiobooks/merge handler passes req.BookIDs straight through) — if
+	// /audiobooks/duplicates/link handler passes req.BookIDs straight through) — if
 	// duplicate IDs reach here, the version-group loop below writes that
 	// book's row twice, and the LAST write wins. A duplicated primary would
 	// get its own IsPrimaryVersion=true immediately overwritten back to

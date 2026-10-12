@@ -1,12 +1,12 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
 // last-edited: 2026-10-11
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
-// (SQL-backed book/author/series duplicate detection, async merge / dismiss /
-// scan triggers, series prune / normalize preview + apply, and dedup-entry
-// metadata validation). Each interface lists only what the 17 handlers actually
+// (SQL-backed book/author/series duplicate detection, async link / reject /
+// scan triggers, series prune preview + apply, and dedup-entry metadata
+// validation). Each interface lists only what the handlers actually
 // call so package duplicates stays decoupled from the concrete store / service /
 // registry implementations and never imports package server (which would create
 // an import cycle).
@@ -38,7 +38,7 @@ import (
 // observed (mirrors the dedup / system handler getStore seam).
 //
 // CreateOperation was dropped on 2026-08-22. The scan / merge / refresh / dedup
-// / prune / normalize triggers used to mint a v1 operation row here purely to
+// / prune triggers used to mint a v1 operation row here purely to
 // have something to return; they are v2-native now and the registry owns the
 // row, so the method is not merely unused by these handlers — it is unreachable
 // from them.
@@ -97,7 +97,7 @@ type DedupEngine interface {
 }
 
 // OperationsRegistry is the narrow operations-registry subset the duplicates
-// scan/merge/refresh/dedup/prune/normalize triggers require: only EnqueueOp.
+// scan/merge/refresh/dedup/prune triggers require: only EnqueueOp.
 // The variadic opts param is preserved so the concrete *opsregistry.Registry
 // satisfies the interface. The duplicates domain never calls Cancel.
 type OperationsRegistry interface {

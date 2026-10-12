@@ -1,12 +1,12 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-12
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
-// server package: dedup candidate / cluster / series listing, merge / dismiss /
-// remove, bulk merge, stats, CSV/JSON export, and the dedup / embed / acoustid /
-// book-signature scan triggers, plus the per-segment acoustid compare endpoint.
+// server package: dedup candidate / cluster / series listing, link / reject /
+// remove, bulk link, stats, CSV/JSON export, and the dedup / embed / acoustid
+// scan triggers, plus the per-segment acoustid compare endpoint.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (DedupStore, OperationsRegistry, MergeService, DedupEngine) plus

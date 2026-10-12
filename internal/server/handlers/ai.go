@@ -1,13 +1,15 @@
 // file: internal/server/handlers/ai.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
 // last-edited: 2026-10-11
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
 // parsing, the AI author-dedup scan lifecycle (start/list/get/results/apply/
-// delete/cancel/compare), the duplicate-author review + apply flows, and the
-// ai-jobs listing. Business logic that does not depend on the *Server receiver
+// delete/cancel/compare), and the ai-jobs listing. The ai.author-review and
+// ai.author-merge-apply ops have no HTTP routes here; they are started through
+// the generic operations endpoints and their review modes live below as
+// package-level functions. Business logic that does not depend on the *Server receiver
 // is reproduced here behind narrow interfaces so package handlers stays free of
 // any import on package server.
 
@@ -104,7 +106,8 @@ type AudiobookUpdater interface {
 // These are the params for the two AI author ops, and they are EXPORTED for a
 // reason. Package server used to declare its own structurally-identical copies
 // (server.aiReviewOpParams / aiMergeApplyOpParams / aiMergeApplySuggestion),
-// because this package enqueues the op and that package decodes it in Run.
+// because this package once enqueued the ops (through HTTP handlers since
+// removed) and that package decodes them in Run.
 // Nothing coupled the two but matching JSON tags: edit one side's fields and
 // the build stays green while the op silently decodes a zero value at runtime.
 // That is not hypothetical — dropping the legacy_op_id field on 2026-08-23
@@ -126,9 +129,9 @@ type aiAuthorScanOpParams struct {
 }
 
 // AIMergeApplySuggestion is the per-item suggestion for the merge-apply op. It
-// is exported because it doubles as the HTTP request body shape for
-// ApplyAuthorReview, and because AIMergeApplyOpParams carries it across the
-// package boundary into ai_ops.go.
+// is exported because AIMergeApplyOpParams carries it across the package
+// boundary into ai_ops.go. (It also used to be the request body of the removed
+// ApplyAuthorReview handler.)
 type AIMergeApplySuggestion struct {
 	GroupIndex    int    `json:"group_index"`
 	Action        string `json:"action"`
@@ -144,18 +147,15 @@ type AIMergeApplyOpParams struct {
 	Suggestions []AIMergeApplySuggestion `json:"suggestions"`
 }
 
-// AIHandler hosts the AI HTTP endpoints. Fields are narrow dependency
-// interfaces (plus the concrete dedup cache and an injected enrich function) so
-// the handler is fully mockable and package handlers never imports package
-// server.
 // aiStore is everything the AI handler needs from the store. Was
 // database.Store (398 methods) until 2026-08-19, on a comment reading "full
-// store for the author-review paths". An empty-interface compiler probe under
-// -gcflags=-e enumerated exactly the eight methods below, with no forwarding
-// constraints and no `too many errors` truncation.
+// store for the author-review paths". Narrowed to the eight methods the
+// author-review paths needed, then to the four below once the review/apply
+// HTTP handlers were removed (01-P72): only ParseAudiobook / shownSeriesName
+// call the store through AIHandler now.
 type aiStore interface {
-	aiReviewGroupsStore
-	aiAuthorReviewStore
+	GetAuthorByID(id int) (*database.Author, error)
+	GetBookByID(id string) (*database.Book, error)
 	// BookFilesGetter feeds the parse context's runtime
 	// (database.LoadBookRuntime), which sums the book's files.
 	database.BookFilesGetter
@@ -164,31 +164,21 @@ type aiStore interface {
 	GetSeriesByID(id int) (*database.Series, error)
 }
 
-// aiReviewGroupsStore is the two methods AIReviewGroupsMode itself touches. It
-// is a separate declaration rather than a slice of aiStore because the function
-// is exported and callable without an AIHandler, so its own requirement is worth
-// stating exactly -- probed independently, not assumed to be a subset.
+// aiReviewGroupsStore is the one method AIReviewGroupsMode itself touches. It
+// is a separate declaration, not part of aiStore, because the function is
+// exported and called by the op executor in package server without an
+// AIHandler, so its own requirement is stated exactly.
 type aiReviewGroupsStore interface {
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
-}
-
-// aiAuthorReviewStore is the author/book reads behind the author-review paths.
-type aiAuthorReviewStore interface {
-	GetAllAuthorBookCounts() (map[int]int, error)
-	GetAllAuthors() ([]database.Author, error)
-	GetAuthorByID(id int) (*database.Author, error)
-	GetBookByID(id string) (*database.Book, error)
 }
 
 // AIAuthorReviewDefID and AIAuthorMergeApplyDefID are the registered
 // OperationDef ids for the two AI author operations.
 //
 // They are exported so internal/server/ai_ops.go registers each op under the
-// same string this package enqueues and compares against. The review id in
-// particular must not drift: activeAuthorReview matches rows by DefID, so a
-// mismatch would not fail a build, and a unit test written with the same
-// literal would not see it either — the guard would simply match nothing,
-// forever, and every request would start a second concurrent review.
+// same string the rest of the codebase refers to (the former in-package
+// active-review lookup matched rows by DefID and is gone with the removed
+// handlers, but the ids are still the wire identity of the ops).
 const (
 	AIAuthorReviewDefID     = "ai.author-review"
 	AIAuthorMergeApplyDefID = "ai.author-merge-apply"
@@ -197,15 +187,18 @@ const (
 // SaveResultFunc persists an operation's result payload.
 //
 // The two review-mode functions used to call store.UpdateOperationResultData
-// with the id of a v1 row the handler had minted. They now take this instead, so
+// with the id of a v1 row a handler had minted. They now take this instead, so
 // the result lands wherever the CALLER's operations system keeps it — for the v2
 // ops in ai_ops.go, that is the run's own v2 row via ReporterSetResult. The
 // error is returned rather than logged: the payload IS the review's output, and
 // a run whose suggestions were never stored has not succeeded.
 type SaveResultFunc func(payload any) error
 
+// AIHandler hosts the AI HTTP endpoints. Fields are narrow dependency
+// interfaces (plus an injected enrich function) so the handler is fully
+// mockable and package handlers never imports package server.
 type AIHandler struct {
-	store      aiStore                  // 8 methods; see aiStore
+	store      aiStore                  // 4 methods; see aiStore
 	scanStore  AIScanStore              // AI scan persistence
 	pipeline   AIPipeline               // scan pipeline manager (start/cancel)
 	updater    AudiobookUpdater         // audiobook update service (parse-with-ai)

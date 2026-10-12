@@ -1,7 +1,7 @@
 <!-- file: docs/dedup/STATUS.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 09dc17af-0c96-4f15-bc27-e5f48edb9e74 -->
-<!-- last-edited: 2026-09-25 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Dedup — Status & Architecture (single source of truth)
 
@@ -298,7 +298,7 @@ side's book row); capture failure never blocks the link
 | Scan & ingest | `library.scan` · `POST /operations/scan` |
 | Fingerprint | `acoustid.scan` · `POST /dedup/scan-acoustid` |
 | LSH index | `dedup.lsh-index-build` |
-| Whole-book signature | `dedup.book-signature-scan` · `POST /dedup/scan-book-signature` |
+| Whole-book signature | `dedup.book-signature-scan` · started via `POST /operations/v2` (the `POST /dedup/scan-book-signature` route was removed) |
 | Embeddings | `dedup.embed-scan` · `POST /dedup/scan-embed` |
 | Candidate scan | `dedup.full-scan` · `POST /dedup/scan` |
 | Rescore | engine `Rescore` · `POST /dedup/rescore` |
