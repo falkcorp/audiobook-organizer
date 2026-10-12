@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_reconcile_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: ea4b7eaf-18c6-45d2-9344-3838c68c905f
 // last-edited: 2026-10-11
 
@@ -279,6 +279,14 @@ func TestReconcileOpsV3RepairsOldBinaryWritesOnReboot(t *testing.T) {
 	if err := raw.db.Delete(opv2OpKey(deleted), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
+	// The deleted run's journals (undo journal, results, summaries, v1
+	// state) are not opv3 keys: removing its opv3 run must leave every one.
+	journals := []string{"opchange:" + deleted + ":0001", "op_result:" + deleted + ":book-1", "opsummary:" + deleted, "opstate:" + deleted}
+	for _, k := range journals {
+		if err := raw.db.Set([]byte(k), []byte(`{"synthetic":true}`), pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -305,6 +313,16 @@ func TestReconcileOpsV3RepairsOldBinaryWritesOnReboot(t *testing.T) {
 	}
 	if ks := keysMentioning(t, p, deleted); len(ks) != 0 {
 		t.Errorf("deleted run left opv3 keys: %v", ks)
+	}
+	for _, k := range journals {
+		if v, closer, err := p.db.Get([]byte(k)); err != nil {
+			t.Errorf("the reconcile removed %s with the orphaned run: %v", k, err)
+		} else {
+			if string(v) != `{"synthetic":true}` {
+				t.Errorf("the reconcile rewrote %s: %q", k, v)
+			}
+			_ = closer.Close()
+		}
 	}
 	if v3Digest(t, p, opv3RunPrefix+untouched, opv3ProgPrefix+untouched, opv3EvtPrefix+untouched+":") != untouchedBefore {
 		t.Error("the reconcile rewrote a run the old binary never touched")
