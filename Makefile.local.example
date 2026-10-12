@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.5.1
+# version: 1.6.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-10-09
+# last-edited: 2026-10-11
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -17,7 +17,7 @@
 # template's `.prev`-preserving step enables.
 #
 # ---------------------------------------------------------------------------
-# TOOLCHAIN: the `go build` lines below deliberately carry NO GOTOOLCHAIN
+# TOOLCHAIN: the recipes below deliberately carry NO GOTOOLCHAIN
 # prefix. The committed Makefile exports it (`export GOTOOLCHAIN := go1.27.2`)
 # BEFORE its `-include Makefile.local`, and an exported make variable becomes an
 # environment variable for every recipe — including recipes defined in this
@@ -67,23 +67,21 @@ DEPLOY_DB := /path/to/audiobooks.pebble
 # Base URL of the deployed server, used by the post-deploy version check.
 DEPLOY_URL := https://$(DEPLOY_HOST):8484
 
-## deploy: Build frontend + cross-compile embedded binary, ship it, preserve a
+## deploy: Build via the committed `build-linux` target, ship it, preserve a
 ## .prev copy, restart, and verify the deployed version.
 #
-# Mirrors the committed `build-linux` target's build chain: web-build first
-# (so web/dist is fresh — embed_frontend embeds whatever is on disk, stale or
-# absent), then cross-compile with the SAME tag set the real build uses
-# (embed_frontend fts5 native_taglib). Cross-compiling CGO (fts5/native_taglib)
-# from macOS requires: brew install filosottile/musl-cross/musl-cross
+# The build itself lives in the committed Makefile (`make build-linux`): it owns
+# the tags (including `pprof`, listener off unless ABK_PPROF_ADDR is set), the
+# flags and the web-build prerequisite, so this file repeats NO `go build` line.
+# Cross-compiling CGO (fts5/native_taglib) from macOS requires:
+# brew install filosottile/musl-cross/musl-cross
+# Do not assign GO_BUILD_TAGS / GO_BUILD_FLAGS / GO_LDFLAGS here: this file is
+# included after the Makefile defines them, so an assignment would silently
+# override the committed values.
 .PHONY: deploy
-deploy: web-build
+deploy:
 	@bash scripts/deploy-preflight.sh origin/main
-	@echo "→ Cross-compiling linux/amd64 binary..."
-	@mkdir -p dist
-	CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
-		-tags "embed_frontend fts5 native_taglib" \
-		-ldflags="-s -w -linkmode external -extldflags '-static' -X main.version=$$(git describe --tags --always)" \
-		-o dist/$(BINARY)-linux-amd64 .
+	@$(MAKE) build-linux
 	@echo "→ Copying binary to $(DEPLOY_HOST)..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
@@ -92,7 +90,7 @@ deploy: web-build
 	  sudo systemctl restart audiobook-organizer.service'
 	@echo "→ Post-deploy: verifying deployed version matches git describe..."
 	@sleep 3; \
-	  expected=$$(git describe --tags --always); \
+	  expected="$(VERSION)"; \
 	  deployed=$$(curl -ksf $(DEPLOY_URL)/api/v1/system/version || echo "UNREACHABLE"); \
 	  echo "   expected: $$expected"; \
 	  echo "   deployed: $$deployed"; \
@@ -102,34 +100,24 @@ deploy: web-build
 	  esac
 	@echo "✅ Deployed to $(DEPLOY_HOST). Roll back with: make rollback DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_BIN=$(DEPLOY_BIN)"
 
-## deploy-debug: Same as deploy, but ships a debug (non-stripped) build
+## deploy-debug: deploy, then turn the pprof listener on (loopback only) via a
+## systemd drop-in. Profile over `ssh -L 6060:localhost:6060 $(DEPLOY_HOST)`.
 .PHONY: deploy-debug
-deploy-debug: web-build
-	@bash scripts/deploy-preflight.sh origin/main
-	@echo "→ Cross-compiling linux/amd64 debug binary..."
-	@mkdir -p dist
-	CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
-		-gcflags="all=-N -l" \
-		-tags "embed_frontend fts5 native_taglib" \
-		-ldflags="-linkmode external -extldflags '-static' -X main.version=$$(git describe --tags --always)" \
-		-o dist/$(BINARY)-linux-amd64-debug .
-	@echo "→ Copying debug binary to $(DEPLOY_HOST)..."
-	scp dist/$(BINARY)-linux-amd64-debug $(DEPLOY_HOST):/home/USER/audiobook-organizer
-	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
-	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
-	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
-	  sudo systemctl restart audiobook-organizer.service'
-	@echo "→ Post-deploy: verifying deployed version matches git describe..."
-	@sleep 3; \
-	  expected=$$(git describe --tags --always); \
-	  deployed=$$(curl -ksf $(DEPLOY_URL)/api/v1/system/version || echo "UNREACHABLE"); \
-	  echo "   expected: $$expected"; \
-	  echo "   deployed: $$deployed"; \
-	  case "$$deployed" in \
-	    *"$$expected"*) echo "✅ Deployed version matches." ;; \
-	    *) echo "❌ Deployed version does NOT match git describe — stale binary shipped?"; exit 1 ;; \
-	  esac
-	@echo "✅ Debug build deployed to $(DEPLOY_HOST)."
+deploy-debug: deploy
+	@echo "→ Enabling pprof listener (ABK_PPROF_ADDR=localhost:6060) via systemd drop-in..."
+	ssh $(DEPLOY_HOST) 'sudo mkdir -p /etc/systemd/system/audiobook-organizer.service.d && \
+	  printf "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n" | sudo tee /etc/systemd/system/audiobook-organizer.service.d/pprof.conf >/dev/null && \
+	  sudo systemctl daemon-reload && sudo systemctl restart audiobook-organizer.service'
+	@sleep 3
+	ssh $(DEPLOY_HOST) 'curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1" | head -1'
+	@echo "✅ pprof listening on $(DEPLOY_HOST) localhost:6060. Turn off with: make pprof-off"
+
+## pprof-off: remove the pprof drop-in and restart (listener goes back to off)
+.PHONY: pprof-off
+pprof-off:
+	ssh $(DEPLOY_HOST) 'sudo rm -f /etc/systemd/system/audiobook-organizer.service.d/pprof.conf && \
+	  sudo systemctl daemon-reload && sudo systemctl restart audiobook-organizer.service'
+	@echo "✅ pprof listener disabled on $(DEPLOY_HOST)."
 
 # ============================================================================
 # Sandbox: disposable full-fidelity replica for testing RISKY / DESTRUCTIVE changes
