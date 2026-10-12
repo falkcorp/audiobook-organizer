@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.7.0
+# version: 1.8.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-10-11
+# last-edited: 2026-10-12
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -64,7 +64,9 @@ DEPLOY_BIN := /usr/local/bin/audiobook-organizer
 # a `?=` here would silently leave it empty.
 DEPLOY_DB := /path/to/audiobooks.pebble
 
-# Base URL of the deployed server, used by the post-deploy version check.
+# Base URL of the deployed server, used by the post-deploy readiness wait
+# (scripts/deploy-wait-ready.sh polls $(DEPLOY_URL)/health) and version check.
+# Also required by the committed `make rollback` target.
 DEPLOY_URL := https://$(DEPLOY_HOST):8484
 
 ## deploy: Build via the committed `build-linux` target, ship it, preserve a
@@ -89,9 +91,10 @@ deploy:
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
 	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
 	  sudo systemctl restart audiobook-organizer.service'
+	@echo "→ Waiting for /health to report ready (up to 300s; the in-memory warmup takes minutes)..."
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
 	@echo "→ Post-deploy: verifying deployed version matches git describe..."
-	@sleep 3; \
-	  expected="$(VERSION)"; \
+	@expected="$(VERSION)"; \
 	  deployed=$$(curl -ksf $(DEPLOY_URL)/api/v1/system/version || echo "UNREACHABLE"); \
 	  echo "   expected: $$expected"; \
 	  echo "   deployed: $$deployed"; \
@@ -116,7 +119,7 @@ pprof-dropin:
 
 deploy-debug: pprof-dropin deploy
 	@echo "→ Checking the pprof listener answers..."
-	@sleep 3
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
 	ssh $(DEPLOY_HOST) 'out=$$(curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1") && [ -n "$$out" ] && printf "%s\n" "$$out" | head -1'
 	@echo "✅ pprof listening on $(DEPLOY_HOST) localhost:6060. Turn off with: make pprof-off"
 

@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.33.0
+// version: 4.33.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -267,13 +267,27 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	s.startCacheWarmers()
 
-	// Fatal. configureAndStartHTTP itself only returns setup errors; a
-	// listener that fails to BIND does so inside its goroutine, which logs
-	// and os.Exit(1)s (H113), so that failure stops the process without
-	// passing through this Run.
+	// Fatal. configureAndStartHTTP binds the main listener (and loads the
+	// TLS key pair) synchronously, so a port in use or an unreadable cert
+	// returns here and Start fails instead of a goroutine exiting the
+	// process after the fact. Only a Serve error AFTER a successful bind
+	// still exits from its goroutine (H113).
 	if err := steps.Run("http", func() error { return s.configureAndStartHTTP(cfg) }); err != nil {
 		s.flushDeferredActivity()
 		return err
+	}
+
+	// The last Fatal step has passed and the port accepts connections: tell
+	// systemd (Type=notify) the service is started. This is deliberately
+	// NOT after the in-memory warmup (130-200 s on prod), which would turn a
+	// slow disk into a start timeout and a restart loop; /health reports
+	// `ready` for that and the deploy waits on it. A notify failure is
+	// logged, never fatal: under Type=simple there is no socket at all.
+	if err := NotifyReady(); err != nil {
+		lifecycleLog.Warn("systemd readiness notification failed: %v", err)
+	}
+	if err := NotifyStatus("Serving; readiness is reported by the health endpoint"); err != nil {
+		lifecycleLog.Warn("systemd status notification failed: %v", err)
 	}
 
 	// The listener is started: activity entries queued on the startup path
@@ -510,6 +524,14 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	// Wait for interrupt signal to gracefully shutdown the server
 	<-quit
+	// Tell systemd the stop has begun before anything slow runs (the client
+	// broadcast below sleeps, the registry drain can take 10 s).
+	if err := NotifyStopping(); err != nil {
+		lifecycleLog.Warn("systemd stopping notification failed: %v", err)
+	}
+	if err := NotifyStatus("Shutting down"); err != nil {
+		lifecycleLog.Warn("systemd status notification failed: %v", err)
+	}
 	close(shutdown)
 	signal.Stop(quit)
 
@@ -822,9 +844,16 @@ func (s *Server) startCacheWarmers() {
 }
 
 // configureAndStartHTTP builds s.httpServer (and, when TLS is configured,
-// s.http3Server plus the HTTP->HTTPS redirect listener) and launches the
-// listener goroutines. Extracted verbatim from Start; cfg is taken by value so
-// the local TLS-fallback mutations stay scoped to this phase exactly as before.
+// s.http3Server plus the HTTP->HTTPS redirect listener), binds the listeners
+// and launches their Serve goroutines. cfg is taken by value so the local
+// TLS-fallback mutations stay scoped to this phase.
+//
+// The main listener is bound HERE, synchronously, and the TLS key pair is
+// loaded here too. That gives two guarantees Start relies on: a port in use
+// or an unreadable key pair is returned as a startup error instead of a
+// goroutine exiting the process later, and when this returns nil the port
+// already accepts connections (the kernel queues them before the first
+// Accept), which is when Start sends READY=1 to systemd.
 func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
@@ -878,72 +907,109 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 			})
 		}
 
-		// Start HTTPS server with HTTP/2
+		// Load the key pair now rather than inside ServeTLS: a key pair
+		// that cannot be read must fail Start, before READY=1, instead of
+		// exiting the process just after systemd was told it started.
+		// ServeTLS(ln, "", "") then serves tlsConfig.Certificates.
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("load TLS key pair: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+
+		ln, err := s.bindMainListener()
+		if err != nil {
+			return err
+		}
+		serving := "HTTPS/HTTP2"
+		if cfg.HTTP3Port != "" {
+			serving = "HTTPS/HTTP2 (HTTP/3 on UDP port " + cfg.HTTP3Port + ")"
+		}
+		lifecycleLog.Info("Serving %s on %s", serving, ln.Addr())
 		go func() {
-			protocols := "HTTPS/HTTP2"
-			if cfg.HTTP3Port != "" {
-				protocols = "HTTPS/HTTP2 (HTTP/3 on UDP port " + cfg.HTTP3Port + ")"
-			}
-			slog.Info("Starting server on", "protocols", protocols, "addr", s.httpServer.Addr)
-			if err := s.httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
-				// A process whose MAIN listener failed to bind is useless but
-				// looks alive: on 2026-08-11 an e2e run probed the port, got a
-				// 200 from the SIBLING that owned it, and gated a change
-				// against the wrong build while this process idled. Exit so
-				// supervisors and scripts see the failure (H113).
-				slog.Error("Failed to start HTTPS server; exiting", "err", err)
+			if err := s.httpServer.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// The bind succeeded, so this is the listener failing while
+				// serving. A process whose main listener is gone is useless
+				// but looks alive (on 2026-08-11 an e2e run got a 200 from a
+				// SIBLING that owned the port and gated a change against the
+				// wrong build). Exit so supervisors and scripts see it (H113).
+				lifecycleLog.Error("HTTPS server stopped serving; exiting: %v", err)
 				os.Exit(1)
 			}
 		}()
 
-		// Start HTTP/3 server if configured
+		// Start HTTP/3 server if configured. Optional and non-fatal, as
+		// before. quic-go binds the UDP socket inside ListenAndServeTLS, so
+		// "started without error" is the most this function knows about it;
+		// READY=1 does not wait on HTTP/3. (Binding the UDP socket here and
+		// handing it to http3.Server.Serve would need the shutdown path to
+		// close it too: quic-go's Close leaves a caller-supplied conn open.)
 		if cfg.HTTP3Port != "" {
 			s.http3Server = &http3.Server{
 				Addr:      fmt.Sprintf("%s:%s", cfg.Host, cfg.HTTP3Port),
 				Handler:   s.router,
 				TLSConfig: tlsConfig,
 			}
+			lifecycleLog.Info("Starting HTTP/3 (QUIC) server on UDP %s:%s", cfg.Host, cfg.HTTP3Port)
 			go func() {
-				slog.Info("Starting HTTP/3 (QUIC) server on UDP", "host", cfg.Host, "port", cfg.HTTP3Port)
-				if err := s.http3Server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
-					slog.Error("Failed to start HTTP/3 server", "err", err)
+				if err := s.http3Server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					lifecycleLog.Error("HTTP/3 server failed: %v", err)
 				}
 			}()
 		}
 
-		// Start HTTP to HTTPS redirect server on port 80
-		go func() {
-			redirectAddr := fmt.Sprintf("%s:80", cfg.Host)
-			httpsPort := cfg.Port
-			if httpsPort == "80" {
-				httpsPort = "443" // Don't redirect 80->80
-			}
-
-			redirectHandler := newHTTPSRedirectHandler(cfg.Host, httpsPort)
-
-			slog.Info("Starting HTTP->HTTPS redirect server on (redirects to )", "redirectAddr", redirectAddr, "httpsPort", httpsPort)
+		// HTTP to HTTPS redirect server on port 80. Bound synchronously like
+		// the main listener, but a failure stays non-fatal: port 80 may need
+		// privileges this process does not have.
+		redirectAddr := fmt.Sprintf("%s:80", cfg.Host)
+		httpsPort := cfg.Port
+		if httpsPort == "80" {
+			httpsPort = "443" // Don't redirect 80->80
+		}
+		redirectLn, err := net.Listen("tcp", redirectAddr)
+		if err != nil {
+			lifecycleLog.Warn("HTTP->HTTPS redirect server not started (port 80 may require privileges): %v", err)
+		} else {
+			lifecycleLog.Info("Serving HTTP->HTTPS redirect on %s (to port %s)", redirectLn.Addr(), httpsPort)
 			httpRedirectServer := &http.Server{
 				Addr:    redirectAddr,
-				Handler: redirectHandler,
+				Handler: newHTTPSRedirectHandler(cfg.Host, httpsPort),
 			}
-			if err := httpRedirectServer.ListenAndServe(); err != nil {
-				// Don't fatal - port 80 might require sudo
-				slog.Warn("Warning HTTP redirect server failed (port 80 may require sudo)", "err", err)
-			}
-		}()
+			go func() {
+				if err := httpRedirectServer.Serve(redirectLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					lifecycleLog.Warn("HTTP->HTTPS redirect server stopped: %v", err)
+				}
+			}()
+		}
 	} else {
-		// Start HTTP/1.1 server without TLS
+		// HTTP/1.1 server without TLS
+		ln, err := s.bindMainListener()
+		if err != nil {
+			return err
+		}
+		lifecycleLog.Info("Serving HTTP/1.1 on %s (use --tls-cert and --tls-key for HTTP/2, add --http3-port for HTTP/3)", ln.Addr())
 		go func() {
-			slog.Info("Starting HTTP/1.1 server on (use --tls-cert and --tls-key for HTTP/2, add --http3-port for HTTP/3)", "addr", s.httpServer.Addr)
-			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				// See the TLS twin above: a bind failure must not leave a
-				// healthy-looking zombie process (H113).
-				slog.Error("Failed to start server; exiting", "err", err)
+			if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// See the TLS twin above (H113).
+				lifecycleLog.Error("HTTP server stopped serving; exiting: %v", err)
 				os.Exit(1)
 			}
 		}()
 	}
 	return nil
+}
+
+// bindMainListener binds s.httpServer.Addr and records the bound address in
+// s.httpBoundAddr. A failure (most often the port already in use) is returned,
+// so it fails Start rather than leaving a process that looks alive.
+func (s *Server) bindMainListener() (net.Listener, error) {
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("bind HTTP listener: %w", err)
+	}
+	addr := ln.Addr().String()
+	s.httpBoundAddr.Store(&addr)
+	return ln, nil
 }
 
 // seedRolesAndTokens seeds/refreshes multi-user roles and the system user, then

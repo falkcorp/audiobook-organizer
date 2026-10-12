@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.43.0
+# version: 2.44.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-11
+# last-edited: 2026-10-12
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -48,6 +48,9 @@ DEPLOY_BIN  ?=
 # Path of the main Pebble store on DEPLOY_HOST (the --db / DATABASE_PATH
 # value); required by rollback.
 DEPLOY_DB   ?=
+# Base URL of the deployed server (e.g. https://192.0.2.10:8484); rollback
+# waits on $(DEPLOY_URL)/health for "ready":true after its restart.
+DEPLOY_URL  ?=
 BACKUP_DIR  ?= $(CURDIR)/backups
 
 # Generic build flags (owner decision D37). The committed Makefile owns these so
@@ -848,6 +851,7 @@ rollback:
 	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is not set. Set it to the server's base URL (e.g. https://HOST:8484) in Makefile.local or export it."; exit 1)
 	@echo "→ Rolling back $(DEPLOY_BIN) on $(DEPLOY_HOST)..."
 	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST) — nothing to roll back to."; exit 1)
 	@errs=$$(mktemp -d) && trap 'rm -rf "$$errs"' EXIT; \
@@ -864,6 +868,8 @@ rollback:
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
 	  sudo cp $(DEPLOY_BIN).prev $(DEPLOY_BIN) && \
 	  sudo systemctl restart audiobook-organizer.service'
+	@echo "→ Restarted on the previous binary; waiting for /health to report ready (up to 300s)..."
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300 || (echo "ERROR: the swap and restart are done, but the server did not report ready. A previous binary older than readiness reporting has no ready field; check it by hand."; exit 1)
 	@echo "✅ Rolled back $(DEPLOY_BIN) to previous version and restarted."
 
 # Quick aliases
