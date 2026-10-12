@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
 // last-edited: 2026-10-11
 
@@ -8,6 +8,8 @@ package deluge
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,11 +114,15 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 		name      string
 		protected func(dir string) []string // config.ProtectedPaths
 		seeding   bool                      // a torrent seeds from the row's directory
+		unloaded  bool                      // Deluge is configured but cannot be reached
 		wantMark  bool
 	}{
 		{name: "unprotected control", wantMark: true},
 		{name: "config protected path", protected: func(dir string) []string { return []string{dir} }},
 		{name: "torrent seeding from the library", seeding: true},
+		// A configured Deluge that has never answered: the cache would call
+		// every seeding file unprotected, so nothing is marked.
+		{name: "protected list not loaded", unloaded: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,6 +159,18 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 			if tc.seeding {
 				tor := delugeclient.TorrentDetail{TorrentStatus: delugeclient.TorrentStatus{Hash: linkTorrentID(1), SavePath: dir}}
 				_, client := newFakeDelugeClient(t, tor)
+				p.client = client
+				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)
+			}
+			if tc.unloaded {
+				down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "down", http.StatusServiceUnavailable)
+				}))
+				t.Cleanup(down.Close)
+				client, err := delugeclient.New(down.URL, "test-password")
+				if err != nil {
+					t.Fatal(err)
+				}
 				p.client = client
 				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)
 			}
