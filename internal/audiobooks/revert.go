@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.68.0
+// version: 1.68.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-12
 
@@ -453,7 +453,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		// Only the plan record is left (the run's other rows were pruned,
 		// or the op wrote nothing else): nothing here can be restored, and
 		// reporting it restored would clear the run's hold.
-		return nil, fmt.Errorf("operation %s has nothing left to revert but its plan record: the rows its run wrote are gone, so nothing can be restored; finish the run's books by hand (merge them into the book that holds the work) to clear its hold",
+		return nil, fmt.Errorf("operation %s has nothing left to revert but its plan record: the rows its run wrote are gone, so nothing can be restored; finish the run's books by hand to clear its hold",
 			operationID)
 	}
 	if !undo.OperationRevertible(changes) {

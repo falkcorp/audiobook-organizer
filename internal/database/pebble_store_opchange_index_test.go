@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -233,6 +233,36 @@ func TestOpchangeIndex_PruneDeletesEntry(t *testing.T) {
 	got, _ := p.GetBookChanges("b1")
 	if len(got) != 1 || got[0].ID != keep.ID {
 		t.Fatalf("GetBookChanges(b1) = %v", changeIDs(got))
+	}
+}
+
+// TestOpchangeIndex_PruneKeepsTheKeptTypes: an old row of every type in
+// OpChangeTypesKeptByPrune survives PruneOperationChanges with its
+// opchange_by_book entry, among them the merge_combine_journal pointer (the
+// only link from a Repairs run to its undoable merge), while an old row of an
+// ordinary type is deleted.
+func TestOpchangeIndex_PruneKeepsTheKeptTypes(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustTrustOpChange(t, p)
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	for _, ct := range []string{"repair_plan_record", "repair_owner_apply", "merge_combine_journal"} {
+		if !OpChangeTypesKeptByPrune[ct] {
+			t.Errorf("%s is not in OpChangeTypesKeptByPrune", ct)
+		}
+		rawPutOpChange(t, p, &OperationChange{ID: "kept-" + ct, OperationID: "op-" + ct, BookID: "b-" + ct, ChangeType: ct, CreatedAt: old})
+	}
+	rawPutOpChange(t, p, &OperationChange{ID: "gone", OperationID: "op-gone", BookID: "b-gone", ChangeType: "metadata_update", CreatedAt: old})
+	mustTrustOpChange(t, p)
+
+	n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(-time.Hour), nil)
+	if err != nil || n != 1 {
+		t.Fatalf("prune = %d, %v; want 1 (only the ordinary row), nil", n, err)
+	}
+	if got := countPrefix(t, p, opChangeKeyPrefix, ""); got != 3 {
+		t.Fatalf("opchange rows = %d, want the 3 kept ones", got)
+	}
+	if got := countOpChangeIndexKeys(t, p); got != 3 {
+		t.Fatalf("opchange_by_book entries = %d, want the 3 kept ones", got)
 	}
 }
 
