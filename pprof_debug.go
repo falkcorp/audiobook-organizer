@@ -1,5 +1,5 @@
 // file: pprof_debug.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f9e1a23b-4c56-7890-d1e2-f3a4b5c6d7e8
 // last-edited: 2026-10-11
 
@@ -26,9 +26,14 @@ import (
 //
 // For a remote host, prefer SSH port-forwarding over binding a public address.
 //
-// The blank-import side effect of net/http/pprof (registering on
-// http.DefaultServeMux) is inert here: nothing in this binary serves
-// DefaultServeMux, and the listener below uses its own mux.
+// Importing net/http/pprof registers its handlers on http.DefaultServeMux as an
+// import side effect, even though this file only calls its exported handler
+// functions. That registration is inert because nothing in this binary serves
+// DefaultServeMux and the listener below uses its own mux;
+// TestPprofGuard_NothingServesDefaultServeMux enforces the first half.
+//
+// Child processes (isolated operations re-exec this binary) do not inherit
+// ABK_PPROF_ADDR: registry.childBaseEnv strips it.
 const pprofAddrEnv = "ABK_PPROF_ADDR"
 
 // newPprofMux returns a dedicated mux with the pprof handlers mounted
@@ -65,6 +70,11 @@ func startPprofFromEnv(getenv func(string) string, serve func(addr string, h htt
 	addr = resolvePprofAddr(raw)
 	if addr != raw {
 		slog.Warn("pprof address had no host; pinned to loopback", "requested", raw, "addr", addr)
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			slog.Warn("pprof address binds every interface; profiling endpoints are unauthenticated", "addr", addr)
+		}
 	}
 	go func() {
 		slog.Warn("pprof listener enabled — exposes unauthenticated profiling data; bind to loopback only", "addr", addr)

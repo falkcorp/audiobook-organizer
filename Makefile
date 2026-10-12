@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.42.0
+# version: 2.43.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-11
 
@@ -51,14 +51,22 @@ DEPLOY_DB   ?=
 BACKUP_DIR  ?= $(CURDIR)/backups
 
 # Generic build flags (owner decision D37). The committed Makefile owns these so
-# every build path, including `make build-linux` (and so every deploy), ships the
-# same tags and flags. `pprof` compiles the profiling listener in, but it serves
-# nothing unless ABK_PPROF_ADDR is set at runtime. They sit ABOVE the
-# `-include Makefile.local` line on purpose: an assignment in Makefile.local
-# would be read after these and silently override them, so do not assign them there.
+# every Makefile build target, including `make build-linux` (and so every
+# deploy), ships the same tags and flags. The `go build` lines in the
+# Dockerfiles, .goreleaser.yml and CI workflows are separate and do NOT use them
+# (they set their own tags/flags). `pprof` compiles the profiling listener in,
+# but it serves nothing unless ABK_PPROF_ADDR is set at runtime.
+# They are defined ABOVE the `-include Makefile.local` line, so an assignment in
+# Makefile.local is read after them and DOES override them (`:=` there wins);
+# that would make the deploy build differ from everyone else's, so only do it
+# on purpose.
+# GO_LDFLAGS carries no `-s -w`: dev builds and `make build-api` stay unstripped
+# so `govulncheck -mode=binary` (vulnerability-scan.yml) sees symbols. Only
+# build-linux, the deploy artifact, adds GO_STRIP_LDFLAGS.
 GO_BUILD_TAGS := pprof
 GO_BUILD_FLAGS := -trimpath
-GO_LDFLAGS := -s -w -X main.version=$(VERSION)
+GO_LDFLAGS := -X main.version=$(VERSION)
+GO_STRIP_LDFLAGS := -s -w
 
 # Include local overrides (not committed — see Makefile.local.example)
 -include Makefile.local
@@ -67,7 +75,7 @@ GO_LDFLAGS := -s -w -X main.version=$(VERSION)
         web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check fmt-check \
+        vet mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -107,6 +115,7 @@ help:
 	@echo "  make coverage-check - Verify 30% coverage threshold"
 	@echo "  make sdkguard       - Assert pkg/plugin/sdk has no unexpected internal/ deps"
 	@echo "  make bench-check    - Typecheck the //go:build bench code"
+	@echo "  make pprof-check    - Vet + run the pprof-tagged tests (go vet/test -tags pprof)"
 	@echo "  make fmt-check      - Assert every Go file is gofmt-clean"
 	@echo "  make ci             - Fast CI: short tests + coverage (prop tests skipped)"
 	@echo "  make audiobooth-decode - AudioBooth Swift decode proof (macOS, needs swift)"
@@ -157,7 +166,7 @@ build-linux: web-build
 	@mkdir -p dist
 	@CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
 		-tags "embed_frontend fts5 native_taglib $(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) \
-		-ldflags="$(GO_LDFLAGS) -linkmode external -extldflags '-static'" \
+		-ldflags="$(GO_LDFLAGS) $(GO_STRIP_LDFLAGS) -linkmode external -extldflags '-static'" \
 		-o dist/audiobook-organizer-linux-amd64 .
 	@echo "✅ Built dist/audiobook-organizer-linux-amd64"
 
@@ -546,6 +555,13 @@ bench-check:
 	@go build -tags bench -gcflags=-e ./...
 	@echo "✅ Bench check passed"
 
+## pprof-check: Vet and run the pprof-tagged tests (no other gate compiles with -tags pprof)
+pprof-check:
+	@echo "🔍 Vetting and testing the pprof build tag..."
+	@go vet -tags pprof .
+	@go test -tags pprof -run Pprof -count=1 .
+	@echo "✅ pprof check passed"
+
 ## fmt-check: Assert every Go file is gofmt-clean (verified nowhere until 2026-08-20)
 #
 # The third instance of the pattern that produced sdkguard and bench-check:
@@ -728,7 +744,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard ops-check bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck sdkguard ops-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool

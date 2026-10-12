@@ -1,5 +1,5 @@
 <!-- file: docs/BUILD_TAGS_GUIDE.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -33,17 +33,26 @@ acts as a build constraint. Files with this tag are only included when the
 
 `pprof` is part of the committed Makefile's `GO_BUILD_TAGS`, so `make build`,
 `make build-api` and `make build-linux` (and therefore every deploy) include it.
+Only `build-linux` (the deploy artifact) strips symbols (`-s -w`, via
+`GO_STRIP_LDFLAGS`); dev builds and `make build-api` stay unstripped so
+`govulncheck -mode=binary` in `vulnerability-scan.yml` can read the symbols.
 It compiles in `pprof_debug.go`, which starts a profiling listener only when
 `ABK_PPROF_ADDR` is set at runtime. A default deploy exposes nothing.
 
 - Enable: `ABK_PPROF_ADDR=localhost:6060`. An empty host (`:6060`) is rewritten to
   `127.0.0.1:6060`. Bind loopback only; the endpoints are unauthenticated.
-- The listener uses its own mux, never `http.DefaultServeMux`.
+- The listener uses its own mux, never `http.DefaultServeMux`
+  (`TestPprofGuard_NothingServesDefaultServeMux` fails if any non-test file
+  serves it). Isolated-operation child processes do not inherit
+  `ABK_PPROF_ADDR`, so only the parent listens. Binding `0.0.0.0`/`[::]` logs a
+  WARN.
+- `make pprof-check` (part of `make ci`) vets and tests with `-tags pprof`.
 - Profile production by port-forwarding: `ssh -L 6060:localhost:6060 <host>`, then
   `go tool pprof http://localhost:6060/debug/pprof/profile` (also `heap`,
   `goroutine`, `goroutineleak`).
 - `make deploy-debug` / `make pprof-off` (from `Makefile.local.example`) add and
-  remove a systemd drop-in that sets the variable.
+  remove a systemd drop-in that sets the variable. The drop-in persists on the
+  host, across later plain `make deploy` runs, until `make pprof-off`.
 
 ## Running Tests
 

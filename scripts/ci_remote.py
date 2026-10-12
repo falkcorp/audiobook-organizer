@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
 # last-edited: 2026-10-11
 
@@ -25,7 +25,7 @@ What it does, in order:
    with a per-node shared GOCACHE and GOMODCACHE.
 4. Build the legs that `make ci` runs: `go test -short -race` split by package
    into shards balanced by measured runtime, plus vet, staticcheck, sdkguard,
-   bench-check, fmt-check, the errcheck ratchet, the web tests and mocks-check.
+   bench-check, pprof-check, fmt-check, the errcheck ratchet, the web tests and mocks-check.
    Packages whose tests decode audio (ffmpeg/ffprobe/fpcalc) never go to a
    `nodecode` node, and a nodecode node runs with those binaries filtered out
    of PATH so a missed test skips instead of decoding.
@@ -509,6 +509,7 @@ MAKE_LEGS = (
     ("deadcode-ratchet", "make --no-print-directory lint-deadcode-ratchet", 120.0),
     ("sdkguard", "make --no-print-directory sdkguard", 30.0),
     ("bench-check", "make --no-print-directory bench-check", 120.0),
+    ("pprof-check", "make --no-print-directory pprof-check", 180.0),
     ("fmt-check", "make --no-print-directory fmt-check", 10.0),
     (
         "web-test",

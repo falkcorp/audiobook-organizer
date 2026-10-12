@@ -1,7 +1,7 @@
 # file: scripts/tests/test_deploy_preflight.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 9c4b2e1a-6d3f-4f8b-a1c7-5e0d8b7a2f13
-# last-edited: 2026-09-11
+# last-edited: 2026-10-11
 """Tests for scripts/deploy-preflight.sh (todo.d CI-01).
 
 The guard the deploy targets used to run inline, ``git merge-base
@@ -147,18 +147,29 @@ class MakefileExampleWiringTests(unittest.TestCase):
     """Both deploy targets must call the script; an inline guard is how the
     one-sided check crept in, so a re-inlined one fails here."""
 
-    def _target_body(self, name: str) -> str:
+    def _target(self, name: str) -> tuple[str, str]:
+        """Return (prerequisites, recipe body) of a target in Makefile.local.example."""
         text = MAKEFILE_EXAMPLE.read_text()
-        m = re.search(rf"^{re.escape(name)}:.*?\n((?:\t.*\n)+)", text, re.M)
+        m = re.search(rf"^{re.escape(name)}:([^\n]*)\n((?:\t.*\n)+)", text, re.M)
         if m is None:
             self.fail(f"target {name} not found in Makefile.local.example")
-        return m.group(1)
+        return m.group(1), m.group(2)
 
     def test_deploy_targets_call_the_script(self) -> None:
+        """deploy calls the script itself; any other deploy target must either
+        call it too or list `deploy` as a prerequisite (so it runs the same
+        guard). Nothing may re-inline an --is-ancestor check."""
         for target in ("deploy", "deploy-debug"):
-            body = self._target_body(target)
-            self.assertIn("scripts/deploy-preflight.sh", body, target)
+            prereqs, body = self._target(target)
+            via_deploy = target != "deploy" and "deploy" in prereqs.split()
+            if not via_deploy:
+                self.assertIn("scripts/deploy-preflight.sh", body, target)
             self.assertNotIn("--is-ancestor", body, target)
+        self.assertIn("scripts/deploy-preflight.sh", self._target("deploy")[1])
+
+    def test_deploy_debug_reaches_the_script_only_through_deploy(self) -> None:
+        prereqs, _ = self._target("deploy-debug")
+        self.assertIn("deploy", prereqs.split())
 
 
 if __name__ == "__main__":

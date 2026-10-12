@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -44,6 +45,26 @@ const childModeArg = "--operation-runner"
 
 // EnvSocketPath is the environment variable name for the unix socket path.
 const EnvSocketPath = "UOS_SOCKET"
+
+// envPprofAddr is the pprof listener opt-in read by the root package's
+// `pprof`-tagged init (pprof_debug.go; the registry cannot import package
+// main, so the name is repeated and pinned by a test).
+const envPprofAddr = "ABK_PPROF_ADDR"
+
+// childBaseEnv returns parent without ABK_PPROF_ADDR. The child is the same
+// binary, so its package init would otherwise start a second pprof listener on
+// the parent's port for every isolated op (bind fails, logs a WARN, and a
+// differing child could briefly expose profiling data of its own).
+func childBaseEnv(parent []string) []string {
+	out := make([]string, 0, len(parent))
+	for _, kv := range parent {
+		if strings.HasPrefix(kv, envPprofAddr+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
 
 // Env variables propagated from parent to child so the child can open the
 // same store and register the same plugin defs as the parent. The child
@@ -187,7 +208,7 @@ func runSubprocess(ctx context.Context, def OperationDef, opID string, params js
 	}
 
 	cmd := exec.CommandContext(ctx, exe, childModeArg, opID)
-	childEnv := append(os.Environ(), fmt.Sprintf("%s=%s", EnvSocketPath, socketPath))
+	childEnv := append(childBaseEnv(os.Environ()), fmt.Sprintf("%s=%s", EnvSocketPath, socketPath))
 	if ChildEnvFunc != nil {
 		childEnv = append(childEnv, ChildEnvFunc()...)
 	}
