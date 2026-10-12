@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.19.0
+// version: 1.20.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-12
 
@@ -561,6 +561,21 @@ describe('command bar', () => {
     await user.click(await screen.findByTestId('command-find-duplicates'));
 
     await waitFor(() => expect(api.triggerDedupScan).toHaveBeenCalled());
+  });
+
+  it('looks up fingerprints online from the Maintenance group', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    vi.mocked(api.triggerAcoustIDOnlineLookup).mockResolvedValue({ id: 'op-1' } as api.Operation);
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('command-menu-dedup'));
+    const item = await screen.findByTestId('command-acoustid-online-lookup');
+    expect(item).toHaveTextContent('Look up fingerprints online');
+    await user.click(item);
+
+    await waitFor(() => expect(api.triggerAcoustIDOnlineLookup).toHaveBeenCalledTimes(1));
   });
 });
 

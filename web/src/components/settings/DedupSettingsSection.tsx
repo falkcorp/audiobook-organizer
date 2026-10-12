@@ -1,17 +1,64 @@
 // file: web/src/components/settings/DedupSettingsSection.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-12
+// last-edited: 2026-10-12
 
-import { Box, Typography, TextField, FormControlLabel, Switch, Grid, Divider } from '@mui/material';
+import { useEffect, useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Typography,
+  TextField,
+  FormControlLabel,
+  Switch,
+  Grid,
+  Divider,
+} from '@mui/material';
 import * as api from '../../services/api';
 
 interface DedupSettingsSectionProps {
   config: api.DedupConfig;
   onChange: (patch: Partial<api.DedupConfig>) => void;
+  /** The masked AcoustID.org key from the config Settings already loaded. */
+  acoustidKeyMask?: string;
 }
 
-export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionProps) {
+export function DedupSettingsSection({
+  config,
+  onChange,
+  acoustidKeyMask: loadedMask = '',
+}: DedupSettingsSectionProps) {
+  // The AcoustID.org key is saved on its own (PUT /config), not through the
+  // dedup Save button. The server returns it masked, so the input only ever
+  // holds what the user is typing now; the key is never logged or toasted.
+  const [acoustidKey, setAcoustidKey] = useState('');
+  const [acoustidKeyMask, setAcoustidKeyMask] = useState(loadedMask);
+  const [acoustidKeySaving, setAcoustidKeySaving] = useState(false);
+  const [acoustidStatus, setAcoustidStatus] = useState<{
+    severity: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  // Follow the page's own load; a save below overrides it with the new mask.
+  useEffect(() => setAcoustidKeyMask(loadedMask), [loadedMask]);
+
+  const handleSaveAcoustIDKey = async () => {
+    if (!acoustidKey.trim()) return;
+    setAcoustidKeySaving(true);
+    setAcoustidStatus(null);
+    try {
+      const cfg = await api.updateConfig({ acoustid_api_key: acoustidKey.trim() });
+      setAcoustidKeyMask(cfg.acoustid_api_key || '');
+      setAcoustidKey('');
+      setAcoustidStatus({ severity: 'success', text: 'AcoustID API key saved.' });
+    } catch {
+      setAcoustidStatus({ severity: 'error', text: 'Failed to save the AcoustID API key.' });
+    } finally {
+      setAcoustidKeySaving(false);
+    }
+  };
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
@@ -273,6 +320,41 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               htmlInput: { min: 0, max: 100, step: 0.5 },
             }}
           />
+        </Grid>
+        <Grid size={12}>
+          <Divider sx={{ my: 1 }} />
+          <Typography variant="subtitle2" gutterBottom>
+            AcoustID
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <TextField
+              label="AcoustID.org API key"
+              type="password"
+              size="small"
+              autoComplete="off"
+              value={acoustidKey}
+              onChange={(e) => setAcoustidKey(e.target.value)}
+              placeholder={acoustidKeyMask || 'Not set'}
+              helperText={
+                acoustidKeyMask
+                  ? `Saved key: ${acoustidKeyMask}. Type a new key to replace it.`
+                  : 'Used by "Look up fingerprints online" in the Dedup menu.'
+              }
+              sx={{ minWidth: 320 }}
+            />
+            <Button
+              variant="outlined"
+              onClick={() => void handleSaveAcoustIDKey()}
+              disabled={acoustidKeySaving || !acoustidKey.trim()}
+            >
+              Save key
+            </Button>
+          </Box>
+          {acoustidStatus && (
+            <Alert severity={acoustidStatus.severity} sx={{ mt: 1 }}>
+              {acoustidStatus.text}
+            </Alert>
+          )}
         </Grid>
       </Grid>
     </Box>

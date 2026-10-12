@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.178.0
+// version: 2.179.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-12
 
@@ -6729,11 +6729,12 @@ export interface AcoustIDCompareResponse {
 
 export async function compareAcoustID(
   bookAID: string,
-  bookBID: string
+  bookBID: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<AcoustIDCompareResponse> {
   const response = await apiFetch(
     `${API_BASE}/audiobooks/${encodeURIComponent(bookAID)}/compare-acoustid?other=${encodeURIComponent(bookBID)}`,
-    { method: 'POST' }
+    { method: 'POST', signal: opts?.signal }
   );
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to compare AcoustID fingerprints');

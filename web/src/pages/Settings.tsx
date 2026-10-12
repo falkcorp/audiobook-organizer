@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.63.0
+// version: 1.64.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -216,6 +216,8 @@ export function Settings() {
   const [importInProgress, setImportInProgress] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
+  // Masked by the server; shown by the Dedup section, never the real key.
+  const [acoustidKeyMask, setAcoustidKeyMask] = useState('');
   // Config keys the server's environment is currently forcing; their controls
   // render disabled. Server-reported and read-only — never saved back.
   const [envLocked, setEnvLocked] = useState<string[]>([]);
@@ -626,6 +628,7 @@ export function Settings() {
         // Deluge integration
         protectedPaths: (config.protected_paths || []).join('\n'),
       };
+      setAcoustidKeyMask(config.acoustid_api_key || '');
       if (config.dedup) setDedupConfig(config.dedup);
       if (config.embedding) setEmbeddingConfig(config.embedding);
       if (config.ai_backend) setAIBackendConfig(config.ai_backend);
@@ -905,7 +908,11 @@ export function Settings() {
         </TabPanel>
 
         <TabPanel value={tabValue} index={3}>
-          <DedupSettingsSection config={dedupConfig} onChange={handleDedupChange} />
+          <DedupSettingsSection
+            config={dedupConfig}
+            onChange={handleDedupChange}
+            acoustidKeyMask={acoustidKeyMask}
+          />
           <Box sx={{ mt: 4 }}>
             <EmbeddingSettingsSection config={embeddingConfig} onChange={handleEmbeddingChange} />
           </Box>

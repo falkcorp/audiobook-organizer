@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.19.0
+// version: 1.20.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-12
 //
@@ -404,6 +404,15 @@ export function ReviewWorkspace() {
                 description:
                   'Looks for books whose files have gone missing and matches them to untracked files on disk. Review the matches on the Dedup page under Reconcile.',
                 run: startJob('Reconcile scan', api.startReconcileScan),
+              },
+              {
+                // acoustid.lookup-online; the key is set in Settings → Dedup.
+                id: 'acoustid-online-lookup',
+                label: 'Look up fingerprints online',
+                scope: 'library',
+                description:
+                  'Looks up the stored fingerprints on AcoustID.org to find the matching recordings. Uses the API key in Settings.',
+                run: startJob('AcoustID online lookup', () => api.triggerAcoustIDOnlineLookup()),
               },
               {
                 id: 'manage-labels',
