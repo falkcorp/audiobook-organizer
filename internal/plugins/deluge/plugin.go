@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/plugin.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-47a8-b9c0-d1e2f3a4b5c6
 // last-edited: 2026-10-11
 
@@ -74,16 +74,17 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 	}
 }
 
-// pluginStore is what this plugin reads and writes, measured with an
-// empty-interface compiler probe under -gcflags=-e: five methods of its own plus
-// linkBackfillStore's five (deluge.link-backfill), no forwarding constraints. It
-// was the full database.Store -- 398 methods -- until 2026-08-19.
+// pluginStore is what this plugin reads and writes: four methods of its own,
+// delugeclient.Store (GetBookFileByPath and UpdateBookFile: what
+// deluge.centralize hands to ImportToLibraryWith for its ownership check and
+// repoint), and linkBackfillStore's five (deluge.link-backfill). It was the
+// full database.Store -- 398 methods -- until 2026-08-19.
 // MarkFileImportedFromDeluge left with the dead importToLibrary (10-PR2, D55).
 type pluginStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	delugeclient.Store
 	linkBackfillStore
 }
