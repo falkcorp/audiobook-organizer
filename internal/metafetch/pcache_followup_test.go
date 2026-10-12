@@ -1,5 +1,5 @@
 // file: internal/metafetch/pcache_followup_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e971d44a-1aa0-4ff3-8223-e9a5a43c932b
 // last-edited: 2026-10-11
 
@@ -199,7 +199,7 @@ func TestPCache_ConcurrentFanoutRecordsEveryKey(t *testing.T) {
 	}
 	wg.Wait()
 	for i := 0; i < 8; i++ {
-		pointed, err := database.PCachePointedKeys(svc.db, fmt.Sprintf("book-%d", i))
+		pointed, err := pcachePointedKeys(svc.db, fmt.Sprintf("book-%d", i))
 		require.NoError(t, err)
 		assert.Len(t, pointed, len(srcs), "book-%d: every source's key is on the pointer row", i)
 	}
@@ -250,7 +250,7 @@ func TestPCache_CachedIdentitySearchPointerAndRejectBust(t *testing.T) {
 
 	_, err := CachedIdentitySearch(ctx, svc.db, "book-a", fa, q, IdentitySearchCache{})
 	require.NoError(t, err)
-	pointed, err := database.PCachePointedKeys(svc.db, "book-a")
+	pointed, err := pcachePointedKeys(svc.db, "book-a")
 	require.NoError(t, err)
 	require.Len(t, pointed[metadata.SourceIDAudible], 1, "the identity key is on the book's pointer row")
 
@@ -262,7 +262,7 @@ func TestPCache_CachedIdentitySearchPointerAndRejectBust(t *testing.T) {
 	// ReadOnly writes neither the answer nor the pointer row.
 	_, err = CachedIdentitySearch(ctx, svc.db, "book-c", fa, metadata.AudibleIdentityQuery{Title: "Title 000605", Author: "Author 07"}, IdentitySearchCache{ReadOnly: true})
 	require.NoError(t, err)
-	pointed, err = database.PCachePointedKeys(svc.db, "book-c")
+	pointed, err = pcachePointedKeys(svc.db, "book-c")
 	require.NoError(t, err)
 	assert.Empty(t, pointed)
 }
@@ -356,4 +356,18 @@ func TestWriteBackOutcome_LaterRungFromSharedCacheKeepsAskedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, row)
 	assert.True(t, row.CachedAt.Equal(asked), "the per-book copy is stamped with the provider's answer time, got %s", row.CachedAt)
+}
+
+// pcachePointedKeys returns bookID's pointer row (provider -> P1 keys), read
+// from the raw row the production RecordPCachePointer writes.
+func pcachePointedKeys(store database.PCacheStore, bookID string) (map[string][]string, error) {
+	blob, err := store.GetRaw(database.PCacheBookPrefix + bookID)
+	if err != nil || blob == nil {
+		return nil, err
+	}
+	var ptr database.PCachePointer
+	if err := json.Unmarshal(blob, &ptr); err != nil {
+		return nil, err
+	}
+	return ptr.Keys, nil
 }
