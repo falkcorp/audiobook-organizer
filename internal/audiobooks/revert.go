@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.67.1
+// version: 1.68.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -174,6 +174,10 @@ type RevertService struct {
 	// (metafetch.Service.UndoApplyBatch): the revert of a
 	// undo.ChangeTypeMetadataApply row. nil refuses such rows.
 	UndoApplyBatch func(bookID, batchID string) (*metafetch.UndoApplyResult, error)
+	// combineUndo undoes a merge's combine journal: the revert of an
+	// undo.ChangeTypeMergeCombineJournal row. nil means merge.NewService
+	// over db (combineUndoerFor).
+	combineUndo combineUndoer
 }
 
 // NewRevertService creates a new RevertService.
@@ -706,6 +710,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertMetadataApply(c)
 	case undo.ChangeTypeMetadataCacheCopy:
 		return rs.revertMetadataCacheCopy(c)
+	case undo.ChangeTypeMergeCombineJournal:
+		return rs.revertMergeCombineJournal(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
 		undo.ChangeTypeRepairPlanRecord, undo.ChangeTypeRepairOwnerApply:
 		// No filesystem or DB mutation recorded; nothing to reverse.
