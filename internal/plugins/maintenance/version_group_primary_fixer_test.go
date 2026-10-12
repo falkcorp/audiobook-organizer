@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -50,6 +50,15 @@ type scriptedScan struct {
 	lapsed  bool
 	// advancedAt is renews as of the last advanceAfterRenewal.
 	advancedAt int
+	// failWhen, when non-nil, is asked on every renewal (under mu, so it must
+	// not call back into the scan): true refuses that renewal. It lets a test
+	// lose the lease at a beat it identifies by library state instead of by
+	// counting renewals, which drifts whenever a fixer gains or loses a beat.
+	failWhen func() bool
+	// afterRenew, when non-nil, runs after every renewal (outside mu, on the
+	// renewing goroutine) with the renewal's running count. Set both fields
+	// before the apply starts.
+	afterRenew func(n int)
 }
 
 // advanceAfterRenewal moves the lease clock forward by d if the holder has
@@ -96,10 +105,26 @@ func (s *scriptedScan) AcquireScanStandDown(_ context.Context, holder, _ string)
 	}, nil
 }
 
-func (s *scriptedScan) RenewScanStandDown(string) bool {
+func (s *scriptedScan) RenewScanStandDown(h string) bool {
+	ok, n := s.renew(h)
+	if s.afterRenew != nil {
+		s.afterRenew(n)
+	}
+	return ok
+}
+
+func (s *scriptedScan) renew(string) (bool, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ok := s.renewLocked()
+	return ok, s.renews
+}
+
+func (s *scriptedScan) renewLocked() bool {
 	s.renews++
+	if s.failWhen != nil && s.failWhen() {
+		return false
+	}
 	if s.ttl > 0 {
 		if s.lapsed || s.now.After(s.expires) {
 			s.lapsed = true
