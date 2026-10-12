@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1817dbb3-1b63-474d-af55-ff93d468ae1b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -74,8 +74,6 @@ type pcacheSweepStore interface {
 	database.RawKVStore
 	GetBookByID(id string) (*database.Book, error)
 }
-
-var _ pcacheSweepStore = (database.Store)(nil)
 
 // pcacheSweepResult is the run's accounting, persisted as the op result.
 type pcacheSweepResult struct {

@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 04ccc271-b21f-4dfa-b788-6ab9e21ca3ca
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -17,6 +17,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// runPCacheSweep reaches the store through a runtime type assertion, so a
+// production store that stopped satisfying pcacheSweepStore would only fail
+// at run time. This keeps that a compile error. It lives in a test file so
+// the wide database.Store reference stays out of the store-reference count.
+var _ pcacheSweepStore = (database.Store)(nil)
 
 // Synthetic fixtures only: "Title 000123", book ids "book-gone-01".
 
