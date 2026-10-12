@@ -1,5 +1,5 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.5.0
+// version: 1.5.1
 // last-edited: 2026-10-11
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
@@ -46,7 +46,7 @@ export const SEARCH_FIELDS: readonly string[] = [
   'metadata',
   // Identification state (server: internal/audiobooks/filter_ident.go):
   // unasked, asked_empty, has_candidates, applied, held, or missing
-  // (unasked + asked_empty, the metadata goal number).
+  // (unasked + asked_empty: no candidate fetched and nothing applied).
   'ident',
   'file_size',
   'bitrate',
