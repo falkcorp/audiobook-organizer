@@ -1,12 +1,18 @@
 // file: web/src/components/settings/DedupSettingsSection.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c7d6e5-f4a3-2109-bcde-fa8765432109
-// last-edited: 2026-09-12
+// last-edited: 2026-10-12
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { DedupSettingsSection } from './DedupSettingsSection';
+import * as api from '../../services/api';
 import type { DedupConfig } from '../../services/api';
+
+vi.mock('../../services/api', async (orig) => ({
+  ...(await orig<typeof import('../../services/api')>()),
+  updateConfig: vi.fn(),
+}));
 
 const defaultConfig: DedupConfig = {
   book_high_threshold: 0.9,
@@ -107,5 +113,34 @@ describe('DedupSettingsSection', () => {
     fireEvent.change(screen.getByLabelText('Certain band min'), { target: { value: '98.5' } });
     const callArg = onChange.mock.calls[0][0] as { signals: { band_certain_min: unknown } };
     expect(callArg.signals.band_certain_min).toBe(98.5);
+  });
+
+  describe('AcoustID.org API key', () => {
+    it('saves acoustid key through updateConfig', async () => {
+      vi.mocked(api.updateConfig).mockResolvedValue({ acoustid_api_key: '****cdef' } as api.Config);
+      render(<DedupSettingsSection config={defaultConfig} onChange={vi.fn()} />);
+      const input = screen.getByLabelText('AcoustID.org API key');
+      fireEvent.change(input, { target: { value: 'abcd-test-key-cdef' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+      await waitFor(() =>
+        expect(api.updateConfig).toHaveBeenCalledWith({ acoustid_api_key: 'abcd-test-key-cdef' })
+      );
+      expect(await screen.findByText('AcoustID API key saved.')).toBeInTheDocument();
+    });
+
+    it('masked key never rendered in clear', async () => {
+      vi.mocked(api.updateConfig).mockResolvedValue({ acoustid_api_key: '****cdef' } as api.Config);
+      render(
+        <DedupSettingsSection config={defaultConfig} onChange={vi.fn()} acoustidKeyMask="****cdef" />
+      );
+      const input = screen.getByLabelText('AcoustID.org API key') as HTMLInputElement;
+      expect(input.type).toBe('password');
+      fireEvent.change(input, { target: { value: 'abcd-test-key-cdef' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+      await screen.findByText('AcoustID API key saved.');
+      expect(input.value).toBe('');
+      expect(screen.getByText(/\*\*\*\*cdef/)).toBeInTheDocument();
+      expect(document.body.textContent).not.toContain('abcd-test-key-cdef');
+    });
   });
 });

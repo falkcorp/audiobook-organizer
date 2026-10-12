@@ -1,9 +1,9 @@
 // file: web/src/components/review/compare/__tests__/CandidateCompareDrawer.test.tsx
-// version: 2.3.0
+// version: 2.4.0
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CandidateCompareDrawer } from '../CandidateCompareDrawer';
@@ -193,5 +193,51 @@ describe('CandidateCompareDrawer', () => {
 
     expect(await screen.findByText('Book metadata unavailable.')).toBeInTheDocument();
     expect(screen.queryByTestId('metadata-compare-panel')).not.toBeInTheDocument();
+  });
+
+  describe('Audio match section', () => {
+    it('audio match fetches only on click', async () => {
+      vi.mocked(api.compareAcoustID).mockResolvedValue({
+        book_a: {} as never,
+        book_b: {} as never,
+        overall_score: 0.9,
+        segment_scores: [{ segment: 'seg0', hash_a: 'aaaa', hash_b: 'aaaa', match: true }],
+      });
+      renderDrawer();
+      const btn = await screen.findByTestId('audio-match-check-btn');
+      expect(btn).toHaveTextContent('Check audio match');
+      expect(api.compareAcoustID).not.toHaveBeenCalled();
+
+      fireEvent.click(btn);
+      expect(api.compareAcoustID).toHaveBeenCalledWith('book-a', 'book-b', {
+        signal: expect.any(AbortSignal),
+      });
+      const result = await screen.findByTestId('audio-match-result');
+      expect(result).toHaveTextContent('90% match');
+      expect(result).toHaveTextContent('Intro');
+    });
+
+    it('audio match shows loading state while the request is in flight', async () => {
+      let resolve!: (v: never) => void;
+      vi.mocked(api.compareAcoustID).mockReturnValue(
+        new Promise((r) => {
+          resolve = r as never;
+        })
+      );
+      renderDrawer();
+      fireEvent.click(await screen.findByTestId('audio-match-check-btn'));
+      expect(await screen.findByTestId('audio-match-loading')).toBeInTheDocument();
+      expect(screen.getByTestId('audio-match-check-btn')).toBeDisabled();
+      resolve({ overall_score: 0, segment_scores: [] } as never);
+      await waitFor(() => expect(screen.queryByTestId('audio-match-loading')).toBeNull());
+    });
+
+    it('audio match shows error state', async () => {
+      vi.mocked(api.compareAcoustID).mockRejectedValue(new Error('boom'));
+      renderDrawer();
+      fireEvent.click(await screen.findByTestId('audio-match-check-btn'));
+      expect(await screen.findByTestId('audio-match-error')).toHaveTextContent('boom');
+      expect(screen.queryByTestId('audio-match-result')).toBeNull();
+    });
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/components/review/compare/CandidateCompareDrawer.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -19,6 +19,12 @@ import {
   IconButton,
   Stack,
   Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Tabs,
   Tooltip,
   Typography,
@@ -283,6 +289,149 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
         ))}
       </Stack>
     </Stack>
+  );
+}
+
+const AUDIO_SEGMENT_LABELS: Record<string, string> = {
+  seg0: 'Intro',
+  seg1: 'Body 1',
+  seg2: 'Body 2',
+  seg3: 'Body 3',
+  seg4: 'Body 4',
+  seg5: 'Body 5',
+  seg6: 'Outro',
+};
+
+interface AudioMatchSectionProps {
+  bookAId: string;
+  bookBId: string;
+}
+
+// On-demand audio comparison. Nothing is fetched until the button is clicked:
+// the comparison reads the stored fingerprints of both books and is not needed
+// to judge most pairs. Remount with a new key when the pair changes.
+function AudioMatchSection({ bookAId, bookBId }: AudioMatchSectionProps) {
+  const [result, setResult] = useState<AcoustIDCompareResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const check = () => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    api
+      .compareAcoustID(bookAId, bookBId, { signal: ctrl.signal })
+      .then((resp) => {
+        if (!ctrl.signal.aborted) setResult(resp);
+      })
+      .catch((err: unknown) => {
+        if (!ctrl.signal.aborted) {
+          setError(err instanceof Error ? err.message : 'Audio comparison failed');
+        }
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLoading(false);
+      });
+  };
+
+  const hasAnySegments = result ? result.segment_scores.some((s) => s.hash_a || s.hash_b) : false;
+
+  return (
+    <Box sx={{ mt: 3 }} data-testid="audio-match-section">
+      <Divider sx={{ mb: 2 }} />
+      <Typography variant="subtitle2" gutterBottom>
+        Audio match
+      </Typography>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={check}
+          disabled={loading}
+          data-testid="audio-match-check-btn"
+        >
+          Check audio match
+        </Button>
+        {loading && <CircularProgress size={18} data-testid="audio-match-loading" />}
+      </Stack>
+      {error && (
+        <Alert severity="error" data-testid="audio-match-error">
+          {error}
+        </Alert>
+      )}
+      {result && (
+        <Box data-testid="audio-match-result">
+          <Chip
+            size="small"
+            sx={{ mb: 1 }}
+            label={
+              hasAnySegments
+                ? `${Math.round(result.overall_score * 100)}% match`
+                : 'No fingerprint data'
+            }
+            color={
+              !hasAnySegments
+                ? 'default'
+                : result.overall_score >= 0.85
+                  ? 'error'
+                  : result.overall_score >= 0.6
+                    ? 'warning'
+                    : 'default'
+            }
+          />
+          {!hasAnySegments && (
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+              One or both of these books has no stored audio fingerprints, so there is
+              nothing to compare.
+            </Typography>
+          )}
+          {hasAnySegments && (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Segment</TableCell>
+                    <TableCell align="center">Book A</TableCell>
+                    <TableCell align="center">Book B</TableCell>
+                    <TableCell align="center">Match</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {result.segment_scores.map((seg) => (
+                    <TableRow key={seg.segment}>
+                      <TableCell>
+                        <strong>{AUDIO_SEGMENT_LABELS[seg.segment] ?? seg.segment}</strong>
+                      </TableCell>
+                      <TableCell align="center">
+                        {seg.hash_a ? 'fingerprinted' : <em>not fingerprinted</em>}
+                      </TableCell>
+                      <TableCell align="center">
+                        {seg.hash_b ? 'fingerprinted' : <em>not fingerprinted</em>}
+                      </TableCell>
+                      <TableCell align="center">
+                        {!seg.hash_a || !seg.hash_b ? (
+                          <Chip label="n/a" size="small" variant="outlined" />
+                        ) : seg.match ? (
+                          <Chip label="✓ match" size="small" color="success" />
+                        ) : (
+                          <Chip label="✗ differ" size="small" color="error" />
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Box>
+      )}
+    </Box>
   );
 }
 
@@ -676,6 +825,14 @@ export function CandidateCompareDrawer({
                   </Typography>
                 )}
               </Box>
+            )}
+
+            {bookA && bookB && (
+              <AudioMatchSection
+                key={`${bookA.id}:${bookB.id}`}
+                bookAId={bookA.id}
+                bookBId={bookB.id}
+              />
             )}
           </>
         )}
