@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/split_books_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b55e5de5-a785-4658-9cb0-ab1d3f20a781
 // last-edited: 2026-10-12
 
@@ -97,6 +97,12 @@ const sbChangeType = dedup.SplitBookMergeJournalOrigin
 // "row:<row id>") BEFORE the merge, voided if the merge refuses, and the
 // combine journal id after it, so the Repairs journal records every merge
 // and names its undo.
+//
+// RESUME. A merge cut off part-way (a lost lease, a cancel, a crash) is not
+// resumed as such: the re-plan sees the sources it already retired, the
+// fingerprint differs, and the row settles changed_since_plan. The combine
+// journal names every step already made (it is written before each one), so
+// undoing it reverses the partial merge; a fresh plan offers what is left.
 //
 // Written Evaluate-style for the ops v3 port: evaluate decides ONE cluster
 // from reads it makes itself, with no writer; Plan and Replan differ only in

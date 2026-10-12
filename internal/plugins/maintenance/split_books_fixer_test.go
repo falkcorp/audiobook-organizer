@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/split_books_fixer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 946919fd-5279-41f2-bb7e-1331ea924e5e
 // last-edited: 2026-10-12
 
@@ -158,24 +158,30 @@ func TestSplitBooksFixer_PlanRowsEqualListSplitBookCandidates(t *testing.T) {
 	}
 }
 
-// A cluster with an iTunes book (here: a book iTunes persistent id) is a
-// skipped row with the reason "iTunes"; the other cluster stays applicable.
+// A cluster with an iTunes book is a skipped row with the reason "iTunes":
+// one with a book iTunes persistent id (which only the fixer's own predicate
+// sees), and one whose files are under books/itunes/** (which the
+// framework's plan guard sees too; it keeps the fixer's skip). The other
+// cluster stays applicable.
 func TestSplitBooksFixer_ITunesClusterIsSkipped(t *testing.T) {
 	t.Parallel()
 	f := newFragFixture(t)
 	plain := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
-	tunes := sbCluster(t, f, "lib/Author A/Book Two", "Book Two", 3, 300)
+	byID := sbCluster(t, f, "lib/Author A/Book Two", "Book Two", 3, 300)
 	pid := "ABCDEF0123456789"
-	_, err := f.s.ModifyBook(tunes[1], func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+	_, err := f.s.ModifyBook(byID[1], func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
 	require.NoError(t, err)
+	byPath := sbCluster(t, f, "books/itunes/Author C/Book Three", "Book Three", 3, 300)
 
 	res := sbPlan(t, f, sbFixer(f))
-	r := sbRowWith(t, res, tunes)
-	assert.False(t, r.Applicable())
-	assert.Equal(t, repairs.SkipITunes, r.Skipped)
-	assert.Equal(t, "iTunes", r.SkipReason)
-	assert.Contains(t, r.Reason, tunes[1])
-	assert.Len(t, r.Members, 3, "a skipped row still lists its books")
+	for _, tunes := range [][]string{byID, byPath} {
+		r := sbRowWith(t, res, tunes)
+		assert.False(t, r.Applicable())
+		assert.Equal(t, repairs.SkipITunes, r.Skipped)
+		assert.Equal(t, "iTunes", r.SkipReason)
+		assert.Len(t, r.Members, 3, "a skipped row still lists its books")
+	}
+	assert.Contains(t, sbRowWith(t, res, byID).Reason, byID[1])
 	assert.True(t, sbRowWith(t, res, plain).Applicable())
 }
 
