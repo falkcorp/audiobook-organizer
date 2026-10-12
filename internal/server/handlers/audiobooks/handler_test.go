@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,10 +35,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -989,6 +992,77 @@ func TestUpdateAudiobook_CleanSaveHasNoWarningsKey(t *testing.T) {
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"warnings"`) {
 		t.Fatalf("want 200 without warnings, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// writeBackWarnings runs PUT /audiobooks/b1 for a book with a file, with the
+// write-back failing as writeErr says, and returns the response's "warnings".
+func writeBackWarnings(t *testing.T, existing []string, writeErr error) []any {
+	t.Helper()
+	restore := audiobookshandler.SwapWriteMetadataBack(
+		func(context.Context, string, map[string]any, fileops.OperationConfig) error { return writeErr })
+	defer restore()
+	h, d := newHandler(t)
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
+		Return(&database.Book{ID: "b1", Title: "New", FilePath: "/lib/book.m4b"}, existing, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{}, nil).Maybe()
+	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
+	d.svc.EXPECT().InvalidateListCache().Return()
+	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
+	h.UpdateAudiobook(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("a failed write-back must not fail the committed edit: want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	ws, _ := body.Data["warnings"].([]any)
+	return ws
+}
+
+// A verify_after_write failure of the file write-back is a 200 whose warnings
+// name the keys that did not stick, after the update service's own warnings.
+func TestUpdateAudiobook_VerifyFailureWarnsWithKeys(t *testing.T) {
+	verr := &tagger.VerifyAfterWriteError{
+		Path: "/lib/book.m4b",
+		Keys: []string{"PUBLISHER", "TITLE"},
+		Diffs: []tagger.KeyDiff{
+			{Key: "PUBLISHER", Want: []string{"P"}},
+			{Key: "TITLE", Want: []string{"New"}, Got: []string{"Old"}},
+		},
+	}
+	ws := writeBackWarnings(t, []string{"locks not saved"}, fmt.Errorf("write metadata to x: %w", verr))
+	if len(ws) != 2 || ws[0] != "locks not saved" {
+		t.Fatalf("want the service warning then the write-back warning, got %v", ws)
+	}
+	got, _ := ws[1].(string)
+	if !strings.Contains(got, "PUBLISHER, TITLE") || !strings.Contains(got, "did not stick") {
+		t.Fatalf("the warning must name the keys that did not stick: %q", got)
+	}
+}
+
+// Any other write-back failure is a warning too, not a silent log line.
+func TestUpdateAudiobook_WriteBackFailureWarns(t *testing.T) {
+	ws := writeBackWarnings(t, nil, errors.New("unsupported file format: .xyz"))
+	if len(ws) != 1 {
+		t.Fatalf("want one warning, got %v", ws)
+	}
+	got, _ := ws[0].(string)
+	if !strings.Contains(got, "writing it to the audio file failed") || !strings.Contains(got, "unsupported file format") {
+		t.Fatalf("the warning must say the file write failed and why: %q", got)
+	}
+}
+
+func TestWriteBackWarning_Shapes(t *testing.T) {
+	if got := audiobookshandler.WriteBackWarning(tagger.ErrVerifyAfterWrite); !strings.Contains(got, "could not be verified") {
+		t.Fatalf("a bare ErrVerifyAfterWrite names no keys: %q", got)
+	}
+	long := audiobookshandler.WriteBackWarning(errors.New(strings.Repeat("x", 5000)))
+	if len(long) > 400 {
+		t.Fatalf("the error text must be bounded, got %d bytes", len(long))
 	}
 }
 
