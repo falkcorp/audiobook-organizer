@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-11
 
@@ -419,6 +419,18 @@ func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row) error
 		return nil
 	}
 	next, tr := projectRunFromV2(cur, row, time.Now().UTC())
+	if next.FromV2 != nil {
+		// A migrated run now reflects this write, so its SourceHash names
+		// this row: a later migration pass then sees an unchanged row and
+		// leaves the record (and any v3-only state on it) alone.
+		h, err := opsV3SourceHash(row)
+		if err != nil {
+			return err
+		}
+		o := *next.FromV2
+		o.SourceHash = h
+		next.FromV2 = &o
+	}
 	return s.put(cur, next, tr)
 }
 
@@ -1284,6 +1296,9 @@ func (p *PebbleStore) SaveCheckpointV3(id string, ck Checkpoint) (err error) {
 	if err := p.newOpsV3Stage(b).put(cur, &next, nil); err != nil {
 		return err
 	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return err
+	}
 	return b.Commit(pebble.Sync)
 }
 
@@ -1405,6 +1420,9 @@ func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 	if err := p.newOpsV3Stage(b).put(cur, &next, nil); err != nil {
 		return err
 	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return err
+	}
 	return b.Commit(pebble.Sync)
 }
 
@@ -1497,6 +1515,9 @@ func (p *PebbleStore) PutItemOutcomesV3(id string, rows []ItemOutcome) (err erro
 		return err
 	}
 	if err := p.newOpsV3Stage(b).put(cur, &next, nil); err != nil {
+		return err
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
 		return err
 	}
 	return b.Commit(pebble.Sync)

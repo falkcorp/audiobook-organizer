@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_migrate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e3dede70-3460-4dd5-8185-a94a66839551
 // last-edited: 2026-10-11
 
@@ -246,6 +246,9 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 		}
 	}
 	if err := s.flush(); err != nil {
+		return nil, err
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
 		return nil, err
 	}
 	return requeued, b.Commit(pebble.Sync)
