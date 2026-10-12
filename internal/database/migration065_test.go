@@ -1,11 +1,12 @@
 // file: internal/database/migration065_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
 // last-edited: 2026-10-11
 
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -238,8 +239,9 @@ func TestMigration065Idempotent(t *testing.T) {
 		t.Fatal("a second migration pass changed the key set")
 	}
 
-	// A run the live façade wrote after the first pass is newer than the
-	// row: never re-derived. A row that changed under an older binary is.
+	// A run the live façade wrote after the first pass is current with its
+	// row (the write stamped V2RowHash): never re-derived. A row that changed
+	// under an older binary is (TestReconcileOpsV3RepairsOldBinaryWritesOnReboot).
 	now := time.Now().UTC()
 	if err := p.UpdateOperationV2Status(rows[0].ID, "running", &now, nil, nil); err != nil {
 		t.Fatal(err)
@@ -344,4 +346,18 @@ func TestMigration065Timing100k(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("second (idempotent) pass: %s", time.Since(start).Round(time.Millisecond))
+	rep2, err := p.ReconcileOpsV3WithV2(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("boot reconcile, all %d runs current: %s (%d workers)", rep2.Checked, rep2.Duration.Round(time.Millisecond), opsV3ReconcileWorkers)
+	for _, row := range rows[:1000] {
+		row.Status = "failed"
+		rawSetOp(t, p, row)
+	}
+	rep2, err = p.ReconcileOpsV3WithV2(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("boot reconcile, %d of %d runs stale: %s (%d rebuilt)", rep2.Stale, rep2.Checked, rep2.Duration.Round(time.Millisecond), rep2.Rebuilt)
 }

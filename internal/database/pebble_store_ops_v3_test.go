@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -285,6 +285,9 @@ func TestStageRunV3KeepsIndexesConsistent(t *testing.T) {
 			}
 		}
 	}
+	// Every write path above stamped V2RowHash with the bytes it stored, so
+	// the boot reconcile finds nothing to rebuild and writes nothing.
+	assertReconcileNoop(t, p, "10,000 random writes")
 }
 
 // ── TestTransitionCAS ───────────────────────────────────────────────────────
@@ -900,7 +903,6 @@ func TestOpv3KeysAllInRegisteredFamilies(t *testing.T) {
 		}
 	}
 }
-
 
 // TestInterruptedLedgerRunMirrorsAsDroppedAndStays: a v2 binary cannot resume
 // a chunk ledger, so an interrupted ledger run mirrors as interrupted_dropped;
