@@ -1,9 +1,9 @@
 <!-- file: docs/executive-summaries/2026-10-11-identification-state-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 66ff413b-18cf-4eb7-9d4d-d7b50c4533b9 -->
 <!-- last-edited: 2026-10-11 -->
 
-# The metadata goal number is now a live count you can click
+# Missing metadata is now a live count you can click
 
 Branch `task/02-pr4` (task brief 02-PR4 of the October filter and
 identification plan).
@@ -15,26 +15,35 @@ identification plan).
   has suggestions waiting for review, metadata applied, or held (you ruled
   "no match"). The app keeps a running count of each, so the counts are
   instant instead of needing a scan of the whole library.
-- **The goal number.** The goal of fewer than 1,000 books missing metadata is
-  now a number the app shows directly: books never looked up plus books
-  looked up with nothing found, among the books the Library shows by default.
-  Books with suggestions waiting for review do not count as missing.
+- **The "missing" count.** The app now shows directly how many books are
+  missing metadata: books never looked up plus books looked up with nothing
+  found, among the books the Library shows by default. Books with suggestions
+  waiting for review do not count as missing. It is not yet exactly the goal
+  number (fewer than 1,000): the goal leaves out the franchise you excluded
+  (about 281 books), and the app cannot tell those books apart yet. Until a
+  later change marks them, "missing" is higher than the goal number by however
+  many of those books have no metadata.
 - **You can click through to the books.** Typing `ident:missing` in the
   Library search bar lists exactly those books, and the "Select all N items"
   number is the same count. The other states work the same way
   (`ident:has_candidates`, `ident:held`, and so on), and a minus sign
   excludes a state. A new `asin:` filter finds books by their Audible ID.
-- **The review page's summary carries the counts** for each state and the
-  goal number. Nothing on the review page shows them yet; that is later work.
+- **The review page shows the counts**, each one a link: clicking "missing
+  metadata" opens the Library already searching `ident:missing`, and the
+  Library's "Select all N items" shows the same N.
 - **After an update, the counts take a few seconds to appear.** The first
-  start after the update builds the index (about 0.2 seconds per 5,000 books
+  start after the update builds the index (about 0.05 seconds per 5,000 books
   in testing). Until it finishes, an `ident:` search answers "try again
-  shortly" rather than a number that could be wrong.
+  shortly" rather than a number that could be wrong. If the build fails, the
+  app tries again on its own for about two minutes, and after that there is a
+  maintenance operation to rebuild it by hand.
 
 ## Details
 
-- **Speed, measured on 40,000 synthetic books:** the goal count takes under a
-  microsecond; the first page of `ident:missing` takes about 4 ms.
+- **Speed, measured on 40,000 synthetic books:** the missing count takes under a
+  microsecond; the first page of `ident:missing` takes about 4 ms. Keeping the
+  counts does not slow down saving books or fetched suggestions when many
+  happen at once (an earlier draft did, by up to ten times, and was redesigned).
 - **Kept correct by every change.** A fetch of suggestions, an applied match,
   a "no match" ruling, a retitle, a book moved to the trash or out of it, a
   book deleted: each updates the count in the same database write as the

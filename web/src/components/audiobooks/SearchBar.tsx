@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.11.0
+// version: 2.11.1
 // last-edited: 2026-10-11
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
@@ -118,14 +118,17 @@ const SEARCH_HELP = [
   },
   {
     example: 'ident:missing',
-    desc: 'The metadata goal number: never asked about, or asked and nothing found (ident: takes unasked, asked_empty, has_candidates, applied, held, or missing)',
+    desc: 'Missing metadata: never asked about, or asked and nothing found (ident: takes unasked, asked_empty, has_candidates, applied, held, or missing)',
   },
   {
     example: 'ident:has_candidates',
     desc: 'Candidates fetched that nobody has applied yet',
   },
   { example: 'ident:held', desc: 'Ruled "no match" by the owner' },
-  { example: 'asin:B0*', desc: 'Books with an ASIN (a full ASIN finds that book)' },
+  {
+    example: 'asin:*',
+    desc: 'Books with an ASIN (asin:B0ABC12345 finds that book; -asin:* finds books without one)',
+  },
   { example: 'author:"Brandon Sanderson"', desc: 'Books by a specific author' },
   { example: 'series:Mistborn', desc: 'Books in a series' },
   { example: 'narrator:Kramer', desc: 'Books by narrator' },
