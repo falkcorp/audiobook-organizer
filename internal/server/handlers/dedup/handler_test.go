@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
 // last-edited: 2026-10-12
 
@@ -43,6 +43,7 @@ func init() { gin.SetMode(gin.TestMode) }
 type testDeps struct {
 	es           *database.EmbeddingStore
 	store        *dedupmocks.MockDedupStore
+	seriesBooks  *dedupmocks.MockSeriesBooksStore
 	merge        *dedupmocks.MockMergeService
 	engine       *dedupmocks.MockDedupEngine
 	reg          *dedupmocks.MockOperationsRegistry
@@ -69,6 +70,7 @@ func newHandler(t *testing.T, opts ...func(*handlerCfg)) (*deduphandler.Handler,
 	}
 
 	store := dedupmocks.NewMockDedupStore(t)
+	seriesBooksMock := dedupmocks.NewMockSeriesBooksStore(t)
 	mergeMock := dedupmocks.NewMockMergeService(t)
 	engineMock := dedupmocks.NewMockDedupEngine(t)
 	regMock := dedupmocks.NewMockOperationsRegistry(t)
@@ -96,6 +98,7 @@ func newHandler(t *testing.T, opts ...func(*handlerCfg)) (*deduphandler.Handler,
 
 	h := deduphandler.New(
 		store,
+		seriesBooksMock,
 		embedArg,
 		regArg,
 		mergeArg,
@@ -103,7 +106,7 @@ func newHandler(t *testing.T, opts ...func(*handlerCfg)) (*deduphandler.Handler,
 		func(ctx context.Context, event plugin.Event) { publishedN++ },
 		func(reason string) { dirtyReasons = append(dirtyReasons, reason) },
 	)
-	return h, testDeps{es, store, mergeMock, engineMock, regMock, &publishedN, &dirtyReasons}
+	return h, testDeps{es, store, seriesBooksMock, mergeMock, engineMock, regMock, &publishedN, &dirtyReasons}
 }
 
 type handlerCfg struct {
@@ -1242,7 +1245,7 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 
 	// Series 7 is e-1, e-2 and e-3: pairs e-1/e-2 and e-2/e-7 have one book
 	// outside it (e-7), and e-3/e-4 has e-4 outside, so only e-1/e-2 qualifies.
-	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).
+	d.seriesBooks.EXPECT().GetBooksBySeriesIDAllVersions(7).
 		Return([]database.BookCore{{ID: "e-1"}, {ID: "e-2"}, {ID: "e-3"}}, nil).Maybe()
 
 	cases := []struct {
@@ -1390,7 +1393,7 @@ func TestListDedupCandidates_SeriesID(t *testing.T) {
 	insertCandidate(t, d.es, "a-out", "s-1")
 	insertCandidate(t, d.es, "s-1", "z-out")
 	insertCandidate(t, d.es, "n-1", "n-2") // no series at all
-	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).
+	d.seriesBooks.EXPECT().GetBooksBySeriesIDAllVersions(7).
 		Return(seriesBooks("s-1", "s-2", "s-3"), nil)
 	d.store.EXPECT().GetBookByID(mock.Anything).
 		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
@@ -1420,7 +1423,7 @@ func TestListDedupCandidates_SeriesID(t *testing.T) {
 func TestListDedupCandidates_SeriesIDWithNoBooksMatchesNothing(t *testing.T) {
 	h, d := newHandler(t)
 	insertCandidate(t, d.es, "s-1", "s-2")
-	d.store.EXPECT().GetBooksBySeriesIDAllVersions(99).Return(nil, nil)
+	d.seriesBooks.EXPECT().GetBooksBySeriesIDAllVersions(99).Return(nil, nil)
 
 	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
 		"/api/v1/dedup/candidates?series_id=99", nil, nil)
@@ -1438,7 +1441,7 @@ func TestListDedupCandidates_SeriesIDReadFailureIs500(t *testing.T) {
 	// with an empty list reads as a correct answer).
 	h, d := newHandler(t)
 	insertCandidate(t, d.es, "s-1", "s-2")
-	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).Return(nil, fmt.Errorf("store down"))
+	d.seriesBooks.EXPECT().GetBooksBySeriesIDAllVersions(7).Return(nil, fmt.Errorf("store down"))
 
 	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
 		"/api/v1/dedup/candidates?series_id=7", nil, nil)
@@ -1453,7 +1456,7 @@ func TestListDedupCandidates_SeriesIDExcludesDeadBookRows(t *testing.T) {
 	h, d := newHandler(t)
 	insertCandidate(t, d.es, "s-1", "s-2")
 	insertCandidate(t, d.es, "s-2", "s-3")
-	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).
+	d.seriesBooks.EXPECT().GetBooksBySeriesIDAllVersions(7).
 		Return(seriesBooks("s-1", "s-2", "s-3"), nil)
 	d.store.EXPECT().GetBookByID("s-3").Return(nil, nil)
 	d.store.EXPECT().GetBookByID(mock.Anything).
