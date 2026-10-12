@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-10-11
 
@@ -380,8 +380,8 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 // observation, reachable through FindFileEventsByHash. (AdoptOrphanEvents could
 // attach it to a row, but nothing in production calls it, so it stays an
 // orphan.) With neither, nothing is recorded: an event naming no row and no
-// digest could not be found again. A nil recorder records nothing. Like every provenance
-// record it is observational and a failure is logged, not returned.
+// digest could not be found again. A nil recorder records nothing. Like every
+// provenance record it is observational and a failure is logged, not returned.
 func RecordObserved(rec database.FileProvenanceRecorder, bookFileID, actor, path, sha256 string, size int64, detail string) {
 	recordEvent(WriteTagsSafeOptions{Provenance: rec, BookFileID: bookFileID, Actor: actor},
 		database.FileEventObserved, path, sha256, size, detail, "")
