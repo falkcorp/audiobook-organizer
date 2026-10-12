@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.9.0
+// version: 1.10.0
 // last-edited: 2026-10-11
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
@@ -140,15 +140,20 @@ func writePropertiesWithTaglib(ctx context.Context, abs string, tags map[string]
 		return fmt.Errorf("taglib properties resolve: %w", err)
 	}
 	tags = tagger.FoldTagKeys(tags)
+	// writeOptions, like the other native writers: the write records its
+	// hashes on the file's book_file row (a revert rewrites the file's bytes,
+	// so the row must learn them) and keeps the create_backups backup.
+	opts := writeOptions(ctx, effectivePath)
 	_, postHash, err := fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
-	}, fileops.WriteTagsSafeOptions{KeepBackup: tagger.BackupWanted(ctx)})
+	}, opts)
 	if err != nil {
 		return fmt.Errorf("taglib properties: %w", err)
 	}
-	deps := packageSafeWriteDeps
+	// The installed hash store also gives the failure event its recorder.
+	deps := WithBookFileHashes(packageSafeWriteDeps)
 	deps.ForceVerify = true
-	if err := deps.VerifyWritten(effectivePath, tags, "", postHash); err != nil {
+	if err := deps.VerifyWritten(effectivePath, tags, opts.BookFileID, postHash); err != nil {
 		return fmt.Errorf("taglib properties: %w", err)
 	}
 	return nil

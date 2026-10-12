@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 //
@@ -92,7 +92,10 @@ func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value stri
 // promises its caller (an operation revert) that a property the writer did
 // not set or remove is an error.
 func writePropertiesWithTaglib(ctx context.Context, abs string, tags map[string][]string) error {
-	deps := packageSafeWriteDeps
+	// WithBookFileHashes, as the other tagger writes here: the revert's rewrite
+	// is recorded on the file's book_file row, and a failed verification
+	// reaches the provenance recorder behind the installed hash store.
+	deps := WithBookFileHashes(packageSafeWriteDeps)
 	deps.ForceVerify = true
 	return tagger.WriteTagsSafe(ctx, abs, tags, 0, deps)
 }

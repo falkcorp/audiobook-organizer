@@ -1,5 +1,5 @@
 // file: internal/metadata/verify_write_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6a8d13-4c79-4b05-8e1a-96d0b3f7c524
 // last-edited: 2026-10-11
 
@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/stretchr/testify/require"
@@ -175,6 +177,123 @@ func TestWriters_VerifyAfterWrite_FullProductionTagMap(t *testing.T) {
 			require.NoError(t, WriteSingleTagContext(ctx, path, "COMPOSER", ""), "clear composer")
 			require.NoError(t, WriteMetadataToFileContext(ctx, path, map[string]any{"track": "03"}, cfg), "zero-padded track")
 			require.NoError(t, WriteSingleTagContext(ctx, path, "TITLE", "T "), "trailing space")
+		})
+	}
+}
+
+// A property value holding a NUL is cut at the NUL by TagLib's C string
+// handling, on every container and in both build variants: a write that is
+// lossy for a reason no container-specific rule explains.
+const nulTitle = "a\x00b"
+
+// WriteTagProperties checks the file even with verify_after_write off, in
+// both build variants: reverts rely on a failed set or removal being an error.
+func TestWriteTagProperties_LossyPropertyFailsWithTheSettingOff(t *testing.T) {
+	setVerifyAfterWrite(t, false)
+	noSafeWriteDeps(t)
+	for _, name := range fixtureNames {
+		t.Run(name, func(t *testing.T) {
+			path := copyFixture(t, name)
+			err := WriteTagProperties(path, map[string]string{"title": nulTitle})
+			require.ErrorIs(t, err, tagger.ErrVerifyAfterWrite)
+			var vae *tagger.VerifyAfterWriteError
+			require.True(t, errors.As(err, &vae))
+			require.Equal(t, []string{"TITLE"}, vae.Keys)
+		})
+	}
+}
+
+// WriteSingleTag is verified like the other writers (the native build's
+// writeSingleTagWithTaglib has its own call to the read-back): TRACKNUMBER
+// "side A" is not an integer an MP4 atom can hold.
+func TestWriteSingleTag_LossyValueFailsVerification(t *testing.T) {
+	setVerifyAfterWrite(t, true)
+	noSafeWriteDeps(t)
+	path := copyFixture(t, "test_sample.m4b")
+	err := WriteSingleTagContext(context.Background(), path, "TRACKNUMBER", "side A")
+	require.ErrorIs(t, err, tagger.ErrVerifyAfterWrite)
+	var vae *tagger.VerifyAfterWriteError
+	require.True(t, errors.As(err, &vae))
+	require.Equal(t, []string{"TRACKNUMBER"}, vae.Keys)
+
+	// Flag off: the write is not checked.
+	setVerifyAfterWrite(t, false)
+	require.NoError(t, WriteSingleTagContext(context.Background(), copyFixture(t, "test_sample.m4b"), "TRACKNUMBER", "side A"))
+}
+
+// hashedFixture copies a fixture, gives it a book_file row in a real store,
+// and installs the store as the package's book_file hash store, as the server
+// does at startup. packageSafeWriteDeps stays empty: WriteTagProperties must
+// reach the store through the installed hash store alone.
+func hashedFixture(t *testing.T, name string) (path string, store *database.PebbleStore, row *database.BookFile) {
+	t.Helper()
+	noSafeWriteDeps(t)
+	path = copyFixture(t, name)
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	book, err := store.CreateBook(&database.Book{Title: "Old", FilePath: path})
+	require.NoError(t, err)
+	before, err := filehash.BookFileHash(path)
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: path, FileHash: before}))
+	SetBookFileHashStore(store)
+	t.Cleanup(func() { SetBookFileHashStore(nil) })
+	row, err = store.GetBookFileByPath(path)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	return path, store, row
+}
+
+// A revert (WriteTagProperties) rewrites the file's bytes, so the file's
+// book_file row must learn the new hash, or the next rescan reads the file as
+// replaced. Until the revert writers were wired through the installed hash
+// store they recorded nothing.
+func TestWriteTagProperties_RecordsTheRowsHashes(t *testing.T) {
+	setVerifyAfterWrite(t, true)
+	for _, name := range fixtureNames {
+		t.Run(name, func(t *testing.T) {
+			path, store, row := hashedFixture(t, name)
+			require.NoError(t, WriteTagProperties(path, map[string]string{"title": "Reverted"}))
+
+			after, err := filehash.BookFileHash(path)
+			require.NoError(t, err)
+			require.NotEqual(t, row.FileHash, after, "fixture error: the write did not change the file's bytes")
+			got, err := store.GetBookFileByPath(path)
+			require.NoError(t, err)
+			require.Equal(t, after, got.FileHash)
+		})
+	}
+}
+
+// A revert whose read-back fails records the diff as a FileEventObserved event
+// on the file's row, even with verify_after_write off: before the writers were
+// wired through the hash store there was no recorder, and the failure left no
+// trace beyond the returned error.
+func TestWriteTagProperties_FailedVerificationRecordsProvenance(t *testing.T) {
+	setVerifyAfterWrite(t, false)
+	for _, name := range fixtureNames {
+		t.Run(name, func(t *testing.T) {
+			path, store, row := hashedFixture(t, name)
+			err := WriteTagProperties(path, map[string]string{"title": nulTitle})
+			require.ErrorIs(t, err, tagger.ErrVerifyAfterWrite)
+
+			history, herr := store.GetFileHistory(row.ID)
+			require.NoError(t, herr)
+			var observed []database.FileEvent
+			for _, e := range history {
+				if e.Kind == database.FileEventObserved {
+					observed = append(observed, e)
+				}
+			}
+			require.Len(t, observed, 1, "history: %+v", history)
+			require.Contains(t, observed[0].Detail, "TITLE")
+			require.Equal(t, row.ID, observed[0].BookFileID)
+			// The event carries the digest of the file as written, so the
+			// whole-file hash finds it.
+			byHash, ferr := store.FindFileEventsByHash(observed[0].Digest.SHA256Full)
+			require.NoError(t, ferr)
+			require.NotEmpty(t, byHash)
 		})
 	}
 }
