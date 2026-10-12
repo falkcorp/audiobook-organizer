@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
 // last-edited: 2026-10-11
 
@@ -108,7 +108,11 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 					Status:      "dry_run",
 				})
 			}
-			imported++
+			if action == bdiStatusInPlace {
+				inPlace++
+			} else {
+				imported++
+			}
 		} else {
 			// Hydrate the full row before writing back — f is the Core
 			// (memdb-slim) projection, and passing it straight to
