@@ -1,3 +1,13 @@
+# file: internal/server/testdata/series_prune.golden
+# version: 1.0.0
+# guid: 1f5cc3d2-0374-43a8-ac07-f473e33e7aff
+# last-edited: 2026-10-11
+#
+# executeSeriesPrune's outcome and computeSeriesPrunePreview's output on the
+# synthetic library of internal/server/series_prune_golden_test.go, recorded
+# before the prune's cores moved to internal/dedup. Read by
+# TestSeriesPrune_GoldenOutcome; regenerate only for an intended change.
+
 {
   "preview": {
     "groups": [

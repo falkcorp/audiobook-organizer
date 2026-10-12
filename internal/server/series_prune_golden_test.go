@@ -1,5 +1,5 @@
 // file: internal/server/series_prune_golden_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f0e3653a-d221-478a-89b2-2d7da58ed8af
 // last-edited: 2026-10-11
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -176,11 +177,31 @@ func TestSeriesPrune_GoldenOutcome(t *testing.T) {
 	got, err := json.MarshalIndent(seriesPruneGoldenSnapshot(t, st, preview, runErr, prog.lines), "", "  ")
 	require.NoError(t, err)
 	got = append(got, '\n')
+	raw, err := os.ReadFile(seriesPruneGoldenPath)
 	if os.Getenv("UPDATE_SERIES_PRUNE_GOLDEN") == "1" {
-		require.NoError(t, os.WriteFile(seriesPruneGoldenPath, got, 0o644))
+		// The file's version header is kept as it is; bump it by hand.
+		header, _ := seriesPruneGoldenSplit(raw)
+		require.NoError(t, os.WriteFile(seriesPruneGoldenPath, append([]byte(header), got...), 0o644))
 		return
 	}
-	want, err := os.ReadFile(seriesPruneGoldenPath)
 	require.NoError(t, err, "golden missing; run with UPDATE_SERIES_PRUNE_GOLDEN=1 once, before changing the prune")
-	require.Equal(t, string(want), string(got))
+	_, want := seriesPruneGoldenSplit(raw)
+	require.Equal(t, want, string(got))
+}
+
+// seriesPruneGoldenSplit splits the golden into its "# " header lines (the
+// file's version header, ending in one blank line) and the JSON body.
+func seriesPruneGoldenSplit(raw []byte) (header, body string) {
+	s := string(raw)
+	for strings.HasPrefix(s, "#") {
+		i := strings.IndexByte(s, '\n')
+		if i < 0 {
+			return header + s, ""
+		}
+		header, s = header+s[:i+1], s[i+1:]
+	}
+	if header != "" && strings.HasPrefix(s, "\n") {
+		header, s = header+"\n", s[1:]
+	}
+	return header, s
 }
