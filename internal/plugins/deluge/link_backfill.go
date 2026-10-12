@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-10-11
 
@@ -43,7 +43,11 @@ const linkMaxWorkers = 8
 // pluginStore stays within the interfacebloat limit (an embed counts as one
 // declared entry).
 type linkBackfillStore interface {
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	// GetAllBookFilesCoreComplete, not GetAllBookFilesCore: the index it
+	// feeds decides the relink hold-back by ABSENCE (a version no row names
+	// is unsettled), so a memdb missing rows must not answer. A row it did
+	// omit could only make the op hold more, never write more.
+	GetAllBookFilesCoreComplete() ([]database.BookFileCore, error)
 	BookFilesWithHash(hash string) ([]database.BookFile, error)
 	BookFilesAtPath(path string) ([]database.BookFile, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
@@ -53,8 +57,8 @@ type linkBackfillStore interface {
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 }
 
-// linkVersionReader is the read the relink-order report makes (one per book
-// of a planned row). pluginStore already declares it, so it is not repeated
+// linkVersionReader is the read the relink hold-back makes (one per book of a
+// planned row that names no version). pluginStore already declares it, so it is not repeated
 // in linkBackfillStore.
 type linkVersionReader interface {
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
@@ -70,10 +74,16 @@ func (p *Plugin) linkBackfillDef() sdk.OperationDef {
 			"verifies it by content hash, and records the torrent hash on that file. Writes only BookFile.DelugeHash; " +
 			"removes, moves and repoints nothing. A torrent file whose verified files belong to more than one book, " +
 			"and a file two torrents both verify, are left unlinked as ambiguous. Defaults to a preview; " +
-			"dry_run=false applies. Run maintenance.relink-pre-fix-imports' apply FIRST: a file it would link is " +
-			"one this op turns into its report-only hash_mismatch class (the preview's relink_fixer_would_link " +
-			"counts them). Params: dry_run, label (default: the discovery label), limit (torrents written, applied " +
-			"after every torrent is checked; 0 = all), workers (default: CPUs, max 8).",
+			"dry_run=false applies. Files of a book maintenance.relink-pre-fix-imports has not settled (the file " +
+			"names no version and the book has an active or alt version with no torrent hash that no file names) " +
+			"are held back and counted held_for_relink, in the preview too: setting their DelugeHash first would " +
+			"turn them into that fixer's report-only hash_mismatch class. Apply the fixer, then run this op; " +
+			"include_unsettled_relink=true writes them anyway (relink_fixer_would_link then counts the ones the " +
+			"fixer would have linked). Params: dry_run, label (default: the discovery label), limit (0 = all: " +
+			"caps the torrents written, counted after the hold-back; torrents are hashed in batches until that " +
+			"many have writes, torrents no file carries yet first, and the rest of the listing only for files " +
+			"whose size equals one in the batch, for the cross-seed check; deferred_by_limit counts the torrents " +
+			"left for a later run), include_unsettled_relink, workers (default: CPUs, max 8).",
 		ResumePolicy:    sdk.ResumeRestart, // idempotent: a linked row is skipped as already_linked
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  linkBackfillOpID,
@@ -100,21 +110,27 @@ type linkBackfillParams struct {
 	Label       string `json:"label,omitempty"`
 	Limit       int    `json:"limit,omitempty"`
 	Workers     int    `json:"workers,omitempty"`
+	// IncludeUnsettledRelink writes the rows the relink hold-back would hold
+	// (held_for_relink). Opt-in: the default holds them.
+	IncludeUnsettledRelink bool `json:"include_unsettled_relink,omitempty"`
 }
 
 // linkTally counts outcomes across the run.
 //
-// Every field is atomic: phase-1 and phase-3 workers write them, and the
+// Every field is atomic: the resolve, relink and write workers update them, and the
 // RunItems Label closure reads them from inside each worker goroutine
 // (run_items.go invokes Label there), so a plain int would be both a data race
 // and a lost update.
 //
-// Units: torrents counts listed torrents; files (audio files resolved),
-// non_audio, empty_files, deselected, unmatched and outside_library count
-// torrent files; unverified counts candidate rows that failed verification;
-// linked, already_linked, ambiguous, conflict, book_deleted,
-// deferred_by_limit and relink_fixer_would_link count book_file rows; errors
-// counts failed lookups, hashes and writes.
+// Units: torrents counts listed torrents and deferred_by_limit the ones left
+// outside the limit window; files (audio files resolved), non_audio,
+// empty_files, deselected, unmatched and outside_library count files of
+// torrents inside the window, and beyond_limit_hashed the files outside it
+// hashed for the cross-seed check; unverified counts candidate rows that
+// failed verification; linked, already_linked, ambiguous, conflict,
+// book_deleted, held_for_relink and relink_fixer_would_link count book_file
+// rows of torrents inside the window; errors counts failed lookups, hashes,
+// version reads and writes, inside the window or not.
 type linkTally struct {
 	torrents       atomic.Int64
 	files          atomic.Int64
@@ -129,7 +145,11 @@ type linkTally struct {
 	conflict       atomic.Int64
 	bookDeleted    atomic.Int64
 	deferred       atomic.Int64
+	heldForRelink  atomic.Int64
 	relinkPending  atomic.Int64
+	// beyondLimit counts the files of torrents outside the limit window that
+	// were hashed for the cross-seed check.
+	beyondLimit atomic.Int64
 	linked         atomic.Int64
 	errors         atomic.Int64
 	// hashed and hashMissing count torrent-file hash attempts and the ones
@@ -147,9 +167,9 @@ func (t *linkTally) summary(dry bool) string {
 	if dry {
 		linkKey = "would_link"
 	}
-	return fmt.Sprintf("%s=%d already_linked=%d unverified=%d ambiguous=%d conflict=%d book_deleted=%d deferred_by_limit=%d errors=%d",
+	return fmt.Sprintf("%s=%d already_linked=%d unverified=%d ambiguous=%d conflict=%d book_deleted=%d held_for_relink=%d deferred_by_limit=%d errors=%d",
 		linkKey, t.linked.Load(), t.alreadyLinked.Load(), t.unverified.Load(),
-		t.ambiguous.Load(), t.conflict.Load(), t.bookDeleted.Load(), t.deferred.Load(), t.errors.Load())
+		t.ambiguous.Load(), t.conflict.Load(), t.bookDeleted.Load(), t.heldForRelink.Load(), t.deferred.Load(), t.errors.Load())
 }
 
 // linkBackfillResult is the op's persisted result. Exactly one of Linked and
@@ -167,6 +187,8 @@ type linkBackfillResult struct {
 	Conflict              int64    `json:"conflict"`
 	BookDeleted           int64    `json:"book_deleted"`
 	DeferredByLimit       int64    `json:"deferred_by_limit"`
+	BeyondLimitHashed     int64    `json:"beyond_limit_hashed"`
+	HeldForRelink         int64    `json:"held_for_relink"`
 	RelinkFixerWouldLink  int64    `json:"relink_fixer_would_link"`
 	NonAudio              int64    `json:"non_audio"`
 	EmptyFiles            int64    `json:"empty_files"`
@@ -191,6 +213,8 @@ func (t *linkTally) result(dry bool, label string, notes []string) linkBackfillR
 		Conflict:              t.conflict.Load(),
 		BookDeleted:           t.bookDeleted.Load(),
 		DeferredByLimit:       t.deferred.Load(),
+		BeyondLimitHashed:     t.beyondLimit.Load(),
+		HeldForRelink:         t.heldForRelink.Load(),
 		RelinkFixerWouldLink:  t.relinkPending.Load(),
 		NonAudio:              t.nonAudio.Load(),
 		EmptyFiles:            t.emptyFiles.Load(),
@@ -276,17 +300,20 @@ type baseSizeKey struct {
 	size int64
 }
 
-// linkLibraryIndex is built once per run from GetAllBookFilesCore and only
-// read afterwards, so workers share it without a lock.
+// linkLibraryIndex is built once per run from GetAllBookFilesCoreComplete and
+// only read afterwards, so workers share it without a lock.
 type linkLibraryIndex struct {
 	root       string
 	byOrigPath map[string][]linkCandidate // rule (a): DelugeOriginalPath
 	byBaseSize map[baseSizeKey][]linkCandidate
-	// For the relink-order report (relinkFixerWouldLink): per book, the
+	// For the relink hold-back (relinkStates, holdBack): per book, the
 	// version IDs its rows name, and how many of its rows name no version and
 	// carry no torrent hash.
 	namedVersions map[string]map[string]bool
 	hashlessRows  map[string]int
+	// rowHashes holds every DelugeHash some row carries (lower case), for
+	// the limit window's order (linkOrder).
+	rowHashes map[string]bool
 }
 
 func buildLinkLibraryIndex(root string, rows []database.BookFileCore) *linkLibraryIndex {
@@ -296,10 +323,14 @@ func buildLinkLibraryIndex(root string, rows []database.BookFileCore) *linkLibra
 		byBaseSize:    make(map[baseSizeKey][]linkCandidate),
 		namedVersions: make(map[string]map[string]bool),
 		hashlessRows:  make(map[string]int),
+		rowHashes:     make(map[string]bool),
 	}
 	for i := range rows {
 		r := &rows[i]
 		c := candidateFromCore(r)
+		if r.DelugeHash != "" {
+			idx.rowHashes[strings.ToLower(r.DelugeHash)] = true
+		}
 		switch {
 		case r.VersionID != "":
 			if idx.namedVersions[r.BookID] == nil {
@@ -336,10 +367,50 @@ func underLibraryRoot(root, path string) bool {
 	return pathutil.IsUnderRoot(root, path)
 }
 
-// torrentResolution is phase 1's output for one torrent. Each worker writes
-// only its own slot of a preallocated slice, so phase 1 shares no map.
+// linkFile is one torrent file resolution will hash: audio, selected for
+// download, not empty.
+type linkFile struct {
+	abs  string
+	size int64 // Deluge's size for the file
+}
+
+// fileResult is one torrent file's resolution. It is computed at most once
+// per run (done), by the one worker that owns its torrent.
+type fileResult struct {
+	done bool
+	// failed: the hash or a lookup failed. missing: the hash failed because
+	// the file was not on disk.
+	failed, missing bool
+	err             error // why it failed, for the log
+	verified        []linkCandidate
+	unverified      int64
+	// outside: rules found rows, all outside the library root. unmatched: no
+	// rule found any row.
+	outside, unmatched bool
+	// counted: its outcome is in the tally (set once its torrent is inside
+	// the limit window).
+	counted bool
+}
+
+// linkTorrent is one listed torrent: prepared without I/O, then resolved file
+// by file. inWindow torrents are resolved in full and may be written; the
+// others only have the files whose size equals a size inside the window
+// resolved, for the cross-seed check, and are never written.
+type linkTorrent struct {
+	hash    string // "" when Deluge's id is invalid: nothing is resolved
+	files   []linkFile
+	results []fileResult // parallel to files
+	// Counted into the tally when the torrent enters the window.
+	nonAudio, deselected, emptyFiles int64
+	inWindow                         bool
+}
+
+// torrentResolution is one torrent's input to decide.
 type torrentResolution struct {
 	hash string
+	// inWindow: inside the limit window, so its rows may be written and are
+	// counted. A torrent outside it only makes rows ambiguous.
+	inWindow bool
 	// failed is set when any lookup for the torrent errored. Such a torrent
 	// links nothing: an incomplete lookup could hide a second row or a second
 	// torrent, and must never read as "no candidates". The rows it did verify
@@ -351,15 +422,32 @@ type torrentResolution struct {
 	groups [][]linkCandidate
 }
 
-// linkRun holds one run's shared, read-only state plus the tally.
+// relinkState is what one book's versions say about
+// maintenance.relink-pre-fix-imports, for the hold-back.
+type relinkState struct {
+	// stranded counts the book's active or alt versions with an empty
+	// TorrentHash that no book_file row names.
+	stranded int
+	// readErr: the version read failed, so the book's state is unknown.
+	readErr bool
+}
+
+// linkRun holds one run's shared state plus the tally. idx, store, versions,
+// prov, audio and hash are read-only after setup; the caches (live, asked,
+// relink) are touched only between worker phases, by the run goroutine.
 type linkRun struct {
 	store    linkBackfillStore
 	versions linkVersionReader
 	prov     database.FileProvenanceStore // nil: rule (c) and the provenance arm are skipped
 	idx      *linkLibraryIndex
 	audio    interface{ MatchPath(string) bool }
+	hash     func(path string) (string, error)
 	tally    *linkTally
 	log      *slog.Logger
+
+	live   map[string]bool // book ID -> exists and is not soft-deleted
+	asked  map[string]bool // book IDs liveBooks has read
+	relink map[string]relinkState
 }
 
 func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
@@ -384,6 +472,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	}
 	root := config.AppConfig.RootDir
 	workers := linkWorkers(params.Workers)
+	limit := max(params.Limit, 0)
 
 	if p.client == nil {
 		return fmt.Errorf("%s: deluge is not configured; nothing was written", linkBackfillOpID)
@@ -400,11 +489,8 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	if err != nil {
 		return fmt.Errorf("%s: list torrents from deluge (label %q): %w; nothing was written", linkBackfillOpID, label, err)
 	}
-	// limit is applied to the write plan after decide, never here: a torrent
-	// cut from the listing could be the cross-seed twin that makes a row
-	// ambiguous, and the survivor would then win the row arbitrarily.
 
-	rows, err := p.store.GetAllBookFilesCore()
+	rows, err := p.store.GetAllBookFilesCoreComplete()
 	if err != nil {
 		return fmt.Errorf("%s: load book files: %w; nothing was written", linkBackfillOpID, err)
 	}
@@ -416,8 +502,15 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		versions: p.store,
 		idx:      buildLinkLibraryIndex(root, rows),
 		audio:    delugeclient.AudioExtensions(),
+		hash:     p.linkHash,
 		tally:    tally,
 		log:      log,
+		live:     make(map[string]bool),
+		asked:    make(map[string]bool),
+		relink:   make(map[string]relinkState),
+	}
+	if run.hash == nil {
+		run.hash = filehash.BookFileHash
 	}
 
 	var notes []string
@@ -434,65 +527,123 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	}
 
 	log.Info("starting", "dry_run", dry, "label", label, "torrents", len(details),
-		"workers", workers, "limit", params.Limit)
+		"workers", workers, "limit", limit, "include_unsettled_relink", params.IncludeUnsettledRelink)
 
-	// Phase 1: resolve and verify every torrent, in parallel. Nothing is
-	// written here.
-	resolutions := make([]torrentResolution, len(details))
-	indices := make([]int, len(details))
-	for i := range indices {
-		indices[i] = i
+	torrents := make([]*linkTorrent, len(details))
+	for i := range details {
+		torrents[i] = run.prepare(&details[i])
 	}
-	sdk.NewProgress(reporter, len(details)).Start(fmt.Sprintf("Resolving %d torrent(s)...", len(details)))
-	if err := registry.RunItems(ctx, reporter, indices, func(ctx context.Context, i int) error {
-		resolutions[i] = run.resolveTorrent(ctx, &details[i])
-		return ctx.Err()
-	}, linkRunOptions(workers, len(details), tally)); err != nil {
-		return err
+	order := linkOrder(torrents, run.idx)
+
+	// Phases 1 and 2, repeated while limit is unmet. Nothing is written here.
+	//
+	// limit bounds the torrents written, counted after the hold-back, and the
+	// hashing with them. Each round moves the next torrents of order into the
+	// window, as many as limit still lacks (all of them with no limit), and
+	// hashes their files in full. A torrent outside the window has only the
+	// files whose Deluge size equals the size of a window file hashed: a
+	// cross-seed holds identical bytes, so a size no window file has cannot
+	// make a window row ambiguous (filehash.BookFileHash digests the size
+	// with a sampled file, and a whole file's size is its own). Each torrent
+	// file is hashed at most once per run, however many rounds there are.
+	// The window grows past torrents with nothing to write (already linked,
+	// held, unmatched), so a later limited run reaches new torrents.
+	var (
+		plan   []torrentWrites
+		stats  decideStats
+		window int
+	)
+	for {
+		grow := len(order) - window
+		if limit > 0 {
+			grow = min(grow, limit-len(plan))
+		}
+		for _, i := range order[window : window+grow] {
+			run.enterWindow(torrents[i])
+		}
+		window += grow
+
+		if err := run.resolveRound(ctx, reporter, torrents, workers); err != nil {
+			return err
+		}
+		resolutions := make([]torrentResolution, len(torrents))
+		for i, t := range torrents {
+			resolutions[i] = t.resolution()
+		}
+
+		// Phase 2: decide, single-threaded, from every torrent's result at
+		// once. The books of every verified row are read in batches first,
+		// so a row of a soft-deleted book is dropped before the
+		// one-book-per-file check.
+		live, err := run.liveBooks(resolutions)
+		if err != nil {
+			return fmt.Errorf("%s: read the books of verified files: %w; nothing was written", linkBackfillOpID, err)
+		}
+		plan, stats = run.decide(resolutions, live)
+
+		// Phase 2b: hold back the rows of books the relink fixer has not
+		// settled, before limit counts the plan.
+		if err := run.relinkStates(ctx, reporter, plan, workers); err != nil {
+			return err
+		}
+		plan, stats.held, stats.fixerWouldLink = run.holdBack(plan, params.IncludeUnsettledRelink)
+
+		if limit == 0 || len(plan) >= limit || window == len(order) {
+			break
+		}
+	}
+	run.countWindow(torrents)
+	stats.addTo(tally)
+	if limit > 0 && len(plan) > limit {
+		// Not expected (each window torrent adds at most one plan entry),
+		// kept so limit holds whatever decide does.
+		tally.deferred.Add(int64(len(plan) - limit))
+		plan = plan[:limit]
+	}
+	if rest := len(order) - window; rest > 0 {
+		tally.deferred.Add(int64(rest))
+	}
+	for _, t := range torrents {
+		if t.inWindow {
+			continue
+		}
+		for i := range t.results {
+			if t.results[i].done {
+				tally.beyondLimit.Add(1)
+			}
+		}
+	}
+	if n := tally.deferred.Load(); n > 0 {
+		notes = append(notes, fmt.Sprintf("limit: %d torrent(s) written; deferred_by_limit counts the %d torrent(s) "+
+			"left for a later run, and beyond_limit_hashed the %d file(s) of those hashed only for the cross-seed check",
+			len(plan), n, tally.beyondLimit.Load()))
 	}
 	if n, missing := tally.hashed.Load(), tally.hashMissing.Load(); n > 0 && missing == n {
 		notes = append(notes, fmt.Sprintf("path_views_differ: none of the %d torrent file(s) hashed was found on disk; "+
 			"Deluge's save paths are likely mounted at a different path on this server than in Deluge", n))
 	}
-
-	// Phase 2: decide, single-threaded, from every torrent's result at once.
-	// The books of every verified row are read in one batch first, so a row
-	// of a soft-deleted book is dropped before the one-book-per-file check.
-	live, err := run.liveBooks(resolutions)
-	if err != nil {
-		return fmt.Errorf("%s: read the books of verified files: %w; nothing was written", linkBackfillOpID, err)
-	}
-	plan := run.decide(resolutions, live)
-	if params.Limit > 0 && len(plan) > params.Limit {
-		for _, w := range plan[params.Limit:] {
-			tally.deferred.Add(int64(len(w.rows)))
-		}
-		plan = plan[:params.Limit]
-		notes = append(notes, fmt.Sprintf("limit: %d torrent(s) written of the planned ones; deferred_by_limit "+
-			"counts the files left for a later run", params.Limit))
-	}
-
-	// Phase 2b: report the planned rows maintenance.relink-pre-fix-imports
-	// would link today. Setting their DelugeHash first moves them to that
-	// fixer's report-only hash_mismatch class.
-	if err := run.relinkFixerWouldLink(ctx, reporter, plan, workers); err != nil {
-		return err
+	if n := tally.heldForRelink.Load(); n > 0 {
+		notes = append(notes, fmt.Sprintf("held_for_relink: %d file(s) were held back: their books have a version "+
+			"maintenance.relink-pre-fix-imports has not settled (active or alt, no torrent hash, named by no file). "+
+			"Setting DelugeHash first would turn them into that fixer's report-only hash_mismatch class. Apply "+
+			"maintenance.relink-pre-fix-imports, then run this op again; include_unsettled_relink=true writes them anyway", n))
 	}
 	if n := tally.relinkPending.Load(); n > 0 {
 		verb := "would set"
 		if !dry {
 			verb = "set"
 		}
-		notes = append(notes, fmt.Sprintf("relink_fixer_would_link: this run %s DelugeHash on %d file(s) that "+
-			"maintenance.relink-pre-fix-imports plans as would_link; once set, that fixer classes them hash_mismatch "+
-			"(report-only) and cannot link them. Apply maintenance.relink-pre-fix-imports first, then run this op", verb, n))
+		notes = append(notes, fmt.Sprintf("relink_fixer_would_link: include_unsettled_relink is on, and this run %s "+
+			"DelugeHash on %d file(s) that maintenance.relink-pre-fix-imports plans as would_link; once set, that "+
+			"fixer classes them hash_mismatch (report-only) and cannot link them. Apply maintenance.relink-pre-fix-imports "+
+			"first, then run this op", verb, n))
 	}
 
 	// Phase 3: write. Workers partition by torrent, and phase 2 already gave
 	// each book_file row to at most one torrent (a row two torrents resolve to
 	// is skipped for both as ambiguous), so no two workers can target one row.
-	// ModifyBookFile's under-lock re-check guards against everything else that
-	// writes book_file rows.
+	// Only window torrents are in plan. ModifyBookFile's under-lock re-check
+	// guards against everything else that writes book_file rows.
 	if dry {
 		for _, w := range plan {
 			tally.linked.Add(int64(len(w.rows)))
@@ -520,54 +671,171 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		"torrents", res.Torrents, "files", res.Files, "non_audio", res.NonAudio,
 		"empty_files", res.EmptyFiles, "deselected", res.Deselected,
 		"unmatched", res.Unmatched, "outside_library", res.OutsideLibrary,
+		"beyond_limit_hashed", res.BeyondLimitHashed,
 		"relink_fixer_would_link", res.RelinkFixerWouldLink,
 		"provenance_unavailable", res.ProvenanceUnavailable)
 	sdk.NewProgress(reporter, len(details)).Done(tally.summary(dry))
 	return nil
 }
 
-// resolveTorrent runs candidate resolution (§4 rules a-d) and verification for
-// every audio file of one torrent.
-func (r *linkRun) resolveTorrent(ctx context.Context, d *delugeclient.TorrentDetail) torrentResolution {
+// prepare reads one listed torrent without I/O: its normalized hash and the
+// files resolution will hash (D62: audio only; Deluge-deselected and empty
+// files are skipped and counted).
+func (r *linkRun) prepare(d *delugeclient.TorrentDetail) *linkTorrent {
 	hash, err := delugeclient.NormalizeTorrentID(d.Hash)
 	if err != nil {
-		r.tally.errors.Add(1)
 		r.log.Warn("skipping torrent with an invalid id", "error", err)
-		return torrentResolution{failed: true}
+		return &linkTorrent{}
 	}
-	res := torrentResolution{hash: hash}
+	t := &linkTorrent{hash: hash}
 	for _, f := range d.Files {
-		if ctx.Err() != nil {
-			res.failed = true
-			return res
-		}
-		if !r.audio.MatchPath(f.Path) {
-			r.tally.nonAudio.Add(1) // D62: audio files only
-			continue
-		}
-		if deselected(d, f) {
+		switch {
+		case !r.audio.MatchPath(f.Path):
+			t.nonAudio++
+		case deselected(d, f):
 			// Priority 0: Deluge was told not to download it, so it is
 			// usually absent or partial. Skip the file, not the torrent.
-			r.tally.deselected.Add(1)
-			continue
-		}
-		if f.Size <= 0 {
+			t.deselected++
+		case f.Size <= 0:
 			// Every empty file has the same digest, so an empty file
 			// "verifies" against every empty library row of every book.
-			r.tally.emptyFiles.Add(1)
+			t.emptyFiles++
+		default:
+			t.files = append(t.files, linkFile{abs: filepath.Clean(d.AbsPath(f)), size: f.Size})
+		}
+	}
+	t.results = make([]fileResult, len(t.files))
+	return t
+}
+
+// linkOrder is the order torrents enter the limit window: torrents whose
+// hash no book_file row carries yet first, then the ones some row already
+// carries (linked or imported before), each group by hash, and invalid ids
+// last. So a limited run that linked a batch reaches new torrents the next
+// time instead of re-hashing the same ones.
+func linkOrder(ts []*linkTorrent, idx *linkLibraryIndex) []int {
+	order := make([]int, len(ts))
+	for i := range order {
+		order[i] = i
+	}
+	rank := func(t *linkTorrent) int {
+		switch {
+		case t.hash == "":
+			return 2
+		case idx.rowHashes[t.hash]:
+			return 1
+		}
+		return 0
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		ta, tb := ts[order[a]], ts[order[b]]
+		if ra, rb := rank(ta), rank(tb); ra != rb {
+			return ra < rb
+		}
+		return ta.hash < tb.hash
+	})
+	return order
+}
+
+// enterWindow moves t into the limit window and counts its torrent-level
+// outcomes.
+func (r *linkRun) enterWindow(t *linkTorrent) {
+	t.inWindow = true
+	if t.hash == "" {
+		r.tally.errors.Add(1) // the invalid id
+	}
+	r.tally.nonAudio.Add(t.nonAudio)
+	r.tally.deselected.Add(t.deselected)
+	r.tally.emptyFiles.Add(t.emptyFiles)
+}
+
+// resolveRound resolves, on the worker pool, every file not yet resolved of
+// every window torrent, and the files of the other torrents whose size
+// equals a window file's size. Each worker writes only its own torrent's
+// results.
+func (r *linkRun) resolveRound(ctx context.Context, reporter sdk.Reporter, ts []*linkTorrent, workers int) error {
+	sizes := make(map[int64]bool)
+	for _, t := range ts {
+		if t.inWindow {
+			for _, f := range t.files {
+				sizes[f.size] = true
+			}
+		}
+	}
+	var work []*linkTorrent
+	for _, t := range ts {
+		for i, f := range t.files {
+			if !t.results[i].done && (t.inWindow || sizes[f.size]) {
+				work = append(work, t)
+				break
+			}
+		}
+	}
+	if len(work) == 0 {
+		return nil
+	}
+	sdk.NewProgress(reporter, len(work)).Start(fmt.Sprintf("Resolving %d torrent(s)...", len(work)))
+	return registry.RunItems(ctx, reporter, work, func(ctx context.Context, t *linkTorrent) error {
+		for i, f := range t.files {
+			if t.results[i].done || (!t.inWindow && !sizes[f.size]) {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			t.results[i] = r.resolveFile(f.abs, f.size)
+			if t.results[i].failed {
+				r.tally.errors.Add(1)
+				r.log.Warn("torrent file lookup failed; this torrent links nothing", "torrent", t.hash,
+					"in_window", t.inWindow, "error", t.results[i].err)
+			}
+		}
+		return nil
+	}, linkRunOptions(workers, len(work), r.tally))
+}
+
+// countWindow puts the per-file outcomes of every window torrent into the
+// tally, once each.
+func (r *linkRun) countWindow(ts []*linkTorrent) {
+	for _, t := range ts {
+		if !t.inWindow {
 			continue
 		}
-		r.tally.files.Add(1)
-		abs := filepath.Clean(d.AbsPath(f))
-		verified, err := r.resolveFile(abs, f.Size)
-		if err != nil {
-			r.tally.errors.Add(1)
-			r.log.Warn("torrent file lookup failed; this torrent links nothing", "torrent", hash, "error", err)
+		for i := range t.results {
+			fr := &t.results[i]
+			if !fr.done || fr.counted {
+				continue
+			}
+			fr.counted = true
+			r.tally.files.Add(1)
+			r.tally.hashed.Add(1)
+			if fr.missing {
+				r.tally.hashMissing.Add(1)
+			}
+			r.tally.unverified.Add(fr.unverified)
+			switch {
+			case fr.outside:
+				r.tally.outsideLibrary.Add(1)
+			case fr.unmatched:
+				r.tally.unmatched.Add(1)
+			}
+		}
+	}
+}
+
+// resolution is t's input to decide: every resolved file's verified rows.
+func (t *linkTorrent) resolution() torrentResolution {
+	res := torrentResolution{hash: t.hash, inWindow: t.inWindow, failed: t.hash == ""}
+	for i := range t.results {
+		fr := &t.results[i]
+		if !fr.done {
+			continue
+		}
+		if fr.failed {
 			res.failed = true
-			continue
 		}
-		if len(verified) > 0 {
-			res.groups = append(res.groups, verified)
+		if len(fr.verified) > 0 {
+			res.groups = append(res.groups, fr.verified)
 		}
 	}
 	return res
@@ -581,43 +849,41 @@ func deselected(d *delugeclient.TorrentDetail, f delugeclient.TorrentFile) bool 
 }
 
 // resolveFile finds the library candidates for one torrent file and returns
-// the verified ones. It returns an error only for a failed hash or lookup.
-func (r *linkRun) resolveFile(abs string, size int64) ([]linkCandidate, error) {
+// the verified ones. It touches no shared state but the read-only index.
+func (r *linkRun) resolveFile(abs string, size int64) fileResult {
 	// filehash.BookFileHash is the only digest the op compares: head and tail
 	// above 100 MB, the whole file below, no audio decoding.
-	r.tally.hashed.Add(1)
-	h, err := filehash.BookFileHash(abs)
+	out := fileResult{done: true}
+	h, err := r.hash(abs)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			r.tally.hashMissing.Add(1)
-		}
-		return nil, fmt.Errorf("hash torrent file: %w", err)
+		out.failed, out.err = true, fmt.Errorf("hash torrent file: %w", err)
+		out.missing = errors.Is(err, fs.ErrNotExist)
+		return out
 	}
 	cands, sawOutside, err := r.candidates(abs, size, h)
 	if err != nil {
-		return nil, err
+		out.failed, out.err = true, err
+		return out
 	}
 	if len(cands) == 0 {
-		if sawOutside {
-			r.tally.outsideLibrary.Add(1)
-		} else {
-			r.tally.unmatched.Add(1)
-		}
-		return nil, nil
+		out.outside = sawOutside
+		out.unmatched = !sawOutside
+		return out
 	}
-	var out []linkCandidate
 	for _, c := range cands {
 		ok, err := r.verify(c, h, size)
 		if err != nil {
-			return nil, err
+			out.failed, out.err = true, err
+			out.verified = nil
+			return out
 		}
 		if !ok {
-			r.tally.unverified.Add(1)
+			out.unverified++
 			continue
 		}
-		out = append(out, c)
+		out.verified = append(out.verified, c)
 	}
-	return out, nil
+	return out
 }
 
 // candidates tries rules (a) to (d) in order and returns the in-library
@@ -740,23 +1006,22 @@ type torrentWrites struct {
 // liveBooksChunk bounds one GetBooksByIDs call: it reads full Book rows.
 const liveBooksChunk = 500
 
-// liveBooks reads, in batches, the book of every verified row and returns the
-// IDs of those that exist and are not soft-deleted.
+// liveBooks reads, in batches, the book of every verified row not read in an
+// earlier round, and returns the IDs of those that exist and are not
+// soft-deleted (r.live, which it extends).
 func (r *linkRun) liveBooks(resolutions []torrentResolution) (map[string]bool, error) {
-	seen := make(map[string]bool)
 	var ids []string
 	for _, res := range resolutions {
 		for _, g := range res.groups {
 			for _, c := range g {
-				if !seen[c.BookID] {
-					seen[c.BookID] = true
+				if !r.asked[c.BookID] {
+					r.asked[c.BookID] = true
 					ids = append(ids, c.BookID)
 				}
 			}
 		}
 	}
 	sort.Strings(ids)
-	live := make(map[string]bool, len(ids))
 	for start := 0; start < len(ids); start += liveBooksChunk {
 		books, err := r.store.GetBooksByIDs(ids[start:min(start+liveBooksChunk, len(ids))])
 		if err != nil {
@@ -764,11 +1029,27 @@ func (r *linkRun) liveBooks(resolutions []torrentResolution) (map[string]bool, e
 		}
 		for i := range books {
 			if !books[i].IsSoftDeleted() {
-				live[books[i].ID] = true
+				r.live[books[i].ID] = true
 			}
 		}
 	}
-	return live, nil
+	return r.live, nil
+}
+
+// decideStats is decide's and holdBack's count of one round, put into the
+// tally once, for the final round only.
+type decideStats struct {
+	ambiguous, deleted, alreadyLinked, conflict int64
+	held, fixerWouldLink                        int64
+}
+
+func (d decideStats) addTo(t *linkTally) {
+	t.ambiguous.Add(d.ambiguous)
+	t.bookDeleted.Add(d.deleted)
+	t.alreadyLinked.Add(d.alreadyLinked)
+	t.conflict.Add(d.conflict)
+	t.heldForRelink.Add(d.held)
+	t.relinkPending.Add(d.fixerWouldLink)
 }
 
 // decide partitions the verified rows by book_file ID across every torrent
@@ -781,20 +1062,31 @@ func (r *linkRun) liveBooks(resolutions []torrentResolution) (map[string]bool, e
 //     intro, an unmerged duplicate -- say nothing about which book the
 //     torrent is.
 //  3. A row two or more torrents resolve to (cross-seeded copies) is skipped
-//     for all of them (ambiguous): there is no arbitrary winner.
+//     for all of them (ambiguous): there is no arbitrary winner. A torrent
+//     outside the limit window counts here: its size-matched files were
+//     resolved for exactly this.
 //  4. A row already holding this torrent's hash is already_linked; one
 //     holding another hash is a conflict and is left as it is.
 //
-// ambiguous and book_deleted count each row once, whatever the number of
-// files or torrents that reached it.
-func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) []torrentWrites {
+// Only window torrents' rows are planned or counted: a row only torrents
+// outside the window reached belongs to a later run. ambiguous and
+// book_deleted count each such row once, whatever the number of files or
+// torrents that reached it. decide writes nothing to the tally; the caller
+// adds the final round's stats.
+func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) ([]torrentWrites, decideStats) {
+	var stats decideStats
 	byRow := make(map[string]map[string]linkCandidate) // row ID -> torrent hash -> candidate
 	failed := make(map[string]bool)
+	window := make(map[string]bool)
+	inScope := make(map[string]bool) // rows a window torrent verified
 	ambiguous := make(map[string]bool)
 	deleted := make(map[string]bool)
 	for _, res := range resolutions {
 		if res.hash == "" {
 			continue // invalid torrent id: nothing was resolved
+		}
+		if res.inWindow {
+			window[res.hash] = true
 		}
 		// A failed torrent still takes part in the ambiguity partition with
 		// the rows it did verify: if it and another torrent both verified a
@@ -807,6 +1099,9 @@ func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) 
 			kept := make([]linkCandidate, 0, len(g))
 			books := make(map[string]bool, 1)
 			for _, c := range g {
+				if res.inWindow {
+					inScope[c.ID] = true
+				}
 				if !live[c.BookID] {
 					deleted[c.ID] = true
 					continue
@@ -840,19 +1135,29 @@ func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) 
 		}
 		for hash, c := range torrents {
 			switch {
+			case !window[hash]:
+				// Outside the limit window: a later run's row.
 			case failed[hash]:
 				// Counted in errors when the lookup failed; no write.
 			case strings.EqualFold(c.DelugeHash, hash):
-				r.tally.alreadyLinked.Add(1)
+				stats.alreadyLinked++
 			case c.DelugeHash != "":
-				r.tally.conflict.Add(1)
+				stats.conflict++
 			default:
 				perTorrent[hash] = append(perTorrent[hash], c)
 			}
 		}
 	}
-	r.tally.ambiguous.Add(int64(len(ambiguous)))
-	r.tally.bookDeleted.Add(int64(len(deleted)))
+	for id := range ambiguous {
+		if inScope[id] {
+			stats.ambiguous++
+		}
+	}
+	for id := range deleted {
+		if inScope[id] {
+			stats.deleted++
+		}
+	}
 
 	plan := make([]torrentWrites, 0, len(perTorrent))
 	for hash, rows := range perTorrent {
@@ -860,72 +1165,113 @@ func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) 
 		plan = append(plan, torrentWrites{hash: hash, rows: rows})
 	}
 	sort.Slice(plan, func(i, j int) bool { return plan[i].hash < plan[j].hash })
-	return plan
+	return plan, stats
 }
 
-// relinkFixerWouldLink counts the planned rows maintenance.relink-pre-fix-imports
-// classes would_link today, into tally.relinkPending. It reports; it changes
-// no plan.
-//
-// Why only report. That fixer links a pre-fix import's row to the one live
-// version of its book no row names whose TorrentHash equals the row's
-// DelugeHash (empty matches empty). Pre-fix imports recorded no torrent hash
-// on either, so the pair matched on "". Once this op sets the row's DelugeHash
-// the version (still "") no longer matches: the fixer's doc lists "the row
-// carries one and the version none" as hash_mismatch, not inferred, and
-// versions.CreateIngestVersion's adopt path refuses a version whose
-// TorrentHash differs from the row's (WhyNotLinkable, strandedVersion).
-// Treating "" as compatible there would plan links its apply then refuses, so
-// the fixer is left as it is and the order is stated instead: apply the relink
-// fixer first.
-//
-// The fixer's would_link, for a row this op links (hashless, unlinked, under
-// the library root and so inside its allow-list, on a live book): exactly one
-// active or alt version of the book with an empty TorrentHash that no row
-// names, and at most one hashless unlinked row on the book (more is its
-// hashless ambiguous class). One version read per book, on the worker pool.
-func (r *linkRun) relinkFixerWouldLink(ctx context.Context, reporter sdk.Reporter, plan []torrentWrites, workers int) error {
-	byBook := make(map[string]int)
+// relinkStates reads, on the worker pool, the versions of every book with a
+// planned row that names no version, once per run (r.relink), and records
+// its relinkState. A failed read is counted in errors and recorded as
+// readErr, which holdBack treats as unsettled.
+func (r *linkRun) relinkStates(ctx context.Context, reporter sdk.Reporter, plan []torrentWrites, workers int) error {
+	var books []string
+	seen := make(map[string]bool)
 	for _, w := range plan {
 		for _, c := range w.rows {
-			if c.VersionID == "" {
-				byBook[c.BookID]++
+			if c.VersionID == "" && !seen[c.BookID] {
+				seen[c.BookID] = true
+				if _, done := r.relink[c.BookID]; !done {
+					books = append(books, c.BookID)
+				}
 			}
 		}
 	}
-	if len(byBook) == 0 {
+	if len(books) == 0 {
 		return nil
 	}
-	books := make([]string, 0, len(byBook))
-	for id := range byBook {
-		books = append(books, id)
-	}
 	sort.Strings(books)
+	states := make([]relinkState, len(books))
+	pos := make(map[string]int, len(books))
+	for i, id := range books {
+		pos[id] = i
+	}
 	opts := linkRunOptions(workers, len(books), r.tally)
 	opts.Label = func(i, t int) string { return fmt.Sprintf("Checking relink order: book %d/%d", i+1, t) }
-	return registry.RunItems(ctx, reporter, books, func(_ context.Context, bookID string) error {
-		if r.idx.hashlessRows[bookID] > 1 {
-			return nil
-		}
+	err := registry.RunItems(ctx, reporter, books, func(_ context.Context, bookID string) error {
+		st := &states[pos[bookID]] // each worker owns one slot
 		vers, err := r.versions.GetBookVersionsByBookID(bookID)
 		if err != nil {
 			r.tally.errors.Add(1)
-			r.log.Warn("relink-order check: read versions failed; not counted", "book_id", bookID, "error", err)
+			r.log.Warn("relink hold-back: read versions failed; holding the book's files", "book_id", bookID, "error", err)
+			st.readErr = true
 			return nil
 		}
-		stranded := 0
 		for i := range vers {
 			v := &vers[i]
 			if (v.Status == database.BookVersionStatusActive || v.Status == database.BookVersionStatusAlt) &&
 				v.TorrentHash == "" && !r.idx.namedVersions[bookID][v.ID] {
-				stranded++
+				st.stranded++
 			}
-		}
-		if stranded == 1 {
-			r.tally.relinkPending.Add(int64(byBook[bookID]))
 		}
 		return nil
 	}, opts)
+	if err != nil {
+		return err
+	}
+	for i, id := range books {
+		r.relink[id] = states[i]
+	}
+	return nil
+}
+
+// holdBack drops from plan the rows of books maintenance.relink-pre-fix-imports
+// has not settled, unless include (include_unsettled_relink) is set, and
+// returns the rest with the count it held. relinkStates must have run on
+// plan.
+//
+// Unsettled: the row names no version, and its book has at least one active
+// or alt version with an empty TorrentHash that no row names, or its versions
+// could not be read. That fixer links such a row to such a version when both
+// carry no torrent hash. Once this op sets the row's DelugeHash the pair no
+// longer matches: the fixer's doc lists "the row carries one and the version
+// none" as hash_mismatch, report-only, and versions.CreateIngestVersion's
+// adopt path refuses a version whose TorrentHash differs from the row's
+// (WhyNotLinkable, strandedVersion). Treating "" as compatible there would
+// plan links its apply then refuses, so this op waits for the fixer instead.
+//
+// The hold is wider than the fixer's own would_link on purpose: a book with
+// two such versions, or two hashless unlinked rows, is the fixer's ambiguous
+// class today and can become would_link once its owner settles one of them,
+// and linking the row first would rule that out. Any version of the book no
+// row names is enough; the index is GetAllBookFilesCoreComplete's, so a row
+// the store failed to list can only widen the hold.
+//
+// fixerWouldLink counts the rows written (include set) that the fixer plans
+// as would_link today: exactly one such version and at most one hashless
+// unlinked row on the book (more is its hashless ambiguous class).
+func (r *linkRun) holdBack(plan []torrentWrites, include bool) (kept []torrentWrites, held, fixerWouldLink int64) {
+	kept = make([]torrentWrites, 0, len(plan))
+	for _, w := range plan {
+		rows := make([]linkCandidate, 0, len(w.rows))
+		for _, c := range w.rows {
+			if c.VersionID == "" {
+				st := r.relink[c.BookID]
+				if st.readErr || st.stranded > 0 {
+					if !include {
+						held++
+						continue
+					}
+					if !st.readErr && st.stranded == 1 && r.idx.hashlessRows[c.BookID] <= 1 {
+						fixerWouldLink++
+					}
+				}
+			}
+			rows = append(rows, c)
+		}
+		if len(rows) > 0 {
+			kept = append(kept, torrentWrites{hash: w.hash, rows: rows})
+		}
+	}
+	return kept, held, fixerWouldLink
 }
 
 // link writes torrentHash to one row's DelugeHash and nothing else. Under the
