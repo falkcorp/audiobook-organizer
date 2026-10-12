@@ -298,23 +298,27 @@ func plural(n int) string {
 
 // evaluate decides one candidate from in, reading only the listed book
 // counts the canonical vote needs (and an author name). It never writes. An
-// error is returned only when ctx is done.
+// error is returned only when ctx is done or the row's state cannot be
+// encoded.
 func (f *seriesPruneFixer) evaluate(ctx context.Context, in *spInputs, c dedup.SeriesPruneCandidate) (repairs.Row, error) {
 	if err := ctx.Err(); err != nil {
 		return repairs.Row{}, err
 	}
 	if c.Kind == dedup.SeriesPruneOrphan {
-		return f.evaluateOrphan(in, c), nil
+		return f.evaluateOrphan(in, c)
 	}
-	return f.evaluateDuplicate(in, c), nil
+	return f.evaluateDuplicate(in, c)
 }
 
 // evaluateOrphan decides one series that lists no books.
-func (f *seriesPruneFixer) evaluateOrphan(in *spInputs, c dedup.SeriesPruneCandidate) repairs.Row {
+func (f *seriesPruneFixer) evaluateOrphan(in *spInputs, c dedup.SeriesPruneCandidate) (repairs.Row, error) {
 	s := c.Members[0]
 	refs := in.refs[s.ID]
 	held := database.SeriesHeld(s)
-	st, _ := json.Marshal(spState{Kind: c.Kind, SeriesID: s.ID})
+	st, err := json.Marshal(spState{Kind: c.Kind, SeriesID: s.ID})
+	if err != nil {
+		return repairs.Row{}, fmt.Errorf("encode row state of series %d: %w", s.ID, err)
+	}
 	r := repairs.Row{
 		RowID:    spRowID(c),
 		BookIDs:  []string{},
@@ -344,16 +348,19 @@ func (f *seriesPruneFixer) evaluateOrphan(in *spInputs, c dedup.SeriesPruneCandi
 		r.Detail = &spDecision{kind: c.Kind, orphan: s, orphanRf: refs}
 	}
 	r.Fingerprint = spFingerprint(r, fmt.Sprintf("orphan|%d|%s|%t|%d", s.ID, s.Name, held, refs))
-	return r
+	return r, nil
 }
 
 // evaluateDuplicate decides one duplicate group.
-func (f *seriesPruneFixer) evaluateDuplicate(in *spInputs, c dedup.SeriesPruneCandidate) repairs.Row {
+func (f *seriesPruneFixer) evaluateDuplicate(in *spInputs, c dedup.SeriesPruneCandidate) (repairs.Row, error) {
 	ids := make([]int, len(c.Members))
 	for i, s := range c.Members {
 		ids[i] = s.ID
 	}
-	st, _ := json.Marshal(spState{Kind: c.Kind, Name: c.Key.Name, AuthorID: c.Key.AuthorID, MemberIDs: ids})
+	st, err := json.Marshal(spState{Kind: c.Kind, Name: c.Key.Name, AuthorID: c.Key.AuthorID, MemberIDs: ids})
+	if err != nil {
+		return repairs.Row{}, fmt.Errorf("encode row state of series group %v: %w", ids, err)
+	}
 	r := repairs.Row{
 		RowID:   spRowID(c),
 		BookIDs: []string{},
@@ -370,7 +377,7 @@ func (f *seriesPruneFixer) evaluateDuplicate(in *spInputs, c dedup.SeriesPruneCa
 		r.Title = fmt.Sprintf("Merge %d duplicate series named %q", len(c.Members), c.Members[0].Name)
 		r.Skipped, r.SkipReason, r.Reason = spSkipCountFailed, err.Error(), err.Error()
 		r.Fingerprint = spFingerprint(r, "count_failed|"+intsText(ids))
-		return r
+		return r, nil
 	}
 	keep := c.Members[vote.CanonicalIdx]
 	var (
@@ -430,7 +437,7 @@ func (f *seriesPruneFixer) evaluateDuplicate(in *spInputs, c dedup.SeriesPruneCa
 		r.Detail = &spDecision{kind: c.Kind, keep: keep, away: away, refs: refs, members: members}
 	}
 	r.Fingerprint = spFingerprint(r, fp.String())
-	return r
+	return r, nil
 }
 
 // authorName returns the author row's name, or "" when there is none or it
@@ -461,7 +468,7 @@ func intsText(ids []int) string {
 	return strings.Join(parts, ",")
 }
 
-// spErrorRow is a candidate Plan could not decide (its context ended).
+// spErrorRow is a candidate Plan could not decide.
 func spErrorRow(c dedup.SeriesPruneCandidate, err error) repairs.Row {
 	class := spClassDuplicate
 	if c.Kind == dedup.SeriesPruneOrphan {

@@ -147,6 +147,10 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// totalMerged at zero.
 	booksRepointed := 0
 	var mergeErrors []string
+	// Ledger rows the store refused. The writes they describe stand; before
+	// the extraction these failures were discarded without a trace, so they
+	// are reported in a warn line and never change the run's outcome.
+	unrecorded := 0
 
 	// Drop the cached series list, but only when this run actually changed
 	// something.
@@ -310,6 +314,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		// series list.
 		booksRepointed += merged.Repointed
 		mergeErrors = append(mergeErrors, merged.Errors...)
+		unrecorded += len(merged.Unrecorded)
 	}
 
 	_ = progress.Log("info", fmt.Sprintf("Phase 1 complete: merged %d duplicate series from %d groups", totalMerged, dupGroupCount), nil)
@@ -379,6 +384,9 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			if orphan.Deleted {
 				orphansDeleted++
 			}
+			if orphan.Unrecorded != nil {
+				unrecorded++
+			}
 		}
 	}
 
@@ -391,12 +399,17 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	_ = progress.Log("info", resultMsg, nil)
 
 	// Record summary change
-	_ = record(&database.OperationChange{
+	if rerr := record(&database.OperationChange{
 		ChangeType: "series_prune_summary",
 		FieldName:  "summary",
 		OldValue:   fmt.Sprintf("%d total series scanned", len(allSeries)),
 		NewValue:   resultMsg,
-	})
+	}); rerr != nil {
+		unrecorded++
+	}
+	if unrecorded > 0 {
+		_ = progress.Log("warn", fmt.Sprintf("%d change row(s) of this run could not be recorded; the changes themselves were made", unrecorded), nil)
+	}
 	// Capped at ten in the message so a run with thousands of failures does not
 	// produce an unreadable error string; the count above it is the complete
 	// figure, and every entry is in the operation log.
