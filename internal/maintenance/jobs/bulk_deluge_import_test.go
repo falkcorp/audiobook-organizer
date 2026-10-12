@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
 // last-edited: 2026-10-11
 
@@ -335,9 +335,16 @@ func bdiSeedingDeluge(t *testing.T, savePath string) string {
 // under that status, not already_in_library or an error.
 func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		seeding bool
-	}{{name: "config protected path"}, {name: "torrent seeding from the library", seeding: true}} {
+		name     string
+		seeding  bool
+		unloaded bool // Deluge configured but never reachable
+	}{
+		{name: "config protected path"},
+		{name: "torrent seeding from the library", seeding: true},
+		// The protected list never loaded, so no seeding file is known
+		// unprotected: fail closed, preview and live alike.
+		{name: "protected list not loaded", unloaded: true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "Example Author")
@@ -350,7 +357,13 @@ func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 			})
 			c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
 			c.DownloadClient.Torrent.Deluge.Host = ""
-			if tc.seeding {
+			if tc.unloaded {
+				down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "down", http.StatusServiceUnavailable)
+				}))
+				t.Cleanup(down.Close)
+				c.DelugeWebURL = down.URL
+			} else if tc.seeding {
 				c.DelugeWebURL = bdiSeedingDeluge(t, dir)
 			} else {
 				c.ProtectedPaths = []string{dir}

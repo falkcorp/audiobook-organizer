@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-11
 //
@@ -214,6 +214,11 @@ func ImportToLibraryWith(
 	// refuse rather than hand the protected path back as the write target.
 	if src == dest {
 		if why := InPlaceProtection(cfg, opts.Protected, src); why != "" {
+			if why == ProtectedListNotLoaded {
+				// Not known to be protected, but not known to be safe
+				// either: the row stays pending until the list loads.
+				return "", fmt.Errorf("ImportToLibrary: %s is its own library destination and %s, so whether it is a seeding file is unknown; left pending: %w: %w", src, why, tagger.ErrProtectedListNotLoaded, tagger.ErrProtectedPathWrite)
+			}
 			return "", fmt.Errorf("ImportToLibrary: %s is under %s and is its own library destination (a protected directory under RootDir), so there is nowhere to copy it: %w", src, why, tagger.ErrProtectedPathWrite)
 		}
 		// Already in place: record that, or the discovery list offers this
@@ -376,25 +381,43 @@ func staticProtection(cfg *config.Config, protected tagger.PathChecker, path str
 	return ""
 }
 
+// ProtectedListNotLoaded is the reason InPlaceProtection gives while a
+// configured Deluge protected-path cache has never fetched its save_path
+// list. Callers compare against it to word the refusal (and to wrap
+// tagger.ErrProtectedListNotLoaded); every other non-empty reason means the
+// path is protected.
+const ProtectedListNotLoaded = "deluge protected list not loaded"
+
 // InPlaceProtection names why a file at path, which is its own library
 // destination, may not be marked imported in place, or returns "" when it
 // may: path lies under a static protected prefix (staticProtection: the
-// checker's static list, config.ProtectedPaths, the iTunes library) or the
+// checker's static list, config.ProtectedPaths, the iTunes library), the
 // checker protects it some other way (a Deluge torrent's save_path under
-// RootDir). ImportToLibraryWith refuses such a file with
+// RootDir), or the checker's Deluge list has never loaded
+// (ProtectedListNotLoaded). ImportToLibraryWith refuses such a file with
 // tagger.ErrProtectedPathWrite and MarkImportedInPlace returns
 // InPlaceProtected for it; both use this one rule, so every importer leaves
 // the row pending alike.
 //
-// A nil checker contributes nothing, but the cfg prefixes still apply. A
-// typed-nil *ProtectedPathCache (a caller's unset cache field) is the same
-// as nil rather than a nil-receiver call.
+// An unloaded list fails closed. A cache that has never reached Deluge
+// reports "not protected" for every seeding file, so marking on its answer
+// would mark a file a torrent is seeding as the library copy. The organizer's
+// rename guard refuses on the same condition (tagger.ProtectedListLoaded in
+// server.SetRenameSourceGuard); static prefixes are still named first, since
+// they need no list. A nil checker (Deluge not configured) contributes
+// nothing and counts as loaded, but the cfg prefixes still apply, as do the
+// checkers that do not report loading. A typed-nil *ProtectedPathCache (a
+// caller's unset cache field) is the same as nil rather than a nil-receiver
+// call.
 func InPlaceProtection(cfg *config.Config, protected tagger.PathChecker, path string) string {
 	if pc, ok := protected.(*ProtectedPathCache); ok && pc == nil {
 		protected = nil
 	}
 	if why := staticProtection(cfg, protected, path); why != "" {
 		return why
+	}
+	if !tagger.ProtectedListLoaded(protected) {
+		return ProtectedListNotLoaded
 	}
 	if isProtected(protected, path) {
 		return "a protected path (a Deluge save path)"
