@@ -1,5 +1,5 @@
 // file: internal/deluge/mark_in_place.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8ee900f5-372f-426f-a797-2f6d18be3aa1
 // last-edited: 2026-10-11
 
@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 // BookFileModifier is the one store call MarkImportedInPlace makes.
@@ -31,6 +33,10 @@ const (
 	InPlaceMoved
 	// InPlaceGone: the row no longer exists; nothing written.
 	InPlaceGone
+	// InPlaceProtected: path is protected (InPlaceProtection), so the row is
+	// left pending; nothing written. ImportToLibraryWith refuses the same
+	// file with tagger.ErrProtectedPathWrite.
+	InPlaceProtected
 )
 
 // MarkImportedInPlace records that a pending book file is already at its
@@ -40,18 +46,35 @@ const (
 // path), no path change, no move -- under the row's lock, and only while the
 // row still names path and is unmarked.
 //
-// Without it the row stays on GetBookFilesNeedingDelugeImportCore forever.
-// ImportToLibraryWith has marked such a row since 2026-09-14;
-// deluge.centralize and maintenance.bulk-deluge-import skipped it and wrote
-// nothing, so every run listed it again (bulk import counting it "imported"
-// each time). A row deluge.link-backfill links is exactly this case: it is in
-// the library and carries a DelugeHash, with ImportedFromDelugeAt unset.
+// A protected path is refused first, before the row is read: when
+// InPlaceProtection(cfg, protected, path) names a reason (a static protected
+// prefix, or a Deluge save_path the checker knows) it returns
+// InPlaceProtected and writes nothing, so the row stays pending exactly as
+// ImportToLibraryWith leaves it (tagger.ErrProtectedPathWrite). Marking it
+// would hand the protected file to every later tag write as the library
+// copy. protected is the server's ProtectedPathCache or nil; with nil only
+// cfg's static prefixes apply.
+//
+// Without it an unprotected row stays on GetBookFilesNeedingDelugeImportCore
+// forever. ImportToLibraryWith (the /discovery/import path) has marked an
+// unprotected in-place row since 2026-09-14 and refused a protected one;
+// deluge.centralize and maintenance.bulk-deluge-import skipped both and wrote
+// nothing, so every run listed them again (bulk import counting them
+// "imported" each time). A row deluge.link-backfill links is in the library
+// and carries a DelugeHash, with ImportedFromDelugeAt unset: this function
+// marks it, unless its path is protected (a torrent seeding from inside
+// RootDir), in which case it stays pending under every importer.
 //
 // A write whose fsync failed (database.ErrBookFileDurabilityUnknown) was
 // applied, so it is logged and reported as InPlaceMarked.
-func MarkImportedInPlace(store BookFileModifier, bookID, fileID, path string, now time.Time) (InPlaceOutcome, error) {
+func MarkImportedInPlace(store BookFileModifier, cfg *config.Config, protected tagger.PathChecker, bookID, fileID, path string, now time.Time) (InPlaceOutcome, error) {
 	if store == nil {
 		return InPlaceGone, fmt.Errorf("MarkImportedInPlace: store is nil")
+	}
+	if why := InPlaceProtection(cfg, protected, path); why != "" {
+		importLog.Info("MarkImportedInPlace: %s is under %s; book file %s left pending, nothing written",
+			logger.SanitizeLogValue(path), logger.SanitizeLogValue(why), logger.SanitizeLogValue(fileID))
+		return InPlaceProtected, nil
 	}
 	got := InPlaceGone
 	row, err := store.ModifyBookFile(bookID, fileID, func(bf *database.BookFile) error {

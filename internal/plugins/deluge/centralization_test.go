@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
-// last-edited: 2026-07-07
+// last-edited: 2026-10-11
 
 package deluge
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -96,5 +97,78 @@ func TestRunCentralization_HydratesBeforeWriteback(t *testing.T) {
 	}
 	if *updated.FingerprintDiagnosticJSON != diagJSON {
 		t.Errorf("FingerprintDiagnosticJSON = %q, want %q", *updated.FingerprintDiagnosticJSON, diagJSON)
+	}
+}
+
+// A pending row that is its own library destination is marked imported in
+// place only when its path is not protected. A path under
+// config.ProtectedPaths, or under the save_path of a torrent seeding from
+// inside the library (the plugin's ProtectedPathCache), is left pending with
+// nothing written -- what /discovery/import's ImportToLibraryWith does
+// (tagger.ErrProtectedPathWrite). The control case shows the row would be
+// marked otherwise.
+func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
+	cases := []struct {
+		name      string
+		protected func(dir string) []string // config.ProtectedPaths
+		seeding   bool                      // a torrent seeds from the row's directory
+		wantMark  bool
+	}{
+		{name: "unprotected control", wantMark: true},
+		{name: "config protected path", protected: func(dir string) []string { return []string{dir} }},
+		{name: "torrent seeding from the library", seeding: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "Example Author", "Example Book")
+			origRoot, origProt := config.AppConfig.RootDir, config.AppConfig.ProtectedPaths
+			config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = root, nil
+			if tc.protected != nil {
+				config.AppConfig.ProtectedPaths = tc.protected(dir)
+			}
+			t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = origRoot, origProt })
+
+			row := database.BookFile{ID: "bf-1", BookID: "book-1", FilePath: filepath.Join(dir, "01.mp3"), DelugeHash: linkTorrentID(1)}
+			modifies := 0
+			store := &database.MockStore{
+				GetBookFilesNeedingDelugeImportCoreFunc: func() ([]database.BookFileCore, error) {
+					return []database.BookFileCore{row.Core()}, nil
+				},
+				ModifyBookFileFunc: func(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+					modifies++
+					cp := row
+					if err := fn(&cp); err != nil {
+						return &row, nil
+					}
+					row = cp
+					return &row, nil
+				},
+				UpdateBookFileFunc: func(string, *database.BookFile) error {
+					t.Error("UpdateBookFile called: an in-place row is never rewritten whole")
+					return nil
+				},
+			}
+			p := &Plugin{store: store}
+			if tc.seeding {
+				tor := delugeclient.TorrentDetail{TorrentStatus: delugeclient.TorrentStatus{Hash: linkTorrentID(1), SavePath: dir}}
+				_, client := newFakeDelugeClient(t, tor)
+				p.client = client
+				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)
+			}
+
+			if err := p.runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+				t.Fatalf("runCentralization: %v", err)
+			}
+			if marked := row.ImportedFromDelugeAt != nil; marked != tc.wantMark {
+				t.Errorf("marked imported = %v, want %v", marked, tc.wantMark)
+			}
+			if !tc.wantMark && modifies != 0 {
+				t.Errorf("ModifyBookFile called %d time(s) for a protected row; want none", modifies)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("centralize created the row's directory (stat err %v)", err)
+			}
+		})
 	}
 }
