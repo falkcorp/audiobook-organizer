@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.39.1
+// version: 1.39.2
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -1229,7 +1229,9 @@ func (s *Server) runBulkWriteBack(
 }
 
 // runMetadataRefreshScan reports books with incomplete metadata. Read-only,
-// safe to re-run on restart with no state.
+// safe to re-run on restart with no state. This is the only copy: the
+// scheduler.metadata-refresh body was merged into maintenance.metadata-refresh
+// in 04-P4c.
 func (s *Server) runMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error {
 	store := s.Ops()
 	if store == nil {

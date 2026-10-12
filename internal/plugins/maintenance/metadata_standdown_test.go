@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/metadata_standdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1d3b82-9a4e-4c57-8e20-d3a5b7c91f46
 // last-edited: 2026-10-11
 
@@ -37,12 +37,17 @@ func (d *metadataScanDeps) RenewScanStandDown(string) bool { return true }
 // merged op must refuse, without running the scan body, when the scan does not
 // park.
 func TestMetadataRefresh_RefusesWhileScanHoldsTheLibrary(t *testing.T) {
-	d := &metadataScanDeps{acquireErr: errors.New("scan did not park within 5m0s")}
+	var bodyCtx context.Context
+	d := &metadataScanDeps{
+		fakeDeps:   fakeDeps{refreshCtx: &bodyCtx},
+		acquireErr: errors.New("scan did not park within 5m0s"),
+	}
 	p := New(d)
 	err := p.runMetadataRefresh(context.Background(), nil, &opIDReporter{id: "op-refresh"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "a library scan is running")
 	require.Contains(t, err.Error(), "maintenance.metadata-refresh apply")
+	require.Nil(t, bodyCtx, "the scan body must not run when the hold is refused")
 }
 
 func TestMetadataRefresh_ProceedsOnceScanParks(t *testing.T) {
