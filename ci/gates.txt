@@ -1,5 +1,5 @@
 # file: ci/gates.txt
-# version: 1.1.0
+# version: 1.2.0
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
 # last-edited: 2026-10-12
 #
@@ -15,15 +15,17 @@
 #   ratchet-const  baseline is a Go constant; the bot never edits Go source. lower-command is
 #                  "-" and the bot reports the test's "NOTE ... lower" line in its PR body.
 #   check          pass/fail, no baseline.
-# job: "own-job" when ci.yml runs the gate in its own job under a required-check name
-#   (run_gates.py --exclude-own-jobs skips these in the shared Gates job), else "shared".
+# job: where CI executes the gate (scripts/tests/test_run_gates.py verifies it):
+#   own-job   a ci.yml job runs the command (directly or through a make target);
+#   go-suite  a Go test in the sharded short-race suite runs it (the test exists
+#             and does not skip under -short).
 # baseline / lower-command are "-" when not applicable. Ratchets fail only on a rise.
 # Blank lines and lines starting with # are ignored.
 errcheck	bash scripts/check-errcheck-ratchet.sh	.errcheck-baseline	ratchet	bash scripts/check-errcheck-ratchet.sh --measure	own-job
 interface-width	bash scripts/check-interface-width.sh	.interface-width-baseline	ratchet	bash scripts/check-interface-width.sh --measure	own-job
 deadcode-ratchet	python3 scripts/deadcode-ratchet.py	scripts/deadcode-baseline.txt	ratchet-set	python3 scripts/deadcode-ratchet.py --prune	own-job
-store-width	go test ./internal/database/ -run TestStoreFlattenedWidth -count=1	internal/database/store_width_test.go	ratchet-const	-	shared
-store-references	go test ./internal/database/ -run TestStoreReferenceCount -count=1	internal/database/store_consumers_test.go	ratchet-const	-	shared
-layering	go test ./internal/arch/ -count=1	-	check	-	shared
-appconfig-reads	go test ./internal/config/ -run TestAppConfigDirectReadRatchet -count=1	internal/config/appconfig_reads_test.go	ratchet-const	-	shared
-slog-guard	go test ./internal/logger/ -run TestGuard_NoDirectSlogCalls -count=1	-	check	-	shared
+store-width	go test ./internal/database/ -run TestStoreFlattenedWidth -count=1	internal/database/store_width_test.go	ratchet-const	-	go-suite
+store-references	go test ./internal/database/ -run TestStoreReferenceCount -count=1	internal/database/store_consumers_test.go	ratchet-const	-	go-suite
+layering	go test ./internal/arch/ -count=1	-	check	-	go-suite
+appconfig-reads	go test ./internal/config/ -run TestAppConfigDirectReadRatchet -count=1	internal/config/appconfig_reads_test.go	ratchet-const	-	go-suite
+slog-guard	go test ./internal/logger/ -run TestGuard_NoDirectSlogCalls -count=1	-	check	-	go-suite

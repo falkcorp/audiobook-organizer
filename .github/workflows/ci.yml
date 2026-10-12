@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.29.0
+# version: 3.30.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-12
 
@@ -341,49 +341,11 @@ jobs:
       - name: Check unreachable functions against baseline
         run: make --no-print-directory lint-deadcode-ratchet
 
-  # One job over the gate manifest (07-G4): ci/gates.txt is the single list of
-  # gates and scripts/ci/run_gates.py runs them. The three golangci-lint/deadcode
-  # ratchets keep their own jobs above under their existing display names (the
-  # required-check names); the manifest marks them own-job, so they are skipped
-  # here rather than run twice; this
-  # job covers the Go-test ratchets and checks. The owner may later collapse the
-  # names; .github/branch-protection.json is deliberately untouched.
-  gates:
-    name: Gates
-    needs: changes
-    if: ${{ needs.changes.outputs.go == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: recursive
-
-      - name: Set up Go (no built-in cache)
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.2'
-          cache: false
-
-      - name: Restore Go cache (manual)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-1.27-
-            ${{ runner.os }}-go-
-
-      - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
-
-      - name: Run gates (ci/gates.txt)
-        run: python3 scripts/ci/run_gates.py --exclude-own-jobs
+  # Gate list: ci/gates.txt is the single manifest (07-G4). The golangci-lint and
+  # deadcode ratchets run in the jobs above (their display names are the required
+  # check names; .github/branch-protection.json is untouched); the Go-test gates
+  # run in the sharded short-race suite below. scripts/tests/test_run_gates.py
+  # fails if a manifest gate is executed by neither.
 
   # Non-blocking report of unused frontend files and exports (01-P9). It never
   # fails the run: continue-on-error is set on the job and on the step.

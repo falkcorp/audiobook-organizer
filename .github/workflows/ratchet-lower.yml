@@ -1,5 +1,5 @@
 # file: .github/workflows/ratchet-lower.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
 # last-edited: 2026-10-12
 
@@ -74,11 +74,18 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           echo "DEADCODE_BIN=$(go env GOPATH)/bin/deadcode" >> "$GITHUB_ENV"
 
+      # continue-on-error so a gate that could not be measured does not discard
+      # the lowerings that did succeed: the PR step below still runs, and the
+      # last step turns the job red so the failure stays visible.
       - name: Lower baselines
+        id: lower
+        continue-on-error: true
         run: python3 scripts/ci/run_gates.py --lower --report "$RUNNER_TEMP/ratchet-report.md"
 
       - name: Open PR if a baseline changed
+        if: ${{ !cancelled() }}
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PAT: ${{ secrets.JF_CI_GH_PAT }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPORT: ${{ runner.temp }}/ratchet-report.md
@@ -100,6 +107,9 @@ jobs:
           fi
 
           # PRs opened with GITHUB_TOKEN do not trigger CI; prefer the PAT.
+          if [ -z "${PAT:-}" ]; then
+            echo "::warning::JF_CI_GH_PAT is not set; falling back to GITHUB_TOKEN. CI will not run on the bot PR, and the repo must allow Actions to create pull requests."
+          fi
           export GH_TOKEN="${PAT:-$GITHUB_TOKEN}"
 
           git config user.name "github-actions[bot]"
@@ -118,11 +128,20 @@ jobs:
           } > "$RUNNER_TEMP/pr-body.md"
 
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push --force-with-lease "$REMOTE" "HEAD:refs/heads/${BRANCH}"
+          # Lease against the branch's CURRENT remote sha (empty when absent): a
+          # bare --force-with-lease against a URL has no remote-tracking ref and
+          # is rejected as stale when last week's bot branch still exists.
+          bash scripts/ci/push_bot_branch.sh "$REMOTE" "$BRANCH"
 
           if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh pr edit "$BRANCH" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/pr-body.md"
           else
-            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base "${{ github.event.repository.default_branch }}" \
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base "$DEFAULT_BRANCH" \
               --title "chore(ci): lower ratchet baselines" --body-file "$RUNNER_TEMP/pr-body.md"
           fi
+
+      - name: Fail the job if a gate could not be measured
+        if: ${{ !cancelled() && steps.lower.outcome == 'failure' }}
+        run: |
+          echo "::error::run_gates.py --lower could not measure at least one gate; see the 'Lower baselines' step and the PR body."
+          exit 1
