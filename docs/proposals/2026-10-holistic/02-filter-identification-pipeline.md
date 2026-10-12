@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/02-filter-identification-pipeline.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 7244e5a7-f9c2-4d5a-9260-ecfcc99e7585 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-11 -->
 
 # 02 — Filtering, search and the identification pipeline
 
@@ -332,7 +332,7 @@ across all sources.
 | Layer | Key | Value | TTL | Invalidation |
 |---|---|---|---|---|
 | P1 provider answer | `pcache:q:<provider>:<endpoint>:<sha256(normalized question)>` | Raw results, including **empty** | Positive: `MetadataFetchCacheTTLDays` (today's knob). Negative: per provider (suggest 14 d for Audible and Audnexus, 30 d for Open Library, 7 d for Google). Errors are **never** cached. | TTL, or a manual bust |
-| P2 product by id | `pcache:asin:<ASIN>` / `pcache:isbn:<ISBN>` | Product | 30 d | Re-harvest |
+| P2 product by id | `pcache:asin:<ASIN>` (no ISBN family: nothing looks a product up by ISBN; removed in 02-PR6) | Product | 30 d | Re-harvest |
 | C book candidates | `metadata_cache:<bookID>` (today's) plus `question_fp` | The scored candidate list | No TTL. **Stale** when the book's question fingerprint changes. | Becomes **stale, not deleted** (replaces I6). The driver rescores it from P1/P2 with no provider call; only a missing P1 entry costs a call. |
 | L local catalog | `cat_*` (today's) | Harvested entries | The harvest's own 30-day due rule | `MarkUnseen` (today's) |
 
