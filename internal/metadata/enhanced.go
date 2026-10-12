@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-11
 
@@ -445,11 +445,11 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 	return errs, successCount
 }
 
-// WriteMetadataToFile safely writes metadata to an audiobook file
-// Prefers native TagLib writer when built with 'taglib'; falls back to external CLI tools if unavailable or failed.
-// Uses backup/rollback strategy via fileops.SafeCopy for all paths.
-// WriteMetadataToFileInPlace is WriteMetadataToFile for callers that are ALREADY
-// inside an outer fileops.WriteTagsSafe and are handing us its temp copy.
+// writeMetadataToFileInPlace is WriteMetadataToFile for callers that are ALREADY
+// inside an outer fileops.WriteTagsSafe and are handing us its temp copy
+// (WriteMetadataToFileAtomic). It reports whether the native taglib writer made
+// the write (false when it failed and a CLI writer ran, or the CLI writer failed
+// too).
 //
 // It skips the writer's own internal copy-and-rename wrapper. Without this, the
 // write-back path wrapped every tag write twice: four full-file SHA-256 passes
@@ -457,15 +457,7 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 // On NAS-backed audiobooks that redundant I/O dominated write-back time.
 //
 // Do NOT call this on a live library file — it has no atomic-rename safety net.
-// Use WriteMetadataToFile for that.
-func WriteMetadataToFileInPlace(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
-	_, err := writeMetadataToFileInPlace(filePath, metadata, config)
-	return err
-}
-
-// writeMetadataToFileInPlace is WriteMetadataToFileInPlace that also reports
-// whether the native taglib writer made the write (false when it failed and a
-// CLI writer ran, or the CLI writer failed too).
+// Use WriteMetadataToFile (or WriteMetadataToFileAtomic) for that.
 func writeMetadataToFileInPlace(filePath string, metadata map[string]any, config fileops.OperationConfig) (native bool, err error) {
 	if taglibAvailable {
 		if err := writeMetadataWithTaglibInPlace(filePath, metadata, config); err == nil {
@@ -587,7 +579,7 @@ func fileUnchangedSince(path string, before os.FileInfo) bool {
 
 // writeMetadataViaCLI dispatches to the per-container CLI writers (AtomicParsley for
 // m4b/m4a, eyeD3 for mp3, metaflac for flac; there is no ffmpeg writer). Shared
-// by WriteMetadataToFile and WriteMetadataToFileInPlace so the format dispatch
+// by WriteMetadataToFile and writeMetadataToFileInPlace so the format dispatch
 // exists once.
 func writeMetadataViaCLI(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	switch strings.ToLower(filepath.Ext(filePath)) {

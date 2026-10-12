@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_forcedwrite_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b91d2c7-3a48-4e60-9f15-8c27a04be3d1
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,9 +77,7 @@ func TestWriteBack_SecondPassIsANoOp(t *testing.T) {
 				"series_index": "4",
 			}
 
-			_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
-				return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, fileops.OperationConfig{})
-			}, fileops.WriteTagsSafeOptions{})
+			err := metadata.WriteMetadataToFileAtomic(path, tagMap, fileops.OperationConfig{}, fileops.WriteTagsSafeOptions{}, tagger.SafeWriteDeps{})
 			require.NoError(t, err, "first write must succeed")
 			require.FileExists(t, path)
 
@@ -113,9 +112,7 @@ func TestWriteBack_ChangedValueStillWrites(t *testing.T) {
 		"album":     "The Long Way Home",
 		"publisher": "Podium Audio",
 	}
-	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
-		return metadata.WriteMetadataToFileInPlace(tmpPath, initial, fileops.OperationConfig{})
-	}, fileops.WriteTagsSafeOptions{})
+	err := metadata.WriteMetadataToFileAtomic(path, initial, fileops.OperationConfig{}, fileops.WriteTagsSafeOptions{}, tagger.SafeWriteDeps{})
 	require.NoError(t, err)
 
 	changed := map[string]any{

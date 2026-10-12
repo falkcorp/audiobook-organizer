@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-10-11
 
@@ -236,8 +236,8 @@ func keepBackup(path string, now time.Time, allowLink bool) (name string, linked
 //
 // writeFn receives a temp copy, so a writer that itself wraps its work in
 // WriteTagsSafe would double the copy-and-hash cost. Writers meant to be called
-// from here have in-place variants — see metadata.WriteMetadataToFileInPlace and
-// tagger.WriteTagsInPlace.
+// from here have in-place variants — see metadata.WriteMetadataToFileAtomic (which
+// wraps this function around the in-place writer) and tagger.WriteTagsInPlace.
 func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTagsSafeOptions) (originalHash, postHash string, err error) {
 	// The hashes exist solely to be persisted against a book_file row. When no
 	// row is supplied there is nothing to persist and every caller discards the

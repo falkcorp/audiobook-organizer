@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_realfile_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3e5f7a91-8c24-4b6d-a017-5d92c4e8b3f0
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,12 +57,11 @@ func TestWriteBackRoundTrip_RealFile(t *testing.T) {
 		"track":  "1/12",
 	}
 
-	// This is exactly the shape the multi-file write path uses: an outer
-	// WriteTagsSafe whose writeFn is the IN-PLACE writer. Before the de-nesting
-	// fix the writeFn re-entered WriteTagsSafe, doubling the copies and hashes.
-	_, _, err = fileops.WriteTagsSafe(path, func(tmpPath string) error {
-		return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, fileops.OperationConfig{})
-	}, fileops.WriteTagsSafeOptions{})
+	// This is exactly what the write-back calls (Service.writeFileTagsSafe):
+	// WriteMetadataToFileAtomic, an outer fileops.WriteTagsSafe whose writeFn is
+	// the in-place writer. Before the de-nesting fix the writeFn re-entered
+	// WriteTagsSafe, doubling the copies and hashes.
+	err = metadata.WriteMetadataToFileAtomic(path, tagMap, fileops.OperationConfig{}, fileops.WriteTagsSafeOptions{}, tagger.SafeWriteDeps{})
 	require.NoError(t, err, "the de-nested write path must succeed on a real file")
 
 	// The file must still be a valid, readable audio file — a de-nesting bug
@@ -102,9 +102,7 @@ func TestWriteBackRoundTrip_RealFile_ChangedTagStillWrites(t *testing.T) {
 		"artist": "Test Author",
 		"track":  "1/12",
 	}
-	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
-		return metadata.WriteMetadataToFileInPlace(tmpPath, initial, fileops.OperationConfig{})
-	}, fileops.WriteTagsSafeOptions{})
+	err := metadata.WriteMetadataToFileAtomic(path, initial, fileops.OperationConfig{}, fileops.WriteTagsSafeOptions{}, tagger.SafeWriteDeps{})
 	require.NoError(t, err)
 
 	// Same file, but the album genuinely changed.
