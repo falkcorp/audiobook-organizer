@@ -1,5 +1,5 @@
 // file: internal/metadata/verify_write.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9d2f6c80-1b7e-4e53-a4c9-3f8b5a0d7e61
 // last-edited: 2026-10-11
 //
@@ -30,11 +30,15 @@ import (
 // write-back). deps carries the book_file store the verification event is
 // recorded through, and bookFileID (opts.BookFileID) the row it names.
 //
-// Only a write the native taglib writer made is verified. If native TagLib
-// failed and the AtomicParsley/ffmpeg fallback wrote the file, the result is
-// not compared: those tools write a different tag set (no AUDIOBOOK_ORGANIZER_*
-// freeform tags, for one), so the native writer's map is not what they were
-// asked for.
+// What is verified depends on which writer made the write. A write the native
+// taglib writer made is checked against everything it was asked to write
+// (buildWriteTagMap). If native TagLib failed and a CLI writer (AtomicParsley,
+// eyeD3 or metaflac) wrote the file, it is checked against the tags that
+// writer sets and TagLib reads back under a stable name (cliWriterTags): those
+// tools write a different tag set (no AUDIOBOOK_ORGANIZER_* freeform tags from
+// AtomicParsley, no LABEL or DESCRIPTION), so the native map is not what they
+// were asked for. A CLI write that left such a tag missing fails verification
+// like a native one.
 func WriteMetadataToFileAtomic(filePath string, metadata map[string]any, config fileops.OperationConfig,
 	opts fileops.WriteTagsSafeOptions, deps tagger.SafeWriteDeps) error {
 	nativeWrote := false
@@ -43,14 +47,19 @@ func WriteMetadataToFileAtomic(filePath string, metadata map[string]any, config 
 		nativeWrote, werr = writeMetadataToFileInPlace(tmpPath, metadata, config)
 		return werr
 	}, opts)
-	if err != nil || !nativeWrote {
+	if err != nil {
 		return err
 	}
 	abs, aerr := filepath.Abs(filePath)
 	if aerr != nil {
 		abs = filePath
 	}
-	want := tagger.FoldTagKeys(buildWriteTagMap(metadata))
+	var want map[string][]string
+	if nativeWrote {
+		want = tagger.FoldTagKeys(buildWriteTagMap(metadata))
+	} else {
+		want = cliWriterTags(filePath, metadata)
+	}
 	if verr := deps.VerifyWritten(abs, want, opts.BookFileID, postHash); verr != nil {
 		return fmt.Errorf("write metadata to %s: %w", filePath, verr)
 	}

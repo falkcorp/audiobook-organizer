@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.30.1
+// version: 1.31.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-11
 
@@ -473,8 +473,12 @@ func writeMetadataToFileInPlace(filePath string, metadata map[string]any, config
 		// Native failed; fall through to the CLI writers, which manage their own
 		// temp files and are safe to run against the caller's temp copy.
 	}
-	return false, writeMetadataViaCLI(filePath, metadata, config)
+	return false, cliTagWriter(filePath, metadata, config)
 }
+
+// cliTagWriter is the CLI fallback of writeMetadataToFileInPlace; a variable so
+// a test can stand in for AtomicParsley, eyeD3 and metaflac.
+var cliTagWriter = writeMetadataViaCLI
 
 // WriteMetadataToFile is WriteMetadataToFileContext with a background
 // context, so the write keeps a .bak-* backup when create_backups is on. A
@@ -605,6 +609,138 @@ func cliWriterSupports(path string) bool {
 	return false
 }
 
+// cliWriterTags returns the tags the CLI writer for path's container
+// (AtomicParsley, eyeD3 or metaflac) sets for metadata, as TagLib names them
+// when it reads the file back, or nil for a container with no CLI writer. It
+// is a subset of what the native writer sets (the CLI tools write no
+// DESCRIPTION, no LABEL, and so on), and a tag whose flag TagLib does not read
+// back under a stable name is left out: see the *TagPlan functions. Keep it in
+// step with writeMetadataViaCLI.
+func cliWriterTags(path string, metadata map[string]any) map[string][]string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".m4b", ".m4a":
+		return m4bTagPlan(metadata).want
+	case ".mp3":
+		return mp3TagPlan(metadata).want
+	case ".flac":
+		return flacTagPlan(metadata).want
+	}
+	return nil
+}
+
+// cliTagPlan is what one CLI tag writer is asked to do for a metadata map: the
+// arguments it passes, and the tags (TagLib property names, as the native
+// reader returns them) those arguments set. A writer builds its command line
+// from args, and WriteMetadataToFileAtomic verifies the file against want, so
+// the two are built at the same place and cannot drift: a flag is added to
+// args and its property to want in one step, or a flag whose tag TagLib does not
+// read back under a stable name is added to args alone.
+type cliTagPlan struct {
+	args []string
+	want map[string][]string
+}
+
+func newCliTagPlan() *cliTagPlan { return &cliTagPlan{want: map[string][]string{}} }
+
+// arg appends command-line arguments the file is not verified against.
+func (p *cliTagPlan) arg(args ...string) { p.args = append(p.args, args...) }
+
+// expect records that the arguments set property to value.
+func (p *cliTagPlan) expect(property, value string) { p.want[property] = []string{value} }
+
+// m4bTagPlan is the AtomicParsley plan (the arguments after the file and
+// --overWrite) for metadata; writeM4BMetadata runs it.
+func m4bTagPlan(metadata map[string]any) *cliTagPlan {
+	p := newCliTagPlan()
+
+	// --- Standard MP4 atoms ---
+	if title, ok := metadata["title"].(string); ok && title != "" {
+		p.arg("--title", title)
+		p.expect("TITLE", title)
+	}
+	if artist, ok := metadata["artist"].(string); ok && artist != "" {
+		// Album Artist = author (owner rule): readers take aART first, so
+		// leaving an old one behind reads the old author back on the next scan.
+		p.arg("--artist", artist, "--albumArtist", artist)
+		p.expect("ARTIST", artist)
+		p.expect("ALBUMARTIST", artist)
+	}
+	if album, ok := metadata["album"].(string); ok && album != "" {
+		p.arg("--album", album)
+		p.expect("ALBUM", album)
+	}
+	if genre, ok := metadata["genre"].(string); ok && genre != "" {
+		// Not verified: AtomicParsley stores a standard ID3v1 genre name in the
+		// integer gnre atom, which TagLib reads back under the table's spelling.
+		p.arg("--genre", genre)
+	}
+	if year, ok := metadata["year"].(int); ok && year > 0 {
+		p.arg("--year", fmt.Sprintf("%d", year))
+		p.expect("DATE", fmt.Sprintf("%d", year))
+	}
+	if track, ok := metadata["track"].(string); ok && track != "" {
+		p.arg("--tracknum", track)
+		p.expect("TRACKNUMBER", track)
+	}
+	if desc, ok := metadata["description"].(string); ok && desc != "" {
+		p.arg("--description", desc)
+	}
+	// COMPOSER (©wrt) is never written or blanked (owner rule): blanking it
+	// erased owner-set values with no undo record. Narrator goes to the custom
+	// NARRATOR atom below.
+	// --grouping maps to ©grp; use for series name
+	if series, ok := metadata["series"].(string); ok && series != "" {
+		p.arg("--grouping", series)
+		p.expect("GROUPING", series)
+	}
+
+	// --- Reverse-DNS atoms for fields without standard AtomicParsley flags ---
+	// These are stored as ----:domain:name atoms. Not verified: AtomicParsley
+	// writes them (AtomicParsley -t lists them) but TagLib's property map does
+	// not return a freeform atom outside the com.apple.iTunes domain, so the
+	// read-back has nothing to compare (probed with TagLib 2.0.2, 2026-10-11).
+	const rdnsDomain = "audiobook-organizer"
+
+	rdnsPairs := [][2]string{
+		{"NARRATOR", "narrator"},
+		{"LANGUAGE", "language"},
+		{"PUBLISHER", "publisher"},
+		{"SERIES", "series"},
+		{"ISBN10", "isbn10"},
+		{"ISBN13", "isbn13"},
+	}
+	for _, pair := range rdnsPairs {
+		if val, ok := metadata[pair[1]].(string); ok && val != "" {
+			p.arg("--rDNSatom", val, "name="+pair[0], "domain="+rdnsDomain)
+		}
+	}
+	// One coercion for every caller type. This was previously two separate
+	// blocks — an int case and a "some callers pass it as string" case — which
+	// between them still missed float64 (JSON) and would have appended the atom
+	// twice had both ever matched. The other two copies of this logic
+	// (buildWriteTagMap, and the custom-tag block above) each handled a
+	// different subset, which is how series_index came to be written by some
+	// paths and silently dropped by others.
+	if si, ok := positiveIntTag(metadata["series_index"]); ok {
+		p.arg("--rDNSatom", si, "name=SERIES_INDEX", "domain="+rdnsDomain)
+	}
+
+	// --- Custom AUDIOBOOK_ORGANIZER_* reverse-DNS atoms ---
+	customPairs := [][2]string{
+		{TagBookID, "book_id"}, {TagISBN10, "isbn10"}, {TagISBN13, "isbn13"},
+		{TagASIN, "asin"}, {TagOpenLibrary, "open_library_id"},
+		{TagHardcover, "hardcover_id"}, {TagGoogleBooks, "google_books_id"},
+		{TagEdition, "edition"}, {TagPrintYear, "print_year"},
+	}
+	for _, pair := range customPairs {
+		if val, ok := metadata[pair[1]].(string); ok && val != "" {
+			p.arg("--rDNSatom", val, "name="+pair[0], "domain="+rdnsDomain)
+		}
+	}
+	p.arg("--rDNSatom", CustomTagVersion, "name="+TagVersion, "domain="+rdnsDomain)
+	return p
+}
+
 // writeM4BMetadata writes metadata to M4B/M4A files using AtomicParsley.
 // This is the CLI fallback path; the native taglib writer is preferred and
 // handles all fields. AtomicParsley supports standard MP4 atoms and custom
@@ -630,81 +766,7 @@ func writeM4BMetadata(filePath string, metadata map[string]any, config fileops.O
 	}()
 
 	// Build AtomicParsley command with metadata updates
-	args := []string{filePath, "--overWrite"}
-
-	// --- Standard MP4 atoms ---
-	if title, ok := metadata["title"].(string); ok && title != "" {
-		args = append(args, "--title", title)
-	}
-	if artist, ok := metadata["artist"].(string); ok && artist != "" {
-		// Album Artist = author (owner rule): readers take aART first, so
-		// leaving an old one behind reads the old author back on the next scan.
-		args = append(args, "--artist", artist, "--albumArtist", artist)
-	}
-	if album, ok := metadata["album"].(string); ok && album != "" {
-		args = append(args, "--album", album)
-	}
-	if genre, ok := metadata["genre"].(string); ok && genre != "" {
-		args = append(args, "--genre", genre)
-	}
-	if year, ok := metadata["year"].(int); ok && year > 0 {
-		args = append(args, "--year", fmt.Sprintf("%d", year))
-	}
-	if track, ok := metadata["track"].(string); ok && track != "" {
-		args = append(args, "--tracknum", track)
-	}
-	if desc, ok := metadata["description"].(string); ok && desc != "" {
-		args = append(args, "--description", desc)
-	}
-	// COMPOSER (©wrt) is never written or blanked (owner rule): blanking it
-	// erased owner-set values with no undo record. Narrator goes to the custom
-	// NARRATOR atom below.
-	// --grouping maps to ©grp; use for series name
-	if series, ok := metadata["series"].(string); ok && series != "" {
-		args = append(args, "--grouping", series)
-	}
-
-	// --- Reverse-DNS atoms for fields without standard AtomicParsley flags ---
-	// These are stored as ----:domain:name atoms and can be read back by taglib.
-	const rdnsDomain = "audiobook-organizer"
-
-	rdnsPairs := [][2]string{
-		{"NARRATOR", "narrator"},
-		{"LANGUAGE", "language"},
-		{"PUBLISHER", "publisher"},
-		{"SERIES", "series"},
-		{"ISBN10", "isbn10"},
-		{"ISBN13", "isbn13"},
-	}
-	for _, pair := range rdnsPairs {
-		if val, ok := metadata[pair[1]].(string); ok && val != "" {
-			args = append(args, "--rDNSatom", val, "name="+pair[0], "domain="+rdnsDomain)
-		}
-	}
-	// One coercion for every caller type. This was previously two separate
-	// blocks — an int case and a "some callers pass it as string" case — which
-	// between them still missed float64 (JSON) and would have appended the atom
-	// twice had both ever matched. The other two copies of this logic
-	// (buildWriteTagMap, and the custom-tag block above) each handled a
-	// different subset, which is how series_index came to be written by some
-	// paths and silently dropped by others.
-	if si, ok := positiveIntTag(metadata["series_index"]); ok {
-		args = append(args, "--rDNSatom", si, "name=SERIES_INDEX", "domain="+rdnsDomain)
-	}
-
-	// --- Custom AUDIOBOOK_ORGANIZER_* reverse-DNS atoms ---
-	customPairs := [][2]string{
-		{TagBookID, "book_id"}, {TagISBN10, "isbn10"}, {TagISBN13, "isbn13"},
-		{TagASIN, "asin"}, {TagOpenLibrary, "open_library_id"},
-		{TagHardcover, "hardcover_id"}, {TagGoogleBooks, "google_books_id"},
-		{TagEdition, "edition"}, {TagPrintYear, "print_year"},
-	}
-	for _, pair := range customPairs {
-		if val, ok := metadata[pair[1]].(string); ok && val != "" {
-			args = append(args, "--rDNSatom", val, "name="+pair[0], "domain="+rdnsDomain)
-		}
-	}
-	args = append(args, "--rDNSatom", CustomTagVersion, "name="+TagVersion, "domain="+rdnsDomain)
+	args := append([]string{filePath, "--overWrite"}, m4bTagPlan(metadata).args...)
 
 	cmd := exec.Command("AtomicParsley", args...)
 	output, err := cmd.CombinedOutput()
@@ -716,6 +778,62 @@ func writeM4BMetadata(filePath string, metadata map[string]any, config fileops.O
 		return fmt.Errorf("tag write failed (restored from backup): %w, output: %s", err, output)
 	}
 	return nil
+}
+
+// mp3TagPlan is the eyeD3 plan (the arguments before the file) for metadata;
+// writeMP3Metadata runs it.
+func mp3TagPlan(metadata map[string]any) *cliTagPlan {
+	p := newCliTagPlan()
+	if title, ok := metadata["title"].(string); ok && title != "" {
+		p.arg("--title", title)
+		p.expect("TITLE", title)
+	}
+	if artist, ok := metadata["artist"].(string); ok && artist != "" {
+		// Album Artist (TPE2) = author, as organize and the taglib path write it.
+		p.arg("--artist", artist, "--album-artist", artist)
+		p.expect("ARTIST", artist)
+		p.expect("ALBUMARTIST", artist)
+	}
+	if album, ok := metadata["album"].(string); ok && album != "" {
+		p.arg("--album", album)
+		p.expect("ALBUM", album)
+	}
+	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
+		// Store narrator in a custom TXXX frame
+		p.arg("--user-text-frame=NARRATOR:" + narrator)
+		p.expect("NARRATOR", narrator)
+	}
+	if genre, ok := metadata["genre"].(string); ok && genre != "" {
+		// Not verified: eyeD3 maps a genre name to ID3v1's table, so a name in
+		// the table reads back in the table's spelling.
+		p.arg("--genre", genre)
+	}
+	if year, ok := metadata["year"].(int); ok && year > 0 {
+		// -Y is --release-year: eyeD3 writes TDRL, which TagLib reads as
+		// RELEASEDATE (not DATE, the recording year in TDRC).
+		p.arg("-Y", fmt.Sprintf("%d", year))
+		p.expect("RELEASEDATE", fmt.Sprintf("%d", year))
+	}
+	if track, ok := metadata["track"].(string); ok && track != "" {
+		p.arg("-n", track)
+		p.expect("TRACKNUMBER", track)
+	}
+	// Write custom AUDIOBOOK_ORGANIZER_* TXXX frames
+	customPairs := [][2]string{
+		{TagBookID, "book_id"}, {TagISBN10, "isbn10"}, {TagISBN13, "isbn13"},
+		{TagASIN, "asin"}, {TagOpenLibrary, "open_library_id"},
+		{TagHardcover, "hardcover_id"}, {TagGoogleBooks, "google_books_id"},
+		{TagEdition, "edition"}, {TagPrintYear, "print_year"},
+	}
+	for _, pair := range customPairs {
+		if val, ok := metadata[pair[1]].(string); ok && val != "" {
+			p.arg("--user-text-frame=" + pair[0] + ":" + val)
+			p.expect(pair[0], val)
+		}
+	}
+	p.arg("--user-text-frame=" + TagVersion + ":" + CustomTagVersion)
+	p.expect(TagVersion, CustomTagVersion)
+	return p
 }
 
 // writeMP3Metadata writes metadata to MP3 files using eyeD3
@@ -737,44 +855,7 @@ func writeMP3Metadata(filePath string, metadata map[string]any, config fileops.O
 	}()
 
 	// Build eyeD3 command
-	args := []string{}
-	if title, ok := metadata["title"].(string); ok && title != "" {
-		args = append(args, "--title", title)
-	}
-	if artist, ok := metadata["artist"].(string); ok && artist != "" {
-		// Album Artist (TPE2) = author, as organize and the taglib path write it.
-		args = append(args, "--artist", artist, "--album-artist", artist)
-	}
-	if album, ok := metadata["album"].(string); ok && album != "" {
-		args = append(args, "--album", album)
-	}
-	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
-		// Store narrator in a custom TXXX frame
-		args = append(args, "--user-text-frame=NARRATOR:"+narrator)
-	}
-	if genre, ok := metadata["genre"].(string); ok && genre != "" {
-		args = append(args, "--genre", genre)
-	}
-	if year, ok := metadata["year"].(int); ok && year > 0 {
-		args = append(args, "-Y", fmt.Sprintf("%d", year))
-	}
-	if track, ok := metadata["track"].(string); ok && track != "" {
-		args = append(args, "-n", track)
-	}
-	// Write custom AUDIOBOOK_ORGANIZER_* TXXX frames
-	customPairs := [][2]string{
-		{TagBookID, "book_id"}, {TagISBN10, "isbn10"}, {TagISBN13, "isbn13"},
-		{TagASIN, "asin"}, {TagOpenLibrary, "open_library_id"},
-		{TagHardcover, "hardcover_id"}, {TagGoogleBooks, "google_books_id"},
-		{TagEdition, "edition"}, {TagPrintYear, "print_year"},
-	}
-	for _, pair := range customPairs {
-		if val, ok := metadata[pair[1]].(string); ok && val != "" {
-			args = append(args, "--user-text-frame="+pair[0]+":"+val)
-		}
-	}
-	args = append(args, "--user-text-frame="+TagVersion+":"+CustomTagVersion)
-	args = append(args, filePath)
+	args := append(mp3TagPlan(metadata).args, filePath)
 
 	cmd := exec.Command("eyeD3", args...)
 	output, err := cmd.CombinedOutput()
@@ -786,6 +867,59 @@ func writeMP3Metadata(filePath string, metadata map[string]any, config fileops.O
 		return fmt.Errorf("tag write failed (restored from backup): %w, output: %s", err, output)
 	}
 	return nil
+}
+
+// flacTagPlan is the metaflac plan (the removes, then the sets, before the
+// file) for metadata; writeFLACMetadata runs it.
+func flacTagPlan(metadata map[string]any) *cliTagPlan {
+	p := newCliTagPlan()
+	// Remove only the tags about to be set, then set them. It used to remove
+	// TITLE/ARTIST/ALBUM/GENRE/DATE/NARRATOR unconditionally, so a write that
+	// carried only some fields erased the others from the file.
+	var removeArgs, setArgs []string
+	set := func(tag, value string) {
+		removeArgs = append(removeArgs, "--remove-tag="+tag)
+		setArgs = append(setArgs, "--set-tag="+tag+"="+value)
+		p.expect(tag, value)
+	}
+	if title, ok := metadata["title"].(string); ok && title != "" {
+		set("TITLE", title)
+	}
+	if artist, ok := metadata["artist"].(string); ok && artist != "" {
+		// Album Artist = author, as organize and the taglib path write it.
+		set("ARTIST", artist)
+		set("ALBUMARTIST", artist)
+	}
+	if album, ok := metadata["album"].(string); ok && album != "" {
+		set("ALBUM", album)
+	}
+	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
+		set("NARRATOR", narrator)
+	}
+	if genre, ok := metadata["genre"].(string); ok && genre != "" {
+		set("GENRE", genre)
+	}
+	if year, ok := metadata["year"].(int); ok && year > 0 {
+		set("DATE", fmt.Sprintf("%d", year))
+	}
+	if track, ok := metadata["track"].(string); ok && track != "" {
+		set("TRACKNUMBER", track)
+	}
+	// Write custom AUDIOBOOK_ORGANIZER_* Vorbis comments
+	customPairs := [][2]string{
+		{TagBookID, "book_id"}, {TagISBN10, "isbn10"}, {TagISBN13, "isbn13"},
+		{TagASIN, "asin"}, {TagOpenLibrary, "open_library_id"},
+		{TagHardcover, "hardcover_id"}, {TagGoogleBooks, "google_books_id"},
+		{TagEdition, "edition"}, {TagPrintYear, "print_year"},
+	}
+	for _, pair := range customPairs {
+		if val, ok := metadata[pair[1]].(string); ok && val != "" {
+			set(pair[0], val)
+		}
+	}
+	set(TagVersion, CustomTagVersion)
+	p.args = append(removeArgs, setArgs...)
+	return p
 }
 
 // writeFLACMetadata writes metadata to FLAC files using metaflac
@@ -806,63 +940,9 @@ func writeFLACMetadata(filePath string, metadata map[string]any, config fileops.
 		}
 	}()
 
-	// Remove only the tags about to be set, then set them. It used to remove
-	// TITLE/ARTIST/ALBUM/GENRE/DATE/NARRATOR unconditionally, so a write that
-	// carried only some fields erased the others from the file.
-	var removeArgs []string
-	removeFor := func(tags ...string) {
-		for _, t := range tags {
-			removeArgs = append(removeArgs, "--remove-tag="+t)
-		}
-	}
-	var args []string
-	if title, ok := metadata["title"].(string); ok && title != "" {
-		removeFor("TITLE")
-		args = append(args, "--set-tag=TITLE="+title)
-	}
-	if artist, ok := metadata["artist"].(string); ok && artist != "" {
-		// Album Artist = author, as organize and the taglib path write it.
-		removeFor("ARTIST", "ALBUMARTIST")
-		args = append(args, "--set-tag=ARTIST="+artist, "--set-tag=ALBUMARTIST="+artist)
-	}
-	if album, ok := metadata["album"].(string); ok && album != "" {
-		removeFor("ALBUM")
-		args = append(args, "--set-tag=ALBUM="+album)
-	}
-	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
-		removeFor("NARRATOR")
-		args = append(args, "--set-tag=NARRATOR="+narrator)
-	}
-	if genre, ok := metadata["genre"].(string); ok && genre != "" {
-		removeFor("GENRE")
-		args = append(args, "--set-tag=GENRE="+genre)
-	}
-	if year, ok := metadata["year"].(int); ok && year > 0 {
-		removeFor("DATE")
-		args = append(args, fmt.Sprintf("--set-tag=DATE=%d", year))
-	}
-	if track, ok := metadata["track"].(string); ok && track != "" {
-		removeFor("TRACKNUMBER")
-		args = append(args, "--set-tag=TRACKNUMBER="+track)
-	}
-	// Write custom AUDIOBOOK_ORGANIZER_* Vorbis comments
-	customPairs := [][2]string{
-		{TagBookID, "book_id"}, {TagISBN10, "isbn10"}, {TagISBN13, "isbn13"},
-		{TagASIN, "asin"}, {TagOpenLibrary, "open_library_id"},
-		{TagHardcover, "hardcover_id"}, {TagGoogleBooks, "google_books_id"},
-		{TagEdition, "edition"}, {TagPrintYear, "print_year"},
-	}
-	for _, pair := range customPairs {
-		if val, ok := metadata[pair[1]].(string); ok && val != "" {
-			removeFor(pair[0])
-			args = append(args, "--set-tag="+pair[0]+"="+val)
-		}
-	}
-	removeFor(TagVersion)
-	args = append(args, "--set-tag="+TagVersion+"="+CustomTagVersion)
 	// One metaflac run applies the removes then the sets in order, so a
 	// failure restores from the backup instead of leaving tags removed.
-	args = append(append(removeArgs, args...), filePath)
+	args := append(flacTagPlan(metadata).args, filePath)
 
 	cmd := exec.Command("metaflac", args...)
 	output, err := cmd.CombinedOutput()
