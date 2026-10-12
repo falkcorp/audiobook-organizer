@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_ops_dry_run_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c1e4571-8bcf-4190-ac2d-ae141026d139
 // last-edited: 2026-10-11
 
@@ -418,8 +418,8 @@ func TestResolveProductionAuthorsWorkers(t *testing.T) {
 }
 
 // The def carries the merged contract (04-P4d): the loser ID as a FormerID, the
-// loser's gate, timeout and resume policy, and the network capabilities of the
-// fetch path it runs.
+// loser's gate, timeout and resume policy, the network capabilities of the
+// fetch path it runs, and the tables its apply writes.
 func TestResolveProductionAuthorsDef_MergeContract(t *testing.T) {
 	def := New(fakeDeps{}).resolveProductionAuthorsDef()
 	require.Equal(t, []string{"scheduler.resolve-production-authors"}, def.FormerIDs)
@@ -429,4 +429,7 @@ func TestResolveProductionAuthorsDef_MergeContract(t *testing.T) {
 	require.Subset(t, def.Capabilities, []sdk.Capability{
 		sdk.CapLibraryWrite, sdk.CapNetworkAudible, sdk.CapNetworkGeneric, sdk.CapNetworkOpenAI,
 	})
+	// The write-set gate keeps it from interleaving with another writer of the
+	// rows the apply rewrites.
+	require.ElementsMatch(t, []sdk.Resource{sdk.ResBooks, sdk.ResAuthors, sdk.ResSeries}, def.Writes)
 }
