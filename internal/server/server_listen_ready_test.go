@@ -1,5 +1,5 @@
 // file: internal/server/server_listen_ready_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b665aef1-a25e-4d51-a7fe-4069066fd9e4
 // last-edited: 2026-10-12
 
@@ -15,6 +15,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -29,6 +30,58 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeNotifySocket binds a unix datagram socket, points NOTIFY_SOCKET at it
+// for the test and returns the listener. It lives under os.MkdirTemp rather
+// than t.TempDir: a unix socket path is limited to 104 bytes on darwin, and
+// t.TempDir's path (which embeds the test name) passes that.
+func fakeNotifySocket(t *testing.T) *net.UnixConn {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sdn")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "notify.sock")
+	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	t.Setenv("NOTIFY_SOCKET", path)
+	return conn
+}
+
+// readNotify returns the next datagram on conn, or "" after the timeout.
+func readNotify(t *testing.T, conn *net.UnixConn, timeout time.Duration) string {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(timeout)))
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return ""
+		}
+		require.NoError(t, err)
+	}
+	return string(buf[:n])
+}
+
+// nextStateNotify returns the next datagram that is not a start-timeout
+// extension, or "" after the timeout. Long startup steps (the search index
+// open inside container.Start) send EXTEND_TIMEOUT_USEC before READY=1; those
+// are progress, not state, so the ordering assertions skip them.
+func nextStateNotify(t *testing.T, conn *net.UnixConn, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return ""
+		}
+		msg := readNotify(t, conn, left)
+		if !strings.HasPrefix(msg, "EXTEND_TIMEOUT_USEC=") {
+			return msg
+		}
+	}
+}
 
 // listenTestServer is a Server with only what configureAndStartHTTP touches.
 func listenTestServer() *Server {
@@ -133,18 +186,26 @@ func TestConfigureAndStartHTTPListenTLSServesLoadedKeyPair(t *testing.T) {
 
 	s := listenTestServer()
 	require.NoError(t, s.configureAndStartHTTP(cfg))
-	t.Cleanup(func() { _ = s.httpServer.Close() })
+	t.Cleanup(func() {
+		_ = s.httpServer.Close()
+		if s.httpRedirectServer != nil {
+			_ = s.httpRedirectServer.Close()
+		}
+	})
 
 	addr := s.httpBoundAddr.Load()
 	require.NotNil(t, addr)
 	client := &http.Client{Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2: true,
 	}}
 	resp, err := client.Get("https://" + *addr + "/ping")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	require.Equal(t, "pong", string(body))
+	// ServeTLS(ln, "", "") must keep HTTP/2 negotiation (s.httpServer.Protocols).
+	require.Equal(t, 2, resp.ProtoMajor, "TLS listener did not negotiate HTTP/2")
 }
 
 // TestConfigureAndStartHTTPListenTLSBadKeyPairFails: an unreadable key pair is
@@ -185,7 +246,8 @@ func TestStartListenFailureFailsStartWithoutReady(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("Start did not fail on an occupied port")
 	}
-	require.Empty(t, readNotify(t, sock, 200*time.Millisecond), "no notification may be sent when startup fails")
+	require.Empty(t, nextStateNotify(t, sock, 200*time.Millisecond),
+		"no state notification (READY, STATUS) may be sent when startup fails; only start-timeout extensions")
 }
 
 // TestStartNotifyReadyAfterBindAndStoppingOnShutdown boots a full server under
@@ -201,8 +263,8 @@ func TestStartNotifyReadyAfterBindAndStoppingOnShutdown(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- server.Start(listenTestConfig("0")) }()
 
-	first := readNotify(t, sock, 30*time.Second)
-	require.Equal(t, "READY=1", first, "the first datagram after startup must be READY=1")
+	first := nextStateNotify(t, sock, 30*time.Second)
+	require.Equal(t, "READY=1", first, "the first state datagram after startup must be READY=1")
 	addr := server.httpBoundAddr.Load()
 	require.NotNil(t, addr, "READY=1 was sent before the listener was bound")
 	conn, err := net.DialTimeout("tcp", *addr, 2*time.Second)
@@ -220,7 +282,7 @@ func TestStartNotifyReadyAfterBindAndStoppingOnShutdown(t *testing.T) {
 
 	var seen []string
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
-		msg := readNotify(t, sock, time.Until(deadline))
+		msg := nextStateNotify(t, sock, time.Until(deadline))
 		seen = append(seen, msg)
 		if msg == "STOPPING=1" {
 			break

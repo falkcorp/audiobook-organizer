@@ -1,7 +1,7 @@
 // file: main.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 
 package main
 
@@ -12,6 +12,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/cmd"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
@@ -38,6 +39,18 @@ func run() int {
 	// to stdout, and this output must be exactly one line.
 	if len(os.Args) == 2 && os.Args[1] == "--print-storage-format" {
 		fmt.Println(database.SupportedStorageFormat)
+		return 0
+	}
+
+	// The deploy and rollback recipes ask a binary what it supports before
+	// restarting it (scripts/deploy-match-unit-type.sh). One token per line;
+	// `sd_notify` means it sends READY=1, so it may run under the Type=notify
+	// unit. A build older than this flag fails with "unknown flag" and prints
+	// nothing to stdout, which the recipes read as "no sd_notify": it then
+	// runs as Type=simple instead of being killed at TimeoutStartSec. Handled
+	// before cobra for the same stdout reason as --print-storage-format.
+	if len(os.Args) == 2 && os.Args[1] == "--print-capabilities" {
+		fmt.Println(sdnotify.Capability)
 		return 0
 	}
 

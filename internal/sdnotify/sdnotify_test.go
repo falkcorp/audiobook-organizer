@@ -1,11 +1,11 @@
-// file: internal/server/sdnotify_test.go
-// version: 1.0.0
+// file: internal/sdnotify/sdnotify_test.go
+// version: 2.0.0
 // guid: 9009cd80-44b0-462e-a2ad-d3e325def504
 // last-edited: 2026-10-12
 
 //go:build !windows
 
-package server
+package sdnotify
 
 import (
 	"errors"
@@ -33,7 +33,7 @@ func fakeNotifySocket(t *testing.T) *net.UnixConn {
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	t.Setenv(notifySocketEnv, path)
+	t.Setenv(socketEnv, path)
 	return conn
 }
 
@@ -53,60 +53,70 @@ func readNotify(t *testing.T, conn *net.UnixConn, timeout time.Duration) string 
 	return string(buf[:n])
 }
 
-func TestNotifyReadySendsReadyDatagram(t *testing.T) {
+func TestReadySendsReadyDatagram(t *testing.T) {
 	conn := fakeNotifySocket(t)
-	require.NoError(t, NotifyReady())
+	require.NoError(t, Ready())
 	require.Equal(t, "READY=1", readNotify(t, conn, 5*time.Second))
 }
 
-func TestNotifyStoppingAndStatusDatagrams(t *testing.T) {
+func TestStoppingAndStatusDatagrams(t *testing.T) {
 	conn := fakeNotifySocket(t)
-	require.NoError(t, NotifyStopping())
+	require.NoError(t, Stopping())
 	require.Equal(t, "STOPPING=1", readNotify(t, conn, 5*time.Second))
 	// A newline would start a second assignment; it must not reach the socket.
-	require.NoError(t, NotifyStatus("Serving\nREADY=1"))
+	require.NoError(t, Status("Serving\nREADY=1"))
 	require.Equal(t, "STATUS=Serving READY=1", readNotify(t, conn, 5*time.Second))
 }
 
-func TestNotifyUnsetIsNoOp(t *testing.T) {
-	t.Setenv(notifySocketEnv, "")
-	require.NoError(t, os.Unsetenv(notifySocketEnv))
-	require.NoError(t, NotifyReady())
-	require.NoError(t, NotifyStopping())
-	require.NoError(t, NotifyStatus("x"))
+func TestExtendTimeoutDatagram(t *testing.T) {
+	conn := fakeNotifySocket(t)
+	require.NoError(t, ExtendTimeout(StartupStepBudget))
+	require.Equal(t, "EXTEND_TIMEOUT_USEC=600000000", readNotify(t, conn, 5*time.Second))
+	// A non-positive duration asks for nothing, so nothing is sent.
+	require.NoError(t, ExtendTimeout(0))
+	require.Empty(t, readNotify(t, conn, 200*time.Millisecond))
 }
 
-func TestNotifyMissingSocketErrorOmitsPath(t *testing.T) {
+func TestUnsetIsNoOp(t *testing.T) {
+	t.Setenv(socketEnv, "")
+	require.NoError(t, os.Unsetenv(socketEnv))
+	require.NoError(t, Ready())
+	require.NoError(t, Stopping())
+	require.NoError(t, Status("x"))
+	require.NoError(t, ExtendTimeout(time.Minute))
+}
+
+func TestMissingSocketErrorOmitsPath(t *testing.T) {
 	dir, err := os.MkdirTemp("", "sdn")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := filepath.Join(dir, "absent.sock")
-	t.Setenv(notifySocketEnv, path)
-	err = NotifyReady()
+	t.Setenv(socketEnv, path)
+	err = Ready()
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), dir, "the notify error must not carry the socket path")
 }
 
-func TestNotifySocketAddr(t *testing.T) {
-	addr, err := notifySocketAddr("@aorg/notify")
+func TestSocketAddr(t *testing.T) {
+	addr, err := socketAddr("@aorg/notify")
 	require.NoError(t, err)
 	require.Equal(t, "\x00aorg/notify", addr.Name, "a leading @ names an abstract socket, whose first byte is NUL")
 	require.Equal(t, "unixgram", addr.Net)
 
-	addr, err = notifySocketAddr("/run/systemd/notify")
+	addr, err = socketAddr("/run/systemd/notify")
 	require.NoError(t, err)
 	require.Equal(t, "/run/systemd/notify", addr.Name)
 
 	for _, bad := range []string{"relative/notify", "vsock:2:1234"} {
-		_, err = notifySocketAddr(bad)
-		require.ErrorIs(t, err, errNotifySocketUnsupported, bad)
+		_, err = socketAddr(bad)
+		require.ErrorIs(t, err, errSocketUnsupported, bad)
 	}
 }
 
-// TestNotifyAbstractSocketRoundTrip sends to a real abstract-namespace socket,
+// TestAbstractSocketRoundTrip sends to a real abstract-namespace socket,
 // the form systemd uses when NOTIFY_SOCKET starts with '@'. Abstract sockets
 // exist only on Linux.
-func TestNotifyAbstractSocketRoundTrip(t *testing.T) {
+func TestAbstractSocketRoundTrip(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("abstract unix sockets are Linux-only")
 	}
@@ -114,7 +124,7 @@ func TestNotifyAbstractSocketRoundTrip(t *testing.T) {
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: "\x00" + name, Net: "unixgram"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	t.Setenv(notifySocketEnv, "@"+name)
-	require.NoError(t, NotifyReady())
+	t.Setenv(socketEnv, "@"+name)
+	require.NoError(t, Ready())
 	require.Equal(t, "READY=1", readNotify(t, conn, 5*time.Second))
 }

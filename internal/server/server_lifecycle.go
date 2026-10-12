@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.33.1
+// version: 4.33.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-12
 
@@ -32,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
+	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -283,10 +284,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// slow disk into a start timeout and a restart loop; /health reports
 	// `ready` for that and the deploy waits on it. A notify failure is
 	// logged, never fatal: under Type=simple there is no socket at all.
-	if err := NotifyReady(); err != nil {
+	if err := sdnotify.Ready(); err != nil {
 		lifecycleLog.Warn("systemd readiness notification failed: %v", err)
 	}
-	if err := NotifyStatus("Serving; readiness is reported by the health endpoint"); err != nil {
+	if err := sdnotify.Status("Serving; readiness is reported by the health endpoint"); err != nil {
 		lifecycleLog.Warn("systemd status notification failed: %v", err)
 	}
 
@@ -526,10 +527,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	<-quit
 	// Tell systemd the stop has begun before anything slow runs (the client
 	// broadcast below sleeps, the registry drain can take 10 s).
-	if err := NotifyStopping(); err != nil {
+	if err := sdnotify.Stopping(); err != nil {
 		lifecycleLog.Warn("systemd stopping notification failed: %v", err)
 	}
-	if err := NotifyStatus("Shutting down"); err != nil {
+	if err := sdnotify.Status("Shutting down"); err != nil {
 		lifecycleLog.Warn("systemd status notification failed: %v", err)
 	}
 	close(shutdown)
@@ -561,6 +562,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		slog.Warn("HTTP server forced shutdown", "err", err)
+	}
+	if s.httpRedirectServer != nil {
+		if err := s.httpRedirectServer.Shutdown(ctx); err != nil {
+			lifecycleLog.Warn("HTTP->HTTPS redirect server forced shutdown: %v", err)
+		}
 	}
 	// No more scrapes can arrive; drop the pebble metrics closures so they stop
 	// pinning this Server and its stores.
@@ -971,12 +977,13 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 			lifecycleLog.Warn("HTTP->HTTPS redirect server not started (port 80 may require privileges): %v", err)
 		} else {
 			lifecycleLog.Info("Serving HTTP->HTTPS redirect on %s (to port %s)", redirectLn.Addr(), httpsPort)
-			httpRedirectServer := &http.Server{
+			redirectServer := &http.Server{
 				Addr:    redirectAddr,
 				Handler: newHTTPSRedirectHandler(cfg.Host, httpsPort),
 			}
+			s.httpRedirectServer = redirectServer
 			go func() {
-				if err := httpRedirectServer.Serve(redirectLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				if err := redirectServer.Serve(redirectLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					lifecycleLog.Warn("HTTP->HTTPS redirect server stopped: %v", err)
 				}
 			}()

@@ -1,5 +1,5 @@
 # file: Makefile.local.example
-# version: 1.8.0
+# version: 1.9.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
 # last-edited: 2026-10-12
 #
@@ -87,6 +87,8 @@ deploy:
 	@$(MAKE) build-linux VERSION=$(VERSION)
 	@echo "→ Copying binary to $(DEPLOY_HOST)..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
+	@echo "→ Matching the service type to the new binary (removes a rollback's Type=simple drop-in)..."
+	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) /home/USER/audiobook-organizer
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
 	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
