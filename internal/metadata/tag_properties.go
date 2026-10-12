@@ -1,7 +1,7 @@
 // file: internal/metadata/tag_properties.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f3c9a27-4e1d-4b85-9c20-7a5e1d8b3f64
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metadata
 
@@ -306,17 +306,11 @@ func WriteTagPropertiesContext(ctx context.Context, path string, values map[stri
 	if err != nil {
 		return fmt.Errorf("tag properties abs path: %w", err)
 	}
+	// writePropertiesWithTaglib reads the file back once and returns
+	// tagger.ErrVerifyAfterWrite, naming each property and the value it holds,
+	// unless every property holds what was asked for.
 	if err := writePropertiesWithTaglib(ctx, abs, tags); err != nil {
 		return fmt.Errorf("write tag properties to %s: %w", path, err)
-	}
-	raw, err := readTagsWithTaglib(abs)
-	if err != nil {
-		return fmt.Errorf("read back tags of %s after the write: %w", path, err)
-	}
-	for prop, vals := range tags {
-		if !slices.Equal(raw[prop], vals) && !(len(vals) == 0 && len(raw[prop]) == 0) {
-			return fmt.Errorf("tag property %s of %s reads %q after the write, not %q", prop, path, raw[prop], vals)
-		}
 	}
 	return nil
 }
