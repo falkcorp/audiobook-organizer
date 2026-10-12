@@ -1,11 +1,11 @@
 // file: internal/dedup/collectors_window.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e1b07-63d2-4f8a-a5e9-2b7d0c8f4a13
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package dedup — window-print collector (02-PR8, owner decisions D14a, D34).
 //
-// CollectWindowAcoustID turns the window prints the Macs wrote (fpwin:) into a
+// CollectWindowAcoustIDForBook turns the window prints the Macs wrote (fpwin:) into a
 // SUPPORTING dedup signal, unified.SigWindowAcoustID:
 //
 //  1. Gate: nothing happens until dedup.window-index-build has completed a
@@ -44,7 +44,7 @@ import (
 // but a Pebble read failing is never routine and must not hide at Debug.
 var windowCollectLog = logger.New("dedup.window-collector")
 
-// WindowAcoustIDConfig calibrates CollectWindowAcoustID.
+// WindowAcoustIDConfig calibrates CollectWindowAcoustIDForBook.
 type WindowAcoustIDConfig struct {
 	// MinBandHits is the least number of shared band keys that makes a file
 	// a candidate. The index probe already applies
@@ -113,33 +113,20 @@ const windowGateLogEvery = time.Hour
 
 var windowGateLastLog atomic.Int64
 
-// CollectWindowAcoustID probes the window-band index for queryFile and emits a
-// SigWindowAcoustID signal per candidate book whose window prints verify
-// against the query's. queryBookID suppresses matches inside the query's own
-// book. The evidence names the candidate book ID (the engine filters signals
-// per pair by it).
-func CollectWindowAcoustID(
-	store WindowAcoustIDStore,
-	queryFile *database.BookFile,
-	queryBookID string,
-	cfg WindowAcoustIDConfig,
-) ([]unified.Signal, error) {
-	matches, err := collectWindowMatches(store, queryFile, queryBookID, cfg)
-	if err != nil || len(matches) == 0 {
-		return nil, err
-	}
-	out := make([]unified.Signal, len(matches))
-	for i, m := range matches {
-		out[i] = m.signal
-	}
-	return out, nil
-}
-
-// CollectWindowAcoustIDForBook runs CollectWindowAcoustID for every file of a
-// book and keeps ONE signal per candidate book, the highest similarity. A
-// supporting boost is added per signal (unified.ComposeScore), so without
-// this a twenty-file book matching one candidate on every file would add the
-// boost twenty times. A per-file store error is logged at Warn and that file
+// CollectWindowAcoustIDForBook probes the window-band index for every file of
+// a book and emits a SigWindowAcoustID signal per candidate book whose window
+// prints verify against one of the query's files, keeping ONE signal per
+// candidate book, the highest similarity. bookID suppresses matches inside the
+// query's own book. The evidence names the candidate book ID (the engine
+// filters signals per pair by it).
+//
+// It is the window collector's only entry point: the unified scan
+// (runUnifiedScoringForBook) and the labeled-example rescore
+// (ScorePairsForBook) both call it once per book. There is deliberately no
+// exported per-file variant: per-file signals would have to be deduplicated
+// by book again at every call site, and a supporting boost is added per
+// signal (unified.ComposeScore), so a twenty-file book matching one candidate
+// on every file would add the boost twenty times. A per-file store error is logged at Warn and that file
 // contributes nothing (fail closed: a missing supporting signal can only lower
 // the pair's score).
 func CollectWindowAcoustIDForBook(

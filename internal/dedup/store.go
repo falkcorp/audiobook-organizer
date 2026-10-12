@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package dedup
 
@@ -170,7 +170,7 @@ type Store interface {
 	dedupSplitMergeStore
 }
 
-// WindowAcoustIDStore is what CollectWindowAcoustID reads (02-PR8): the
+// WindowAcoustIDStore is what CollectWindowAcoustIDForBook reads (02-PR8): the
 // window-band index and the stored window prints, plus a by-file-ID row
 // lookup. It is a *database.PebbleStore capability, deliberately NOT embedded
 // in Store: the index methods are not on database.Store, so the indexedStore
