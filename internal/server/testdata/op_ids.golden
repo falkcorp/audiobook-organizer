@@ -265,3 +265,4 @@ maintenance.opchange-book-index-rebuild
 maintenance.db-census-exact
 maintenance.credit-census
 maintenance.authority-build
+maintenance.ident-index-rebuild
