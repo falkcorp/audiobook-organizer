@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-11
 //
@@ -264,29 +264,9 @@ func ImportToLibraryWith(
 		return "", fmt.Errorf("ImportToLibrary: create dest dir %s: %w", destDir, err)
 	}
 
-	// Clone into the library, falling back to a byte copy when the filesystem
-	// cannot clone. fileops.ReflinkOrCopy refuses an existing destination
-	// rather than truncating it -- so a destination that is already there is
-	// adopted when it holds the same bytes as the source (a copy an earlier
-	// attempt made and could not record, before failed attempts cleaned up
-	// after themselves) and refused otherwise.
-	created := false
-	if _, statErr := os.Lstat(dest); statErr == nil {
-		same, cmpErr := sameContent(src, dest)
-		if cmpErr != nil {
-			return "", fmt.Errorf("ImportToLibrary: compare existing destination %s with %s: %w", dest, src, cmpErr)
-		}
-		if !same {
-			return "", fmt.Errorf("ImportToLibrary: destination %s already exists with different content than %s", dest, src)
-		}
-		importLog.Info("ImportToLibrary: %s already holds the bytes of %s; recording it instead of copying again", dest, src)
-	} else if !errors.Is(statErr, fs.ErrNotExist) {
-		return "", fmt.Errorf("ImportToLibrary: stat destination %s: %w", dest, statErr)
-	} else {
-		if err := fileops.ReflinkOrCopy(src, dest); err != nil {
-			return "", fmt.Errorf("ImportToLibrary: copy %s -> %s: %w", src, dest, err)
-		}
-		created = true
+	created, err := CopyIntoLibrary(src, dest)
+	if err != nil {
+		return "", fmt.Errorf("ImportToLibrary: %w", err)
 	}
 
 	// Update the BookFile record.
@@ -347,6 +327,41 @@ func ImportToLibraryWith(
 	}
 
 	return dest, nil
+}
+
+// CopyIntoLibrary clones src to dest, falling back to a byte copy when the
+// filesystem cannot clone, and never overwrites: fileops.ReflinkOrCopy refuses
+// an existing destination rather than truncating it -- so a destination that
+// is already there is adopted when it holds the same bytes as the source (a
+// copy an earlier attempt made and could not record, before failed attempts
+// cleaned up after themselves) and refused otherwise. created reports whether
+// this call made dest; false means an identical dest was adopted, which a
+// caller must not remove. dest's directory must exist. The caller owns the
+// ownership and locking around it (ImportToLibraryWith holds destLocks and has
+// checked no other row names dest).
+//
+// This is the one copy step the importers share. maintenance.bulk-deluge-import
+// used to open dest with os.Create, which truncates: a second pending file with
+// the same basename, or a seeding file already at RootDir/<basename>, was
+// overwritten.
+func CopyIntoLibrary(src, dest string) (created bool, err error) {
+	if _, statErr := os.Lstat(dest); statErr == nil {
+		same, cmpErr := sameContent(src, dest)
+		if cmpErr != nil {
+			return false, fmt.Errorf("compare existing destination %s with %s: %w", dest, src, cmpErr)
+		}
+		if !same {
+			return false, fmt.Errorf("destination %s already exists with different content than %s", dest, src)
+		}
+		importLog.Info("CopyIntoLibrary: %s already holds the bytes of %s; recording it instead of copying again", dest, src)
+		return false, nil
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return false, fmt.Errorf("stat destination %s: %w", dest, statErr)
+	}
+	if err := fileops.ReflinkOrCopy(src, dest); err != nil {
+		return false, fmt.Errorf("copy %s -> %s: %w", src, dest, err)
+	}
+	return true, nil
 }
 
 // protectionClassifier is implemented by *ProtectedPathCache: it says why a

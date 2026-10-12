@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
 // last-edited: 2026-10-11
 
@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -216,6 +217,49 @@ func TestBulkDelugeImportJob_HydrateSuccess(t *testing.T) {
 
 	require.NotNil(t, updated, "a successful hydrate must reach bdi_importToLibrary's UpdateBookFile")
 	assert.NotNil(t, updated.ImportedFromDelugeAt)
+}
+
+// The copy never overwrites a file already at the destination: a pending file
+// outside the library lands at RootDir/<basename>, so a second pending file
+// with the same basename, or a file a torrent seeds from the library root,
+// sits exactly there. Until now the job opened the destination with os.Create
+// and truncated it. A destination with other bytes now refuses the file with
+// an error and is left as it was; one holding the file's own bytes (a copy an
+// earlier run made and could not record) is adopted: the row is repointed to
+// it without a rewrite.
+func TestBulkDelugeImportJob_ExistingDestinationNeverOverwritten(t *testing.T) {
+	t.Run("other bytes: refused, untouched", func(t *testing.T) {
+		root, full := bdiFixture(t)
+		dest := filepath.Join(root, "book.m4b")
+		require.NoError(t, os.WriteFile(dest, []byte("another book's bytes"), 0o644))
+
+		store, updated, _ := runBDI(t, full, func(string, string) (*database.BookFile, error) { return full, nil })
+
+		require.Len(t, store.results, 1)
+		assert.Equal(t, "error", store.results[0].Status)
+		assert.Contains(t, bdiResultError(t, store.results[0]), "already exists with different content")
+		got, err := os.ReadFile(dest)
+		require.NoError(t, err)
+		assert.Equal(t, "another book's bytes", string(got), "the file already at the destination was overwritten")
+		assert.Nil(t, updated, "the row must not be repointed to a file that is not its copy")
+	})
+	t.Run("same bytes: adopted without a rewrite", func(t *testing.T) {
+		root, full := bdiFixture(t)
+		dest := filepath.Join(root, "book.m4b")
+		require.NoError(t, os.WriteFile(dest, []byte("audiodata"), 0o644))
+		old := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		require.NoError(t, os.Chtimes(dest, old, old))
+
+		store, updated, _ := runBDI(t, full, func(string, string) (*database.BookFile, error) { return full, nil })
+
+		require.Len(t, store.results, 1)
+		assert.Equal(t, "imported", store.results[0].Status)
+		require.NotNil(t, updated)
+		assert.Equal(t, dest, updated.FilePath)
+		info, err := os.Stat(dest)
+		require.NoError(t, err)
+		assert.True(t, info.ModTime().Equal(old), "an adopted destination was rewritten")
+	})
 }
 
 // bdiPebbleStore is a real Pebble store that records operation results.
