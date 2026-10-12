@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.32.0
+// version: 4.33.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-11
 
@@ -1127,6 +1127,10 @@ func (s *Server) startBackfills() {
 	// otherwise reconciled in place while it keeps serving, which repairs
 	// rows a build that predates the index wrote. Waits for memdb warmup so
 	// its full book scan does not compete with warmup's; never blocks startup.
+	// SuperviseIdentIndex retries a failed build with backoff and stays for
+	// the life of the server, rebuilding again when a wipe's own rebuild
+	// fails; after its retries it logs an ERROR naming the manual op
+	// (maintenance.ident-index-rebuild).
 	s.bgWG.Go("ident-index", func() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
@@ -1142,9 +1146,7 @@ func (s *Server) startBackfills() {
 		case <-s.bgCtx.Done():
 			return
 		}
-		if err := b.EnsureIdentIndex(s.bgCtx); err != nil && s.bgCtx.Err() == nil {
-			lifecycleLog.Warn("identification index build failed; ident: queries stay unavailable until the next boot: %v", err)
-		}
+		b.SuperviseIdentIndex(s.bgCtx)
 	})
 
 	// opv2 timeline index (pebble_store_ops_v2_timeline.go): opv2:open: and
@@ -1829,11 +1831,12 @@ func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
 	return database.AsCapability[bookAtPathBackfiller](s)
 }
 
-// identIndexBuilder is the identification index's boot build plus the
-// warmup gate it waits on (*PebbleStore methods outside database.Store).
+// identIndexBuilder is the identification index's supervisor (boot build
+// plus retries) and the warmup gate it waits on (*PebbleStore methods outside
+// database.Store).
 type identIndexBuilder interface {
 	WaitForWarmup()
-	EnsureIdentIndex(ctx context.Context) error
+	SuperviseIdentIndex(ctx context.Context)
 }
 
 // opsV2TimelineReconciler is the opv2 timeline index boot reconcile plus the
