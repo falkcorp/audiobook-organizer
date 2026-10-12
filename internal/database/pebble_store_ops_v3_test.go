@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -87,6 +87,36 @@ func insertV3(t testing.TB, p *PebbleStore, def, wait string) string {
 	return id
 }
 
+// setOpsV2MirrorEnabled flips the opv2 mirror of native writes. Test-only
+// until 05-PR16 adds the production switch.
+func (p *PebbleStore) setOpsV2MirrorEnabled(on bool) { p.opsV2MirrorOff.Store(!on) }
+
+// reachableV3States is every v3 state, derived from the production
+// transition table: everything Next reaches from "" through every event and
+// stop reason (every one of the ten states is reachable, so a state added to
+// the table without a transition into it is a bug this also exposes).
+func reachableV3States() []state.V3 {
+	seen := map[state.V3]bool{}
+	var out []state.V3
+	frontier := []state.V3{""}
+	for len(frontier) > 0 {
+		from := frontier[0]
+		frontier = frontier[1:]
+		for _, ev := range state.AllEvents {
+			for _, reason := range append([]string{""}, state.StopReasons...) {
+				to, err := state.Next(from, ev, reason)
+				if err != nil || seen[to] {
+					continue
+				}
+				seen[to] = true
+				out = append(out, to)
+				frontier = append(frontier, to)
+			}
+		}
+	}
+	return out
+}
+
 // checkV3Consistency recomputes every index key and the counters from a full
 // scan of opv3:run: and compares them to what is stored, and checks that
 // every run's mirrored opv2 row reads in the status family the record maps
@@ -168,7 +198,7 @@ func checkV3Consistency(t testing.TB, p *PebbleStore) {
 	if stored.Total != counts.Total {
 		t.Errorf("meta:counts total = %d, full scan says %d", stored.Total, counts.Total)
 	}
-	for _, s := range state.AllV3() {
+	for _, s := range reachableV3States() {
 		n := int64(len(timelineKeys(t, p, opv3IxStatePrefix+string(s)+":")))
 		if n != counts.ByState[s] {
 			t.Errorf("ix:state:%s has %d keys, full scan says %d", s, n, counts.ByState[s])
@@ -261,7 +291,7 @@ func TestStageRunV3KeepsIndexesConsistent(t *testing.T) {
 			if rng.IntN(4) == 0 {
 				_, _, _ = p.DeleteOperationV2(id, allDiscard)
 			} else {
-				_, _ = p.DeleteRunV3(id, state.AllV3())
+				_, _ = p.DeleteRunV3(id, reachableV3States())
 			}
 		default:
 			cur, err := p.GetRunV3(id)
@@ -398,7 +428,7 @@ func TestOneBatchTwoFamilies(t *testing.T) {
 			return err
 		},
 		"InsertRunV3":    func() error { return p.InsertRunV3(RunRecord{ID: newRunID(), DefID: "test.batch"}) },
-		"DeleteRunV3":    func() error { _, err := p.DeleteRunV3(v3id, state.AllV3()); return err },
+		"DeleteRunV3":    func() error { _, err := p.DeleteRunV3(v3id, reachableV3States()); return err },
 		"CommitLedgerV3": func() error { return p.CommitLedgerV3(v3id, LedgerBatch{Ledger: Ledger{ChunkCount: 1}}) },
 	}
 	for name, w := range writes {
@@ -573,6 +603,9 @@ func TestListRunsTotalIsExact(t *testing.T) {
 // serves): the status families must agree, and a v2 progress tick on the row
 // must not move the v3 state.
 func TestMirrorEveryState(t *testing.T) {
+	if n := len(reachableV3States()); n != 10 {
+		t.Fatalf("the transition table reaches %d v3 states, want the ten of state-and-persistence.md section 1", n)
+	}
 	type step struct {
 		ev  state.Event
 		mut func(*TransitionRequest)
@@ -628,7 +661,7 @@ func TestMirrorEveryState(t *testing.T) {
 		}
 		covered[c.want] = true
 	}
-	for _, s := range state.AllV3() {
+	for _, s := range reachableV3States() {
 		if !covered[s] {
 			t.Errorf("state %s has no mirror row", s)
 		}

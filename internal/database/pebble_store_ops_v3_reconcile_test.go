@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_reconcile_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ea4b7eaf-18c6-45d2-9344-3838c68c905f
 // last-edited: 2026-10-11
 
@@ -188,7 +188,7 @@ func TestReconcileOpsV3NoWritesAfterEveryWriter(t *testing.T) {
 			transition(t, p, nat, state.EvStopRequested, func(r *TransitionRequest) { r.StopReason = state.StopReasons[0] })
 			return nil
 		}},
-		{"DeleteRunV3", func() error { _, err := p.DeleteRunV3(nat, state.AllV3()); return err }},
+		{"DeleteRunV3", func() error { _, err := p.DeleteRunV3(nat, reachableV3States()); return err }},
 	}...)
 	for _, st := range steps {
 		if err := st.run(); err != nil {
@@ -532,7 +532,7 @@ func TestNativeWritesRefuseUnsyncedRecord(t *testing.T) {
 	if !errors.Is(err, ErrStaleTransition) {
 		t.Errorf("transition of a run whose row changed under it: err = %v, want ErrStaleTransition", err)
 	}
-	if ok, err := p.DeleteRunV3(changed, state.AllV3()); ok || !errors.Is(err, ErrStaleTransition) {
+	if ok, err := p.DeleteRunV3(changed, reachableV3States()); ok || !errors.Is(err, ErrStaleTransition) {
 		t.Errorf("discard of a run whose row changed under it: deleted %v, err %v; want refused", ok, err)
 	}
 	g := mustRun(t, p, gone)

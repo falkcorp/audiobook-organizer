@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-11
 
@@ -203,12 +203,11 @@ func opv3IndexKeys(r *RunRecord) []string {
 
 // opsV2MirrorEnabled reports whether native v3 writes also stage the opv2:
 // mirror row. On by default (the zero value of opsV2MirrorOff); 05-PR16 turns
-// it off after the D25 soak. It is deliberately not a user setting. The v2
-// façade methods always write opv2: (that is what they are).
+// it off after the D25 soak, with the production setter it needs (today only
+// the tests flip it, through setOpsV2MirrorEnabled in a _test.go file). It is
+// deliberately not a user setting. The v2 façade methods always write opv2:
+// (that is what they are).
 func (p *PebbleStore) opsV2MirrorEnabled() bool { return !p.opsV2MirrorOff.Load() }
-
-// setOpsV2MirrorEnabled flips the mirror (05-PR16 and tests).
-func (p *PebbleStore) setOpsV2MirrorEnabled(on bool) { p.opsV2MirrorOff.Store(!on) }
 
 // ── staging ─────────────────────────────────────────────────────────────────
 

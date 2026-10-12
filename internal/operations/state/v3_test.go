@@ -1,5 +1,5 @@
 // file: internal/operations/state/v3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e23135cd-0f05-456d-b2f0-dbe4bdefb9c1
 // last-edited: 2026-10-11
 
@@ -56,7 +56,7 @@ func allowedTransitions() map[transitionKey]V3 {
 // events, and requires Next to accept exactly the listed transitions.
 func TestNextIsClosedSet(t *testing.T) {
 	allowed := allowedTransitions()
-	froms := append([]V3{"", "bogus"}, AllV3()...)
+	froms := append([]V3{"", "bogus"}, allV3()...)
 	events := append([]Event{EvMigrate, EvV2Write, "bogus"}, AllEvents...)
 	reasons := append([]string{"", "bogus"}, StopReasons...)
 	seen := 0
@@ -105,10 +105,10 @@ func TestClassifyV3PinsEveryState(t *testing.T) {
 		V3TimedOut:         finished,
 		V3Dropped:          finished,
 	}
-	if len(AllV3()) != 10 || len(want) != 10 {
-		t.Fatalf("the v3 table has %d states, want ten", len(AllV3()))
+	if len(allV3()) != 10 || len(want) != 10 {
+		t.Fatalf("the v3 table has %d states, want ten", len(allV3()))
 	}
-	for _, s := range AllV3() {
+	for _, s := range allV3() {
 		if got := ClassifyV3(s); got != want[s] {
 			t.Errorf("ClassifyV3(%q) = %+v, want %+v", s, got, want[s])
 		}
@@ -154,7 +154,7 @@ func TestToV2EveryState(t *testing.T) {
 		}
 		covered[c.s] = true
 	}
-	for _, s := range AllV3() {
+	for _, s := range allV3() {
 		if !covered[s] {
 			t.Errorf("state %q has no ToV2 row", s)
 		}
@@ -274,4 +274,15 @@ func TestInferEvent(t *testing.T) {
 			t.Errorf("InferEvent(%q, %q) = %s; no single listed event connects them", pair[0], pair[1], ev)
 		}
 	}
+}
+
+// allV3 returns the ten states in table order (test-only: production code
+// has no use for the list; the database tests derive it from Next, see
+// reachableV3States there).
+func allV3() []V3 {
+	out := make([]V3, len(v3Table))
+	for i, e := range v3Table {
+		out[i] = e.state
+	}
+	return out
 }
