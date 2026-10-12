@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_migrate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3dede70-3460-4dd5-8185-a94a66839551
 // last-edited: 2026-10-11
 
@@ -64,7 +64,9 @@ func opsV3RowHash(data []byte) string {
 }
 
 // getOpV2Raw reads one opv2:op: row and its stored bytes. A missing row is
-// (nil, nil, nil); a row that does not decode, or has no id, is an error.
+// (nil, nil, nil). A row that does not decode, or has no id, is an error
+// wrapping errOpsV3Undecodable, returned with its bytes; a failed read is any
+// other error, with nil bytes.
 func (p *PebbleStore) getOpV2Raw(id string) (row *OperationV2Row, raw []byte, err error) {
 	defer recoverPebbleClosed("getOpV2Raw", &err)
 	val, closer, err := p.db.Get(opv2OpKey(id))
@@ -78,10 +80,10 @@ func (p *PebbleStore) getOpV2Raw(id string) (row *OperationV2Row, raw []byte, er
 	_ = closer.Close()
 	var r OperationV2Row
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, raw, err
+		return nil, raw, fmt.Errorf("opv2 row %s %w: %v", id, errOpsV3Undecodable, err)
 	}
 	if r.ID == "" {
-		return nil, raw, fmt.Errorf("opv2 row %s has no id", id)
+		return nil, raw, fmt.Errorf("opv2 row %s %w: it has no id", id, errOpsV3Undecodable)
 	}
 	return &r, raw, nil
 }
@@ -219,8 +221,13 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 		// Re-read under the lock: the page was listed (and, for the
 		// reconcile, hashed) without it, so a live write may have synced
 		// the record since.
+		// Bytes that do not decode are counted and skipped; a failed read
+		// stops the pass (it is the store, not one run).
 		row, raw, gerr := p.getOpV2Raw(id)
 		if gerr != nil {
+			if !errors.Is(gerr, errOpsV3Undecodable) {
+				return nil, gerr
+			}
 			rep.Undecodable++
 			opsV3Log.Warn("opv3 migration: opv2 row %s does not decode; not migrated: %v", id, gerr)
 			continue
@@ -233,12 +240,21 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 		hash := opsV3RowHash(raw)
 		cur, err := p.loadRunV3(id)
 		if err != nil {
+			if !errors.Is(err, errOpsV3Undecodable) {
+				return nil, err
+			}
 			rep.Undecodable++
 			opsV3Log.Warn("opv3 migration: run record %s does not decode; left alone: %v", id, err)
 			continue
 		}
 		if cur != nil && cur.V2RowHash == hash {
 			rep.Skipped++
+			// Current, but a pass that wrote it and stopped before
+			// fillMigratedSuccessors left its successor empty: collect it
+			// again, or a resumed migration never fills it.
+			if needsMigratedSuccessor(cur) {
+				requeued = append(requeued, id)
+			}
 			continue
 		}
 		rec, why, ok := migratedRunRecord(cur, row, hash)
@@ -261,7 +277,7 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 			return nil, err
 		}
 		rep.Written++
-		if rec.State == state.V3Dropped && why == state.WhyRequeued && rec.SuccessorID == "" {
+		if needsMigratedSuccessor(rec) {
 			requeued = append(requeued, id)
 		}
 	}
@@ -277,8 +293,22 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 	return requeued, b.Commit(pebble.Sync)
 }
 
+// needsMigratedSuccessor reports whether r is a migrated v2 requeue row
+// (dropped, "requeued: original op replaced") whose successor has not been
+// filled yet.
+func needsMigratedSuccessor(r *RunRecord) bool {
+	if r.State != state.V3Dropped || r.SuccessorID != "" || r.FromV2 == nil {
+		return false
+	}
+	_, why, _ := state.FromV2(r.FromV2.Status, r.FromV2.ErrMessage)
+	return why == state.WhyRequeued
+}
+
 // stageLegacyCheckpoint copies opv2:state:{id} into opv3:ckpt:{id} as
-// legacy_state bytes, keeping any v3 checkpoint fields already there.
+// legacy_state bytes, keeping any v3 checkpoint fields already there. A
+// stored checkpoint that does not decode is left alone (logged): the copy is
+// skipped for that run rather than overwriting v3 state nobody can read, or
+// failing the whole pass, and with it every boot, on one bad value.
 func (p *PebbleStore) stageLegacyCheckpoint(b *GatedBatch, id string, now time.Time) error {
 	raw, closer, err := p.db.Get(opv2StateKey(id))
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -291,7 +321,11 @@ func (p *PebbleStore) stageLegacyCheckpoint(b *GatedBatch, id string, now time.T
 	_ = closer.Close()
 	var ck Checkpoint
 	if _, err := p.getJSONFound(opv3CkptKey(id), &ck); err != nil {
-		return err
+		if !isJSONDecodeError(err) {
+			return err
+		}
+		opsV3Log.Warn("opv3 migration: checkpoint of run %s does not decode; opv2:state: not copied into it: %v", id, err)
+		return nil
 	}
 	ck.LegacyState = legacy
 	if ck.SchemaVersion == 0 {
@@ -353,6 +387,9 @@ func (p *PebbleStore) fillSuccessorBatch(ids []string, rep *OpsV3MigrationReport
 	}
 	if b.Empty() {
 		return nil
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return err
 	}
 	return b.Commit(pebble.Sync)
 }
@@ -443,6 +480,9 @@ func (p *PebbleStore) rebuildOpCountsV3() error {
 	b := p.db.NewBatch()
 	defer b.Close()
 	if err := p.stageOpCounts(b, c); err != nil {
+		return err
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
 		return err
 	}
 	return b.Commit(pebble.Sync)
