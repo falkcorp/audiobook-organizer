@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -34,6 +34,7 @@ test a branch with no PR, use `make ci-woodpecker`.
 | `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
 | `test-fixtures` | `heavy=true` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
+| `test-native-taglib` | `heavy=true`, `host=u1` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, web tests | split out of `checks` on 2026-09-29 |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
@@ -288,11 +289,18 @@ pipelines would run as root.
 ### U1: local backend on Linux
 
 U1 runs the `heavy=true` workflows (`test-rest`, `test-database`,
-`test-server-scanner`, `test-fixtures` and `checks-build`) with the local
+`test-server-scanner`, `test-fixtures`, `checks-build` and, as the only host
+that can link it, `test-native-taglib`) with the local
 backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
 fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies
 the C compiler `-race` needs, and `golang-go` is only a bootstrap:
-`GOTOOLCHAIN=go1.27.2` fetches the pinned version.
+`GOTOOLCHAIN=go1.27.2` fetches the pinned version. `test-native-taglib` also
+needs `cmake` and `zlib1g-dev` (the static `libz.a`) installed (`apt install
+cmake zlib1g-dev`) and, for the first build only, network access to github.com;
+it stores the static TagLib it builds under `/tank/ci/cache/taglib/`. It is
+labelled `host=u1` as well as `heavy=true` because the `#cgo LDFLAGS` in
+`internal/metadata/taglib_cgo.go` (`-lgcc_eh`) link on Linux only: llm1 (macOS)
+would fail at link time.
 
 - **Runs as:** the unprivileged system user `woodpecker` (no sudo). Pipelines
   execute pull-request code, so the agent never runs as a login user.
