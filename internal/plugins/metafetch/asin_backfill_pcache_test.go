@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill_pcache_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a3e9c04-1f72-4b8d-9e25-c0d84b7a1f36
 // last-edited: 2026-10-11
 
@@ -100,7 +100,7 @@ func TestASINBackfill_UsesP1(t *testing.T) {
 	if got := fa.calls.Load(); got != 2 {
 		t.Fatalf("second run made %d searches in total, want 2: the new copy replays the stored empty answer", got)
 	}
-	pointed, err := database.PCachePointedKeys(s, d.ID)
+	pointed, err := pcachePointedKeys(s, d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,4 +207,18 @@ func TestASINBackfill_FailedSearchIsNotCached(t *testing.T) {
 	if keys := pcacheKeys(t, s, database.PCachePrefix); len(keys) != 0 {
 		t.Fatalf("a failed search wrote pcache keys: %v", keys)
 	}
+}
+
+// pcachePointedKeys returns bookID's pointer row (provider -> P1 keys), read
+// from the raw row the production RecordPCachePointer writes.
+func pcachePointedKeys(store database.PCacheStore, bookID string) (map[string][]string, error) {
+	blob, err := store.GetRaw(database.PCacheBookPrefix + bookID)
+	if err != nil || blob == nil {
+		return nil, err
+	}
+	var ptr database.PCachePointer
+	if err := json.Unmarshal(blob, &ptr); err != nil {
+		return nil, err
+	}
+	return ptr.Keys, nil
 }

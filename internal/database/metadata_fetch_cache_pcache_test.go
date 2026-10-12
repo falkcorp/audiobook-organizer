@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache_pcache_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8f6a17-9d43-4e0b-b71a-5e3d90c4a2f8
 // last-edited: 2026-10-11
 
@@ -25,9 +25,26 @@ func newPCacheTestStore(t *testing.T) *PebbleStore {
 	return s
 }
 
+// pcacheQuestionProviderPrefix is the prefix every P1 key of provider shares.
+func pcacheQuestionProviderPrefix(provider string) string {
+	return PCacheQuestionPrefix + pcacheSegment(provider) + ":"
+}
+
+// pcachePointedKeys returns bookID's pointer row (provider -> P1 keys).
+func pcachePointedKeys(store PCacheStore, bookID string) (map[string][]string, error) {
+	if bookID == "" {
+		return nil, nil
+	}
+	ptr, err := readPCachePointer(store, bookID)
+	if err != nil {
+		return nil, err
+	}
+	return ptr.Keys, nil
+}
+
 func TestPCache_KeysAreProviderPrefixed(t *testing.T) {
 	k := PCacheQuestionKey("Audible", "search_title", "v1\x1et=title 000123")
-	assert.True(t, strings.HasPrefix(k, PCacheQuestionProviderPrefix("audible")), k)
+	assert.True(t, strings.HasPrefix(k, pcacheQuestionProviderPrefix("audible")), k)
 	assert.NotEqual(t, k, PCacheQuestionKey("audible", "search_title", "v1\x1et=title 000124"))
 	assert.Equal(t, "pcache:asin:audible:B0SYNTH001", PCacheASINKey("audible", " b0synth001 ", ""))
 	assert.Equal(t, "pcache:asin:audnexus:B0SYNTH001", PCacheASINKey("audnexus", "B0SYNTH001", ""))
@@ -118,7 +135,7 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 		"audible":     {"pcache:q:audible:search_title:2", "pcache:q:audible:search_title:0"},
 		"openlibrary": {"pcache:q:openlibrary:search_title:0"},
 	}, t0))
-	keys, err := PCachePointedKeys(s, "book-a")
+	keys, err := pcachePointedKeys(s, "book-a")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"pcache:q:audible:search_title:0", "pcache:q:audible:search_title:1", "pcache:q:audible:search_title:2"},
 		keys["audible"], "a union, in first-recorded order")
@@ -131,7 +148,7 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, left, 1)
 	assert.Equal(t, "pcache:q:openlibrary:search_title:0", left[0].Key)
-	keys, err = PCachePointedKeys(s, "book-a")
+	keys, err = pcachePointedKeys(s, "book-a")
 	require.NoError(t, err)
 	assert.NotContains(t, keys, "audible")
 
@@ -150,7 +167,7 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 		many = append(many, fmt.Sprintf("pcache:q:audible:search_title:k%03d", i))
 	}
 	require.NoError(t, RecordPCachePointer(s, "book-b", map[string][]string{"audible": many}, t0))
-	keys, err = PCachePointedKeys(s, "book-b")
+	keys, err = pcachePointedKeys(s, "book-b")
 	require.NoError(t, err)
 	require.Len(t, keys["audible"], pcachePointerMaxPerProvider)
 	assert.Equal(t, many[len(many)-1], keys["audible"][pcachePointerMaxPerProvider-1])

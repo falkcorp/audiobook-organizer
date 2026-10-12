@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout_pcache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f9b2d61-8e07-4c5a-a3f1-7d26c0b95e18
 // last-edited: 2026-10-11
 
@@ -393,7 +393,7 @@ func TestSearchAgainBustDeletesPointedKeys(t *testing.T) {
 	require.Positive(t, asked)
 	shared := kv.keys(database.PCacheQuestionPrefix)
 	require.NotEmpty(t, shared)
-	pointed, err := database.PCachePointedKeys(svc.db, "book-a")
+	pointed, err := pcachePointedKeys(svc.db, "book-a")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, shared, pointed[metadata.SourceIDAudible], "the pointer row lists the keys the search touched")
 
@@ -597,7 +597,7 @@ func TestWalkSourceChain_SharedCache(t *testing.T) {
 	assert.True(t, second.SharedCacheHit)
 	assert.False(t, second.CacheHit, "the caller still writes book-b's own row")
 	assert.Equal(t, FetchStatusCached, second.Status())
-	pointed, err := database.PCachePointedKeys(svc.db, "book-b")
+	pointed, err := pcachePointedKeys(svc.db, "book-b")
 	require.NoError(t, err)
 	assert.Len(t, pointed[metadata.SourceIDAudible], 1)
 

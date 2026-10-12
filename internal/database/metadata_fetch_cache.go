@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -472,12 +472,6 @@ func PCacheQuestionKey(provider, endpoint, normalized string) string {
 	return PCacheQuestionPrefix + pcacheSegment(provider) + ":" + pcacheSegment(endpoint) + ":" + hex.EncodeToString(sum[:])
 }
 
-// PCacheQuestionProviderPrefix is the prefix every P1 key of provider shares,
-// for a bust by provider.
-func PCacheQuestionProviderPrefix(provider string) string {
-	return PCacheQuestionPrefix + pcacheSegment(provider) + ":"
-}
-
 // PCacheASINKey is the P2 key of one product lookup by ASIN. The provider is
 // part of the key: Audible and Audnexus return different records for the
 // same ASIN (Audnexus carries the runtime chapters, Audible the catalog
@@ -699,18 +693,6 @@ func indexOf(list []string, s string) int {
 		}
 	}
 	return -1
-}
-
-// PCachePointedKeys returns bookID's pointer row (provider -> P1 keys).
-func PCachePointedKeys(store PCacheStore, bookID string) (map[string][]string, error) {
-	if bookID == "" {
-		return nil, nil
-	}
-	ptr, err := readPCachePointer(store, bookID)
-	if err != nil {
-		return nil, err
-	}
-	return ptr.Keys, nil
 }
 
 // DeletePCacheForBook is the per-book "Search again" bust (owner decision

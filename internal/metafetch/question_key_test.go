@@ -1,5 +1,5 @@
 // file: internal/metafetch/question_key_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c41f0d7-2a6e-4b93-b5d8-61e7a9c3f2b4
 // last-edited: 2026-10-11
 
@@ -137,4 +137,11 @@ func TestNormalizeQuestion_MarketplaceIsAPrefix(t *testing.T) {
 	assert.True(t, strings.HasPrefix(other, "pcache:q:audible:search_title@api.example.invalid:"), other)
 	assert.Equal(t, def[strings.LastIndex(def, ":"):], other[strings.LastIndex(other, ":"):],
 		"the marketplace is outside the hash")
+}
+
+// questionKey is NormalizeQuestion with the provider's marketplace applied.
+// Production call sites need the marketplace-qualified endpoint as well, so
+// they apply endpointWithMarketplace themselves; this is the test shorthand.
+func questionKey(provider, endpoint string, q Question) string {
+	return NormalizeQuestion(provider, endpointWithMarketplace(provider, endpoint), q)
 }
