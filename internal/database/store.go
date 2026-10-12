@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.110.0
+// version: 2.110.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-11
 
@@ -950,7 +950,7 @@ type BookFile struct {
 	// The scan cache was keyed per BOOK while the skip decision is made per FILE,
 	// during the walk, before any book is known. For a single-file book the two
 	// grains coincide; for a multi-file book they diverge the moment
-	// createBookFilesForBook normalizes Book.FilePath to the containing directory.
+	// createBookFilesForBookWithAudio normalizes Book.FilePath to the containing directory.
 	// The result is arithmetic, not an anomaly: an 80-file audiobook has ONE book
 	// row, so a per-file write-back that looks the book up BY PATH can stamp at
 	// most 1 file in 80 and the other 79 are re-read and re-hashed on every scan,

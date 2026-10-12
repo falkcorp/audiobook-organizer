@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 //
 // Resolves, once, the stored row a scanned book already is.
 
@@ -160,7 +160,7 @@ func (e *scanExisting) lookupHashes(book *Book, fileHash *string) error {
 }
 
 // lookupSegments runs the multi-file vote once: every segment file is hashed
-// (the hashes are kept on book.SegmentHashes so createBookFilesForBook does
+// (the hashes are kept on book.SegmentHashes so createBookFilesForBookWithAudio does
 // not re-hash) and each match votes for its parent book. The book with the
 // most votes is kept with its count and the 80% bar it must clear. This
 // handles a book whose first file was damaged or replaced, which the

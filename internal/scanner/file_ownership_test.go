@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c2a43e1-d6ec-4eae-8570-41c987062ce6
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -406,8 +406,6 @@ func softDeletedOwnerOf(f ownershipFixture, path string) *database.Book {
 // and one not (full metadata), so both the withheld-stamp and the stamp path
 // are exercised.
 func TestProcessBooksParallel_OwnershipSkipTouchesNothingOfTheOwner(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	f := newOwnershipFixture(t)
 	origGlobal := database.GetGlobalStore()
 	database.SetGlobalStore(f.store)
@@ -470,8 +468,6 @@ func TestProcessBooksParallel_OwnershipSkipTouchesNothingOfTheOwner(t *testing.T
 // rest arrive, the next scan must grow that book rather than skip the new
 // files as fragments forever.
 func TestProcessBooksParallel_StagedArrivalAppendsToTheOwner(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	f := newOwnershipFixture(t)
 	useScannerStore(t, f.store)
 	config.AppConfig.EnableAIParsing = false

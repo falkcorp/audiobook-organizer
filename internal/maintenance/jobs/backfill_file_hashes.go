@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package jobs
 
@@ -158,12 +158,9 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 				if bf.FileHash != "" {
 					return nil
 				}
-				// filehash.BookFileHash directly, not scanner.ComputeFileHash:
-				// the latter is a thin wrapper whose only remaining job is the
-				// activeScanner test seam, so a package-global set by a test
-				// could swap the algorithm out from under the very job that
-				// repairs this column. Same digest, one fewer place it can be
-				// substituted.
+				// filehash.BookFileHash directly: scanner.ComputeFileHash is only
+				// a thin wrapper over it, and filehash is the single entry point
+				// for the digest.
 				hash, herr := filehash.BookFileHash(bf.FilePath)
 				if herr != nil {
 					msg := herr.Error()

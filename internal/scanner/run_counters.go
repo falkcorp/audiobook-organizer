@@ -1,7 +1,7 @@
 // file: internal/scanner/run_counters.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4e1c7b-2d58-4f63-b8e0-5c1a7d3f9b26
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -20,7 +20,7 @@ type scanRunCounters struct {
 	// ownershipLookupErr: scanned books not imported because a store read
 	// failed while checking who owns their files.
 	ownershipLookupErr atomic.Int64
-	// ceilingRefused: books createBookFilesForBook gave no rows because they
+	// ceilingRefused: books createBookFilesForBookWithAudio gave no rows because they
 	// claimed more than maxDirectoryBookFiles files.
 	ceilingRefused atomic.Int64
 	// stagedAppended / appendFailed: files appended to an already-imported

@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-10
+// last-edited: 2026-10-11
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -23,7 +23,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // TestGetFileSize tests the getFileSize function
@@ -658,53 +657,8 @@ func TestIsExcludedPath(t *testing.T) {
 	}
 }
 
-// TestScanDirectoryGlobalScanner tests that ScanDirectory uses activeScanner when set
-func TestScanDirectoryGlobalScanner(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
-
-	// Set a mock scanner
-	SetScanner(&fullMockScanner{
-		books: []Book{{FilePath: "/mock/book.m4b", Title: "Mock Book"}},
-	})
-
-	books, err := ScanDirectory(context.Background(), "/any/dir", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(books) != 1 || books[0].Title != "Mock Book" {
-		t.Errorf("expected mock book, got %v", books)
-	}
-}
-
-type fullMockScanner struct {
-	books []Book
-}
-
-func (m *fullMockScanner) ScanDirectory(rootDir string, _ logger.Logger) ([]Book, error) {
-	return m.books, nil
-}
-
-func (m *fullMockScanner) ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, _ logger.Logger) ([]Book, error) {
-	return m.books, nil
-}
-
-func (m *fullMockScanner) ProcessBooks(books []Book, _ logger.Logger) error {
-	return nil
-}
-
-func (m *fullMockScanner) ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(int, int, string), _ logger.Logger, _ ...func(string)) error {
-	return nil
-}
-
-func (m *fullMockScanner) ComputeFileHash(filePath string) (string, error) {
-	return "mockhash", nil
-}
-
-// TestProcessBooksDefault tests ProcessBooks without activeScanner
+// TestProcessBooksDefault tests ProcessBooks
 func TestProcessBooksDefault(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })

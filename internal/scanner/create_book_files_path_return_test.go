@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_return_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f2b41c8-93ad-4e05-b6d1-8c0e5a72f394
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -162,8 +162,6 @@ func TestCreateBookFilesForBookReportsNoMoveWhenUpdateBookFails(t *testing.T) {
 // normalized multi-file book ends a scan with LastScanMtime still nil and so is
 // re-read and re-hashed on every scan for the life of the library.
 func TestProcessBooksParallelWritesScanCacheForNormalizedMultiFileBook(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

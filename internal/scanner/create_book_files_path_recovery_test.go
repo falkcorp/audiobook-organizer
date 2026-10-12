@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_recovery_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d81f0a6-2c57-4b93-9e6a-71cf05d8b2ae
-// last-edited: 2026-08-25
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -146,8 +146,6 @@ func TestProcessBooksParallelDirectoryBookKeepsItsPath(t *testing.T) {
 // on a rescan createBookFilesForBook returns "" (BookFiles already exist), so
 // an unguarded assignment blanks FilePath to "" and destroys the write-back.
 func TestProcessBooksParallelSecondScanKeepsTheBookServiceable(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
@@ -256,9 +254,6 @@ func TestProcessBooksParallelPersistsChaptersForNormalizedMultiFileBook(t *testi
 		segs = append(segs, p)
 	}
 
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
-
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
 	origStore := database.GetGlobalStore()
@@ -323,8 +318,6 @@ func TestProcessBooksParallelPersistsChaptersForNormalizedMultiFileBook(t *testi
 // then blanks FilePath to "", and both consumers below it collapse -- chapters
 // look up "" and writeBackScanCache fails its os.Stat.
 func TestProcessBooksParallelKeepsPathWhenNothingMoved(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

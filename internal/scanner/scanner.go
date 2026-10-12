@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.131.1
+// version: 1.131.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -112,7 +112,7 @@ var (
 	scanCacheRearmCount    atomic.Int64 // write-back re-armed NeedsRescan: file still inside the rescan-age window
 	scanCacheRearmErrCount atomic.Int64 // MarkNeedsRescan failed after a write-back that needed re-arming
 
-	// createBookFilesForBook's own by-path lookup. Split out because a store
+	// createBookFilesForBookWithAudio's own by-path lookup. Split out because a store
 	// ERROR and "no row here" are different facts with different consequences,
 	// and the original code returned the same "" for both -- silently.
 	bookFileLookupErrCount     atomic.Int64 // book lookup failed: chapters and scan-cache write-back skipped for this book
@@ -160,19 +160,6 @@ func warnSampled(c *atomic.Int64, log logger.Logger, format string, args ...any)
 	}
 	return n
 }
-
-// Scanner defines the interface for scanning and processing audiobook files.
-// Tests can swap in a mock implementation via SetScanner.
-type Scanner interface {
-	ScanDirectory(rootDir string, scanLog logger.Logger) ([]Book, error)
-	ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error)
-	ProcessBooks(books []Book, scanLog logger.Logger) error
-	ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger, onAIPhaseWarning ...func(string)) error
-	ComputeFileHash(filePath string) (string, error)
-}
-
-// activeScanner overrides the default implementation. Set by tests via SetScanner.
-var activeScanner Scanner
 
 // activeEmbeddingStore is used for dedup candidate creation during scanning.
 // Set by ScanService before starting a scan.
@@ -233,7 +220,7 @@ func detectMetadataHashDuplicate(book *database.Book, log logger.Logger) {
 
 // pkgStore is the database the scanner's package-level helpers use.
 // Wired by SetStore from NewServer at startup. Free helpers in this
-// file (createBookFilesForBook, saveBookToDatabase, the inline DB
+// file (createBookFilesForBookWithAudio, saveBookToDatabase, the inline DB
 // lookups inside ProcessBooksParallel) read pkgStore rather than the
 // host's database.GetGlobalStore (SERVER-GLOBAL-STORE-AUDIT phase 7).
 // Nil-safe — all helpers check before use. Single-writer at startup,
@@ -301,9 +288,10 @@ var (
 //
 // Design choice (R-4): a refcount around the existing package-level cache was
 // chosen over threading a per-run cache instance through the scan context
-// because ProcessBooksParallel sits behind the Scanner interface (mocked by
-// tests); changing its signature would ripple through every implementation
-// and mock, while the refcount confines the fix to this file.
+// because ProcessBooksParallel (and ProcessBooks wrapping it) is called from
+// every scan entry point and a large body of tests; changing its signature
+// would ripple through every one of those call sites, while the refcount
+// confines the fix to this file.
 //
 // Rules:
 //   - The first acquirer installs its cache; later concurrent acquirers share
@@ -441,12 +429,12 @@ func initWorksLookupCacheLocked(ctx context.Context) error {
 		worksLookupCache = nil
 		worksLookupReady = false
 		worksLookupReusable = false
-		defaultLog.Info("InitWorksLookupCache: load canceled after %d works (%s)",
+		defaultLog.Info("works lookup cache: load canceled after %d works (%s)",
 			len(m), time.Since(start).Round(time.Millisecond))
 		return fmt.Errorf("works lookup load canceled: %w", ctx.Err())
 	}
 	if err != nil {
-		defaultLog.Warn("InitWorksLookupCache: loading works failed: %v", err)
+		defaultLog.Warn("works lookup cache: loading works failed: %v", err)
 		worksLookupCache = make(map[string]string)
 		worksLookupReady = true
 		worksLookupReusable = false
@@ -457,7 +445,7 @@ func initWorksLookupCacheLocked(ctx context.Context) error {
 	worksLookupReusable = true
 	worksLookupBuiltGen = gen
 	worksLookupOwnWrites = 0
-	defaultLog.Info("InitWorksLookupCache: loaded %d works in %s",
+	defaultLog.Info("works lookup cache: loaded %d works in %s",
 		len(m), time.Since(start).Round(time.Millisecond))
 	return nil
 }
@@ -503,11 +491,11 @@ func AcquireWorksLookupCache(ctx context.Context) error {
 		if cur := store.WorksGeneration(); cur == worksLookupBuiltGen+worksLookupOwnWrites {
 			worksLookupReady = true
 			worksLookupRefs++
-			defaultLog.Info("InitWorksLookupCache: reusing %d works from the previous run (no work row changed)",
+			defaultLog.Info("works lookup cache: reusing %d works from the previous run (no work row changed)",
 				len(worksLookupCache))
 			return nil
 		}
-		defaultLog.Info("InitWorksLookupCache: works changed since the previous run; reloading")
+		defaultLog.Info("works lookup cache: works changed since the previous run; reloading")
 	}
 	if err := initWorksLookupCacheLocked(ctx); err != nil {
 		return err
@@ -867,7 +855,7 @@ type Book struct {
 
 	// chapterSequence marks a book consolidateChapterGroups built from one
 	// chapter key, three or more files, every file short. That is proof it is
-	// one work rather than an author shelf, so createBookFilesForBook's
+	// one work rather than an author shelf, so createBookFilesForBookWithAudio's
 	// maxDirectoryBookFiles backstop does not apply to it.
 	chapterSequence bool
 
@@ -894,9 +882,6 @@ type Book struct {
 // ScanDirectory scans the given directory for audiobook files.
 // If scanLog is nil, a default logger is used.
 func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) ([]Book, error) {
-	if activeScanner != nil {
-		return activeScanner.ScanDirectory(rootDir, scanLog)
-	}
 	return ScanDirectoryParallel(ctx, rootDir, 1, scanLog)
 }
 
@@ -1079,9 +1064,6 @@ func writeBackScanCache(filePath string, fi os.FileInfo, scanLog logger.Logger) 
 // ScanDirectoryParallel scans directory with parallel workers for improved performance.
 // If scanLog is nil, a default logger is used.
 func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
-	if activeScanner != nil {
-		return activeScanner.ScanDirectoryParallel(ctx, rootDir, workers, scanLog)
-	}
 	if scanLog == nil {
 		scanLog = logger.New("scanner")
 	}
@@ -1358,9 +1340,6 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 // ProcessBooks processes the discovered books to extract metadata and identify series.
 // If scanLog is nil, a default logger is used.
 func ProcessBooks(books []Book, scanLog logger.Logger) error {
-	if activeScanner != nil {
-		return activeScanner.ProcessBooks(books, scanLog)
-	}
 	return ProcessBooksParallel(context.Background(), books, config.AppConfig.ConcurrentScans, nil, scanLog)
 }
 
@@ -1373,9 +1352,6 @@ func ProcessBooks(books []Book, scanLog logger.Logger) error {
 // failed inline AI-parse phase's AIPhaseSummary -- see AIPhaseSummary.ReportTo
 // for why this exists and why it is NOT routed through UpdateProgress.
 func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger, onAIPhaseWarning ...func(string)) error {
-	if activeScanner != nil {
-		return activeScanner.ProcessBooksParallel(ctx, books, workers, progressFn, scanLog, onAIPhaseWarning...)
-	}
 	if scanLog == nil {
 		scanLog = logger.New("scanner")
 	}
@@ -1921,7 +1897,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				// counts a miss as "no book row" (so the book never acquired a
 				// scan-cache entry). Measured on prod 2026-08-24. Note this
 				// does NOT yet make the next scan SKIP the book -- see the
-				// SCOPE paragraph on createBookFilesForBook for the two
+				// SCOPE paragraph on createBookFilesForBookWithAudio for the two
 				// grain mismatches that still defeat that.
 				pathMode := normalizeToDirectory
 				if books[idx].sharesDirectory {
@@ -1936,7 +1912,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				}
 			} else {
 				// GENUINELY SINGLE-FILE BOOKS. This branch did not exist, so
-				// createBookFilesForBook was never called for them and they
+				// createBookFilesForBookWithAudio was never called for them and they
 				// got no book_file row at all -- the gap
 				// ensureSingleFileBookFile backfills from the organize hook.
 				//
@@ -2469,57 +2445,13 @@ func recoverNormalizedBookPath(bookFilePath string) string {
 	return ""
 }
 
-// createBookFilesForBook creates BookFile records for a book.
-// If segmentFiles is nil, it scans dirPath for all audio files.
-// If segmentFiles is provided, only those specific files become BookFile records.
-// After creating book files, if book.FilePath points to a file (not a directory),
-// it normalizes it to the parent directory.
-// The optional knownHashes parameter (filePath→hash) lets callers pass hashes
-// already computed during the dedup check (PERF-2b) to avoid a second os.Open.
-// The returned string is the path the book row LIVES AT once this function is
-// done, or "" if it did not move it.
-//
-// Returning it is not a convenience. The normalization block below can rewrite
-// the stored FilePath to the containing directory, and until 2026-08-24 nothing
-// told the caller. The caller went on using the path it passed IN, which no
-// longer matched any row, and TWO consumers then failed silently on the miss:
-//
-//   - writeBackScanCache found no row, so the book never acquired a scan-cache
-//     entry at all and every scan counted it in scanCacheNoRowCount;
-//   - PersistChaptersForBook found no row and returned quietly (its comment
-//     classifies "a stale path" as a benign data condition), so the book's
-//     chapters were never persisted at all.
-//
-// Measured on prod 2026-08-24: books stored under a normalized directory path
-// had last_scan_mtime = nil, while a single-file book -- which never reaches
-// this function, so is never normalized -- had a real timestamp. Handing the
-// caller the new path lets it keep its in-memory Book in step with the row,
-// which fixes both consumers with one change.
-//
-// SCOPE -- do not read more into this than it does. Populating the scan-cache
-// entry does NOT yet make the next scan SKIP the book, and an earlier version
-// of this comment wrongly said it did. Two independent things still defeat the
-// skip, both measured 2026-08-24:
-//
-//  1. KEY GRAIN. GetScanCacheMap keys the cache by book.FilePath -- now the
-//     directory -- but the walk emits, and classifySkipFile looks up, the
-//     SEGMENT file path. The lookup misses on every scan.
-//  2. VALUE GRAIN. This path hands writeBackScanCache a DIRECTORY to stat, so
-//     the stored size is the directory inode's (128 bytes in the measurement),
-//     never the segment's. Aligning the keys alone would still fail the size
-//     comparison.
-//
-// The scan cache is keyed per-BOOK while the skip decision is made per-FILE;
-// closing that needs per-file cache keying, which is tracked separately. What
-// this function's return value fixes is chapter persistence and the no-row
-// counter -- both real, neither a skip.
 // createSingleFileBookFile gives a genuinely single-file book its one
 // book_file row, without moving the book row to its parent directory.
 //
 // Two things it deliberately does, both of which look like they could be
 // dropped and cannot:
 //
-//  1. It passes the file EXPLICITLY rather than letting createBookFilesForBook
+//  1. It passes the file EXPLICITLY rather than letting createBookFilesForBookWithAudio
 //     scan the directory. With a nil segment list that function reads the whole
 //     containing folder and turns every audio file in it into a row for THIS
 //     book -- fine when the folder is the book, catastrophic when two
@@ -2549,7 +2481,7 @@ func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
 	//
 	// FilePath == SegmentFiles[0] is guaranteed ONLY for single-file groups,
 	// and those are the only books that reach this function: the scan worker
-	// sends every book with len(SegmentFiles) > 1 to createBookFilesForBook
+	// sends every book with len(SegmentFiles) > 1 to createBookFilesForBookWithAudio
 	// instead. It does NOT hold for multi-file books in general. The album-group
 	// site in groupFilesIntoBooks deliberately keeps FilePath on the first file
 	// in arrival (alphabetical) order while SegmentFiles is the natural-sorted
@@ -2571,7 +2503,7 @@ func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
 	createBookFilesForBookWithAudio(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes, knownInfo, maxDirectoryBookFiles, nil)
 }
 
-// normalizeToDirectory / keepFilePath name createBookFilesForBook's
+// normalizeToDirectory / keepFilePath name createBookFilesForBookWithAudio's
 // normalizeBookPath argument at the call sites, because a bare true/false there
 // says nothing about which of the two very different behaviours is wanted.
 const (
@@ -2584,7 +2516,7 @@ const (
 // them to every row when they may.
 //
 // bfs must be EVERY file of ONE book and placements[i] the position file i's tag
-// states (zero when the tag read failed). createBookFilesForBook is the only
+// states (zero when the tag read failed). createBookFilesForBookWithAudio is the only
 // place book_file rows are created for a scanned book and it builds all of them
 // in one call before one BatchUpsertBookFiles, so the whole book is always in
 // view here; both of its scan call sites already run inside the per-book worker
@@ -2669,9 +2601,53 @@ func createBookFilesForBookLimited(bookFilePath string, segmentFiles []string, s
 	return createBookFilesForBookWithAudio(bookFilePath, segmentFiles, scanLog, normalizeBookPath, knownHashes, nil, maxFiles, rc)
 }
 
-// createBookFilesForBookWithAudio creates the book_file rows of one book,
-// taking knownInfo: filePath → media info this scan ALREADY read for that file. A row whose file
-// is in knownInfo takes its duration and codec from there (see
+// createBookFilesForBookWithAudio creates the book_file rows of one book.
+// If segmentFiles is nil, it scans dirPath for all audio files.
+// If segmentFiles is provided, only those specific files become BookFile records.
+// After creating book files, if book.FilePath points to a file (not a directory),
+// it normalizes it to the parent directory.
+// knownHashes (filePath→hash) lets callers pass hashes already computed during
+// the dedup check (PERF-2b) to avoid a second os.Open.
+// The returned string is the path the book row LIVES AT once this function is
+// done, or "" if it did not move it.
+//
+// Returning it is not a convenience. The normalization block below can rewrite
+// the stored FilePath to the containing directory, and until 2026-08-24 nothing
+// told the caller. The caller went on using the path it passed IN, which no
+// longer matched any row, and TWO consumers then failed silently on the miss:
+//
+//   - writeBackScanCache found no row, so the book never acquired a scan-cache
+//     entry at all and every scan counted it in scanCacheNoRowCount;
+//   - PersistChaptersForBook found no row and returned quietly (its comment
+//     classifies "a stale path" as a benign data condition), so the book's
+//     chapters were never persisted at all.
+//
+// Measured on prod 2026-08-24: books stored under a normalized directory path
+// had last_scan_mtime = nil, while a single-file book -- which never reaches
+// this function, so is never normalized -- had a real timestamp. Handing the
+// caller the new path lets it keep its in-memory Book in step with the row,
+// which fixes both consumers with one change.
+//
+// SCOPE -- do not read more into this than it does. Populating the scan-cache
+// entry does NOT yet make the next scan SKIP the book, and an earlier version
+// of this comment wrongly said it did. Two independent things still defeat the
+// skip, both measured 2026-08-24:
+//
+//  1. KEY GRAIN. GetScanCacheMap keys the cache by book.FilePath -- now the
+//     directory -- but the walk emits, and classifySkipFile looks up, the
+//     SEGMENT file path. The lookup misses on every scan.
+//  2. VALUE GRAIN. This path hands writeBackScanCache a DIRECTORY to stat, so
+//     the stored size is the directory inode's (128 bytes in the measurement),
+//     never the segment's. Aligning the keys alone would still fail the size
+//     comparison.
+//
+// The scan cache is keyed per-BOOK while the skip decision is made per-FILE;
+// closing that needs per-file cache keying, which is tracked separately. What
+// this function's return value fixes is chapter persistence and the no-row
+// counter -- both real, neither a skip.
+//
+// knownInfo is filePath → media info this scan ALREADY read for that file. A
+// row whose file is in knownInfo takes its duration and codec from there (see
 // bookfileaudio.EnsureDuration) instead of being probed again or written with
 // Duration 0. Only single-file books have such a value today: ProcessFile reads
 // the one file; a multi-file book's segments are not read until chapter
@@ -2689,7 +2665,7 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 		// returned with no log and no counter, so the two consumers below went
 		// silently unserviced. Say so.
 		warnSampled(&bookFileLookupErrCount, scanLog,
-			"createBookFilesForBook: book lookup failed for %s: %v "+
+			"createBookFilesForBookWithAudio: book lookup failed for %s: %v "+
 				"(chapters and scan-cache write-back skipped for this book)", bookFilePath, err)
 		return ""
 	}
@@ -2932,7 +2908,7 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 	return normalizedPath
 }
 
-// createSegmentsForBook is deprecated and removed — use createBookFilesForBook instead.
+// createSegmentsForBook is deprecated and removed — use createBookFilesForBookWithAudio instead.
 
 // parseCueFile reads a CUE sheet and returns the audio files it references.
 // CUE files use FILE "name.mp3" BINARY/WAVE/MP3 to list tracks.
@@ -3195,7 +3171,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 
 	// The directory-book verdict: claim the WHOLE directory as one book, with
 	// FilePath = the directory and no segment list, which makes
-	// createBookFilesForBook re-enumerate the folder and mint one row per audio
+	// createBookFilesForBookWithAudio re-enumerate the folder and mint one row per audio
 	// file in it (see the hard bound there). It is the only branch in this
 	// function that claims files it never looked at, so the evidence it demands
 	// has to scale with how many files that is.
@@ -3352,7 +3328,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 			// back to when its tag numbers are refused, so the segments are put
 			// in natural order ("Chapter 2" before "Chapter 10"). FilePath is
 			// deliberately still albumFiles[0] as before: it is the book's
-			// lookup key until createBookFilesForBook normalizes it to the
+			// lookup key until createBookFilesForBookWithAudio normalizes it to the
 			// directory, and changing which file it names would stop a rescan
 			// from finding a row that was never normalized.
 			segs := slices.Clone(albumFiles)
@@ -3737,7 +3713,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// detects partial damage (bit rot) when only some files changed.
 		if existing == nil && len(book.SegmentFiles) > 1 {
 			// The vote (hashing every segment, keeping the hashes on
-			// book.SegmentHashes for createBookFilesForBook) runs once:
+			// book.SegmentHashes for createBookFilesForBookWithAudio) runs once:
 			// lookupScanExisting already ran it when nothing else matched.
 			found.lookupSegments(book)
 
@@ -4110,19 +4086,21 @@ func ComputeSegmentFileHash(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// computeFileHash is the digest implementation ComputeFileHash delegates to.
+// It is a package variable only so a test can wrap it to count calls (see
+// installHashCounter); production never reassigns it.
+var computeFileHash = filehash.BookFileHash
+
 // ComputeFileHash returns the canonical identity digest for filePath — the
 // value that belongs in books.file_hash and book_files.file_hash.
 //
 // The algorithm itself lives in internal/filehash, which is the single entry
 // point every writer of those columns must use; this wrapper exists only for
-// the activeScanner test seam and for the in-package callers that predate the
-// split. New code OUTSIDE internal/scanner should call filehash.BookFileHash
-// directly rather than routing through the scanner.
+// the in-package callers that predate the split. New code OUTSIDE
+// internal/scanner should call filehash.BookFileHash directly rather than
+// routing through the scanner.
 func ComputeFileHash(filePath string) (string, error) {
-	if activeScanner != nil {
-		return activeScanner.ComputeFileHash(filePath)
-	}
-	return filehash.BookFileHash(filePath)
+	return computeFileHash(filePath)
 }
 
 // getFileSize returns the size of a file in bytes

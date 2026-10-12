@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_grouping_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 950c3ace-c8d3-4885-9a1d-d90682d41415
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -260,8 +260,6 @@ func TestGroupFileDurationSec_UsesTheStoredRowDuration(t *testing.T) {
 // to end: the createBookFilesForBook backstop must not refuse the rows of a
 // book the grouping already proved to be one chapter sequence.
 func TestProcessBooksParallel_ProvenSequenceOverCeilingGetsAllItsRows(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	stubChapterDurations(t, 240, nil)
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
@@ -290,8 +288,6 @@ func TestProcessBooksParallel_ProvenSequenceOverCeilingGetsAllItsRows(t *testing
 // untagged chapter files over the ceiling must import as one book with every
 // file, not import nothing.
 func TestProcessBooksParallel_UntaggedProvenSequenceOverCeiling(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	stubChapterDurations(t, 240, nil)
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
@@ -377,8 +373,6 @@ func TestGroupFilesIntoBooks_OversizedShelfOfNovelsStaysPerFile(t *testing.T) {
 // of one folder are saved with their own first-file paths, not all normalized
 // to the one directory.
 func TestProcessBooksParallel_SubGroupsKeepDistinctPaths(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	stubChapterDurations(t, 240, nil)
 
 	store, cleanup := setupPebbleStore(t)

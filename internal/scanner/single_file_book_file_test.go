@@ -1,7 +1,7 @@
 // file: internal/scanner/single_file_book_file_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4d81b0f2-6ce7-4a39-91b5-2f0a7c63d5e8
-// last-edited: 2026-08-25
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -229,8 +229,6 @@ func TestSingleFileBookFileIsVisibleToTheScanCache(t *testing.T) {
 // "the single-file fix regressed", pointing at the wrong thing. The twin must
 // pass for the single-file assertion to mean anything.
 func TestProcessBooksParallelGivesASingleFileBookItsFileRow(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

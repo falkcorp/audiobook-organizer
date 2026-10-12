@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.44.2
+// version: 1.44.3
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-11
 
@@ -2001,7 +2001,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 			file.UpdatedAt = now
 
 			// The incoming row may be PARTIAL: the library scanner
-			// (createBookFilesForBook) and the iTunes sync hand this method bare
+			// (createBookFilesForBookWithAudio) and the iTunes sync hand this method bare
 			// rows carrying only what they observed, and memdb-sourced rows lack
 			// the stripped heavy fields (raw chromaprint, IntroTranscription).
 			// Every field the caller does not own keeps its stored value when the

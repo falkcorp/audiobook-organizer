@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 04249a9d-8f2e-44f4-9652-258511aae768
 // last-edited: 2026-10-11
 
@@ -27,7 +27,7 @@ func chBook(id, path string, dur *int) database.BookCore {
 // (a) The primary must be chapter 01, not whichever row the store listed
 // first. Store order is a key order (ULID/hash), so "BookIDs[0]" picked an
 // arbitrary chapter as the book every other chapter was folded into.
-func TestDetectChapterGroups_PrimaryIsLowestChapterNumber(t *testing.T) {
+func TestDetectChapterGroupsWithOptions_PrimaryIsLowestChapterNumber(t *testing.T) {
 	// Store order scrambled, and "10" must sort after "9" (numeric, not
 	// lexical).
 	var books []database.BookCore

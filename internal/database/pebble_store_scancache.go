@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.6.0
+// version: 3.6.1
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package database
 
@@ -27,7 +27,7 @@ import (
 // It used to be built from BOOK rows, and that was the bug. The scan cache is
 // consulted per FILE, during the walk, before any book is known; keying it per
 // BOOK only works while the two grains coincide, which they do for a single-file
-// book and stop doing the moment createBookFilesForBook normalizes
+// book and stop doing the moment createBookFilesForBookWithAudio normalizes
 // Book.FilePath to the containing directory. After that the walk looks up a
 // segment path and the map holds a directory path, so every lookup misses.
 //
@@ -336,7 +336,7 @@ func (p *PebbleStore) stampFileScanCache(bookID, fileID string, apply func(*Book
 //
 // A book-level stamp measures whatever Book.FilePath points at. That is a real
 // file only when the book owns exactly one file AND that file's path IS the
-// book's path. Once createBookFilesForBook normalizes Book.FilePath to the
+// book's path. Once createBookFilesForBookWithAudio normalizes Book.FilePath to the
 // containing directory the stamp describes a directory inode (128 bytes observed
 // on prod) and therefore describes no file at all; copying it onto a member would
 // mark that file scanned at a measurement nobody took, and every later scan would
@@ -552,7 +552,7 @@ func (p *PebbleStore) GetBookPathHistory(bookID string) ([]BookPathChange, error
 //
 // The row it writes is the same honest row ensureSingleFileBookFile writes: this
 // book has exactly this one file. It deliberately does NOT go through
-// createBookFilesForBook, which would also normalize Book.FilePath to the
+// createBookFilesForBookWithAudio, which would also normalize Book.FilePath to the
 // containing directory -- right for a multi-file book, wrong here, and not a side
 // effect a migration should have.
 //

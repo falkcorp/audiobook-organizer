@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.4
+// version: 1.22.5
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-11
 
@@ -842,7 +842,7 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	}
 
 	// Reaching here means either verify=false (verification not requested) or
-	// verify=true and the checksum matched -- backup.RestoreBackup returns an
+	// verify=true and the checksum matched -- backup.RestoreBackupIn returns an
 	// error in every other case, so "verified" always equals what was asked
 	// for. The fields are included explicitly (rather than omitted) so a
 	// caller parsing the response, not just the server log, can tell whether

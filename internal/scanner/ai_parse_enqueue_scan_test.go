@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
-// last-edited: 2026-09-10
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -31,8 +31,6 @@ import (
 // the production symptom; the assertion below is what turns that into a failure
 // rather than a slow no-op.
 func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
@@ -163,8 +161,6 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 // and folder_autoscan_op.go both treat a non-nil error here as the chunk/op
 // having failed outright), so the callback is the only acceptable channel.
 func TestProcessBooksParallelReportsFailedInlineAIPhase(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

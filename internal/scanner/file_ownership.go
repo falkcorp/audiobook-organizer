@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -89,7 +89,7 @@ func (v fileOwnershipVerdict) asError(path string) error {
 // scannedFilesOf returns the files a scanned Book would claim: its segment
 // list, its own path for a single-file book, or -- for a directory-shaped book
 // (no segment list, FilePath is a folder) -- the audio files directly in that
-// folder, enumerated the way createBookFilesForBook will enumerate them when it
+// folder, enumerated the way createBookFilesForBookWithAudio will enumerate them when it
 // mints the book's rows.
 func scannedFilesOf(book *Book) ([]string, error) {
 	if len(book.SegmentFiles) > 0 {
@@ -329,7 +329,7 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 // that is already at its path: an update of that book, which proceeds -- except
 // that for a DIRECTORY book, audio files in its folder that no book has a row
 // for are a staged arrival (checkFileOwnership step 4, directory shape).
-// createBookFilesForBook returns as soon as the book has any rows, so without
+// createBookFilesForBookWithAudio returns as soon as the book has any rows, so without
 // this those files never got rows. Files another book claims are left to it.
 func directoryBookArrivals(store scannerStore, book *Book, atPath *database.Book) (fileOwnershipVerdict, error) {
 	if atPath.IsSoftDeleted() {
@@ -344,7 +344,7 @@ func directoryBookArrivals(store scannerStore, book *Book, atPath *database.Book
 		return fileOwnershipVerdict{}, fmt.Errorf("book_files of %s: %w", atPath.ID, err)
 	}
 	if len(rows) == 0 {
-		return fileOwnershipVerdict{}, nil // createBookFilesForBook mints them all
+		return fileOwnershipVerdict{}, nil // createBookFilesForBookWithAudio mints them all
 	}
 	have := make(map[string]bool, len(rows))
 	for _, r := range rows {
@@ -376,7 +376,7 @@ func directoryBookArrivals(store scannerStore, book *Book, atPath *database.Book
 }
 
 // appendScannedFilesToOwner writes book_file rows for files that arrived after
-// ownerID was imported. createBookFilesForBook cannot do this: it returns as
+// ownerID was imported. createBookFilesForBookWithAudio cannot do this: it returns as
 // soon as the book has ANY rows (a rescan must not rebuild rows whose tag
 // positions were judged at import), so without this a book first scanned
 // mid-download kept the first batch of files forever and every later scan

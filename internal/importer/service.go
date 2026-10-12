@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-11
 
@@ -555,7 +555,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	//
 	// This is always the single-file shape: ImportFile rejects directories
 	// above, and fileInfo/ext are the values already computed for that check.
-	// It therefore does NOT go through scanner.createBookFilesForBook, which
+	// It therefore does NOT go through scanner.createBookFilesForBookWithAudio, which
 	// also normalizes Book.FilePath to the containing directory — correct for a
 	// multi-file book, wrong here. Same reasoning as
 	// server.ensureSingleFileBookFile, which exists to backfill exactly this
