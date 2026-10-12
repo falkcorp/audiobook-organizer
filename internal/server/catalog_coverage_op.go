@@ -1,5 +1,5 @@
 // file: internal/server/catalog_coverage_op.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b8e2c61-0d7f-4a93-b1c4-e9a3f6d82b07
 // last-edited: 2026-10-12
 //
@@ -69,10 +69,9 @@ func (s *Server) RegisterCatalogCoverageOp(reg *opsregistry.Registry) error {
 		ResumePolicy:   opsregistry.ResumeRestart,
 		ConcurrencyKey: catalogCoverageOpID,
 		// Do not start while the harvest is writing author blocks: the count
-		// would move under the report. DependsOn is one-directional (this op
-		// waits for the harvest); the registry's write-set gate does not
-		// consult Reads, so the harvest itself is not held back by a running
-		// report.
+		// would move under the report. DependsOn is one-directional, so the
+		// harvest names this op too (catalog_harvest_op.go); the write-set
+		// gate does not consult Reads.
 		DependsOn:    []string{catalogHarvestOpID},
 		Reads:        []opsregistry.Resource{opsregistry.ResBooks, opsregistry.ResAuthors, opsregistry.ResCatalog},
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
