@@ -1036,4 +1036,32 @@ describe('duplicate export', () => {
     expect(hrefs).toHaveLength(1);
     expect(new URL(hrefs[0], 'http://localhost').searchParams.has('q')).toBe(false);
   });
+  it('export url carries status and both_unmatched from the lane', async () => {
+    const user = userEvent.setup();
+    const hrefs: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        hrefs.push(this.getAttribute('href') ?? '');
+      });
+    try {
+      renderWorkspace(['/review?lane=dupes']);
+      await user.click(await screen.findByLabelText(/both unmatched/i));
+      await waitFor(() =>
+        expect(api.getDedupCandidates).toHaveBeenCalledWith(
+          expect.objectContaining({ both_unmatched: true }),
+          expect.anything()
+        )
+      );
+      await user.click(await screen.findByTestId('command-menu-queue'));
+      await user.click(await screen.findByTestId('command-export-dupes-csv'));
+    } finally {
+      click.mockRestore();
+    }
+    expect(hrefs).toHaveLength(1);
+    const p = new URL(hrefs[0], 'http://localhost').searchParams;
+    expect(p.get('both_unmatched')).toBe('true');
+    // The lane opens on Pending; the export must carry the status it shows.
+    expect(p.get('status')).toBe('pending');
+  });
 });

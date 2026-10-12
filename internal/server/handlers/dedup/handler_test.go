@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
 // last-edited: 2026-10-12
 
@@ -1267,9 +1267,15 @@ func TestMergeDedupCandidateUsesTheJournaledMergePath(t *testing.T) {
 func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 	h, d := newHandler(t)
 	insertCandidateWithBand(t, d.es, "e-1", "e-2", "HIGH")
-	insertCandidateWithBand(t, d.es, "e-3", "e-4", "LOW")
+	insertCandidateWithBand(t, d.es, "e-3", "e-4", "LOW") // e-3 carries an ASIN: matched
 	insertCandidateWithBand(t, d.es, "e-5", "e-6", "HIGH")
 	insertCandidateWithBand(t, d.es, "e-2", "e-7", "LOW")
+	// A pair whose second book no longer exists: neither endpoint may show it.
+	deadID, _, _ := insertCandidateWithBand(t, d.es, "e-8", "e-gone", "HIGH")
+	// A hand-enqueued pair, for the source case.
+	if _, err := d.es.EnqueueManualCandidate("book", "e-9", "e-10", "note"); err != nil {
+		t.Fatalf("EnqueueManualCandidate: %v", err)
+	}
 	// An author pair that the book-only lane must be able to exclude.
 	sim := 0.9
 	if err := d.es.UpsertCandidate(database.DedupCandidate{
@@ -1278,8 +1284,16 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCandidate: %v", err)
 	}
+	asin := "B000TEST01"
 	d.store.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
-		return &database.Book{ID: id, Title: "Book " + id}, nil
+		if id == "e-gone" {
+			return nil, nil
+		}
+		b := &database.Book{ID: id, Title: "Book " + id}
+		if id == "e-3" {
+			b.ASIN = &asin
+		}
+		return b, nil
 	}).Maybe()
 	d.store.EXPECT().GetAllAuthors().Return(nil, nil).Maybe()
 	d.store.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{
@@ -1293,12 +1307,15 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 		query string
 		want  int
 	}{
-		{"unfiltered", "", 5},
+		{"unfiltered", "", 6},
 		{"band", "band=LOW", 2},
 		{"entity_id", "entity_id=e-2", 2},
 		{"q", "q=needle", 1},
-		{"entity_type", "entity_type=book", 4},
+		{"entity_type", "entity_type=book", 5},
 		{"band and entity_id", "band=LOW&entity_id=e-2", 1},
+		{"both_unmatched", "both_unmatched=true", 4},
+		{"source", "source=manual", 1},
+		{"min_similarity", "min_similarity=0.95", 4},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1344,6 +1361,9 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 			if len(listIDs) != tc.want {
 				t.Fatalf("list returned %d rows, want %d (fixture check)", len(listIDs), tc.want)
 			}
+			if listIDs[deadID] || expIDs[deadID] {
+				t.Fatalf("pair with a missing book %d leaked: list=%v export=%v", deadID, listIDs[deadID], expIDs[deadID])
+			}
 			if len(expIDs) != len(listIDs) {
 				t.Fatalf("export has %d rows, list has %d", len(expIDs), len(listIDs))
 			}
@@ -1353,5 +1373,46 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExportDedupCandidates_TruncationHeaders pins that a file cut at the row
+// cap says so: X-Total-Count carries the full match count and
+// X-Export-Truncated marks the cut, so a partial file is never mistaken for the
+// whole set.
+func TestExportDedupCandidates_TruncationHeaders(t *testing.T) {
+	h, d := newHandler(t)
+	insertCandidate(t, d.es, "t-1", "t-2")
+	insertCandidate(t, d.es, "t-3", "t-4")
+	insertCandidate(t, d.es, "t-5", "t-6")
+	d.store.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
+		return &database.Book{ID: id, Title: "Book " + id}, nil
+	}).Maybe()
+
+	w := doReq(t, h.ExportDedupCandidates, http.MethodGet, "/api/v1/dedup/candidates/export?format=json", nil, nil)
+	if got := w.Header().Get("X-Total-Count"); got != "3" {
+		t.Fatalf("X-Total-Count=%q want 3", got)
+	}
+	if got := w.Header().Get("X-Export-Truncated"); got != "" {
+		t.Fatalf("X-Export-Truncated=%q on an untruncated export", got)
+	}
+
+	restore := deduphandler.SetExportRowCapForTest(2)
+	defer restore()
+	w = doReq(t, h.ExportDedupCandidates, http.MethodGet, "/api/v1/dedup/candidates/export?format=json", nil, nil)
+	if got := w.Header().Get("X-Total-Count"); got != "3" {
+		t.Fatalf("X-Total-Count=%q want 3 (the full match count)", got)
+	}
+	if got := w.Header().Get("X-Export-Truncated"); got != "true" {
+		t.Fatalf("X-Export-Truncated=%q want true", got)
+	}
+	var exp struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &exp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if exp.Count != 2 {
+		t.Fatalf("count=%d want 2 (the cap)", exp.Count)
 	}
 }
