@@ -10,7 +10,3 @@
       Wiring them changes every pair's score, so decide with a corpus rescore.
       Found building 02-PR8 (the window signal is wired through
       `database.AsCapability` in `registry_wire.go`); not fixed there.
-- [ ] **WINDOW-ACOUSTID-UI-LABEL** The review UI has no label or colour for the
-      new `window_acoustid` signal kind (`web/src/components/review/evidence/signalLabels.ts`,
-      `web/src/theme.ts`); chips fall back to the raw kind name. Add both
-      alongside `lsh_acoustid`. Found in 02-PR8.

@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/signalLabels.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 6d8b3f51-2a94-4c07-ae63-5f10c7d92b48
-// last-edited: 2026-09-27
+// last-edited: 2026-10-11
 //
 // Reviewer-facing names for dedup signal kinds, and the primary/supporting
 // rule, so the dupes rows can say WHY a pair is on screen without the reviewer
@@ -40,6 +40,7 @@ export const SIGNAL_LABELS: Record<string, string> = {
   embedding_med: 'Embedding (medium)',
   duration: 'Duration match',
   folder_path: 'Folder path',
+  window_acoustid: 'Window AcoustID',
   same_path: 'Same path',
   cover_text: 'Cover text',
   exact_rule: 'Exact rule',
@@ -75,7 +76,7 @@ export function signalLabel(kind: string): string {
  *
  * SOURCE OF TRUTH IS GO: `isSupportingKind` in internal/dedup/unified/score.go
  * (`k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText
- * || k == SigExactRule`). This is a DUPLICATE of that rule,
+ * || k == SigExactRule || k == SigWindowAcoustID`). This is a DUPLICATE of that rule,
  * and duplicating it is not the design -- it is a stopgap. The wire format
  * (models.Signal in internal/models/dedup_score.go) does not serialize the
  * primary/supporting classification at all, so the frontend cannot read the
@@ -90,19 +91,24 @@ export function signalLabel(kind: string): string {
 // Go (same_path and cover_text had already drifted out of this list, exactly as
 // warned above). exact_rule is a non-scoring provenance record -- the panel
 // renders it as the "why this pair exists" block, not as a confidence row.
+//
+// window_acoustid was added on 2026-10-11 in the same PR that added it to Go
+// (02-PR8). Without it here the chip would present a +6 corroborating boost as
+// the fingerprint match that put the pair on screen.
 const SUPPORTING_KINDS: ReadonlySet<string> = new Set([
   'duration',
   'folder_path',
   'same_path',
   'cover_text',
   'exact_rule',
+  'window_acoustid',
 ]);
 
 /**
  * Whether a signal kind can, on its own, be the reason a pair is a candidate.
  *
- * Note the polarity: everything the scorer emits is primary EXCEPT the two
- * supporting kinds. An unknown kind from a new collector is therefore treated as
+ * Note the polarity: everything the scorer emits is primary EXCEPT the
+ * supporting kinds above. An unknown kind from a new collector is therefore treated as
  * primary, which is the safe direction -- it appears in the panel and the chips
  * rather than being silently dropped from both.
  */

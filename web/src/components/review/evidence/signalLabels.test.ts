@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/signalLabels.test.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 1f7a4c93-8b26-4d50-91ce-6a04b8d3e527
-// last-edited: 2026-09-27
+// last-edited: 2026-10-11
 
 import { describe, it, expect } from 'vitest';
 import type { DedupScoreBreakdown, DedupSignal } from '../../../services/api';
@@ -34,6 +34,7 @@ describe('signalLabel', () => {
     expect(signalLabel('exact_file')).toBe('Exact file hash');
     expect(signalLabel('isbn_asin')).toBe('ISBN/ASIN');
     expect(signalLabel('metadata_hash')).toBe('Metadata hash');
+    expect(signalLabel('window_acoustid')).toBe('Window AcoustID');
   });
 
   it('falls through to the raw kind for one it does not know', () => {
@@ -51,8 +52,8 @@ describe('isPrimaryKind', () => {
   // changing what the chips claim.
   it('treats exactly the Go supporting kinds as supporting', () => {
     // isSupportingKind: SigDuration, SigFolderPath, SigSamePath, SigCoverText,
-    // SigExactRule.
-    for (const kind of ['duration', 'folder_path', 'same_path', 'cover_text', 'exact_rule']) {
+    // SigExactRule, SigWindowAcoustID.
+    for (const kind of ['duration', 'folder_path', 'same_path', 'cover_text', 'exact_rule', 'window_acoustid']) {
       expect(isPrimaryKind(kind), `${kind} should be supporting`).toBe(false);
     }
   });
@@ -98,6 +99,14 @@ describe('primarySignals', () => {
       breakdown([{ kind: 'exact_file' }, { kind: 'duration' }, { kind: 'folder_path' }])
     );
     expect(out.map((s) => s.kind)).toEqual(['exact_file']);
+  });
+
+  it('omits the window-print signal: it corroborates, it never decides', () => {
+    // window_acoustid adds a bounded boost after the noisy-OR (02-PR8). A chip
+    // naming it beside lsh_acoustid would claim it is the acoustic match that
+    // made the pair.
+    const out = primarySignals(breakdown([{ kind: 'lsh_acoustid' }, { kind: 'window_acoustid' }]));
+    expect(out.map((s) => s.kind)).toEqual(['lsh_acoustid']);
   });
 
   it('is empty rather than throwing when there is no breakdown', () => {
