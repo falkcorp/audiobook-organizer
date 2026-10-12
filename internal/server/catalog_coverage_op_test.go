@@ -1,5 +1,5 @@
 // file: internal/server/catalog_coverage_op_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d94f17-8a2e-4b60-9d15-7e1b0a6f3c82
 // last-edited: 2026-10-12
 
@@ -497,6 +497,15 @@ func TestCatalogCoverage_RunsThroughServerWiring(t *testing.T) {
 	}
 	if !slices.Contains(def.DependsOn, catalogHarvestOpID) {
 		t.Errorf("DependsOn = %v; want it to include %s", def.DependsOn, catalogHarvestOpID)
+	}
+	// Both directions: DependsOn is one-way, so the harvest must name the
+	// report too or a harvest could start under a running report.
+	harvest, ok := s.OpRegistry().Def(catalogHarvestOpID)
+	if !ok {
+		t.Fatalf("%s is not registered on the server", catalogHarvestOpID)
+	}
+	if !slices.Contains(harvest.DependsOn, catalogCoverageOpID) {
+		t.Errorf("%s DependsOn = %v; want it to include %s", catalogHarvestOpID, harvest.DependsOn, catalogCoverageOpID)
 	}
 	if !slices.Contains(def.Reads, opsregistry.ResCatalog) || len(def.Writes) != 0 {
 		t.Errorf("Reads = %v Writes = %v; want a catalog reader that writes nothing", def.Reads, def.Writes)
