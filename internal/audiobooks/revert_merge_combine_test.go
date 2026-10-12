@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_combine_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a6c29e41-8f07-4b3d-9e15-d2b84f7c0a63
 // last-edited: 2026-10-12
 
@@ -25,7 +25,10 @@ var _ merge.Store = database.Store(nil)
 type fakeCombineUndoer struct {
 	journals map[string]*merge.CombineJournal
 	refuse   bool
-	undone   []string
+	// undoneByRival: the journal is undone by someone else after the revert
+	// read it, so this undo is refused against a journal that is done.
+	undoneByRival bool
+	undone        []string
 }
 
 func (f *fakeCombineUndoer) GetCombineJournal(id string) (*merge.CombineJournal, error) {
@@ -37,6 +40,10 @@ func (f *fakeCombineUndoer) GetCombineJournal(id string) (*merge.CombineJournal,
 }
 
 func (f *fakeCombineUndoer) UndoCombine(id string) (*merge.CombineUndoResult, error) {
+	if f.undoneByRival {
+		f.journals[id].Status = merge.CombineJournalUndone
+		return nil, &merge.CombineUndoRefusedError{JournalID: id, Reasons: []string{"journal already undone"}}
+	}
 	if f.refuse {
 		return nil, &merge.CombineUndoRefusedError{JournalID: id, Reasons: []string{"file f1 is no longer on survivor keep"}}
 	}
@@ -95,6 +102,19 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 		assert.Equal(t, 1, res.Failed)
 		assert.Equal(t, 1, res.ChangedSince)
 		assert.Empty(t, s.marked)
+	})
+	t.Run("a refusal against a journal undone in the meantime is already restored", func(t *testing.T) {
+		s := &ledgerStub{book: keep, changes: rows()}
+		u := newFake(merge.CombineJournalApplied)
+		u.undoneByRival = true
+		rs := NewRevertService(s)
+		rs.combineUndo = u
+		res, err := rs.RevertOperation("op")
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.AlreadyRestored)
+		assert.Zero(t, res.Failed)
+		assert.Zero(t, res.ChangedSince)
+		assert.ElementsMatch(t, []string{"ptr", "dec"}, s.marked)
 	})
 	t.Run("a missing journal is refused", func(t *testing.T) {
 		s := &ledgerStub{book: keep, changes: rows()}

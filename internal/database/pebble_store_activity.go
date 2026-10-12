@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -238,7 +238,14 @@ var opChangePruneBeforeCommit func()
 // "repair_owner_apply" (undo.ChangeTypeRepairOwnerApply) is the audit record
 // that the owner himself applied an iTunes-tracked Repairs row: kept for as
 // long as the store is, like any audit trail.
-var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true, "repair_owner_apply": true}
+//
+// "merge_combine_journal" (undo.ChangeTypeMergeCombineJournal) is the pointer
+// from a Repairs merge's keep book to its merge.CombineJournal: the only link
+// that lets the operation's revert find that journal. The combine journal
+// itself is not pruned, so pruning the pointer would strand an undoable merge
+// behind a run that offers no revert. One row per merge, so keeping them
+// costs little.
+var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true, "repair_owner_apply": true, "merge_combine_journal": true}
 
 // PruneOperationChanges deletes operation change entries older than the given
 // time, each with its opchange_by_book: index entry. Undecodable rows are
