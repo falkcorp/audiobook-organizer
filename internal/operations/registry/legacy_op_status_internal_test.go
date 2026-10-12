@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_op_status_internal_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8e35b0d7-4a91-4c26-bf08-73d9a15c6e42
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry
 
@@ -30,10 +30,9 @@ type legacyUpdate struct {
 // that make it a legacyOpStore.
 type legacyFakeStore struct {
 	database.OpsV2Store
-	NopOpsV3 // no v3 run records (05-PR4)
-	v2       map[string]database.OperationV2Row
-	legacy   map[string]*database.Operation
-	updates  []legacyUpdate
+	v2      map[string]database.OperationV2Row
+	legacy  map[string]*database.Operation
+	updates []legacyUpdate
 }
 
 func newLegacyFakeStore() *legacyFakeStore {
@@ -67,12 +66,9 @@ func (s *legacyFakeStore) UpdateOperationStatus(id, status string, progress, tot
 // fakes (and any future store) that implement OpsV2Store and nothing else —
 // the reason the v1 surface is discovered by type assertion rather than added
 // to OpsV2Store.
-type v2OnlyStore struct {
-	database.OpsV2Store
-	NopOpsV3
-}
+type v2OnlyStore struct{ database.OpsV2Store }
 
-func newTestRegistryWithStore(store database.OpsStore) *Registry {
+func newTestRegistryWithStore(store database.OpsV2Store) *Registry {
 	return &Registry{store: store, logger: slog.Default()}
 }
 

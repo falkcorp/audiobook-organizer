@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry
 
@@ -40,11 +40,16 @@ func (w *RegistryWrapper) Stop(ctx context.Context) error {
 // needed the wide type to hold: an interface value carries its dynamic type
 // either way.
 //
+// The ops v3 run state (05-PR4) is deliberately absent too: database.Store
+// does not carry it, so this value -- the server's search-index decorator in
+// production -- does not promote it. New resolves it from the same value as a
+// capability, through the decorator's Unwrap (runStateV3).
+//
 // BookFiles is deliberately absent even though DepStore declares it:
 // prodSchedulerStore supplies that method itself, and demanding it from the
 // underlying store would be asking for a method *PebbleStore does not have.
 type opRegistryStore interface {
-	database.OpsStore // New (v2 + v3, 05-PR4), and 7 of the 8 DepStore/SchedulerStore methods
+	database.OpsV2Store // New, and 7 of the 8 DepStore/SchedulerStore methods
 
 	// The one thing SchedulerStore needs that OpsV2Store does not carry.
 	GetBookByID(id string) (*database.Book, error)

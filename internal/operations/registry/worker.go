@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.35.1
+// version: 2.35.2
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry
 
@@ -1270,7 +1270,7 @@ func (r *Registry) stopReasonFor(runCtx context.Context, h *runHandle) string {
 // zombie handle is what holds the key either way. h.stoppingRecorded says
 // whether it stored the stop.
 func (r *Registry) markStopping(qr *queuedRun, h *runHandle, reason string) {
-	rec, err := r.store.GetRunV3(qr.opID)
+	rec, err := r.getRunV3(qr.opID)
 	if err != nil || rec == nil {
 		r.logger.Debug("registry: no v3 run record to mark stopping", "op_id", qr.opID, "error", err)
 		return
@@ -1280,7 +1280,7 @@ func (r *Registry) markStopping(qr *queuedRun, h *runHandle, reason string) {
 			"op_id", qr.opID, "v3_state", rec.State)
 		return
 	}
-	if _, err := r.store.TransitionRunV3(database.TransitionRequest{
+	if _, err := r.transitionRunV3(database.TransitionRequest{
 		ID:               qr.opID,
 		ExpectState:      rec.State,
 		ExpectAttempt:    rec.Attempt,

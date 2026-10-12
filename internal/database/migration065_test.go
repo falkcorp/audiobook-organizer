@@ -1,7 +1,7 @@
 // file: internal/database/migration065_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -281,8 +281,8 @@ func TestMigration065Batches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Batches != 3 || fmt.Sprint(calls) != "[500 1000 1250]" {
-		t.Fatalf("batches = %d, progress = %v; want 3 batches at 500/1000/1250", rep.Batches, calls)
+	if rep.Pages != 3 || fmt.Sprint(calls) != "[500 1000 1250]" {
+		t.Fatalf("pages = %d, progress = %v; want 3 pages at 500/1000/1250", rep.Pages, calls)
 	}
 	c, err := p.OpCountsV3()
 	if err != nil || c.Total != 1250 || c.ByState[state.V3Succeeded] != 1250 {
@@ -426,7 +426,7 @@ func TestMigration065Timing100k(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("migration 065 on %d rows: %s (%d batches, %d written)", len(rows), time.Since(start).Round(time.Millisecond), rep.Batches, rep.Written)
+	t.Logf("migration 065 on %d rows: %s (%d pages, %d written)", len(rows), time.Since(start).Round(time.Millisecond), rep.Pages, rep.Written)
 	start = time.Now()
 	if _, err := p.MigrateOpsV2ToV3(opsV3MigrationBatch, nil); err != nil {
 		t.Fatal(err)

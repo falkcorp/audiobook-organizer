@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/05/05-README.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: 7d3e9b14-5c2a-4f68-a1e0-9b4c6d8f2a73 -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-12 -->
 
 # 05 Ops v3 platform: task briefs (wave 1)
 
@@ -49,6 +49,7 @@ order: 04 P1, P4a, P9, P12, 02 PR14, PR8, 12B, PR15.
 - `opv3:` families are registered by PR4, not PR2. No new `opv2:` census is needed (existing census counts it).
 - PR1 pollers keep stopping on every `interrupted*` status.
 - A v3 zombie stays `stopping`, so EnqueueOp dedupe must skip it.
+- `OpsV3Store` is not part of `database.Store` (the `TestStoreFlattenedWidth` ratchet). A consumer declares the v3 methods it calls as its own small interface and resolves it with `database.AsCapability`, which sees through the server's search-index decorator. The registry's `runStateV3` is the model (05-PR4 "Store width").
 - PR8 does not enable the D23 checks; 04 P1 does. PR8 adds `Schedule.Preview()`, absent from sdk-api.
 
 ## Unverified

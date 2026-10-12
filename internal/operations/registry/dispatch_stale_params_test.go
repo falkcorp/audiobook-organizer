@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatch_stale_params_test.go
-// version: 1.1.1
+// version: 1.1.0
 // guid: 5e18d3b7-0c92-44a6-8f31-b7d260e94a18
-// last-edited: 2026-10-11
+// last-edited: 2026-10-03
 
 // White-box regression tests for the dispatcher's stale-snapshot TOCTOU: stale
 // params (below) and, since 2026-10-03, a stale status, where the snapshot still
@@ -94,7 +94,7 @@ func TestDispatchCycle_UsesParamsMergedAfterSnapshot(t *testing.T) {
 	store.EXPECT().GetOperationV2("op-1").
 		Return(new(queuedRow("op-1", "test.mergeable", mergedParams)), nil).Once()
 
-	r := New(WithNopV3(store), slog.Default(), 1, nil)
+	r := New(store, slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(mergeableDef("test.mergeable")))
 
 	r.dispatchCycle(context.Background())
@@ -123,7 +123,7 @@ func TestDispatchCycle_RereadsEveryClaimedRow(t *testing.T) {
 	fresh := queuedRow("op-2", "test.plain", staleParams)
 	store.EXPECT().GetOperationV2("op-2").Return(&fresh, nil).Once()
 
-	r := New(WithNopV3(store), slog.Default(), 1, nil)
+	r := New(store, slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(plainDef("test.plain")))
 
 	r.dispatchCycle(context.Background())
@@ -155,7 +155,7 @@ func TestDispatchCycle_DropsARowThatIsNoLongerQueued(t *testing.T) {
 			fresh.Status = status
 			store.EXPECT().GetOperationV2("op-5").Return(&fresh, nil).Once()
 
-			r := New(WithNopV3(store), slog.Default(), 1, nil)
+			r := New(store, slog.Default(), 1, nil)
 			require.NoError(t, r.RegisterOp(plainDef("test.plain")))
 
 			r.dispatchCycle(context.Background())
@@ -182,7 +182,7 @@ func TestDispatchCycle_FailsClosedWhenRereadErrors(t *testing.T) {
 		Return([]database.OperationV2Row{queuedRow("op-3", "test.mergeable", staleParams)}, nil).Once()
 	store.EXPECT().GetOperationV2("op-3").Return(nil, errors.New("boom")).Once()
 
-	r := New(WithNopV3(store), slog.Default(), 1, nil)
+	r := New(store, slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(mergeableDef("test.mergeable")))
 
 	r.dispatchCycle(context.Background())
@@ -205,7 +205,7 @@ func TestDispatchCycle_FailsClosedWhenRowVanished(t *testing.T) {
 		Return([]database.OperationV2Row{queuedRow("op-4", "test.mergeable", staleParams)}, nil).Once()
 	store.EXPECT().GetOperationV2("op-4").Return(nil, nil).Once()
 
-	r := New(WithNopV3(store), slog.Default(), 1, nil)
+	r := New(store, slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(mergeableDef("test.mergeable")))
 
 	r.dispatchCycle(context.Background())

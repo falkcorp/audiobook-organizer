@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -394,16 +394,15 @@ type OpsV3AuxStore interface {
 // OpsV3Store is the operations v3 storage surface. It is a composition of
 // four pieces because interfacebloat caps a declaration at 8 entries; the
 // method set is the 05-PR4 brief's OpsV3Store.
+//
+// It is NOT part of Store (TestStoreFlattenedWidth: Store may only narrow). A
+// consumer declares the few methods it calls as its own interface and
+// resolves it with AsCapability, which sees through the server's
+// search-index decorator to the *PebbleStore (the operations registry's
+// runStateV3 is the model).
 type OpsV3Store interface {
 	OpsV3RunWriter
 	OpsV3RunReader
 	OpsV3ChunkStore
 	OpsV3AuxStore
-}
-
-// OpsStore is what the operations registry needs: the v2 surface it still
-// writes through, and the v3 surface for what v2 vocabulary cannot express.
-type OpsStore interface {
-	OpsV2Store
-	OpsV3Store
 }
