@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.51.0
+// version: 1.51.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-11
 
@@ -863,11 +863,19 @@ func (f *fragmentFixer) windowIndex() fragWindowIndexReader {
 // signal, and the approval-by-id flow decides every apply. Nothing here is
 // read by provenMatch, the row's Skipped state, its fingerprint or its State.
 //
-// With r = 1 MinHash bands the value estimates the fraction of the fragment's
-// window audio that also lies in the parent's windows. ws1 windows sit at
-// 10/50/90 percent of each file, so a fragment's window and its parent's
-// windows often cover different stretches of the same book: a low value is
-// weak evidence, never evidence against.
+// What the number measures. Each band is an r = 1 MinHash, and two windows'
+// band k agree with probability equal to the Jaccard similarity of their
+// shingle sets, NOT the containment of one in the other. So for a fragment
+// window lying wholly inside a longer parent window the expected value is
+// |fragment| / |parent window| (a 95 percent slice reads about 0.95, a 60 s
+// fragment inside a 120 s window about 0.5), and identical windows (the same
+// file under two rows, the common fragment case) read 1.0. ws1 windows sit at
+// 10/50/90 percent of each file, so a fragment's windows and its parent's often
+// cover different stretches of the same book: a low value is weak evidence,
+// never evidence against.
+//
+// A member-list read error drops that pair's line and is logged at Warn: the
+// line is informational, so skipping it cannot change any row's decision.
 func (f *fragmentFixer) addWindowContainment(r *repairs.Row, pairs []fragWindowPair) {
 	if len(pairs) == 0 {
 		return
@@ -883,11 +891,19 @@ func (f *fragmentFixer) addWindowContainment(r *repairs.Row, pairs []fragWindowP
 			continue
 		}
 		fb, ok, err := idx.WindowIndexMembers(p.fragFile.ID)
-		if err != nil || !ok || len(fb) == 0 {
+		if err != nil {
+			fragLog.Warn("window containment: member list of fragment file %s unreadable, line omitted: %v", p.fragFile.ID, err)
+			continue
+		}
+		if !ok || len(fb) == 0 {
 			continue
 		}
 		pb, ok, err := idx.WindowIndexMembers(p.parentRow.ID)
-		if err != nil || !ok {
+		if err != nil {
+			fragLog.Warn("window containment: member list of parent row %s unreadable, line omitted: %v", p.parentRow.ID, err)
+			continue
+		}
+		if !ok {
 			continue
 		}
 		if minC < 0 {

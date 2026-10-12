@@ -1,12 +1,11 @@
 // file: internal/server/registry_wire.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
 // last-edited: 2026-10-11
 
 package server
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -23,7 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -256,7 +255,7 @@ func init() {
 			if ws, ok := database.AsCapability[dedup.WindowAcoustIDStore](store); ok {
 				engine.SetWindowStore(ws)
 			} else {
-				logging.Info(context.Background(), "dedup engine: store has no window-print index (non-Pebble backend) — window_acoustid signal off")
+				logger.New("dedup").Info("dedup engine: store has no window-print index (non-Pebble backend); window_acoustid signal off")
 			}
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
 			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold

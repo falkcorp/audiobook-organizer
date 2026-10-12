@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwinidx.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f0d2a8e-41c7-4b95-8e3d-9a7c1b5e2f60
 // last-edited: 2026-10-11
 
@@ -51,8 +51,12 @@ import (
 // "never indexed".
 
 // windowIndexBuiltFlagKey is set by dedup.window-index-build after a complete
-// pass. The v1 suffix tracks fingerprint.WindowBandVersion.
-const windowIndexBuiltFlagKey = "system:flag:fpwinidx_v1_done"
+// pass: "system:flag:fpwinidx_v1_done" at band version 1. It is DERIVED from
+// fingerprint.WindowBandVersion, not spelled out, because the flag certifies an
+// index of one band version: a re-tune moves every key to a new version byte,
+// and a hand-written "_v1_" would keep reporting the new, empty index as built,
+// switching the collector on over nothing.
+var windowIndexBuiltFlagKey = fmt.Sprintf("system:flag:fpwinidx_v%d_done", fingerprint.WindowBandVersion)
 
 // windowIndexMaxPostings bounds one probe key: a (band, hash) shared by more
 // files than this is a stop word (near-silence, a test tone that slipped past

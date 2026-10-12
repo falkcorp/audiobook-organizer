@@ -1,5 +1,5 @@
 // file: internal/dedup/collectors_window_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d6f9a43-b8e1-4c07-9f52-1a3e7b0c5d96
 // last-edited: 2026-10-11
 
@@ -83,12 +83,19 @@ const winFrames = 969
 // provenance stamp.
 func (e *windowEnv) putWindows(t *testing.T, fileID string, seed uint64, pipeline string) {
 	t.Helper()
+	e.putSlots(t, fileID, [3]uint64{seed * 10, seed*10 + 1, seed*10 + 2}, 3600, pipeline)
+}
+
+// putSlots writes the three ws1 windows with the audio of slotSeeds[i] at
+// slot i (1000/5000/9000) and durSec as the duration the plan used.
+func (e *windowEnv) putSlots(t *testing.T, fileID string, slotSeeds [3]uint64, durSec float64, pipeline string) {
+	t.Helper()
 	for i, slot := range []int{1000, 5000, 9000} {
-		raw := le(walk(seed*10+uint64(i), winFrames))
+		raw := le(walk(slotSeeds[i], winFrames))
 		require.NoError(t, e.s.PutFingerprintWindow(&database.FingerprintWindow{
 			Ref: database.FileWindowRef(fileID), Kind: database.WindowKindWindow, SlotBP: slot,
-			WindowSet: fingerprint.WindowSetWS1, OffsetSec: float64(slot) / 10000 * 3600, LengthSec: 120,
-			DecodedSec: 120, DurationUsedSec: 3600, DurationSource: "book_file", Frames: winFrames,
+			WindowSet: fingerprint.WindowSetWS1, OffsetSec: float64(slot) / 10000 * durSec, LengthSec: 120,
+			DecodedSec: 120, DurationUsedSec: durSec, DurationSource: "book_file", Frames: winFrames,
 			Raw: raw, Algorithm: 2, Pipeline: pipeline, FpcalcVersion: "1.6.0", FFmpegVersion: "8.0.1",
 			ComputedAt: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), Host: "mac-test",
 		}))
@@ -155,6 +162,55 @@ func TestCollectWindowAcoustID_ProvenanceMismatchIsIncomparable(t *testing.T) {
 	require.Empty(t, sigs, "incomparable prints emit nothing")
 	require.Equal(t, int64(1), stats.Incomparable.Load(), "and are counted")
 	t.Logf("provenance mismatch: %d signal(s), %d incomparable", len(sigs), stats.Incomparable.Load())
+}
+
+// TestCollectWindowAcoustID_LowConfidenceIsSkipped: the same audio in every
+// slot, but the two files' durations are 10 percent apart, so
+// WindowSetSimilarity pairs every slot with every slot and flags the result
+// LowConfidence. That is not a dedup signal however high the score.
+func TestCollectWindowAcoustID_LowConfidenceIsSkipped(t *testing.T) {
+	e := newWindowEnv(t)
+	aBook, aFiles := e.book(t, 1)
+	_, bFiles := e.book(t, 1)
+	e.putSlots(t, aFiles[0], [3]uint64{10, 11, 12}, 3600, fingerprint.WindowPipelineID)
+	e.putSlots(t, bFiles[0], [3]uint64{10, 11, 12}, 3960, fingerprint.WindowPipelineID)
+	require.NoError(t, e.s.SetWindowIndexBuilt())
+
+	query, err := e.s.GetBookFileByFileID(aFiles[0])
+	require.NoError(t, err)
+	var stats WindowCollectStats
+	cfg := DefaultWindowAcoustIDConfig()
+	cfg.Stats = &stats
+	sigs, err := CollectWindowAcoustID(e.s, query, aBook, cfg)
+	require.NoError(t, err)
+	require.Empty(t, sigs, "a LowConfidence comparison emits nothing")
+	require.Equal(t, int64(1), stats.Candidates.Load(), "the candidate was found and compared")
+	require.Equal(t, int64(1), stats.LowConfidence.Load())
+}
+
+// TestCollectWindowAcoustID_BelowMinSimilarityIsSkipped: one slot holds the
+// same audio, so the index proposes the pair (all 16 bands of that window
+// hit), but the other two slots are unrelated and the median similarity is
+// far under MinSimilarity.
+func TestCollectWindowAcoustID_BelowMinSimilarityIsSkipped(t *testing.T) {
+	e := newWindowEnv(t)
+	aBook, aFiles := e.book(t, 1)
+	_, bFiles := e.book(t, 1)
+	e.putSlots(t, aFiles[0], [3]uint64{20, 21, 22}, 3600, fingerprint.WindowPipelineID)
+	e.putSlots(t, bFiles[0], [3]uint64{20, 91, 92}, 3600, fingerprint.WindowPipelineID)
+	require.NoError(t, e.s.SetWindowIndexBuilt())
+
+	query, err := e.s.GetBookFileByFileID(aFiles[0])
+	require.NoError(t, err)
+	var stats WindowCollectStats
+	cfg := DefaultWindowAcoustIDConfig()
+	cfg.Stats = &stats
+	sigs, err := CollectWindowAcoustID(e.s, query, aBook, cfg)
+	require.NoError(t, err)
+	require.Empty(t, sigs, "one matching slot of three is below MinSimilarity")
+	require.Equal(t, int64(1), stats.Candidates.Load(), "the band index did propose the pair")
+	require.Equal(t, int64(1), stats.BelowMinSimilarity.Load())
+	require.Zero(t, stats.LowConfidence.Load())
 }
 
 func TestCollectWindowAcoustID_GatedOnIndexBuilt(t *testing.T) {

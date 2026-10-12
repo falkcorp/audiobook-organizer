@@ -1,5 +1,5 @@
 // file: internal/fingerprint/window_lsh_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b0f7c55-2e4a-4d8b-9a61-0c7e5f2d9b14
 // last-edited: 2026-10-11
 
@@ -244,5 +244,29 @@ func TestWindowBandContainment_SliceAndUnrelated(t *testing.T) {
 	}
 	if WindowBandContainment(nil, pb) != 0 {
 		t.Fatal("empty fragment: want 0")
+	}
+}
+
+// TestWindowBandContainment_IsAsymmetric pins the denominator: |a ∩ b| / |a|,
+// the share of the FRAGMENT's keys the parent has, not a symmetric overlap.
+// A fragment whose four keys all appear among a parent's sixteen is fully
+// contained (1.0); the parent is a quarter contained in the fragment. A
+// Jaccard-style |a ∩ b| / |a ∪ b| would read 0.25 both ways.
+func TestWindowBandContainment_IsAsymmetric(t *testing.T) {
+	parent := make([]WindowBand, 16)
+	for i := range parent {
+		parent[i] = WindowBand{Band: byte(i), Hash: uint64(1000 + i)}
+	}
+	frag := []WindowBand{parent[0], parent[5], parent[9], parent[15], parent[5]} // a repeat counts once
+	if got := WindowBandContainment(frag, parent); got != 1.0 {
+		t.Fatalf("Containment(fragment, parent) = %v, want 1.0", got)
+	}
+	if got := WindowBandContainment(parent, frag); got != 0.25 {
+		t.Fatalf("Containment(parent, fragment) = %v, want 0.25", got)
+	}
+	// Same band index, different hash: not a shared key.
+	other := []WindowBand{{Band: 0, Hash: 1}, parent[1]}
+	if got := WindowBandContainment(other, parent); got != 0.5 {
+		t.Fatalf("Containment(other, parent) = %v, want 0.5", got)
 	}
 }

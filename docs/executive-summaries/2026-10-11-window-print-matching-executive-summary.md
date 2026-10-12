@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-window-print-matching-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e334db9f-27c6-4c39-9fb1-7654a5745fd8 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -24,7 +24,8 @@ Branch `task/02-pr8` (holistic plan 02, PR 8).
 - **Duplicates.** A match between two books' fingerprints now adds a small,
   fixed number of points (6) to the duplicate score. It can only back up
   other evidence; it can never by itself make two books look like
-  duplicates.
+  duplicates. On the Duplicates page it shows as "Window AcoustID" in its own
+  colour, and it is never listed as the reason a pair is on screen.
 - **Chapter fragments.** On the Repairs page, a row that links a stray
   chapter to its parent book now also says how much of the chapter's audio
   was found in the parent ("window containment 0.92 ..."). This is
@@ -39,8 +40,8 @@ Branch `task/02-pr8` (holistic plan 02, PR 8).
 ## Details
 
 - **Disk space.** For the 742,000 files the plan counts, the table needs
-  about 2.0 GB at most (measured on a test database), less if some files are
-  short.
+  about 1.6 GB (scaled up from a 4,000-file test database) and at most
+  1.75 GB by the planned estimate, less if some files are short.
 - **No audio is read on the server.** Everything uses fingerprints the Macs
   already stored.
 - **Duplicate scores are now labelled with a new formula version.** Existing

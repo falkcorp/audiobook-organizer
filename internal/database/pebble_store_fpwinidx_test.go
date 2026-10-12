@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwinidx_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7e3f19-8c2d-4a56-b1e4-7d9a2c6f3e81
 // last-edited: 2026-10-11
 
@@ -7,8 +7,10 @@ package database
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"math/rand/v2"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -258,4 +260,71 @@ func TestListWindowIndexFiles_KeysOnly(t *testing.T) {
 	sort.Strings(want)
 	require.Equal(t, want, ids)
 	require.NotContains(t, ids, none)
+}
+
+// TestPutFingerprintWindow_IndexFailureWritesNoWindow pins the "same batch":
+// when the index rows for a write cannot be staged, the window itself is not
+// written either. TestPutFingerprintWindow_WritesIndexInSameBatch only shows
+// both exist afterwards, which a window committed first and its index second
+// would also satisfy, leaving a window the index does not know about whenever
+// the second commit fails.
+func TestPutFingerprintWindow_IndexFailureWritesNoWindow(t *testing.T) {
+	env := newBookSigEnv(t)
+	_, id := fpwinSeedFile(t, env.store, "/lib/idx/corrupt.m4b", nil)
+	ref := FileWindowRef(id)
+
+	// A stored sibling whose Raw is not uint32 aligned (validate refuses one
+	// on write, so it is planted directly): the file's final window set cannot
+	// be banded, so the index write fails.
+	bad := idxWindow(ref, WindowKindWindow, 1000, 60)
+	bad.Raw = []byte{1, 2, 3}
+	data, err := json.Marshal(bad)
+	require.NoError(t, err)
+	require.NoError(t, env.store.db.Set(fpwinKey(bad), data, nil))
+
+	err = env.store.PutFingerprintWindow(idxWindow(ref, WindowKindWindow, 5000, 61))
+	require.Error(t, err, "a window whose index rows cannot be written is refused")
+	require.Contains(t, err.Error(), "window index")
+
+	stored, err := env.store.GetFingerprintWindows(ref)
+	require.NoError(t, err)
+	for _, w := range stored {
+		require.NotEqual(t, 5000, w.SlotBP, "the refused window was written outside the index batch")
+	}
+	requireNotIndexed(t, env.store, id)
+}
+
+// TestWindowIndexMembers_OtherBandVersionIsNotIndexed: a member list written
+// under another band-scheme version (a re-tune) reads as "not indexed", so
+// the collector ignores it and dedup.window-index-build rewrites the file
+// under the current version.
+func TestWindowIndexMembers_OtherBandVersionIsNotIndexed(t *testing.T) {
+	env := newBookSigEnv(t)
+	_, id := fpwinSeedFile(t, env.store, "/lib/idx/version.m4b", nil)
+	require.NoError(t, env.store.PutFingerprintWindow(idxWindow(FileWindowRef(id), WindowKindWindow, 5000, 70)))
+	want := wantBands(t, idxRaw(70))
+	requireIndexed(t, env.store, id, want)
+
+	// The same body under a foreign version byte: well formed, wrong scheme.
+	meta := encodeWindowIndexMeta(want)
+	meta[0] = fingerprint.WindowBandVersion + 1
+	require.NoError(t, env.store.db.Set(fpwinIdxMetaKey(id), meta, nil))
+	got, indexed, err := env.store.WindowIndexMembers(id)
+	require.NoError(t, err)
+	require.False(t, indexed, "a member list of another band version is not this index")
+	require.Nil(t, got)
+
+	n, err := env.store.PutWindowIndex(id)
+	require.NoError(t, err)
+	require.Equal(t, fingerprint.WindowBandCount, n)
+	requireIndexed(t, env.store, id, want)
+}
+
+// TestWindowIndexBuiltFlag_TracksBandVersion: the completion flag names the
+// band version it certifies, so a re-tune (a new WindowBandVersion) starts
+// with the collector off instead of trusting an empty index.
+func TestWindowIndexBuiltFlag_TracksBandVersion(t *testing.T) {
+	require.Equal(t, "system:flag:fpwinidx_v1_done", windowIndexBuiltFlagKey,
+		"band version 1 keeps the flag name the brief and the runbooks use")
+	require.Contains(t, windowIndexBuiltFlagKey, "_v"+strconv.Itoa(int(fingerprint.WindowBandVersion))+"_")
 }
