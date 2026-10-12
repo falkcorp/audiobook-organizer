@@ -1,7 +1,7 @@
 // file: web/src/theme.contrast.test.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7e3d1a95-4c62-4b08-9f71-6a2d5c0e8b34
-// last-edited: 2026-08-20
+// last-edited: 2026-10-11
 
 import { describe, expect, it } from 'vitest';
 import { palettes } from './theme';
@@ -84,5 +84,24 @@ describe('light theme contrast', () => {
     // purpose -- not merely updated constants.
     expect(light.primary.main).toBe('#1976d2');
     expect(light.secondary.main).toBe('#dc004e');
+  });
+});
+
+// WCAG 2.1 SC 1.4.11 non-text contrast: a bar segment or chip fill is a
+// graphical object, so 3:1 against the surface it sits on.
+const AA_NON_TEXT = 3;
+
+describe('signal palette', () => {
+  it('gives window_acoustid its own legible hue in both schemes', () => {
+    // 02-PR8 added the kind. Without an entry it painted in `unknown` grey, the
+    // same as a kind the frontend has never heard of.
+    for (const scheme of ['light', 'dark'] as const) {
+      const p = palettes[scheme];
+      const hue = p.signal.window_acoustid;
+      expect(hue, scheme).not.toBe(p.signal.unknown);
+      expect(hue, scheme).not.toBe(p.signal.lsh_acoustid);
+      expect(hue, scheme).not.toBe(p.signal.exact_acoustid);
+      expect(contrast(hue, p.background.paper), scheme).toBeGreaterThanOrEqual(AA_NON_TEXT);
+    }
   });
 });

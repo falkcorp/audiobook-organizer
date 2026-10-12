@@ -1,7 +1,7 @@
 // file: web/src/theme.ts
-// version: 2.2.0
+// version: 2.3.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-23
+// last-edited: 2026-10-11
 
 import { createTheme } from '@mui/material/styles';
 
@@ -42,6 +42,12 @@ export interface SignalPalette {
   embedding_med: string;
   duration: string;
   folder_path: string;
+  /**
+   * Window-print match (02-PR8), a SUPPORTING kind. Brown: an acoustic signal,
+   * so warm like the two AcoustID hues, but outside their red/orange so a
+   * corroborating boost never reads as the fingerprint that decided the pair.
+   */
+  window_acoustid: string;
   /** Fallback for a signal kind the frontend does not know about yet. */
   unknown: string;
 }
@@ -95,10 +101,11 @@ const lightSignals: SignalPalette = {
   embedding_med: '#0277bd',
   duration: '#6a1b9a',
   folder_path: '#4a148c',
+  window_acoustid: '#795548',
   unknown: '#9e9e9e',
 };
 
-// Dark-mode counterparts: the same ten hues raised in lightness so each clears
+// Dark-mode counterparts: the same hues raised in lightness so each clears
 // the `#1e2a38` paper, while keeping the family groupings that let a reader tell
 // the two reds, two blues, two greens and two purples apart at a glance.
 const darkSignals: SignalPalette = {
@@ -112,6 +119,7 @@ const darkSignals: SignalPalette = {
   embedding_med: '#4fc3f7',
   duration: '#ba68c8',
   folder_path: '#9575cd',
+  window_acoustid: '#bcaaa4',
   unknown: '#bdbdbd',
 };
 
