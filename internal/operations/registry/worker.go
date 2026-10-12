@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.34.0
+// version: 2.35.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-11
 
@@ -142,11 +142,12 @@ type runHandle struct {
 	zombieFinal atomic.Pointer[zombieOutcome]
 }
 
-// zombieOutcome is a stopping run's decided final status.
+// zombieOutcome is a stopping run's decided final status. It carries no
+// completion time: the run ends when its goroutine returns (or the process
+// exits first), so the writer stamps completed_at then.
 type zombieOutcome struct {
 	status string
 	msg    *string
-	at     time.Time
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -352,8 +353,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	r.mu.Lock()
 	// prev is always this run's own dispatcher stub, never a zombie (05-PR3):
 	// Gate 0 refuses to claim an id that is in r.running, so a zombie's
-	// same-id re-queued row cannot reach a worker until the zombie's handle
-	// is released.
+	// same-id re-queued row (possible only between the exit monitor's status
+	// write and its handle release, 05-PR4) cannot reach a worker until the
+	// zombie's handle is released.
 	if prev, exists := r.running[qr.opID]; exists && prev.queuedCancel {
 		r.mu.Unlock()
 		// Status first, release second. The claim is what stops the dispatcher
@@ -707,9 +709,14 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			abandonStatus, reason := r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
 			if reason != nil {
-				abandonMsg += "; " + *reason
+				// The decided reason leads: a timeout's message must start
+				// with state.TimeoutPrefix, which is how a v2 "canceled" row
+				// says it timed out, and what the v3 projection reads to
+				// record timed_out (state.FromV2) rather than canceled -- the
+				// same outcome the boot sweep gives this run after a crash.
+				abandonMsg = *reason + "; " + abandonMsg
 			}
-			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg, at: time.Now().UTC()})
+			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg})
 			r.markStopping(qr, r.stopReasonFor(runCtx, h))
 			h.zombieSince.Store(r.livenessClock().UnixNano())
 			h.zombie.Store(true)
@@ -741,8 +748,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// over, not at abandonment (05-PR4 moved both here from the
 				// abandonment branch: a dependent must not start, and the UI
 				// must not drop the run, while its goroutine still writes).
+				// The final status was decided at abandonment (a user cancel
+				// since may have replaced it; Cancel), but the run ends now.
 				final := h.zombieFinal.Load()
-				out := r.writeRunTerminalStatus(qr, h, final.status, &final.at, final.msg)
+				endedAt := time.Now().UTC()
+				out := r.writeRunTerminalStatus(qr, h, final.status, &endedAt, final.msg)
 				if out.publish {
 					r.publishOpTerminal(qr.opID, qr.defID, out.status)
 				}
@@ -764,7 +774,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// path only once its row reads interrupted_quiesced, which is
 				// now; hand it to the stand-down so a release that already
 				// happened is not missed (the pickup gate does the same).
-				if qr.defID == scanStandDownDefID && out.status == "interrupted_quiesced" {
+				//
+				// Not while shutting down: the rows stay interrupted_quiesced
+				// and the next boot's resume picks them up (the convention
+				// endScanStandDownGrace keeps). Re-queueing now would publish
+				// a run nobody will start, and count a second resume against
+				// the restart-strike guard for one restart.
+				if qr.defID == scanStandDownDefID && out.status == "interrupted_quiesced" && !r.shuttingDown.Load() {
 					r.resumeDroppedScanOnRelease(qr.opID)
 				}
 				r.logger.Info("registry: abandoned goroutine returned",

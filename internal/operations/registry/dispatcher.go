@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry
 
@@ -91,13 +91,14 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		//
 		// A zombie handle (05-PR3) is keyed by ITS op id. A new enqueue of the
 		// same def has a new id, so it is not "already claimed" here; Gate 3 /
-		// 3b hold it back instead. But the zombie's OWN row can come back to
-		// queued under the same id while the goroutine still runs: a scan
-		// stand-down quiesce leaves it interrupted_quiesced, and
-		// resumeQuiescedOp -> requeueInPlace (a holder releasing or giving up)
-		// flips it to queued in place. This check is what keeps that row from
-		// being claimed, and run a second time next to its own zombie, until
-		// the exit monitor releases the handle.
+		// 3b hold it back instead. Since 05-PR4 the zombie's own row reads
+		// "running" (v3 stopping) until its goroutine returns, and the exit
+		// monitor writes the final status BEFORE it releases the handle. In
+		// that window a scan quiesced by a stand-down reads
+		// interrupted_quiesced, and resumeQuiescedOp -> requeueInPlace (a
+		// holder releasing) can flip it to queued under the same id. This
+		// check keeps that row from being claimed until the monitor releases
+		// the handle.
 		r.mu.RLock()
 		_, alreadyClaimed := r.running[row.ID]
 		r.mu.RUnlock()

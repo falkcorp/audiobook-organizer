@@ -1,5 +1,5 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
 // last-edited: 2026-10-11
 
@@ -327,6 +327,12 @@ func TestZombie_ScanKeyUnchanged(t *testing.T) {
 	awaitStatus(t, h.store, resumed, "completed", 5*time.Second)
 }
 
+// TestZombie_CancelTwiceIsNoop: canceling a run that is already stopping as
+// canceled succeeds and writes nothing: its row keeps reading "running" (v3
+// stopping) until its goroutine returns, and only then is it canceled.
+// Writing "canceled" at the cancel (as before 05-PR4's review) recorded the
+// run as ended -- op.terminal, the v3 goroutine_returned event -- while its
+// goroutine still ran.
 func TestZombie_CancelTwiceIsNoop(t *testing.T) {
 	h := newZombieHarness(t, 2, nil)
 	s := newStubbornRun()
@@ -342,12 +348,14 @@ func TestZombie_CancelTwiceIsNoop(t *testing.T) {
 			t.Fatalf("second cancel of a zombie: %v, want nil", err)
 		}
 	}
-	if got := h.store.statusOf(id); got != "canceled" {
-		t.Errorf("status = %q after repeated cancel, want canceled", got)
+	if got := h.store.statusOf(id); got != "running" {
+		t.Errorf("status = %q after repeated cancel of a stopping run, want running until its goroutine returns", got)
 	}
 	if n := h.r.ZombieCount(); n != 1 {
 		t.Errorf("ZombieCount = %d, want 1", n)
 	}
+	s.releaseRun()
+	awaitStatus(t, h.store, id, "canceled", 5*time.Second)
 }
 
 // The zombie a user is most likely to press Retry on is a scan a stand-down
@@ -594,6 +602,115 @@ func TestZombie_WarnAfterTenMinutes(t *testing.T) {
 		if !strings.Contains(l, "level=WARN") || !strings.Contains(l, id) || !strings.Contains(l, def.ID) {
 			t.Errorf("warning lacks level, op id or def id: %q", l)
 		}
+	}
+	// Eleven minutes without progress is past the default ProgressTimeout,
+	// but a zombie was already stopped: the watchdog must not strike it (or
+	// set userCanceled on it, which would turn a quiesce outcome into a
+	// cancel).
+	if n := len(h.store.strikesOfKind(id, "stuck")) + len(h.store.strikesOfKind(id, "never_reported")); n != 0 {
+		t.Errorf("the watchdog struck a zombie %d times", n)
+	}
+}
+
+// quiesceIntoZombie starts a scan, has a stand-down holder quiesce it into a
+// zombie (decided final status interrupted_quiesced), and returns its id and
+// a func that makes the holder give up and release (the acquire waits for
+// the scan to stop, which a zombie never does); safe to call twice.
+func quiesceIntoZombie(t *testing.T, h *zombieHarness, s *stubbornRun) (string, func()) {
+	t.Helper()
+	id, err := h.r.EnqueueOp(t.Context(), registry.ScanStandDownDefIDForTest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "scan to start")
+	actx, acancel := context.WithCancel(t.Context())
+	acquired := make(chan func(), 1)
+	go func() {
+		rel, aerr := h.r.AcquireScanStandDown(actx, "holder-op", "test")
+		if aerr != nil {
+			rel = func() {}
+		}
+		acquired <- rel
+	}()
+	h.awaitZombie(t, id)
+	var once sync.Once
+	return id, func() {
+		once.Do(func() {
+			acancel()
+			(<-acquired)()
+		})
+	}
+}
+
+// TestZombie_ShutdownSettlesALateUserCancel: a cancel that reached the handle
+// after the abandonment decision but before the zombie flag set only
+// userCanceled (MarkUserCanceledForTest). Shutdown writing the decided
+// interrupted_quiesced as it is would leave the run the user canceled
+// resumable; like the exit monitor (settleInterrupted) it must write
+// "canceled".
+func TestZombie_ShutdownSettlesALateUserCancel(t *testing.T) {
+	h := newZombieHarness(t, 2, nil)
+	s := newStubbornRun()
+	defer s.releaseRun()
+	def := makeValidDef(registry.ScanStandDownDefIDForTest)
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = s.run
+	if err := h.r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	h.r.Start(t.Context())
+	id, release := quiesceIntoZombie(t, h, s)
+	defer release()
+	if !h.r.MarkUserCanceledForTest(id) {
+		t.Fatal("no handle for the zombie")
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = h.r.Shutdown(sctx)
+	if got := h.store.statusOf(id); got != "canceled" {
+		t.Fatalf("zombie row = %q after shutdown, want canceled (the user's cancel)", got)
+	}
+}
+
+// TestZombie_ExitDuringShutdownLeavesQuiescedScan: a quiesced scan's zombie
+// returning while Shutdown drains gets interrupted_quiesced and stays so: the
+// next boot resumes it. Re-queueing it from the exit monitor would publish a
+// run nobody starts and count a second resume for one restart.
+func TestZombie_ExitDuringShutdownLeavesQuiescedScan(t *testing.T) {
+	h := newZombieHarness(t, 2, nil)
+	s := newStubbornRun()
+	defer s.releaseRun()
+	def := makeValidDef(registry.ScanStandDownDefIDForTest)
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = s.run
+	if err := h.r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	h.r.Start(t.Context())
+	id, release := quiesceIntoZombie(t, h, s)
+	release() // the holder is done: the release found the row "running"
+	if got := h.store.statusOf(id); got != "running" {
+		t.Fatalf("status after the holder released = %q, want running", got)
+	}
+	done := make(chan error, 1)
+	go func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done <- h.r.Shutdown(sctx)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !h.r.ShuttingDownForTest() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	s.releaseRun()
+	if err := <-done; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if got := h.store.statusOf(id); got != "interrupted_quiesced" {
+		t.Fatalf("status after the zombie exited during shutdown = %q, want interrupted_quiesced (resumed by the next boot)", got)
+	}
+	if n := s.calls.Load(); n != 1 {
+		t.Fatalf("Run called %d times, want 1", n)
 	}
 }
 
