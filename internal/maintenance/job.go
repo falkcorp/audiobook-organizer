@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -295,6 +295,10 @@ type jobBookFileWriter interface {
 	// deleted and recreated rows with the second, losing every per-file field.
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	SetBookFileHash(id, hash string) error
+	// ModifyBookFile sets fields on the stored row under its lock
+	// (bulk-deluge-import marks a file already in the library imported with
+	// it, writing ImportedFromDelugeAt only).
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 type jobBookFileStore interface {

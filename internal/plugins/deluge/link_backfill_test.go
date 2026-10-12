@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
 // last-edited: 2026-10-11
 
@@ -851,10 +851,16 @@ func TestLinkBackfill_DelugeUnavailableFails(t *testing.T) {
 // import candidacy: a row this op links has DelugeHash set and
 // ImportedFromDelugeAt nil, so GetBookFilesNeedingDelugeImportCore returns it,
 // and /discovery/import, deluge.centralize and maintenance.bulk-deluge-import
-// (all manual) will see it. That is accepted only because the op links rows
+// (all manual) will see it. That is accepted because the op links rows
 // already inside the library root, where all three resolve the destination to
-// the file's own path and copy nothing. If this test starts failing because
-// the row is no longer a candidate, the decision changed: update the brief.
+// the file's own path, copy nothing, and mark the row imported in place
+// (ImportedFromDelugeAt only), so it leaves the list after one pass. Until
+// review round 1 the last two skipped it without marking it and it stayed
+// listed forever; the second half of this test runs deluge.centralize on the
+// linked row (bulk-deluge-import's twin is
+// TestBulkDelugeImportJob_LinkedRowMarkedInPlace in internal/maintenance/jobs).
+// If the first half starts failing because the row is no longer a candidate,
+// the decision changed: update the brief.
 func TestLinkedRowBecomesBulkImportCandidate(t *testing.T) {
 	f := newLinkFixture(t)
 	store, err := database.NewPebbleStore(t.TempDir())
@@ -905,6 +911,33 @@ func TestLinkedRowBecomesBulkImportCandidate(t *testing.T) {
 	}
 	if !underLibraryRoot(f.root, c.FilePath) {
 		t.Errorf("linked row %s is outside the library root", c.FilePath)
+	}
+
+	// deluge.centralize on the linked row: nothing copied, the row marked
+	// imported in place and off the list, its path and hashes unchanged.
+	if err := (&Plugin{store: store}).runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+		t.Fatalf("centralize: %v", err)
+	}
+	left, err := store.GetBookFilesNeedingDelugeImportCore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("candidates after centralize = %+v, want none", left)
+	}
+	got, err := store.GetBookFileByID(book.ID, row.ID)
+	if err != nil || got == nil {
+		t.Fatalf("read row: %+v, %v", got, err)
+	}
+	if got.ImportedFromDelugeAt == nil || got.FilePath != row.FilePath || got.DelugeOriginalPath != "" ||
+		got.DelugeHash != linkTorrentID(1) || got.FileHash != row.FileHash {
+		t.Errorf("after centralize: imported_at=%v path=%q original_path=%q deluge_hash=%q file_hash=%q; "+
+			"want only imported_at set", got.ImportedFromDelugeAt, got.FilePath, got.DelugeOriginalPath, got.DelugeHash, got.FileHash)
+	}
+	// The fixture never created the library directory; centralize must not
+	// have created it (or a copy in it) either.
+	if _, err := os.Stat(filepath.Dir(row.FilePath)); !os.IsNotExist(err) {
+		t.Errorf("centralize created the library dir (stat err %v)", err)
 	}
 }
 
