@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.41.0
+# version: 2.42.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-11
 
@@ -49,6 +49,16 @@ DEPLOY_BIN  ?=
 # value); required by rollback.
 DEPLOY_DB   ?=
 BACKUP_DIR  ?= $(CURDIR)/backups
+
+# Generic build flags (owner decision D37). The committed Makefile owns these so
+# every build path, including `make build-linux` (and so every deploy), ships the
+# same tags and flags. `pprof` compiles the profiling listener in, but it serves
+# nothing unless ABK_PPROF_ADDR is set at runtime. They sit ABOVE the
+# `-include Makefile.local` line on purpose: an assignment in Makefile.local
+# would be read after these and silently override them, so do not assign them there.
+GO_BUILD_TAGS := pprof
+GO_BUILD_FLAGS := -trimpath
+GO_LDFLAGS := -s -w -X main.version=$(VERSION)
 
 # Include local overrides (not committed — see Makefile.local.example)
 -include Makefile.local
@@ -126,19 +136,19 @@ install: web-install
 ## build: Full build with embedded frontend
 build: web-build
 	@echo "🔨 Building $(BINARY) with embedded frontend..."
-	@go build -tags embed_frontend -ldflags="$(LDFLAGS)" -o $(BINARY) .
+	@go build -tags "embed_frontend $(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) -ldflags="$(GO_LDFLAGS)" -o $(BINARY) .
 	@echo "✅ Built ./$(BINARY)"
 
 ## build-api: Backend-only build (no frontend, serves placeholder at /)
 build-api:
 	@echo "🔨 Building $(BINARY) (API only)..."
-	@go build -ldflags="$(LDFLAGS)" -o $(BINARY) .
+	@go build -tags "$(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) -ldflags="$(GO_LDFLAGS)" -o $(BINARY) .
 	@echo "✅ Built ./$(BINARY)"
 
 ## build-bench: Build with bench tooling (dedup-bench experiments)
 build-bench:
 	@echo "🔨 Building $(BINARY) with bench tooling..."
-	@go build -tags bench -ldflags="$(LDFLAGS)" -o $(BINARY) .
+	@go build -tags "bench $(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) -ldflags="$(GO_LDFLAGS)" -o $(BINARY) .
 	@echo "✅ Built ./$(BINARY) (bench mode)"
 
 ## build-linux: Cross-compile for Linux amd64 (requires: brew install filosottile/musl-cross/musl-cross)
@@ -146,8 +156,8 @@ build-linux: web-build
 	@echo "🔨 Cross-compiling for Linux amd64..."
 	@mkdir -p dist
 	@CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
-		-tags "embed_frontend fts5 native_taglib" \
-		-ldflags="-s -w -linkmode external -extldflags '-static' -X main.version=$(VERSION)" \
+		-tags "embed_frontend fts5 native_taglib $(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) \
+		-ldflags="$(GO_LDFLAGS) -linkmode external -extldflags '-static'" \
 		-o dist/audiobook-organizer-linux-amd64 .
 	@echo "✅ Built dist/audiobook-organizer-linux-amd64"
 
