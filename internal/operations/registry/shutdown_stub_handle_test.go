@@ -1,7 +1,7 @@
 // file: internal/operations/registry/shutdown_stub_handle_test.go
-// version: 1.2.1
+// version: 1.2.0
 // guid: 7b3c9d1e-4a52-4c8f-9e0a-2f6b1d8c4a37
-// last-edited: 2026-10-11
+// last-edited: 2026-10-10
 
 // White-box regression tests for the "stub handle" nil-cancel race.
 //
@@ -49,7 +49,7 @@ func TestShutdown_StubHandleNilCancel_NoPanic(t *testing.T) {
 		UpdateOperationV2Status(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 
-	r := New(WithNopV3(store), slog.Default(), 1, nil)
+	r := New(store, slog.Default(), 1, nil)
 	insertStubHandle(r, "stub-op")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
@@ -71,7 +71,7 @@ func TestCancel_StubHandleNilCancel_NoPanic(t *testing.T) {
 		UpdateOperationV2StatusIf("stub-op", "queued", "canceled", mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Once()
 
-	r := New(WithNopV3(store), slog.Default(), 1, nil)
+	r := New(store, slog.Default(), 1, nil)
 	insertStubHandle(r, "stub-op")
 
 	require.NotPanics(t, func() {

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry
 
@@ -504,7 +504,7 @@ func (r *Registry) bootSweepV3(rows []database.OperationV2Row) []database.Operat
 			out = append(out, row)
 			continue
 		}
-		rec, err := r.store.GetRunV3(row.ID)
+		rec, err := r.getRunV3(row.ID)
 		if err != nil || rec == nil || (rec.State != state.V3Running && rec.State != state.V3Stopping) {
 			out = append(out, row)
 			continue
@@ -525,7 +525,7 @@ func (r *Registry) bootSweepV3(rows []database.OperationV2Row) []database.Operat
 			}
 		}
 		final, _ := state.StopTerminal(rec.StopReason)
-		if _, err := r.store.TransitionRunV3(req); err != nil {
+		if _, err := r.transitionRunV3(req); err != nil {
 			// ErrStaleTransition: the record does not reflect this row (a
 			// previous binary wrote it since, and the boot reconcile did not
 			// repair it), so its stop reason says nothing about the run the
@@ -588,9 +588,9 @@ func (r *Registry) endStoppedRunAtBoot(row database.OperationV2Row) {
 // the plain v2 write, as before 05-PR4.
 func (r *Registry) retireForRequeue(row database.OperationV2Row, successorID string, now time.Time) error {
 	msg := state.RequeuedMessage
-	if rec, err := r.store.GetRunV3(row.ID); err == nil && rec != nil &&
+	if rec, err := r.getRunV3(row.ID); err == nil && rec != nil &&
 		(rec.State == state.V3Interrupted || rec.State == state.V3AwaitingDecision) {
-		_, terr := r.store.TransitionRunV3(database.TransitionRequest{
+		_, terr := r.transitionRunV3(database.TransitionRequest{
 			ID: rec.ID, ExpectState: rec.State, ExpectAttempt: rec.Attempt, ExpectFenceEpoch: rec.FenceEpoch,
 			Event: state.EvDecideDrop, SuccessorID: successorID, Error: msg, Now: now,
 			Actor: &database.Actor{AuthMethod: "system"},

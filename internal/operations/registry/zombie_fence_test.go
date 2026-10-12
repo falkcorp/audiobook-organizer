@@ -1,7 +1,7 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry_test
 
@@ -328,7 +328,7 @@ func TestZombie_ScanKeyUnchanged(t *testing.T) {
 }
 
 // TestZombie_CancelTwiceIsNoop: canceling a zombie again succeeds. On this
-// fake store (NopOpsV3) the stop was never recorded as v3 stopping, so
+// fake store (no v3 run state) the stop was never recorded as v3 stopping, so
 // nothing durable says the run was canceled and the cancel writes the row
 // "canceled" at once, as before 05-PR4; with a recorded stop the row is left
 // to the goroutine's exit (TestZombieIsStoppingNotTerminal).

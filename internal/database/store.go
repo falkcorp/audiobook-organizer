@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.112.0
+// version: 2.112.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-12
 
@@ -122,7 +122,6 @@ type enrichmentStore interface {
 type operationsStore interface {
 	OperationStore
 	OpsV2Store
-	OpsV3Store
 	MaintenanceStore
 	SystemActivityStore
 	AIJobsStore

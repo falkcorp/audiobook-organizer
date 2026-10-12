@@ -1,15 +1,16 @@
 // file: internal/operations/registry/zombie_v3_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b2d29b34-41c4-40f1-93e1-3d616e6251bc
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry_test
 
 // The registry against a real Pebble store, whose v2 methods stage the opv3
 // projection (05-PR4): the zombie is v3 "stopping" while its goroutine lives,
 // the enqueue dedupe skips it, the boot sweep maps a stopping run by its stop
-// reason, and a requeue records its successor. The fakes embed NopOpsV3 and
-// cannot exercise any of this.
+// reason, and a requeue records its successor. The in-memory fakes have no
+// v3 run state (the registry resolves none from them) and cannot exercise any
+// of this.
 
 import (
 	"context"
@@ -43,7 +44,7 @@ func newV3Store(t *testing.T) *database.PebbleStore {
 // newV3Registry is a registry on a real store with a short abandon grace and
 // a watchdog that stays out of the way. Shutdown runs at cleanup before the
 // store closes (cleanups run last-in first-out).
-func newV3Registry(t *testing.T, store database.OpsStore, release ...func()) *registry.Registry {
+func newV3Registry(t *testing.T, store database.OpsV2Store, release ...func()) *registry.Registry {
 	t.Helper()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
 		AbandonGrace:     50 * time.Millisecond,

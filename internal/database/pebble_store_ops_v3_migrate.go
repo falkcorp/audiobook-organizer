@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_migrate.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e3dede70-3460-4dd5-8185-a94a66839551
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Migration 065's engine: build opv3: run records from opv2: operation rows
 // (state-and-persistence.md sections 3 and 4), and the boot reconcile that
@@ -41,7 +41,7 @@ type OpsV3MigrationReport struct {
 	Written     int // opv3:run: records written (new or re-derived)
 	Skipped     int // already current: the record's V2RowHash names this row
 	Undecodable int // opv2:op: rows (or opv3:run: records) that do not decode
-	Batches     int // pages of batchSize rows the main pass processed (one batch each, committed only when it wrote)
+	Pages       int // pages of batchSize rows the main pass processed (one Pebble batch each, committed only when it wrote)
 	// PerStatus counts rows by original v2 status; Unmapped counts the ones
 	// the mapping table does not know ("anything else": recorded as failed).
 	PerStatus map[string]int
@@ -183,7 +183,7 @@ func (p *PebbleStore) MigrateOpsV2ToV3(batchSize int, progress func(done, total 
 			return rep, err
 		}
 		requeued = append(requeued, more...)
-		rep.Batches++
+		rep.Pages++
 		done += len(ids)
 		if progress != nil {
 			progress(done, total)
@@ -200,8 +200,8 @@ func (p *PebbleStore) MigrateOpsV2ToV3(batchSize int, progress func(done, total 
 	if err := p.rebuildOpCountsV3(); err != nil {
 		return rep, err
 	}
-	opsV3Log.Info("opv3 migration: done: scanned %d, written %d, skipped %d (current), undecodable %d, batches %d; successors filled %d, not found %d",
-		rep.Scanned, rep.Written, rep.Skipped, rep.Undecodable, rep.Batches, rep.SuccessorsFilled, rep.SuccessorsMissing)
+	opsV3Log.Info("opv3 migration: done: scanned %d, written %d, skipped %d (current), undecodable %d, pages %d; successors filled %d, not found %d",
+		rep.Scanned, rep.Written, rep.Skipped, rep.Undecodable, rep.Pages, rep.SuccessorsFilled, rep.SuccessorsMissing)
 	opsV3Log.Info("opv3 migration: v2 status counts %v; anything else (recorded as failed) %v", rep.PerStatus, rep.Unmapped)
 	return rep, nil
 }

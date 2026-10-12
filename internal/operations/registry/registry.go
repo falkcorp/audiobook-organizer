@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.45.1
+// version: 3.46.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package registry
 
@@ -59,10 +59,12 @@ type Registry struct {
 	writeSetDeferred map[string]string
 	nextRun          chan *queuedRun
 	dispatch         chan struct{}
-	// store is the v2 surface the registry still writes through plus the v3
-	// surface for what v2 vocabulary cannot express (a stopping zombie, a
-	// requeue successor, the boot sweep); 05-PR4.
-	store database.OpsStore
+	store            database.OpsV2Store
+	// runs is the v3 run-state surface, for what v2 vocabulary cannot express
+	// (a stopping zombie, a requeue successor, the boot sweep); 05-PR4. Nil
+	// when the store has none, which every v3 path reads as "no v3 record"
+	// (getRunV3). Resolved from store in NewWithOptions; see runStateV3.
+	runs runStateV3
 	// warmupGate holds non-exempt ops back while the store warms (dispatcher.go);
 	// warmupHeld remembers each held row's pre-hold message, under warmupMu.
 	warmupGate       WarmupGate
@@ -250,6 +252,26 @@ func (r *Registry) livenessClock() time.Time {
 	return time.Now()
 }
 
+// getRunV3 reads a run's v3 record. A registry whose store has no v3 run
+// state (runs == nil) answers (nil, nil): no record, which every caller
+// already treats as "do it the v2 way".
+func (r *Registry) getRunV3(id string) (*database.RunRecord, error) {
+	if r.runs == nil {
+		return nil, nil
+	}
+	return r.runs.GetRunV3(id)
+}
+
+// transitionRunV3 applies a v3 transition. Callers reach it only with a
+// record getRunV3 returned, so runs is set; the nil check keeps a future
+// caller from panicking and reports the run as not found instead.
+func (r *Registry) transitionRunV3(req database.TransitionRequest) (*database.RunRecord, error) {
+	if r.runs == nil {
+		return nil, database.ErrRunNotFoundV3
+	}
+	return r.runs.TransitionRunV3(req)
+}
+
 // SetScanStandDownGraceFunc installs a live source for the scan stand-down
 // re-queue grace (see releaseScanStandDown), read at each last release. It
 // overrides Options.ScanStandDownGrace. Safe to call at any time.
@@ -261,18 +283,42 @@ func (r *Registry) SetScanStandDownGraceFunc(fn func() time.Duration) {
 	r.scanStandDownGraceFn.Store(&fn)
 }
 
+// runStateV3 is everything the registry needs from the ops v3 store
+// (05-PR4): read a run's record and move it with a compare-and-set
+// transition. It is resolved from the registry's store as a capability
+// (database.AsCapability), not demanded by New's signature, because
+// database.Store deliberately does not carry the v3 surface
+// (TestStoreFlattenedWidth): the production store reaches New through the
+// server's search-index decorator, which embeds database.Store and promotes
+// only that method set, so the capability lookup walks its Unwrap to the
+// *PebbleStore underneath.
+type runStateV3 interface {
+	GetRunV3(id string) (*database.RunRecord, error)
+	TransitionRunV3(req database.TransitionRequest) (*database.RunRecord, error)
+}
+
 // New creates a new Registry. workers controls the in-process worker pool size.
-// store must implement database.OpsStore (OpsV2Store + OpsV3Store); the
-// database.Store composite interface satisfies this automatically.
-// bus may be nil; it will be wired to the real EventHub in UOS-06.
-func New(store database.OpsStore, logger *slog.Logger, workers int, bus Bus) *Registry {
+// store must implement database.OpsV2Store; the database.Store composite
+// interface satisfies this automatically. The v3 run state is resolved from
+// the same store (see runStateV3). bus may be nil; it will be wired to the
+// real EventHub in UOS-06.
+func New(store database.OpsV2Store, logger *slog.Logger, workers int, bus Bus) *Registry {
 	return NewWithOptions(store, logger, workers, Options{Bus: bus})
 }
 
 // NewWithOptions is like New but accepts optional tunable parameters.
-func NewWithOptions(store database.OpsStore, logger *slog.Logger, workers int, opts Options) *Registry {
+func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int, opts Options) *Registry {
 	if workers <= 0 {
 		workers = 8
+	}
+	runs, ok := database.AsCapability[runStateV3](store)
+	if !ok {
+		// Every production store is a *PebbleStore (behind the search-index
+		// decorator, which Unwrap sees through), so this is a test double or
+		// an opaque decorator. Say so: the v3 paths then act as if no run has
+		// a v3 record, which is the pre-05-PR4 behavior.
+		logger.Warn("registry: store has no ops v3 run state; stopping runs, the boot sweep and requeue successors are recorded the v2 way only",
+			"store_type", fmt.Sprintf("%T", store))
 	}
 	ops := opts.OpsMetrics
 	if ops == nil {
@@ -289,6 +335,7 @@ func NewWithOptions(store database.OpsStore, logger *slog.Logger, workers int, o
 		nextRun:            make(chan *queuedRun, workers*2),
 		dispatch:           make(chan struct{}, 1),
 		store:              store,
+		runs:               runs,
 		bus:                opts.Bus,
 		logger:             logger,
 		workers:            workers,

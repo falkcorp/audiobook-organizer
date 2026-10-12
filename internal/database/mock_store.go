@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.145.0
+// version: 1.144.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-11
 
@@ -10,8 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // Compile-time assertion: MockStore must implement Store. If a new
@@ -343,40 +341,14 @@ type MockStore struct {
 	AddToBatchBucketFunc              func(opType string, sub OpSubject) error
 	ListBatchBucketFunc               func(opType string) ([]BatchBucketEntry, error)
 	ClearBatchBucketFunc              func(opType string, subs []OpSubject) error
-	// Operations v3 (OpsV3Store, 05-PR4). Unset funcs return zero values.
-	InsertRunV3Func           func(rec RunRecord) error
-	TransitionRunV3Func       func(req TransitionRequest) (*RunRecord, error)
-	DeleteRunV3Func           func(id string, allowed []state.V3) (bool, error)
-	GetRunV3Func              func(id string) (*RunRecord, error)
-	ListRunsV3Func            func(q RunQuery) (RunPage, error)
-	OpCountsV3Func            func() (OpCounts, error)
-	ListQueuedRunsV3Func      func(limit int) ([]RunRecord, error)
-	ListDoneRunsSinceV3Func   func(since time.Time, limit int) ([]RunRecord, bool, error)
-	ListChildRunsV3Func       func(parentID string) ([]RunRecord, error)
-	ListRunEventsV3Func       func(id string, limit int) ([]Transition, error)
-	SaveCheckpointV3Func      func(id string, ck Checkpoint) error
-	GetCheckpointV3Func       func(id string) (*Checkpoint, error)
-	PutSnapshotPageV3Func     func(id string, page int, keys []string) error
-	GetSnapshotPageV3Func     func(id string, page int) ([]string, bool, error)
-	PutChunkOffsetsV3Func     func(id string, offsets []int32) error
-	GetChunkOffsetsV3Func     func(id string) ([]int32, bool, error)
-	CommitLedgerV3Func        func(id string, b LedgerBatch) error
-	GetLedgerV3Func           func(id string) (*Ledger, error)
-	PutIntentV3Func           func(id string, in Intent) error
-	ClearIntentV3Func         func(id string, seq uint64) error
-	ListIntentsV3Func         func(id string) ([]Intent, error)
-	PutItemOutcomesV3Func     func(id string, rows []ItemOutcome) error
-	ListItemOutcomesV3Func    func(id string, q ItemQuery) (ItemPage, error)
-	AppendLogV3Func           func(id string, line LogLine) error
-	ListLogV3Func             func(id string, limit int, afterKey string) ([]LogLine, error)
-	UpsertReviewItemFunc      func(item ReviewItem) (ReviewItem, error)
-	GetReviewItemFunc         func(id string) (*ReviewItem, error)
-	ListReviewItemsFunc       func(filter ReviewFilter) ([]ReviewItem, int, error)
-	CountReviewItemsFunc      func(status string) (int, error)
-	ReviewStatsByKindFunc     func() ([]ReviewKindStat, error)
-	SetReviewItemStatusFunc   func(id, status string) (*ReviewItem, error)
-	SetReviewItemDecisionFunc func(id, status, chosenAction string) (*ReviewItem, error)
-	DeleteReviewItemFunc      func(id string) error
+	UpsertReviewItemFunc              func(item ReviewItem) (ReviewItem, error)
+	GetReviewItemFunc                 func(id string) (*ReviewItem, error)
+	ListReviewItemsFunc               func(filter ReviewFilter) ([]ReviewItem, int, error)
+	CountReviewItemsFunc              func(status string) (int, error)
+	ReviewStatsByKindFunc             func() ([]ReviewKindStat, error)
+	SetReviewItemStatusFunc           func(id, status string) (*ReviewItem, error)
+	SetReviewItemDecisionFunc         func(id, status, chosenAction string) (*ReviewItem, error)
+	DeleteReviewItemFunc              func(id string) error
 
 	// User Preferences
 	GetUserPreferenceFunc     func(key string) (*UserPreference, error)
@@ -4131,181 +4103,4 @@ func (m *MockStore) DeleteReviewItem(id string) error {
 		return m.DeleteReviewItemFunc(id)
 	}
 	return nil
-}
-
-// ── Operations v3 (OpsV3Store) ──
-
-func (m *MockStore) InsertRunV3(rec RunRecord) error {
-	if m.InsertRunV3Func != nil {
-		return m.InsertRunV3Func(rec)
-	}
-	return nil
-}
-
-func (m *MockStore) TransitionRunV3(req TransitionRequest) (*RunRecord, error) {
-	if m.TransitionRunV3Func != nil {
-		return m.TransitionRunV3Func(req)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) DeleteRunV3(id string, allowed []state.V3) (bool, error) {
-	if m.DeleteRunV3Func != nil {
-		return m.DeleteRunV3Func(id, allowed)
-	}
-	return false, nil
-}
-
-func (m *MockStore) GetRunV3(id string) (*RunRecord, error) {
-	if m.GetRunV3Func != nil {
-		return m.GetRunV3Func(id)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) ListRunsV3(q RunQuery) (RunPage, error) {
-	if m.ListRunsV3Func != nil {
-		return m.ListRunsV3Func(q)
-	}
-	return RunPage{}, nil
-}
-
-func (m *MockStore) OpCountsV3() (OpCounts, error) {
-	if m.OpCountsV3Func != nil {
-		return m.OpCountsV3Func()
-	}
-	return OpCounts{}, nil
-}
-
-func (m *MockStore) ListQueuedRunsV3(limit int) ([]RunRecord, error) {
-	if m.ListQueuedRunsV3Func != nil {
-		return m.ListQueuedRunsV3Func(limit)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) ListDoneRunsSinceV3(since time.Time, limit int) ([]RunRecord, bool, error) {
-	if m.ListDoneRunsSinceV3Func != nil {
-		return m.ListDoneRunsSinceV3Func(since, limit)
-	}
-	return nil, true, nil
-}
-
-func (m *MockStore) ListChildRunsV3(parentID string) ([]RunRecord, error) {
-	if m.ListChildRunsV3Func != nil {
-		return m.ListChildRunsV3Func(parentID)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) ListRunEventsV3(id string, limit int) ([]Transition, error) {
-	if m.ListRunEventsV3Func != nil {
-		return m.ListRunEventsV3Func(id, limit)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) SaveCheckpointV3(id string, ck Checkpoint) error {
-	if m.SaveCheckpointV3Func != nil {
-		return m.SaveCheckpointV3Func(id, ck)
-	}
-	return nil
-}
-
-func (m *MockStore) GetCheckpointV3(id string) (*Checkpoint, error) {
-	if m.GetCheckpointV3Func != nil {
-		return m.GetCheckpointV3Func(id)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) PutSnapshotPageV3(id string, page int, keys []string) error {
-	if m.PutSnapshotPageV3Func != nil {
-		return m.PutSnapshotPageV3Func(id, page, keys)
-	}
-	return nil
-}
-
-func (m *MockStore) GetSnapshotPageV3(id string, page int) ([]string, bool, error) {
-	if m.GetSnapshotPageV3Func != nil {
-		return m.GetSnapshotPageV3Func(id, page)
-	}
-	return nil, false, nil
-}
-
-func (m *MockStore) PutChunkOffsetsV3(id string, offsets []int32) error {
-	if m.PutChunkOffsetsV3Func != nil {
-		return m.PutChunkOffsetsV3Func(id, offsets)
-	}
-	return nil
-}
-
-func (m *MockStore) GetChunkOffsetsV3(id string) ([]int32, bool, error) {
-	if m.GetChunkOffsetsV3Func != nil {
-		return m.GetChunkOffsetsV3Func(id)
-	}
-	return nil, false, nil
-}
-
-func (m *MockStore) CommitLedgerV3(id string, b LedgerBatch) error {
-	if m.CommitLedgerV3Func != nil {
-		return m.CommitLedgerV3Func(id, b)
-	}
-	return nil
-}
-
-func (m *MockStore) GetLedgerV3(id string) (*Ledger, error) {
-	if m.GetLedgerV3Func != nil {
-		return m.GetLedgerV3Func(id)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) PutIntentV3(id string, in Intent) error {
-	if m.PutIntentV3Func != nil {
-		return m.PutIntentV3Func(id, in)
-	}
-	return nil
-}
-
-func (m *MockStore) ClearIntentV3(id string, seq uint64) error {
-	if m.ClearIntentV3Func != nil {
-		return m.ClearIntentV3Func(id, seq)
-	}
-	return nil
-}
-
-func (m *MockStore) ListIntentsV3(id string) ([]Intent, error) {
-	if m.ListIntentsV3Func != nil {
-		return m.ListIntentsV3Func(id)
-	}
-	return nil, nil
-}
-
-func (m *MockStore) PutItemOutcomesV3(id string, rows []ItemOutcome) error {
-	if m.PutItemOutcomesV3Func != nil {
-		return m.PutItemOutcomesV3Func(id, rows)
-	}
-	return nil
-}
-
-func (m *MockStore) ListItemOutcomesV3(id string, q ItemQuery) (ItemPage, error) {
-	if m.ListItemOutcomesV3Func != nil {
-		return m.ListItemOutcomesV3Func(id, q)
-	}
-	return ItemPage{}, nil
-}
-
-func (m *MockStore) AppendLogV3(id string, line LogLine) error {
-	if m.AppendLogV3Func != nil {
-		return m.AppendLogV3Func(id, line)
-	}
-	return nil
-}
-
-func (m *MockStore) ListLogV3(id string, limit int, afterKey string) ([]LogLine, error) {
-	if m.ListLogV3Func != nil {
-		return m.ListLogV3Func(id, limit, afterKey)
-	}
-	return nil, nil
 }
