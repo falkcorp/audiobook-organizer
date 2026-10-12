@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -902,8 +901,6 @@ func TestOpv3KeysAllInRegisteredFamilies(t *testing.T) {
 	}
 }
 
-// keep imports honest when a helper above changes.
-var _ = sort.Strings
 
 // TestInterruptedLedgerRunMirrorsAsDroppedAndStays: a v2 binary cannot resume
 // a chunk ledger, so an interrupted ledger run mirrors as interrupted_dropped;
