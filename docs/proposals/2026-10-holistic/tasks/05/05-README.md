@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/05/05-README.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 7d3e9b14-5c2a-4f68-a1e0-9b4c6d8f2a73 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -36,7 +36,7 @@ requested sonnet to opus: the `go/analysis` writer-bypass rule needs cross-packa
 | PR 13 | after port waves | "PR 13" |
 | PR 14 | after port waves | "PR 14" |
 | PR 15 (v2compat removal) | late | "PR 15". Note D53 supersedes the "allowlist of 4": the four frozen ops are wrapped as native Tasks so v2compat is deleted outright |
-| PR 16 (drop `opv2:` mirror) | at least 30 days after the last wave (D25) | "PR 16". **Must delete the boot `ReconcileOpsV3WithV2` call in `InitializeStore` (added by 05-PR4) in the same change that turns the mirror off**: the mirror switch is in memory and reads "on" at every boot, so a surviving reconcile would treat v3-native runs as orphans and rebuild runs from stale v2 rows |
+| PR 16 (drop `opv2:` mirror) | at least 30 days after the last wave (D25) | "PR 16". **Must delete the boot `ReconcileOpsV3WithV2` call in `InitializeStore` (added by 05-PR4) in the same change that turns the mirror off**: the mirror switch is in memory and reads "on" at every boot, so a surviving reconcile would rebuild runs from stale v2 rows (for example a run discarded natively with the mirror off, whose v2 row stays). It also adds the production mirror setter (05-PR4 keeps `setOpsV2MirrorEnabled` test-only) |
 
 ## Landing order
 PR0, PR1, PR3 (parallel-safe), PR4, PR2 (after 11 PR4), PR5, PR6, PR7, PR8, PR9. `go.mod`
