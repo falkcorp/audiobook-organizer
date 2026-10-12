@@ -31,9 +31,9 @@ type legacyUpdate struct {
 type legacyFakeStore struct {
 	database.OpsV2Store
 	NopOpsV3 // no v3 run records (05-PR4)
-	v2      map[string]database.OperationV2Row
-	legacy  map[string]*database.Operation
-	updates []legacyUpdate
+	v2       map[string]database.OperationV2Row
+	legacy   map[string]*database.Operation
+	updates  []legacyUpdate
 }
 
 func newLegacyFakeStore() *legacyFakeStore {
