@@ -1,11 +1,12 @@
 // file: internal/database/store.go
-// version: 2.111.1
+// version: 2.112.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-12
 
 package database
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -1532,7 +1533,26 @@ func InitializeStore(dbType, path string) (Store, error) {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+	// Every boot, not only when migration 065 runs: rebuild the opv3 records
+	// a previous binary left stale (ReconcileOpsV3WithV2). Synchronous and
+	// here, before the caller builds the server and the operations registry,
+	// because the registry's boot resume acts on opv3 records. A failure is
+	// logged, not returned: opv2: is still the source of truth the registry
+	// runs from, and the next boot retries.
+	if r, ok := s.(opsV3Reconciler); ok {
+		if _, err := r.ReconcileOpsV3WithV2(context.Background()); err != nil {
+			opsV3Log.Error("opv3 reconcile failed; opv3 records may be stale until each run's next write, and the next boot retries: %v", err)
+		}
+	}
+
 	return s, nil
+}
+
+// opsV3Reconciler is the boot reconcile's one capability, asserted at run
+// time so Store is not widened for one boot step (every production store is
+// a *PebbleStore and has it).
+type opsV3Reconciler interface {
+	ReconcileOpsV3WithV2(ctx context.Context) (OpsV3ReconcileReport, error)
 }
 
 // CloseStore closes the global store

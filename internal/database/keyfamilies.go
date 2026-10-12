@@ -264,6 +264,7 @@ var keyFamilies = []KeyFamily{
 	{"opv3:ledger:", "operations v3 chunk ledgers", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:log:", "operations v3 run logs", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:meta:", "operations v3 per-state/per-def counters", "internal/database/pebble_store_ops_v3.go"},
+	{"opv3:prog:", "operations v3 run progress, checkpoint stamp and synced opv2 row hash (the small half of a run record)", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:q:", "operations v3 dispatch queue", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:run:", "operations v3 run records", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:sched:", "operations v3 schedule state (written by 05-PR8)", "internal/database/pebble_store_ops_v3.go"},

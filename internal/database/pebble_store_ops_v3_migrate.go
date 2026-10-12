@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_ops_v3_migrate.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e3dede70-3460-4dd5-8185-a94a66839551
 // last-edited: 2026-10-11
 
 // Migration 065's engine: build opv3: run records from opv2: operation rows
-// (state-and-persistence.md sections 3 and 4). Every opv2: key is left in
-// place; no op id changes.
+// (state-and-persistence.md sections 3 and 4), and the boot reconcile that
+// re-runs it for the rows a previous binary changed (ReconcileOpsV3WithV2).
+// Every opv2: key is left in place; no op id changes.
 
 package database
 
@@ -38,10 +39,9 @@ const (
 type OpsV3MigrationReport struct {
 	Scanned     int // decodable opv2:op: rows read
 	Written     int // opv3:run: records written (new or re-derived)
-	Skipped     int // already migrated with the same SourceHash
-	SkippedLive int // already written by the live v2 façade (newer than this row)
+	Skipped     int // already current: the record's V2RowHash names this row
 	Undecodable int // opv2:op: rows (or opv3:run: records) that do not decode
-	Batches     int // Pebble batches committed by the main pass
+	Batches     int // pages of batchSize rows the main pass processed (one batch each, committed only when it wrote)
 	// PerStatus counts rows by original v2 status; Unmapped counts the ones
 	// the mapping table does not know ("anything else": recorded as failed).
 	PerStatus map[string]int
@@ -52,21 +52,44 @@ type OpsV3MigrationReport struct {
 	SuccessorsMissing int
 }
 
-// opsV3SourceHash is the hash of a v2 row as the store encodes it: equal for
-// an unchanged row, so a second pass skips it.
-func opsV3SourceHash(row *OperationV2Row) (string, error) {
-	data, err := json.Marshal(row)
-	if err != nil {
-		return "", err
-	}
+// opsV3RowHash is RunRecord.V2RowHash: the first 128 bits of the SHA-256 of
+// an opv2:op: row's stored bytes, hex. Every writer hashes the exact bytes it
+// stages and the reconcile hashes the bytes it reads, so a row is "current"
+// exactly when no write the record did not see has replaced it; a binary that
+// encodes the same row differently (a previous one, after a rollback) reads
+// as changed, which only costs a rebuild.
+func opsV3RowHash(data []byte) string {
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:16])
 }
 
-// migratedRunRecord is the record migration 065 builds for row. cur is a
-// record an earlier pass wrote for the same id from an older version of the
-// row (re-derived; its attempt, fence epoch, event seq and successor carry
-// over).
+// getOpV2Raw reads one opv2:op: row and its stored bytes. A missing row is
+// (nil, nil, nil); a row that does not decode, or has no id, is an error.
+func (p *PebbleStore) getOpV2Raw(id string) (row *OperationV2Row, raw []byte, err error) {
+	defer recoverPebbleClosed("getOpV2Raw", &err)
+	val, closer, err := p.db.Get(opv2OpKey(id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	raw = append([]byte(nil), val...)
+	_ = closer.Close()
+	var r OperationV2Row
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, raw, err
+	}
+	if r.ID == "" {
+		return nil, raw, fmt.Errorf("opv2 row %s has no id", id)
+	}
+	return &r, raw, nil
+}
+
+// migratedRunRecord is the record migration 065 (and the boot reconcile)
+// builds for row, whose stored bytes hash to hash. cur is the record already
+// stored for the id, from an older version of the row (re-derived; its
+// attempt, fence epoch, event seq and successor carry over).
 func migratedRunRecord(cur *RunRecord, row *OperationV2Row, hash string) (*RunRecord, string, bool) {
 	var rec RunRecord
 	if cur != nil {
@@ -89,9 +112,9 @@ func migratedRunRecord(cur *RunRecord, row *OperationV2Row, hash string) (*RunRe
 	if !ok {
 		rec.UnmappedV2Status = row.Status
 	}
+	rec.V2RowHash = hash
 	rec.FromV2 = &V2Origin{
 		Status:      row.Status,
-		SourceHash:  hash,
 		HighWater:   int64(row.HighWaterProgress),
 		ResumeCount: row.ResumeCount,
 		ErrMessage:  rec.Error,
@@ -103,11 +126,11 @@ func migratedRunRecord(cur *RunRecord, row *OperationV2Row, hash string) (*RunRe
 // migrate event for every opv2:op: row, batchSize rows per Pebble batch, and
 // leaves every opv2: key in place.
 //
-// Idempotent: a run already migrated from the same row (same SourceHash) is
-// skipped, a run the live v2 façade has written since (no FromV2) is newer
-// than the row and is skipped, and a run migrated from an older version of
-// the row is re-derived. opv2:state: is copied into opv3:ckpt: as
-// legacy_state; opv2:log: is not copied (ListLogV3 reads through).
+// Idempotent: a run whose record is current with the row (its V2RowHash
+// names the row's bytes: migrated from it, or written by the live v2 façade
+// or the mirror since) is skipped, and any other is (re-)derived from the
+// row. opv2:state: is copied into opv3:ckpt: as legacy_state; opv2:log: is
+// not copied (ListLogV3 reads through).
 //
 // CONCURRENCY: deliberately one streaming writer in key order, not a worker
 // pool (repo CLAUDE.md "Concurrency" rule, ordering case). Each batch is a
@@ -164,7 +187,7 @@ func (p *PebbleStore) MigrateOpsV2ToV3(batchSize int, progress func(done, total 
 			progress(done, total)
 		}
 		if done >= nextLog {
-			opsV3Log.Info("opv3 migration: %d/%d rows (%d written, %d skipped)", done, total, rep.Written, rep.Skipped+rep.SkippedLive)
+			opsV3Log.Info("opv3 migration: %d/%d rows (%d written, %d skipped)", done, total, rep.Written, rep.Skipped)
 			nextLog += opsV3MigrationLogEvery
 		}
 	}
@@ -175,14 +198,16 @@ func (p *PebbleStore) MigrateOpsV2ToV3(batchSize int, progress func(done, total 
 	if err := p.rebuildOpCountsV3(); err != nil {
 		return rep, err
 	}
-	opsV3Log.Info("opv3 migration: done: scanned %d, written %d, skipped %d (same row) + %d (live), undecodable %d, batches %d; successors filled %d, not found %d",
-		rep.Scanned, rep.Written, rep.Skipped, rep.SkippedLive, rep.Undecodable, rep.Batches, rep.SuccessorsFilled, rep.SuccessorsMissing)
+	opsV3Log.Info("opv3 migration: done: scanned %d, written %d, skipped %d (current), undecodable %d, batches %d; successors filled %d, not found %d",
+		rep.Scanned, rep.Written, rep.Skipped, rep.Undecodable, rep.Batches, rep.SuccessorsFilled, rep.SuccessorsMissing)
 	opsV3Log.Info("opv3 migration: v2 status counts %v; anything else (recorded as failed) %v", rep.PerStatus, rep.Unmapped)
 	return rep, nil
 }
 
-// migrateOpsV3Batch migrates one page of ids in one batch under opsMu and
-// returns the ids of requeued rows still missing a successor.
+// migrateOpsV3Batch (re-)derives the records of one page of ids from their
+// rows in one batch under opsMu, skipping every record that is already
+// current, and returns the ids of requeued rows still missing a successor.
+// Nothing is committed when every record was current.
 func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport) (requeued []string, err error) {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
@@ -191,8 +216,10 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 	defer b.Close()
 	s := p.newOpsV3Stage(b)
 	for _, id := range ids {
-		// Re-read under the lock: the page was listed without it.
-		row, gerr := p.GetOperationV2(id)
+		// Re-read under the lock: the page was listed (and, for the
+		// reconcile, hashed) without it, so a live write may have synced
+		// the record since.
+		row, raw, gerr := p.getOpV2Raw(id)
 		if gerr != nil {
 			rep.Undecodable++
 			opsV3Log.Warn("opv3 migration: opv2 row %s does not decode; not migrated: %v", id, gerr)
@@ -203,21 +230,14 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 		}
 		rep.Scanned++
 		rep.PerStatus[row.Status]++
-		hash, err := opsV3SourceHash(row)
-		if err != nil {
-			return nil, err
-		}
+		hash := opsV3RowHash(raw)
 		cur, err := p.loadRunV3(id)
 		if err != nil {
 			rep.Undecodable++
 			opsV3Log.Warn("opv3 migration: run record %s does not decode; left alone: %v", id, err)
 			continue
 		}
-		switch {
-		case cur != nil && cur.FromV2 == nil:
-			rep.SkippedLive++
-			continue
-		case cur != nil && cur.FromV2.SourceHash == hash:
+		if cur != nil && cur.V2RowHash == hash {
 			rep.Skipped++
 			continue
 		}
@@ -244,6 +264,9 @@ func (p *PebbleStore) migrateOpsV3Batch(ids []string, rep *OpsV3MigrationReport)
 		if rec.State == state.V3Dropped && why == state.WhyRequeued && rec.SuccessorID == "" {
 			requeued = append(requeued, id)
 		}
+	}
+	if b.Empty() {
+		return requeued, nil
 	}
 	if err := s.flush(); err != nil {
 		return nil, err
@@ -327,6 +350,9 @@ func (p *PebbleStore) fillSuccessorBatch(ids []string, rep *OpsV3MigrationReport
 			return err
 		}
 		rep.SuccessorsFilled++
+	}
+	if b.Empty() {
+		return nil
 	}
 	return b.Commit(pebble.Sync)
 }
