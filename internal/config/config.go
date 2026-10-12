@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.154.0
+// version: 1.155.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-11
 
@@ -1667,6 +1667,9 @@ type Config struct {
 	// fetch cache (Audible/Audnexus/etc. API results) is considered fresh.
 	// 0 means never expire. Default 7.
 	MetadataFetchCacheTTLDays int `json:"metadata_fetch_cache_ttl_days"`
+	// MetadataFetch holds the metadata_fetch.* settings of the shared
+	// provider-answer cache (pcache:, see MetadataFetchConfig).
+	MetadataFetch MetadataFetchConfig `json:"metadata_fetch" mapstructure:"metadata_fetch"`
 	// BootstrapKeyTTL is how long a bootstrap-issued, full-scope admin API key
 	// stays valid: a Go duration ("8h", "90m"). Empty means the default,
 	// DefaultBootstrapKeyTTL (8h); anything over MaxBootstrapKeyTTL (24h) is
@@ -2723,6 +2726,11 @@ func InitConfig() {
 	viper.SetDefault("memory_limit_type", "items")
 	viper.SetDefault("cache_size", 1000)
 	viper.SetDefault("metadata_fetch_cache_ttl_days", 180)
+	viper.SetDefault("metadata_fetch.shared_cache", true)
+	viper.SetDefault("metadata_fetch.negative_ttl_days.audible", DefaultNegativeTTLDaysAudible)
+	viper.SetDefault("metadata_fetch.negative_ttl_days.audnexus", DefaultNegativeTTLDaysAudnexus)
+	viper.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", DefaultNegativeTTLDaysOpenLibrary)
+	viper.SetDefault("metadata_fetch.negative_ttl_days.google", DefaultNegativeTTLDaysGoogle)
 	// No defaults for bootstrap_key_ttl / bootstrap_key_ttl_days: an empty
 	// bootstrap_key_ttl resolves to DefaultBootstrapKeyTTL in code, and a
 	// default for the legacy days key would make it look set on every boot
@@ -3278,6 +3286,17 @@ func InitConfig() {
 			BootstrapKeyTTLDays:         viper.GetInt("bootstrap_key_ttl_days"),
 			MemoryLimitPercent:          viper.GetInt("memory_limit_percent"),
 			MemoryLimitMB:               viper.GetInt("memory_limit_mb"),
+
+			// Shared provider-answer cache (metadata_fetch.*)
+			MetadataFetch: MetadataFetchConfig{
+				SharedCache: viper.GetBool("metadata_fetch.shared_cache"),
+				NegativeTTLDays: MetadataFetchNegativeTTLDays{
+					Audible:     viper.GetInt("metadata_fetch.negative_ttl_days.audible"),
+					Audnexus:    viper.GetInt("metadata_fetch.negative_ttl_days.audnexus"),
+					OpenLibrary: viper.GetInt("metadata_fetch.negative_ttl_days.openlibrary"),
+					Google:      viper.GetInt("metadata_fetch.negative_ttl_days.google"),
+				},
+			},
 
 			// Lifecycle / retention
 			PurgeSoftDeletedAfterDays:   viper.GetInt("purge_soft_deleted_after_days"),
@@ -4069,6 +4088,11 @@ func ResetToDefaults() {
 			MemoryLimitPercent: 25,
 			MemoryLimitMB:      512,
 
+			// The shared provider-answer cache stays on through a reset:
+			// shared_cache is its rollback switch, and a reset that zeroed it
+			// would silently turn the cache off.
+			MetadataFetch: DefaultMetadataFetchConfig(),
+
 			// Lifecycle / retention
 			PurgeSoftDeletedAfterDays:           30,
 			PurgeSoftDeletedDeleteFiles:         false,
@@ -4407,4 +4431,55 @@ func EffectiveBackupRetentionDays() int {
 		return AppConfig.PurgeSoftDeletedAfterDays
 	}
 	return 30
+}
+
+// Default negative TTLs of the shared provider-answer cache, in days (owner
+// decision D30).
+const (
+	DefaultNegativeTTLDaysAudible     = 14
+	DefaultNegativeTTLDaysAudnexus    = 14
+	DefaultNegativeTTLDaysOpenLibrary = 30
+	DefaultNegativeTTLDaysGoogle      = 7
+)
+
+// MetadataFetchConfig groups the metadata_fetch.* settings: the shared
+// provider-answer cache (pcache:q: questions, pcache:asin: products) that
+// replaces the per-book metadata_fetch_cache:<book>:<provider>#q... rows.
+//
+// shared_cache (default true) is the rollback switch: false sends every read
+// and write back to the per-book rows, exactly as before the shared cache, and
+// leaves the pcache: rows inert.
+//
+// negative_ttl_days is how long an EMPTY provider answer is replayed instead
+// of re-asked, per provider (defaults: Audible and Audnexus 14, Open Library
+// 30, Google Books 7). 0 turns negative caching off for that provider (an
+// empty answer is neither written nor served); it never means "forever". A
+// provider with no entry here (Hardcover, Wikipedia) gets no negative caching.
+// A non-empty answer uses metadata_fetch_cache_ttl_days. "Search again" on a
+// book deletes the shared answers its questions map to; nothing else busts a
+// negative entry before its TTL.
+type MetadataFetchConfig struct {
+	SharedCache     bool                         `json:"shared_cache" mapstructure:"shared_cache"`
+	NegativeTTLDays MetadataFetchNegativeTTLDays `json:"negative_ttl_days" mapstructure:"negative_ttl_days"`
+}
+
+// MetadataFetchNegativeTTLDays is metadata_fetch.negative_ttl_days.*.
+type MetadataFetchNegativeTTLDays struct {
+	Audible     int `json:"audible" mapstructure:"audible"`
+	Audnexus    int `json:"audnexus" mapstructure:"audnexus"`
+	OpenLibrary int `json:"openlibrary" mapstructure:"openlibrary"`
+	Google      int `json:"google" mapstructure:"google"`
+}
+
+// DefaultMetadataFetchConfig is the shipped metadata_fetch.* block.
+func DefaultMetadataFetchConfig() MetadataFetchConfig {
+	return MetadataFetchConfig{
+		SharedCache: true,
+		NegativeTTLDays: MetadataFetchNegativeTTLDays{
+			Audible:     DefaultNegativeTTLDaysAudible,
+			Audnexus:    DefaultNegativeTTLDaysAudnexus,
+			OpenLibrary: DefaultNegativeTTLDaysOpenLibrary,
+			Google:      DefaultNegativeTTLDaysGoogle,
+		},
+	}
 }

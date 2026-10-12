@@ -1,7 +1,7 @@
 // file: internal/metafetch/fetch_cache_identity_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6b1e9c42-8d3f-4a7e-b25c-0f9a3d7e41c8
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -41,8 +41,16 @@ func (c *identityCountingSource) SearchByTitleAndAuthor(_ context.Context, _, _ 
 
 // fetchCacheHarness builds a MockStore whose book row is `title`/`author` and
 // whose raw KV is the supplied map, plus a Service wired to one counting source.
+//
+// These tests pin the per-book, identity-stamped rows (metadata_fetch_cache:
+// <book>:<provider>), so the harness runs with the shared provider-answer
+// cache OFF (metadata_fetch.shared_cache=false): the rollback path. The
+// shared cache is keyed by the exact question, so a corrected title is a new
+// key and the A3#14 stamp has nothing to guard there; its behaviour is pinned
+// in search_fanout_pcache_test.go.
 func fetchCacheHarness(t *testing.T, raw map[string][]byte, title, author string) (*Service, *identityCountingSource) {
 	t.Helper()
+	withSharedCache(t, false)
 	mock := &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			return &database.Book{ID: id, Title: title, Author: &database.Author{ID: 1, Name: author}}, nil

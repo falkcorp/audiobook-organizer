@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -721,7 +721,7 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 		return nil
 	}
 
-	cands, err := r.search(ctx, facts)
+	cands, err := r.search(ctx, b.ID, facts)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -815,8 +815,19 @@ func (r *asinBackfillRun) bookFacts(b *database.Book, title string, authors []st
 // search runs the ISBN-anchored searches first, then title+author. There is
 // deliberately no title-only search: every candidate must match an author, and
 // a search without one only adds strangers.
-func (r *asinBackfillRun) search(ctx context.Context, f asinBookFacts) ([]metadata.AudibleIdentity, error) {
+//
+// Every search goes through the shared provider-answer cache
+// (metafetch.CachedIdentitySearch): candidate-fetch and this op ask Audible
+// about the same books, and a book searched on an earlier run, or a
+// duplicate copy of it, replays the stored answer -- an empty one included,
+// until Audible's negative TTL -- with no request and no token from Audible's
+// bucket. A failed search stores nothing. The no-match marker below is
+// unchanged: it still skips the book entirely inside retry_after_days.
+func (r *asinBackfillRun) search(ctx context.Context, bookID string, f asinBookFacts) ([]metadata.AudibleIdentity, error) {
 	client := r.newClient()
+	ask := func(q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error) {
+		return metafetch.CachedIdentitySearch(ctx, r.store, bookID, client, q)
+	}
 	var out []metadata.AudibleIdentity
 	seenISBN := map[string]bool{}
 	for _, isbn := range f.ISBNs {
@@ -825,13 +836,13 @@ func (r *asinBackfillRun) search(ctx context.Context, f asinBookFacts) ([]metada
 			continue
 		}
 		seenISBN[n] = true
-		res, err := client.SearchIdentities(ctx, metadata.AudibleIdentityQuery{Keywords: n, NumResults: asinISBNSearchResults})
+		res, err := ask(metadata.AudibleIdentityQuery{Keywords: n, NumResults: asinISBNSearchResults})
 		if err != nil {
 			return nil, fmt.Errorf("isbn %s: %w", n, err)
 		}
 		out = append(out, res...)
 	}
-	res, err := client.SearchIdentities(ctx, metadata.AudibleIdentityQuery{
+	res, err := ask(metadata.AudibleIdentityQuery{
 		Title: f.Title, Author: f.Authors[0], NumResults: asinTitleSearchResults,
 	})
 	if err != nil {
@@ -842,7 +853,7 @@ func (r *asinBackfillRun) search(ctx context.Context, f asinBookFacts) ([]metada
 		// Audible's title filter can miss on a long "Title: Subtitle"; retry
 		// with the head. Still with the author.
 		if head, _, ok := splitSubtitle(stripSeriesParen(f.Title)); ok {
-			res, err = client.SearchIdentities(ctx, metadata.AudibleIdentityQuery{
+			res, err = ask(metadata.AudibleIdentityQuery{
 				Title: head, Author: f.Authors[0], NumResults: asinTitleSearchResults,
 			})
 			if err != nil {

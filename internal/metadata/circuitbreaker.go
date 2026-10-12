@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package metadata
 
@@ -268,6 +268,15 @@ func (ps *ProtectedSource) SearchByTitleAndAuthor(ctx context.Context, title, au
 // Breaker returns the underlying CircuitBreaker for status reporting.
 func (ps *ProtectedSource) Breaker() *CircuitBreaker {
 	return ps.breaker
+}
+
+// SupportsContextSearch reports whether the wrapped source implements
+// ContextualSearch. SearchByContext answers (nil, nil) for one that does not,
+// which a caller caching answers must not mistake for the provider saying
+// "nothing found".
+func (ps *ProtectedSource) SupportsContextSearch() bool {
+	_, ok := ps.source.(ContextualSearch)
+	return ok
 }
 
 // SearchByContext forwards to the underlying source if it implements

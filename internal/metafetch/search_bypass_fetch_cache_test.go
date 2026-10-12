@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_bypass_fetch_cache_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c7a9e51-2b84-4f06-9d1e-8a5c0f2b6d47
-// last-edited: 2026-10-01
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -20,7 +20,11 @@ import (
 // when the per-source fetch cache holds a fresh row for the book's identity,
 // and must replace that row with the fresh answer. Without the option the
 // row is replayed and the provider is not called.
+//
+// This pins the per-book rows, so it runs with metadata_fetch.shared_cache
+// off; the shared-cache counterpart is TestSearchAgainBustDeletesPointedKeys.
 func TestSearchMetadataForBook_BypassFetchCacheReasksAndRewrites(t *testing.T) {
+	withSharedCache(t, false)
 	prevTTL := config.AppConfig.MetadataFetchCacheTTLDays
 	config.AppConfig.MetadataFetchCacheTTLDays = 30
 	t.Cleanup(func() { config.AppConfig.MetadataFetchCacheTTLDays = prevTTL })

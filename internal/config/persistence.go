@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.55.1
+// version: 1.56.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -1516,6 +1516,26 @@ func applySetting(key, value, typ string) error {
 		case "metadata_fetch_cache_ttl_days":
 			if i, err := strconv.Atoi(value); err == nil {
 				c.MetadataFetchCacheTTLDays = i
+			}
+		case "metadata_fetch.shared_cache":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.MetadataFetch.SharedCache = b
+			}
+		case "metadata_fetch.negative_ttl_days.audible":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.MetadataFetch.NegativeTTLDays.Audible = i
+			}
+		case "metadata_fetch.negative_ttl_days.audnexus":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.MetadataFetch.NegativeTTLDays.Audnexus = i
+			}
+		case "metadata_fetch.negative_ttl_days.openlibrary":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.MetadataFetch.NegativeTTLDays.OpenLibrary = i
+			}
+		case "metadata_fetch.negative_ttl_days.google":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.MetadataFetch.NegativeTTLDays.Google = i
 			}
 		case "memory_limit_percent":
 			if i, err := strconv.Atoi(value); err == nil {

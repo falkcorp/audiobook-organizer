@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -127,7 +127,14 @@ type ChainOutcome struct {
 	// under. sourceName stays the DISPLAY name: it is what the operation ledger
 	// and the review UI show a human.
 	ProviderKey string
-	CacheHit    bool
+	// CacheHit: the book's OWN per-book row (metadata_fetch_cache:<book>:
+	// <provider>) answered, so the caller has nothing to write back.
+	CacheHit bool
+	// SharedCacheHit: the winning answer came from the shared provider-answer
+	// cache (P1), with no provider call. CacheHit stays false for it, so the
+	// callers still write the book's per-book row, which the review UI and
+	// the bulk "already cached" skip read.
+	SharedCacheHit bool
 	// SearchIdentity is the book's database.MetadataSearchIdentity the walk
 	// read the cache with. Callers stamp their write-back with it, so the read
 	// and the write can never derive the identity two different ways.
@@ -189,6 +196,17 @@ func (o ChainOutcome) Status() string {
 // all-books copy retried with the untrimmed title when stripChapterFromTitle had
 // changed it. Unifying them fixes that divergence in passing -- the by-IDs path
 // gains the retry it was silently missing.
+//
+// Shared cache (metadata_fetch.shared_cache): each rung of a source's ladder
+// is one provider question with its own P1 row. Per source the walk first
+// replays the ladder from P1 without the semaphore -- the first rung whose
+// stored answer survives the rung's filter wins with no call, and a ladder
+// whose every rung is stored EMPTY means the source has nothing for this book
+// until its negative TTL, so no call is made either -- then reads the book's
+// legacy per-book row, and only then asks live from the first rung with no
+// stored answer, writing each answer (empty included) when the call returned
+// no error. The P1 keys read or written are recorded on the book's pointer
+// row.
 func WalkSourceChain(
 	ctx context.Context,
 	store database.RawKVStore,
@@ -199,6 +217,12 @@ func WalkSourceChain(
 ) (ChainOutcome, error) {
 	out := ChainOutcome{SearchIdentity: identity}
 	searchTitle := stripChapterFromTitle(bookTitle)
+	shared := sharedCacheEnabled()
+	var pkeys *pcacheKeyLog
+	if shared {
+		pkeys = newPCacheKeyLog()
+		defer pkeys.flush(store, bookID)
+	}
 
 	// live counts sources that were actually callable this book; throttledAll
 	// stays true only while every one of them refused on the throttle.
@@ -216,6 +240,46 @@ func WalkSourceChain(
 		// migration, not a rename.
 		slotKey := metadata.ProviderKey(src)
 		name := src.Name()
+
+		attempts := chainAttempts(ctx, src, slotKey, bookTitle, searchTitle, author, shared)
+
+		// Shared cache first: replay the ladder from P1 while every rung has
+		// a stored answer.
+		start := 0
+		if shared {
+			for ; start < len(attempts); start++ {
+				a := attempts[start]
+				e, hit := pcacheRead(store, a.key, questionTTL(slotKey))
+				if !hit {
+					break
+				}
+				res, ok := decodeEntry[metadata.BookMetadata](e)
+				if !ok {
+					break
+				}
+				pkeys.add(slotKey, a.key)
+				if a.variant != nil {
+					res = keepVariant(res, *a.variant, author)
+				}
+				if len(res) > 0 {
+					markReleaseYear(res, name)
+					metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheHit)
+					out.Results, out.SourceName, out.ProviderKey, out.SharedCacheHit = res, name, slotKey, true
+					if a.variant != nil {
+						out.Variant = a.query
+					}
+					return out, nil
+				}
+			}
+			if start == len(attempts) {
+				// Every question this source would be asked is stored as
+				// answered-with-nothing: the source has nothing for the book
+				// until a negative TTL runs out. Not a throttle, and no call,
+				// so throttledAll is left as it is.
+				metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheHit)
+				continue
+			}
+		}
 
 		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, identity, maxAge); cerr == nil && cached != nil {
 			var cr []metadata.BookMetadata
@@ -237,46 +301,30 @@ func WalkSourceChain(
 		hit := func() bool {
 			defer sem.Release(slotKey)
 
-			// Query ladder for this source, most specific first. The untrimmed
-			// retries are appended only when trimming actually changed the
-			// title, so an unchanged title is not searched twice.
-			type attempt struct {
-				query   string
-				variant *titleVariant // non-nil: a variant, results gated on it
-				run     func() ([]metadata.BookMetadata, error)
-			}
-			attempts := make([]attempt, 0, 8)
-			add := func(title string, variant *titleVariant, titleOnly bool) {
-				if author != "" {
-					attempts = append(attempts, attempt{title, variant, func() ([]metadata.BookMetadata, error) {
-						return src.SearchByTitleAndAuthor(ctx, title, author)
-					}})
-				}
-				if titleOnly {
-					attempts = append(attempts, attempt{title, variant, func() ([]metadata.BookMetadata, error) {
-						return src.SearchByTitle(ctx, title)
-					}})
-				}
-			}
-			add(searchTitle, nil, true)
-			if searchTitle != bookTitle {
-				add(bookTitle, nil, true)
-			}
-			// Series-decorated titles ("Eternal Dominion, Book 04 - Assertions")
-			// miss on every provider verbatim; the loop below returns on the
-			// first hit, so these cost calls only for a book the two literal
-			// queries did not find, and their results are anchored on the
-			// book's own name so a series-name answer cannot be cached as it.
-			for _, v := range extraTitleVariants(bookTitle, searchTitle) {
-				add(v.Query, &v, v.titleOnlyAllowed())
-			}
-			for _, a := range attempts {
+			for i := start; i < len(attempts); i++ {
+				a := attempts[i]
 				// A cancelled walk makes no further calls: each one would fail
 				// fast and count against the shared circuit breaker.
 				if ctx.Err() != nil {
 					return false
 				}
-				res, err := a.run()
+				var res []metadata.BookMetadata
+				var err error
+				switch {
+				case !shared:
+					res, err = a.run()
+				case i == start:
+					// Known miss from the replay above: ask, and store.
+					res, err = a.run()
+					if err == nil {
+						pcacheWrite(store, a.key, slotKey, a.endpoint, res, len(res) == 0, questionTTL(slotKey), time.Time{})
+					}
+				default:
+					res, _, err = cachedCall(store, slotKey, a.endpoint, a.key, false, a.run)
+				}
+				if shared && err == nil {
+					pkeys.add(slotKey, a.key)
+				}
 				if err != nil {
 					if errors.Is(err, metadata.ErrProviderThrottled) {
 						throttled++
@@ -323,4 +371,65 @@ func WalkSourceChain(
 	// A cache-only walk (live == 0) is not "all throttled" -- nothing refused.
 	out.AllThrottled = live > 0 && throttledAll
 	return out, nil
+}
+
+// chainAttempt is one rung of a source's query ladder: one provider call.
+type chainAttempt struct {
+	query    string
+	variant  *titleVariant // non-nil: a variant, results gated on it
+	endpoint string        // P1 endpoint (marketplace applied); "" when the shared cache is off
+	key      string        // P1 key; "" when the shared cache is off
+	run      func() ([]metadata.BookMetadata, error)
+}
+
+// chainAttempts is a source's query ladder for one book, most specific
+// first. The untrimmed retries are appended only when trimming actually
+// changed the title, so an unchanged title is not searched twice.
+func chainAttempts(ctx context.Context, src metadata.MetadataSource, provider, bookTitle, searchTitle, author string, shared bool) []chainAttempt {
+	attempts := make([]chainAttempt, 0, 8)
+	add := func(title string, variant *titleVariant, titleOnly bool) {
+		if author != "" {
+			a := chainAttempt{query: title, variant: variant, run: func() ([]metadata.BookMetadata, error) {
+				return src.SearchByTitleAndAuthor(ctx, title, author)
+			}}
+			if shared {
+				a.endpoint = endpointWithMarketplace(provider, EndpointSearchTitleAuthor)
+				a.key = NormalizeQuestion(provider, a.endpoint, Question{Title: title, Authors: CreditsFromFlat(author)})
+			}
+			attempts = append(attempts, a)
+		}
+		if titleOnly {
+			a := chainAttempt{query: title, variant: variant, run: func() ([]metadata.BookMetadata, error) {
+				return src.SearchByTitle(ctx, title)
+			}}
+			if shared {
+				a.endpoint = endpointWithMarketplace(provider, EndpointSearchTitle)
+				a.key = NormalizeQuestion(provider, a.endpoint, Question{Title: title})
+			}
+			attempts = append(attempts, a)
+		}
+	}
+	add(searchTitle, nil, true)
+	if searchTitle != bookTitle {
+		add(bookTitle, nil, true)
+	}
+	// Series-decorated titles ("Eternal Dominion, Book 04 - Assertions")
+	// miss on every provider verbatim; the walk returns on the first hit, so
+	// these cost calls only for a book the two literal queries did not find,
+	// and their results are anchored on the book's own name so a series-name
+	// answer cannot be cached as it.
+	for _, v := range extraTitleVariants(bookTitle, searchTitle) {
+		add(v.Query, &v, v.titleOnlyAllowed())
+	}
+	return attempts
+}
+
+// markReleaseYear re-derives the year-kind flag of answers replayed from a
+// cache, as every replay path does: Audible and Audnexus report the
+// audiobook RELEASE year.
+func markReleaseYear(rs []metadata.BookMetadata, sourceName string) {
+	isRelease := metadata.SourceProducesAudiobookReleaseYear(sourceName)
+	for i := range rs {
+		rs[i].PublishYearIsAudiobookRelease = isRelease
+	}
 }
