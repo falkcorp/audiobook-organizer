@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/check-errcheck-ratchet.sh
-# version: 1.3.1
+# version: 1.4.0
 # guid: 9c3e7a1d-5b48-4f0a-8e6c-2d1a9f7b3c05
-# last-edited: 2026-10-11
+# last-edited: 2026-10-12
 #
 # Ratchet on the number of `errcheck` findings, exactly as
 # scripts/check-interface-width.sh ratchets `interfacebloat`.
@@ -39,6 +39,14 @@
 # .errcheck-baseline would need two numbers, and every darwin run would
 # spuriously report "went DOWN" against the linux-measured baseline.
 set -euo pipefail
+
+# --measure (07-G4): print only the measured count on stdout and exit 0, so the
+# scheduled baseline-lowering job can read it. Every refusal path below
+# (exit 2: no usable measurement) still applies; only the comparison is skipped.
+measure_only=0
+if [[ "${1:-}" == "--measure" ]]; then
+  measure_only=1
+fi
 
 export GOOS=linux
 export GOARCH=amd64
@@ -150,6 +158,11 @@ fi
 # grep -c exits non-zero on a count of 0, which is reachable once the backlog is
 # paid down to zero; `|| true` keeps that from aborting under set -e.
 actual=$(printf '%s\n' "$output" | grep -cE '\(errcheck\)$' || true)
+
+if [[ "$measure_only" -eq 1 ]]; then
+  echo "$actual"
+  exit 0
+fi
 
 echo "errcheck-ratchet: baseline=$baseline actual=$actual"
 

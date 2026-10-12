@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.7.1
+# version: 1.8.0
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
-# last-edited: 2026-10-11
+# last-edited: 2026-10-12
 #
 # Ratchet on the number of `interfacebloat` findings. See
 # .interface-width-baseline for why this counts rather than listing files.
@@ -12,6 +12,14 @@
 # new number and exits 0; lower the baseline by hand in the PR that earned
 # it, or let the scheduled job from 07-G4 do it.
 set -euo pipefail
+
+# --measure (07-G4): print only the measured count on stdout and exit 0, so the
+# scheduled baseline-lowering job can read it. Every refusal path below
+# (exit 2: no usable measurement) still applies; only the comparison is skipped.
+measure_only=0
+if [[ "${1:-}" == "--measure" ]]; then
+  measure_only=1
+fi
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
@@ -192,6 +200,11 @@ MSG
 fi
 
 actual=$(printf '%s\n' "$output" | grep -cE '\(interfacebloat\)$' || true)
+
+if [[ "$measure_only" -eq 1 ]]; then
+  echo "$actual"
+  exit 0
+fi
 
 echo "interface-width: baseline=$baseline actual=$actual"
 
