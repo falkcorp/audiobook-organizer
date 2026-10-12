@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_prune_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3aa1a5a7-404c-42f9-9a8d-b6213e7b09f2
 // last-edited: 2026-10-11
 
@@ -16,8 +16,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -66,7 +68,34 @@ const (
 // referenced by any book in any state (the unfiltered count,
 // database.SeriesRefCounts: a trashed book cannot be repointed and would be
 // left naming a series that no longer exists), when an orphan is held for an
-// undo, or when a member's book count cannot be read.
+// undo, when a member's book count cannot be read, or when a member series is
+// named for Doctor Who / Big Finish / Torchwood (repairs.SkipOwnerManual, by
+// series name: an empty-series row has no books for the framework's book
+// guard to read, so the row carries the guard itself).
+//
+// CONCURRENCY. Every series write the fixer makes runs under repairs.apply,
+// which declares the series write-set, so the dispatcher never runs it beside
+// dedup.series-prune, -normalize, -merge or entities.series-rename. A book
+// write from any other op can still land between the re-plan and a delete;
+// each delete therefore re-counts the references to its one series
+// immediately before the write (spWriteStore.DeleteSeries) and refuses on
+// any. What is left is the moment between that count and the delete itself:
+// book writes take a per-book lock, not the series lock DeleteSeries takes,
+// so no store-level guarded delete could close it without making every book
+// write contend on the series lock.
+//
+// JOURNAL FIRST. Each series_merge and series_delete row is journaled before
+// the write it describes (Writer.JournalStep), and voided when the write is
+// refused, so a run stopped between the two never leaves a write with no
+// record. Because a book's series_merge row is journaled before its Modify,
+// that book's history batch is marked apply_op_journaled, and "undo last
+// apply" refuses it in favour of the operation (whose series rows are
+// record-only; see UNDO below).
+//
+// RESUME. A merge cut off part-way (a lost lease, a cancel) is NOT resumed:
+// the re-plan sees the books it already moved on the kept series, the
+// fingerprint differs, and the row settles changed_since_plan. A fresh plan
+// offers what is left (the emptied copy as a merge or an empty series).
 //
 // Written Evaluate-style for the ops v3 port: evaluate decides ONE candidate
 // from inputs read before it, with no writer; Plan and Replan differ only in
@@ -238,32 +267,27 @@ func (f *seriesPruneFixer) Replan(ctx context.Context, _ json.RawMessage, planne
 	if err := json.Unmarshal(planned.State, &st); err != nil {
 		return repairs.Row{}, fmt.Errorf("%s: row %s: unreadable plan state: %w", seriesPruneFixerID, planned.RowID, err)
 	}
-	store, cands, refs, err := f.spLoad()
+	snap, err := f.snapshotFor(ctx)
 	if err != nil {
 		return repairs.Row{}, err
 	}
 	var found *dedup.SeriesPruneCandidate
-	for i := range cands {
-		c := cands[i]
-		switch {
-		case st.Kind == dedup.SeriesPruneDuplicate && c.Kind == st.Kind &&
-			c.Key == (dedup.SeriesGroupKey{Name: st.Name, AuthorID: st.AuthorID}):
-			found = &cands[i]
-		case st.Kind == dedup.SeriesPruneOrphan && c.Kind == st.Kind && c.Members[0].ID == st.SeriesID:
-			found = &cands[i]
-		}
-		if found != nil {
-			break
-		}
+	switch st.Kind {
+	case dedup.SeriesPruneDuplicate:
+		found = snap.dups[dedup.SeriesGroupKey{Name: st.Name, AuthorID: st.AuthorID}]
+	case dedup.SeriesPruneOrphan:
+		found = snap.orphans[st.SeriesID]
 	}
 	if found == nil {
 		return spResolvedRow(planned), nil
 	}
-	members, err := spMembers(store, []dedup.SeriesPruneCandidate{*found})
+	// Membership is read per row, fresh: it is one index read per member
+	// series, and it is what the merge moves.
+	members, err := spMembers(snap.store, []dedup.SeriesPruneCandidate{*found})
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	row, err := f.evaluate(ctx, &spInputs{reader: store, refs: refs, members: members}, *found)
+	row, err := f.evaluate(ctx, &spInputs{reader: snap.store, refs: snap.refs, members: members}, *found)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -271,6 +295,87 @@ func (f *seriesPruneFixer) Replan(ctx context.Context, _ json.RawMessage, planne
 		return repairs.Row{}, fmt.Errorf("%s: candidate re-planned as %s, not %s", seriesPruneFixerID, row.RowID, planned.RowID)
 	}
 	return row, nil
+}
+
+// spSnapshot is the library-wide read a re-plan decides from: the series
+// list, the listed and unfiltered counts (spLoad) and the candidates indexed
+// by row. Read-only once built.
+type spSnapshot struct {
+	store   OpsStore
+	refs    map[int]int
+	dups    map[dedup.SeriesGroupKey]*dedup.SeriesPruneCandidate
+	orphans map[int]*dedup.SeriesPruneCandidate
+}
+
+func (f *seriesPruneFixer) loadSnapshot() (*spSnapshot, error) {
+	store, cands, refs, err := f.spLoad()
+	if err != nil {
+		return nil, err
+	}
+	snap := &spSnapshot{store: store, refs: refs,
+		dups: map[dedup.SeriesGroupKey]*dedup.SeriesPruneCandidate{}, orphans: map[int]*dedup.SeriesPruneCandidate{}}
+	for i := range cands {
+		c := &cands[i]
+		if c.Kind == dedup.SeriesPruneOrphan {
+			snap.orphans[c.Members[0].ID] = c
+		} else {
+			snap.dups[c.Key] = c
+		}
+	}
+	return snap, nil
+}
+
+// spApplySession is one apply run's state (repairs.ApplyScoped).
+//
+// The snapshot is read ONCE per run, on the first re-plan, instead of three
+// library-wide reads (series list, listed counts, reference counts) per row.
+// That is safe against the run's own writes because its rows are
+// series-disjoint (dedup.PlanSeriesPrune puts every series in at most one
+// candidate), so no row's write changes another row's inputs. Writers outside
+// the run are caught at apply: the fresh per-row membership, the existence
+// and hold re-check of every series (spSeriesExist), the book checks before
+// and under each write lock, and the per-series reference re-count before
+// each delete. Holding the snapshot is also what makes a run whose first
+// re-plan cannot read the counts fail every row (fail closed) rather than
+// plan from a filtered count.
+//
+// wrote is set by any row that changed something; end drops the cached
+// series list and the duplicates cache once, also for a run that was
+// cancelled or lost its lease after a row wrote.
+type spApplySession struct {
+	once  sync.Once
+	snap  *spSnapshot
+	err   error
+	wrote atomic.Bool
+}
+
+type spSessionKey struct{}
+
+var _ repairs.ApplyScoped = (*seriesPruneFixer)(nil)
+
+// BeginApply implements repairs.ApplyScoped.
+func (f *seriesPruneFixer) BeginApply(ctx context.Context, _ bool) (context.Context, func()) {
+	s := &spApplySession{}
+	return context.WithValue(ctx, spSessionKey{}, s), func() {
+		if s.wrote.Load() {
+			f.invalidateCaches()
+		}
+	}
+}
+
+func spSessionOf(ctx context.Context) *spApplySession {
+	s, _ := ctx.Value(spSessionKey{}).(*spApplySession)
+	return s
+}
+
+// snapshotFor returns the run's snapshot, or a fresh one outside a run.
+func (f *seriesPruneFixer) snapshotFor(ctx context.Context) (*spSnapshot, error) {
+	s := spSessionOf(ctx)
+	if s == nil {
+		return f.loadSnapshot()
+	}
+	s.once.Do(func() { s.snap, s.err = f.loadSnapshot() })
+	return s.snap, s.err
 }
 
 // spRowID is a candidate's stable row id: a duplicate group by its key (not
@@ -335,7 +440,11 @@ func (f *seriesPruneFixer) evaluateOrphan(in *spInputs, c dedup.SeriesPruneCandi
 		State: st,
 	}
 	r.Author = f.authorName(in, s.AuthorID)
+	franchise := spFranchiseName(c.Members)
 	switch {
+	case franchise != "":
+		r.Skipped, r.SkipReason = repairs.SkipOwnerManual, "Doctor Who / Big Finish / Torchwood"
+		r.Reason = fmt.Sprintf("Series %q is Doctor Who / Big Finish / Torchwood; the owner prunes these by hand.", franchise)
 	case refs > 0:
 		r.Skipped, r.SkipReason = spSkipReferenced, "still referenced"
 		r.Reason = fmt.Sprintf("Series #%d lists no books, but %d book row(s) (trashed, or other versions) still name it; "+
@@ -429,7 +538,11 @@ func (f *seriesPruneFixer) evaluateDuplicate(in *spInputs, c dedup.SeriesPruneCa
 	r.Proposed = map[string]string{"kept": spSeriesText(keep, total), "merged away": "(removed)"}
 	r.Reason = fmt.Sprintf("%d series share the name %q and the same author. The one with the most books (then the lowest id) "+
 		"is kept; the books of the others move to it and the emptied copies are removed.", len(c.Members), keep.Name)
-	if len(stranded) > 0 {
+	switch franchise := spFranchiseName(c.Members); {
+	case franchise != "":
+		r.Skipped, r.SkipReason = repairs.SkipOwnerManual, "Doctor Who / Big Finish / Torchwood"
+		r.Reason = fmt.Sprintf("Series %q is Doctor Who / Big Finish / Torchwood; the owner merges these by hand.", franchise)
+	case len(stranded) > 0:
 		r.Skipped, r.SkipReason = spSkipReferenced, "still referenced"
 		r.Reason = strings.Join(stranded, "; ") + "; removing it would leave them naming a series that no longer exists."
 	}
@@ -438,6 +551,20 @@ func (f *seriesPruneFixer) evaluateDuplicate(in *spInputs, c dedup.SeriesPruneCa
 	}
 	r.Fingerprint = spFingerprint(r, fp.String())
 	return r, nil
+}
+
+// spFranchiseName returns the name of the first member series named for
+// Doctor Who / Big Finish / Torchwood (the framework guard's series-name rule,
+// applygate.IsOwnerManualOnly), or "". The framework guard reads a row's
+// books; an empty-series row (and an all-empty duplicate pair) has none, so
+// without this a Doctor Who series row would reach apply unguarded.
+func spFranchiseName(members []database.Series) string {
+	for _, s := range members {
+		if applygate.IsOwnerManualOnly("", s.Name) {
+			return s.Name
+		}
+	}
+	return ""
 }
 
 // authorName returns the author row's name, or "" when there is none or it
@@ -494,8 +621,10 @@ func spResolvedRow(planned repairs.Row) repairs.Row {
 
 // spWriteStore routes the cores' writes through the Repairs Writer: each
 // repoint through Writer.Modify (fenced, lease-renewing, metadata history
-// recorded), and each series delete behind Writer.Beat, so a stopped or
-// lease-lost run deletes nothing more.
+// recorded), and each series delete behind a fresh reference count. Both run
+// inside the ledger's Writer.JournalStep, which renews the lease (and checks
+// the run's fence) before journaling, so a stopped or lease-lost run neither
+// journals nor writes anything more.
 type spWriteStore struct {
 	store OpsStore
 	w     *repairs.Writer
@@ -529,15 +658,37 @@ func (s spWriteStore) ModifyBook(id string, fn func(*database.Book) error) (*dat
 	return &database.Book{ID: id, SeriesID: now}, nil
 }
 
+// DeleteSeries deletes series id only when NOTHING references it right now.
+// The row was decided on reference counts read at the re-plan (the run's
+// snapshot); a book another op pointed at the series since then would be
+// stranded by the delete. So the one series is re-counted, unfiltered
+// (trashed and non-primary rows included), immediately before the write: one
+// index read, not a library scan (database.SeriesRefCount). A count that
+// cannot be read refuses (fail closed). The window left is the count-to-delete
+// moment; see the type comment for why no lock closes it.
 func (s spWriteStore) DeleteSeries(id int) error {
-	if err := s.w.Beat("delete series " + strconv.Itoa(id)); err != nil {
-		return err
+	n, err := database.SeriesRefCount(s.store, id)
+	if err != nil {
+		return fmt.Errorf("re-count references to series %d before deleting it: %w", id, err)
+	}
+	if n != 0 {
+		return fmt.Errorf("%w: %d book row(s) now name series %d", repairs.ErrChangedSincePlan, n, id)
 	}
 	return s.store.DeleteSeries(id)
 }
 
+// spJournalFirst is the fixer's ledger: every row is journaled under the
+// apply op BEFORE the write it describes (Writer.JournalStep), and voided if
+// the write is refused. A row that cannot be journaled is never written
+// (repairs.ErrNotJournaled), so recErr is always nil here.
+func spJournalFirst(w *repairs.Writer) dedup.SeriesPruneLedger {
+	return func(c *database.OperationChange, write func() error) (error, error) {
+		return w.JournalStep(c.BookID, repairs.UndoEntry{ChangeType: c.ChangeType, Field: c.FieldName, Old: c.OldValue, New: c.NewValue}, write), nil
+	}
+}
+
 // Apply writes one fresh row through the extracted cores.
-func (f *seriesPruneFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *seriesPruneFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*spDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", seriesPruneFixerID, fresh.RowID)
@@ -546,22 +697,30 @@ func (f *seriesPruneFixer) Apply(_ context.Context, w *repairs.Writer, fresh rep
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	// Ledger rows go to the apply op's journal after each write, in the
-	// change types the op writes.
-	record := func(c *database.OperationChange) error {
-		return w.Journal(c.BookID, c.ChangeType, c.FieldName, c.OldValue, c.NewValue)
+	// Inside an apply run the caches are dropped once, when it ends
+	// (BeginApply); a direct call drops them after its own write.
+	wrote := func() {
+		if s := spSessionOf(ctx); s != nil {
+			s.wrote.Store(true)
+			return
+		}
+		f.invalidateCaches()
 	}
 	if d.kind == dedup.SeriesPruneOrphan {
-		return f.applyOrphan(w, store, d, record)
+		return f.applyOrphan(w, store, d, wrote)
 	}
-	return f.applyMerge(w, store, d, record)
+	return f.applyMerge(w, store, d, wrote)
 }
 
-// spSeriesExist reports ErrChangedSincePlan unless every series still exists.
-// A delete of a missing series succeeds in the store, so without this a
-// second apply of the same row would journal a delete it never made.
-func spSeriesExist(store OpsStore, ss ...database.Series) error {
-	for _, s := range ss {
+// spSeriesExist reports ErrChangedSincePlan unless every series still exists,
+// and, for each series in deleted (the ones the row removes), unless it is
+// still unheld. A delete of a missing series succeeds in the store, so without
+// the existence check a second apply of the same row would journal a delete it
+// never made, and a merge whose kept series is gone would point books at a
+// series that no longer exists. A series held for an undo since the re-plan
+// is never merged away: its books are not moved and nothing is deleted.
+func spSeriesExist(store OpsStore, keep []database.Series, deleted ...database.Series) error {
+	for i, s := range append(append([]database.Series(nil), keep...), deleted...) {
 		got, err := store.GetSeriesByID(s.ID)
 		if err != nil {
 			return fmt.Errorf("read series %d: %w", s.ID, err)
@@ -569,35 +728,42 @@ func spSeriesExist(store OpsStore, ss ...database.Series) error {
 		if got == nil {
 			return fmt.Errorf("%w: series %d is gone", repairs.ErrChangedSincePlan, s.ID)
 		}
+		if i >= len(keep) && database.SeriesHeld(*got) {
+			return fmt.Errorf("%w: series %d is now held by %s for an undo", repairs.ErrChangedSincePlan, s.ID, got.HeldBy)
+		}
 	}
 	return nil
 }
 
-func (f *seriesPruneFixer) applyOrphan(w *repairs.Writer, store OpsStore, d *spDecision, record dedup.SeriesPruneRecorder) error {
-	if err := spSeriesExist(store, d.orphan); err != nil {
+func (f *seriesPruneFixer) applyOrphan(w *repairs.Writer, store OpsStore, d *spDecision, wrote func()) error {
+	if err := spSeriesExist(store, nil, d.orphan); err != nil {
 		return err
 	}
-	res := dedup.DeleteOrphanSeries(spWriteStore{store: store, w: w}, d.orphan, d.orphanRf, record)
+	res := dedup.DeleteOrphanSeries(spWriteStore{store: store, w: w}, d.orphan, d.orphanRf, spJournalFirst(w))
 	switch {
 	case res.Referenced, res.Held:
 		// evaluate never hands Apply such a row; the core's guard stands
 		// anyway.
 		return fmt.Errorf("%w: series %d is referenced or held", repairs.ErrChangedSincePlan, d.orphan.ID)
 	case res.Err != nil:
+		// The write was not made. A fence, a lost lease and a change since
+		// the plan (a new reference, a hold) are all carried by WriteErr.
 		if errors.Is(res.WriteErr, database.ErrSeriesHeld) {
 			return fmt.Errorf("%w: %w", repairs.ErrChangedSincePlan, res.Err)
 		}
 		return errors.Join(res.WriteErr, res.Err)
 	}
-	f.invalidateCaches()
+	wrote()
 	if res.Unrecorded != nil {
+		// Unreachable with the journal-first ledger (a row it cannot journal
+		// is never written); kept so a ledger change cannot drop it silently.
 		return fmt.Errorf("%w: series %d removed but not journaled: %w", repairs.ErrPartiallyApplied, d.orphan.ID, res.Unrecorded)
 	}
 	return nil
 }
 
-func (f *seriesPruneFixer) applyMerge(w *repairs.Writer, store OpsStore, d *spDecision, record dedup.SeriesPruneRecorder) error {
-	if err := spSeriesExist(store, append([]database.Series{d.keep}, d.away...)...); err != nil {
+func (f *seriesPruneFixer) applyMerge(w *repairs.Writer, store OpsStore, d *spDecision, wrote func()) error {
+	if err := spSeriesExist(store, []database.Series{d.keep}, d.away...); err != nil {
 		return err
 	}
 	from := map[string]int{}
@@ -619,26 +785,28 @@ func (f *seriesPruneFixer) applyMerge(w *repairs.Writer, store OpsStore, d *spDe
 			return fmt.Errorf("%w: book %s is no longer in series %d", repairs.ErrChangedSincePlan, id, sid)
 		}
 	}
-	res := dedup.MergeSeriesGroup(spWriteStore{store: store, w: w, from: from}, d.keep, d.away, d.refs, d.members, record)
-	wrote := res.Repointed > 0 || res.Merged > 0
-	if wrote {
-		f.invalidateCaches()
+	res := dedup.MergeSeriesGroup(spWriteStore{store: store, w: w, from: from}, d.keep, d.away, d.refs, d.members, spJournalFirst(w))
+	moved := res.Repointed > 0 || res.Merged > 0
+	if moved {
+		wrote()
 	}
 	if len(res.Errors) == 0 && len(res.Unrecorded) == 0 {
 		return nil
 	}
 	errs := make([]error, 0, 2+len(res.WriteErrs)+len(res.Unrecorded))
 	// A stopped run (fence) or a lost lease is reported as such: the engine
-	// checks them before partial, so a resumed apply re-runs the row.
+	// checks them before partial. Such a row is not resumed as such: its
+	// re-plan sees the books already moved and settles changed_since_plan
+	// (see RESUME on seriesPruneFixer).
 	errs = append(errs, res.WriteErrs...)
-	if wrote {
+	if moved {
 		errs = append(errs, repairs.ErrPartiallyApplied)
 	}
 	errs = append(errs, res.Unrecorded...)
 	if len(res.Errors) > 0 {
 		errs = append(errs, errors.New(strings.Join(res.Errors, "; ")))
 	}
-	if len(res.Unrecorded) > 0 && !wrote {
+	if len(res.Unrecorded) > 0 && !moved {
 		errs = append(errs, repairs.ErrPartiallyApplied)
 	}
 	return fmt.Errorf("%s: row %s (%d books moved, %d series removed): %w",
