@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.52.0
+// version: 1.52.1
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-10-12
 
@@ -1381,13 +1381,22 @@ func migration065Up(store migrationStore) error {
 }
 
 // migration065Down only resets the schema version to 64. It deletes no
-// opv3: key: the previous binary ignores that prefix, and a later roll
-// forward reuses the records (Up is idempotent). Note that the
-// applied-migration record for 65 is kept (migrationStore cannot delete a
-// preference), so a roll forward after this Down advances the version without
-// re-running Up; any run the previous binary changed in the meantime has its
-// opv3: record corrected by its next v2 write (the façade projection reads
-// the v2 row, not the stale record's state).
+// opv3: key: the previous binary ignores that prefix, and every run it reads
+// is current in opv2: because of the mirror.
+//
+// What this rollback does NOT do, stated so nothing relies on more:
+//   - The previous binary does not know migration 65, so a plain redeploy
+//     never runs this Down: the version stays 65, and on roll-forward Up does
+//     not run again.
+//   - Even after this Down, the applied-migration record for 65 is kept
+//     (migrationStore cannot delete a preference), so RunMigrations advances
+//     the version again without re-running Up.
+//
+// Either way, a run the previous binary created or changed gets a correct
+// opv3: record only on its next v2 write (the façade projection reads the v2
+// row). A run it finished and never touches again keeps a stale record or
+// none, and the opv3 census undercounts it until something reconciles opv3:
+// against opv2: at boot (not built in 05-PR4).
 func migration065Down(store migrationStore) error {
 	return setVersion(store, 64)
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -929,5 +929,51 @@ func TestInterruptedLedgerRunMirrorsAsDroppedAndStays(t *testing.T) {
 	}
 	if l, _ := p.GetLedgerV3(id); l == nil {
 		t.Fatal("the ledger of a non-terminal run was deleted")
+	}
+}
+
+// TestMirrorOffSwitch is the D25 switch 05-PR16 flips: with the mirror off,
+// native v3 writes leave opv2: alone, while the v2 façade (which IS the v2
+// API) keeps writing both families.
+func TestMirrorOffSwitch(t *testing.T) {
+	p := newTimelineStore(t)
+	facade := newRunID()
+	if err := p.InsertOperationV2(OperationV2Row{ID: facade, DefID: "test.mirror-off", Status: "queued", QueuedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	p.setOpsV2MirrorEnabled(false)
+	t.Cleanup(func() { p.setOpsV2MirrorEnabled(true) })
+	if p.opsV2MirrorEnabled() {
+		t.Fatal("the switch did not turn the mirror off")
+	}
+
+	native := insertV3(t, p, "test.mirror-off", "")
+	transition(t, p, native, state.EvDispatch, nil)
+	for _, k := range timelineKeys(t, p, "opv2:") {
+		if strings.Contains(k, native) {
+			t.Errorf("mirror off, but a native write left %s", k)
+		}
+	}
+
+	// The façade still writes both families.
+	now := time.Now().UTC()
+	if err := p.UpdateOperationV2Status(facade, "running", &now, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustRun(t, p, facade); r.State != state.V3Running {
+		t.Fatalf("façade write with the mirror off: v3 %s, want running", r.State)
+	}
+
+	// A native discard leaves the v2 row alone with the mirror off.
+	transition(t, p, facade, state.EvReturnNil, nil)
+	before := v3Digest(t, p, "opv2:")
+	if deleted, err := p.DeleteRunV3(facade, []state.V3{state.V3Succeeded}); err != nil || !deleted {
+		t.Fatalf("DeleteRunV3: %v %v", deleted, err)
+	}
+	if v3Digest(t, p, "opv2:") != before {
+		t.Fatal("mirror off, but DeleteRunV3 changed opv2:")
+	}
+	if r, _ := p.GetRunV3(facade); r != nil {
+		t.Fatal("the v3 record survived its discard")
 	}
 }
