@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.88.2
+// version: 2.88.3
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package server
 
@@ -178,8 +178,12 @@ type Server struct {
 	credRoutes map[string]credRouteKind
 	// metadataCacheH is the metadata-cache handler, kept so the startup
 	// warmer can build its review snapshot (warmMetadataReviewSnapshot).
-	metadataCacheH         *handlers.MetadataCacheHandler
-	httpServer             *http.Server
+	metadataCacheH *handlers.MetadataCacheHandler
+	httpServer     *http.Server
+	// httpBoundAddr is the main listener's real address ("host:port"),
+	// stored by configureAndStartHTTP once the port is bound and before
+	// READY=1 is sent. With --port 0 it is the only record of the port.
+	httpBoundAddr          atomic.Pointer[string]
 	router                 *gin.Engine
 	audiobookService       *audiobookspkg.AudiobookService
 	audiobookUpdateService *AudiobookUpdateService

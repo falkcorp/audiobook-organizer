@@ -1,7 +1,7 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-10-12 -->
 
 # Deploy Rollback & Windows GPU Keepalive
 
@@ -51,12 +51,13 @@ Once your real `Makefile.local`'s `deploy` target includes this same
    installing the new one and restarting the service.
 2. If the new deploy is bad, run the committed rollback target:
    ```bash
-   make rollback DEPLOY_HOST=192.0.2.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer DEPLOY_DB=/path/to/audiobooks.pebble
+   make rollback DEPLOY_HOST=192.0.2.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer DEPLOY_DB=/path/to/audiobooks.pebble DEPLOY_URL=https://192.0.2.10:8484
    ```
-   (`DEPLOY_HOST`/`DEPLOY_BIN`/`DEPLOY_DB` are normally already set in your
-   `Makefile.local`, so you can usually just run `make rollback`. `DEPLOY_DB`
-   is the main Pebble store path on the server, the `--db` /
-   `DATABASE_PATH` value; `rollback` refuses to run without it.)
+   (`DEPLOY_HOST`/`DEPLOY_BIN`/`DEPLOY_DB`/`DEPLOY_URL` are normally already
+   set in your `Makefile.local`, so you can usually just run `make rollback`.
+   `DEPLOY_DB` is the main Pebble store path on the server, the `--db` /
+   `DATABASE_PATH` value; `DEPLOY_URL` is the server's base URL, which the
+   readiness wait polls. `rollback` refuses to run without either.)
 3. `rollback` first checks that `$(DEPLOY_BIN).prev` exists on the server
    (errors out cleanly if not — e.g. right after a fresh install with no
    prior deploy).
@@ -78,11 +79,59 @@ Once your real `Makefile.local`'s `deploy` target includes this same
    overrides a format change.
 5. Only then does it copy the *currently installed* (bad) binary to
    `$(DEPLOY_BIN).rolled-back` for forensics, restore `.prev` back to
-   `$(DEPLOY_BIN)`, and restart `audiobook-organizer.service`.
+   `$(DEPLOY_BIN)`, and restart `audiobook-organizer.service`. It then
+   waits for `/health` to report `"ready":true` (see
+   [Readiness](#readiness-what-deploy-and-rollback-wait-for)). A `.prev`
+   older than readiness reporting answers without a `ready` field, so the
+   wait fails at once after a swap that did happen; check that server by
+   hand.
 6. Dry-run without touching any host:
    ```bash
-   make -n rollback DEPLOY_HOST=test-host DEPLOY_BIN=/tmp/x DEPLOY_DB=/tmp/db
+   make -n rollback DEPLOY_HOST=test-host DEPLOY_BIN=/tmp/x DEPLOY_DB=/tmp/db DEPLOY_URL=https://192.0.2.10:8484
    ```
+
+### Readiness: what deploy and rollback wait for
+
+The server reports readiness in two places:
+
+- **`/health` field `ready`** (also `/api/health`, `/api/v1/health`). It is
+  `false` while the in-memory read layer warms up, which takes 130-200 s on
+  prod, and `true` once reads are on the fast path. The HTTP status is 200
+  either way, so liveness probes are unaffected.
+- **systemd `READY=1`**, under a `Type=notify` unit. The server sends it once
+  its fatal startup steps have passed and its HTTP port is bound, which is
+  before the warmup, and sends `STOPPING=1` when shutdown begins. A port
+  that is already taken now fails startup instead of leaving a process that
+  looks alive.
+
+`make deploy`, `make deploy-debug` and `make rollback` run
+`scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300` after the restart. The
+script polls `$(DEPLOY_URL)/health` every 5 s, for up to 300 s, until the body
+contains `"ready":true`, and prints the elapsed seconds. No answer, or
+`"ready":false`, keeps it polling. A 200 body with no `ready` field fails at
+once, because that binary predates readiness reporting. `deploy` runs its
+version check only after the wait succeeds.
+
+**The owner installs the unit.** `deploy/audiobook-organizer.service` sets
+`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`, but no target
+in this repo copies it to a host. To install it:
+
+1. Deploy a binary that sends `READY=1` first. An older binary under this
+   unit never reports ready, so systemd kills it at `TimeoutStartSec` and
+   restarts it in a loop. A new binary under the old `Type=simple` unit is
+   fine; it simply has no socket to notify.
+2. Copy the unit: `sudo cp deploy/audiobook-organizer.service /etc/systemd/system/`.
+   Your `local.conf` drop-in keeps overriding `ExecStart`. It must start the
+   binary directly, not through a wrapper shell, because `NotifyAccess=main`
+   accepts the notification only from the main process.
+3. Run `sudo systemctl daemon-reload`.
+4. Run `sudo systemctl restart audiobook-organizer.service`.
+   `systemctl restart` now returns once the port is bound, and
+   `systemctl status` shows the server's status line.
+
+To undo, put `Type=simple` back (and drop the two added lines), then run
+`daemon-reload` and restart. Do this before rolling back to a binary older
+than readiness notification.
 
 ### sudoers for `make rollback` (owner action)
 
