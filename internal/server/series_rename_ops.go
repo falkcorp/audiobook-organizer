@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -138,14 +138,29 @@ func (s *Server) invalidateSeriesCaches() {
 	}
 }
 
+// invalidateBookDuplicateCaches drops the caches an undone book merge makes
+// stale: the book duplicate scan and its group list. The merge-undo route
+// (duplicates.Handler.UndoCombine) drops the same two keys.
+func (s *Server) invalidateBookDuplicateCaches() {
+	if s.dedupCache != nil {
+		s.dedupCache.Invalidate("book-dedup-scan")
+		s.dedupCache.Invalidate("book-duplicates")
+	}
+}
+
 // revertOperation is the operations handler's revert: it reverses the
 // operation's change ledger and, when any series_rename row was restored,
-// drops the series caches so GET /series shows the restored name at once.
+// drops the series caches so GET /series shows the restored name at once;
+// when any merge_combine_journal row was restored (a Repairs merge undone),
+// it drops the book duplicate caches, as the merge-undo route does.
 // A partial revert still invalidates, since its restored rows did land.
 func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error) {
 	res, err := audiobookspkg.NewRevertService(s.storeForWiring()).RevertOperation(id)
 	if res != nil && res.RestoredTypes[undo.ChangeTypeSeriesRename] > 0 {
 		s.invalidateSeriesCaches()
+	}
+	if res != nil && res.RestoredTypes[undo.ChangeTypeMergeCombineJournal] > 0 {
+		s.invalidateBookDuplicateCaches()
 	}
 	return res, err
 }
