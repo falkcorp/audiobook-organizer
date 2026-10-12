@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -43,30 +43,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
 
-// seriesPruneStore and seriesMergeStore are what the series maintenance helpers
-// actually call, measured by emptying each and reading the compiler's
-// enumeration. Both were inline anonymous interfaces of database.* embeds —
-// 111 and 60 methods — in parameter position.
-type seriesPruneStore interface {
-	GetAllSeries() ([]database.Series, error)
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
-	// No per-series AllVersions read on purpose: phase 1 hoists the complete
-	// membership once through database.SeriesMembershipAllVersions (a
-	// capability, resolved through the decorator chain), so a per-series read
-	// inside the merge loop cannot come back without widening this interface
-	// (SERIES-MERGE-PERSERIES-SCAN-COST).
-	DeleteSeries(id int) error
-	GetBookByID(id string) (*database.Book, error)
-	// ModifyBook, not UpdateBook: the prune repoints one column (SeriesID)
-	// and must not revert whatever another writer committed to the row
-	// between the hydrate and the write (database.BookMutator.ModifyBook).
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	CreateOperationChange(change *database.OperationChange) error
-}
+// seriesPruneStore is what executeSeriesPrune calls; the per-group merge and
+// per-orphan delete it loops over live in internal/dedup (series_prune_core.go)
+// beside the Repairs fixer that applies them one row at a time, so the
+// interface does too. seriesMergeStore is what the series normalize helpers
+// call, measured by emptying it and reading the compiler's enumeration (an
+// inline anonymous interface of database.* embeds, 60 methods, until then).
+type seriesPruneStore = dedup.SeriesPruneStore
 
 type seriesMergeStore interface {
 	GetAllSeries() ([]database.Series, error)
@@ -127,13 +113,21 @@ func (s *Server) filterReviewedAuthorGroups(groups []dedup.AuthorDedupGroup) []d
 
 // executeSeriesPrune performs the actual series prune logic (used by both HTTP handler and scheduler).
 //
+// It is a whole-library loop over the cores in internal/dedup
+// (series_prune_core.go): dedup.GroupDuplicateSeries and
+// dedup.VoteSeriesCanonical choose, dedup.MergeSeriesGroup merges one group,
+// dedup.DeleteOrphanSeries deletes one orphan. The Repairs fixer
+// dedup.series-prune applies the same cores one row at a time. What stays
+// here is what only the whole-library run has: progress, counters, the
+// once-per-run reads, the summary ledger row and the cache invalidation.
+//
 // Counters and the cache invalidation are hoisted to the top and deferred on
 // purpose. This function has seven exits — two ctx cancellations, two store
 // failures, both fail-closed reference-count guards (phase 1's and phase 2's),
 // and the normal end. All but two of them can be reached AFTER phase 1 has
 // already repointed books — the exceptions are phase 1's own reference-count
 // guard and the initial GetAllSeries failure, which both return before any
-// repointing happens and are listed here only so the count is honest.
+// repointing happens and are listed here only so the count is complete.
 // Invalidating
 // only at the normal exit left the other five serving pre-merge membership under
 // the cached list's 24-hour TTL, which is the 2026-08-14 production symptom
@@ -206,6 +200,18 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		err = recorded
 	}()
 
+	// Every ledger row of the cores is written under this run's operation, as
+	// the inline loop always wrote them, and only when the run has one. A
+	// failed write was ignored before the extraction and still is.
+	record := func(c *database.OperationChange) error {
+		if operationID == "" {
+			return nil
+		}
+		c.ID = ulid.Make().String()
+		c.OperationID = operationID
+		return store.CreateOperationChange(c)
+	}
+
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
 		return fmt.Errorf("failed to get series: %w", err)
@@ -215,28 +221,9 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	totalSteps := len(allSeries) + 2
 	_ = progress.UpdateProgress(0, totalSteps, fmt.Sprintf("Scanning %d series... (0/%d 0.00%%)", len(allSeries), totalSteps))
 
-	// Group by LOWER(TRIM(name)) + author_id
-	type groupKey struct {
-		name     string
-		authorID int
-	}
-	groups := make(map[groupKey][]database.Series)
-	held := 0
-	for _, s := range allSeries {
-		// A held row (database.SeriesHeld) is kept for an undo that links its
-		// books back; merging it away would delete it. Its twins still merge
-		// among themselves.
-		if database.SeriesHeld(s) {
-			held++
-			continue
-		}
-		aid := 0
-		if s.AuthorID != nil {
-			aid = *s.AuthorID
-		}
-		key := groupKey{name: util.NormalizeString(s.Name), authorID: aid}
-		groups[key] = append(groups[key], s)
-	}
+	// Group by LOWER(TRIM(name)) + author_id, held rows left out
+	// (dedup.GroupDuplicateSeries).
+	groups, held := dedup.GroupDuplicateSeries(allSeries)
 
 	// UNFILTERED reference counts for PHASE 1, read once before the merge loop.
 	//
@@ -274,16 +261,14 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// Staleness: groups are disjoint and each merged-from series is read once,
 	// and books only move from it onto its own group's keeper, which is never
 	// read from this map. So no read here can see a stale entry today. Every
-	// successful repoint is still recorded with Move, so the map stays equal to
-	// what a fresh read would return if a later change adds such a read.
+	// successful repoint is still recorded with Move (inside
+	// dedup.MergeSeriesGroup), so the map stays equal to what a fresh read would
+	// return if a later change adds such a read.
 	//
 	// Fails CLOSED, before anything is written, like phase1RefCounts.
 	var phase1IDs []int
 	for _, group := range groups {
-		if len(group) < 2 {
-			continue
-		}
-		for _, s := range group {
+		for _, s := range group.Members {
 			phase1IDs = append(phase1IDs, s.ID)
 		}
 	}
@@ -297,192 +282,34 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	dupGroupCount := 0
 
 	for _, group := range groups {
-		if len(group) < 2 {
-			continue
-		}
 		dupGroupCount++
 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		// Pick canonical: most books, then lowest ID
-		canonicalIdx := 0
-		canonicalBookCount := 0
-		voteFailed := false
-		for i, s := range group {
-			// Core is right here: this is candidate SELECTION, picking which of
-			// several duplicate series survives. Counting alternate rips would let
-			// a series win the vote on copies rather than on distinct books. The
-			// repoint loop below reads the complete set — the two getters play
-			// different roles and that is deliberate.
-			books, err := store.GetBooksBySeriesIDCore(s.ID)
-			if err != nil {
-				// A failed count DISQUALIFIES the whole group.
-				//
-				// Recording the error and carrying on was not enough. A series whose
-				// count fails to load counts as zero books, so it loses the vote to any
-				// sibling — and the loser is then DELETED. One transient read error
-				// could make a 400-book series lose to a 2-book typo of itself: the
-				// books survive (they get repointed) but the canonical row, its ID and
-				// every external reference to it are gone, and reversing it means
-				// hand-reading the OperationChange ledger.
-				//
-				// Skipping the group costs one deferred merge. Getting the vote wrong
-				// costs a row that cannot be recovered from the summary.
-				mergeErrors = append(mergeErrors, fmt.Sprintf(
-					"failed to count books for series %d (%q) while picking which of %d duplicate "+
-						"series to keep; REFUSING to merge this group, because an unreadable count "+
-						"would silently lose the vote and get the series deleted: %v",
-					s.ID, s.Name, len(group), err))
-				voteFailed = true
-				break
-			}
-			bc := len(books)
-			if bc > canonicalBookCount || (bc == canonicalBookCount && s.ID < group[canonicalIdx].ID) {
-				canonicalIdx = i
-				canonicalBookCount = bc
-			}
-		}
-		if voteFailed {
+		// Pick canonical: most books, then lowest ID. A failed count
+		// disqualifies the whole group (see dedup.VoteSeriesCanonical).
+		vote, voteErr := dedup.VoteSeriesCanonical(store, group.Members)
+		if voteErr != nil {
+			mergeErrors = append(mergeErrors, voteErr.Error())
 			continue
 		}
-		keepID := group[canonicalIdx].ID
-
-		for i, ser := range group {
-			if i == canonicalIdx {
-				continue
-			}
-			// Hydrate the full row via GetBookByID and mutate/write THAT. The
-			// tempting shortcut — bookCore.ToBook() then UpdateBook — would drop
-			// the denormalized Author/Series (db:"-"): they are NOT covered by
-			// UpdateBook's STOR-1 preserve-on-empty guard (which only restores
-			// Description/VersionNotes/BookSig*). Hydrating keeps the write
-			// correct and self-contained.
-			// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-			//
-			// AllVersions, not the Core listing getter: this loop repoints every
-			// row it is handed and then deletes ser.ID below. A non-primary
-			// version the listing getter hides is one this loop never repoints,
-			// and it is left holding a series that no longer exists.
-			// From the hoisted map (see phase1Members).
-			books := phase1Members[ser.ID]
-			// Every book that could NOT be repointed. The delete below is gated on
-			// this being zero: a book still holding ser.ID when the row is deleted
-			// is stranded exactly as if the getter had hidden it, and the operator
-			// is told the prune succeeded. Recording the failure is not enough --
-			// that is what this loop already did.
-			repointFailed := 0
-			// Rows this iteration actually MOVED off ser.ID, counted on the
-			// write succeeding. It is the subtrahend of the reference guard
-			// below and must never be len(books): that is what was ATTEMPTED,
-			// and it would make the guard pass on exactly the failures it
-			// exists to catch. booksRepointed is the run-wide total and cannot
-			// serve here.
-			moved := 0
-			for _, bookCore := range books {
-				oldSeriesID := ser.ID
-				full, herr := store.GetBookByID(bookCore.ID)
-				if herr != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to hydrate book %s: %v", bookCore.ID, herr))
-					repointFailed++
-					continue
-				}
-				if full == nil {
-					// Reachable: the Pebble store returns (nil, nil) on ErrNotFound,
-					// and the membership getter can list a row from the memdb that a
-					// later point-get cannot hydrate. This branch used to be entirely
-					// silent -- no error, no counter -- and then fell through to the
-					// delete.
-					mergeErrors = append(mergeErrors, fmt.Sprintf(
-						"book %s is listed under series %d but does not resolve", bookCore.ID, ser.ID))
-					repointFailed++
-					continue
-				}
-				// ModifyBook writes SeriesID alone, on the row as it is under
-				// the write lock, so a column another writer committed between
-				// the hydrate above and this write is not reverted.
-				written, err := store.ModifyBook(full.ID, func(b *database.Book) error {
-					if b.SeriesID != nil && *b.SeriesID == keepID {
-						return database.ErrSkipBookWrite
-					}
-					b.SeriesID = &keepID
-					return nil
-				})
-				if err == nil && written == nil {
-					err = fmt.Errorf("book vanished before its series could be reassigned")
-				}
-				if err != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
-					repointFailed++
-				} else {
-					// Counted on the WRITE succeeding, not inside the operationID
-					// branch below: a repoint with no operation to attribute it to
-					// still changed the book's series and still invalidates the
-					// cached series list.
-					booksRepointed++
-					moved++
-					phase1Members.Move(bookCore.ID, ser.ID, &keepID)
-					if operationID != "" {
-						_ = store.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      bookCore.ID,
-							ChangeType:  "series_merge",
-							FieldName:   "series_id",
-							OldValue:    fmt.Sprintf("%d (%s)", oldSeriesID, ser.Name),
-							NewValue:    fmt.Sprintf("%d (%s)", keepID, group[canonicalIdx].Name),
-						})
-					}
-				}
-			}
-			if repointFailed > 0 {
-				mergeErrors = append(mergeErrors, fmt.Sprintf(
-					"series %d (%q): %d of %d books could not be repointed to %d; REFUSING to "+
-						"delete it, which would leave them holding a series row that no longer "+
-						"exists. Re-run after resolving the errors above.",
-					ser.ID, ser.Name, repointFailed, len(books), keepID))
-				continue
-			}
-			// The reference guard, kept SEPARATE from the repointFailed gate
-			// above on purpose: they answer different questions and fire on
-			// different populations. repointFailed covers rows this loop was
-			// handed and could not write; this covers rows it was never handed
-			// at all. Reaching here means the unfiltered counter sees more
-			// references than GetBooksBySeriesIDAllVersions returned — a
-			// TRASHED row (both series getters skip soft-deleted books, and a
-			// trashed row cannot be repointed) or a row the memdb counts and
-			// Pebble can no longer hydrate.
-			//
-			// Only the row removal is refused. The books that WERE repointed
-			// stay repointed: that is strictly an improvement and rolling it
-			// back would re-strand them. A surviving series row is visible and
-			// re-cleanable; a deleted one is not.
-			if stranded := phase1RefCounts[ser.ID] - moved; stranded > 0 {
-				mergeErrors = append(mergeErrors, fmt.Sprintf(
-					"series %d (%q): %d book(s) still reference it after reassigning %d to %d "+
-						"(trashed rows, which cannot be repointed, or rows the reference count sees "+
-						"and this run could not); REFUSING to delete it, which would leave them "+
-						"holding a series row that no longer exists",
-					ser.ID, ser.Name, stranded, moved, keepID))
-				continue
-			}
-			if err := store.DeleteSeries(ser.ID); err != nil {
-				mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete series %d: %v", ser.ID, err))
-			} else {
-				totalMerged++
-				if operationID != "" {
-					_ = store.CreateOperationChange(&database.OperationChange{
-						ID:          ulid.Make().String(),
-						OperationID: operationID,
-						ChangeType:  "series_delete",
-						FieldName:   "series",
-						OldValue:    fmt.Sprintf("%d: %s", ser.ID, ser.Name),
-						NewValue:    fmt.Sprintf("merged into %d: %s", keepID, group[canonicalIdx].Name),
-					})
-				}
+		keep := group.Members[vote.CanonicalIdx]
+		away := make([]database.Series, 0, len(group.Members)-1)
+		for i, ser := range group.Members {
+			if i != vote.CanonicalIdx {
+				away = append(away, ser)
 			}
 		}
+		merged := dedup.MergeSeriesGroup(store, keep, away, phase1RefCounts, phase1Members, record)
+		totalMerged += merged.Merged
+		// Counted on the WRITE succeeding, whether or not the series delete
+		// that follows was refused: a repoint with no operation to attribute it
+		// to still changed the book's series and still invalidates the cached
+		// series list.
+		booksRepointed += merged.Repointed
+		mergeErrors = append(mergeErrors, merged.Errors...)
 	}
 
 	_ = progress.Log("info", fmt.Sprintf("Phase 1 complete: merged %d duplicate series from %d groups", totalMerged, dupGroupCount), nil)
@@ -543,26 +370,14 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if refCounts[ser.ID] == 0 && database.SeriesHeld(ser) {
-				// Kept for an undo; counted with the merge pass's held rows.
-				continue
+			// A referenced row and a held one (kept for an undo; counted with
+			// the merge pass's held rows) are both left alone.
+			orphan := dedup.DeleteOrphanSeries(store, ser, refCounts[ser.ID], record)
+			if orphan.Err != nil {
+				mergeErrors = append(mergeErrors, orphan.Err.Error())
 			}
-			if refCounts[ser.ID] == 0 {
-				if err := store.DeleteSeries(ser.ID); err != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete orphan series %d: %v", ser.ID, err))
-				} else {
-					orphansDeleted++
-					if operationID != "" {
-						_ = store.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							ChangeType:  "series_delete",
-							FieldName:   "orphan_series",
-							OldValue:    fmt.Sprintf("%d: %s", ser.ID, ser.Name),
-							NewValue:    "deleted (0 book references, any state)",
-						})
-					}
-				}
+			if orphan.Deleted {
+				orphansDeleted++
 			}
 		}
 	}
@@ -576,16 +391,12 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	_ = progress.Log("info", resultMsg, nil)
 
 	// Record summary change
-	if operationID != "" {
-		_ = store.CreateOperationChange(&database.OperationChange{
-			ID:          ulid.Make().String(),
-			OperationID: operationID,
-			ChangeType:  "series_prune_summary",
-			FieldName:   "summary",
-			OldValue:    fmt.Sprintf("%d total series scanned", len(allSeries)),
-			NewValue:    resultMsg,
-		})
-	}
+	_ = record(&database.OperationChange{
+		ChangeType: "series_prune_summary",
+		FieldName:  "summary",
+		OldValue:   fmt.Sprintf("%d total series scanned", len(allSeries)),
+		NewValue:   resultMsg,
+	})
 	// Capped at ten in the message so a run with thousands of failures does not
 	// produce an unreadable error string; the count above it is the complete
 	// figure, and every entry is in the operation log.
