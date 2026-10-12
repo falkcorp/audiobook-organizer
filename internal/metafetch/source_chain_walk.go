@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-10-11
 
@@ -136,10 +136,12 @@ type ChainOutcome struct {
 	// callers still write the book's per-book row (WriteBackOutcome), which
 	// the review UI and the bulk "already cached" skip read.
 	SharedCacheHit bool
-	// SharedAskedAt is when the provider gave the shared answer
-	// (SharedCacheHit only; zero otherwise). The per-book row copied from it
-	// is stamped with this age, not with the copy time: a copy stamped "now"
-	// would let an answer outlive its TTL by up to the TTL again.
+	// SharedAskedAt is when the provider gave the winning answer when that
+	// answer came from the shared cache: on a SharedCacheHit, or when a later
+	// rung of a ladder that also asked live was answered from P1. Zero for a
+	// live answer. The per-book row copied from it is stamped with this age,
+	// not with the copy time: a copy stamped "now" would let an answer outlive
+	// its TTL by up to the TTL again.
 	SharedAskedAt time.Time
 	// SearchIdentity is the book's database.MetadataSearchIdentity the walk
 	// read the cache with. Callers stamp their write-back with it, so the read
@@ -189,7 +191,7 @@ func (o ChainOutcome) FromCache() bool {
 // per-provider row (metadata_fetch_cache:<book>:<provider>), which the review
 // UI and the bulk "already cached" skip read. Nothing is written when the
 // book's own row answered (CacheHit) or there are no results. A shared-cache
-// hit is copied with the shared answer's age (SharedAskedAt), so the copy
+// answer is copied with that answer's age (SharedAskedAt), so the copy
 // expires when the answer does. The three bulk-fetch paths share this one
 // write so the rule cannot drift between them.
 func WriteBackOutcome(store database.RawKVStore, bookID string, out ChainOutcome) error {
@@ -200,11 +202,9 @@ func WriteBackOutcome(store database.RawKVStore, bookID string, out ChainOutcome
 	if err != nil {
 		return fmt.Errorf("encode results: %w", err)
 	}
-	var cachedAt time.Time
-	if out.SharedCacheHit {
-		cachedAt = out.SharedAskedAt
-	}
-	return database.PutCachedMetadataFetchAt(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0, cachedAt)
+	// SharedAskedAt is zero for a live answer, which PutCachedMetadataFetchAt
+	// stamps now.
+	return database.PutCachedMetadataFetchAt(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0, out.SharedAskedAt)
 }
 
 // status maps a completed walk onto the ledger status. Order matters: results
@@ -351,6 +351,7 @@ func WalkSourceChain(
 				}
 				var res []metadata.BookMetadata
 				var err error
+				var cachedAt time.Time // non-zero: this rung was answered from P1
 				switch {
 				case !shared:
 					res, err = a.run()
@@ -361,7 +362,7 @@ func WalkSourceChain(
 						pcacheWrite(store, a.key, slotKey, a.endpoint, res, len(res) == 0, questionTTL(slotKey), time.Time{})
 					}
 				default:
-					res, _, err = cachedCall(store, slotKey, a.endpoint, a.key, cacheUse{}, a.run)
+					res, cachedAt, err = cachedCall(store, slotKey, a.endpoint, a.key, cacheUse{}, a.run)
 				}
 				if shared && err == nil {
 					pkeys.add(slotKey, a.key)
@@ -385,6 +386,13 @@ func WalkSourceChain(
 				}
 				if len(res) > 0 {
 					out.Results, out.SourceName, out.ProviderKey = res, name, slotKey
+					// A later rung can win from P1 after an earlier rung was
+					// asked live: the walk made a call (not FromCache), but the
+					// winning answer keeps its age for the write-back.
+					out.SharedAskedAt = cachedAt
+					if !cachedAt.IsZero() {
+						markReleaseYear(res, name)
+					}
 					if a.variant != nil {
 						out.Variant = a.query
 						slog.Info("metadata-fetch: hit on title variant",

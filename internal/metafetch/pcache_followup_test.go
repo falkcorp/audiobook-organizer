@@ -1,5 +1,5 @@
 // file: internal/metafetch/pcache_followup_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e971d44a-1aa0-4ff3-8223-e9a5a43c932b
 // last-edited: 2026-10-11
 
@@ -315,4 +315,45 @@ func TestCachedLookupASIN_ErrorNeverCached(t *testing.T) {
 	_, err = svc.cachedLookupASIN(p, metadata.SourceIDAudible, "B0SYNTH005")
 	require.Error(t, err)
 	assert.EqualValues(t, 2, calls.Load(), "the next search asks again")
+}
+
+// A ladder that asks its first rung live can still win on a later rung from
+// the shared cache: two copies of a book with different author spellings
+// share the title-only answer. The walk made a call (not FromCache, so the
+// bulk pause applies), but the per-book copy keeps the shared answer's age.
+func TestWriteBackOutcome_LaterRungFromSharedCacheKeepsAskedAt(t *testing.T) {
+	withSharedCache(t, true)
+	asked := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	now := asked
+	withClock(t, &now)
+	svc, _ := newPCacheService(t)
+	// Title+author finds nothing; the title alone finds the book.
+	src := &scriptedProvider{id: metadata.SourceIDAudible, answer: func(title, author string) []metadata.BookMetadata {
+		if author != "" {
+			return nil
+		}
+		return echoAnswer(title, "Author 07")
+	}}
+	sem := NewProviderSemaphore([]metadata.MetadataSource{src}, 2)
+	ctx := context.Background()
+
+	a, err := WalkSourceChain(ctx, svc.db, []metadata.MetadataSource{src}, sem, "book-a", "Title 000124", "Author 07", "v1:book-a", 0)
+	require.NoError(t, err)
+	require.Len(t, a.Results, 1, "book-a wins on the title-only rung, asked live")
+	assert.True(t, a.SharedAskedAt.IsZero(), "a live answer carries no shared age")
+	callsA := src.calls.Load()
+
+	now = asked.Add(20 * 24 * time.Hour)
+	b, err := WalkSourceChain(ctx, svc.db, []metadata.MetadataSource{src}, sem, "book-b", "Title 000124", "A. Author 07", "v1:book-b", 0)
+	require.NoError(t, err)
+	require.Len(t, b.Results, 1)
+	assert.Equal(t, callsA+1, src.calls.Load(), "book-b's own title+author rung is asked live; the title-only rung is shared")
+	assert.False(t, b.FromCache(), "the walk made a call")
+	assert.True(t, b.SharedAskedAt.Equal(asked), "the winning shared answer keeps its age, got %s", b.SharedAskedAt)
+
+	require.NoError(t, WriteBackOutcome(svc.db, "book-b", b))
+	row, err := database.GetCachedMetadataFetch(svc.db, "book-b", metadata.SourceIDAudible, "v1:book-b")
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.True(t, row.CachedAt.Equal(asked), "the per-book copy is stamped with the provider's answer time, got %s", row.CachedAt)
 }
