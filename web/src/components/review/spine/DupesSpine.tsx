@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
 // last-edited: 2026-10-11
 //
@@ -154,7 +154,8 @@ const stopPropagation = (e: MouseEvent) => e.stopPropagation();
  * The server decides: the candidate list computes `is_itunes` for each side with
  * itunesguard.OwnershipWhy, which also sees the per-file rows and external ids
  * the candidate payload does not carry. The check below runs only when that
- * field is ABSENT (a payload from a server that predates it, or a book that did
+ * field is ABSENT (a payload from a server that predates it, a page whose flag
+ * pass ran out of time on a slow mount, or a book that did
  * not come through include_books) and mirrors the book-level part of that
  * predicate: a book under books/itunes/**, or carrying a book iTunes persistent
  * id or iTunes path. A book that is an iTunes copy only through its file rows
@@ -177,7 +178,7 @@ function SideChips({ book }: { book: Book | null | undefined }) {
           label="iTunes"
           size="small"
           variant="outlined"
-          title="This book came from iTunes (persistent ID, iTunes path, or a file in an iTunes folder)."
+          title="This book came from iTunes (persistent ID, iTunes path or ID, or a file in an iTunes folder)."
           data-testid="itunes-chip"
         />
       )}

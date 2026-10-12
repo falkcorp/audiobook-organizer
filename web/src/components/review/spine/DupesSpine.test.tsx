@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 2.4.0
+// version: 2.4.1
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
 // last-edited: 2026-10-11
 //
@@ -324,6 +324,7 @@ describe('side chips', () => {
     ]);
     const title = screen.getByTestId('itunes-chip').getAttribute('title') ?? '';
     expect(title).toMatch(/came from iTunes/);
+    expect(title).toMatch(/iTunes path or ID/);
     // A book with only a persistent id can be merged: the old text said otherwise.
     expect(title).not.toMatch(/never writes/i);
   });

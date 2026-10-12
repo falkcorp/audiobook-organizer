@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
 // last-edited: 2026-10-11
 
@@ -48,8 +48,7 @@ type DedupStore interface {
 
 	// The include_books listing's iTunes flag (itunes_flags.go): one batched
 	// read of the page's book_file rows plus a per-book external-id read.
-	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error) // BookFileStore
-	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)           // ExternalIDReader
+	iTunesFlagStore
 
 	// Bulk readers, used only by resolveBookIDsMatching to turn a search
 	// needle into the set of book IDs the Dupes panel's text search must
