@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill_budget_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1e9d34-0c7a-4f52-a8d3-5e72c9b04f81
 // last-edited: 2026-10-11
 
@@ -7,12 +7,18 @@ package deluge
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 
 // budgetBytes is distinct content of a distinct size per n, so no two
@@ -288,5 +294,171 @@ func TestLinkBackfill_LimitStillNamesItsOwnDeferral(t *testing.T) {
 	}
 	if res.NextStartAfter != linkTorrentID(1) {
 		t.Errorf("next_start_after = %q, want torrent 1 (torrent 2 is still unexamined)", res.NextStartAfter)
+	}
+}
+
+// matchedTorrents lists n single-file torrents, ids linkTorrentID(1..n), each
+// matching one library row (bf-1..bf-n) by content, and returns the rows.
+func matchedTorrents(t *testing.T, f *linkFixture, n int) ([]delugeclient.TorrentDetail, []database.BookFile) {
+	t.Helper()
+	var ts []delugeclient.TorrentDetail
+	var rows []database.BookFile
+	for i := 1; i <= n; i++ {
+		ts = append(ts, f.torrent(t, i, filepath.Join(f.downloads, fmt.Sprintf("t%d", i)),
+			tfile{"Example Book/01.mp3", budgetBytes(i)}))
+		rows = append(rows, f.libraryRow(fmt.Sprintf("bf-%d", i), fmt.Sprintf("%02d.mp3", i), budgetBytes(i)))
+	}
+	return ts, rows
+}
+
+// fakeLinkClock is a clock each hash advances by step, so a test drives the
+// deadline stop without sleeping.
+type fakeLinkClock struct {
+	now  atomic.Int64 // unix nanos
+	step time.Duration
+}
+
+func (c *fakeLinkClock) Now() time.Time { return time.Unix(0, c.now.Load()) }
+
+func (c *fakeLinkClock) hash(path string) (string, error) {
+	c.now.Add(int64(c.step))
+	return filehash.BookFileHash(path)
+}
+
+func runLinkCtx(t *testing.T, ctx context.Context, p *Plugin, params string) (linkBackfillResult, error) {
+	t.Helper()
+	r := &linkTestReporter{}
+	err := p.runLinkBackfill(ctx, json.RawMessage(params), r)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.result == nil {
+		return linkBackfillResult{}, err
+	}
+	return r.result.(linkBackfillResult), err
+}
+
+// A run with no limit whose listing would outlast the op's timeout stops
+// admitting torrents before the deadline, still writes the links it found,
+// and persists next_start_after, so the next run continues instead of
+// hashing the same torrents again. Until 2026-10-11 such a run hashed the
+// whole listing in one round and wrote only after it: on the timeout it wrote
+// nothing and reported no cursor.
+//
+// The clock is the plugin's: each hash advances it 10 minutes, the deadline
+// is an hour away, so the reserve is 15 minutes (a quarter of the hour, at
+// the cap) and admitting stops once the clock plus the last round's length
+// reaches 45 minutes. One torrent file per round: torrents 1-4 are examined
+// and linked, 5 and 6 are deferred_by_deadline.
+func TestLinkBackfill_DeadlineStopsAdmittingAndWrites(t *testing.T) {
+	f := newLinkFixture(t)
+	ts, rows := matchedTorrents(t, f, 6)
+	store := newLinkMock(rows...)
+	_, client := newFakeDelugeClient(t, ts...)
+
+	run := func(params string) linkBackfillResult {
+		t.Helper()
+		start := time.Now()
+		clock := &fakeLinkClock{step: 10 * time.Minute}
+		clock.now.Store(start.UnixNano())
+		ctx, cancel := context.WithDeadline(context.Background(), start.Add(time.Hour))
+		defer cancel()
+		res, err := runLinkCtx(t, ctx, &Plugin{client: client, store: store, linkHash: clock.hash, linkNow: clock.Now, linkRoundFiles: 1}, params)
+		if err != nil {
+			t.Fatalf("run %s: %v", params, err)
+		}
+		return res
+	}
+
+	res := run(`{"dry_run":false}`)
+	if got := linkedCount(t, res); got != 4 {
+		t.Errorf("linked = %d, want 4", got)
+	}
+	if res.DeferredByDeadline != 2 || res.DeferredByHashBudget != 0 || res.DeferredByLimit != 0 {
+		t.Errorf("deferred_by_deadline=%d deferred_by_hash_budget=%d deferred_by_limit=%d, want 2/0/0",
+			res.DeferredByDeadline, res.DeferredByHashBudget, res.DeferredByLimit)
+	}
+	if res.NextStartAfter != linkTorrentID(4) {
+		t.Errorf("next_start_after = %q, want the last torrent examined, %q", res.NextStartAfter, linkTorrentID(4))
+	}
+	if !strings.Contains(strings.Join(res.Notes, "\n"), "deadline:") {
+		t.Errorf("notes %q carry no deadline note", res.Notes)
+	}
+	for i := 1; i <= 6; i++ {
+		got := store.row(fmt.Sprintf("bf-%d", i)).DelugeHash
+		if want := linkTorrentID(i); (i <= 4) != (got == want) {
+			t.Errorf("bf-%d DelugeHash = %q after run 1 (torrent %d examined: %v)", i, got, i, i <= 4)
+		}
+	}
+
+	// The next run, from the cursor, reaches the rest.
+	res = run(`{"dry_run":false,"start_after":"` + res.NextStartAfter + `"}`)
+	if got := linkedCount(t, res); got != 2 {
+		t.Errorf("run 2 linked = %d, want 2", got)
+	}
+	for i := 5; i <= 6; i++ {
+		if got := store.row(fmt.Sprintf("bf-%d", i)).DelugeHash; got != linkTorrentID(i) {
+			t.Errorf("run 2: bf-%d DelugeHash = %q, want %q", i, got, linkTorrentID(i))
+		}
+	}
+}
+
+// With no deadline (or one far off) a run with no limit still examines the
+// whole listing across its rounds: the round allowance splits the hashing,
+// it does not cap it.
+func TestLinkBackfill_RoundsCoverWholeListing(t *testing.T) {
+	f := newLinkFixture(t)
+	ts, rows := matchedTorrents(t, f, 5)
+	store := newLinkMock(rows...)
+	_, client := newFakeDelugeClient(t, ts...)
+	hc := &hashCounter{}
+
+	res, err := runLink(t, &Plugin{client: client, store: store, linkHash: hc.hash, linkRoundFiles: 2}, `{"dry_run":false}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := linkedCount(t, res); got != 5 || res.DeferredByDeadline != 0 || res.DeferredByHashBudget != 0 || res.NextStartAfter != "" {
+		t.Errorf("linked=%d deferred_by_deadline=%d deferred_by_hash_budget=%d next_start_after=%q, want 5/0/0/\"\"",
+			got, res.DeferredByDeadline, res.DeferredByHashBudget, res.NextStartAfter)
+	}
+	if got := hashedSet(hc, ts); got != "1,2,3,4,5" {
+		t.Errorf("hashed %q, want every torrent once", got)
+	}
+}
+
+// When the plan meets limit in the round that also spends the hash budget,
+// the torrents left are the limit's: they would have been left anyway.
+func TestLinkBackfill_LimitAndBudgetTogetherDeferByLimit(t *testing.T) {
+	f := newLinkFixture(t)
+	ts, rows := matchedTorrents(t, f, 4)
+	store := newLinkMock(rows...)
+	_, client := newFakeDelugeClient(t, ts...)
+
+	res, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false,"limit":1,"max_hashed_files":1}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := linkedCount(t, res); got != 1 || res.DeferredByLimit != 3 || res.DeferredByHashBudget != 0 {
+		t.Errorf("linked=%d deferred_by_limit=%d deferred_by_hash_budget=%d, want 1/3/0",
+			got, res.DeferredByLimit, res.DeferredByHashBudget)
+	}
+}
+
+// A label Deluge lists no torrent under ends the run before the full-library
+// book_file scan, and still reports why it did nothing.
+func TestLinkBackfill_NoTorrentsSkipsLibraryScan(t *testing.T) {
+	newLinkFixture(t)
+	store := newLinkMock()
+	store.GetAllBookFilesCoreCompleteFunc = func() ([]database.BookFileCore, error) {
+		t.Error("the full-library scan ran for a label with no torrents")
+		return nil, nil
+	}
+	_, client := newFakeDelugeClient(t)
+
+	res, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Torrents != 0 || !strings.Contains(strings.Join(res.Notes, "\n"), "no_torrents:") {
+		t.Errorf("torrents=%d notes=%q, want 0 and a no_torrents note", res.Torrents, res.Notes)
 	}
 }

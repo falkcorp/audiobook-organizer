@@ -7,6 +7,8 @@
 package deluge
 
 import (
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -22,6 +24,12 @@ type Plugin struct {
 	// filehash.BookFileHash. A field rather than a package var so a test can
 	// count hash calls without racing another test's plugin.
 	linkHash func(path string) (string, error)
+	// linkRoundFiles is deluge.link-backfill's per-round hash allowance; 0
+	// is linkRoundHashFiles. linkNow is its clock; nil is time.Now. Fields
+	// for the same reason as linkHash: a test drives the deadline stop
+	// without sleeping.
+	linkRoundFiles int
+	linkNow        func() time.Time
 }
 
 // New constructs a Deluge plugin. client and cache may be nil if Deluge is not configured;
