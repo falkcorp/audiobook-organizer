@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/split_books_fixer_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 946919fd-5279-41f2-bb7e-1331ea924e5e
 // last-edited: 2026-10-12
 
@@ -13,12 +13,14 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -342,6 +344,80 @@ func TestSplitBooksFixer_ApplyRefusesChangedMembership(t *testing.T) {
 		}
 		assert.Empty(t, sbLiveJournal(t, f, "op-early"))
 	})
+}
+
+// sbApplyHeld is sbApply with the fixture's scripted scan stand-down, so the
+// Writer's beats renew (and can lose) a lease. It returns RunApply's error
+// instead of requiring success.
+func sbApplyHeld(f *fragFixture, fx repairs.Fixer, res *repairs.PlanResult, opID string, rowIDs ...string) (*repairs.ApplyResult, error) {
+	return repairs.RunApply(context.Background(), fx, res, "plan-1", rowIDs, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: sbWriter(f, opID), OpID: opID, StandDown: f.scan(), Wait: f.p.standDownWait},
+		&fakeReporter{})
+}
+
+// The stand-down lease is lost while the row waits for the process-wide
+// merge lock (an outside merge holds it). The merge core writes through the
+// store, not the Writer, so the beat under the lock is what stops it: the
+// row is aborted, no source is retired, no file row moves, and the decision
+// row journaled before the wait is voided.
+//
+// Not parallel: it holds the process-wide merge lock.
+func TestSplitBooksFixer_LeaseLostWhileWaitingForTheMergeLock(t *testing.T) {
+	f := newFragFixture(t)
+	ids := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+	fx := sbFixer(f)
+	res := sbPlan(t, f, fx)
+	row := sbRowWith(t, res, ids)
+	require.True(t, row.Applicable(), row.SkipReason)
+
+	type out struct {
+		res *repairs.ApplyResult
+		err error
+	}
+	done := make(chan out, 1)
+	merge.LockMergeRMW()
+	locked := true
+	defer func() {
+		if locked {
+			merge.UnlockMergeRMW()
+		}
+	}()
+	go func() {
+		r, err := sbApplyHeld(f, fx, res, "op-held", row.RowID)
+		done <- out{r, err}
+	}()
+	// The decision row is journaled immediately before the merge, which then
+	// blocks on the lock this test holds.
+	deadline := time.Now().Add(time.Minute)
+	for {
+		changes, err := f.s.GetOperationChanges("op-held")
+		require.NoError(t, err)
+		if len(changes) > 0 {
+			break
+		}
+		require.True(t, time.Now().Before(deadline), "the apply never journaled its decision")
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // let it park on the lock
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.renewsLeft = 0
+	scan.mu.Unlock()
+	merge.UnlockMergeRMW()
+	locked = false
+
+	o := <-done
+	require.ErrorIs(t, o.err, repairs.ErrStandDownLost)
+	require.NotNil(t, o.res)
+	require.Len(t, o.res.Rows, 1)
+	assert.Equal(t, repairs.OutcomeAborted, o.res.Rows[0].Outcome, o.res.Rows[0].Error)
+	for _, src := range ids[1:] {
+		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "source %s is not retired", src)
+	}
+	for _, id := range ids {
+		assert.Len(t, sbFileOwners(t, f, []string{id}), 1, "book %s keeps its file row", id)
+	}
+	assert.Empty(t, sbLiveJournal(t, f, "op-held"), "the decision row of the stopped merge is voided")
 }
 
 // TestSplitBooksFixer_D21OverlapWithFragmentNoParent is the measurement owner
