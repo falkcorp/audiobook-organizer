@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.65.0
+// version: 1.65.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-12
 
@@ -721,11 +721,11 @@ func (s *Server) CachedMetadataCandidates(bookID string) (*database.MetadataCand
 // FetchMetadataByTitle implements maintenance.ServerDeps: the title-only
 // metadata fetch-and-apply the production-author resolvers loop over. It hands
 // back only the author ID the book ends with, the one thing they read.
-func (s *Server) FetchMetadataByTitle(bookID string) (*int, error) {
+func (s *Server) FetchMetadataByTitle(ctx context.Context, bookID string) (*int, error) {
 	if s.metadataFetchService == nil {
 		return nil, errors.New("metadata fetch service not initialized")
 	}
-	resp, err := s.metadataFetchService.FetchMetadataForBookByTitle(bookID)
+	resp, err := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, bookID)
 	if err != nil {
 		return nil, err
 	}

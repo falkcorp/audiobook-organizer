@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.23.2
+// version: 1.23.3
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-11
 
@@ -561,7 +561,12 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 // FetchMetadataForBookByTitle searches metadata sources using only the book's title,
 // suppressing the author name. This is useful when the current author is a production
 // company and we want to discover the real author from external sources.
-func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataResponse, error) {
+//
+// ctx bounds the provider searches and gates the apply: a cancelled ctx (a user
+// cancel, the op's Timeout, or a lost scan stand-down lease, which cancels the
+// holder's ctx) stops the search loop and refuses the write rather than letting
+// an in-flight fetch apply after its caller has given up.
+func (mfs *Service) FetchMetadataForBookByTitle(ctx context.Context, id string) (*FetchMetadataResponse, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
@@ -600,13 +605,16 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 	var lastErr error
 	var reviewOnlyFound, ownerRejectedFound []string
 	for _, src := range sources {
-		results, searchErr := src.SearchByTitle(context.Background(), searchTitle)
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
+		results, searchErr := src.SearchByTitle(ctx, searchTitle)
 		if searchErr != nil {
 			lastErr = searchErr
 			continue
 		}
 		if len(results) == 0 && searchTitle != book.Title {
-			results, searchErr = src.SearchByTitle(context.Background(), book.Title)
+			results, searchErr = src.SearchByTitle(ctx, book.Title)
 			if searchErr != nil {
 				lastErr = searchErr
 				continue
@@ -615,7 +623,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		if len(results) == 0 {
 			strippedTitle := stripSubtitle(searchTitle)
 			if strippedTitle != searchTitle {
-				results, searchErr = src.SearchByTitle(context.Background(), strippedTitle)
+				results, searchErr = src.SearchByTitle(ctx, strippedTitle)
 				if searchErr != nil {
 					lastErr = searchErr
 					continue
@@ -660,6 +668,11 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 			return nil, rErr
 		}
 
+		// The searches are slow; the caller may have given up meanwhile.
+		// Nothing is written on a cancelled ctx.
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
 		fetched := meta
 		// Snapshot before the apply: history is recorded from the
 		// committed diff after UpdateBook, never from the candidate.

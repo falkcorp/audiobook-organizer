@@ -1,7 +1,7 @@
 // file: internal/metafetch/review_only_autofetch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b881bf7b-f075-494b-b50e-cdc671118002
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -51,7 +51,7 @@ func TestAutoFetch_ReviewOnlyFirstThenAudibleAppliesAudible(t *testing.T) {
 					return s.FetchMetadataForBook(context.Background(), id)
 				}},
 				{"FetchMetadataForBookByTitle", func(s *Service, id string) (*FetchMetadataResponse, error) {
-					return s.FetchMetadataForBookByTitle(id)
+					return s.FetchMetadataForBookByTitle(context.Background(), id)
 				}},
 			} {
 				f, id := autoFetchFixture(t, ro, aud)
@@ -88,9 +88,50 @@ func TestAutoFetch_OnlyReviewOnlyMatchesAppliesNothing(t *testing.T) {
 			require.NoError(t, cerr)
 			require.NotNil(t, cached, "the review-only answer must be cached for review")
 
-			_, err = f.mfs.FetchMetadataForBookByTitle(id)
+			_, err = f.mfs.FetchMetadataForBookByTitle(context.Background(), id)
 			require.ErrorIs(t, err, ErrReviewOnlyCandidatesNotApplied)
 			require.Nil(t, f.book(id).Description)
 		})
 	}
+}
+
+// cancelOnSearchSource answers the title search with a match and cancels the
+// caller's ctx as it does, standing in for a cancel (or a lost scan stand-down
+// lease) that lands while a provider search is in flight.
+type cancelOnSearchSource struct {
+	verdictSource
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnSearchSource) SearchByTitle(ctx context.Context, title string) ([]metadata.BookMetadata, error) {
+	defer c.cancel()
+	return c.verdictSource.SearchByTitle(ctx, title)
+}
+
+// The title-only fetch applies with nobody watching (the production-company
+// resolver runs it on a worker pool under the scan stand-down). A ctx cancelled
+// before or during the search must stop it without a write: an apply after the
+// lease is lost would race the resumed scan.
+func TestFetchMetadataForBookByTitle_CancelledCtxWritesNothing(t *testing.T) {
+	t.Run("cancelled during the search", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		src := &cancelOnSearchSource{
+			verdictSource: verdictSource{name: "Audible", results: autoFetchRecord("audible description")},
+			cancel:        cancel,
+		}
+		f, id := autoFetchFixture(t, src)
+		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, f.book(id).Description, "nothing may be written after the ctx is cancelled")
+	})
+	t.Run("cancelled before the search", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		src := &verdictSource{name: "Audible", results: autoFetchRecord("audible description")}
+		f, id := autoFetchFixture(t, src)
+		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Zero(t, src.calls.Load(), "no provider may be searched on a cancelled ctx")
+		require.Nil(t, f.book(id).Description)
+	})
 }

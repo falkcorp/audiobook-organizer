@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -269,7 +269,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 				_ = progress.UpdateProgress(i, len(books), fmt.Sprintf("Processing %d/%d: %s", i+1, len(books), book.Title))
 
 				// Try metadata fetch by title only
-				resp, fetchErr := s.metadataFetchService.FetchMetadataForBookByTitle(book.ID)
+				resp, fetchErr := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, book.ID)
 				if fetchErr == nil && resp != nil && resp.Book != nil && resp.Book.AuthorID != nil {
 					// Check if the found author is different from the production company
 					newAuthor, _ := store.GetAuthorByID(*resp.Book.AuthorID)
