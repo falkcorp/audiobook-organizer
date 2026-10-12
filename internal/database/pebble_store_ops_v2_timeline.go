@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
 // last-edited: 2026-10-11
 
@@ -84,7 +84,8 @@ var opsV2TimelineReconcileWorkers = runtime.NumCPU()
 
 // opsV2BeforeCommitHook, when set, runs just before every opv2:op: row batch
 // commits (commitOpV2Row, the batch-based status writers and both delete
-// sites). A non-nil error aborts the commit and is returned to the caller.
+// sites), and before every opv3 batch (pebble_store_ops_v3*.go), so a test
+// can prove a failed commit leaves neither family changed. A non-nil error aborts the commit and is returned to the caller.
 // Test-only: nil in production. Atomic so a test that sets it cannot race
 // writers in parallel tests, and handed the store so a test's hook can leave
 // every other store alone.
