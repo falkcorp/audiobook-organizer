@@ -1,5 +1,5 @@
 // file: internal/server/op_schedule_driver_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c47e92b1-5d08-4a3f-9e61-1b2f8d0a7c34
 // last-edited: 2026-10-11
 
@@ -23,7 +23,6 @@ var scheduleDriverAllowList = map[string]string{
 	"maintenance.author-split-scan":   "twin of the scheduled scheduler.author-split-scan; after P4e the task points here",
 	"maintenance.batch-poller":        "to be deleted by D26 / P12; the inline loop is the poller",
 	"maintenance.cleanup-old-backups": "twin of the scheduled scheduler.cleanup-old-backups; after P4f the task points here",
-	"maintenance.metadata-refresh":    "twin of the scheduled scheduler.metadata-refresh; after P4c the task points here",
 }
 
 // TestScheduledOpsHaveADriver fails any op that declares a cron Schedule with

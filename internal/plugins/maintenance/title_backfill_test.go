@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-11
 
@@ -67,6 +67,8 @@ type fakeDeps struct {
 	labels DedupVerdictReader
 	// purgeCtx, when non-nil, records the ctx RunAutoPurgeSoftDeleted receives.
 	purgeCtx *context.Context
+	// refreshCtx, when non-nil, records the ctx RunMetadataRefreshScan receives.
+	refreshCtx *context.Context
 }
 
 func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
@@ -208,7 +210,10 @@ func (d fakeDeps) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 }
 
 // Delegate stubs — maintenance plugin calls these on ServerDeps from other ops.
-func (d fakeDeps) RunMetadataRefreshScan(_ context.Context, _ operations.ProgressReporter) error {
+func (d fakeDeps) RunMetadataRefreshScan(ctx context.Context, _ operations.ProgressReporter) error {
+	if d.refreshCtx != nil {
+		*d.refreshCtx = ctx
+	}
 	return nil
 }
 func (d fakeDeps) RunBulkWriteBack(_ context.Context, _ string, _ []string, _ bool, _ int, _ operations.ProgressReporter) error {

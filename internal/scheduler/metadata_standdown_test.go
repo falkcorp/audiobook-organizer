@@ -1,7 +1,7 @@
 // file: internal/scheduler/metadata_standdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5b40d97-3a1c-4f28-b6e0-9d7c2a18f453
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package scheduler
 
@@ -50,10 +50,11 @@ func schedRun(t *testing.T, gate *schedGate, opID string, register func(*ExtraOp
 	return def.Run(context.Background(), nil, schedReporter{})
 }
 
+// maintenance.metadata-refresh (merged from scheduler.metadata-refresh in
+// 04-P4c) has the same case in internal/plugins/maintenance.
 func TestSchedulerMetadataOps_RefuseWhileScanHoldsTheLibrary(t *testing.T) {
 	for opID, register := range map[string]func(*ExtraOpsRegistrar, *opsregistry.Registry) error{
 		"scheduler.metadata-upgrade": (*ExtraOpsRegistrar).RegisterMetadataUpgradeOp,
-		"scheduler.metadata-refresh": (*ExtraOpsRegistrar).RegisterMetadataRefreshOp,
 	} {
 		t.Run(opID, func(t *testing.T) {
 			err := schedRun(t, &schedGate{acquireErr: errors.New("scan did not park within 5m0s")}, opID, register)
