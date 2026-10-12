@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package server
 
@@ -371,8 +371,8 @@ func TestSeriesRenameOp_UndoRefreshesSeriesList(t *testing.T) {
 	require.NotContains(t, body, "New Name")
 }
 
-// The three ops that rename series declare the series write-set, so the
-// dispatcher's write-set gate never runs two of them at once.
+// The ops that rename, merge or prune series declare the series write-set,
+// so the dispatcher's write-set gate never runs two of them at once.
 func TestSeriesWriters_DeclareSeriesWriteSet(t *testing.T) {
 	s := newSeriesRenameOpServer(newRelinkOpStore(t))
 	for _, tc := range []struct {
@@ -382,6 +382,7 @@ func TestSeriesWriters_DeclareSeriesWriteSet(t *testing.T) {
 		{seriesRenameOpID, s.RegisterSeriesRenameOp},
 		{"dedup.series-merge", s.RegisterSeriesMergeOp},
 		{"dedup.series-normalize", s.RegisterSeriesNormalizeOp},
+		{"dedup.series-prune", s.RegisterSeriesPruneOp},
 	} {
 		def := relinkOpDef(t, tc.register, tc.id)
 		require.True(t, slices.Contains(def.Writes, opsregistry.ResSeries), "%s must declare Writes ResSeries", tc.id)
