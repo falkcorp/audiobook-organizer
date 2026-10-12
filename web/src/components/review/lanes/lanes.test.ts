@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/lanes.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: b6d29a04-8f35-4c71-90e2-3a5f7c1b8046
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 import { describe, expect, it } from 'vitest';
 import { LANES, LANE_ORDER, dupesLane, metadataLane, regroupLane, repairsLane } from './index';
@@ -33,7 +33,7 @@ describe('action vocabulary is total', () => {
   const cases: Array<{ lane: ReviewLane; types: string[] }> = [
     {
       lane: 'dupes',
-      types: ['merge', 'dismiss', 'mergeSelected', 'dismissSelected', 'mergeAllFiltered', 'dismissAllFiltered', 'keepAAllFiltered', 'keepBAllFiltered'],
+      types: ['merge', 'dismiss', 'mergeSelected', 'dismissSelected', 'mergeAllFiltered', 'dismissAllFiltered', 'keepAAllFiltered', 'keepBAllFiltered', 'linkCluster', 'rejectCluster', 'removeFromCluster'],
     },
     {
       lane: 'metadata',

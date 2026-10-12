@@ -88,8 +88,8 @@ const UNPORTED: Partial<Record<ReviewLane, { where: string; href: string }>> = {
 
 /**
  * The view toggle's three positions. Every ranked search candidate per book
- * is `candidates` (was 'auto' until 2026-10-07); the dupes lane renders it as
- * its compact view.
+ * is `candidates` (was 'auto' until 2026-10-07); on the dupes lane it is the
+ * Clusters view.
  */
 const VIEW_MODE_BUTTONS = [
   { value: 'compact', Icon: ViewListIcon },
@@ -104,6 +104,11 @@ const VIEW_MODE_BUTTONS = [
 function viewModeLabel(lane: ReviewLane, mode: SpineViewMode): string {
   if (lane === 'repairs') {
     return mode === 'compact' ? 'Compact rows' : mode === 'two-column' ? 'Details' : 'Grouped by fix';
+  }
+  // The dupes lane's third position is its cluster view; metadata's stays the
+  // ranked-candidates list it always was.
+  if (lane === 'dupes') {
+    return mode === 'compact' ? 'Compact rows' : mode === 'two-column' ? 'Two columns' : 'Clusters';
   }
   return mode === 'compact' ? 'Compact rows' : mode === 'two-column' ? 'Two columns' : 'Candidates';
 }
@@ -192,7 +197,9 @@ export function ReviewWorkspace() {
     }),
     [searchParams],
   );
-  const dupes = useDupesLane(toast, lane === 'dupes', dupesUrlFilters);
+  // The third view position is the dupes lane's Clusters view; the lane makes
+  // its two extra fetches only while that is showing.
+  const dupes = useDupesLane(toast, lane === 'dupes', dupesUrlFilters, viewMode === 'candidates');
   // Expansion is a view concern and the two lanes key it on different id types,
   // so it is not shared state.
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);

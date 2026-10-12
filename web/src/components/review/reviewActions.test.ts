@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.test.ts
-// version: 1.3.0
+// version: 1.5.0
 // guid: 9d4a7e21-05c8-4b63-a19f-3e8b2c60d475
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -74,6 +74,36 @@ describe('confirmation', () => {
   it('confirms a multi-row dismissal but not a single one', () => {
     expect(needsConfirmation({ lane: 'dupes', type: 'dismissSelected', ids: [1] })).toBe(false);
     expect(needsConfirmation({ lane: 'dupes', type: 'dismissSelected', ids: [1, 2] })).toBe(true);
+  });
+});
+
+describe('cluster actions', () => {
+  it('confirms a cluster link and a cluster reject, but not a single-book removal', () => {
+    expect(needsConfirmation({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2'] })).toBe(true);
+    expect(
+      needsConfirmation({ lane: 'dupes', type: 'rejectCluster', ids: ['b1', 'b2'], candidateIds: [1] })
+    ).toBe(true);
+    expect(
+      needsConfirmation({ lane: 'dupes', type: 'removeFromCluster', ids: ['b1', 'b2', 'b3'], removeIds: ['b3'] })
+    ).toBe(false);
+  });
+
+  it('offers no undo for any of them', () => {
+    expect(inverseOf({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2'] })).toBeNull();
+    expect(inverseOf({ lane: 'dupes', type: 'rejectCluster', ids: ['b1', 'b2'], candidateIds: [1] })).toBeNull();
+    expect(
+      inverseOf({ lane: 'dupes', type: 'removeFromCluster', ids: ['b1', 'b2'], removeIds: ['b2'] })
+    ).toBeNull();
+  });
+
+  it('counts books for a link, the named pairs for a reject and the removed books for a removal', () => {
+    expect(affectedCount({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] })).toBe(3);
+    expect(
+      affectedCount({ lane: 'dupes', type: 'rejectCluster', ids: ['b1', 'b2', 'b3'], candidateIds: [4, 5] })
+    ).toBe(2);
+    expect(
+      affectedCount({ lane: 'dupes', type: 'removeFromCluster', ids: ['b1', 'b2', 'b3'], removeIds: ['b3'] })
+    ).toBe(1);
   });
 });
 

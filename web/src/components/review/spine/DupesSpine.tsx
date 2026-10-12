@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.7.1
+// version: 1.8.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -211,7 +211,8 @@ function QualityChip({ book }: { book: Book | null | undefined }) {
 }
 
 /**
- * One side of a pair. Ported from UnifiedDedupTab's renderBookCard, which was a
+ * One side of a pair (also one member of a cluster card, in DupesClusterSpine).
+ * Ported from UnifiedDedupTab's renderBookCard, which was a
  * function returning JSX rather than a component -- fine there, but it meant the
  * cover image re-mounted on every parent render.
  *
@@ -226,7 +227,7 @@ function QualityChip({ book }: { book: Book | null | undefined }) {
  * here it would be 200 independent useState/useEffect pairs at the 100-row cap,
  * each resolving on its own tick.
  */
-const BookSide = memo(function BookSide({
+export const BookSide = memo(function BookSide({
   book,
   id,
   recommended,

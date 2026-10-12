@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/dupes.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b1d4e93-2c05-48a6-b39f-0e6a2c85f174
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 import type { LaneDescriptor } from './types';
 
@@ -38,6 +38,13 @@ export const dupesLane = {
     // bulk keep-side is labelled older/newer; a server `recommended` is later.
     keepAAllFiltered: 'Keep the older record',
     keepBAllFiltered: 'Keep the newer record',
+    // The Clusters view. A cluster is a set of books joined by pairs, so these
+    // say "cluster" where the pair verbs say "merge"/"dismiss"; the wording of
+    // the rest of the lane is "Not a duplicate", and "Reject cluster" is the
+    // endpoint's own name for the same judgement on a whole group.
+    linkCluster: 'Link cluster',
+    rejectCluster: 'Reject cluster',
+    removeFromCluster: 'Remove from cluster',
   },
   emptyMessage: 'No duplicate candidates. Run a scan from the Dedup menu to look for more.',
 } satisfies LaneDescriptor<'dupes'>;

@@ -6165,6 +6165,9 @@ export async function getDedupCandidates(
     // server-side at scan level, so `total` covers the whole matching set and
     // the result can be paginated like any other filter.
     entity_id?: string;
+    // Only pairs whose BOTH books belong to this series (the rule the series
+    // summary counts by). Scan level, so `total` covers the whole series.
+    series_id?: number;
     // Free-text search, applied server-side at scan level so `total` counts
     // every match rather than the ones that fit on the page. Matches the
     // candidate's own layer/band/entity IDs, plus the title, author and file
@@ -6184,6 +6187,7 @@ export async function getDedupCandidates(
   if (params?.both_unmatched) qs.set('both_unmatched', 'true');
   if (params?.q?.trim()) qs.set('q', params.q.trim());
   if (params?.entity_id) qs.set('entity_id', params.entity_id);
+  if (params?.series_id != null) qs.set('series_id', String(params.series_id));
   if (params?.limit != null) qs.set('limit', String(params.limit));
   if (params?.offset != null) qs.set('offset', String(params.offset));
   const url = qs.toString() ? `${API_BASE}/dedup/candidates?${qs}` : `${API_BASE}/dedup/candidates`;
@@ -6403,6 +6407,10 @@ export interface ClusterMergeResult {
   status: string;
   merged_books: number;
   candidates_updated: number;
+  // Pairs the books were linked for but whose status could not be written
+  // (they still read pending), and why no pair could be marked at all.
+  failed_candidate_ids?: number[];
+  candidates_error?: string;
   result?: unknown;
 }
 
@@ -6440,8 +6448,12 @@ export interface DedupSeriesSummary {
   candidate_count: number;
 }
 
-export async function listDedupCandidateSeries(): Promise<DedupSeriesSummary[]> {
-  const response = await apiFetch(`${API_BASE}/dedup/candidates/series-summary`);
+export async function listDedupCandidateSeries(opts?: {
+  signal?: AbortSignal;
+}): Promise<DedupSeriesSummary[]> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/series-summary`, {
+    signal: opts?.signal,
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to list dedup series summary');
   }
@@ -6476,13 +6488,26 @@ export async function linkDedupCandidateSeries(seriesId: number): Promise<Series
 // rejectDedupCluster was renamed from dismissDedupCluster (naming-audit
 // class "dismiss vs reject vs undo",
 // docs/audits/2026-09-25-interface-naming-consistency.md class 3).
+//
+// With candidateIds the server dismisses exactly those pairs (each must still be
+// pending and lie within bookIds, or it is reported in skipped_candidate_ids);
+// without, it dismisses every pending pair among bookIds, including ones a
+// reviewer's filter hides.
 export async function rejectDedupCluster(
-  bookIds: string[]
-): Promise<{ status: string; dismissed: number }> {
+  bookIds: string[],
+  candidateIds?: number[]
+): Promise<{
+  status: string;
+  dismissed: number;
+  failed_candidate_ids?: number[];
+  skipped_candidate_ids?: number[];
+}> {
   const response = await apiFetch(`${API_BASE}/dedup/candidates/reject-cluster`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ book_ids: bookIds }),
+    body: JSON.stringify(
+      candidateIds ? { book_ids: bookIds, candidate_ids: candidateIds } : { book_ids: bookIds }
+    ),
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to reject dedup cluster');
@@ -6499,7 +6524,12 @@ export async function rejectDedupCluster(
 export async function removeFromDedupCluster(
   clusterBookIds: string[],
   removeBookIds: string | string[]
-): Promise<{ status: string; dismissed: number; removed: number }> {
+): Promise<{
+  status: string;
+  dismissed: number;
+  removed: number;
+  failed_candidate_ids?: number[];
+}> {
   const body: Record<string, unknown> = {
     cluster_book_ids: clusterBookIds,
   };
@@ -6518,6 +6548,46 @@ export async function removeFromDedupCluster(
   }
   const responseData = await response.json();
   return responseData.data;
+}
+
+// What the Clusters view needs to say "N more pairs for these books are on
+// other pages": one request for the whole page. other_pairs is the number of
+// distinct pairs touching the cluster that match the list's filter and are not
+// in page_candidate_ids; per_book is each book's own count (books with none are
+// omitted).
+export interface DedupBookPairCountsRequest {
+  clusters: Array<{ key: string; book_ids: string[] }>;
+  page_candidate_ids: number[];
+  status?: string;
+  layer?: string;
+  band?: string;
+  q?: string;
+  both_unmatched?: boolean;
+  // The ?book= deep link: counts only pairs touching this book, like the list.
+  entity_id?: string;
+}
+
+export interface DedupBookPairCounts {
+  key: string;
+  other_pairs: number;
+  per_book: Array<{ book_id: string; count: number }>;
+}
+
+export async function getDedupBookPairCounts(
+  req: DedupBookPairCountsRequest,
+  opts?: { signal?: AbortSignal }
+): Promise<DedupBookPairCounts[]> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/book-pair-counts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+    signal: opts?.signal,
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to count pairs on other pages');
+  }
+  const envelope = await response.json();
+  return envelope.data?.clusters ?? [];
 }
 
 // --- Split-book backfill (MAYDEPLOY-G2/G3/G4) ---

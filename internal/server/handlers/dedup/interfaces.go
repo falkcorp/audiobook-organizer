@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.8.2
+// version: 1.10.1
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
 // cluster / series listing, link / reject / remove, bulk link, stats,
@@ -58,6 +58,14 @@ type DedupStore interface {
 	// per-candidate lookup.
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error) // BookBulkReader
 	GetAllAuthors() ([]database.Author, error)                      // AuthorStore
+
+	// GetBooksBySeriesIDAllVersions backs the list's series_id filter: the
+	// members of one series, every version included (not only primaries). The
+	// store answers from its series index when that index is complete; a
+	// Pebble-only store falls back to scanning the library, so this is one
+	// bounded read per request rather than a free one. The Core variant is
+	// primary-only and would drop pairs whose book is a non-primary version.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error) // BookStore
 }
 
 // EmbeddingStore is the narrow *database.EmbeddingStore subset the dedup

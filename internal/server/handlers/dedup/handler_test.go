@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
 // last-edited: 2026-10-12
 
@@ -1240,12 +1240,18 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 		{ID: "e-5", Title: "Other"}, {ID: "e-6", Title: "Other"}, {ID: "e-7", Title: "Other"},
 	}, nil).Maybe()
 
+	// Series 7 is e-1, e-2 and e-3: pairs e-1/e-2 and e-2/e-7 have one book
+	// outside it (e-7), and e-3/e-4 has e-4 outside, so only e-1/e-2 qualifies.
+	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).
+		Return([]database.BookCore{{ID: "e-1"}, {ID: "e-2"}, {ID: "e-3"}}, nil).Maybe()
+
 	cases := []struct {
 		name  string
 		query string
 		want  int
 	}{
 		{"unfiltered", "", 6},
+		{"series_id", "series_id=7", 1},
 		{"band", "band=LOW", 2},
 		{"entity_id", "entity_id=e-2", 2},
 		{"q", "q=needle", 1},
@@ -1352,5 +1358,125 @@ func TestExportDedupCandidates_TruncationHeaders(t *testing.T) {
 	}
 	if exp.Count != 2 {
 		t.Fatalf("count=%d want 2 (the cap)", exp.Count)
+	}
+}
+
+func seriesBooks(ids ...string) []database.BookCore {
+	out := make([]database.BookCore, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, database.BookCore{ID: id})
+	}
+	return out
+}
+
+type seriesListResp struct {
+	Data struct {
+		Candidates []map[string]any `json:"candidates"`
+		Total      int              `json:"total"`
+	} `json:"data"`
+}
+
+func TestListDedupCandidates_SeriesID(t *testing.T) {
+	// The By-series view's counts open these rows: pairs whose BOTH books are in
+	// the series (the series summary's rule). Scan-level, so total is the whole
+	// series even when the page holds one row.
+	h, d := newHandler(t)
+	insertCandidate(t, d.es, "s-1", "s-2")
+	insertCandidate(t, d.es, "s-2", "s-3")
+	// One in-series book on EACH side of the pair, the other outside the series.
+	// "a-out" sorts before "s-1" (in-series book lands on side B) and "z-out"
+	// after it (side A): a predicate that checked only one side would pass one
+	// of these two.
+	insertCandidate(t, d.es, "a-out", "s-1")
+	insertCandidate(t, d.es, "s-1", "z-out")
+	insertCandidate(t, d.es, "n-1", "n-2") // no series at all
+	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).
+		Return(seriesBooks("s-1", "s-2", "s-3"), nil)
+	d.store.EXPECT().GetBookByID(mock.Anything).
+		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
+
+	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
+		"/api/v1/dedup/candidates?series_id=7&limit=1", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp seriesListResp
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Data.Total != 2 || len(resp.Data.Candidates) != 1 {
+		t.Fatalf("total=%d len=%d want total 2 (whole series) and a page of 1; body=%s",
+			resp.Data.Total, len(resp.Data.Candidates), w.Body.String())
+	}
+	for _, row := range resp.Data.Candidates {
+		a, _ := row["entity_a_id"].(string)
+		b, _ := row["entity_b_id"].(string)
+		if !strings.HasPrefix(a, "s-") || !strings.HasPrefix(b, "s-") {
+			t.Fatalf("pair outside the series leaked: %v", row)
+		}
+	}
+}
+
+func TestListDedupCandidates_SeriesIDWithNoBooksMatchesNothing(t *testing.T) {
+	h, d := newHandler(t)
+	insertCandidate(t, d.es, "s-1", "s-2")
+	d.store.EXPECT().GetBooksBySeriesIDAllVersions(99).Return(nil, nil)
+
+	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
+		"/api/v1/dedup/candidates?series_id=99", nil, nil)
+	var resp seriesListResp
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if w.Code != http.StatusOK || resp.Data.Total != 0 || len(resp.Data.Candidates) != 0 {
+		t.Fatalf("an empty series must list nothing, not everything; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestListDedupCandidates_SeriesIDReadFailureIs500(t *testing.T) {
+	// A failed series read must not degrade to "the series has no pairs" (a 200
+	// with an empty list reads as a correct answer).
+	h, d := newHandler(t)
+	insertCandidate(t, d.es, "s-1", "s-2")
+	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).Return(nil, fmt.Errorf("store down"))
+
+	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
+		"/api/v1/dedup/candidates?series_id=7", nil, nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestListDedupCandidates_SeriesIDExcludesDeadBookRows(t *testing.T) {
+	// The summary counts a pair only if both books resolve; the list drops a
+	// dead-book row. Same rule, so the number on the row equals the rows listed.
+	h, d := newHandler(t)
+	insertCandidate(t, d.es, "s-1", "s-2")
+	insertCandidate(t, d.es, "s-2", "s-3")
+	d.store.EXPECT().GetBooksBySeriesIDAllVersions(7).
+		Return(seriesBooks("s-1", "s-2", "s-3"), nil)
+	d.store.EXPECT().GetBookByID("s-3").Return(nil, nil)
+	d.store.EXPECT().GetBookByID(mock.Anything).
+		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
+
+	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
+		"/api/v1/dedup/candidates?series_id=7", nil, nil)
+	var resp seriesListResp
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data.Candidates) != 1 || resp.Data.Total != 1 {
+		t.Fatalf("dead-book row listed or total not reduced; body=%s", w.Body.String())
+	}
+}
+
+func TestListDedupCandidates_SeriesIDInvalid(t *testing.T) {
+	h, _ := newHandler(t)
+	for _, v := range []string{"abc", "0", "-3"} {
+		w := doReq(t, h.ListDedupCandidates, http.MethodGet,
+			"/api/v1/dedup/candidates?series_id="+v, nil, nil)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("series_id=%s: status=%d want 400", v, w.Code)
+		}
 	}
 }
