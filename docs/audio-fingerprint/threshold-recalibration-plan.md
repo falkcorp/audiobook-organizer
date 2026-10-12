@@ -1,7 +1,7 @@
 <!-- file: docs/audio-fingerprint/threshold-recalibration-plan.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 8c41e2d7-5a93-4b6f-a0d8-71f3c9e25b14 -->
-<!-- last-edited: 2026-09-25 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Fingerprint threshold recalibration plan
 
@@ -203,8 +203,10 @@ between two candidate thresholds, gather more data before choosing.
    `dedup.full-scan` and may have suppressed real duplicates. After the
    re-fingerprint and the new thresholds, re-run `dedup.book-signature-scan`
    and a `dedup.full-scan` so they can surface.
-3. `ReevaluateAcoustIDConflicts` with `apply` stays manual. Run it only after
-   the thresholds are measured.
+3. The AcoustID-conflict purge (`ReevaluateAcoustIDConflicts` and its
+   `/dedup/purge-acoustid-conflicts` route) was removed in 01-P72. If a veto is
+   revived it needs a new, measured-threshold implementation; nothing to run
+   here.
 4. Re-run `acoustid.lookup-online` for the rows whose online verdict was
    cleared.
 
