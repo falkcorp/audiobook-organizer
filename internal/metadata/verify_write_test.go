@@ -1,5 +1,5 @@
 // file: internal/metadata/verify_write_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6a8d13-4c79-4b05-8e1a-96d0b3f7c524
 // last-edited: 2026-10-11
 
@@ -8,6 +8,8 @@ package metadata
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"sort"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -294,6 +296,129 @@ func TestWriteTagProperties_FailedVerificationRecordsProvenance(t *testing.T) {
 			byHash, ferr := store.FindFileEventsByHash(observed[0].Digest.SHA256Full)
 			require.NoError(t, ferr)
 			require.NotEmpty(t, byHash)
+		})
+	}
+}
+
+// CLI fallback. When native TagLib fails, AtomicParsley, eyeD3 or metaflac
+// writes the file, and WriteMetadataToFileAtomic checks it against the tags
+// that writer sets (cliWriterTags) rather than skipping verification. The gate
+// tests force the native writer off (taglibAvailable = false: the in-place
+// write then goes straight to the CLI writer) and stand in for the CLI tool, so
+// they need no external program.
+
+var cliGateMetadata = map[string]any{
+	"title": "Gate Title", "artist": "Gate Author", "album": "Gate Album", "year": 2020,
+	"track": "3", "series": "Gate Series", "narrator": "Gate Narrator",
+	"publisher": "Gate Publisher", "description": "Gate Description", "book_id": "gate-1",
+}
+
+func forceCLIFallback(t *testing.T, writer func(path string, md map[string]any) error) {
+	t.Helper()
+	prevNative, prevCLI := taglibAvailable, cliTagWriter
+	t.Cleanup(func() { taglibAvailable, cliTagWriter = prevNative, prevCLI })
+	taglibAvailable = false
+	cliTagWriter = func(path string, md map[string]any, _ fileops.OperationConfig) error { return writer(path, md) }
+}
+
+// writeCLITags writes the tags the CLI writer for path would set, except drop.
+func writeCLITags(path string, md map[string]any, drop ...string) error {
+	want := cliWriterTags(path, md)
+	for _, k := range drop {
+		delete(want, k)
+	}
+	return tagger.WriteTagsInPlace(path, want, 0)
+}
+
+func atomicWrite(path string) error {
+	return WriteMetadataToFileAtomic(path, cliGateMetadata, fileops.OperationConfig{}, fileops.WriteTagsSafeOptions{}, tagger.SafeWriteDeps{})
+}
+
+func TestWriteMetadataToFileAtomic_VerifiesAfterCLIFallback(t *testing.T) {
+	setVerifyAfterWrite(t, true)
+	noSafeWriteDeps(t)
+	for _, name := range fixtureNames {
+		t.Run(name+"/tags landed", func(t *testing.T) {
+			forceCLIFallback(t, func(path string, md map[string]any) error { return writeCLITags(path, md) })
+			require.NoError(t, atomicWrite(copyFixture(t, name)))
+		})
+		t.Run(name+"/a tag the writer set is missing", func(t *testing.T) {
+			forceCLIFallback(t, func(path string, md map[string]any) error { return writeCLITags(path, md, "TITLE") })
+			err := atomicWrite(copyFixture(t, name))
+			require.ErrorIs(t, err, tagger.ErrVerifyAfterWrite)
+			var vae *tagger.VerifyAfterWriteError
+			require.True(t, errors.As(err, &vae))
+			require.Equal(t, []string{"TITLE"}, vae.Keys)
+		})
+		t.Run(name+"/the writer reported success and wrote nothing", func(t *testing.T) {
+			forceCLIFallback(t, func(string, map[string]any) error { return nil })
+			path := copyFixture(t, name)
+			err := atomicWrite(path)
+			require.ErrorIs(t, err, tagger.ErrVerifyAfterWrite)
+			var vae *tagger.VerifyAfterWriteError
+			require.True(t, errors.As(err, &vae))
+			wantKeys := make([]string, 0)
+			for k := range cliWriterTags(path, cliGateMetadata) {
+				wantKeys = append(wantKeys, k)
+			}
+			sort.Strings(wantKeys)
+			require.Equal(t, wantKeys, vae.Keys)
+		})
+		t.Run(name+"/setting off", func(t *testing.T) {
+			setVerifyAfterWrite(t, false)
+			forceCLIFallback(t, func(string, map[string]any) error { return nil })
+			require.NoError(t, atomicWrite(copyFixture(t, name)))
+		})
+		t.Run(name+"/a CLI failure is returned as is", func(t *testing.T) {
+			boom := errors.New("tool failed")
+			forceCLIFallback(t, func(string, map[string]any) error { return boom })
+			require.ErrorIs(t, atomicWrite(copyFixture(t, name)), boom)
+		})
+	}
+}
+
+// The CLI writers set a subset of the native map; a tag they do not set is not
+// held against them.
+func TestCLIWriterTags_AreASubsetOfWhatEachWriterSets(t *testing.T) {
+	md := cliGateMetadata
+	m4b := cliWriterTags("x.m4b", md)
+	require.Equal(t, []string{"Gate Title"}, m4b["TITLE"])
+	require.Equal(t, []string{"Gate Author"}, m4b["ALBUMARTIST"])
+	require.Equal(t, []string{"Gate Series"}, m4b["GROUPING"])
+	for _, k := range []string{"PUBLISHER", "LABEL", "DESCRIPTION", "COMMENT", "NARRATOR", "AUDIOBOOK_ORGANIZER_ID", "GENRE"} {
+		require.NotContains(t, m4b, k, "AtomicParsley: %s is not a stable read-back", k)
+	}
+	mp3 := cliWriterTags("x.mp3", md)
+	require.Equal(t, []string{"Gate Narrator"}, mp3["NARRATOR"])
+	require.Equal(t, []string{"2020"}, mp3["RELEASEDATE"], "eyeD3 -Y is the release year")
+	require.NotContains(t, mp3, "DATE")
+	require.NotContains(t, mp3, "PUBLISHER")
+	require.Equal(t, []string{"gate-1"}, mp3["AUDIOBOOK_ORGANIZER_ID"])
+	flac := cliWriterTags("x.flac", md)
+	require.Equal(t, []string{"2020"}, flac["DATE"])
+	require.Equal(t, []string{"gate-1"}, flac["AUDIOBOOK_ORGANIZER_ID"])
+	require.NotContains(t, flac, "PUBLISHER")
+	require.Nil(t, cliWriterTags("x.ogg", md), "no CLI writer for ogg")
+}
+
+// The real tools: what AtomicParsley, eyeD3 and metaflac write is what
+// cliWriterTags says TagLib reads back. Skipped where a tool is not installed.
+func TestWriteMetadataToFileAtomic_RealCLIWriters(t *testing.T) {
+	setVerifyAfterWrite(t, true)
+	noSafeWriteDeps(t)
+	for name, tool := range map[string]string{"test_sample.m4b": "AtomicParsley", "test_sample.mp3": "eyeD3", "test_sample.flac": "metaflac"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := exec.LookPath(tool); err != nil {
+				t.Skipf("%s not on PATH", tool)
+			}
+			prev := taglibAvailable
+			t.Cleanup(func() { taglibAvailable = prev })
+			taglibAvailable = false
+			path := copyFixture(t, name)
+			require.NoError(t, atomicWrite(path), "the %s write must read back as cliWriterTags says", tool)
+			raw, err := readTagsWithTaglib(path)
+			require.NoError(t, err)
+			require.Equal(t, []string{"Gate Title"}, raw["TITLE"])
 		})
 	}
 }
