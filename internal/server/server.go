@@ -1370,7 +1370,7 @@ func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scan
 		// book. The old hand-rolled path bypassed that filter entirely, which
 		// is the only reason it appeared to work.
 		//
-		// The row is honest data: the book has exactly this one file. The
+		// The row is accurate data: the book has exactly this one file. The
 		// durable fix is for the SCAN to give every book its book_files rather
 		// than the organize hook backfilling them here; filed in todo.d.
 		if ensured, eerr := server.ensureSingleFileBookFile(dbBook); eerr != nil {
