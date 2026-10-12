@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -174,7 +174,7 @@ func checkV3Consistency(t testing.TB, p *PebbleStore) {
 		if r.FromV2 == nil {
 			mig = fwd // only a migrated run may read "running" as interrupted{crash}
 		}
-		if wantS := v2StatusOf(&r); row.Status != wantS && fwd != r.State && mig != r.State {
+		if wantS := v2StatusOf(&r, false); row.Status != wantS && fwd != r.State && mig != r.State {
 			t.Errorf("run %s is %s in v3 but %q in v2 (want %q)", id, r.State, row.Status, wantS)
 		}
 	}
@@ -904,3 +904,30 @@ func TestOpv3KeysAllInRegisteredFamilies(t *testing.T) {
 
 // keep imports honest when a helper above changes.
 var _ = sort.Strings
+
+// TestInterruptedLedgerRunMirrorsAsDroppedAndStays: a v2 binary cannot resume
+// a chunk ledger, so an interrupted ledger run mirrors as interrupted_dropped;
+// a later v2 write on that row (a progress tick) must not read that as a
+// drop.
+func TestInterruptedLedgerRunMirrorsAsDroppedAndStays(t *testing.T) {
+	p := newTimelineStore(t)
+	id := insertV3(t, p, "test.ledger-mirror", "")
+	transition(t, p, id, state.EvDispatch, nil)
+	if err := p.CommitLedgerV3(id, LedgerBatch{Ledger: Ledger{ChunkCount: 4, Done: []byte{1}}}); err != nil {
+		t.Fatal(err)
+	}
+	transition(t, p, id, state.EvBootSweep, nil)
+	row, err := p.GetOperationV2(id)
+	if err != nil || row == nil || row.Status != "interrupted_dropped" {
+		t.Fatalf("interrupted ledger run mirrors as %+v (%v), want interrupted_dropped", row, err)
+	}
+	if err := p.UpdateOpProgressV2(id, 1, 4, "tick"); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustRun(t, p, id); r.State != state.V3Interrupted {
+		t.Fatalf("after a v2 progress tick the ledger run is %s, want interrupted", r.State)
+	}
+	if l, _ := p.GetLedgerV3(id); l == nil {
+		t.Fatal("the ledger of a non-terminal run was deleted")
+	}
+}

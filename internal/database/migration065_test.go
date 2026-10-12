@@ -1,5 +1,5 @@
 // file: internal/database/migration065_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
 // last-edited: 2026-10-11
 
@@ -153,7 +153,7 @@ func TestMigration065TimeoutPrefix(t *testing.T) {
 		t.Errorf("cancel row -> %s", s)
 	}
 	// The mirror of timed_out is the row v2 wrote.
-	if got := v2StatusOf(mustRun(t, p, a)); got != "canceled" {
+	if got := v2StatusOf(mustRun(t, p, a), false); got != "canceled" {
 		t.Errorf("timed_out mirrors as %q", got)
 	}
 }
