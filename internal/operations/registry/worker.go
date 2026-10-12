@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.35.0
+// version: 2.35.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-11
 
@@ -140,6 +140,12 @@ type runHandle struct {
 	// "stopping") was given at abandonment: written when its goroutine
 	// returns, or by Shutdown if the process exits first (05-PR4).
 	zombieFinal atomic.Pointer[zombieOutcome]
+	// stoppingRecorded is true once markStopping stored the run as v3
+	// stopping{reason}: from then on a crash before the goroutine returns
+	// leaves the stop reason for the boot sweep, which keeps a user or
+	// timeout stop's outcome. Cancel relies on it to leave the row to the
+	// goroutine's exit (cancelStoppingRun); markStopping is best effort.
+	stoppingRecorded atomic.Bool
 }
 
 // zombieOutcome is a stopping run's decided final status. It carries no
@@ -654,7 +660,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// v3: the run is stopping, a zombie (05-PR4), recorded before
 				// it is listed as one. Its row keeps reading "running";
 				// Shutdown's timeout loop stamps it.
-				r.markStopping(qr, r.stopReasonFor(runCtx, h))
+				r.markStopping(qr, h, r.stopReasonFor(runCtx, h))
 				h.zombieSince.Store(r.livenessClock().UnixNano())
 				h.zombie.Store(true)
 				// R-3: same rationale as the genuine-abandonment path — the
@@ -717,7 +723,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				abandonMsg = *reason + "; " + abandonMsg
 			}
 			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg})
-			r.markStopping(qr, r.stopReasonFor(runCtx, h))
+			r.markStopping(qr, h, r.stopReasonFor(runCtx, h))
 			h.zombieSince.Store(r.livenessClock().UnixNano())
 			h.zombie.Store(true)
 			r.mu.Lock()
@@ -1261,8 +1267,9 @@ func (r *Registry) stopReasonFor(runCtx context.Context, h *runHandle) string {
 // stopping mirrors as "running". Best effort: a store without the run's v3
 // record (a fake, or a row the v2 registry wrote before migration 065) or a
 // run that is no longer running is logged and left alone -- the in-process
-// zombie handle is what holds the key either way.
-func (r *Registry) markStopping(qr *queuedRun, reason string) {
+// zombie handle is what holds the key either way. h.stoppingRecorded says
+// whether it stored the stop.
+func (r *Registry) markStopping(qr *queuedRun, h *runHandle, reason string) {
 	rec, err := r.store.GetRunV3(qr.opID)
 	if err != nil || rec == nil {
 		r.logger.Debug("registry: no v3 run record to mark stopping", "op_id", qr.opID, "error", err)
@@ -1284,5 +1291,7 @@ func (r *Registry) markStopping(qr *queuedRun, reason string) {
 		Actor:            &database.Actor{AuthMethod: "system"},
 	}); err != nil {
 		r.logger.Warn("registry: could not record the zombie run as stopping", "op_id", qr.opID, "error", err)
+		return
 	}
+	h.stoppingRecorded.Store(true)
 }

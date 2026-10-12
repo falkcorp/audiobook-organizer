@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.45.0
+// version: 3.45.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-11
 
@@ -1414,12 +1414,15 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 // either writer that already loaded the old decision still turns an
 // interrupted_* status into "canceled" (settleInterrupted, Shutdown). It
 // reports whether that settles the cancel without writing the row:
-//   - decided "canceled" (a user cancel, a watchdog kill or a timeout): the
-//     run is already being canceled. Its row keeps reading "running" until
-//     the goroutine returns -- what a stopping run is (05-PR4), so op.terminal
-//     and the v3 goroutine_returned event come when it really ends -- and a
-//     crash before then leaves it to the boot sweep, which keeps a user or
-//     timeout stop's outcome. True.
+//   - decided "canceled" (a user cancel, a watchdog kill or a timeout) and
+//     recorded as v3 stopping (h.stoppingRecorded): the run is already being
+//     canceled. Its row keeps reading "running" until the goroutine returns
+//     -- what a stopping run is (05-PR4), so op.terminal and the v3
+//     goroutine_returned event come when it really ends -- and a crash before
+//     then leaves it to the boot sweep, which keeps a user or timeout stop's
+//     outcome. True. When markStopping could not record the stop (it is best
+//     effort), nothing durable says the run was canceled, so false: the row
+//     is written "canceled" now, as before 05-PR4.
 //   - decided interrupted_* (a scan stand-down quiesce): the cancel changes
 //     the outcome. The decision is replaced with "canceled", and false, so
 //     the row is written "canceled" now as well: a crash before the goroutine
@@ -1437,6 +1440,9 @@ func (r *Registry) cancelStoppingRun(opID string, h *runHandle) bool {
 			return false
 		}
 		if cur.status == "canceled" {
+			if !h.stoppingRecorded.Load() {
+				return false
+			}
 			r.logger.Info("registry: cancel of a run already stopping as canceled; its row is written when its goroutine returns",
 				"op_id", logger.SanitizeLogValue(opID))
 			return true
