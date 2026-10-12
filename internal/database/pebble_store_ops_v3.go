@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-11
 
@@ -418,7 +418,16 @@ func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row) error
 		opsV3Log.Warn("opv3: not mirroring a v2 write onto an unreadable run record (op %s): %v", row.ID, err)
 		return nil
 	}
-	next, tr := projectRunFromV2(cur, row, time.Now().UTC())
+	// An interrupted run with a chunk ledger mirrors as interrupted_dropped
+	// (ToV2), so the "same status family" test below must know about the
+	// ledger, or the next v2 write on that row would read as a drop.
+	curHasLedger := false
+	if cur != nil && cur.State == state.V3Interrupted {
+		if curHasLedger, err = p.hasKey(opv3LedgerKey(cur.ID)); err != nil {
+			return err
+		}
+	}
+	next, tr := projectRunFromV2(cur, curHasLedger, row, time.Now().UTC())
 	if next.FromV2 != nil {
 		// A migrated run now reflects this write, so its SourceHash names
 		// this row: a later migration pass then sees an unchanged row and
@@ -453,27 +462,28 @@ func (p *PebbleStore) stageRunV3DeleteForV2(s *opsV3Stage, id string) error {
 	return s.del(cur)
 }
 
-// v2StatusOf is the v2 status a stored record mirrors as.
-func v2StatusOf(r *RunRecord) string {
-	st, _ := state.ToV2(r.State, r.WaitReason, r.InterruptedWhy, r.SuccessorID != "", false, r.Error)
+// v2StatusOf is the v2 status a stored record mirrors as (hasLedger: the run
+// has an opv3:ledger: key).
+func v2StatusOf(r *RunRecord, hasLedger bool) string {
+	st, _ := state.ToV2(r.State, r.WaitReason, r.InterruptedWhy, r.SuccessorID != "", hasLedger, r.Error)
 	return st
 }
 
 // projectRunFromV2 returns the record a v2 row write leaves, and the audit
 // row for it (nil when the v3 state did not change). cur is the stored record
-// (nil: none).
+// (nil: none); curHasLedger says whether it has a chunk ledger.
 //
 // When the v2 status is the one cur already mirrors as, cur's v3 state is
 // kept: a stopping zombie's progress tick still reads "running" in v2, a
 // timed_out run's row reads "canceled", and neither may be overwritten by the
 // forward map.
-func projectRunFromV2(cur *RunRecord, row *OperationV2Row, now time.Time) (*RunRecord, *Transition) {
+func projectRunFromV2(cur *RunRecord, curHasLedger bool, row *OperationV2Row, now time.Time) (*RunRecord, *Transition) {
 	var next RunRecord
 	if cur != nil {
 		next = *cur
 	}
 	fillRunFromV2Row(&next, row)
-	if cur != nil && v2StatusOf(cur) == row.Status {
+	if cur != nil && v2StatusOf(cur, curHasLedger) == row.Status {
 		return &next, nil
 	}
 
