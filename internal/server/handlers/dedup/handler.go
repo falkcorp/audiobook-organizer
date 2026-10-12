@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-12
 
@@ -565,34 +565,6 @@ func (h *Handler) RescoreDedupCandidates(c *gin.Context) {
 		httputil.RespondWithInternalError(c, fmt.Sprintf(
 			"rescore incomplete: %d of %d changed candidate rows could not be re-banded (%d written); they still carry the previous ladder's band",
 			result.WriteErrors, result.Changed, result.Written))
-		return
-	}
-
-	httputil.RespondWithOK(c, result)
-}
-
-// PurgeAcoustIDConflicts handles POST /api/v1/dedup/purge-acoustid-conflicts.
-//
-// Finds PENDING non-audio dedup candidates whose two books have clearly
-// disagreeing book-level AcoustID signatures — the title/metadata false
-// positives the new acoustid veto suppresses at emission time. Dry-run by
-// default (returns counts + a sample, mutates nothing); pass {"apply": true} to
-// delete the conflicting candidates.
-func (h *Handler) PurgeAcoustIDConflicts(c *gin.Context) {
-	if h.dedupEngine == nil {
-		httputil.RespondWithServiceUnavailable(c, "dedup engine not available")
-		return
-	}
-
-	var body struct {
-		Apply bool `json:"apply"`
-	}
-	// Ignore parse errors; missing body → dry-run (apply=false).
-	_ = c.ShouldBindJSON(&body)
-
-	result, err := h.dedupEngine.ReevaluateAcoustIDConflicts(c.Request.Context(), !body.Apply)
-	if err != nil {
-		httputil.InternalError(c, "acoustid-conflict reevaluation failed", err)
 		return
 	}
 
@@ -2381,13 +2353,6 @@ func (h *Handler) TriggerDedupLLM(c *gin.Context) {
 	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
 }
 
-// TriggerDedupRefresh handles POST /api/v1/dedup/refresh.
-// Re-runs the full scan as a tracked Operation. Identical behavior to
-// TriggerDedupScan — kept as a separate endpoint for backwards compatibility.
-func (h *Handler) TriggerDedupRefresh(c *gin.Context) {
-	h.TriggerDedupScan(c)
-}
-
 // TriggerDedupAcoustID handles POST /api/v1/dedup/scan-acoustid.
 // Delegates to the UOS registry (acoustid.scan op) since UOS-09.
 func (h *Handler) TriggerDedupAcoustID(c *gin.Context) {
@@ -2457,42 +2422,6 @@ func (h *Handler) PurgeStaleCandidates(c *gin.Context) {
 	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
 }
 
-// PurgeLegacyFPCandidates handles POST /api/v1/dedup/purge-legacy-fp.
-//
-// Enqueues the dedup.purge-legacy-fp-candidates UOS op (T015) which marks
-// pre-whole-file-fingerprint exact/embedding sim=1.0 candidates as stale-fp.
-//
-// Optional JSON body: {"apply": true} to execute (default is dry-run, which
-// returns counts only without mutating any rows). The "apply" flag is forwarded
-// verbatim to the op as its params payload.
-//
-// Why an op and not a synchronous handler: the purge touches up to ~12K rows
-// and performs a per-candidate file-hash re-check; it belongs in the op queue
-// so the caller can track progress in the bell and the operation log.
-func (h *Handler) PurgeLegacyFPCandidates(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	// Forward the request body as the op's params JSON so the op can see
-	// {"apply":true/false} without the handler needing to parse it.
-	var paramsJSON json.RawMessage
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&paramsJSON); err != nil {
-			httputil.RespondWithBadRequest(c, "invalid JSON body")
-			return
-		}
-	}
-
-	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.purge-legacy-fp-candidates", paramsJSON)
-	if err != nil {
-		httputil.InternalError(c, "failed to enqueue dedup purge-legacy-fp-candidates", err)
-		return
-	}
-	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
-}
-
 // TriggerEmbedScan handles POST /api/v1/dedup/embed.
 // Delegates to the UOS registry (dedup.embed-scan op) since UOS-07.
 func (h *Handler) TriggerEmbedScan(c *gin.Context) {
@@ -2503,55 +2432,6 @@ func (h *Handler) TriggerEmbedScan(c *gin.Context) {
 	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.embed-scan", nil)
 	if err != nil {
 		httputil.InternalError(c, "failed to enqueue embed scan", err)
-		return
-	}
-	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
-}
-
-// TriggerEmbedAsync handles POST /api/v1/dedup/embed-async.
-// Enqueues the nightly embed-async UOS op on demand.
-func (h *Handler) TriggerEmbedAsync(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.embed-async", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to enqueue embed-async", err)
-		return
-	}
-	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
-}
-
-// TriggerLSHIndexBuild handles POST /api/v1/dedup/lsh-index.
-// Enqueues the dedup.lsh-index-build op (fable5 T012), which builds
-// the fpidx: PebbleDB secondary index over whole-file AcoustID
-// fingerprints. The op is idempotent and resumable — re-triggering
-// while the index is already up-to-date is safe (skips already-indexed
-// files via the fpidx_meta: member-list).
-func (h *Handler) TriggerLSHIndexBuild(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.lsh-index-build", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to enqueue lsh-index-build", err)
-		return
-	}
-	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
-}
-
-// TriggerBookSignatureScan handles POST /api/v1/dedup/scan-book-signature.
-// Delegates to the UOS registry (dedup.book-signature-scan op) since UOS-09.
-func (h *Handler) TriggerBookSignatureScan(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.book-signature-scan", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to enqueue book signature scan", err)
 		return
 	}
 	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
@@ -2650,40 +2530,4 @@ func (h *Handler) HandleCompareAcoustID(c *gin.Context) {
 		OverallScore:  overall,
 		SegmentScores: comparisons,
 	})
-}
-
-// EmbReeencode handles POST /api/v1/dedup/emb-reencode.
-//
-// Enqueues the dedup.emb-reencode UOS op (T021) which rewrites all emb:v:
-// blobs from legacy float32 (v0) to float16+zstd (v1), saving ~3.5–4× disk
-// space.
-//
-// Optional JSON body: {"apply": true} to execute (default is dry-run, which
-// reports counts and compression ratio without writing any data).
-//
-// Why an op and not a synchronous handler: re-encoding can touch 50K+ rows and
-// is a maintenance background task — tracking progress in the bell is more
-// user-friendly than a long-polling HTTP response.
-func (h *Handler) EmbReeencode(c *gin.Context) {
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	// Forward the request body as the op's params JSON so the op can see
-	// {"apply":true/false} without the handler needing to parse it.
-	var paramsJSON json.RawMessage
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&paramsJSON); err != nil {
-			httputil.RespondWithBadRequest(c, "invalid JSON body")
-			return
-		}
-	}
-
-	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.emb-reencode", paramsJSON)
-	if err != nil {
-		httputil.InternalError(c, "failed to enqueue dedup emb-reencode", err)
-		return
-	}
-	httputil.RespondWithSuccess(c, http.StatusAccepted, map[string]string{"op_id": opID})
 }

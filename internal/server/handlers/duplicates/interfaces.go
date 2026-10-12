@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed book/author/series duplicate detection, async merge / dismiss /
@@ -118,5 +118,4 @@ type (
 	seriesDedupOpParams     = dedup.SeriesDedupParams
 	seriesPruneOpParams     = dedup.SeriesPruneParams
 	seriesMergeOpParams     = dedup.SeriesMergeParams
-	seriesNormalizeOpParams = dedup.SeriesNormalizeParams
 )

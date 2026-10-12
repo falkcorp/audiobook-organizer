@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
 // last-edited: 2026-10-11
 
@@ -124,11 +124,6 @@ type DedupEngine interface {
 	// apply=true persists new bands and scores. Returns a delta summary
 	// suitable for the HTTP response body.
 	Rescore(ctx context.Context, apply bool) (dedup.RescoreResult, error)
-	// ReevaluateAcoustIDConflicts finds pending non-audio candidates whose two
-	// books have clearly-disagreeing book-level AcoustID signatures (false
-	// positives the new acoustid veto suppresses at emission). dryRun=true
-	// reports counts + a sample without mutating; dryRun=false deletes them.
-	ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) (*dedup.AcoustIDConflictResult, error)
 }
 
 // OperationsRegistry is the narrow operations-registry subset the dedup scan

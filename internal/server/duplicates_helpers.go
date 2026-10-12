@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-10-11
 //
@@ -14,9 +14,7 @@
 //   - executeSeriesNormalizeCore      → duplicates_ops.go, server_maintenance_deps.go
 //   - computeSeriesNormalizeActions   → executeSeriesNormalizeCore + duplicates_handlers_test.go
 //   - mergeSeriesGroupHelper          → executeSeriesNormalizeCore
-//   - seriesNormalizeAction /
-//     seriesNormalizePreviewResult    → duplicates_handlers_test.go + the
-//                                        normalize preview payload builder
+//   - seriesNormalizeAction           → computeSeriesNormalizeActions
 //
 // Signatures and the *Server-method-vs-package-func form are preserved EXACTLY
 // so existing callers (and tests) compile unchanged. The duplicates sub-package
@@ -477,14 +475,6 @@ type seriesNormalizeAction struct {
 	CandidatePosition string `json:"candidate_position,omitempty"`
 }
 
-// seriesNormalizePreviewResult is the response body for the dry-run preview endpoint.
-type seriesNormalizePreviewResult struct {
-	Actions             []seriesNormalizeAction `json:"actions"`
-	TotalSeriesAffected int                     `json:"total_series_affected"`
-	TotalBooksAffected  int                     `json:"total_books_affected"`
-	FlaggedForReview    []seriesNormalizeAction `json:"flagged_for_review"`
-}
-
 // computeSeriesNormalizeActions iterates all series, strips contamination from
 // each name, and returns the list of rename / merge_into / flag actions that
 // would be taken by a full normalize run. No writes are performed.
@@ -565,44 +555,6 @@ func computeSeriesNormalizeActions(store seriesMergeStore) ([]seriesNormalizeAct
 		}
 	}
 	return actions, nil
-}
-
-// buildSeriesNormalizePreview computes the dry-run normalize actions over store
-// and assembles the preview response payload. Extracted from the former
-// seriesNormalizePreview HTTP handler so the duplicates sub-package can obtain
-// the identical payload through an injected closure (it cannot reference the
-// unexported seriesNormalizeAction / seriesNormalizePreviewResult types).
-func buildSeriesNormalizePreview(store seriesMergeStore) seriesNormalizePreviewResult {
-	// A failed listing yields an empty preview, which reads as "nothing to do" to
-	// an operator deciding whether to approve the run. The error is logged rather
-	// than returned because this builds a payload for a dry-run view with no error
-	// channel; SERIES-NORMALIZE-PREVIEW-SWALLOWS-ERROR in todo.d tracks giving it
-	// one, which needs a handler signature change.
-	actions, err := computeSeriesNormalizeActions(store)
-	if err != nil {
-		logging.Error(context.Background(),
-			"series normalize preview could not list series; returning an EMPTY preview that must not be read as a clean library",
-			"err", err)
-	}
-
-	flagged := make([]seriesNormalizeAction, 0)
-	normal := make([]seriesNormalizeAction, 0)
-	totalBooks := 0
-	for _, a := range actions {
-		if a.Action == "flag" {
-			flagged = append(flagged, a)
-		} else {
-			normal = append(normal, a)
-			totalBooks += a.BookCount
-		}
-	}
-
-	return seriesNormalizePreviewResult{
-		Actions:             normal,
-		TotalSeriesAffected: len(normal),
-		TotalBooksAffected:  totalBooks,
-		FlaggedForReview:    flagged,
-	}
 }
 
 // mergeSeriesGroupHelper moves all books from each series in mergeIDs to keepID,

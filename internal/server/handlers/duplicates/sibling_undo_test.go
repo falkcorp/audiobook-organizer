@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/sibling_undo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: cefc1ee2-288b-4ccf-a693-5940c218a848
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 package duplicates_test
 
@@ -35,7 +35,7 @@ func TestLinkBookDuplicatesAsVersions_SiblingMoveUndoEndpoint(t *testing.T) {
 
 	ms := merge.NewService(f.S)
 	h := duplicates.New(f.S, nil, nil, nil, nil,
-		func() duplicates.MergeService { return ms }, nil, nil, nil, nil)
+		func() duplicates.MergeService { return ms }, nil, nil, nil)
 
 	// No explicit primary on this endpoint: L has no file, so K wins.
 	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
@@ -93,7 +93,7 @@ func TestListSiblingMoveJournals_LimitCap(t *testing.T) {
 	}
 	ms := merge.NewService(f.S)
 	h := duplicates.New(f.S, nil, nil, nil, nil,
-		func() duplicates.MergeService { return ms }, nil, nil, nil, nil)
+		func() duplicates.MergeService { return ms }, nil, nil, nil)
 	count := func(url string) int {
 		w := doReq(t, h.ListSiblingMoveJournals, http.MethodGet, url, nil)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -126,7 +126,7 @@ func TestLinkBookDuplicatesAsVersions_ReportsFlagAndStateHolder(t *testing.T) {
 
 	ms := merge.NewService(f.S)
 	h := duplicates.New(f.S, nil, nil, nil, nil,
-		func() duplicates.MergeService { return ms }, nil, nil, nil, nil)
+		func() duplicates.MergeService { return ms }, nil, nil, nil)
 	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
 		map[string]any{"book_ids": []string{l, k}})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

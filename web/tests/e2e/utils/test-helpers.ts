@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.21.0
+// version: 2.21.1
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-08
+// last-edited: 2026-10-11
 
 import { Page } from '@playwright/test';
 
@@ -987,12 +987,6 @@ export async function setupMockApiRoutes(
     }
     if (pathname.match(/\/api\/v1\/authors\/\d+\/reclassify-as-narrator/) && method === 'POST') {
       return route.fulfill(jsonResponse({ message: 'Reclassified', books_updated: 1 }));
-    }
-    if (pathname === '/api/v1/authors/duplicates/ai-review' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'ai-review-1', type: 'ai-author-review', status: 'running', progress: 0, total: 100, message: 'Starting AI review...' }, 202));
-    }
-    if (pathname === '/api/v1/authors/duplicates/ai-review/apply' && method === 'POST') {
-      return route.fulfill(jsonResponse({ id: 'ai-apply-1', type: 'ai-author-merge-apply', status: 'running', progress: 0, total: 100, message: 'Applying...' }, 202));
     }
     if (pathname.match(/\/api\/v1\/operations\/[^/]+\/result/) && method === 'GET') {
       return route.fulfill(jsonResponse({

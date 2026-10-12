@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package server
 
@@ -31,28 +31,21 @@ func (s *Server) wireDedupRoutes(
 	// T016: breakdown and rescore endpoints (frozen API contract for T017).
 	protected.GET("/dedup/candidates/:id/breakdown", s.perm(auth.PermLibraryView), dedupH.GetDedupCandidateBreakdown)
 	protected.POST("/dedup/rescore", s.perm(auth.PermScanTrigger), dedupH.RescoreDedupCandidates)
-	protected.POST("/dedup/purge-acoustid-conflicts", s.perm(auth.PermScanTrigger), dedupH.PurgeAcoustIDConflicts)
 	// naming-audit classes "merge vs link verbs" and "dismiss vs reject vs
 	// undo" (docs/audits/2026-09-25-interface-naming-consistency.md classes
-	// 2/3): these "merge"/"dismiss" endpoints link books into a version group
-	// or reject a candidate, never move a file — renamed to say so. The old
-	// paths are kept registered as DEPRECATED aliases pointing at the same
-	// handlers, matching the /rescan alias pattern in wire_audiobooks_routes.go.
+	// 2/3): these endpoints link books into a version group or reject a
+	// candidate, never move a file — named to say so. The old merge/dismiss
+	// verb aliases were removed (01-P72).
 	protected.POST("/dedup/candidates/:id/link", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidate)
-	protected.POST("/dedup/candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidate) // DEPRECATED alias for /link
 	protected.POST("/dedup/candidates/:id/reject", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCandidate)
-	protected.POST("/dedup/candidates/:id/dismiss", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCandidate) // DEPRECATED alias for /reject
 	protected.POST("/dedup/candidates/bulk-link", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkLinkDedupCandidates)
-	protected.POST("/dedup/candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkLinkDedupCandidates) // DEPRECATED alias for /bulk-link
 	// Filter-scoped reject for the review UI's cross-page selection; same filter body as bulk-link.
 	protected.POST("/dedup/candidates/bulk-reject", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkRejectDedupCandidates)
 	protected.POST("/dedup/candidates/bulk-reject/revert", s.perm(auth.PermLibraryEditMetadata), dedupH.RevertBulkRejectDedupCandidates)
 	// The count a cross-page confirmation shows and sends back as expected_total (writes nothing).
 	protected.POST("/dedup/candidates/bulk-count", s.perm(auth.PermLibraryView), dedupH.BulkCountDedupCandidates)
 	protected.POST("/dedup/candidates/link-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster)
-	protected.POST("/dedup/candidates/merge-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster) // DEPRECATED alias for /link-cluster
 	protected.POST("/dedup/candidates/reject-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster)
-	protected.POST("/dedup/candidates/dismiss-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster) // DEPRECATED alias for /reject-cluster
 	protected.POST("/dedup/candidates/remove-from-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RemoveFromDedupCluster)
 	protected.GET("/dedup/candidates/series-summary", s.perm(auth.PermLibraryView), dedupH.ListDedupCandidateSeries)
 	// C6 — gold-dataset review (the dedup feedback-loop labels).
@@ -62,20 +55,13 @@ func (s *Server) wireDedupRoutes(
 	protected.GET("/dedup/labels/suspicious", s.perm(auth.PermLibraryView), dedupH.ListSuspiciousDedupLabels) // INIT-1 T4 — read-only suspicious-label review queue.
 	protected.POST("/dedup/labels/:id/override", s.perm(auth.PermLibraryEditMetadata), dedupH.OverrideDedupLabel)
 	protected.POST("/dedup/candidates/link-series", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidateSeries)
-	protected.POST("/dedup/candidates/merge-series", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCandidateSeries) // DEPRECATED alias for /link-series
 	protected.POST("/dedup/scan", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupScan)
 	protected.POST("/dedup/scan-llm", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupLLM)
 	protected.POST("/dedup/scan-acoustid", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupAcoustID)
 	protected.POST("/audiobooks/:id/compare-acoustid", s.perm(auth.PermLibraryView), dedupH.HandleCompareAcoustID)
-	protected.POST("/dedup/scan-book-signature", s.perm(auth.PermScanTrigger), dedupH.TriggerBookSignatureScan)
-	protected.POST("/dedup/refresh", s.perm(auth.PermScanTrigger), dedupH.TriggerDedupRefresh)
 	protected.POST("/dedup/purge-stale", s.perm(auth.PermScanTrigger), dedupH.PurgeStaleCandidates)
-	protected.POST("/dedup/purge-legacy-fp", s.perm(auth.PermScanTrigger), dedupH.PurgeLegacyFPCandidates)
 	protected.POST("/dedup/reset-acoustid", s.perm(auth.PermScanTrigger), dedupH.ResetAcoustIDFingerprints)
 	protected.POST("/dedup/embed", s.perm(auth.PermScanTrigger), dedupH.TriggerEmbedScan)
-	protected.POST("/dedup/embed-async", s.perm(auth.PermScanTrigger), dedupH.TriggerEmbedAsync)
-	protected.POST("/dedup/lsh-index", s.perm(auth.PermScanTrigger), dedupH.TriggerLSHIndexBuild)
-	protected.POST("/dedup/emb-reencode", s.perm(auth.PermScanTrigger), dedupH.EmbReeencode) // T021: float16+zstd re-encode op
 
 	// Duplicates domain (SQL-backed dup detection, series prune/normalize,
 	// dedup-entry validation; migrated from server_lifecycle.go). Paths + permission
@@ -98,7 +84,6 @@ func (s *Server) wireDedupRoutes(
 	protected.GET("/authors/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAuthors)
 	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
 	protected.POST("/audiobooks/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks)
-	protected.POST("/audiobooks/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks) // DEPRECATED alias for /link
 	protected.POST("/audiobooks/combine", s.perm(auth.PermLibraryEditMetadata), duplicatesH.CombineBooks)
 	// Combine undo: every combine (manual or review-queue combine/duplicate-of)
 	// is journaled; these list the journals and reverse one.
@@ -114,7 +99,5 @@ func (s *Server) wireDedupRoutes(
 	protected.POST("/series/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeSeriesGroup)
 	protected.GET("/series/prune/preview", s.perm(auth.PermLibraryView), duplicatesH.SeriesPrunePreview)
 	protected.POST("/series/prune", s.perm(auth.PermLibraryEditMetadata), duplicatesH.SeriesPrune)
-	protected.GET("/series/normalize/preview", s.perm(auth.PermLibraryView), duplicatesH.SeriesNormalizePreview)
-	protected.POST("/series/normalize", s.perm(auth.PermLibraryEditMetadata), duplicatesH.SeriesNormalize)
 	protected.POST("/dedup/validate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.ValidateDedupEntry)
 }
