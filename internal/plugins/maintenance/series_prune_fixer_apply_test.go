@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -32,6 +33,15 @@ type spStoreHook struct {
 	*database.PebbleStore
 	beforeDelete func(id int)
 	counts       atomic.Int32
+	// refCountErr fails the per-series reference re-count.
+	refCountErr error
+}
+
+func (h *spStoreHook) GetSeriesBookRefCount(id int) (int, error) {
+	if h.refCountErr != nil {
+		return 0, h.refCountErr
+	}
+	return h.PebbleStore.GetSeriesBookRefCount(id)
 }
 
 func (h *spStoreHook) DeleteSeries(id int) error {
@@ -380,4 +390,45 @@ func TestSeriesPruneFixer_FranchiseSeriesAreOwnerManual(t *testing.T) {
 		assert.Nil(t, fresh.Detail, name)
 	}
 	assert.Empty(t, spRowFor(t, res, l.s7).Skipped, "an ordinary empty series is still offered")
+}
+
+// A re-count that cannot be read refuses the delete (fail closed): an
+// unreadable count is never a zero.
+func TestSeriesPruneFixer_UnreadableRecountDeletesNothing(t *testing.T) {
+	l := newSPLibrary(t)
+	hook := &spStoreHook{PebbleStore: l.st}
+	f := newSeriesPruneFixer(&Plugin{deps: fakeDeps{store: hook}})
+	res := spPlan(t, l, f)
+	hook.refCountErr = errors.New("memdb gone")
+
+	out, err := spRun(t, l, f, res, spWriter(l, l.st, "op-unread"), nil, "op-unread", spRowFor(t, res, l.s7).RowID)
+	require.NoError(t, err)
+	row := spOutcome(t, out)
+	assert.Equal(t, repairs.OutcomeFailed, row.Outcome, row.Error)
+	assert.Contains(t, row.Error, "memdb gone")
+	assert.True(t, l.exists(t, l.s7))
+	assert.Empty(t, spLiveRows(t, l, "op-unread"))
+}
+
+// The orphan core's own guards stand behind evaluate's: a decision naming a
+// referenced or held series (evaluate never builds one) deletes nothing and
+// is never reported applied.
+func TestSeriesPruneFixer_OrphanCoreRefusalIsNeverApplied(t *testing.T) {
+	l := newSPLibrary(t)
+	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	f := newSeriesPruneFixer(&Plugin{deps: deps})
+	s7, err := l.st.GetSeriesByID(l.s7)
+	require.NoError(t, err)
+	held := *s7
+	held.HeldBy = "maintenance.author-named-series"
+	for name, d := range map[string]*spDecision{
+		"referenced": {kind: dedup.SeriesPruneOrphan, orphan: *s7, orphanRf: 1},
+		"held":       {kind: dedup.SeriesPruneOrphan, orphan: held},
+	} {
+		err := f.Apply(context.Background(), spWriter(l, l.st, "op-core-"+name), repairs.Row{RowID: "r", Detail: d})
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan, name)
+		assert.True(t, l.exists(t, l.s7), name)
+		assert.Empty(t, spLiveRows(t, l, "op-core-"+name), name)
+	}
+	assert.Zero(t, deps.series.Load())
 }
