@@ -1,5 +1,5 @@
 // file: internal/tagger/safe_write_verify_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7c1e5b94-2d38-4f6a-a0b7-93e4c8d51f26
 // last-edited: 2026-10-11
 
@@ -129,7 +129,7 @@ func TestWriteTagsSafe_VerifyAfterWrite_DroppedTagFails(t *testing.T) {
 }
 
 // With no book_file row the event is keyed on the file's digest (an orphan
-// observation AdoptOrphanEvents can attach later), not dropped.
+// observation, found through FindFileEventsByHash), not dropped.
 func TestWriteTagsSafe_VerifyAfterWrite_NoRowRecordsHashKeyedEvent(t *testing.T) {
 	setVerifyAfterWrite(t, true)
 	dropKeyWriter(t, "ALBUM")

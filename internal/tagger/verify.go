@@ -1,5 +1,5 @@
 // file: internal/tagger/verify.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8d1b6a-5c47-4a92-b0f3-7d2a9c4e1f58
 // last-edited: 2026-10-11
 //
@@ -154,7 +154,10 @@ func FoldTagKeys(tags map[string][]string) map[string][]string {
 			winner[u] = k
 			out[u] = tags[k]
 		case k == u:
-			// An exact upper-case key outranks a differently-cased twin.
+			// An exact upper-case key outranks a differently-cased twin. For
+			// ASCII keys it sorts first, so this arm is reached only where the
+			// upper-case form sorts after the lower-case one (Georgian
+			// Mkhedruli/Mtavruli); the test pins that case.
 			logCaseConflict(u, prev, k, out[u], tags[k])
 			winner[u] = k
 			out[u] = tags[k]
@@ -310,8 +313,11 @@ func nonEmptyOrNil(vs []string) []string {
 //
 // bookFileID is the book_file row of the file written (empty when it has none)
 // and postHash its whole-file SHA-256 when the writer computed one (empty
-// otherwise). The event is keyed on bookFileID when there is one, else on the
-// file's digest, so a later AdoptOrphanEvents can attach it to the row.
+// otherwise). The event is keyed on bookFileID when there is one. With none it
+// is an orphan observation keyed on the file's digest: it is reachable through
+// FindFileEventsByHash (the store indexes it by that digest), but nothing in
+// production attaches orphan observations to a row afterwards
+// (AdoptOrphanEvents has no caller outside tests), so it stays an orphan.
 //
 // Exported so the writers outside this package (the native taglib writers in
 // internal/metadata, which production builds use) verify through the same
