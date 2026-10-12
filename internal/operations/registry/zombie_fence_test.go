@@ -1,5 +1,5 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
 // last-edited: 2026-10-11
 
@@ -327,12 +327,11 @@ func TestZombie_ScanKeyUnchanged(t *testing.T) {
 	awaitStatus(t, h.store, resumed, "completed", 5*time.Second)
 }
 
-// TestZombie_CancelTwiceIsNoop: canceling a run that is already stopping as
-// canceled succeeds and writes nothing: its row keeps reading "running" (v3
-// stopping) until its goroutine returns, and only then is it canceled.
-// Writing "canceled" at the cancel (as before 05-PR4's review) recorded the
-// run as ended -- op.terminal, the v3 goroutine_returned event -- while its
-// goroutine still ran.
+// TestZombie_CancelTwiceIsNoop: canceling a zombie again succeeds. On this
+// fake store (NopOpsV3) the stop was never recorded as v3 stopping, so
+// nothing durable says the run was canceled and the cancel writes the row
+// "canceled" at once, as before 05-PR4; with a recorded stop the row is left
+// to the goroutine's exit (TestZombieIsStoppingNotTerminal).
 func TestZombie_CancelTwiceIsNoop(t *testing.T) {
 	h := newZombieHarness(t, 2, nil)
 	s := newStubbornRun()
@@ -348,8 +347,8 @@ func TestZombie_CancelTwiceIsNoop(t *testing.T) {
 			t.Fatalf("second cancel of a zombie: %v, want nil", err)
 		}
 	}
-	if got := h.store.statusOf(id); got != "running" {
-		t.Errorf("status = %q after repeated cancel of a stopping run, want running until its goroutine returns", got)
+	if got := h.store.statusOf(id); got != "canceled" {
+		t.Errorf("status = %q after repeated cancel of a zombie whose stop was not recorded, want canceled", got)
 	}
 	if n := h.r.ZombieCount(); n != 1 {
 		t.Errorf("ZombieCount = %d, want 1", n)
