@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/window_index_build_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1a8f37-d29e-4b60-93a4-8e0f6b2d7c15
 // last-edited: 2026-10-11
 
@@ -79,13 +79,15 @@ func newWindowStore(t *testing.T) *database.PebbleStore {
 	return s
 }
 
-// countingWindowStore records how many PutWindowIndex calls run at once.
+// countingWindowStore records how many PutWindowIndex calls run at once, and
+// how many there were.
 type countingWindowStore struct {
 	*database.PebbleStore
-	inFlight, maxInFlight atomic.Int64
+	inFlight, maxInFlight, calls atomic.Int64
 }
 
 func (c *countingWindowStore) PutWindowIndex(fileID string) (int, error) {
+	c.calls.Add(1)
 	n := c.inFlight.Add(1)
 	for {
 		m := c.maxInFlight.Load()
@@ -164,8 +166,11 @@ func TestWindowIndexBuild_ResumableAndCancellable(t *testing.T) {
 	require.NotEmpty(t, partial, "the canceled run indexed some files")
 	require.Less(t, len(partial), files, "and stopped before all of them")
 
+	callsBefore := counting.calls.Load()
 	require.NoError(t, p.runWindowIndexBuild(context.Background(), live(t), &fakeReporter{}))
 	require.True(t, s.IsWindowIndexBuilt())
+	require.Equal(t, int64(files-len(partial)), counting.calls.Load()-callsBefore,
+		"the rerun indexes only what the canceled run left; files with a member list are skipped")
 	resumedKeys, resumed := indexSnapshot(t, s, ids)
 	t.Logf("window-index-build: fresh build %d band keys / %d member lists; canceled run left %d keys / %d lists; resumed build %d keys / %d lists; max workers in flight %d",
 		freshKeys, len(freshMembers), partialKeys, len(partial), resumedKeys, len(resumed), counting.maxInFlight.Load())
@@ -177,4 +182,41 @@ func TestWindowIndexBuild_ResumableAndCancellable(t *testing.T) {
 		require.Equal(t, freshMembers[freshIDs[i]], resumed[ids[i]], "file %d", i)
 	}
 	require.Greater(t, counting.maxInFlight.Load(), int64(1), "workers ran concurrently")
+}
+
+// failingWindowStore fails PutWindowIndex for one file.
+type failingWindowStore struct {
+	*database.PebbleStore
+	failID string
+}
+
+func (f *failingWindowStore) PutWindowIndex(fileID string) (int, error) {
+	if fileID == f.failID {
+		return 0, errors.New("synthetic index write failure")
+	}
+	return f.PebbleStore.PutWindowIndex(fileID)
+}
+
+// TestWindowIndexBuild_FailedFileLeavesFlagUnset: one file that cannot be
+// indexed fails the run and leaves fpwinidx_v1_done unset (fail closed: the
+// collector stays off rather than trusting an index with a hole in it), while
+// every other file is indexed; a clean rerun finishes the one and sets it.
+func TestWindowIndexBuild_FailedFileLeavesFlagUnset(t *testing.T) {
+	const files = 8
+	s := newWindowStore(t)
+	ids := seedWindowLibrary(t, s, files)
+
+	err := (&Plugin{store: &failingWindowStore{PebbleStore: s, failID: ids[3]}}).
+		runWindowIndexBuild(context.Background(), live(t), &fakeReporter{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "1 of 8 file(s) failed")
+	require.False(t, s.IsWindowIndexBuilt(), "a pass with a failed file never sets the flag")
+	_, members := indexSnapshot(t, s, ids)
+	require.Len(t, members, files-1)
+	require.NotContains(t, members, ids[3])
+
+	require.NoError(t, (&Plugin{store: s}).runWindowIndexBuild(context.Background(), live(t), &fakeReporter{}))
+	require.True(t, s.IsWindowIndexBuilt())
+	_, members = indexSnapshot(t, s, ids)
+	require.Len(t, members, files)
 }

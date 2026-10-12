@@ -1,5 +1,5 @@
 // file: internal/dedup/collectors_window.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e1b07-63d2-4f8a-a5e9-2b7d0c8f4a13
 // last-edited: 2026-10-11
 
@@ -27,7 +27,6 @@
 package dedup
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -37,8 +36,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// windowCollectLog is the window collector's logger. A store read error is a
+// Warn: the signal is skipped (missing evidence, which can only lower a score),
+// but a Pebble read failing is never routine and must not hide at Debug.
+var windowCollectLog = logger.New("dedup.window-collector")
 
 // WindowAcoustIDConfig calibrates CollectWindowAcoustID.
 type WindowAcoustIDConfig struct {
@@ -135,8 +139,9 @@ func CollectWindowAcoustID(
 // book and keeps ONE signal per candidate book, the highest similarity. A
 // supporting boost is added per signal (unified.ComposeScore), so without
 // this a twenty-file book matching one candidate on every file would add the
-// boost twenty times. Per-file errors are logged and skipped, like the other
-// acoustic collectors' callers do.
+// boost twenty times. A per-file store error is logged at Warn and that file
+// contributes nothing (fail closed: a missing supporting signal can only lower
+// the pair's score).
 func CollectWindowAcoustIDForBook(
 	store WindowAcoustIDStore,
 	files []database.BookFile,
@@ -151,8 +156,7 @@ func CollectWindowAcoustIDForBook(
 	for i := range files {
 		matches, err := collectWindowMatches(store, &files[i], bookID, cfg)
 		if err != nil {
-			logging.Debug(context.Background(), "dedup/collectors_window: collect error",
-				"file_id", files[i].ID, "err", err)
+			windowCollectLog.Warn("window probe of file %s skipped: %v", files[i].ID, err)
 			continue
 		}
 		for _, m := range matches {
@@ -185,9 +189,7 @@ func collectWindowMatches(
 		now := time.Now().UnixNano()
 		last := windowGateLastLog.Load()
 		if now-last >= int64(windowGateLogEvery) && windowGateLastLog.CompareAndSwap(last, now) {
-			logging.Info(context.Background(), "dedup/collectors_window: window index not yet built; skipping window probe",
-				"file_id", queryFile.ID,
-				"hint", "run dedup.window-index-build (live) to enable the window_acoustid signal")
+			windowCollectLog.Info("window index not yet built; skipping the window probe (file %s). Run dedup.window-index-build (live) to enable the window_acoustid signal", queryFile.ID)
 		}
 		return nil, nil
 	}
@@ -226,8 +228,7 @@ func collectWindowMatches(
 	for _, candID := range candIDs {
 		cand, err := store.GetBookFileByFileID(candID)
 		if err != nil {
-			logging.Debug(context.Background(), "dedup/collectors_window: candidate lookup error",
-				"cand_file_id", candID, "err", err)
+			windowCollectLog.Warn("window candidate %s of file %s skipped: book_file lookup: %v", candID, queryFile.ID, err)
 			continue
 		}
 		if cand == nil || cand.BookID == "" || cand.BookID == queryBookID {
@@ -243,8 +244,7 @@ func collectWindowMatches(
 		}
 		cw, err := store.GetFingerprintWindows(database.FileWindowRef(candID))
 		if err != nil {
-			logging.Debug(context.Background(), "dedup/collectors_window: candidate windows error",
-				"cand_file_id", candID, "err", err)
+			windowCollectLog.Warn("window candidate %s of file %s skipped: read windows: %v", candID, queryFile.ID, err)
 			continue
 		}
 		cfg.Stats.add(func(s *WindowCollectStats) *atomic.Int64 { return &s.Candidates })
@@ -252,13 +252,11 @@ func collectWindowMatches(
 		sim, err := fingerprint.WindowSetSimilarity(queryPrints, windowPrintsOf(cw))
 		if errors.Is(err, fingerprint.ErrIncompatibleWindows) || errors.Is(err, fingerprint.ErrNoComparableWindows) {
 			cfg.Stats.add(func(s *WindowCollectStats) *atomic.Int64 { return &s.Incomparable })
-			logging.Debug(context.Background(), "dedup/collectors_window: prints not comparable (missing evidence)",
-				"file_id", queryFile.ID, "cand_file_id", candID, "err", err)
+			windowCollectLog.Debug("window prints of %s and %s not comparable (missing evidence): %v", queryFile.ID, candID, err)
 			continue
 		}
 		if err != nil {
-			logging.Debug(context.Background(), "dedup/collectors_window: similarity error",
-				"file_id", queryFile.ID, "cand_file_id", candID, "err", err)
+			windowCollectLog.Warn("window similarity of %s and %s failed: %v", queryFile.ID, candID, err)
 			continue
 		}
 		if sim.LowConfidence {

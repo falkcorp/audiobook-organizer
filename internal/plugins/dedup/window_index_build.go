@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/window_index_build.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e2b9d51-0c46-4f83-a1d7-5b8e3c9f6a20
 // last-edited: 2026-10-11
 
@@ -17,7 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -25,6 +25,10 @@ import (
 
 // windowIndexBuildOpID is the op that backfills the window-print band index.
 const windowIndexBuildOpID = "dedup.window-index-build"
+
+// windowIndexLog is the build op's process log; per-file failures also go to
+// the run's own log (reporter.Logger) so they show on the operation.
+var windowIndexLog = logger.New(windowIndexBuildOpID)
 
 // WindowIndexStore is the narrow store the window-index build op needs. The
 // *database.PebbleStore satisfies it; it is resolved through the decorator
@@ -119,7 +123,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		return fmt.Errorf("%s: list files: %w", windowIndexBuildOpID, err)
 	}
 	total := len(ids)
-	logging.Info(ctx, "window-index-build: starting", "files", total, "dry_run", dryRun)
+	windowIndexLog.Info("starting: %d file(s) with stored windows, dry_run=%v", total, dryRun)
 
 	var indexed, already, pending, bandKeys, errs atomic.Int64
 	var processed atomic.Int64
@@ -136,6 +140,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		defer processed.Add(1)
 		_, has, err := store.WindowIndexMembers(fileID)
 		if err != nil {
+			reporter.Logger().Error("window-index-build: read member list", "file_id", fileID, "error", err)
 			errs.Add(1)
 			errMu.Lock()
 			if firstErr == nil {
@@ -180,7 +185,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		},
 	})
 	if runErr != nil {
-		logging.Info(ctx, "window-index-build: stopped", "processed", processed.Load(), "indexed", indexed.Load(), "error", runErr)
+		windowIndexLog.Info("stopped after %d of %d file(s), %d indexed: %v", processed.Load(), total, indexed.Load(), runErr)
 		return runErr
 	}
 
@@ -189,7 +194,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		summary := fmt.Sprintf("Preview: %d file(s) with stored windows, %d already indexed, %d to index. %s Run with dry_run=false to build.",
 			total, already.Load(), pending.Load(), windowIndexSizing(total))
 		prog.Done(summary)
-		logging.Info(ctx, "window-index-build: preview", "files", total, "already", already.Load(), "pending", pending.Load())
+		windowIndexLog.Info("preview: %d file(s), %d already indexed, %d to index", total, already.Load(), pending.Load())
 		return nil
 	}
 	if n := errs.Load(); n > 0 {
@@ -201,7 +206,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 	summary := fmt.Sprintf("Window index built: %d file(s) indexed now (%d band keys), %d already indexed, of %d.",
 		indexed.Load(), bandKeys.Load(), already.Load(), total)
 	prog.Done(summary)
-	logging.Info(ctx, "window-index-build: complete", "indexed", indexed.Load(), "band_keys", bandKeys.Load(), "already", already.Load(), "files", total)
+	windowIndexLog.Info("complete: %d file(s) indexed now (%d band keys), %d already indexed, of %d", indexed.Load(), bandKeys.Load(), already.Load(), total)
 	return nil
 }
 

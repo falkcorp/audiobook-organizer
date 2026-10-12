@@ -14,13 +14,17 @@ copies with 1% of their bits flipped and 0% of unrelated windows.
   this change. Preview by default; `dry_run=false` builds it on a worker per
   CPU, resumes where a canceled run stopped, checks the run's write fence per
   file, and sets `system:flag:fpwinidx_v1_done` only after a complete pass.
-  Not scheduled. Its preview prints the size estimate (742,000 files: about
-  2.0 GB measured, 1.75 GB at the planned 40 bytes per key).
+  Not scheduled. Its preview prints the size estimate (742,000 files with
+  three windows each: 1.75 GB at the planned 40 bytes per key; a compacted
+  4,000-file synthetic database measured 35.5 bytes per key and 469 bytes per
+  member list, which scales to 1.6 GB).
 - New SUPPORTING dedup signal `window_acoustid`: the index proposes candidate
   files, `WindowSetSimilarity` verifies them, one signal per candidate book,
   +6 boost (`dedup.signals.window_acoustid.boost: 0` turns it off). Prints
   from another pipeline or tool version are counted as incomparable, not as
-  disagreement. Silent until the index flag is set.
+  disagreement. Silent until the index flag is set. The review UI labels it
+  "Window AcoustID" with its own colour and treats it as supporting, so the
+  Duplicates row chips never show it as the reason a pair exists.
 - The chapter-fragment fixer shows "window containment 0.NN of the fragment's
   bands appear in the parent" on fragment-to-parent rows when both files are
   indexed (`fragment_window_containment_min`, default 0.5, labels it
