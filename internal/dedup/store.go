@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-09-24
+// last-edited: 2026-10-11
 
 package dedup
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -168,3 +169,27 @@ type Store interface {
 	dedupDuplicateStore
 	dedupSplitMergeStore
 }
+
+// WindowAcoustIDStore is what CollectWindowAcoustID reads (02-PR8): the
+// window-band index and the stored window prints, plus a by-file-ID row
+// lookup. It is a *database.PebbleStore capability, deliberately NOT embedded
+// in Store: the index methods are not on database.Store, so the indexedStore
+// decorator production wraps the store in does not carry them. The engine is
+// handed one through SetWindowStore, resolved with
+// database.AsCapability[WindowAcoustIDStore] (internal/server/registry_wire.go).
+type WindowAcoustIDStore interface {
+	// IsWindowIndexBuilt gates the collector: false until
+	// dedup.window-index-build has completed a pass.
+	IsWindowIndexBuilt() bool
+	// WindowIndexMembers is a file's band member list (fpwinidx_meta:).
+	WindowIndexMembers(fileID string) ([]fingerprint.WindowBand, bool, error)
+	// WindowIndexProbe returns files sharing >= 2 of bands, with hit counts.
+	WindowIndexProbe(bands []fingerprint.WindowBand, max int) (map[string]int, error)
+	// GetFingerprintWindows returns a ref's STORED windows (no virtual head).
+	GetFingerprintWindows(ref database.FingerprintWindowRef) ([]database.FingerprintWindow, error)
+	// GetBookFileByFileID resolves a candidate file to its row (and book)
+	// through the book_file_id index, two point reads, never a scan.
+	GetBookFileByFileID(fileID string) (*database.BookFile, error)
+}
+
+var _ WindowAcoustIDStore = (*database.PebbleStore)(nil)

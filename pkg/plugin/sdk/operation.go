@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/operation.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-16
+// last-edited: 2026-10-11
 
 package sdk
 
@@ -60,4 +60,6 @@ const (
 	ResReviewItems = registry.ResReviewItems
 	ResEmbeddings  = registry.ResEmbeddings
 	ResOperations  = registry.ResOperations
+	// ResFingerprintIndex is the window-print band index (fpwinidx:).
+	ResFingerprintIndex = registry.ResFingerprintIndex
 )

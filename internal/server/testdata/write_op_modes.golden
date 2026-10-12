@@ -67,6 +67,7 @@ dedup.series-merge	no-mode
 dedup.series-normalize	no-mode
 dedup.series-prune	no-mode
 dedup.split-book-bulk-merge	preview
+dedup.window-index-build	preview
 deluge.centralize	no-mode
 deluge.link-backfill	preview
 deluge.protected-paths-sync	no-mode

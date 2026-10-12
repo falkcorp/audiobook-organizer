@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.13.3
+// version: 2.14.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See
@@ -369,6 +369,9 @@ const (
 	ResOperations  Resource = "operations"
 	// ResCatalog is the author catalog (cat:* keys, database.CatalogStore).
 	ResCatalog Resource = "catalog"
+	// ResFingerprintIndex is the window-print band index (fpwinidx: and
+	// fpwinidx_meta: keys, database pebble_store_fpwinidx.go).
+	ResFingerprintIndex Resource = "fingerprint_index"
 )
 
 // EventSubscription wires an event name to a handler on the OperationDef.

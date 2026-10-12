@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.155.1
+// version: 1.156.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package config
 
@@ -1415,6 +1415,13 @@ type Config struct {
 	// so it can afford a longer limit than the unattended scanner. Default
 	// 120. 0 or less means the default, never "disabled".
 	RepairChapterMaxMin int `json:"repair_chapter_max_min" mapstructure:"repair_chapter_max_min"`
+	// FragmentWindowContainmentMin is where the chapter-fragment fixer's
+	// window-containment evidence line (the share of a fragment's window-print
+	// band keys its candidate parent also has, 02-PR8) reads as "supporting"
+	// rather than "weak". Display only: the line never makes a row applicable
+	// and never changes which match proves a repoint. Default 0.5; a value
+	// outside (0, 1] means the default (ResolveFragmentWindowContainmentMin).
+	FragmentWindowContainmentMin float64 `json:"fragment_window_containment_min" mapstructure:"fragment_window_containment_min"`
 	// MetadataCandidateFetchWorkers is the batch candidate fetch's worker
 	// count. 0 (the default) sizes it from the enabled sources' summed rate
 	// budget (server.candidateFetchWorkers); any other value is used as is,
@@ -2660,6 +2667,7 @@ func InitConfig() {
 	viper.SetDefault("scan_standdown_grace_seconds", 45)
 	viper.SetDefault("chapter_consolidation_threshold_min", DefaultChapterConsolidationThresholdMin)
 	viper.SetDefault("repair_chapter_max_min", 120)
+	viper.SetDefault("fragment_window_containment_min", DefaultFragmentWindowContainmentMin)
 	viper.SetDefault("operation_timeout_minutes", 30)
 	viper.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
 	viper.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
@@ -3217,6 +3225,7 @@ func InitConfig() {
 			ScanStandDownGraceSeconds:           viper.GetInt("scan_standdown_grace_seconds"),
 			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
 			RepairChapterMaxMin:                 viper.GetInt("repair_chapter_max_min"),
+			FragmentWindowContainmentMin:        viper.GetFloat64("fragment_window_containment_min"),
 			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
 			GoogleBooksFallbackDailyLimit:       viper.GetInt("google_books_fallback_daily_limit"),
 			GoogleBooksDailyLimit:               viper.GetInt("google_books_daily_limit"),
@@ -4063,6 +4072,7 @@ func ResetToDefaults() {
 			ScanStandDownGraceSeconds:        45,
 			ChapterConsolidationThresholdMin: DefaultChapterConsolidationThresholdMin,
 			RepairChapterMaxMin:              120,
+			FragmentWindowContainmentMin:     DefaultFragmentWindowContainmentMin,
 			OperationTimeoutMinutes:          30,
 			DBCensusExactReadMBPerSec:        DefaultDBCensusExactReadMBPerSec,
 			DBCensusExactCooldownHours:       DefaultDBCensusExactCooldownHours,
@@ -4490,4 +4500,20 @@ func DefaultMetadataFetchConfig() MetadataFetchConfig {
 			Google:      DefaultNegativeTTLDaysGoogle,
 		},
 	}
+}
+
+// DefaultFragmentWindowContainmentMin is the shipped
+// fragment_window_containment_min (02-PR8).
+const DefaultFragmentWindowContainmentMin = 0.5
+
+// ResolveFragmentWindowContainmentMin returns the effective threshold at which
+// the fragment fixer calls a window-containment line "supporting": the
+// configured value, or DefaultFragmentWindowContainmentMin when it is outside
+// (0, 1] (unset, a partially-populated Config, or a typo). The value only
+// labels an informational evidence line, so falling back is safe.
+func (c *Config) ResolveFragmentWindowContainmentMin() float64 {
+	if v := c.FragmentWindowContainmentMin; v > 0 && v <= 1 {
+		return v
+	}
+	return DefaultFragmentWindowContainmentMin
 }
