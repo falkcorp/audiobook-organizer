@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-11
 //
@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -143,6 +144,10 @@ func ImportToLibraryWith(
 	bookFile *database.BookFile,
 	opts ImportOptions,
 ) (newPath string, err error) {
+	// A typed-nil checker (a caller's unset *ProtectedPathCache field) is
+	// no checker: normalised here, before isProtected or staticProtection
+	// can call a method on its nil receiver.
+	opts.Protected = normalizeChecker(opts.Protected)
 	if bookFile == nil {
 		return "", fmt.Errorf("ImportToLibrary: bookFile is nil")
 	}
@@ -332,26 +337,39 @@ func ImportToLibraryWith(
 // CopyIntoLibrary clones src to dest, falling back to a byte copy when the
 // filesystem cannot clone, and never overwrites: fileops.ReflinkOrCopy refuses
 // an existing destination rather than truncating it -- so a destination that
-// is already there is adopted when it holds the same bytes as the source (a
-// copy an earlier attempt made and could not record, before failed attempts
-// cleaned up after themselves) and refused otherwise. created reports whether
-// this call made dest; false means an identical dest was adopted, which a
-// caller must not remove. dest's directory must exist. The caller owns the
-// ownership and locking around it (ImportToLibraryWith holds destLocks and has
-// checked no other row names dest).
+// is already there is adopted when it is a regular file holding the same
+// bytes as the source (a copy an earlier attempt made and could not record,
+// before failed attempts cleaned up after themselves) and refused otherwise.
+// A destination that is not a regular file -- a symlink above all, which
+// could point at the very source it would be "adopted" for -- is refused
+// whatever it resolves to. created reports whether this call made dest; false
+// means an identical dest was adopted, which a caller must not remove. dest's
+// directory must exist.
 //
-// This is the one copy step the importers share. maintenance.bulk-deluge-import
-// used to open dest with os.Create, which truncates: a second pending file with
-// the same basename, or a seeding file already at RootDir/<basename>, was
-// overwritten.
+// The caller owns the ownership check and the locking around it: hold
+// destLocks for dest and refuse a dest another book_file row already names
+// (store.GetBookFileByPath). ImportToLibraryWith does both, so every importer
+// goes through it rather than calling this directly: bulk-deluge-import once
+// called this bare, and two pending rows with one basename and identical
+// bytes both landed on RootDir/<basename> -- the first copied it, the second
+// adopted it -- leaving two rows naming one file.
+//
+// The copy step used to be os.Create in maintenance.bulk-deluge-import, which
+// truncates: a second pending file with the same basename, or a seeding file
+// already at RootDir/<basename>, was overwritten.
 func CopyIntoLibrary(src, dest string) (created bool, err error) {
-	if _, statErr := os.Lstat(dest); statErr == nil {
+	if info, statErr := os.Lstat(dest); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return false, fmt.Errorf("destination %s already exists and is not a regular file (%s); not adopting or replacing it for %s", dest, info.Mode().Type(), src)
+		}
 		same, cmpErr := sameContent(src, dest)
 		if cmpErr != nil {
 			return false, fmt.Errorf("compare existing destination %s with %s: %w", dest, src, cmpErr)
 		}
 		if !same {
-			return false, fmt.Errorf("destination %s already exists with different content than %s", dest, src)
+			return false, fmt.Errorf("destination %s already exists with different content than %s; "+
+				"if it is a partial copy an interrupted import left behind (no book_file row names it), "+
+				"remove it and import again", dest, src)
 		}
 		importLog.Info("CopyIntoLibrary: %s already holds the bytes of %s; recording it instead of copying again", dest, src)
 		return false, nil
@@ -421,13 +439,11 @@ const ProtectedListNotLoaded = "deluge protected list not loaded"
 // server.SetRenameSourceGuard); static prefixes are still named first, since
 // they need no list. A nil checker (Deluge not configured) contributes
 // nothing and counts as loaded, but the cfg prefixes still apply, as do the
-// checkers that do not report loading. A typed-nil *ProtectedPathCache (a
-// caller's unset cache field) is the same as nil rather than a nil-receiver
-// call.
+// checkers that do not report loading. A typed-nil checker (a caller's unset
+// *ProtectedPathCache field) is the same as nil rather than a nil-receiver
+// call (normalizeChecker).
 func InPlaceProtection(cfg *config.Config, protected tagger.PathChecker, path string) string {
-	if pc, ok := protected.(*ProtectedPathCache); ok && pc == nil {
-		protected = nil
-	}
+	protected = normalizeChecker(protected)
 	if why := staticProtection(cfg, protected, path); why != "" {
 		return why
 	}
@@ -438,6 +454,20 @@ func InPlaceProtection(cfg *config.Config, protected tagger.PathChecker, path st
 		return "a protected path (a Deluge save path)"
 	}
 	return ""
+}
+
+// normalizeChecker returns nil for a nil checker and for a typed-nil one (a
+// nil pointer of any type in the interface, such as a caller's unset
+// *ProtectedPathCache field), and c otherwise, so callers compare against nil
+// instead of calling a method on a nil receiver.
+func normalizeChecker(c tagger.PathChecker) tagger.PathChecker {
+	if c == nil {
+		return nil
+	}
+	if v := reflect.ValueOf(c); v.Kind() == reflect.Pointer && v.IsNil() {
+		return nil
+	}
+	return c
 }
 
 // isProtected reports whether path is protected; a nil checker protects nothing.

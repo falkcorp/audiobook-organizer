@@ -1,5 +1,5 @@
 // file: internal/deluge/mark_in_place.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8ee900f5-372f-426f-a797-2f6d18be3aa1
 // last-edited: 2026-10-11
 
@@ -37,6 +37,14 @@ const (
 	// left pending; nothing written. ImportToLibraryWith refuses the same
 	// file with tagger.ErrProtectedPathWrite.
 	InPlaceProtected
+	// InPlaceListNotLoaded: the Deluge protected-path list has never loaded
+	// (InPlaceProtection returned ProtectedListNotLoaded), so whether path is
+	// a seeding file is unknown and the row is left pending; nothing written.
+	// Distinct from InPlaceProtected: Deluge being unreachable is not a
+	// verdict on the file, and a caller reports it as such (a skip until the
+	// list loads), not as "protected". ImportToLibraryWith refuses the same
+	// file with an error wrapping tagger.ErrProtectedListNotLoaded.
+	InPlaceListNotLoaded
 )
 
 // MarkImportedInPlace records that a pending book file is already at its
@@ -48,10 +56,12 @@ const (
 //
 // A protected path is refused first, before the row is read: when
 // InPlaceProtection(cfg, protected, path) names a reason (a static protected
-// prefix, a Deluge save_path the checker knows, or a Deluge list that has not
-// loaded: ProtectedListNotLoaded) it returns
-// InPlaceProtected and writes nothing, so the row stays pending exactly as
-// ImportToLibraryWith leaves it (tagger.ErrProtectedPathWrite). Marking it
+// prefix or a Deluge save_path the checker knows) it returns InPlaceProtected
+// and writes nothing, so the row stays pending exactly as ImportToLibraryWith
+// leaves it (tagger.ErrProtectedPathWrite). A Deluge list that has not loaded
+// (ProtectedListNotLoaded) is refused the same way but returns
+// InPlaceListNotLoaded, so a caller can tell "Deluge is down" from "this file
+// is protected". Marking it
 // would hand the protected file to every later tag write as the library
 // copy. protected is the server's ProtectedPathCache or nil; with nil only
 // cfg's static prefixes apply.
@@ -72,7 +82,11 @@ func MarkImportedInPlace(store BookFileModifier, cfg *config.Config, protected t
 	if store == nil {
 		return InPlaceGone, fmt.Errorf("MarkImportedInPlace: store is nil")
 	}
-	if why := InPlaceProtection(cfg, protected, path); why != "" {
+	if why := InPlaceProtection(cfg, protected, path); why == ProtectedListNotLoaded {
+		importLog.Info("MarkImportedInPlace: %s: the Deluge protected list has not loaded, so whether it is seeding is unknown; book file %s left pending, nothing written",
+			logger.SanitizeLogValue(path), logger.SanitizeLogValue(fileID))
+		return InPlaceListNotLoaded, nil
+	} else if why != "" {
 		importLog.Info("MarkImportedInPlace: %s is protected (%s); book file %s left pending, nothing written",
 			logger.SanitizeLogValue(path), logger.SanitizeLogValue(why), logger.SanitizeLogValue(fileID))
 		return InPlaceProtected, nil
