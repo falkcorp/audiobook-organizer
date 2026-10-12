@@ -20,7 +20,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 var operationTracer = otel.Tracer("audiobook-organizer/operations")
@@ -134,6 +136,17 @@ type runHandle struct {
 	// run's pluginRunning slot (genuine abandonment), so releaseRunHandleLocked
 	// must not decrement it a second time. Guarded by Registry.mu.
 	slotReleased bool
+	// zombieFinal is the final status a genuinely abandoned run (v3
+	// "stopping") was given at abandonment: written when its goroutine
+	// returns, or by Shutdown if the process exits first (05-PR4).
+	zombieFinal atomic.Pointer[zombieOutcome]
+}
+
+// zombieOutcome is a stopping run's decided final status.
+type zombieOutcome struct {
+	status string
+	msg    *string
+	at     time.Time
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -638,6 +651,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// timeout loop still stamps this row interrupted_*.
 				h.zombieSince.Store(r.livenessClock().UnixNano())
 				h.zombie.Store(true)
+				// v3: the run is stopping, a zombie (05-PR4). Its row keeps
+				// reading "running"; Shutdown's timeout loop stamps it.
+				r.markStopping(qr, r.stopReasonFor(runCtx, h))
 				// R-3: same rationale as the genuine-abandonment path — the
 				// wedged goroutine's flushLoop is gone, so no-op its Log calls.
 				if dbr, ok := reporter.(*dbReporter); ok {
@@ -669,34 +685,32 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.releaseSlotKeepKeyLocked(qr.opID)
 			r.mu.Unlock()
 			r.pingDispatch()
-			// C-3: write a terminal status so the row leaves the opv2 active
-			// index. Without this the row stayed "running" forever, and the
-			// ConcurrencyKey enqueue-dedupe in EnqueueOp kept returning this
-			// zombie op's ID for every future enqueue of the def — silently
-			// disabling the op type until restart. Nothing else writes this
-			// row's status afterwards: the runaway goroutine's eventual return
-			// only releases the held handle and decrements the abandoned
-			// counter (below).
+			// The run is now v3 "stopping" (05-PR4, owner decision D6): it was
+			// stopped, its fence is revoked, and it keeps its key until the
+			// goroutine returns. Its final status is decided NOW, by
+			// finalStatusForCanceledRun -- the same single decision point the
+			// non-abandoned path uses -- and written when the goroutine
+			// returns (the monitor below), or by Shutdown if the process exits
+			// first. Until then its row reads "running" (v3 stopping mirrors
+			// as running) and EnqueueOp's dedupe skips it (isZombie), so the
+			// C-3 trap (dedupe handing out a dead op's id forever) stays shut.
 			//
-			// The status comes from finalStatusForCanceledRun, the same single
-			// decision point the non-abandoned path uses. This used to write
-			// interruptedStatus(ResumePolicy) unconditionally, which ignored
-			// userCanceled: a run the WATCHDOG killed, or a user canceled, that
-			// merely took longer than the grace to unwind was recorded as
-			// interrupted_quiesced and resumed on the next boot — the stuck ->
-			// cancel -> resume loop finalStatusForCanceledRun exists to prevent.
-			// Hit on 2026-09-22: library.scan 01M33DPQG1W005NJ246SEZA5DJ was
-			// watchdog-killed inside a 14 GB backup copy, returned 87s later,
-			// and was left resumable. Whether a run is abandoned says how
-			// slowly it unwound, not why it was stopped.
-			abandonedAt := time.Now().UTC()
+			// Until 05-PR4 this branch wrote the terminal status here, at
+			// abandonment, which recorded the run as finished while its
+			// goroutine still ran. The status still comes from
+			// finalStatusForCanceledRun and not interruptedStatus(ResumePolicy):
+			// a run the WATCHDOG killed, or a user canceled, that merely took
+			// longer than the grace to unwind must not become resumable (hit on
+			// 2026-09-22: a watchdog-killed library.scan returned 87s later and
+			// was left resumable). Whether a run is abandoned says how slowly
+			// it unwound, not why it was stopped.
 			abandonStatus, reason := r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
 			if reason != nil {
 				abandonMsg += "; " + *reason
 			}
-			abandonOut := r.writeRunTerminalStatus(qr, h, abandonStatus, &abandonedAt, &abandonMsg)
-			abandonStatus = abandonOut.status
+			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg, at: time.Now().UTC()})
+			r.markStopping(qr, r.stopReasonFor(runCtx, h))
 			// R-3: the runaway goroutine keeps calling reporter.Log even though
 			// its flushLoop has exited (runCtx canceled) — the buffered lines are
 			// unrecoverable by design, so flip the reporter's terminal flag to make
@@ -704,21 +718,25 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			if dbr, ok := reporter.(*dbReporter); ok {
 				dbr.markTerminal()
 			}
-			// R-1: fan out op.terminal for the abandonment transition.
-			if abandonOut.publish {
-				r.publishOpTerminal(qr.opID, qr.defID, abandonStatus)
-			}
-			// Terminal transition: resolve dep-waiting subjects now rather than
-			// leaving them to the 5m sweep (C-5).
-			for _, sub := range subjectsFromParams(qr.params) {
-				r.notifyDepFailed(sub, qr.defID)
-			}
 			r.logger.Warn("registry: op goroutine abandoned; spawning replacement worker",
-				"op_id", qr.opID, "plugin", qr.plugin)
+				"op_id", qr.opID, "plugin", qr.plugin, "final_status", abandonStatus)
 			r.goroutineWG.Go(func() { r.startWorker(parentCtx, -1) })
 			go func() {
 				<-done
 				age := r.livenessClock().Sub(time.Unix(0, h.zombieSince.Load())).Round(time.Millisecond)
+				// Status first, release second: the row leaves "running" while
+				// the handle still holds the key, so nothing can start another
+				// run of this id or key in between. op.terminal and the
+				// dependency scheduler are told now, when the run is really
+				// over, not at abandonment (05-PR4 moved both here from the
+				// abandonment branch: a dependent must not start, and the UI
+				// must not drop the run, while its goroutine still writes).
+				final := h.zombieFinal.Load()
+				out := r.writeRunTerminalStatus(qr, h, final.status, &final.at, final.msg)
+				if out.publish {
+					r.publishOpTerminal(qr.opID, qr.defID, out.status)
+				}
+				r.notifyDepTerminal(out.status, qr)
 				// Release the key and write set now that the goroutine is gone.
 				// Handle first, abandoned counter second -- the shutdown branch's
 				// order -- so a caller that waits for AbandonedCount to drain
@@ -732,8 +750,15 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				r.mu.Unlock()
 				r.pingDispatch()
 				r.abandoned.decrement(qr.plugin)
+				// A scan quiesced by a stand-down is re-queued by the release
+				// path only once its row reads interrupted_quiesced, which is
+				// now; hand it to the stand-down so a release that already
+				// happened is not missed (the pickup gate does the same).
+				if qr.defID == scanStandDownDefID && out.status == "interrupted_quiesced" {
+					r.resumeDroppedScanOnRelease(qr.opID)
+				}
 				r.logger.Info("registry: abandoned goroutine returned",
-					"op_id", qr.opID, "plugin", qr.plugin, "zombie_age", age)
+					"op_id", qr.opID, "plugin", qr.plugin, "zombie_age", age, "status", out.status)
 			}()
 			return true // signal caller to exit
 		}
@@ -1182,4 +1207,56 @@ func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandl
 		return status, &msg
 	}
 	return "canceled", nil
+}
+
+// stopReasonFor names why a canceled run was stopped, in the v3 vocabulary,
+// with finalStatusForCanceledRun's precedence: a deadline is a timeout; a
+// user cancel or a watchdog kill (both set userCanceled, so they cannot be
+// told apart here and are recorded as "user", whose terminal state is
+// canceled -- what v2 records for both); a stand-down quiesce; a shutdown;
+// anything else a plain cancel.
+func (r *Registry) stopReasonFor(runCtx context.Context, h *runHandle) string {
+	switch {
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		return state.StopTimeout
+	case h != nil && h.userCanceled.Load():
+		return state.StopUser
+	case h != nil && h.quiescing.Load():
+		return state.StopQuiesce
+	case r.shuttingDown.Load():
+		return state.StopShutdown
+	}
+	return state.StopUser
+}
+
+// markStopping records a zombie run as v3 stopping{reason, zombie}
+// (TransitionRunV3 stop_requested, a compare-and-set on the run's stored
+// state, attempt and fence epoch). The v2 row is untouched in substance:
+// stopping mirrors as "running". Best effort: a store without the run's v3
+// record (a fake, or a row the v2 registry wrote before migration 065) or a
+// run that is no longer running is logged and left alone -- the in-process
+// zombie handle is what holds the key either way.
+func (r *Registry) markStopping(qr *queuedRun, reason string) {
+	rec, err := r.store.GetRunV3(qr.opID)
+	if err != nil || rec == nil {
+		r.logger.Debug("registry: no v3 run record to mark stopping", "op_id", qr.opID, "error", err)
+		return
+	}
+	if rec.State != state.V3Running {
+		r.logger.Info("registry: zombie run is no longer running in v3; not marking it stopping",
+			"op_id", qr.opID, "v3_state", rec.State)
+		return
+	}
+	if _, err := r.store.TransitionRunV3(database.TransitionRequest{
+		ID:               qr.opID,
+		ExpectState:      rec.State,
+		ExpectAttempt:    rec.Attempt,
+		ExpectFenceEpoch: rec.FenceEpoch,
+		Event:            state.EvStopRequested,
+		StopReason:       reason,
+		Zombie:           true,
+		Actor:            &database.Actor{AuthMethod: "system"},
+	}); err != nil {
+		r.logger.Warn("registry: could not record the zombie run as stopping", "op_id", qr.opID, "error", err)
+	}
 }

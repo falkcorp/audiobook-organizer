@@ -11,7 +11,10 @@ import (
 	"maps"
 	"time"
 
+	"errors"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -63,6 +66,8 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 				"reconcile its partial writes before the next deploy resumes the scan")
 		r.clearScanStandDown()
 	}
+
+	rows = r.bootSweepV3(rows)
 
 	rows, superseded := supersedeStaleQuiesced(rows, r.defDeclaresMergeQueuedParams, r.canonicalDefID)
 	for _, sup := range superseded {
@@ -468,6 +473,98 @@ func mergeJSONParams(base, overlay []byte) ([]byte, error) {
 	return json.Marshal(merged)
 }
 
+// bootSweepV3 applies the v3 boot sweep (05-PR4) to every candidate row that
+// reads "running": nothing in this process owns it.
+//
+//   - A v3 "running" run, or a "stopping" one stopped for a quiesce or a
+//     shutdown, takes the boot_sweep event to interrupted{crash}. Its mirrored
+//     row then reads interrupted_quiesced, and the policy switch below handles
+//     it exactly as it handled the "running" row (the local copy is not
+//     changed, so supersedeStaleQuiesced and the logs still see what the
+//     sweep listed).
+//   - A "stopping" run stopped by a user cancel, a watchdog kill or its
+//     timeout had its outcome decided before the process exited (the zombie's
+//     goroutine was all that was left). It takes goroutine_returned to that
+//     outcome (canceled / timed_out) and is NOT resumed: resuming it would
+//     bring back the stuck -> cancel -> resume loop that
+//     finalStatusForCanceledRun exists to prevent. It is dropped from rows.
+//
+// A row with no v3 record (a store without one, or a row written by a binary
+// that predates migration 065) is left exactly as before.
+func (r *Registry) bootSweepV3(rows []database.OperationV2Row) []database.OperationV2Row {
+	out := rows[:0:0]
+	for _, row := range rows {
+		if row.Status != "running" {
+			out = append(out, row)
+			continue
+		}
+		rec, err := r.store.GetRunV3(row.ID)
+		if err != nil || rec == nil || (rec.State != state.V3Running && rec.State != state.V3Stopping) {
+			out = append(out, row)
+			continue
+		}
+		req := database.TransitionRequest{
+			ID: rec.ID, ExpectState: rec.State, ExpectAttempt: rec.Attempt, ExpectFenceEpoch: rec.FenceEpoch,
+			Event: state.EvBootSweep, InterruptedWhy: state.WhyCrash,
+			Actor: &database.Actor{AuthMethod: "system"},
+		}
+		finished := false
+		if rec.State == state.V3Stopping {
+			if to, terr := state.StopTerminal(rec.StopReason); terr == nil && to != state.V3Interrupted {
+				req.Event = state.EvGoroutineReturned
+				req.StopReason = rec.StopReason
+				req.InterruptedWhy = ""
+				req.Error = "stopped (" + rec.StopReason + ") and the process exited before its goroutine returned; not resumed"
+				finished = true
+			}
+		}
+		if _, err := r.store.TransitionRunV3(req); err != nil {
+			r.logger.Warn("registry: resumeAfterStartup: v3 boot sweep failed; handling the row as v2 did",
+				"op_id", row.ID, "v3_state", rec.State, "event", req.Event, "error", err)
+			out = append(out, row)
+			continue
+		}
+		if finished {
+			final, _ := state.StopTerminal(rec.StopReason)
+			r.logger.Info("registry: resumeAfterStartup: a run stopped before the restart keeps its stop outcome",
+				"op_id", row.ID, "def_id", row.DefID, "stop_reason", rec.StopReason, "v3_state", final)
+			// Both canceled and timed_out mirror as v2 "canceled".
+			r.publishOpTerminal(row.ID, row.DefID, "canceled")
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// retireForRequeue closes the original row of a requeue as dropped with its
+// successor. A run whose v3 record can take decide_drop (interrupted, which
+// is what the boot sweep leaves a running row, or awaiting_decision) is
+// retired natively, so SuccessorID is recorded and the mirror writes the same
+// v2 row the plain write below would (interrupted_dropped, "requeued:
+// original op replaced"). Anything else -- no v3 record, a queued row -- takes
+// the plain v2 write, as before 05-PR4.
+func (r *Registry) retireForRequeue(row database.OperationV2Row, successorID string, now time.Time) error {
+	msg := state.RequeuedMessage
+	if rec, err := r.store.GetRunV3(row.ID); err == nil && rec != nil &&
+		(rec.State == state.V3Interrupted || rec.State == state.V3AwaitingDecision) {
+		_, terr := r.store.TransitionRunV3(database.TransitionRequest{
+			ID: rec.ID, ExpectState: rec.State, ExpectAttempt: rec.Attempt, ExpectFenceEpoch: rec.FenceEpoch,
+			Event: state.EvDecideDrop, SuccessorID: successorID, Error: msg, Now: now,
+			Actor: &database.Actor{AuthMethod: "system"},
+		})
+		if terr == nil {
+			return nil
+		}
+		if !errors.Is(terr, database.ErrStaleTransition) {
+			return terr
+		}
+		// The record moved since it was read: fall back to the v2 write,
+		// which is what decides the row today.
+	}
+	return r.store.UpdateOperationV2Status(row.ID, "interrupted_dropped", nil, &now, &msg)
+}
+
 // resumeRequeue clears state and re-inserts as a brand-new queued op.
 func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Row, def OperationDef) {
 	_ = ctx
@@ -478,9 +575,12 @@ func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Ro
 	// same work: the replacement runs now, and the next startup sweep resumes
 	// the un-retired original too. Bail instead and let the next sweep retry
 	// the whole requeue — the row is untouched, so that retry is safe.
+	//
+	// The replacement's id is minted first so the retire can name it as the
+	// original's successor (05-PR4).
 	now := time.Now().UTC()
-	msg := "requeued: original op replaced"
-	if err := r.store.UpdateOperationV2Status(row.ID, "interrupted_dropped", nil, &now, &msg); err != nil {
+	newID := ulid.Make().String()
+	if err := r.retireForRequeue(row, newID, now); err != nil {
 		r.logger.Error("registry: resumeAfterStartup: failed to retire op for requeue; no replacement inserted",
 			"op_id", row.ID, "def_id", def.ID, "error", err)
 		r.recordResumeRequeueFailure(row, err)
@@ -493,8 +593,7 @@ func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Ro
 	// the only thing letting it pick up where it left off.
 	_ = r.store.DeleteOpStateV2(row.ID)
 
-	// Insert a fresh queued row with a new ULID.
-	newID := ulid.Make().String()
+	// Insert a fresh queued row under the id minted above.
 	newRow := database.OperationV2Row{
 		ID: newID,
 		// The replacement is a NEW row, so it is written under the canonical

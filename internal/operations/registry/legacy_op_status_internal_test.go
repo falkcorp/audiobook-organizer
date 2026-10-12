@@ -69,7 +69,7 @@ func (s *legacyFakeStore) UpdateOperationStatus(id, status string, progress, tot
 type v2OnlyStore struct{ database.OpsV2Store }
 
 func newTestRegistryWithStore(store database.OpsV2Store) *Registry {
-	return &Registry{store: store, logger: slog.Default()}
+	return &Registry{store: WithNopV3(store), logger: slog.Default()}
 }
 
 // The defect: jobs dispatched via maintenance.job / the scheduler create a v1

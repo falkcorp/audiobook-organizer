@@ -6,7 +6,8 @@
 package registry_test
 
 // fakeStore is a minimal in-memory implementation of database.OpsV2Store,
-// which is all the registry depends on. No SQLite required.
+// plus registry.NopOpsV3 for the v3 half of database.OpsStore (a store with
+// no v3 run records). No SQLite required.
 
 import (
 	"fmt"
@@ -16,10 +17,14 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // fakeStore implements database.OpsV2Store in memory.
 type fakeStore struct {
+	// No v3 run records (05-PR4): the registry's v3 paths fall back to v2.
+	registry.NopOpsV3
+
 	mu      sync.Mutex
 	defs    map[string]database.OpDefinitionV2Row
 	ops     map[string]database.OperationV2Row

@@ -49,7 +49,7 @@ func TestShutdown_StubHandleNilCancel_NoPanic(t *testing.T) {
 		UpdateOperationV2Status(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	insertStubHandle(r, "stub-op")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
@@ -71,7 +71,7 @@ func TestCancel_StubHandleNilCancel_NoPanic(t *testing.T) {
 		UpdateOperationV2StatusIf("stub-op", "queued", "canceled", mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Once()
 
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	insertStubHandle(r, "stub-op")
 
 	require.NotPanics(t, func() {

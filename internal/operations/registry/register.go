@@ -44,7 +44,7 @@ func (w *RegistryWrapper) Stop(ctx context.Context) error {
 // prodSchedulerStore supplies that method itself, and demanding it from the
 // underlying store would be asking for a method *PebbleStore does not have.
 type opRegistryStore interface {
-	database.OpsV2Store // New, and 7 of the 8 DepStore/SchedulerStore methods
+	database.OpsStore // New (v2 + v3, 05-PR4), and 7 of the 8 DepStore/SchedulerStore methods
 
 	// The one thing SchedulerStore needs that OpsV2Store does not carry.
 	GetBookByID(id string) (*database.Book, error)

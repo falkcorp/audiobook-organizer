@@ -47,7 +47,7 @@ func TestDispatchCycle_ShutdownDuringListClaimsNothing(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
 	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
 
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(plainDef("test.plain")))
 
 	store.EXPECT().ListQueuedOperationsV2().
@@ -86,7 +86,7 @@ func TestExecuteRun_ShutdownBeforePickupNeverRuns(t *testing.T) {
 		return nil
 	}
 
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(def))
 
 	// The dispatcher's claim, exactly as dispatchCycle publishes it: a stub
@@ -130,7 +130,7 @@ func TestExecuteRun_ShutdownBeforeInfiniteRestartCheckWritesNothing(t *testing.T
 
 	def := plainDef("test.restart")
 	def.ResumePolicy = ResumeRestart
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(def))
 	plantStub(r, "op-rs", def)
 	r.shuttingDown.Store(true)
@@ -154,7 +154,7 @@ func TestExecuteRun_ShutdownDuringPickupNeverRuns(t *testing.T) {
 		ran.Store(true)
 		return nil
 	}
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(def))
 	plantStub(r, "op-mid", def)
 
@@ -183,7 +183,7 @@ func TestShutdown_ReleasesBufferedClaimWithoutStatus(t *testing.T) {
 	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
 
 	def := plainDef("test.plain") // ResumeDrop
-	r := New(store, slog.Default(), 1, nil)
+	r := New(WithNopV3(store), slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(def))
 	plantStub(r, "op-buf", def)
 	r.nextRun <- queuedRunFor("op-buf", def)
@@ -208,7 +208,7 @@ func TestShutdown_TimeoutReleasesStubsAndInterruptsRuns(t *testing.T) {
 		Return(true, nil).Once()
 
 	def := plainDef("test.plain") // ResumeDrop
-	r := New(store, slog.Default(), 2, nil)
+	r := New(WithNopV3(store), slog.Default(), 2, nil)
 	require.NoError(t, r.RegisterOp(def))
 	plantStub(r, "op-stub", def)
 	r.mu.Lock()
@@ -242,7 +242,7 @@ func TestShutdown_TimeoutStampsAUserCanceledRunCanceled(t *testing.T) {
 
 	def := plainDef("test.plain")
 	def.ResumePolicy = ResumeRestart // would otherwise be stamped interrupted_quiesced
-	r := New(store, slog.Default(), 2, nil)
+	r := New(WithNopV3(store), slog.Default(), 2, nil)
 	require.NoError(t, r.RegisterOp(def))
 	h := &runHandle{
 		id: "op-run", defID: def.ID, plugin: def.Plugin, resumePolicy: def.ResumePolicy,
