@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
 // last-edited: 2026-10-11
 
@@ -106,12 +106,9 @@ func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 // holds the same stripe through its commit, so the book read here is the
 // committed one.
 func (p *PebbleStore) commitMetadataCacheWrite(bookID string, data []byte, entry *MetadataCandidateCache) error {
-	book, err := p.GetBookByID(bookID)
-	if err != nil {
-		return fmt.Errorf("read book for identification state: %w", err)
-	}
 	batch := p.db.NewBatch()
 	defer batch.Close()
+	var err error
 	if data != nil {
 		err = batch.Set(metadataCacheKey(bookID), data, nil)
 	} else {
@@ -122,17 +119,18 @@ func (p *PebbleStore) commitMetadataCacheWrite(bookID string, data []byte, entry
 	}
 	t := p.beginIdent(batch)
 	defer t.end(false)
-	if err := t.stage(bookID, book, entry); err != nil {
+	// The raw book row, partially decoded (readIdentBook), read inside the
+	// transaction so a Reset cannot land between it and the commit: a book
+	// row that will not decode is staged as no book, and the cache write
+	// still succeeds, as it did before the index existed.
+	book, _, err := p.readIdentBook(bookID)
+	if err != nil {
 		return err
 	}
-	if err := t.prepare(); err != nil {
+	if err := t.stage(bookID, book, identCacheViewOf(entry)); err != nil {
 		return err
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return err
-	}
-	t.end(true)
-	return nil
+	return p.commitIdentBatch(batch, t, pebble.Sync)
 }
 
 // ListMetadataCacheKeys lives in pebble_store_metadata_cache_summaries.go: it

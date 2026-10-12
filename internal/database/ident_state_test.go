@@ -1,5 +1,5 @@
 // file: internal/database/ident_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
 // last-edited: 2026-10-11
 
@@ -8,9 +8,11 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,13 +87,17 @@ func identOracle(t testing.TB, s *PebbleStore) (all, primary map[IdentState]int6
 	t.Helper()
 	all, primary = map[IdentState]int64{}, map[IdentState]int64{}
 	require.NoError(t, forEachBookRow(s.db, func(id string, value []byte) error {
-		var b Book
-		require.NoError(t, json.Unmarshal(value, &b))
-		c, err := s.getMetadataCacheForIdent(id)
+		// The same partial decode and undecodable rule as the index
+		// (identBookFromRaw): an undecodable row is no book.
+		b, ok := identBookFromRaw(value)
+		if !ok {
+			return nil
+		}
+		c, err := s.readIdentCacheView(id)
 		require.NoError(t, err)
-		st, _ := DeriveIdentState(&b, c)
+		st, _ := deriveIdent(b.MetadataReviewStatus, c.present, c.candidates, c.stale)
 		all[st]++
-		if identInScope(&b) {
+		if identInScope(b) {
 			primary[st]++
 		}
 		return nil
@@ -221,14 +227,22 @@ func identRandomOp(s *PebbleStore, pool *identPool, r *rand.Rand) error {
 // identification input from several goroutines at once, and after every 100
 // operations requires the counters to equal a recount of the membership keys
 // (IdentCountersDrift) and both to equal a derivation from scratch.
+//
+// The acceptance size (5 seeds x 2,000 books x 10 checkpoints) runs without
+// -race. Under -race (raceEnabled) it shrinks to 2 seeds x 400 books, still
+// 10 checkpoints each: the race detector is there to catch unsynchronized
+// access, which the concurrent rounds exercise at any size, and the full
+// size cost about 4x its plain time under it.
 func TestIdentCounters_EqualRecount_Randomized(t *testing.T) {
 	const (
-		seeds      = 5
-		books      = 2000
 		rounds     = 10
 		perRound   = 100
 		goroutines = 4
 	)
+	seeds, books := int64(5), 2000
+	if raceEnabled {
+		seeds, books = 2, 400
+	}
 	checkpoints, mismatches := 0, 0
 	for seed := int64(1); seed <= seeds; seed++ {
 		s := newIdentStore(t)
@@ -284,24 +298,70 @@ func wipeIdentRows(t testing.TB, s *PebbleStore) {
 	require.NoError(t, b.Commit(nil))
 }
 
-func TestIdentRebuild_IdempotentAndReportsNotReady(t *testing.T) {
-	const books = 5000
-	s := newIdentStore(t)
-	pool := &identPool{}
-	r := rand.New(rand.NewSource(7))
-	for range books {
-		id := identCreateBook(t, s, pool)
-		pool.ids = append(pool.ids, id)
-		switch r.Intn(5) {
-		case 0:
-			require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(2)}))
-		case 1:
-			require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id}))
-		case 2:
-			_, err := s.ModifyBook(id, func(b *Book) error { b.MetadataReviewStatus = identStrPtr("matched"); return nil })
+// seedIdentBooksMixed writes n synthetic book rows straight into Pebble, one
+// batch per 1,000, in a random mix of identification inputs: a third with
+// candidates, a fifth with an empty cache row, some applied or held, some
+// non-primary, trashed or quarantined. It writes no ident: row and leaves
+// memdb alone, so it is for database-level tests of the index only; it
+// replaces 5,000 synced CreateBook commits (most of this test's time under
+// -race) with five batches.
+func seedIdentBooksMixed(t testing.TB, s *PebbleStore, n int, r *rand.Rand) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	f, tr := false, true
+	for start := 0; start < n; start += 1000 {
+		batch := s.db.NewBatch()
+		for i := start; i < min(start+1000, n); i++ {
+			id := fmt.Sprintf("mixed%06d", i)
+			ids = append(ids, id)
+			b := &Book{ID: id, Title: fmt.Sprintf("Title %06d", i), FilePath: "/lib/mixed/" + id + ".m4b", Format: "m4b"}
+			switch r.Intn(10) {
+			case 0:
+				b.MetadataReviewStatus = identStrPtr("matched")
+			case 1:
+				b.MetadataReviewStatus = identStrPtr("no_match")
+			case 2:
+				b.IsPrimaryVersion = &f
+			case 3:
+				b.IsPrimaryVersion = &tr
+			case 4:
+				b.MarkedForDeletion = &tr
+			case 5:
+				now := time.Now()
+				b.QuarantinedAt = &now
+			}
+			row, err := json.Marshal(b)
 			require.NoError(t, err)
+			require.NoError(t, batch.Set([]byte(bookRowPrefix+id), row, nil))
+			var cache *MetadataCandidateCache
+			switch r.Intn(5) {
+			case 0, 1:
+				cache = &MetadataCandidateCache{BookID: id, Candidates: identCands(2), Stale: r.Intn(3) == 0}
+			case 2:
+				cache = &MetadataCandidateCache{BookID: id}
+			}
+			if cache != nil {
+				cr, err := json.Marshal(cache)
+				require.NoError(t, err)
+				require.NoError(t, batch.Set(metadataCacheKey(id), cr, nil))
+			}
 		}
+		require.NoError(t, batch.Commit(nil))
+		require.NoError(t, batch.Close())
 	}
+	return ids
+}
+
+func TestIdentRebuild_IdempotentAndReportsNotReady(t *testing.T) {
+	// 5,000 books is the acceptance size (the logged rebuild duration);
+	// under -race it is 1,500, which still spans several seed batches and
+	// rebuild worker rounds.
+	books := 5000
+	if raceEnabled {
+		books = 1500
+	}
+	s := newIdentStore(t)
+	pool := &identPool{ids: seedIdentBooksMixed(t, s, books, rand.New(rand.NewSource(7)))}
 
 	// A boot that finds no marker: the index is not ready, its reads refuse.
 	wipeIdentRows(t, s)
@@ -334,7 +394,7 @@ func TestIdentRebuild_IdempotentAndReportsNotReady(t *testing.T) {
 	// wrote: here a cache row set behind its back, and a counter knocked off.
 	victim := pool.ids[0]
 	require.NoError(t, s.db.Set(metadataCacheKey(victim), []byte(`{"book_id":"x","candidates":[{"t":1}]}`), nil))
-	require.NoError(t, s.db.Set(identCountKey(identScopeAll, IdentApplied), encodeIdentCounter(1), nil))
+	s.ident.published[identScopeAll][identStateIndex(IdentApplied)].Add(1)
 	st, err = s.RebuildIdentIndex(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, 1, st.RowsFixed)
@@ -566,4 +626,443 @@ func seedIdentBooksFast(t testing.TB, s *PebbleStore, n int) {
 	}
 	_, err := s.RebuildIdentIndex(t.Context())
 	require.NoError(t, err)
+}
+
+// identTotal is the number of books the all-scope counters hold.
+func identTotal(c IdentCounts) int64 {
+	var n int64
+	for _, s := range AllIdentStates {
+		n += c.All[s]
+	}
+	return n
+}
+
+func requireNoIdentDrift(t testing.TB, s *PebbleStore) {
+	t.Helper()
+	d, err := s.IdentCountersDrift()
+	require.NoError(t, err)
+	require.Zero(t, d.Total(), "%v", d.Deltas)
+}
+
+// TestIdentWrites_UndecodableBookRowDoesNotFailCacheWrites: a book row that
+// will not decode (or whose signature sidecar will not) must not fail a
+// metadata_cache write, as it did not before the index existed. The
+// undecodable book is in no state; the one with a broken sidecar is indexed
+// from its row.
+func TestIdentWrites_UndecodableBookRowDoesNotFailCacheWrites(t *testing.T) {
+	s := newIdentStore(t)
+	pool := &identPool{}
+	bad := identCreateBook(t, s, pool)
+	sig := identCreateBook(t, s, pool)
+	require.NoError(t, s.db.Set([]byte(bookRowPrefix+bad), []byte(`{"title": not json`), nil))
+	require.NoError(t, s.db.Set(bookSigKey(sig), []byte(`{not json`), nil))
+	_, err := s.GetBookByID(sig)
+	require.Error(t, err, "the sidecar really is broken for a full read")
+
+	data, err := json.Marshal(&MetadataCandidateCache{BookID: bad, Candidates: identCands(1)})
+	require.NoError(t, err)
+	for _, id := range []string{bad, sig} {
+		require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)}), id)
+	}
+	_, ok, err := s.readIdentRow(bad)
+	require.NoError(t, err)
+	require.False(t, ok, "an undecodable book is in no state")
+	r, ok, err := s.readIdentRow(sig)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, IdentHasCandidates, r.State)
+
+	require.NoError(t, s.DeleteMetadataCache(bad))
+	require.NoError(t, s.SetRaw(metadataCacheKeyPrefix+bad, data))
+	require.NoError(t, s.DeleteRaw(metadataCacheKeyPrefix+bad))
+	require.NoError(t, s.SetRaw(metadataCacheKeyPrefix+bad, data))
+	require.NoError(t, s.DeleteRawBatch([]string{metadataCacheKeyPrefix + bad, metadataCacheKeyPrefix + sig}))
+	require.Equal(t, int64(1), identTotal(s.IdentCounts()), "only the decodable book is counted")
+	requireNoIdentDrift(t, s)
+	requireCountsMatchOracle(t, s)
+	// The rebuild agrees with the write-through about both rows.
+	st, err := s.RebuildIdentIndex(t.Context())
+	require.NoError(t, err)
+	require.Zero(t, st.RowsFixed)
+	require.Equal(t, 1, st.Undecodable)
+}
+
+// TestIdentTxn_FailedCommitMovesNoCounter: a write whose commit fails leaves
+// the counters (and the rows) as they were; the next write moves them.
+func TestIdentTxn_FailedCommitMovesNoCounter(t *testing.T) {
+	s := newIdentStore(t)
+	pool := &identPool{}
+	id := identCreateBook(t, s, pool)
+	before := s.IdentCounts()
+	require.Equal(t, int64(1), before.Primary[IdentUnasked])
+
+	boom := errors.New("injected commit failure")
+	fault := func(p *PebbleStore) error {
+		if p == s {
+			return boom
+		}
+		return nil
+	}
+	identCommitFault.Store(&fault)
+	err := s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)})
+	_, merr := s.ModifyBook(id, func(b *Book) error { b.MetadataReviewStatus = identStrPtr("matched"); return nil })
+	derr := s.DeleteBook(id)
+	identCommitFault.Store(nil)
+	require.ErrorIs(t, err, boom)
+	require.ErrorIs(t, merr, boom)
+	require.ErrorIs(t, derr, boom)
+	require.Equal(t, before, s.IdentCounts(), "no failed commit moved a counter")
+	requireNoIdentDrift(t, s)
+
+	require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)}))
+	after := s.IdentCounts()
+	require.Zero(t, after.Primary[IdentUnasked])
+	require.Equal(t, int64(1), after.Primary[IdentHasCandidates])
+	requireNoIdentDrift(t, s)
+}
+
+// TestIdentCounters_SameBookConcurrentWriters hammers ONE book from 8
+// goroutines with every writer (cache put/delete, review status, primary,
+// trash, quarantine, retitle, raw set/delete, delete-and-recreate): the
+// book's cache stripe serializes its transitions, so the in-memory counters
+// still equal a recount of the membership keys.
+func TestIdentCounters_SameBookConcurrentWriters(t *testing.T) {
+	s := newIdentStore(t)
+	pool := &identPool{}
+	pool.ids = []string{identCreateBook(t, s, pool)}
+	const goroutines = 8
+	perG := 150
+	if raceEnabled {
+		perG = 40
+	}
+	var wg sync.WaitGroup
+	for g := range goroutines {
+		r := rand.New(rand.NewSource(int64(100 + g)))
+		wg.Go(func() {
+			for range perG {
+				if err := identRandomOp(s, pool, r); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	requireNoIdentDrift(t, s)
+	requireCountsMatchOracle(t, s)
+}
+
+// TestIdentCounters_LoadedOnReopen: the every-boot path. Counters are not
+// stored; a reopened store recounts them from the membership keys and serves
+// them at once, equal to what the previous process had.
+func TestIdentCounters_LoadedOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewPebbleStore(dir)
+	require.NoError(t, err)
+	s.WaitForWarmup()
+	pool := &identPool{}
+	for i := range 6 {
+		id := identCreateBook(t, s, pool)
+		switch i % 3 {
+		case 1:
+			require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)}))
+		case 2:
+			require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id}))
+		}
+	}
+	f := false
+	_, err = s.ModifyBook(pool.ids0(t, s), func(b *Book) error { b.IsPrimaryVersion = &f; return nil })
+	require.NoError(t, err)
+	want := s.IdentCounts()
+	require.True(t, want.Ready)
+	require.NotZero(t, want.All[IdentHasCandidates])
+	require.NoError(t, s.Close())
+
+	s2, err := NewPebbleStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s2.Close() })
+	got := s2.IdentCounts()
+	require.True(t, got.Ready, "a built index is served at open")
+	require.Equal(t, want, got)
+	requireNoIdentDrift(t, s2)
+}
+
+// ids0 returns the first book id of the store (key order), for tests that
+// need any one book.
+func (p *identPool) ids0(t testing.TB, s *PebbleStore) string {
+	t.Helper()
+	var first string
+	require.NoError(t, forEachBookRow(s.db, func(id string, _ []byte) error {
+		first = id
+		return errStopScan
+	}))
+	return first
+}
+
+// TestIdentCreateBook_CallerSuppliedIDWithExistingCacheRow: a book created
+// under an ID whose metadata_cache row already exists starts in the state
+// that row gives it, not unasked.
+func TestIdentCreateBook_CallerSuppliedIDWithExistingCacheRow(t *testing.T) {
+	s := newIdentStore(t)
+	const id = "01SYNTHCALLERSUPPLIED0001"
+	require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(2)}))
+	_, err := s.CreateBook(&Book{ID: id, Title: "Title 000001", FilePath: "/lib/ident/caller.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	r, ok, err := s.readIdentRow(id)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, IdentHasCandidates, r.State)
+	require.Equal(t, int64(1), s.IdentCounts().Primary[IdentHasCandidates])
+	requireNoIdentDrift(t, s)
+}
+
+// TestIdentRawBatch_StripesLockedOnceInOrder: a raw batch over two books on
+// the SAME cache stripe takes it once (not twice, which would self-deadlock),
+// and two batches naming two books on different stripes in opposite orders
+// cannot deadlock (stripes are taken in ascending order).
+func TestIdentRawBatch_StripesLockedOnceInOrder(t *testing.T) {
+	s := newIdentStore(t)
+	byStripe := map[int]string{}
+	var same [2]string
+	var diff [2]string
+	for i := 0; same[1] == "" || diff[1] == ""; i++ {
+		id := fmt.Sprintf("stripe%05d", i)
+		st := s.metadataCacheStripe(id)
+		if prev, ok := byStripe[st]; ok && same[1] == "" {
+			same = [2]string{prev, id}
+		}
+		byStripe[st] = id
+		if diff[0] == "" {
+			diff[0] = id
+		} else if diff[1] == "" && s.metadataCacheStripe(diff[0]) != st {
+			diff[1] = id
+		}
+	}
+	key := func(id string) string { return metadataCacheKeyPrefix + id }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, s.DeleteRawBatch([]string{key(same[0]), key(same[1])}))
+		var wg sync.WaitGroup
+		for g := range 2 {
+			wg.Go(func() {
+				a, b := diff[0], diff[1]
+				if g == 1 {
+					a, b = b, a
+				}
+				for range 300 {
+					if err := s.DeleteRawBatch([]string{key(a), key(b)}); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("raw batches deadlocked on the cache stripes")
+	}
+}
+
+// TestIdentRebuild_RemovesOrphansAndBadKeys: pass 2 of the rebuild. A state
+// row whose book is gone and membership keys that disagree with their state
+// row are found by VerifyIdentIndex and removed by RebuildIdentIndex over a
+// ready index, and the counters end equal to the recount.
+func TestIdentRebuild_RemovesOrphansAndBadKeys(t *testing.T) {
+	s := newIdentStore(t)
+	pool := &identPool{}
+	keep := identCreateBook(t, s, pool)
+	// An orphan state row and its key (book never existed), a stray key in a
+	// state the book is not in, and a key with the wrong scope byte.
+	require.NoError(t, s.db.Set(identStateKey("gone0001"), []byte(`{"s":"unasked","p":true}`), nil))
+	require.NoError(t, s.db.Set(identByKey(IdentUnasked, "gone0001"), []byte{'1'}, nil))
+	require.NoError(t, s.db.Set(identByKey(IdentHeld, keep), []byte{'1'}, nil))
+	require.NoError(t, s.db.Set(identByKey(IdentUnasked, keep), []byte{'0'}, nil))
+
+	rep, err := s.VerifyIdentIndex(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.OrphanRows)
+	// The orphan's key agrees with its (orphan) state row; it goes with the
+	// row. The stray state key and the wrong scope byte are bad.
+	require.Equal(t, 2, rep.BadKeys)
+	require.Equal(t, 1, rep.RowsWrong, "the kept book's key carries the wrong scope byte")
+	require.NotZero(t, rep.CounterDrift)
+	require.False(t, rep.Clean())
+
+	st, err := s.RebuildIdentIndex(t.Context())
+	require.NoError(t, err)
+	require.False(t, st.FromScratch)
+	require.Equal(t, 1, st.RowsRemoved)
+	require.NotZero(t, st.KeysRemoved+st.RowsFixed)
+	_, ok, err := s.readIdentRow("gone0001")
+	require.NoError(t, err)
+	require.False(t, ok)
+	requireNoIdentDrift(t, s)
+	requireCountsMatchOracle(t, s)
+	rep, err = s.VerifyIdentIndex(t.Context())
+	require.NoError(t, err)
+	require.True(t, rep.Clean(), "%+v", rep)
+}
+
+// TestIdentRebuild_SupersededByInvalidation: a rebuild overtaken by an
+// invalidation (a wipe) does not declare the index ready at its end.
+func TestIdentRebuild_SupersededByInvalidation(t *testing.T) {
+	s := newIdentStore(t)
+	identCreateBook(t, s, &identPool{})
+	gen := s.ident.gen.Load()
+	require.NoError(t, s.invalidateIdentIndex())
+	_, err := s.identFinishRebuild(gen)
+	require.ErrorIs(t, err, errIdentRebuildSuperseded)
+	require.False(t, s.IdentIndexReady())
+	_, err = s.RebuildIdentIndex(t.Context())
+	require.NoError(t, err)
+	require.True(t, s.IdentIndexReady())
+}
+
+// TestSuperviseIdentIndex_RetriesFailedBuild: the boot build is retried
+// after a failure, and a wipe whose own rebuild fails wakes the supervisor,
+// which rebuilds it.
+func TestSuperviseIdentIndex_RetriesFailedBuild(t *testing.T) {
+	s := newIdentStore(t)
+	pool := &identPool{}
+	for range 20 {
+		pool.ids = append(pool.ids, identCreateBook(t, s, pool))
+	}
+	oldDelays := identRetryDelays
+	identRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	var fails atomic.Int32
+	fault := func(p *PebbleStore) error {
+		if p == s && fails.Add(-1) >= 0 {
+			return errors.New("injected commit failure")
+		}
+		return nil
+	}
+	identCommitFault.Store(&fault)
+
+	wipeIdentRows(t, s)
+	s.ident.ready.Store(false)
+	fails.Store(2) // the first two builds fail on their first write
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { s.SuperviseIdentIndex(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		identCommitFault.Store(nil)
+		identRetryDelays = oldDelays
+	})
+	require.Eventually(t, s.IdentIndexReady, 10*time.Second, 5*time.Millisecond)
+	requireCountsMatchOracle(t, s)
+
+	// A wipe of the cache keyspace whose rebuild fails: the supervisor
+	// rebuilds it.
+	for _, id := range pool.ids[:5] {
+		require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)}))
+	}
+	fails.Store(1)
+	_, err := s.WipeByPrefixes([]string{metadataCacheKeyPrefix})
+	require.NoError(t, err)
+	require.Eventually(t, s.IdentIndexReady, 10*time.Second, 5*time.Millisecond)
+	requireCountsMatchOracle(t, s)
+	require.Equal(t, int64(len(pool.ids)), s.IdentCounts().All[IdentUnasked])
+}
+
+// TestIdentCounters_RecountWhileWriting runs the whole-index operations --
+// a reconcile over the ready index (its final recount replaces the counters)
+// and the drift check -- WHILE writers commit. identMu (read for writers,
+// write for those) is what keeps a commit and its counter move on one side
+// of every recount: without it a commit counted by the recount could have its
+// move added on top afterwards, and the counters would stay off once the
+// writers stop.
+func TestIdentCounters_RecountWhileWriting(t *testing.T) {
+	s := newIdentStore(t)
+	pool := &identPool{}
+	books, perG := 300, 150
+	if raceEnabled {
+		books, perG = 120, 60
+	}
+	for range books {
+		pool.ids = append(pool.ids, identCreateBook(t, s, pool))
+	}
+	stop := make(chan struct{})
+	var bg sync.WaitGroup
+	bg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := s.RebuildIdentIndex(t.Context()); err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := s.IdentCountersDrift(); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	})
+	var wg sync.WaitGroup
+	for g := range 6 {
+		r := rand.New(rand.NewSource(int64(500 + g)))
+		wg.Go(func() {
+			for range perG {
+				if err := identRandomOp(s, pool, r); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(stop)
+	bg.Wait()
+	requireNoIdentDrift(t, s)
+	requireCountsMatchOracle(t, s)
+}
+
+// TestIdentCounters_RecountWaitsForPendingCounterMove pins the lock
+// protocol deterministically: a write that has committed but not yet moved
+// its counters holds identMu for read, so the drift check (identMu for
+// write) waits for it instead of seeing the commit without its move.
+func TestIdentCounters_RecountWaitsForPendingCounterMove(t *testing.T) {
+	s := newIdentStore(t)
+	id := identCreateBook(t, s, &identPool{})
+	committed, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hook := func(p *PebbleStore) {
+		if p == s {
+			once.Do(func() { close(committed); <-release })
+		}
+	}
+	identBeforeCountMove.Store(&hook)
+	t.Cleanup(func() { identBeforeCountMove.Store(nil) })
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)})
+	}()
+	<-committed
+	driftc := make(chan IdentDrift, 1)
+	go func() {
+		d, err := s.IdentCountersDrift()
+		if err != nil {
+			t.Error(err)
+		}
+		driftc <- d
+	}()
+	select {
+	case d := <-driftc:
+		close(release)
+		t.Fatalf("the drift check ran while a committed write's counter move was pending: %v", d.Deltas)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-errc)
+	require.Zero(t, (<-driftc).Total())
+	requireCountsMatchOracle(t, s)
 }
