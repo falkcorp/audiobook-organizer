@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
 // last-edited: 2026-10-11
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -346,8 +345,14 @@ func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, protec
 		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: create dest dir %s: %w", destDir, err)
 	}
 
-	if copyErr := bdi_ioCopy(src, dest); copyErr != nil {
-		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: copy %s -> %s: %w", src, dest, copyErr)
+	// The importers' shared copy step: it never overwrites. This used to be
+	// bdi_ioCopy, which opened dest with os.Create and so truncated whatever
+	// was there: a second pending file with the same basename, or a file a
+	// torrent was seeding from RootDir. An identical dest (a copy an earlier
+	// run made and could not record) is adopted, a different one refuses the
+	// file with an error.
+	if _, copyErr := deluge.CopyIntoLibrary(src, dest); copyErr != nil {
+		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: %w", copyErr)
 	}
 
 	now := time.Now()
@@ -369,32 +374,6 @@ func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, protec
 	}
 
 	return dest, bdiCopied, nil
-}
-
-func bdi_ioCopy(src, dest string) error {
-	src = filepath.Clean(src)
-	dest = filepath.Clean(dest)
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open src: %w", err)
-	}
-	defer in.Close()
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return fmt.Errorf("create dest: %w", err)
-	}
-	defer func() {
-		cerr := out.Close()
-		if err == nil {
-			err = cerr
-		}
-	}()
-
-	if _, err = io.Copy(out, in); err != nil {
-		return fmt.Errorf("io.Copy: %w", err)
-	}
-	return nil
 }
 
 // Policy: ResumeRestart. CanResume() is true and this job checkpoints nothing,

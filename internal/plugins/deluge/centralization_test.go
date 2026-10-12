@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
 // last-edited: 2026-10-11
 
@@ -99,6 +99,44 @@ func TestRunCentralization_HydratesBeforeWriteback(t *testing.T) {
 	}
 	if *updated.FingerprintDiagnosticJSON != diagJSON {
 		t.Errorf("FingerprintDiagnosticJSON = %q, want %q", *updated.FingerprintDiagnosticJSON, diagJSON)
+	}
+}
+
+// centralize copies with fileops.ReflinkOrCopy, which refuses an existing
+// destination, so a file already at RootDir/<basename> (another book's, or
+// one a torrent seeds from the library root) is never overwritten: the row is
+// counted an error, left pending, and the file keeps its bytes.
+func TestRunCentralization_ExistingDestinationNeverOverwritten(t *testing.T) {
+	root := t.TempDir()
+	srcPath := filepath.Join(t.TempDir(), "book.mp3")
+	if err := os.WriteFile(srcPath, []byte("test data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(root, "book.mp3")
+	if err := os.WriteFile(dest, []byte("another book's bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = root
+	defer func() { config.AppConfig.RootDir = origRoot }()
+
+	row := database.BookFile{ID: "f1", BookID: "b1", FilePath: srcPath}
+	store := &database.MockStore{
+		GetBookFilesNeedingDelugeImportCoreFunc: func() ([]database.BookFileCore, error) {
+			return []database.BookFileCore{row.Core()}, nil
+		},
+		GetBookFileByIDFunc: func(string, string) (*database.BookFile, error) { return &row, nil },
+		UpdateBookFileFunc: func(string, *database.BookFile) error {
+			t.Error("UpdateBookFile called: the row must stay pending when its destination is taken")
+			return nil
+		},
+	}
+	if err := (&Plugin{store: store}).runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+		t.Fatalf("runCentralization: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil || string(got) != "another book's bytes" {
+		t.Errorf("destination holds %q (err %v): it was overwritten", got, err)
 	}
 }
 
