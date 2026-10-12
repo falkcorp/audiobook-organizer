@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-10-12
 
@@ -49,6 +49,12 @@ type hollowOpsSweeper interface {
 // time for the same reason as hollowOpsSweeper.
 type dedupIndexBackfiller interface {
 	BackfillDedupEntityIndexes() (CandidateIndexBackfill, LabelIndexBackfill, error)
+}
+
+// opsV3Migrator is migration065Up's one capability, asserted at run time so
+// migrationStore (a subset of Store) is not widened for one migration.
+type opsV3Migrator interface {
+	MigrateOpsV2ToV3(batchSize int, progress func(done, total int)) (OpsV3MigrationReport, error)
 }
 
 // junctionBookIDRepairer is migration063Up's one capability, asserted at run
@@ -481,6 +487,12 @@ var migrations = []Migration{
 		Description: "Backfill the dedup candidate and label entity indexes (pre-index verdicts were invisible to the repairs fixers' per-book re-plan)",
 		Up:          migration064Up,
 		Down:        nil,
+	},
+	{
+		Version:     65,
+		Description: "Build opv3: run records and indexes from opv2: operation rows (v2 rows are kept and stay mirrored)",
+		Up:          migration065Up,
+		Down:        migration065Down,
 	},
 }
 
@@ -1339,6 +1351,45 @@ func migration064Up(store migrationStore) error {
 		dedupBackfillLog.Warn("migration 64: %d labeled examples are unreadable and were not indexed by entity", labels.Unreadable)
 	}
 	return nil
+}
+
+// migration065Up builds the opv3: run records, indexes, counters and one
+// synthetic migrate event per run from the opv2: operation rows
+// (MigrateOpsV2ToV3), 500 rows per batch. No op id changes and every opv2:
+// key stays: the v2 store methods keep writing both families from here on
+// (the mirror, D25), so the previous binary can be redeployed.
+func migration065Up(store migrationStore) error {
+	m, ok := store.(opsV3Migrator)
+	if !ok {
+		opsV3Log.Warn("migration 65: store %T cannot build opv3 run records; nothing to do", store)
+		return nil
+	}
+	start := time.Now()
+	rep, err := m.MigrateOpsV2ToV3(opsV3MigrationBatch, nil)
+	if err != nil {
+		return fmt.Errorf("migration 65: build opv3 run records: %w", err)
+	}
+	opsV3Log.Info("migration 65: %d opv2 rows scanned, %d opv3 runs written, %d already current, in %s",
+		rep.Scanned, rep.Written, rep.Skipped+rep.SkippedLive, time.Since(start).Round(time.Millisecond))
+	if n := len(rep.Unmapped); n > 0 {
+		opsV3Log.Warn("migration 65: %d v2 status string(s) are not in the mapping table and were recorded as failed: %v", n, rep.Unmapped)
+	}
+	if rep.Undecodable > 0 {
+		opsV3Log.Warn("migration 65: %d opv2 rows did not decode and have no opv3 run", rep.Undecodable)
+	}
+	return nil
+}
+
+// migration065Down only resets the schema version to 64. It deletes no
+// opv3: key: the previous binary ignores that prefix, and a later roll
+// forward reuses the records (Up is idempotent). Note that the
+// applied-migration record for 65 is kept (migrationStore cannot delete a
+// preference), so a roll forward after this Down advances the version without
+// re-running Up; any run the previous binary changed in the meantime has its
+// opv3: record corrected by its next v2 write (the façade projection reads
+// the v2 row, not the stale record's state).
+func migration065Down(store migrationStore) error {
+	return setVersion(store, 64)
 }
 
 // BackfillDedupEntityIndexes runs migration 64's two backfills over this
