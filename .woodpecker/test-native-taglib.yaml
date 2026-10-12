@@ -1,0 +1,77 @@
+# file: .woodpecker/test-native-taglib.yaml
+# version: 1.0.0
+# guid: 8e2d6a41-5c93-4b7f-a0d8-1f4b9c3e7a52
+# last-edited: 2026-10-11
+#
+# The tag writers under `-tags native_taglib`: the cgo build the production
+# binary is made with (Dockerfile, Dockerfile.build-cgo). Every other workflow
+# builds the default tag set, where the writers go through the TagLib WASM
+# runtime, so the cgo writers in internal/metadata/taglib_cgo.go were compiled
+# and tested by nothing in CI: a regression there reached production unseen.
+#
+# The cgo build links TagLib 2.0.2 statically from third_party/taglib/lib,
+# which is not checked in. scripts/ci/build_taglib_static.py builds it once
+# into the host-wide CI cache (keyed by the TagLib and utfcpp versions, the
+# Dockerfile's pinned releases) and copies it into place; later runs only copy.
+# The distro's libtag1-dev is TagLib 1.x, a different tag_c API, and is not
+# used.
+#
+# Runs on U1 only (`host=u1`, which carries `heavy=true`): the #cgo LDFLAGS in
+# taglib_cgo.go name -lgcc_eh, which exists on Linux only, so llm1 (macOS) could
+# not link it. U1 needs cmake and zlib1g-dev besides the packages the other
+# heavy workflows use (see docs/ci/woodpecker.md); the script says so and fails
+# if either is missing. Never on the prod host. No CI-COVERAGE line: these
+# packages are already counted by the test workflows' -short runs, and this
+# run's coverage would be the cgo files only.
+#
+# Clone, environment, trigger and cleanup are copied from test-fixtures.yaml;
+# see that file for why each setting is there.
+
+labels:
+  heavy: "true"
+  host: u1
+
+when:
+  # Manual only (owner 2026-10-02); see test-fixtures.yaml.
+  - event: manual
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no test reads LFS content
+      depth: 50
+
+steps:
+  - name: test
+    # Local backend: `image` names the SHELL that runs the commands, not a
+    # container image; the step runs on the host with the agent's PATH.
+    image: bash
+    environment:
+      GOTOOLCHAIN: go1.27.2
+      # -trimpath keeps the shared GOCACHE reusable across clones; see
+      # test-fixtures.yaml. CGO_ENABLED is explicit: the tag does nothing
+      # without it.
+      GOFLAGS: -trimpath
+      CGO_ENABLED: "1"
+    commands:
+      - . scripts/ci/cache_env.sh || exit 1
+      # python3 runs the TagLib build and the cache cap in cleanup.
+      - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
+      - python3 scripts/ci/build_taglib_static.py || exit 1
+      # -race and no -short: the cgo writers' tests use the checked-in
+      # fixtures, and the metafetch tests decode audio.
+      - go test -tags native_taglib -race -count=1 -timeout 30m ./internal/metadata/... ./internal/tagger/... ./internal/metafetch/...
+
+  - name: cleanup
+    # Runs on success and failure; see test-fixtures.yaml for each line.
+    image: bash
+    when:
+      - status: [success, failure]
+    commands:
+      - . scripts/ci/cache_env.sh || true
+      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
+      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
+      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
+      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'
