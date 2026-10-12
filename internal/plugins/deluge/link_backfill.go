@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-10-11
 
@@ -80,10 +80,12 @@ func (p *Plugin) linkBackfillDef() sdk.OperationDef {
 			"turn them into that fixer's report-only hash_mismatch class. Apply the fixer, then run this op; " +
 			"include_unsettled_relink=true writes them anyway (relink_fixer_would_link then counts the ones the " +
 			"fixer would have linked). Params: dry_run, label (default: the discovery label), limit (0 = all: " +
-			"caps the torrents written, counted after the hold-back; torrents are hashed in batches until that " +
-			"many have writes, torrents no file carries yet first, and the rest of the listing only for files " +
-			"whose size equals one in the batch, for the cross-seed check; deferred_by_limit counts the torrents " +
-			"left for a later run), include_unsettled_relink, workers (default: CPUs, max 8).",
+			"caps the torrents written, counted after the hold-back; torrents are hashed in batches, torrents no " +
+			"file carries yet first, until that many have writes, and the rest of the listing only for files " +
+			"whose size equals one in the batches, for the cross-seed check. The batches grow past held, " +
+			"unmatched and already-linked torrents, so while many are held a limited run can hash most of the " +
+			"listing; deferred_by_limit counts the torrents left for a later run), include_unsettled_relink, " +
+			"workers (default: CPUs, max 8).",
 		ResumePolicy:    sdk.ResumeRestart, // idempotent: a linked row is skipped as already_linked
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  linkBackfillOpID,
@@ -537,17 +539,22 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 
 	// Phases 1 and 2, repeated while limit is unmet. Nothing is written here.
 	//
-	// limit bounds the torrents written, counted after the hold-back, and the
-	// hashing with them. Each round moves the next torrents of order into the
-	// window, as many as limit still lacks (all of them with no limit), and
-	// hashes their files in full. A torrent outside the window has only the
+	// limit bounds the torrents written, counted after the hold-back. Each
+	// round moves the next torrents of order into the window, as many as
+	// limit still lacks (all of them with no limit), and hashes their files
+	// in full. So the hashing stops once limit torrents have writes, but a
+	// window that keeps meeting torrents with nothing to write (held for the
+	// relink fixer, unmatched; those carry no row's hash and stay at the
+	// front of order on every run) keeps growing: before the relink fixer has
+	// run, a limited run can hash most of the listing. That is the price of
+	// never stalling on them. A torrent outside the window has only the
 	// files whose Deluge size equals the size of a window file hashed: a
 	// cross-seed holds identical bytes, so a size no window file has cannot
 	// make a window row ambiguous (filehash.BookFileHash digests the size
 	// with a sampled file, and a whole file's size is its own). Each torrent
 	// file is hashed at most once per run, however many rounds there are.
-	// The window grows past torrents with nothing to write (already linked,
-	// held, unmatched), so a later limited run reaches new torrents.
+	// Torrents some row already carries go to the back of order, so a later
+	// limited run reaches new torrents instead of re-hashing linked ones.
 	var (
 		plan   []torrentWrites
 		stats  decideStats
@@ -684,6 +691,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 func (r *linkRun) prepare(d *delugeclient.TorrentDetail) *linkTorrent {
 	hash, err := delugeclient.NormalizeTorrentID(d.Hash)
 	if err != nil {
+		r.tally.errors.Add(1)
 		r.log.Warn("skipping torrent with an invalid id", "error", err)
 		return &linkTorrent{}
 	}
@@ -741,9 +749,6 @@ func linkOrder(ts []*linkTorrent, idx *linkLibraryIndex) []int {
 // outcomes.
 func (r *linkRun) enterWindow(t *linkTorrent) {
 	t.inWindow = true
-	if t.hash == "" {
-		r.tally.errors.Add(1) // the invalid id
-	}
 	r.tally.nonAudio.Add(t.nonAudio)
 	r.tally.deselected.Add(t.deselected)
 	r.tally.emptyFiles.Add(t.emptyFiles)
