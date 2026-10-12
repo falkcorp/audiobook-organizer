@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-10-01
+// last-edited: 2026-10-11
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -75,6 +75,7 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 	return []sdk.OperationDef{
 		p.calibrateScoringDef(), // INIT-3-T1: read-only scoring calibration report
 		p.asinBackfillDef(),     // Audible-only ASIN backfill (asin_backfill.go)
+		p.pcacheSweepDef(),      // shared provider-answer cache pruning (pcache_sweep.go)
 	}
 }
 

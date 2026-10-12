@@ -1,5 +1,5 @@
 // file: internal/metafetch/pcache_followup_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e971d44a-1aa0-4ff3-8223-e9a5a43c932b
 // last-edited: 2026-10-11
 
@@ -8,6 +8,7 @@ package metafetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -294,4 +295,24 @@ func TestPCache_SearchAgainBustsBeforeTheLiveCall(t *testing.T) {
 	b := askFor(svc, src, "book-b", v, SearchOptions{})
 	assert.Equal(t, calls, src.calls.Load(), "book-b is answered from the shared row")
 	assert.Empty(t, b.results, "the forced search replaced the stale found answer with the provider's empty one")
+}
+
+// A failed product lookup (an error, not the provider's "no such ASIN") is
+// never stored, not even as an empty negative entry: the next search asks
+// again.
+func TestCachedLookupASIN_ErrorNeverCached(t *testing.T) {
+	withSharedCache(t, true)
+	svc, kv := newPCacheService(t)
+	var calls atomic.Int64
+	svc.asinLookupOverride = func(context.Context, string, string) (*metadata.BookMetadata, error) {
+		calls.Add(1)
+		return nil, errors.New("503 from the provider")
+	}
+	p := fanoutParams{ctx: context.Background(), bookID: "book-a", identity: "v1:book-a"}
+	_, err := svc.cachedLookupASIN(p, metadata.SourceIDAudible, "B0SYNTH005")
+	require.Error(t, err)
+	assert.Empty(t, kv.keys(database.PCachePrefix), "a failed lookup writes 0 pcache: rows")
+	_, err = svc.cachedLookupASIN(p, metadata.SourceIDAudible, "B0SYNTH005")
+	require.Error(t, err)
+	assert.EqualValues(t, 2, calls.Load(), "the next search asks again")
 }

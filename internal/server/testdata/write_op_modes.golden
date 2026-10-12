@@ -166,6 +166,7 @@ metadata.batch-apply-cached	preview
 metadata.batch-save	no-mode
 metadata.candidate-fetch	preview
 metafetch.asin-backfill	preview
+metafetch.pcache-sweep	preview
 openlibrary.download	no-mode
 openlibrary.import	no-mode
 operations.backfill-legacy-status	preview
