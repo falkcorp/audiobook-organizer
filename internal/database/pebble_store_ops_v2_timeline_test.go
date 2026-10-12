@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package database
 
@@ -980,6 +980,9 @@ var opv2OpKeyAllowlist = map[string]string{
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ResetOperationV2ForResume":             "stage",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).DeleteOperationV2":                     "stage",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SweepHollowOperationsV2":               "sweep",
+	"internal/database/pebble_store_ops_v2.go:stageOpV2RowWrite":                                    "stage", // the opv2 mirror row of a native opv3 write (05-PR4)
+	"internal/database/pebble_store_ops_v2.go:stageOpV2RowDelete":                                   "stage", // DeleteRunV3's mirror row delete (05-PR4)
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).listOpV2IDsPage":                       "read",  // migration 065's key-only pager (05-PR4)
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).InsertOperationV2":                     "read",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).PromoteToQueued":                       "read",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOperationV2Result":                  "read",

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -5470,6 +5471,63 @@ func (_c *MockStore_AddToBatchBucket_Call) RunAndReturn(run func(opType string, 
 	return _c
 }
 
+// AppendLogV3 provides a mock function for the type MockStore
+func (_mock *MockStore) AppendLogV3(id string, line database.LogLine) error {
+	ret := _mock.Called(id, line)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AppendLogV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, database.LogLine) error); ok {
+		r0 = returnFunc(id, line)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_AppendLogV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendLogV3'
+type MockStore_AppendLogV3_Call struct {
+	*mock.Call
+}
+
+// AppendLogV3 is a helper method to define mock.On call
+//   - id string
+//   - line database.LogLine
+func (_e *MockStore_Expecter) AppendLogV3(id any, line any) *MockStore_AppendLogV3_Call {
+	return &MockStore_AppendLogV3_Call{Call: _e.mock.On("AppendLogV3", id, line)}
+}
+
+func (_c *MockStore_AppendLogV3_Call) Run(run func(id string, line database.LogLine)) *MockStore_AppendLogV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 database.LogLine
+		if args[1] != nil {
+			arg1 = args[1].(database.LogLine)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_AppendLogV3_Call) Return(err error) *MockStore_AppendLogV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_AppendLogV3_Call) RunAndReturn(run func(id string, line database.LogLine) error) *MockStore_AppendLogV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // AppendOpLogsV2 provides a mock function for the type MockStore
 func (_mock *MockStore) AppendOpLogsV2(rows []database.OpLogV2Row) error {
 	ret := _mock.Called(rows)
@@ -6319,6 +6377,63 @@ func (_c *MockStore_ClearITunesPID_Call) RunAndReturn(run func(itunesPID string)
 	return _c
 }
 
+// ClearIntentV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ClearIntentV3(id string, seq uint64) error {
+	ret := _mock.Called(id, seq)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ClearIntentV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, uint64) error); ok {
+		r0 = returnFunc(id, seq)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ClearIntentV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearIntentV3'
+type MockStore_ClearIntentV3_Call struct {
+	*mock.Call
+}
+
+// ClearIntentV3 is a helper method to define mock.On call
+//   - id string
+//   - seq uint64
+func (_e *MockStore_Expecter) ClearIntentV3(id any, seq any) *MockStore_ClearIntentV3_Call {
+	return &MockStore_ClearIntentV3_Call{Call: _e.mock.On("ClearIntentV3", id, seq)}
+}
+
+func (_c *MockStore_ClearIntentV3_Call) Run(run func(id string, seq uint64)) *MockStore_ClearIntentV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 uint64
+		if args[1] != nil {
+			arg1 = args[1].(uint64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ClearIntentV3_Call) Return(err error) *MockStore_ClearIntentV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ClearIntentV3_Call) RunAndReturn(run func(id string, seq uint64) error) *MockStore_ClearIntentV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ClearUserPositions provides a mock function for the type MockStore
 func (_mock *MockStore) ClearUserPositions(userID string, bookID string) error {
 	ret := _mock.Called(userID, bookID)
@@ -6416,6 +6531,63 @@ func (_c *MockStore_Close_Call) Return(err error) *MockStore_Close_Call {
 }
 
 func (_c *MockStore_Close_Call) RunAndReturn(run func() error) *MockStore_Close_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CommitLedgerV3 provides a mock function for the type MockStore
+func (_mock *MockStore) CommitLedgerV3(id string, b database.LedgerBatch) error {
+	ret := _mock.Called(id, b)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CommitLedgerV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, database.LedgerBatch) error); ok {
+		r0 = returnFunc(id, b)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_CommitLedgerV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CommitLedgerV3'
+type MockStore_CommitLedgerV3_Call struct {
+	*mock.Call
+}
+
+// CommitLedgerV3 is a helper method to define mock.On call
+//   - id string
+//   - b database.LedgerBatch
+func (_e *MockStore_Expecter) CommitLedgerV3(id any, b any) *MockStore_CommitLedgerV3_Call {
+	return &MockStore_CommitLedgerV3_Call{Call: _e.mock.On("CommitLedgerV3", id, b)}
+}
+
+func (_c *MockStore_CommitLedgerV3_Call) Run(run func(id string, b database.LedgerBatch)) *MockStore_CommitLedgerV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 database.LedgerBatch
+		if args[1] != nil {
+			arg1 = args[1].(database.LedgerBatch)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CommitLedgerV3_Call) Return(err error) *MockStore_CommitLedgerV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_CommitLedgerV3_Call) RunAndReturn(run func(id string, b database.LedgerBatch) error) *MockStore_CommitLedgerV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -10446,6 +10618,72 @@ func (_c *MockStore_DeleteRole_Call) Return(err error) *MockStore_DeleteRole_Cal
 }
 
 func (_c *MockStore_DeleteRole_Call) RunAndReturn(run func(id string) error) *MockStore_DeleteRole_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteRunV3 provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteRunV3(id string, allowed []state.V3) (bool, error) {
+	ret := _mock.Called(id, allowed)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteRunV3")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, []state.V3) (bool, error)); ok {
+		return returnFunc(id, allowed)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, []state.V3) bool); ok {
+		r0 = returnFunc(id, allowed)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, []state.V3) error); ok {
+		r1 = returnFunc(id, allowed)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_DeleteRunV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteRunV3'
+type MockStore_DeleteRunV3_Call struct {
+	*mock.Call
+}
+
+// DeleteRunV3 is a helper method to define mock.On call
+//   - id string
+//   - allowed []state.V3
+func (_e *MockStore_Expecter) DeleteRunV3(id any, allowed any) *MockStore_DeleteRunV3_Call {
+	return &MockStore_DeleteRunV3_Call{Call: _e.mock.On("DeleteRunV3", id, allowed)}
+}
+
+func (_c *MockStore_DeleteRunV3_Call) Run(run func(id string, allowed []state.V3)) *MockStore_DeleteRunV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []state.V3
+		if args[1] != nil {
+			arg1 = args[1].([]state.V3)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteRunV3_Call) Return(deleted bool, err error) *MockStore_DeleteRunV3_Call {
+	_c.Call.Return(deleted, err)
+	return _c
+}
+
+func (_c *MockStore_DeleteRunV3_Call) RunAndReturn(run func(id string, allowed []state.V3) (bool, error)) *MockStore_DeleteRunV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -16418,6 +16656,136 @@ func (_c *MockStore_GetChaptersForBook_Call) RunAndReturn(run func(bookID string
 	return _c
 }
 
+// GetCheckpointV3 provides a mock function for the type MockStore
+func (_mock *MockStore) GetCheckpointV3(id string) (*database.Checkpoint, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCheckpointV3")
+	}
+
+	var r0 *database.Checkpoint
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Checkpoint, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Checkpoint); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Checkpoint)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetCheckpointV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetCheckpointV3'
+type MockStore_GetCheckpointV3_Call struct {
+	*mock.Call
+}
+
+// GetCheckpointV3 is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) GetCheckpointV3(id any) *MockStore_GetCheckpointV3_Call {
+	return &MockStore_GetCheckpointV3_Call{Call: _e.mock.On("GetCheckpointV3", id)}
+}
+
+func (_c *MockStore_GetCheckpointV3_Call) Run(run func(id string)) *MockStore_GetCheckpointV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetCheckpointV3_Call) Return(checkpoint *database.Checkpoint, err error) *MockStore_GetCheckpointV3_Call {
+	_c.Call.Return(checkpoint, err)
+	return _c
+}
+
+func (_c *MockStore_GetCheckpointV3_Call) RunAndReturn(run func(id string) (*database.Checkpoint, error)) *MockStore_GetCheckpointV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetChunkOffsetsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) GetChunkOffsetsV3(id string) ([]int32, bool, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetChunkOffsetsV3")
+	}
+
+	var r0 []int32
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]int32, bool, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []int32); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]int32)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) bool); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string) error); ok {
+		r2 = returnFunc(id)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_GetChunkOffsetsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetChunkOffsetsV3'
+type MockStore_GetChunkOffsetsV3_Call struct {
+	*mock.Call
+}
+
+// GetChunkOffsetsV3 is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) GetChunkOffsetsV3(id any) *MockStore_GetChunkOffsetsV3_Call {
+	return &MockStore_GetChunkOffsetsV3_Call{Call: _e.mock.On("GetChunkOffsetsV3", id)}
+}
+
+func (_c *MockStore_GetChunkOffsetsV3_Call) Run(run func(id string)) *MockStore_GetChunkOffsetsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetChunkOffsetsV3_Call) Return(int32s []int32, b bool, err error) *MockStore_GetChunkOffsetsV3_Call {
+	_c.Call.Return(int32s, b, err)
+	return _c
+}
+
+func (_c *MockStore_GetChunkOffsetsV3_Call) RunAndReturn(run func(id string) ([]int32, bool, error)) *MockStore_GetChunkOffsetsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetCollection provides a mock function for the type MockStore
 func (_mock *MockStore) GetCollection(id string) (*database.Collection, error) {
 	ret := _mock.Called(id)
@@ -17977,6 +18345,68 @@ func (_c *MockStore_GetInvite_Call) Return(invite *database.Invite, err error) *
 }
 
 func (_c *MockStore_GetInvite_Call) RunAndReturn(run func(token string) (*database.Invite, error)) *MockStore_GetInvite_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetLedgerV3 provides a mock function for the type MockStore
+func (_mock *MockStore) GetLedgerV3(id string) (*database.Ledger, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetLedgerV3")
+	}
+
+	var r0 *database.Ledger
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Ledger, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Ledger); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Ledger)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetLedgerV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetLedgerV3'
+type MockStore_GetLedgerV3_Call struct {
+	*mock.Call
+}
+
+// GetLedgerV3 is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) GetLedgerV3(id any) *MockStore_GetLedgerV3_Call {
+	return &MockStore_GetLedgerV3_Call{Call: _e.mock.On("GetLedgerV3", id)}
+}
+
+func (_c *MockStore_GetLedgerV3_Call) Run(run func(id string)) *MockStore_GetLedgerV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetLedgerV3_Call) Return(ledger *database.Ledger, err error) *MockStore_GetLedgerV3_Call {
+	_c.Call.Return(ledger, err)
+	return _c
+}
+
+func (_c *MockStore_GetLedgerV3_Call) RunAndReturn(run func(id string) (*database.Ledger, error)) *MockStore_GetLedgerV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -20152,6 +20582,68 @@ func (_c *MockStore_GetRoleByName_Call) RunAndReturn(run func(name string) (*dat
 	return _c
 }
 
+// GetRunV3 provides a mock function for the type MockStore
+func (_mock *MockStore) GetRunV3(id string) (*database.RunRecord, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetRunV3")
+	}
+
+	var r0 *database.RunRecord
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.RunRecord, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.RunRecord); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.RunRecord)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetRunV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetRunV3'
+type MockStore_GetRunV3_Call struct {
+	*mock.Call
+}
+
+// GetRunV3 is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) GetRunV3(id any) *MockStore_GetRunV3_Call {
+	return &MockStore_GetRunV3_Call{Call: _e.mock.On("GetRunV3", id)}
+}
+
+func (_c *MockStore_GetRunV3_Call) Run(run func(id string)) *MockStore_GetRunV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetRunV3_Call) Return(runRecord *database.RunRecord, err error) *MockStore_GetRunV3_Call {
+	_c.Call.Return(runRecord, err)
+	return _c
+}
+
+func (_c *MockStore_GetRunV3_Call) RunAndReturn(run func(id string) (*database.RunRecord, error)) *MockStore_GetRunV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetScanCacheMap provides a mock function for the type MockStore
 func (_mock *MockStore) GetScanCacheMap() (map[string]database.ScanCacheEntry, error) {
 	ret := _mock.Called()
@@ -20827,6 +21319,80 @@ func (_c *MockStore_GetSetting_Call) Return(setting *database.Setting, err error
 }
 
 func (_c *MockStore_GetSetting_Call) RunAndReturn(run func(key string) (*database.Setting, error)) *MockStore_GetSetting_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetSnapshotPageV3 provides a mock function for the type MockStore
+func (_mock *MockStore) GetSnapshotPageV3(id string, page int) ([]string, bool, error) {
+	ret := _mock.Called(id, page)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetSnapshotPageV3")
+	}
+
+	var r0 []string
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string, int) ([]string, bool, error)); ok {
+		return returnFunc(id, page)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int) []string); ok {
+		r0 = returnFunc(id, page)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int) bool); ok {
+		r1 = returnFunc(id, page)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string, int) error); ok {
+		r2 = returnFunc(id, page)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_GetSnapshotPageV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetSnapshotPageV3'
+type MockStore_GetSnapshotPageV3_Call struct {
+	*mock.Call
+}
+
+// GetSnapshotPageV3 is a helper method to define mock.On call
+//   - id string
+//   - page int
+func (_e *MockStore_Expecter) GetSnapshotPageV3(id any, page any) *MockStore_GetSnapshotPageV3_Call {
+	return &MockStore_GetSnapshotPageV3_Call{Call: _e.mock.On("GetSnapshotPageV3", id, page)}
+}
+
+func (_c *MockStore_GetSnapshotPageV3_Call) Run(run func(id string, page int)) *MockStore_GetSnapshotPageV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetSnapshotPageV3_Call) Return(strings []string, b bool, err error) *MockStore_GetSnapshotPageV3_Call {
+	_c.Call.Return(strings, b, err)
+	return _c
+}
+
+func (_c *MockStore_GetSnapshotPageV3_Call) RunAndReturn(run func(id string, page int) ([]string, bool, error)) *MockStore_GetSnapshotPageV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -22039,6 +22605,57 @@ func (_c *MockStore_InsertOperationV2_Call) RunAndReturn(run func(row database.O
 	return _c
 }
 
+// InsertRunV3 provides a mock function for the type MockStore
+func (_mock *MockStore) InsertRunV3(rec database.RunRecord) error {
+	ret := _mock.Called(rec)
+
+	if len(ret) == 0 {
+		panic("no return value specified for InsertRunV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(database.RunRecord) error); ok {
+		r0 = returnFunc(rec)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_InsertRunV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InsertRunV3'
+type MockStore_InsertRunV3_Call struct {
+	*mock.Call
+}
+
+// InsertRunV3 is a helper method to define mock.On call
+//   - rec database.RunRecord
+func (_e *MockStore_Expecter) InsertRunV3(rec any) *MockStore_InsertRunV3_Call {
+	return &MockStore_InsertRunV3_Call{Call: _e.mock.On("InsertRunV3", rec)}
+}
+
+func (_c *MockStore_InsertRunV3_Call) Run(run func(rec database.RunRecord)) *MockStore_InsertRunV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 database.RunRecord
+		if args[0] != nil {
+			arg0 = args[0].(database.RunRecord)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_InsertRunV3_Call) Return(err error) *MockStore_InsertRunV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_InsertRunV3_Call) RunAndReturn(run func(rec database.RunRecord) error) *MockStore_InsertRunV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // InvalidateLibraryStats provides a mock function for the type MockStore
 func (_mock *MockStore) InvalidateLibraryStats() {
 	_mock.Called()
@@ -22979,6 +23596,68 @@ func (_c *MockStore_ListBooksByITunesPID_Call) RunAndReturn(run func(limit int, 
 	return _c
 }
 
+// ListChildRunsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListChildRunsV3(parentID string) ([]database.RunRecord, error) {
+	ret := _mock.Called(parentID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListChildRunsV3")
+	}
+
+	var r0 []database.RunRecord
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.RunRecord, error)); ok {
+		return returnFunc(parentID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.RunRecord); ok {
+		r0 = returnFunc(parentID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.RunRecord)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(parentID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListChildRunsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListChildRunsV3'
+type MockStore_ListChildRunsV3_Call struct {
+	*mock.Call
+}
+
+// ListChildRunsV3 is a helper method to define mock.On call
+//   - parentID string
+func (_e *MockStore_Expecter) ListChildRunsV3(parentID any) *MockStore_ListChildRunsV3_Call {
+	return &MockStore_ListChildRunsV3_Call{Call: _e.mock.On("ListChildRunsV3", parentID)}
+}
+
+func (_c *MockStore_ListChildRunsV3_Call) Run(run func(parentID string)) *MockStore_ListChildRunsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListChildRunsV3_Call) Return(runRecords []database.RunRecord, err error) *MockStore_ListChildRunsV3_Call {
+	_c.Call.Return(runRecords, err)
+	return _c
+}
+
+func (_c *MockStore_ListChildRunsV3_Call) RunAndReturn(run func(parentID string) ([]database.RunRecord, error)) *MockStore_ListChildRunsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListCollections provides a mock function for the type MockStore
 func (_mock *MockStore) ListCollections(collectionType string, limit int, offset int) ([]database.Collection, int, error) {
 	ret := _mock.Called(collectionType, limit, offset)
@@ -23114,6 +23793,80 @@ func (_c *MockStore_ListDirtyUserPlaylists_Call) RunAndReturn(run func() ([]data
 	return _c
 }
 
+// ListDoneRunsSinceV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListDoneRunsSinceV3(since time.Time, limit int) ([]database.RunRecord, bool, error) {
+	ret := _mock.Called(since, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListDoneRunsSinceV3")
+	}
+
+	var r0 []database.RunRecord
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) ([]database.RunRecord, bool, error)); ok {
+		return returnFunc(since, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) []database.RunRecord); ok {
+		r0 = returnFunc(since, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.RunRecord)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(time.Time, int) bool); ok {
+		r1 = returnFunc(since, limit)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(time.Time, int) error); ok {
+		r2 = returnFunc(since, limit)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_ListDoneRunsSinceV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListDoneRunsSinceV3'
+type MockStore_ListDoneRunsSinceV3_Call struct {
+	*mock.Call
+}
+
+// ListDoneRunsSinceV3 is a helper method to define mock.On call
+//   - since time.Time
+//   - limit int
+func (_e *MockStore_Expecter) ListDoneRunsSinceV3(since any, limit any) *MockStore_ListDoneRunsSinceV3_Call {
+	return &MockStore_ListDoneRunsSinceV3_Call{Call: _e.mock.On("ListDoneRunsSinceV3", since, limit)}
+}
+
+func (_c *MockStore_ListDoneRunsSinceV3_Call) Run(run func(since time.Time, limit int)) *MockStore_ListDoneRunsSinceV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 time.Time
+		if args[0] != nil {
+			arg0 = args[0].(time.Time)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListDoneRunsSinceV3_Call) Return(runs []database.RunRecord, complete bool, err error) *MockStore_ListDoneRunsSinceV3_Call {
+	_c.Call.Return(runs, complete, err)
+	return _c
+}
+
+func (_c *MockStore_ListDoneRunsSinceV3_Call) RunAndReturn(run func(since time.Time, limit int) ([]database.RunRecord, bool, error)) *MockStore_ListDoneRunsSinceV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListFileCompletions provides a mock function for the type MockStore
 func (_mock *MockStore) ListFileCompletions(sub database.OpSubject, opType string) (map[string]uint64, error) {
 	ret := _mock.Called(sub, opType)
@@ -23178,6 +23931,208 @@ func (_c *MockStore_ListFileCompletions_Call) Return(stringToUint64 map[string]u
 }
 
 func (_c *MockStore_ListFileCompletions_Call) RunAndReturn(run func(sub database.OpSubject, opType string) (map[string]uint64, error)) *MockStore_ListFileCompletions_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListIntentsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListIntentsV3(id string) ([]database.Intent, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListIntentsV3")
+	}
+
+	var r0 []database.Intent
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.Intent, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.Intent); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Intent)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListIntentsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListIntentsV3'
+type MockStore_ListIntentsV3_Call struct {
+	*mock.Call
+}
+
+// ListIntentsV3 is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) ListIntentsV3(id any) *MockStore_ListIntentsV3_Call {
+	return &MockStore_ListIntentsV3_Call{Call: _e.mock.On("ListIntentsV3", id)}
+}
+
+func (_c *MockStore_ListIntentsV3_Call) Run(run func(id string)) *MockStore_ListIntentsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListIntentsV3_Call) Return(intents []database.Intent, err error) *MockStore_ListIntentsV3_Call {
+	_c.Call.Return(intents, err)
+	return _c
+}
+
+func (_c *MockStore_ListIntentsV3_Call) RunAndReturn(run func(id string) ([]database.Intent, error)) *MockStore_ListIntentsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListItemOutcomesV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListItemOutcomesV3(id string, q database.ItemQuery) (database.ItemPage, error) {
+	ret := _mock.Called(id, q)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListItemOutcomesV3")
+	}
+
+	var r0 database.ItemPage
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, database.ItemQuery) (database.ItemPage, error)); ok {
+		return returnFunc(id, q)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, database.ItemQuery) database.ItemPage); ok {
+		r0 = returnFunc(id, q)
+	} else {
+		r0 = ret.Get(0).(database.ItemPage)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, database.ItemQuery) error); ok {
+		r1 = returnFunc(id, q)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListItemOutcomesV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListItemOutcomesV3'
+type MockStore_ListItemOutcomesV3_Call struct {
+	*mock.Call
+}
+
+// ListItemOutcomesV3 is a helper method to define mock.On call
+//   - id string
+//   - q database.ItemQuery
+func (_e *MockStore_Expecter) ListItemOutcomesV3(id any, q any) *MockStore_ListItemOutcomesV3_Call {
+	return &MockStore_ListItemOutcomesV3_Call{Call: _e.mock.On("ListItemOutcomesV3", id, q)}
+}
+
+func (_c *MockStore_ListItemOutcomesV3_Call) Run(run func(id string, q database.ItemQuery)) *MockStore_ListItemOutcomesV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 database.ItemQuery
+		if args[1] != nil {
+			arg1 = args[1].(database.ItemQuery)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListItemOutcomesV3_Call) Return(itemPage database.ItemPage, err error) *MockStore_ListItemOutcomesV3_Call {
+	_c.Call.Return(itemPage, err)
+	return _c
+}
+
+func (_c *MockStore_ListItemOutcomesV3_Call) RunAndReturn(run func(id string, q database.ItemQuery) (database.ItemPage, error)) *MockStore_ListItemOutcomesV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListLogV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListLogV3(id string, limit int, afterKey string) ([]database.LogLine, error) {
+	ret := _mock.Called(id, limit, afterKey)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListLogV3")
+	}
+
+	var r0 []database.LogLine
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int, string) ([]database.LogLine, error)); ok {
+		return returnFunc(id, limit, afterKey)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int, string) []database.LogLine); ok {
+		r0 = returnFunc(id, limit, afterKey)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.LogLine)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int, string) error); ok {
+		r1 = returnFunc(id, limit, afterKey)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListLogV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListLogV3'
+type MockStore_ListLogV3_Call struct {
+	*mock.Call
+}
+
+// ListLogV3 is a helper method to define mock.On call
+//   - id string
+//   - limit int
+//   - afterKey string
+func (_e *MockStore_Expecter) ListLogV3(id any, limit any, afterKey any) *MockStore_ListLogV3_Call {
+	return &MockStore_ListLogV3_Call{Call: _e.mock.On("ListLogV3", id, limit, afterKey)}
+}
+
+func (_c *MockStore_ListLogV3_Call) Run(run func(id string, limit int, afterKey string)) *MockStore_ListLogV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListLogV3_Call) Return(logLines []database.LogLine, err error) *MockStore_ListLogV3_Call {
+	_c.Call.Return(logLines, err)
+	return _c
+}
+
+func (_c *MockStore_ListLogV3_Call) RunAndReturn(run func(id string, limit int, afterKey string) ([]database.LogLine, error)) *MockStore_ListLogV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -23686,6 +24641,68 @@ func (_c *MockStore_ListQueuedOperationsV2_Call) RunAndReturn(run func() ([]data
 	return _c
 }
 
+// ListQueuedRunsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListQueuedRunsV3(limit int) ([]database.RunRecord, error) {
+	ret := _mock.Called(limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListQueuedRunsV3")
+	}
+
+	var r0 []database.RunRecord
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) ([]database.RunRecord, error)); ok {
+		return returnFunc(limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) []database.RunRecord); ok {
+		r0 = returnFunc(limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.RunRecord)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListQueuedRunsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListQueuedRunsV3'
+type MockStore_ListQueuedRunsV3_Call struct {
+	*mock.Call
+}
+
+// ListQueuedRunsV3 is a helper method to define mock.On call
+//   - limit int
+func (_e *MockStore_Expecter) ListQueuedRunsV3(limit any) *MockStore_ListQueuedRunsV3_Call {
+	return &MockStore_ListQueuedRunsV3_Call{Call: _e.mock.On("ListQueuedRunsV3", limit)}
+}
+
+func (_c *MockStore_ListQueuedRunsV3_Call) Run(run func(limit int)) *MockStore_ListQueuedRunsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListQueuedRunsV3_Call) Return(runRecords []database.RunRecord, err error) *MockStore_ListQueuedRunsV3_Call {
+	_c.Call.Return(runRecords, err)
+	return _c
+}
+
+func (_c *MockStore_ListQueuedRunsV3_Call) RunAndReturn(run func(limit int) ([]database.RunRecord, error)) *MockStore_ListQueuedRunsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListResumableOperationsV2 provides a mock function for the type MockStore
 func (_mock *MockStore) ListResumableOperationsV2() ([]database.OperationV2Row, error) {
 	ret := _mock.Called()
@@ -23860,6 +24877,134 @@ func (_c *MockStore_ListRoles_Call) Return(roles []database.Role, err error) *Mo
 }
 
 func (_c *MockStore_ListRoles_Call) RunAndReturn(run func() ([]database.Role, error)) *MockStore_ListRoles_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListRunEventsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListRunEventsV3(id string, limit int) ([]database.Transition, error) {
+	ret := _mock.Called(id, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListRunEventsV3")
+	}
+
+	var r0 []database.Transition
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.Transition, error)); ok {
+		return returnFunc(id, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int) []database.Transition); ok {
+		r0 = returnFunc(id, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Transition)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
+		r1 = returnFunc(id, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListRunEventsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRunEventsV3'
+type MockStore_ListRunEventsV3_Call struct {
+	*mock.Call
+}
+
+// ListRunEventsV3 is a helper method to define mock.On call
+//   - id string
+//   - limit int
+func (_e *MockStore_Expecter) ListRunEventsV3(id any, limit any) *MockStore_ListRunEventsV3_Call {
+	return &MockStore_ListRunEventsV3_Call{Call: _e.mock.On("ListRunEventsV3", id, limit)}
+}
+
+func (_c *MockStore_ListRunEventsV3_Call) Run(run func(id string, limit int)) *MockStore_ListRunEventsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListRunEventsV3_Call) Return(transitions []database.Transition, err error) *MockStore_ListRunEventsV3_Call {
+	_c.Call.Return(transitions, err)
+	return _c
+}
+
+func (_c *MockStore_ListRunEventsV3_Call) RunAndReturn(run func(id string, limit int) ([]database.Transition, error)) *MockStore_ListRunEventsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListRunsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) ListRunsV3(q database.RunQuery) (database.RunPage, error) {
+	ret := _mock.Called(q)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListRunsV3")
+	}
+
+	var r0 database.RunPage
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(database.RunQuery) (database.RunPage, error)); ok {
+		return returnFunc(q)
+	}
+	if returnFunc, ok := ret.Get(0).(func(database.RunQuery) database.RunPage); ok {
+		r0 = returnFunc(q)
+	} else {
+		r0 = ret.Get(0).(database.RunPage)
+	}
+	if returnFunc, ok := ret.Get(1).(func(database.RunQuery) error); ok {
+		r1 = returnFunc(q)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListRunsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRunsV3'
+type MockStore_ListRunsV3_Call struct {
+	*mock.Call
+}
+
+// ListRunsV3 is a helper method to define mock.On call
+//   - q database.RunQuery
+func (_e *MockStore_Expecter) ListRunsV3(q any) *MockStore_ListRunsV3_Call {
+	return &MockStore_ListRunsV3_Call{Call: _e.mock.On("ListRunsV3", q)}
+}
+
+func (_c *MockStore_ListRunsV3_Call) Run(run func(q database.RunQuery)) *MockStore_ListRunsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 database.RunQuery
+		if args[0] != nil {
+			arg0 = args[0].(database.RunQuery)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListRunsV3_Call) Return(runPage database.RunPage, err error) *MockStore_ListRunsV3_Call {
+	_c.Call.Return(runPage, err)
+	return _c
+}
+
+func (_c *MockStore_ListRunsV3_Call) RunAndReturn(run func(q database.RunQuery) (database.RunPage, error)) *MockStore_ListRunsV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -25909,6 +27054,59 @@ func (_c *MockStore_MoveSegmentsToBook_Call) RunAndReturn(run func(segmentIDs []
 	return _c
 }
 
+// OpCountsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) OpCountsV3() (database.OpCounts, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for OpCountsV3")
+	}
+
+	var r0 database.OpCounts
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (database.OpCounts, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() database.OpCounts); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(database.OpCounts)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_OpCountsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OpCountsV3'
+type MockStore_OpCountsV3_Call struct {
+	*mock.Call
+}
+
+// OpCountsV3 is a helper method to define mock.On call
+func (_e *MockStore_Expecter) OpCountsV3() *MockStore_OpCountsV3_Call {
+	return &MockStore_OpCountsV3_Call{Call: _e.mock.On("OpCountsV3")}
+}
+
+func (_c *MockStore_OpCountsV3_Call) Run(run func()) *MockStore_OpCountsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_OpCountsV3_Call) Return(opCounts database.OpCounts, err error) *MockStore_OpCountsV3_Call {
+	_c.Call.Return(opCounts, err)
+	return _c
+}
+
+func (_c *MockStore_OpCountsV3_Call) RunAndReturn(run func() (database.OpCounts, error)) *MockStore_OpCountsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Optimize provides a mock function for the type MockStore
 func (_mock *MockStore) Optimize(ctx context.Context) error {
 	ret := _mock.Called(ctx)
@@ -26375,6 +27573,63 @@ func (_c *MockStore_PruneSystemActivityLogs_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// PutChunkOffsetsV3 provides a mock function for the type MockStore
+func (_mock *MockStore) PutChunkOffsetsV3(id string, offsets []int32) error {
+	ret := _mock.Called(id, offsets)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PutChunkOffsetsV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []int32) error); ok {
+		r0 = returnFunc(id, offsets)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_PutChunkOffsetsV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutChunkOffsetsV3'
+type MockStore_PutChunkOffsetsV3_Call struct {
+	*mock.Call
+}
+
+// PutChunkOffsetsV3 is a helper method to define mock.On call
+//   - id string
+//   - offsets []int32
+func (_e *MockStore_Expecter) PutChunkOffsetsV3(id any, offsets any) *MockStore_PutChunkOffsetsV3_Call {
+	return &MockStore_PutChunkOffsetsV3_Call{Call: _e.mock.On("PutChunkOffsetsV3", id, offsets)}
+}
+
+func (_c *MockStore_PutChunkOffsetsV3_Call) Run(run func(id string, offsets []int32)) *MockStore_PutChunkOffsetsV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []int32
+		if args[1] != nil {
+			arg1 = args[1].([]int32)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_PutChunkOffsetsV3_Call) Return(err error) *MockStore_PutChunkOffsetsV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_PutChunkOffsetsV3_Call) RunAndReturn(run func(id string, offsets []int32) error) *MockStore_PutChunkOffsetsV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PutFingerprintWindow provides a mock function for the type MockStore
 func (_mock *MockStore) PutFingerprintWindow(w *database.FingerprintWindow) error {
 	ret := _mock.Called(w)
@@ -26426,6 +27681,120 @@ func (_c *MockStore_PutFingerprintWindow_Call) RunAndReturn(run func(w *database
 	return _c
 }
 
+// PutIntentV3 provides a mock function for the type MockStore
+func (_mock *MockStore) PutIntentV3(id string, in database.Intent) error {
+	ret := _mock.Called(id, in)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PutIntentV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, database.Intent) error); ok {
+		r0 = returnFunc(id, in)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_PutIntentV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutIntentV3'
+type MockStore_PutIntentV3_Call struct {
+	*mock.Call
+}
+
+// PutIntentV3 is a helper method to define mock.On call
+//   - id string
+//   - in database.Intent
+func (_e *MockStore_Expecter) PutIntentV3(id any, in any) *MockStore_PutIntentV3_Call {
+	return &MockStore_PutIntentV3_Call{Call: _e.mock.On("PutIntentV3", id, in)}
+}
+
+func (_c *MockStore_PutIntentV3_Call) Run(run func(id string, in database.Intent)) *MockStore_PutIntentV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 database.Intent
+		if args[1] != nil {
+			arg1 = args[1].(database.Intent)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_PutIntentV3_Call) Return(err error) *MockStore_PutIntentV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_PutIntentV3_Call) RunAndReturn(run func(id string, in database.Intent) error) *MockStore_PutIntentV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// PutItemOutcomesV3 provides a mock function for the type MockStore
+func (_mock *MockStore) PutItemOutcomesV3(id string, rows []database.ItemOutcome) error {
+	ret := _mock.Called(id, rows)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PutItemOutcomesV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []database.ItemOutcome) error); ok {
+		r0 = returnFunc(id, rows)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_PutItemOutcomesV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutItemOutcomesV3'
+type MockStore_PutItemOutcomesV3_Call struct {
+	*mock.Call
+}
+
+// PutItemOutcomesV3 is a helper method to define mock.On call
+//   - id string
+//   - rows []database.ItemOutcome
+func (_e *MockStore_Expecter) PutItemOutcomesV3(id any, rows any) *MockStore_PutItemOutcomesV3_Call {
+	return &MockStore_PutItemOutcomesV3_Call{Call: _e.mock.On("PutItemOutcomesV3", id, rows)}
+}
+
+func (_c *MockStore_PutItemOutcomesV3_Call) Run(run func(id string, rows []database.ItemOutcome)) *MockStore_PutItemOutcomesV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []database.ItemOutcome
+		if args[1] != nil {
+			arg1 = args[1].([]database.ItemOutcome)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_PutItemOutcomesV3_Call) Return(err error) *MockStore_PutItemOutcomesV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_PutItemOutcomesV3_Call) RunAndReturn(run func(id string, rows []database.ItemOutcome) error) *MockStore_PutItemOutcomesV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PutMetadataCache provides a mock function for the type MockStore
 func (_mock *MockStore) PutMetadataCache(entry *database.MetadataCandidateCache) error {
 	ret := _mock.Called(entry)
@@ -26473,6 +27842,69 @@ func (_c *MockStore_PutMetadataCache_Call) Return(err error) *MockStore_PutMetad
 }
 
 func (_c *MockStore_PutMetadataCache_Call) RunAndReturn(run func(entry *database.MetadataCandidateCache) error) *MockStore_PutMetadataCache_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// PutSnapshotPageV3 provides a mock function for the type MockStore
+func (_mock *MockStore) PutSnapshotPageV3(id string, page int, keys []string) error {
+	ret := _mock.Called(id, page, keys)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PutSnapshotPageV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, int, []string) error); ok {
+		r0 = returnFunc(id, page, keys)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_PutSnapshotPageV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutSnapshotPageV3'
+type MockStore_PutSnapshotPageV3_Call struct {
+	*mock.Call
+}
+
+// PutSnapshotPageV3 is a helper method to define mock.On call
+//   - id string
+//   - page int
+//   - keys []string
+func (_e *MockStore_Expecter) PutSnapshotPageV3(id any, page any, keys any) *MockStore_PutSnapshotPageV3_Call {
+	return &MockStore_PutSnapshotPageV3_Call{Call: _e.mock.On("PutSnapshotPageV3", id, page, keys)}
+}
+
+func (_c *MockStore_PutSnapshotPageV3_Call) Run(run func(id string, page int, keys []string)) *MockStore_PutSnapshotPageV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_PutSnapshotPageV3_Call) Return(err error) *MockStore_PutSnapshotPageV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_PutSnapshotPageV3_Call) RunAndReturn(run func(id string, page int, keys []string) error) *MockStore_PutSnapshotPageV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -28055,6 +29487,63 @@ func (_c *MockStore_RevokeSession_Call) RunAndReturn(run func(id string) error) 
 	return _c
 }
 
+// SaveCheckpointV3 provides a mock function for the type MockStore
+func (_mock *MockStore) SaveCheckpointV3(id string, ck database.Checkpoint) error {
+	ret := _mock.Called(id, ck)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveCheckpointV3")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, database.Checkpoint) error); ok {
+		r0 = returnFunc(id, ck)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_SaveCheckpointV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveCheckpointV3'
+type MockStore_SaveCheckpointV3_Call struct {
+	*mock.Call
+}
+
+// SaveCheckpointV3 is a helper method to define mock.On call
+//   - id string
+//   - ck database.Checkpoint
+func (_e *MockStore_Expecter) SaveCheckpointV3(id any, ck any) *MockStore_SaveCheckpointV3_Call {
+	return &MockStore_SaveCheckpointV3_Call{Call: _e.mock.On("SaveCheckpointV3", id, ck)}
+}
+
+func (_c *MockStore_SaveCheckpointV3_Call) Run(run func(id string, ck database.Checkpoint)) *MockStore_SaveCheckpointV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 database.Checkpoint
+		if args[1] != nil {
+			arg1 = args[1].(database.Checkpoint)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SaveCheckpointV3_Call) Return(err error) *MockStore_SaveCheckpointV3_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_SaveCheckpointV3_Call) RunAndReturn(run func(id string, ck database.Checkpoint) error) *MockStore_SaveCheckpointV3_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SaveLibraryFingerprint provides a mock function for the type MockStore
 func (_mock *MockStore) SaveLibraryFingerprint(path string, size int64, modTime time.Time, crc32 uint32) error {
 	ret := _mock.Called(path, size, modTime, crc32)
@@ -28125,8 +29614,8 @@ func (_c *MockStore_SaveLibraryFingerprint_Call) RunAndReturn(run func(path stri
 }
 
 // SaveOperationState provides a mock function for the type MockStore
-func (_mock *MockStore) SaveOperationState(opID string, state []byte) error {
-	ret := _mock.Called(opID, state)
+func (_mock *MockStore) SaveOperationState(opID string, state1 []byte) error {
+	ret := _mock.Called(opID, state1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SaveOperationState")
@@ -28134,7 +29623,7 @@ func (_mock *MockStore) SaveOperationState(opID string, state []byte) error {
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(string, []byte) error); ok {
-		r0 = returnFunc(opID, state)
+		r0 = returnFunc(opID, state1)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -28148,12 +29637,12 @@ type MockStore_SaveOperationState_Call struct {
 
 // SaveOperationState is a helper method to define mock.On call
 //   - opID string
-//   - state []byte
-func (_e *MockStore_Expecter) SaveOperationState(opID any, state any) *MockStore_SaveOperationState_Call {
-	return &MockStore_SaveOperationState_Call{Call: _e.mock.On("SaveOperationState", opID, state)}
+//   - state1 []byte
+func (_e *MockStore_Expecter) SaveOperationState(opID any, state1 any) *MockStore_SaveOperationState_Call {
+	return &MockStore_SaveOperationState_Call{Call: _e.mock.On("SaveOperationState", opID, state1)}
 }
 
-func (_c *MockStore_SaveOperationState_Call) Run(run func(opID string, state []byte)) *MockStore_SaveOperationState_Call {
+func (_c *MockStore_SaveOperationState_Call) Run(run func(opID string, state1 []byte)) *MockStore_SaveOperationState_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -28176,7 +29665,7 @@ func (_c *MockStore_SaveOperationState_Call) Return(err error) *MockStore_SaveOp
 	return _c
 }
 
-func (_c *MockStore_SaveOperationState_Call) RunAndReturn(run func(opID string, state []byte) error) *MockStore_SaveOperationState_Call {
+func (_c *MockStore_SaveOperationState_Call) RunAndReturn(run func(opID string, state1 []byte) error) *MockStore_SaveOperationState_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -29588,8 +31077,8 @@ func (_c *MockStore_SetSetting_Call) RunAndReturn(run func(key string, value str
 }
 
 // SetUserBookState provides a mock function for the type MockStore
-func (_mock *MockStore) SetUserBookState(state *database.UserBookState) error {
-	ret := _mock.Called(state)
+func (_mock *MockStore) SetUserBookState(state1 *database.UserBookState) error {
+	ret := _mock.Called(state1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SetUserBookState")
@@ -29597,7 +31086,7 @@ func (_mock *MockStore) SetUserBookState(state *database.UserBookState) error {
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(*database.UserBookState) error); ok {
-		r0 = returnFunc(state)
+		r0 = returnFunc(state1)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -29610,12 +31099,12 @@ type MockStore_SetUserBookState_Call struct {
 }
 
 // SetUserBookState is a helper method to define mock.On call
-//   - state *database.UserBookState
-func (_e *MockStore_Expecter) SetUserBookState(state any) *MockStore_SetUserBookState_Call {
-	return &MockStore_SetUserBookState_Call{Call: _e.mock.On("SetUserBookState", state)}
+//   - state1 *database.UserBookState
+func (_e *MockStore_Expecter) SetUserBookState(state1 any) *MockStore_SetUserBookState_Call {
+	return &MockStore_SetUserBookState_Call{Call: _e.mock.On("SetUserBookState", state1)}
 }
 
-func (_c *MockStore_SetUserBookState_Call) Run(run func(state *database.UserBookState)) *MockStore_SetUserBookState_Call {
+func (_c *MockStore_SetUserBookState_Call) Run(run func(state1 *database.UserBookState)) *MockStore_SetUserBookState_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 *database.UserBookState
 		if args[0] != nil {
@@ -29633,7 +31122,7 @@ func (_c *MockStore_SetUserBookState_Call) Return(err error) *MockStore_SetUserB
 	return _c
 }
 
-func (_c *MockStore_SetUserBookState_Call) RunAndReturn(run func(state *database.UserBookState) error) *MockStore_SetUserBookState_Call {
+func (_c *MockStore_SetUserBookState_Call) RunAndReturn(run func(state1 *database.UserBookState) error) *MockStore_SetUserBookState_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -29943,6 +31432,68 @@ func (_c *MockStore_TouchAPIKeyLastUsed_Call) Return(err error) *MockStore_Touch
 }
 
 func (_c *MockStore_TouchAPIKeyLastUsed_Call) RunAndReturn(run func(id string, at time.Time, ip string) error) *MockStore_TouchAPIKeyLastUsed_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// TransitionRunV3 provides a mock function for the type MockStore
+func (_mock *MockStore) TransitionRunV3(req database.TransitionRequest) (*database.RunRecord, error) {
+	ret := _mock.Called(req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TransitionRunV3")
+	}
+
+	var r0 *database.RunRecord
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(database.TransitionRequest) (*database.RunRecord, error)); ok {
+		return returnFunc(req)
+	}
+	if returnFunc, ok := ret.Get(0).(func(database.TransitionRequest) *database.RunRecord); ok {
+		r0 = returnFunc(req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.RunRecord)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(database.TransitionRequest) error); ok {
+		r1 = returnFunc(req)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_TransitionRunV3_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TransitionRunV3'
+type MockStore_TransitionRunV3_Call struct {
+	*mock.Call
+}
+
+// TransitionRunV3 is a helper method to define mock.On call
+//   - req database.TransitionRequest
+func (_e *MockStore_Expecter) TransitionRunV3(req any) *MockStore_TransitionRunV3_Call {
+	return &MockStore_TransitionRunV3_Call{Call: _e.mock.On("TransitionRunV3", req)}
+}
+
+func (_c *MockStore_TransitionRunV3_Call) Run(run func(req database.TransitionRequest)) *MockStore_TransitionRunV3_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 database.TransitionRequest
+		if args[0] != nil {
+			arg0 = args[0].(database.TransitionRequest)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_TransitionRunV3_Call) Return(runRecord *database.RunRecord, err error) *MockStore_TransitionRunV3_Call {
+	_c.Call.Return(runRecord, err)
+	return _c
+}
+
+func (_c *MockStore_TransitionRunV3_Call) RunAndReturn(run func(req database.TransitionRequest) (*database.RunRecord, error)) *MockStore_TransitionRunV3_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -31575,8 +33126,8 @@ func (_c *MockStore_UpsertBookFile_Call) RunAndReturn(run func(file *database.Bo
 }
 
 // UpsertMetadataFieldState provides a mock function for the type MockStore
-func (_mock *MockStore) UpsertMetadataFieldState(state *database.MetadataFieldState) error {
-	ret := _mock.Called(state)
+func (_mock *MockStore) UpsertMetadataFieldState(state1 *database.MetadataFieldState) error {
+	ret := _mock.Called(state1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpsertMetadataFieldState")
@@ -31584,7 +33135,7 @@ func (_mock *MockStore) UpsertMetadataFieldState(state *database.MetadataFieldSt
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(*database.MetadataFieldState) error); ok {
-		r0 = returnFunc(state)
+		r0 = returnFunc(state1)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -31597,12 +33148,12 @@ type MockStore_UpsertMetadataFieldState_Call struct {
 }
 
 // UpsertMetadataFieldState is a helper method to define mock.On call
-//   - state *database.MetadataFieldState
-func (_e *MockStore_Expecter) UpsertMetadataFieldState(state any) *MockStore_UpsertMetadataFieldState_Call {
-	return &MockStore_UpsertMetadataFieldState_Call{Call: _e.mock.On("UpsertMetadataFieldState", state)}
+//   - state1 *database.MetadataFieldState
+func (_e *MockStore_Expecter) UpsertMetadataFieldState(state1 any) *MockStore_UpsertMetadataFieldState_Call {
+	return &MockStore_UpsertMetadataFieldState_Call{Call: _e.mock.On("UpsertMetadataFieldState", state1)}
 }
 
-func (_c *MockStore_UpsertMetadataFieldState_Call) Run(run func(state *database.MetadataFieldState)) *MockStore_UpsertMetadataFieldState_Call {
+func (_c *MockStore_UpsertMetadataFieldState_Call) Run(run func(state1 *database.MetadataFieldState)) *MockStore_UpsertMetadataFieldState_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 *database.MetadataFieldState
 		if args[0] != nil {
@@ -31620,7 +33171,7 @@ func (_c *MockStore_UpsertMetadataFieldState_Call) Return(err error) *MockStore_
 	return _c
 }
 
-func (_c *MockStore_UpsertMetadataFieldState_Call) RunAndReturn(run func(state *database.MetadataFieldState) error) *MockStore_UpsertMetadataFieldState_Call {
+func (_c *MockStore_UpsertMetadataFieldState_Call) RunAndReturn(run func(state1 *database.MetadataFieldState) error) *MockStore_UpsertMetadataFieldState_Call {
 	_c.Call.Return(run)
 	return _c
 }
