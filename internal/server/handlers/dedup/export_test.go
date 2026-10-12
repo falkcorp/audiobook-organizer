@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/export_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 028a211d-147e-4bdf-bfdc-55af33f7b2b8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package deduphandler
 
@@ -34,4 +34,12 @@ func SetOwnershipWhyForTest(f func(res *repairs.PathResolver, id, pid string, pa
 	old := ownershipWhy
 	ownershipWhy = f
 	return func() { ownershipWhy = old }
+}
+
+// SetExportRowCapForTest lowers the export row cap and returns a func that
+// restores it.
+func SetExportRowCapForTest(n int) (restore func()) {
+	old := exportRowCap
+	exportRowCap = n
+	return func() { exportRowCap = old }
 }

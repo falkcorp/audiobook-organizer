@@ -64,6 +64,9 @@ import (
 // the ~387k pending pre-drain candidate population.
 const bothUnmatchedScanLimit = 1_000_000
 
+// exportRowCap bounds one export file. A var so a test can lower it.
+var exportRowCap = 100000
+
 // Handler hosts the dedup-domain HTTP endpoints.
 type Handler struct {
 	// store is the wire-time snapshot of the database store. All handlers read
@@ -232,7 +235,6 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	filter.Limit = 50
 	includeBreakdown := c.Query("include_breakdown") == "true"
 	// include_books surfaces the full book objects (title/author/path/metadata)
 	// inline on each candidate row so the unified dedup UI can render rich cards
@@ -275,22 +277,6 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// enrichment payload below — no second fetch. A read ERROR is not a
 	// missing book: it refuses the request instead of silently hiding the row.
 	lookupBook := newBookLookup(h.store, len(candidates)*2)
-	// isMetadataMatched reports whether a book has authoritative metadata, so it
-	// does NOT need manual matching. A book counts as matched when EITHER a human
-	// confirmed the match (MetadataReviewStatus == "matched") OR it carries an
-	// external identifier (ASIN / ISBN13 / ISBN10) — having one means it was
-	// matched to a provider record. This is the single intended extension point;
-	// add further "matched" indicators here.
-	nonEmpty := func(s *string) bool { return s != nil && *s != "" }
-	isMetadataMatched := func(b *database.Book) bool {
-		if b == nil {
-			return false
-		}
-		if b.MetadataReviewStatus != nil && *b.MetadataReviewStatus == "matched" {
-			return true
-		}
-		return nonEmpty(b.ASIN) || nonEmpty(b.ISBN13) || nonEmpty(b.ISBN10)
-	}
 	dropped := 0
 	items := make([]gin.H, 0, len(candidates))
 	for _, cand := range candidates {
@@ -304,17 +290,16 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 				dropped++
 				continue
 			}
-			// Both reads are cached by the dead-row check above, so these
-			// cannot fail; the check stays so a future change cannot drop one.
-			ba, aerr := lookupBook.get(cand.EntityAID)
-			bb, berr := lookupBook.get(cand.EntityBID)
-			if err := errors.Join(aerr, berr); err != nil {
-				httputil.InternalError(c, "failed to read a candidate's book", err)
-				return
-			}
 			// both_unmatched: keep only pairs where NEITHER side is matched.
-			if bothUnmatched && (isMetadataMatched(ba) || isMetadataMatched(bb)) {
-				continue
+			if bothUnmatched {
+				keep, kerr := isBothUnmatchedPair(cand, lookupBook.get)
+				if kerr != nil {
+					httputil.InternalError(c, "failed to read a candidate's book", kerr)
+					return
+				}
+				if !keep {
+					continue
+				}
 			}
 		} else if bothUnmatched {
 			// Non-book entities carry no book metadata; exclude from this view.
@@ -650,26 +635,45 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	filter.Limit = 100000
+	bothUnmatched := c.Query("both_unmatched") == "true"
+	// both_unmatched is decided on the Book, after the store scan, so that view
+	// scans everything and is capped below; every other view lets the store cap.
+	if bothUnmatched {
+		filter.Limit = bothUnmatchedScanLimit
+	} else {
+		filter.Limit = exportRowCap
+	}
 
-	candidates, _, err := es.ListCandidates(filter)
+	candidates, total, err := es.ListCandidates(filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for export", err)
 		return
 	}
 
-	// Drop the rows the list endpoint drops (a book pair whose book is gone), so
-	// the file has the row count the lane shows rather than blank-titled extras.
-	lookupLive := newBookLookup(h.store, len(candidates)*2)
+	// Drop the rows the list endpoint drops (a book pair whose book is gone) and
+	// apply both_unmatched the way it does, so the file has the row count the
+	// lane shows. One lookup serves the filters AND the enrichment below: each
+	// book is read once, and a read error fails the request in both.
+	books := newBookLookup(h.store, len(candidates)*2)
 	live := candidates[:0:0]
+	dropped := 0
 	for _, cand := range candidates {
-		if cand.EntityType == "book" {
-			dead, derr := isDeadBookRow(cand, lookupLive.get)
-			if derr != nil {
-				httputil.InternalError(c, "failed to read a candidate's book", derr)
+		dead, derr := isDeadBookRow(cand, books.get)
+		if derr != nil {
+			httputil.InternalError(c, "failed to read a candidate's book", derr)
+			return
+		}
+		if dead {
+			dropped++
+			continue
+		}
+		if bothUnmatched {
+			keep, kerr := isBothUnmatchedPair(cand, books.get)
+			if kerr != nil {
+				httputil.InternalError(c, "failed to read a candidate's book", kerr)
 				return
 			}
-			if dead {
+			if !keep {
 				continue
 			}
 		}
@@ -677,25 +681,50 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 	}
 	candidates = live
 
-	// Enrich: lookup titles + author names for every entity involved,
-	// memoized so a book that appears in multiple candidates is only
-	// fetched once. Books-only for now — authors export would need the
-	// author table which we can add later if needed.
-	store := h.store
+	// The file is capped; say so in headers rather than truncating silently.
+	// X-Total-Count is the number of rows the filter matches (the store's
+	// count, less dead-book pairs), so a reader can compare it to the rows in
+	// the file.
+	truncated := false
+	if bothUnmatched {
+		total = len(candidates)
+		if len(candidates) > exportRowCap {
+			candidates = candidates[:exportRowCap]
+			truncated = true
+		}
+	} else {
+		if total >= dropped {
+			total -= dropped
+		}
+		truncated = total > len(candidates)
+	}
+	c.Header("X-Total-Count", strconv.Itoa(total))
+	if truncated {
+		c.Header("X-Export-Truncated", "true")
+	}
+
+	// Enrich with titles and author names, from the same memoized book reads.
+	// Books-only for now — an authors export would need the author table.
 	type enriched struct {
 		title  string
 		author string
 	}
 	cache := make(map[string]enriched, len(candidates)*2)
-	lookup := func(id string) enriched {
+	lookup := func(cand database.DedupCandidate, id string) enriched {
 		if e, ok := cache[id]; ok {
 			return e
 		}
 		e := enriched{}
-		if book, err := store.GetBookByID(id); err == nil && book != nil {
+		// Every book id of a book pair was read (and cached) by the filters
+		// above, so this cannot fail for one; other entity types have no book.
+		var book *database.Book
+		if cand.EntityType == "book" {
+			book, _ = books.get(id)
+		}
+		if book != nil {
 			e.title = book.Title
 			if book.AuthorID != nil {
-				if a, err := store.GetAuthorByID(*book.AuthorID); err == nil && a != nil {
+				if a, aerr := h.store.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
 					e.author = a.Name
 				}
 			}
@@ -726,8 +755,8 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 		}
 		rows := make([]row, 0, len(candidates))
 		for _, cand := range candidates {
-			a := lookup(cand.EntityAID)
-			b := lookup(cand.EntityBID)
+			a := lookup(cand, cand.EntityAID)
+			b := lookup(cand, cand.EntityBID)
 			sim := 0.0
 			if cand.Similarity != nil {
 				sim = *cand.Similarity
@@ -774,8 +803,8 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 		"created_at", "updated_at",
 	})
 	for _, cand := range candidates {
-		a := lookup(cand.EntityAID)
-		b := lookup(cand.EntityBID)
+		a := lookup(cand, cand.EntityAID)
+		b := lookup(cand, cand.EntityBID)
 		simStr := ""
 		if cand.Similarity != nil {
 			simStr = strconv.FormatFloat(*cand.Similarity, 'f', 4, 64)
@@ -1480,6 +1509,44 @@ func isDeadBookRow(cand database.DedupCandidate, lookup func(string) (*database.
 		return false, err
 	}
 	return b == nil, nil
+}
+
+// isMetadataMatched reports whether a book has authoritative metadata, so it
+// does NOT need manual matching. A book counts as matched when EITHER a human
+// confirmed the match (MetadataReviewStatus == "matched") OR it carries an
+// external identifier (ASIN / ISBN13 / ISBN10) — having one means it was
+// matched to a provider record. This is the single intended extension point;
+// add further "matched" indicators here.
+func isMetadataMatched(b *database.Book) bool {
+	if b == nil {
+		return false
+	}
+	if b.MetadataReviewStatus != nil && *b.MetadataReviewStatus == "matched" {
+		return true
+	}
+	nonEmpty := func(s *string) bool { return s != nil && *s != "" }
+	return nonEmpty(b.ASIN) || nonEmpty(b.ISBN13) || nonEmpty(b.ISBN10)
+}
+
+// isBothUnmatchedPair is the both_unmatched view's predicate: a BOOK pair where
+// NEITHER side has matched metadata. Non-book entities carry no book metadata
+// and are excluded. The match signal lives on the Book, not the candidate, so
+// the store cannot pre-filter it; the list and export handlers both apply this
+// after the store scan so the file holds the rows the lane shows. A lookup
+// error is returned, never read as "unmatched".
+func isBothUnmatchedPair(cand database.DedupCandidate, lookup func(string) (*database.Book, error)) (bool, error) {
+	if cand.EntityType != "book" {
+		return false, nil
+	}
+	a, err := lookup(cand.EntityAID)
+	if err != nil {
+		return false, err
+	}
+	b, err := lookup(cand.EntityBID)
+	if err != nil {
+		return false, err
+	}
+	return !isMetadataMatched(a) && !isMetadataMatched(b), nil
 }
 
 // liveBulkCandidates is the set a filter-scoped bulk action acts on and the

@@ -1,5 +1,5 @@
 // file: web/src/services/api.dedupExportUrl.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b7e2d19-8c35-4f60-a1d8-6e92c0b35f47
 // last-edited: 2026-10-12
 
@@ -13,7 +13,7 @@ function paramsOf(url: string): URLSearchParams {
 describe('dedupCandidatesExportUrl', () => {
   it('export url includes layer band status q entity_id', () => {
     const url = dedupCandidatesExportUrl(
-      { layer: 'acoustid', band: 'high', status: 'pending', q: 'Book One', entity_id: 'B1', entity_type: 'book' },
+      { layer: 'acoustid', band: 'high', status: 'pending', q: 'Book One', entity_id: 'B1', entity_type: 'book', both_unmatched: true },
       'csv'
     );
     expect(url.startsWith('/api/v1/dedup/candidates/export?')).toBe(true);
@@ -25,11 +25,12 @@ describe('dedupCandidatesExportUrl', () => {
     expect(p.get('q')).toBe('Book One');
     expect(p.get('entity_id')).toBe('B1');
     expect(p.get('entity_type')).toBe('book');
+    expect(p.get('both_unmatched')).toBe('true');
   });
 
   it('export url omits empty filters', () => {
     const url = dedupCandidatesExportUrl(
-      { layer: null, band: '', status: undefined, q: '   ', entity_id: null, entity_type: '' },
+      { layer: null, band: '', status: undefined, q: '   ', entity_id: null, entity_type: '', both_unmatched: false },
       'json'
     );
     expect(url).toBe('/api/v1/dedup/candidates/export?format=json');

@@ -263,6 +263,7 @@ export function ReviewWorkspace() {
           entity_id: dupesFilters.entityId,
           // The lane lists book pairs only; without this the file would add author pairs.
           entity_type: 'book',
+          both_unmatched: dupesFilters.bothUnmatched,
         },
         format
       );
@@ -271,7 +272,7 @@ export function ReviewWorkspace() {
       a.click();
       document.body.removeChild(a);
     },
-    [dupesFilters.layer, dupesFilters.band, dupesFilters.status, dupesFilters.entityId, dupesAppliedSearch]
+    [dupesFilters.layer, dupesFilters.band, dupesFilters.status, dupesFilters.entityId, dupesFilters.bothUnmatched, dupesAppliedSearch]
   );
 
   // The Dedup menu's one-button run. When it finishes, show its results.
