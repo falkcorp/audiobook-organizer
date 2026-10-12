@@ -1,7 +1,7 @@
 // file: internal/organizer/finalize_exclusive_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b2e4f61-9d3a-4c07-b5e8-2f6a1c9d7e43
-// last-edited: 2026-09-02
+// last-edited: 2026-10-12
 
 package organizer
 
@@ -26,7 +26,7 @@ import (
 // (run at the commit that introduced them; re-run at final HEAD before merge):
 //
 //	KILLED  shared-temp        dst + tempFileSuffix (nonce dropped)   -> TempName test
-//	KILLED  trunc-not-excl     CopyFileIngest (no O_EXCL)              -> PinnedNonce test
+//	KILLED  trunc-not-excl     CopyFileIngestExclusive (no O_EXCL)     -> PinnedNonce test
 //	KILLED  remove-foreign     rm temp on EEXIST too                  -> PinnedNonce test
 //	KILLED  rename-not-link    os.Rename instead of os.Link            -> 6 tests
 //	KILLED  blind-adopt        adopt on any stat success               -> ConcurrentSameTarget, RaceBranch

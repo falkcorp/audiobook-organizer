@@ -1,5 +1,5 @@
 // file: internal/fileops/copy.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f6c1a58-9d2e-4b07-8c34-71ae5d9b0f42
 // last-edited: 2026-10-12
 
@@ -163,7 +163,8 @@ func CopyFileExclusive(src, dst string) error {
 // fallback) were umask-floored and so could never be more restrictive than the
 // library's own policy.
 //
-// This is the fallback under ReflinkOrCopy, so it must match the reflink path's non-truncating contract.
+// This is the fallback under ReflinkOrCopy, so it must match the reflink
+// path's non-truncating contract.
 func CopyFileIngestExclusive(src, dst string) error {
 	return copyBytes(src, dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, modeLibraryDefault, true, true)
 }
