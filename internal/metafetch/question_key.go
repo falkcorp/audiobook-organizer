@@ -1,5 +1,5 @@
 // file: internal/metafetch/question_key.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2b8e41-7c39-4f0a-9e16-3b8a0d6c2f57
 // last-edited: 2026-10-11
 
@@ -16,7 +16,9 @@ package metafetch
 //   - each text field is NFKC-normalized, case FOLDED (not strings.ToLower:
 //     "ß" folds to "ss", final sigma to sigma), has the punctuation no
 //     provider tokenizer keeps (quotes, apostrophes, commas, periods, colons,
-//     dashes, brackets) turned into a space, and its whitespace collapsed;
+//     dashes, brackets) and every control character (the \x1e and \x1f
+//     separators below among them) turned into a space, and its whitespace
+//     collapsed;
 //     letters, digits, '&' and every other symbol are kept, because a
 //     character that is not on the list might matter to some provider;
 //   - author credits are an ORDERED list (owner rule 2026-10-04): each credit
@@ -138,7 +140,8 @@ func canonicalQuestion(endpoint string, q Question) string {
 }
 
 // normalizeQuestionText is the per-field rule: NFKC, case fold, the listed
-// punctuation to a space, whitespace collapsed and trimmed. The collapse runs
+// punctuation and every control character to a space, whitespace collapsed
+// and trimmed. The collapse runs
 // after the strip so "A , B" and "A, B" agree.
 func normalizeQuestionText(fold cases.Caser, s string) string {
 	if s == "" {
@@ -147,6 +150,14 @@ func normalizeQuestionText(fold cases.Caser, s string) string {
 	s = fold.String(norm.NFKC.String(s))
 	s = strings.Map(func(r rune) rune {
 		if isQuestionPunct(r) {
+			return ' '
+		}
+		// Control characters, \x1e and \x1f among them, are separators:
+		// \x1e separates the canonical form's fields and \x1f its credits,
+		// so a value carrying either could otherwise forge a field or a
+		// credit boundary ("A\x1fB" as one credit keyed as the two credits
+		// A, B).
+		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r

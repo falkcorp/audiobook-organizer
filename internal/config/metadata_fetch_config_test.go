@@ -1,0 +1,68 @@
+// file: internal/config/metadata_fetch_config_test.go
+// version: 1.0.0
+// guid: 14574916-bcbe-4887-ba11-5520e206bed2
+// last-edited: 2026-10-11
+
+package config
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+// The documented rollback of the shared provider-answer cache is
+// PUT /api/v1/config {"metadata_fetch":{"shared_cache":false}}. It must flip
+// the switch, leave the negative TTLs it does not name alone, and persist.
+func TestUpdateConfig_SharedCacheRollbackSwitch(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.EnableAuth = false
+		c.MetadataFetch = DefaultMetadataFetchConfig()
+	})
+	ms, blobs := ladderTestStore(t)
+
+	status, resp := NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{
+		"metadata_fetch": map[string]any{"shared_cache": false},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d; resp = %v", status, resp)
+	}
+	got := Snapshot().MetadataFetch
+	if got.SharedCache {
+		t.Fatal("shared_cache is still on after the rollback PUT")
+	}
+	if got.NegativeTTLDays != DefaultMetadataFetchConfig().NegativeTTLDays {
+		t.Errorf("the rollback PUT changed the negative TTLs it did not name: %+v", got.NegativeTTLDays)
+	}
+	if len(*blobs) == 0 || !strings.Contains((*blobs)[len(*blobs)-1], `"shared_cache":false`) {
+		t.Errorf("the rollback was not persisted; blobs = %v", *blobs)
+	}
+
+	status, resp = NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{
+		"metadata_fetch": map[string]any{"shared_cache": true},
+	})
+	if status != http.StatusOK || !Snapshot().MetadataFetch.SharedCache {
+		t.Fatalf("turning the switch back on: status = %d, shared_cache = %v; resp = %v",
+			status, Snapshot().MetadataFetch.SharedCache, resp)
+	}
+}
+
+// ResetToDefaults restores the fetch-cache TTL: 0 would mean "never expire"
+// and every cached answer would live forever after a reset.
+func TestResetToDefaults_MetadataFetchCacheTTL(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.MetadataFetchCacheTTLDays = 3
+		c.MetadataFetch.SharedCache = false
+	})
+	ResetToDefaults()
+	snap := Snapshot()
+	if snap.MetadataFetchCacheTTLDays != DefaultMetadataFetchCacheTTLDays {
+		t.Errorf("MetadataFetchCacheTTLDays after reset = %d, want %d", snap.MetadataFetchCacheTTLDays, DefaultMetadataFetchCacheTTLDays)
+	}
+	if snap.MetadataFetch != DefaultMetadataFetchConfig() {
+		t.Errorf("MetadataFetch after reset = %+v, want the defaults", snap.MetadataFetch)
+	}
+}
