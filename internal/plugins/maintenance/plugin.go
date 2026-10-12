@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.83.0
+// version: 1.84.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -109,6 +109,9 @@ func (p *Plugin) Repairs() *repairs.Registry {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newSeriesPruneFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
+		if err := p.repairsReg.Register(newSplitBooksFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
