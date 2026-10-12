@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 

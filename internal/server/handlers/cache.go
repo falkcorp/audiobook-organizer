@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package handlers
 
@@ -44,6 +44,11 @@ type CacheStat struct {
 	SizeEstimated bool `json:"size_estimated,omitempty"`
 	// SizeErrorBoundKeys bounds the estimate's error (set with SizeEstimated).
 	SizeErrorBoundKeys int64 `json:"size_error_bound_keys,omitempty"`
+	// Expired is the rows no read would serve: provider_answer only, and only
+	// on ?deep=true (it decodes every row); omitted otherwise.
+	Expired *int64 `json:"expired,omitempty"`
+	// ExpiredError says why a ?deep=true expired count did not complete.
+	ExpiredError string `json:"expired_error,omitempty"`
 }
 
 // GetDurationMetric represents count and sum of cache get durations.
@@ -83,6 +88,7 @@ type CacheMetadataStore interface {
 type CacheHandler struct {
 	metricsStore  CacheMetricsStore
 	metadataStore CacheMetadataStore
+	pcache        pcacheCounter // ?deep=true provider_answer expired count
 }
 
 // NewCacheHandler creates a new CacheHandler.
@@ -134,12 +140,59 @@ func (h *CacheHandler) HandleCacheStats(c *gin.Context) {
 		}
 	}
 
+	if h.metadataStore != nil {
+		stats = h.patchProviderAnswer(c, stats)
+	}
+
 	resp := CacheStatsResponse{
 		Caches:      stats,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
 	httputil.RespondWithOK(c, resp)
+}
+
+// patchProviderAnswer fills the provider_answer row (the shared
+// provider-answer cache, pcache:) with its row count, and with ?deep=true its
+// expired-row count. The row is added when absent: its counters exist only
+// once a read or write has fired since the process started, but the rows on
+// disk are there either way.
+func (h *CacheHandler) patchProviderAnswer(c *gin.Context, stats []CacheStat) []CacheStat {
+	idx := -1
+	for i := range stats {
+		if stats[i].Name == providerAnswerCacheName {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		stats = append(stats, CacheStat{
+			Name: providerAnswerCacheName, Misses: map[string]int64{},
+			Invalidations: map[string]int64{}, Evictions: map[string]int64{},
+		})
+		idx = len(stats) - 1
+	}
+	ctx := c.Request.Context()
+	total, estimated, bound, err := pcacheSize(ctx, resolveHealthCensus(ctx, h.metadataStore), h.metadataStore)
+	if err == nil {
+		stats[idx].Size, stats[idx].SizeEstimated, stats[idx].SizeErrorBoundKeys = total, estimated, bound
+	}
+	if c.Query("deep") != "true" {
+		return stats
+	}
+	scanner, ok := database.AsCapability[database.PrefixPageScanner](h.metadataStore)
+	if !ok {
+		stats[idx].ExpiredError = "the store cannot page through keys"
+		return stats
+	}
+	res, err := h.pcache.count(ctx, scanner)
+	if err != nil {
+		stats[idx].ExpiredError = err.Error()
+		return stats
+	}
+	expired := res.Value.Expired
+	stats[idx].Expired = &expired
+	return stats
 }
 
 // HandleCacheKeysIntrospection returns key names for a specific cache.
@@ -493,8 +546,9 @@ func getLabelValue(labels []*io_prometheus_client.LabelPair, name string) string
 // (i.e., backed by a database or external service, not an in-memory *Cache[T]).
 func IsNonIntrospectableCache(name string) bool {
 	nonIntrospectable := map[string]bool{
-		"metadata_fetch": true,
-		"embedding":      true,
+		"metadata_fetch":        true,
+		providerAnswerCacheName: true,
+		"embedding":             true,
 		// Add other DB-backed or external caches here
 	}
 	return nonIntrospectable[name]

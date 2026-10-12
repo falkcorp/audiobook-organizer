@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_dbhealth_followups_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: de17f8c2-593a-4eea-9ce9-4dac637b04e8
-// last-edited: 2026-10-04
+// last-edited: 2026-10-11
 
 package handlers
 
@@ -202,7 +202,7 @@ func TestCountExpiredMetadataFetches_ChecksBetweenPages(t *testing.T) {
 // still matches context.DeadlineExceeded.
 func TestExpiredCounter_TimeoutReportsPagesWalked(t *testing.T) {
 	spy := &walkSpyStore{forever: true}
-	ec := expiredCounter{timeout: 50 * time.Millisecond}
+	ec := expiredCounter{deepWalker: deepWalker[int64]{timeout: 50 * time.Millisecond}}
 	res, err := ec.count(context.Background(), spy, 30)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Contains(t, err.Error(), "timed out after 50ms, ")
