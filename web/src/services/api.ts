@@ -4606,6 +4606,8 @@ export async function getCachedReviewResults(
    * than chunking around it.
    */
   bulk_apply_max_items?: number;
+  /** Identification state counts (02-PR4); absent from an older server. */
+  ident_counts?: IdentCounts;
 }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (all) params.set('all', 'true');
@@ -4699,6 +4701,25 @@ export interface ReviewFacets {
   };
   sources: Record<string, number>;
   runtime_hidden: number;
+  /** Identification state counts (02-PR4); absent from an older server. */
+  ident_counts?: IdentCounts;
+}
+
+/**
+ * The identification index's counts over the Library's default view (primary
+ * versions; trash and quarantined books excluded), from the review summary
+ * (`ident_counts`). `missing` is unasked + asked_empty, the same number the
+ * Library shows for `ident:missing`. While the index is being built `ready`
+ * is false and every count is 0, which must not be shown as a count.
+ */
+export interface IdentCounts {
+  unasked: number;
+  asked_empty: number;
+  has_candidates: number;
+  applied: number;
+  held: number;
+  missing: number;
+  ready: boolean;
 }
 
 export interface ReviewPageResponse {

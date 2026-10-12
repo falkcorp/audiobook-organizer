@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-11
 
@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -799,6 +800,8 @@ func TestReviewQuery_BadFieldIs400(t *testing.T) {
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	for q, want := range map[string]string{
 		"q=author:smith":         "author: only title: filters apply here",
+		"q=ident:missing":        "ident: only title: filters apply here",
+		"q=-asin:*":              "asin: only title: filters apply here",
 		"q=title:a+extra":        `"extra": mix of title: tokens and bare text — write every part as title:…`,
 		"q=title:/a(b/":          "title:/a(b/ — invalid regex",
 		"q=/(?=x)/":              "no lookahead",
@@ -1263,4 +1266,33 @@ func TestReviewQuery_IdentityStaleRowMatchesTheListing(t *testing.T) {
 
 	l := mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"chip": "identity_stale"}))
 	require.Equal(t, []string{"i01"}, listIDs(l))
+}
+
+// TestReviewSearchFields_MatchSearchParser: the server's copy of the search
+// parser's field list (reviewSearchFields) equals web/src/utils/searchParser.ts
+// SEARCH_FIELDS, both ways. A name only the client knows is read by the
+// client as a field filter and by the server as title text, so the two
+// disagree on what the Title box holds; that is how ident and asin went
+// missing here when the Library learned them.
+func TestReviewSearchFields_MatchSearchParser(t *testing.T) {
+	path, err := filepath.Abs("../../../web/src/utils/searchParser.ts")
+	require.NoError(t, err)
+	raw, err := os.ReadFile(path)
+	// Fatal, never Skip: a moved file must fail here, not silently stop
+	// checking (same rule as filter_field_conformance_test.go).
+	require.NoErrorf(t, err, "cannot read %s; if the file moved, update this path", path)
+	block := regexp.MustCompile(`(?s)export const SEARCH_FIELDS[^=]*=\s*\[(.*?)\]`).FindSubmatch(raw)
+	require.NotNil(t, block, "SEARCH_FIELDS array not found in %s", path)
+	ui := map[string]struct{}{}
+	for _, m := range regexp.MustCompile(`'([a-z0-9_]+)'`).FindAllSubmatch(block[1], -1) {
+		ui[string(m[1])] = struct{}{}
+	}
+	require.NotEmpty(t, ui, "parsed SEARCH_FIELDS but found no names: the regex no longer matches the file")
+	for f := range ui {
+		require.Truef(t, isReviewSearchField(f), "%s is in SEARCH_FIELDS but not in reviewSearchFields", f)
+	}
+	for f := range reviewSearchFields {
+		_, ok := ui[f]
+		require.Truef(t, ok, "%s is in reviewSearchFields but not in SEARCH_FIELDS", f)
+	}
 }

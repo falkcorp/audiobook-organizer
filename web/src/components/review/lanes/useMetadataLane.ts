@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.40.0
+// version: 1.41.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -606,6 +606,8 @@ export interface MetadataLaneSummary {
   resolved_no_candidates?: number;
   /** Rows whose last fallback lookup was deferred (server `deferred`). */
   deferred?: number;
+  /** Identification state counts (server `ident_counts`), absent from an older server. */
+  ident_counts?: api.IdentCounts;
 }
 
 /**
@@ -801,6 +803,7 @@ function summaryFromFacets(f: api.ReviewFacets): MetadataLaneSummary {
     unreviewable_by_cause: f.unreviewable_by_cause,
     resolved_no_candidates: f.resolved_no_candidates,
     deferred: f.deferred,
+    ident_counts: f.ident_counts,
   };
 }
 
@@ -1400,6 +1403,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           unreviewable_by_cause: data.unreviewable_by_cause,
           resolved_no_candidates: data.resolved_no_candidates,
           deferred: data.deferred,
+          ident_counts: data.ident_counts,
         });
         if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
           setApplyCap(data.bulk_apply_max_items);

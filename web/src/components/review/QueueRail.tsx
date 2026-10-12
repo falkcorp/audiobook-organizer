@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -57,7 +57,8 @@ import ClearIcon from '@mui/icons-material/Clear';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import HistoryIcon from '@mui/icons-material/History';
 import SearchIcon from '@mui/icons-material/Search';
-import type { CandidateResult } from '../../services/api';
+import type { CandidateResult, IdentCounts } from '../../services/api';
+import { IdentCountsChips } from './IdentCountsChips';
 import {
   DEFAULT_CONFIDENCE,
   PAGE_SIZE_OPTIONS,
@@ -154,6 +155,12 @@ export interface QueueRailProps {
     resolved_no_candidates?: number;
     /** Rows whose last fallback lookup was deferred. */
     deferred?: number;
+    /**
+     * Identification state counts over the Library's default view; each one
+     * links to the Library with that `ident:` search. Absent from an older
+     * server.
+     */
+    ident_counts?: IdentCounts;
   };
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
@@ -535,6 +542,8 @@ export function QueueRail({
             </IconButton>
           </Tooltip>
         </Stack>
+
+        {summary.ident_counts && <IdentCountsChips counts={summary.ident_counts} />}
 
         {chipFilter && (
           <Alert

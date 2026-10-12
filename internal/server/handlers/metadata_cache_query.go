@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package handlers
 
@@ -368,7 +368,11 @@ func (q *ReviewQuery) normalize() string {
 // reviewSearchFields is web/src/utils/searchParser.ts SEARCH_FIELDS. The Title
 // box is parsed by that parser (compileTitleFilter), where a known field name
 // makes a field filter and anything else is free text, so the server must know
-// the same list to read a value the same way. Keep the two in step.
+// the same list to read a value the same way: `ident:missing` typed in the
+// Title box is the field filter the Library reads, which the box refuses
+// ("ident: only title: filters apply here") on both sides, never the title
+// text "ident:missing". TestReviewSearchFields_MatchSearchParser holds the
+// two lists equal.
 var reviewSearchFields = map[string]struct{}{}
 
 func init() {
@@ -376,7 +380,8 @@ func init() {
 		"title", "author", "narrator", "series", "series_number", "genre", "year", "language",
 		"publisher", "edition", "description", "format", "duration", "has_duration", "metadata",
 		"file_size", "bitrate", "codec", "sample_rate", "channels", "bit_depth", "quality",
-		"library_state", "created_at", "updated_at", "isbn10", "isbn13", "work_id", "tag", "review",
+		"library_state", "created_at", "updated_at", "isbn10", "isbn13", "asin", "work_id", "tag", "review",
+		"ident",
 		"has_cover", "has_written", "needs_writeback", "has_organized", "itunes_sync_status",
 		"read_status", "progress_pct", "last_played",
 	} {
@@ -1402,7 +1407,12 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 		httputil.RespondWithOK(c, reviewIDsResponse(l, q.Pins, applycap.Effective(config.AppConfig.BulkApplyMaxItems)))
 	} else {
 		series, _ := database.AsCapability[metabatch.SeriesBatchGetter](h.store)
-		httputil.RespondWithOK(c, reviewPageResponse(l, q, series))
+		resp := reviewPageResponse(l, q, series)
+		// The rail reads its counts from facets in page mode, so the
+		// identification counts ride there too (the index-mode summary
+		// carries the same block).
+		resp["facets"].(gin.H)["ident_counts"] = identCountsSummary(h.store)
+		httputil.RespondWithOK(c, resp)
 	}
 	if d := time.Since(began); d > slowReviewListing {
 		metadataCacheLog.Warn("review query exceeded slow-request threshold: duration=%s query=%s listed=%d", d.Round(time.Millisecond), q.normalized, len(l.refs))

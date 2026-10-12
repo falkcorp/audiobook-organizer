@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // Page mode (setting review_metadata_server_query) of the Review > Metadata
 // lane, and the proof that it agrees with index mode.
@@ -300,6 +300,27 @@ describe('page mode requests', () => {
     await waitFor(() => expect(result.current.queryMode).toBe('index'));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(api.getReviewPage).not.toHaveBeenCalled();
+  });
+
+  it('passes the facets ident_counts through to the rail summary', async () => {
+    const identCounts = {
+      unasked: 7,
+      asked_empty: 4,
+      has_candidates: 2,
+      applied: 1,
+      held: 1,
+      missing: 11,
+      ready: true,
+    };
+    const page = pageOf(['b1']);
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...page,
+      facets: { ...page.facets, ident_counts: identCounts },
+    });
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.queryMode).toBe('page');
+    expect(result.current.summary.ident_counts).toEqual(identCounts);
   });
 
   it('flag on never loads the review index', async () => {
