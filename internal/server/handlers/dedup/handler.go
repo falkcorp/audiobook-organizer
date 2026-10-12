@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-11
 
@@ -386,7 +386,7 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// qualifying pair and slices a page out of it, and a filesystem-resolving
 	// guard per book of the unsliced set would be paid for rows nobody sees.
 	if includeBooks {
-		if err := attachITunesFlags(h.store, items); err != nil {
+		if err := attachITunesFlags(c.Request.Context(), h.store, items); err != nil {
 			httputil.InternalError(c, "failed to compute the iTunes flag of a candidate's book", err)
 			return
 		}
@@ -402,7 +402,7 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 // stored) with a bookWithITunes carrying is_itunes, in place. A nil side (the
 // entity is not a book, or the lookup missed) stays nil so it still serialises
 // as null.
-func attachITunesFlags(store iTunesFlagStore, items []gin.H) error {
+func attachITunesFlags(ctx context.Context, store iTunesFlagStore, items []gin.H) error {
 	var books []*database.Book
 	for _, row := range items {
 		for _, k := range [...]string{"book_a", "book_b"} {
@@ -411,14 +411,18 @@ func attachITunesFlags(store iTunesFlagStore, items []gin.H) error {
 			}
 		}
 	}
-	flags, err := iTunesFlags(store, books)
+	flags, err := iTunesFlags(ctx, store, books)
 	if err != nil {
 		return err
 	}
 	for _, row := range items {
 		for _, k := range [...]string{"book_a", "book_b"} {
 			if b, ok := row[k].(*database.Book); ok && b != nil {
-				row[k] = bookWithITunes{Book: b, IsITunes: flags[b.ID]}
+				w := bookWithITunes{Book: b}
+				if v, settled := flags[b.ID]; settled {
+					w.IsITunes = &v
+				}
+				row[k] = w
 			}
 		}
 	}
