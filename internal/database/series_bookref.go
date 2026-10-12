@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-10-11
 
@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // Unfiltered series reference counting, for DELETION decisions.
@@ -221,6 +223,10 @@ func SeriesRefCounts(store any) (map[int]int, error) {
 	return refCounter.GetAllSeriesBookRefCounts()
 }
 
+// seriesRefCountLog carries GetSeriesBookRefCount's diagnostics through the
+// log-injection barrier.
+var seriesRefCountLog = logger.New("database.series-ref-count")
+
 // SeriesBookRefCounter answers the unfiltered question for ONE series: how
 // many book rows, in any state (trashed and non-primary included), name it.
 // It is the per-series twin of SeriesBookRefStore, for a delete that must
@@ -275,8 +281,8 @@ func (p *PebbleStore) GetSeriesBookRefCount(seriesID int) (int, error) {
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return 0, err
 		}
-		slog.Error("series ref count (one series): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
-			"error", err, "series_id", seriesID, "lost_rows", m.LostRows())
+		seriesRefCountLog.Error("series ref count (one series): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan: series_id=%d lost_rows=%v error=%v",
+			seriesID, m.LostRows(), err)
 	}
 	counts, err := p.getAllSeriesBookRefCountsPebble()
 	if err != nil {
