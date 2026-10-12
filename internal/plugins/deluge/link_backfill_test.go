@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
 // last-edited: 2026-10-11
 
@@ -208,8 +208,9 @@ type linkMock struct {
 	// book ID GetBooksByIDs is asked for is a live book.
 	deletedBooks map[string]bool
 	missingBooks map[string]bool
-	// versions answers GetBookVersionsByBookID.
-	versions map[string][]database.BookVersion
+	// versions answers GetBookVersionsByBookID; versionErr fails it for a book.
+	versions   map[string][]database.BookVersion
+	versionErr map[string]bool
 	// onHashLookup, when set, runs at the start of every BookFilesWithHash
 	// call, outside the mock's lock.
 	onHashLookup func()
@@ -219,12 +220,13 @@ func newLinkMock(rows ...database.BookFile) *linkMock {
 	m := &linkMock{
 		MockStore: &database.MockStore{}, rows: map[string]database.BookFile{}, hideHash: map[string]bool{},
 		deletedBooks: map[string]bool{}, missingBooks: map[string]bool{}, versions: map[string][]database.BookVersion{},
+		versionErr: map[string]bool{},
 	}
 	for _, r := range rows {
 		m.rows[r.ID] = r
 	}
 	forbid := func(name string) { m.mu.Lock(); m.forbidden = append(m.forbidden, name); m.mu.Unlock() }
-	m.GetAllBookFilesCoreFunc = func() ([]database.BookFileCore, error) {
+	m.GetAllBookFilesCoreCompleteFunc = func() ([]database.BookFileCore, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		out := make([]database.BookFileCore, 0, len(m.rows))
@@ -252,6 +254,9 @@ func newLinkMock(rows ...database.BookFile) *linkMock {
 	m.GetBookVersionsByBookIDFunc = func(bookID string) ([]database.BookVersion, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if m.versionErr[bookID] {
+			return nil, fmt.Errorf("example version read failure for %s", bookID)
+		}
 		return m.versions[bookID], nil
 	}
 	m.BookFilesWithHashFunc = func(h string) ([]database.BookFile, error) {
@@ -1174,7 +1179,8 @@ func TestLinkBackfill_LimitAfterCrossSeedCheck(t *testing.T) {
 	}
 }
 
-// limit caps the torrents written; the rest are counted, not dropped silently.
+// limit caps the torrents written; the torrents left are counted in
+// deferred_by_limit (torrents, not files), not dropped silently.
 func TestLinkBackfill_LimitCapsWrites(t *testing.T) {
 	f := newLinkFixture(t)
 	var torrents []delugeclient.TorrentDetail
@@ -1436,37 +1442,44 @@ func TestLinkBackfill_PathViewsDifferNote(t *testing.T) {
 	}
 }
 
-// S3: a planned row that maintenance.relink-pre-fix-imports classes
-// would_link (unlinked, hashless, its book has exactly one unnamed live
-// hashless version and no other hashless unlinked row) is counted, with a
-// note naming the order. The controls are the fixer's other classes.
-func TestLinkBackfill_RelinkFixerWouldLinkCounted(t *testing.T) {
+// The relink hold-back. A planned row that names no version is held
+// (held_for_relink, nothing written) when its book has an active or alt
+// version with no torrent hash that no row names, or its versions cannot be
+// read; include_unsettled_relink=true writes it, and relink_fixer_would_link
+// then counts the rows maintenance.relink-pre-fix-imports plans as would_link
+// (exactly one such version, at most one hashless unlinked row), with a note
+// naming the order. The other cases are the fixer's other classes.
+func TestLinkBackfill_RelinkHoldBack(t *testing.T) {
 	stranded := database.BookVersion{ID: "ver-1", Status: database.BookVersionStatusActive}
 	cases := []struct {
-		name     string
-		versions []database.BookVersion
-		extra    func(f *linkFixture, row database.BookFile) []database.BookFile
-		want     int64
+		name       string
+		versions   []database.BookVersion
+		readErr    bool
+		extra      func(f *linkFixture, row database.BookFile) []database.BookFile
+		wantHeld   int64
+		wantFixer  int64 // with include_unsettled_relink
+		wantErrors int64
 	}{
-		{name: "one unnamed hashless version", versions: []database.BookVersion{stranded}, want: 1},
-		{name: "version carries a torrent hash", want: 0,
+		{name: "one unnamed hashless version", versions: []database.BookVersion{stranded}, wantHeld: 1, wantFixer: 1},
+		{name: "version carries a torrent hash",
 			versions: []database.BookVersion{{ID: "ver-1", Status: database.BookVersionStatusActive, TorrentHash: linkTorrentID(9)}}},
-		{name: "version is trashed", want: 0,
+		{name: "version is trashed",
 			versions: []database.BookVersion{{ID: "ver-1", Status: database.BookVersionStatusTrash}}},
-		{name: "two unnamed hashless versions", want: 0,
+		{name: "two unnamed hashless versions", wantHeld: 1,
 			versions: []database.BookVersion{stranded, {ID: "ver-2", Status: database.BookVersionStatusAlt}}},
-		{name: "version already named by another row", versions: []database.BookVersion{stranded}, want: 0,
+		{name: "version already named by another row", versions: []database.BookVersion{stranded},
 			extra: func(f *linkFixture, row database.BookFile) []database.BookFile {
 				o := f.libraryRow("bf-named", "named.mp3", []byte("example other bytes"))
 				o.BookID, o.VersionID = row.BookID, "ver-1"
 				return []database.BookFile{o}
 			}},
-		{name: "two hashless unlinked rows", versions: []database.BookVersion{stranded}, want: 0,
+		{name: "two hashless unlinked rows", versions: []database.BookVersion{stranded}, wantHeld: 1,
 			extra: func(f *linkFixture, row database.BookFile) []database.BookFile {
 				o := f.libraryRow("bf-peer", "peer.mp3", []byte("example peer bytes"))
 				o.BookID = row.BookID
 				return []database.BookFile{o}
 			}},
+		{name: "version read fails", readErr: true, wantHeld: 1, wantErrors: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1477,22 +1490,126 @@ func TestLinkBackfill_RelinkFixerWouldLinkCounted(t *testing.T) {
 			if tc.extra != nil {
 				rows = append(rows, tc.extra(f, row)...)
 			}
-			store := newLinkMock(rows...)
-			store.versions[row.BookID] = tc.versions
 			_, client := newFakeDelugeClient(t, tor)
-
-			res, err := runLink(t, &Plugin{client: client, store: store}, `{}`)
-			if err != nil {
-				t.Fatalf("run: %v", err)
+			newStore := func() *linkMock {
+				m := newLinkMock(rows...)
+				m.versions[row.BookID] = tc.versions
+				m.versionErr[row.BookID] = tc.readErr
+				return m
 			}
-			if res.RelinkFixerWouldLink != tc.want {
-				t.Errorf("relink_fixer_would_link = %d, want %d", res.RelinkFixerWouldLink, tc.want)
+
+			for _, dry := range []bool{true, false} {
+				store := newStore()
+				res, err := runLink(t, &Plugin{client: client, store: store}, fmt.Sprintf(`{"dry_run":%v}`, dry))
+				if err != nil {
+					t.Fatalf("dry_run=%v: run: %v", dry, err)
+				}
+				if res.HeldForRelink != tc.wantHeld || linkedCount(t, res) != 1-tc.wantHeld || res.Errors != tc.wantErrors {
+					t.Errorf("dry_run=%v: held_for_relink=%d linked=%d errors=%d, want %d/%d/%d",
+						dry, res.HeldForRelink, linkedCount(t, res), res.Errors, tc.wantHeld, 1-tc.wantHeld, tc.wantErrors)
+				}
+				if res.RelinkFixerWouldLink != 0 {
+					t.Errorf("dry_run=%v: relink_fixer_would_link = %d without the override; held rows are not written", dry, res.RelinkFixerWouldLink)
+				}
+				if held := store.row("bf-1").DelugeHash == ""; !dry && held != (tc.wantHeld == 1) {
+					t.Errorf("row left unlinked = %v, want %v", held, tc.wantHeld == 1)
+				}
+				hasNote := strings.Contains(strings.Join(res.Notes, "\n"), "held_for_relink")
+				if hasNote != (tc.wantHeld > 0) {
+					t.Errorf("dry_run=%v: held note present = %v, want %v: %v", dry, hasNote, tc.wantHeld > 0, res.Notes)
+				}
+			}
+
+			store := newStore()
+			res, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false,"include_unsettled_relink":true}`)
+			if err != nil {
+				t.Fatalf("override: run: %v", err)
+			}
+			if res.HeldForRelink != 0 || linkedCount(t, res) != 1 || store.row("bf-1").DelugeHash != linkTorrentID(1) {
+				t.Errorf("override: held_for_relink=%d linked=%d deluge_hash=%q, want 0/1/the torrent",
+					res.HeldForRelink, linkedCount(t, res), store.row("bf-1").DelugeHash)
+			}
+			if res.RelinkFixerWouldLink != tc.wantFixer {
+				t.Errorf("override: relink_fixer_would_link = %d, want %d", res.RelinkFixerWouldLink, tc.wantFixer)
 			}
 			hasNote := strings.Contains(strings.Join(res.Notes, "\n"), "relink-pre-fix-imports first")
-			if hasNote != (tc.want > 0) {
-				t.Errorf("order note present = %v, want %v: %v", hasNote, tc.want > 0, res.Notes)
+			if hasNote != (tc.wantFixer > 0) {
+				t.Errorf("override: order note present = %v, want %v: %v", hasNote, tc.wantFixer > 0, res.Notes)
 			}
 		})
+	}
+}
+
+// The reviewer's flip case: book B has one hashless version V no row names
+// and two hashless unlinked rows r1 and r2, both verified by one torrent. The
+// fixer classes the book hashless-ambiguous today; once its owner removes one
+// row it would link the other to V. Linking either first rules that out, so
+// both are held -- in the preview and the live run -- and nothing is linked.
+// include_unsettled_relink links both.
+func TestLinkBackfill_RelinkHoldsAmbiguousBook(t *testing.T) {
+	f := newLinkFixture(t)
+	c2 := []byte("example audio bytes, chapter two")
+	tor := f.torrent(t, 1, f.downloads, tfile{"Example Book/01.mp3", exampleAudio}, tfile{"Example Book/02.mp3", c2})
+	r1, r2 := f.libraryRow("bf-r1", "01.mp3", exampleAudio), f.libraryRow("bf-r2", "02.mp3", c2)
+	r2.BookID = r1.BookID
+	_, client := newFakeDelugeClient(t, tor)
+	newStore := func() *linkMock {
+		m := newLinkMock(r1, r2)
+		m.versions[r1.BookID] = []database.BookVersion{{ID: "ver-v", Status: database.BookVersionStatusActive}}
+		return m
+	}
+
+	preview, err := runLink(t, &Plugin{client: client, store: newStore()}, `{}`)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if preview.HeldForRelink != 2 || linkedCount(t, preview) != 0 {
+		t.Errorf("preview: held_for_relink=%d would_link=%d, want 2 and 0", preview.HeldForRelink, linkedCount(t, preview))
+	}
+
+	store := newStore()
+	live, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false}`)
+	if err != nil {
+		t.Fatalf("live: %v", err)
+	}
+	if live.HeldForRelink != 2 || linkedCount(t, live) != 0 || store.modifyCalls.Load() != 0 {
+		t.Errorf("live: held_for_relink=%d linked=%d modify calls=%d, want 2/0/0",
+			live.HeldForRelink, linkedCount(t, live), store.modifyCalls.Load())
+	}
+
+	store = newStore()
+	over, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false,"include_unsettled_relink":true}`)
+	if err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	if over.HeldForRelink != 0 || linkedCount(t, over) != 2 ||
+		store.row("bf-r1").DelugeHash != linkTorrentID(1) || store.row("bf-r2").DelugeHash != linkTorrentID(1) {
+		t.Errorf("override: held_for_relink=%d linked=%d, want 0 and both rows linked", over.HeldForRelink, linkedCount(t, over))
+	}
+}
+
+// limit counts real writes: rows the hold-back holds are dropped before
+// limit is applied, so a held torrent does not use up the limit.
+func TestLinkBackfill_LimitCountsAfterHoldBack(t *testing.T) {
+	f := newLinkFixture(t)
+	held := []byte("example audio held for relink")
+	free := []byte("example audio free to link,..")
+	a := f.torrent(t, 1, filepath.Join(f.downloads, "a"), tfile{"Example Book/01.mp3", held})
+	b := f.torrent(t, 2, filepath.Join(f.downloads, "b"), tfile{"Example Book/01.mp3", free})
+	ra, rb := f.libraryRow("bf-a", "a.mp3", held), f.libraryRow("bf-b", "b.mp3", free)
+	store := newLinkMock(ra, rb)
+	store.versions[ra.BookID] = []database.BookVersion{{ID: "ver-a", Status: database.BookVersionStatusActive}}
+	_, client := newFakeDelugeClient(t, a, b)
+
+	res, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false,"limit":1}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if linkedCount(t, res) != 1 || res.HeldForRelink != 1 || res.DeferredByLimit != 0 {
+		t.Errorf("linked=%d held_for_relink=%d deferred_by_limit=%d, want 1/1/0", linkedCount(t, res), res.HeldForRelink, res.DeferredByLimit)
+	}
+	if store.row("bf-a").DelugeHash != "" || store.row("bf-b").DelugeHash != linkTorrentID(2) {
+		t.Error("want the held row unlinked and the other torrent's row linked")
 	}
 }
 
@@ -1515,5 +1632,110 @@ func TestLinkBackfill_PreviewCountsRowsLikeLive(t *testing.T) {
 	}
 	if p, l := linkedCount(t, preview), linkedCount(t, live); p != 2 || l != 2 {
 		t.Errorf("would_link=%d linked=%d, want 2 and 2", p, l)
+	}
+}
+
+// hashCounter wraps filehash.BookFileHash and records every path hashed.
+type hashCounter struct {
+	mu    sync.Mutex
+	paths []string
+}
+
+func (h *hashCounter) hash(path string) (string, error) {
+	h.mu.Lock()
+	h.paths = append(h.paths, path)
+	h.mu.Unlock()
+	return filehash.BookFileHash(path)
+}
+
+func (h *hashCounter) hashed(path string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, p := range h.paths {
+		if p == path {
+			n++
+		}
+	}
+	return n
+}
+
+// limit bounds the hashing: a torrent past the limit is hashed only for the
+// files whose size equals a size inside the window. So a cross-seed (C, the
+// same bytes as A's first file) is still found and makes that row ambiguous,
+// a same-size file of another book (B) is hashed but never written, and a
+// torrent with no matching size (D) is not hashed at all.
+func TestLinkBackfill_LimitBoundsHashing(t *testing.T) {
+	f := newLinkFixture(t)
+	x2 := []byte("example audio bytes, chapter two, a longer one") // a size no other file has
+	y := []byte("example audio bytes, another book!")[:len(exampleAudio)]
+	z := []byte("example audio bytes of a book past the limit, with its own size")
+	if len(x2) == len(exampleAudio) || len(z) == len(exampleAudio) || len(z) == len(x2) {
+		t.Fatal("fixture: sizes must differ")
+	}
+	a := f.torrent(t, 1, filepath.Join(f.downloads, "a"), tfile{"Example Book/01.mp3", exampleAudio}, tfile{"Example Book/02.mp3", x2})
+	b := f.torrent(t, 2, filepath.Join(f.downloads, "b"), tfile{"Other Book/01.mp3", y})
+	c := f.torrent(t, 3, filepath.Join(f.downloads, "c"), tfile{"Example Book/01.mp3", exampleAudio})
+	d := f.torrent(t, 4, filepath.Join(f.downloads, "d"), tfile{"Late Book/01.mp3", z})
+	r1, r2 := f.libraryRow("bf-1", "01.mp3", exampleAudio), f.libraryRow("bf-2", "02.mp3", x2)
+	r2.BookID = r1.BookID
+	rb, rd := f.libraryRow("bf-b", "other.mp3", y), f.libraryRow("bf-d", "late.mp3", z)
+	store := newLinkMock(r1, r2, rb, rd)
+	_, client := newFakeDelugeClient(t, a, b, c, d)
+	hc := &hashCounter{}
+
+	res, err := runLink(t, &Plugin{client: client, store: store, linkHash: hc.hash}, `{"dry_run":false,"limit":1}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if linkedCount(t, res) != 1 || res.Ambiguous != 1 || res.DeferredByLimit != 3 || res.BeyondLimitHashed != 2 || res.Files != 2 {
+		t.Errorf("linked=%d ambiguous=%d deferred_by_limit=%d beyond_limit_hashed=%d files=%d, want 1/1/3/2/2",
+			linkedCount(t, res), res.Ambiguous, res.DeferredByLimit, res.BeyondLimitHashed, res.Files)
+	}
+	if store.row("bf-2").DelugeHash != linkTorrentID(1) || store.row("bf-1").DelugeHash != "" ||
+		store.row("bf-b").DelugeHash != "" || store.row("bf-d").DelugeHash != "" {
+		t.Error("want only bf-2 linked: bf-1 is cross-seeded, bf-b and bf-d belong to torrents past the limit")
+	}
+	for name, path := range map[string]string{
+		"a/01": d1(a), "a/02": d2(a), "b/01": d1(b), "c/01": d1(c),
+	} {
+		if n := hc.hashed(path); n != 1 {
+			t.Errorf("%s hashed %d time(s), want exactly 1", name, n)
+		}
+	}
+	if n := hc.hashed(d1(d)); n != 0 {
+		t.Errorf("a torrent past the limit with no matching size was hashed %d time(s)", n)
+	}
+}
+
+func d1(d delugeclient.TorrentDetail) string { return filepath.Clean(d.AbsPath(d.Files[0])) }
+func d2(d delugeclient.TorrentDetail) string { return filepath.Clean(d.AbsPath(d.Files[1])) }
+
+// A limited run reaches new torrents the next time: torrents some row
+// already carries go to the back of the window order, so the second run
+// hashes only the torrent the first one did not write.
+func TestLinkBackfill_LimitNextRunReachesNewTorrents(t *testing.T) {
+	f := newLinkFixture(t)
+	ca := []byte("example audio bytes for the first torrent")
+	cb := []byte("example audio bytes for the second torrent, longer")
+	a := f.torrent(t, 1, filepath.Join(f.downloads, "a"), tfile{"Example Book/01.mp3", ca})
+	b := f.torrent(t, 2, filepath.Join(f.downloads, "b"), tfile{"Example Book/01.mp3", cb})
+	store := newLinkMock(f.libraryRow("bf-a", "a.mp3", ca), f.libraryRow("bf-b", "b.mp3", cb))
+	_, client := newFakeDelugeClient(t, a, b)
+
+	first := &hashCounter{}
+	if res, err := runLink(t, &Plugin{client: client, store: store, linkHash: first.hash}, `{"dry_run":false,"limit":1}`); err != nil || linkedCount(t, res) != 1 {
+		t.Fatalf("first run: linked=%d err=%v, want 1", linkedCount(t, res), err)
+	}
+	if store.row("bf-a").DelugeHash != linkTorrentID(1) || first.hashed(d1(b)) != 0 {
+		t.Fatalf("first run: want torrent 1 linked and torrent 2 unhashed")
+	}
+	second := &hashCounter{}
+	res, err := runLink(t, &Plugin{client: client, store: store, linkHash: second.hash}, `{"dry_run":false,"limit":1}`)
+	if err != nil || linkedCount(t, res) != 1 || store.row("bf-b").DelugeHash != linkTorrentID(2) {
+		t.Fatalf("second run: linked=%d err=%v, want torrent 2 linked", linkedCount(t, res), err)
+	}
+	if n := second.hashed(d1(a)); n != 0 {
+		t.Errorf("second run re-hashed the torrent the first run linked (%d time(s))", n)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/plugin.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-47a8-b9c0-d1e2f3a4b5c6
 // last-edited: 2026-10-11
 
@@ -18,6 +18,10 @@ type Plugin struct {
 	client *delugeclient.Client
 	cache  *delugeclient.ProtectedPathCache
 	store  pluginStore
+	// linkHash is deluge.link-backfill's torrent-file digest; nil is
+	// filehash.BookFileHash. A field rather than a package var so a test can
+	// count hash calls without racing another test's plugin.
+	linkHash func(path string) (string, error)
 }
 
 // New constructs a Deluge plugin. client and cache may be nil if Deluge is not configured;
