@@ -1,5 +1,5 @@
 # file: deploy/audiobook-organizer.service
-# version: 4.6.0
+# version: 4.6.1
 # guid: f1e2d3c4-b5a6-9870-8765-4321fedcba98
 # last-edited: 2026-10-12
 #
@@ -10,8 +10,12 @@
 # runs `sudo systemctl daemon-reload` and restarts the service. The server
 # sends READY=1 once its startup steps have passed and its HTTP port is bound
 # (not after the in-memory warmup, which /health reports as "ready"), and
-# STOPPING=1 when shutdown begins. A new binary under the older Type=simple
-# unit has no NOTIFY_SOCKET and behaves exactly as before. An OLD binary (one
+# STOPPING=1 when shutdown begins. Under the older unit (Type=simple, no
+# NotifyAccess) systemd sets no NOTIFY_SOCKET and a new binary behaves
+# exactly as before. Under the rollback drop-in below, Type=simple is combined
+# with this file's NotifyAccess=main, so NOTIFY_SOCKET IS set: a new binary's
+# READY=1 and STATUS= are accepted but do not gate the start, and an old
+# binary ignores the variable. Either way the service starts. An OLD binary (one
 # that never sends READY=1) under this unit would be killed at
 # TimeoutStartSec and restarted in a loop, so the committed recipes never let
 # that happen: before every restart, scripts/deploy-match-unit-type.sh asks

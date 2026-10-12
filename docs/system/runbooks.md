@@ -1,7 +1,7 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-10-12 -->
 
 # Operator Runbooks
 
@@ -204,9 +204,21 @@ approval before running it.
 3. Write the restored store's format into `<db>.storage-format`: the value
    `<bin>.pre-format-<N> --print-storage-format` prints.
 4. Install `<bin>.pre-format-<N>` as `<bin>`, never `<bin>.prev`.
-   `scripts/deploy-cutover.sh` saves that binary at deploy time; if it is
-   absent, build the release that matches the restored format and install that.
-5. Start the service (`sudo systemctl start audiobook-organizer.service`) and
+   The deploy step meant to save that binary when a format-changing release
+   is deployed, `scripts/deploy-cutover.sh`, is planned
+   ([TASK-A9](../plans/storage-efficiency/TASK-A9.md)) and not in the repo
+   yet. Until it lands, nothing saves it automatically. Before deploying a
+   format-changing release, copy the running binary by hand with
+   `sudo cp <bin> <bin>.pre-format-<N>`. If the file is absent, build the
+   release that matches the restored format and install that instead.
+5. Match the service type to that binary before starting it. From your
+   workstation, run `bash scripts/deploy-match-unit-type.sh <host> <bin>`.
+   A binary from before readiness notification never sends `READY=1`, so
+   under the `Type=notify` unit systemd would kill it at the start timeout
+   and restart it in a loop. The script installs a `Type=simple` drop-in for
+   such a binary, and removes the drop-in for a binary that notifies (see
+   [Rollback-safe unit type](deploy-and-gpu-ops.md#rollback-safe-unit-type)).
+6. Start the service (`sudo systemctl start audiobook-organizer.service`) and
    check that the `storage format: stamp=… supported=…` log line shows the
    restored stamp.
 

@@ -1,5 +1,5 @@
 // file: internal/sdnotify/sdnotify.go
-// version: 2.0.0
+// version: 2.1.1
 // guid: 96427de2-bc6f-4a85-9a35-774bdfed9ee7
 // last-edited: 2026-10-12
 
@@ -13,8 +13,10 @@
 // (coreos/go-systemd).
 //
 // Every function is a no-op returning nil when NOTIFY_SOCKET is unset, which is
-// the case under the old Type=simple unit, in tests and on a developer machine:
-// the binary behaves exactly as before there.
+// the case under the old unit (Type=simple, no NotifyAccess), in tests and on a
+// developer machine: the binary behaves exactly as before there. Under the
+// rollback drop-in (Type=simple plus the unit's NotifyAccess=main) the socket
+// is set; systemd accepts the messages but READY=1 does not gate the start.
 //
 // It is a leaf package (no module imports) so the store and search packages,
 // which run long startup steps, can extend the start timeout without
@@ -54,8 +56,11 @@ const StartupStepBudget = 10 * time.Minute
 // promptly; this only keeps a wedged receiver from stalling startup.
 const writeTimeout = time.Second
 
-// socketEnv names the variable systemd sets for a Type=notify service.
-const socketEnv = "NOTIFY_SOCKET"
+// SocketEnv names the variable systemd sets for a Type=notify service.
+// Exported so code that starts child processes can withhold it: only the main
+// process may notify (NotifyAccess=main), and systemd logs a warning for
+// every datagram a child sends.
+const SocketEnv = "NOTIFY_SOCKET"
 
 // errSocketUnsupported is returned for a NOTIFY_SOCKET that is neither an
 // absolute path nor an abstract socket (for example systemd's vsock form,
@@ -81,7 +86,7 @@ func socketAddr(env string) (*net.UnixAddr, error) {
 // returns nil without doing anything when the variable is unset. The error
 // text never includes the socket path.
 func notify(state string) (err error) {
-	env := os.Getenv(socketEnv)
+	env := os.Getenv(SocketEnv)
 	if env == "" {
 		return nil
 	}

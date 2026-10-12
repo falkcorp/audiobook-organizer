@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
-# last-edited: 2026-10-04
+# last-edited: 2026-10-12
 
 """Storage-format guard for `make rollback`.
 
@@ -98,7 +98,7 @@ def restore_steps(db, bin_path, store, checkpoint):
     lines.append("  1. sudo systemctl stop audiobook-organizer.service")
     if checkpoint:
         source = os.path.join(checkpoint, base)
-        lines.append(f"  2. move the converted store aside and put the checkpoint in its place:")
+        lines.append("  2. move the converted store aside and put the checkpoint in its place:")
         lines.append(f"       sudo mv {db} {db}.format-{store}-aside")
         lines.append(f"       sudo cp -a {source} {db}")
         lines.append(f"     checkpoint_dir: {checkpoint}")
@@ -114,14 +114,19 @@ def restore_steps(db, bin_path, store, checkpoint):
     )
     lines.append(f"  4. install {pre_format_bin} as {bin_path} (never {bin_path}.prev)")
     lines.append(
-        f"     note: {pre_format_bin} is saved by scripts/deploy-cutover.sh at deploy time; "
-        f"if it is absent, build the release that matches format {store} and install that binary"
+        f"     note: nothing saves {pre_format_bin} automatically yet (scripts/deploy-cutover.sh "
+        "is planned, TASK-A9); copy it by hand before a format-changing deploy. "
+        f"If it is absent, build the release that matches format {store} and install that binary"
     )
     lines.append(
-        "  5. sudo systemctl start audiobook-organizer.service, then check the "
+        f"  5. from your workstation: bash scripts/deploy-match-unit-type.sh <host> {bin_path} "
+        "(a binary without readiness notification would restart-loop under the Type=notify unit)"
+    )
+    lines.append(
+        "  6. sudo systemctl start audiobook-organizer.service, then check the "
         "`storage format: stamp=` log line"
     )
-    lines.append(f"  6. See {RUNBOOK}")
+    lines.append(f"  7. See {RUNBOOK}")
     lines.append("")
     lines.append(
         "A restore discards every write made since the cut-over; get the owner's approval first."

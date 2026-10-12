@@ -1,5 +1,5 @@
 # file: Makefile.local.example
-# version: 1.9.0
+# version: 1.9.1
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
 # last-edited: 2026-10-12
 #
@@ -66,8 +66,11 @@ DEPLOY_DB := /path/to/audiobooks.pebble
 
 # Base URL of the deployed server, used by the post-deploy readiness wait
 # (scripts/deploy-wait-ready.sh polls $(DEPLOY_URL)/health) and version check.
-# Also required by the committed `make rollback` target.
-DEPLOY_URL := https://$(DEPLOY_HOST):8484
+# Also required by the committed `make rollback` target. `user@` is stripped
+# from DEPLOY_HOST, as the committed Makefile's default does; an ssh alias
+# (a ~/.ssh/config Host name) does not resolve for curl, so write the real
+# host name or address here in that case.
+DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 
 ## deploy: Build via the committed `build-linux` target, ship it, preserve a
 ## .prev copy, restart, and verify the deployed version.

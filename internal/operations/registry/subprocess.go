@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -38,6 +38,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
 )
 
 // childModeArg is the sentinel os.Args[1] value that triggers child mode.
@@ -51,14 +53,21 @@ const EnvSocketPath = "UOS_SOCKET"
 // main, so the name is repeated and pinned by a test).
 const envPprofAddr = "ABK_PPROF_ADDR"
 
-// childBaseEnv returns parent without ABK_PPROF_ADDR. The child is the same
-// binary, so its package init would otherwise start a second pprof listener on
-// the parent's port for every isolated op (bind fails, logs a WARN, and a
-// differing child could briefly expose profiling data of its own).
+// childBaseEnv returns parent without ABK_PPROF_ADDR and NOTIFY_SOCKET.
+//
+// The child is the same binary, so its package init would otherwise start a
+// second pprof listener on the parent's port for every isolated op (bind
+// fails, logs a WARN, and a differing child could briefly expose profiling
+// data of its own).
+//
+// NOTIFY_SOCKET is systemd's readiness socket (Type=notify). Child mode opens
+// the store through InitializeStore, which sends EXTEND_TIMEOUT_USEC; from a
+// child that is a non-main PID, which NotifyAccess=main rejects with a journal
+// warning on every child run, and it says nothing true about the service.
 func childBaseEnv(parent []string) []string {
 	out := make([]string, 0, len(parent))
 	for _, kv := range parent {
-		if strings.HasPrefix(kv, envPprofAddr+"=") {
+		if strings.HasPrefix(kv, envPprofAddr+"=") || strings.HasPrefix(kv, sdnotify.SocketEnv+"=") {
 			continue
 		}
 		out = append(out, kv)

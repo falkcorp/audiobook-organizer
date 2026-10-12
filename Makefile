@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.45.0
+# version: 2.45.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-12
 
@@ -52,7 +52,9 @@ DEPLOY_DB   ?=
 # waits on $(DEPLOY_URL)/health for "ready":true after its restart. Unset, it
 # is derived when used (`?=` is recursive, so Makefile.local's values count):
 # API_URL with a trailing /api/v1 removed if API_URL is set, otherwise
-# https://<DEPLOY_HOST without any user@>:8484.
+# https://<DEPLOY_HOST without any user@>:8484. The DEPLOY_HOST form only
+# works when that name resolves for curl on this machine: an ssh alias from
+# ~/.ssh/config (Host/HostName) does not, so set DEPLOY_URL or API_URL then.
 DEPLOY_URL  ?= $(if $(API_URL),$(patsubst %/api/v1,%,$(patsubst %/,%,$(API_URL))),$(if $(DEPLOY_HOST),https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484))
 BACKUP_DIR  ?= $(CURDIR)/backups
 

@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-10-12 -->
 
@@ -142,8 +142,10 @@ committed recipes rule that out. Before every restart,
 Either way it then runs `systemctl daemon-reload`. `make rollback` runs it on
 `$(DEPLOY_BIN).prev` before the swap, and the `deploy` in
 `Makefile.local.example` runs it on the uploaded binary before the `mv`.
-Being wrong in the fail-safe direction costs nothing: a notify-capable binary
-under `Type=simple` runs exactly as it did before this change.
+Being wrong in the fail-safe direction costs nothing. The drop-in keeps the
+unit's `NotifyAccess=main`, so `NOTIFY_SOCKET` is still set, and a
+notify-capable binary still sends `READY=1` and `STATUS=`. Under
+`Type=simple` systemd accepts them, but they do not gate the start.
 
 The script uses `sudo -n`, so the sudoers drop-in below needs its four
 commands.
@@ -164,8 +166,8 @@ uploads to:
 
 The first line also clears the `Type=simple` drop-in that a `make rollback`
 to an older binary leaves behind. Without it, that drop-in stays in place and
-the service keeps running as `Type=simple`. That is safe, but the server
-never reports readiness to systemd.
+the service keeps running as `Type=simple`. That is safe, but `systemctl
+restart` no longer waits for the server's `READY=1`.
 
 #### Installing the unit
 
