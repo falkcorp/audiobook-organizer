@@ -1,5 +1,5 @@
 // file: internal/metadata/verify_write.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d2f6c80-1b7e-4e53-a4c9-3f8b5a0d7e61
 // last-edited: 2026-10-11
 //
@@ -25,7 +25,7 @@ import (
 // file back and fails with tagger.ErrVerifyAfterWrite unless the tags landed.
 // The file stays as written on that error.
 //
-// It is WriteMetadataToFileInPlace inside the safe wrapper, for the callers
+// It is writeMetadataToFileInPlace inside the safe wrapper, for the callers
 // that already resolved the protected-path question on filePath (the metafetch
 // write-back). deps carries the book_file store the verification event is
 // recorded through, and bookFileID (opts.BookFileID) the row it names.
