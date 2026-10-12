@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.30.1
+// version: 1.31.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -125,42 +125,14 @@ func New(
 	}
 }
 
-// ListDedupCandidates handles GET /api/v1/dedup/candidates.
-//
-// Query params:
-//
-//	entity_type — filter by entity type (e.g. "book")
-//	status      — filter by status (e.g. "pending")
-//	layer       — filter by detection layer (e.g. "embedding")
-//	min_similarity (float) — lower-bound on raw similarity score
-//	band        — filter by unified scoring band: CERTAIN|HIGH|MEDIUM|REVIEW
-//	             (T016 extension; empty = no filter; pre-T015 rows without
-//	             a stored band will not match any non-empty band filter)
-//	entity_id   — restrict to candidates where EITHER side of the pair is this
-//	             entity ("this book's duplicates"). Filtered at scan level, so
-//	             "total" reflects the whole matching set, not one page.
-//	source      — "manual" lists hand-enqueued candidates (POST /dedup/candidates),
-//	             including pinned scanner rows
-//	include_breakdown=true — include score_breakdown (full signal array)
-//	                         in each row; default false (payload savings)
-//	limit (int, default 50), offset (int) — pagination
-//
-// Response shape (T016 contract, frozen for T017):
-//
-//	{ "candidates": [ candidateListItem, ... ], "total": N }
-//
-// Each candidateListItem extends DedupCandidate with a top-level "score"
-// field (the composite 0–100 value). "band" is already part of
-// DedupCandidate. "score_breakdown" is omitted unless include_breakdown=true.
-func (h *Handler) ListDedupCandidates(c *gin.Context) {
-	es := h.embeddingStore
-	if es == nil {
-		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
-		return
-	}
-
-	filter := database.CandidateFilter{Limit: 50}
-
+// candidateFilterFromQuery turns the list endpoint's query string into a
+// store filter (everything except paging). ListDedupCandidates and
+// ExportDedupCandidates both call it, so an export of the same query is the same
+// set of rows the lane shows: a filter parsed in only one of them is the bug
+// where the export silently ignored band, q and entity_id. It writes the error
+// response itself and returns false when the request is refused.
+func (h *Handler) candidateFilterFromQuery(c *gin.Context) (database.CandidateFilter, bool) {
+	filter := database.CandidateFilter{}
 	if v := c.Query("entity_type"); v != "" {
 		filter.EntityType = v
 	}
@@ -174,7 +146,7 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid min_similarity")
-			return
+			return filter, false
 		}
 		filter.MinSimilarity = &f
 	}
@@ -215,10 +187,52 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 			// reads as "nothing matched" and is indistinguishable from a
 			// correct empty result.
 			httputil.InternalError(c, "failed to resolve dedup search", rerr)
-			return
+			return filter, false
 		}
 		filter.SearchEntityIDs = ids
 	}
+	return filter, true
+}
+
+// ListDedupCandidates handles GET /api/v1/dedup/candidates.
+//
+// Query params:
+//
+//	entity_type — filter by entity type (e.g. "book")
+//	status      — filter by status (e.g. "pending")
+//	layer       — filter by detection layer (e.g. "embedding")
+//	min_similarity (float) — lower-bound on raw similarity score
+//	band        — filter by unified scoring band: CERTAIN|HIGH|MEDIUM|REVIEW
+//	             (T016 extension; empty = no filter; pre-T015 rows without
+//	             a stored band will not match any non-empty band filter)
+//	entity_id   — restrict to candidates where EITHER side of the pair is this
+//	             entity ("this book's duplicates"). Filtered at scan level, so
+//	             "total" reflects the whole matching set, not one page.
+//	source      — "manual" lists hand-enqueued candidates (POST /dedup/candidates),
+//	             including pinned scanner rows
+//	include_breakdown=true — include score_breakdown (full signal array)
+//	                         in each row; default false (payload savings)
+//	limit (int, default 50), offset (int) — pagination
+//
+// Response shape (T016 contract, frozen for T017):
+//
+//	{ "candidates": [ candidateListItem, ... ], "total": N }
+//
+// Each candidateListItem extends DedupCandidate with a top-level "score"
+// field (the composite 0–100 value). "band" is already part of
+// DedupCandidate. "score_breakdown" is omitted unless include_breakdown=true.
+func (h *Handler) ListDedupCandidates(c *gin.Context) {
+	es := h.embeddingStore
+	if es == nil {
+		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
+		return
+	}
+
+	filter, ok := h.candidateFilterFromQuery(c)
+	if !ok {
+		return
+	}
+	filter.Limit = 50
 	includeBreakdown := c.Query("include_breakdown") == "true"
 	// include_books surfaces the full book objects (title/author/path/metadata)
 	// inline on each candidate row so the unified dedup UI can render rich cards
@@ -605,7 +619,9 @@ func (h *Handler) PurgeAcoustIDConflicts(c *gin.Context) {
 // Query params:
 //
 //	format = "csv" (default) or "json"
-//	status, layer, min_similarity, entity_type — same as list endpoint
+//	every filter of the list endpoint (entity_type, status, layer,
+//	min_similarity, band, entity_id, source, q), parsed by the same
+//	candidateFilterFromQuery, so the export is the rows the list shows
 //
 // Unlike the list endpoint, export doesn't paginate — it walks every
 // matching row up to an internal hard cap (100K) to prevent runaway
@@ -630,30 +646,36 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 		return
 	}
 
-	filter := database.CandidateFilter{Limit: 100000}
-	if v := c.Query("entity_type"); v != "" {
-		filter.EntityType = v
+	filter, ok := h.candidateFilterFromQuery(c)
+	if !ok {
+		return
 	}
-	if v := c.Query("status"); v != "" {
-		filter.Status = v
-	}
-	if v := c.Query("layer"); v != "" {
-		filter.Layer = v
-	}
-	if v := c.Query("min_similarity"); v != "" {
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			httputil.RespondWithBadRequest(c, "invalid min_similarity")
-			return
-		}
-		filter.MinSimilarity = &f
-	}
+	filter.Limit = 100000
 
 	candidates, _, err := es.ListCandidates(filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for export", err)
 		return
 	}
+
+	// Drop the rows the list endpoint drops (a book pair whose book is gone), so
+	// the file has the row count the lane shows rather than blank-titled extras.
+	lookupLive := newBookLookup(h.store, len(candidates)*2)
+	live := candidates[:0:0]
+	for _, cand := range candidates {
+		if cand.EntityType == "book" {
+			dead, derr := isDeadBookRow(cand, lookupLive.get)
+			if derr != nil {
+				httputil.InternalError(c, "failed to read a candidate's book", derr)
+				return
+			}
+			if dead {
+				continue
+			}
+		}
+		live = append(live, cand)
+	}
+	candidates = live
 
 	// Enrich: lookup titles + author names for every entity involved,
 	// memoized so a book that appears in multiple candidates is only

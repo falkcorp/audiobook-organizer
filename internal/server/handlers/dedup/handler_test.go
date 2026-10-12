@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -1256,5 +1256,102 @@ func TestMergeDedupCandidateUsesTheJournaledMergePath(t *testing.T) {
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestExportDedupCandidates_MatchesListFilters pins that the export applies
+// every filter the lane sends, by comparing it with the list endpoint for the
+// same query. The export once parsed only status, layer and min_similarity, so
+// band, q and entity_id were silently dropped and the file held more rows than
+// the lane showed.
+func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
+	h, d := newHandler(t)
+	insertCandidateWithBand(t, d.es, "e-1", "e-2", "HIGH")
+	insertCandidateWithBand(t, d.es, "e-3", "e-4", "LOW")
+	insertCandidateWithBand(t, d.es, "e-5", "e-6", "HIGH")
+	insertCandidateWithBand(t, d.es, "e-2", "e-7", "LOW")
+	// An author pair that the book-only lane must be able to exclude.
+	sim := 0.9
+	if err := d.es.UpsertCandidate(database.DedupCandidate{
+		EntityType: "author", EntityAID: "au-1", EntityBID: "au-2",
+		Layer: "embedding", Similarity: &sim, Status: "pending", Band: "HIGH",
+	}); err != nil {
+		t.Fatalf("UpsertCandidate: %v", err)
+	}
+	d.store.EXPECT().GetBookByID(mock.Anything).RunAndReturn(func(id string) (*database.Book, error) {
+		return &database.Book{ID: id, Title: "Book " + id}, nil
+	}).Maybe()
+	d.store.EXPECT().GetAllAuthors().Return(nil, nil).Maybe()
+	d.store.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{
+		{ID: "e-1", Title: "Needle Tale"}, {ID: "e-2", Title: "Other"},
+		{ID: "e-3", Title: "Other"}, {ID: "e-4", Title: "Other"},
+		{ID: "e-5", Title: "Other"}, {ID: "e-6", Title: "Other"}, {ID: "e-7", Title: "Other"},
+	}, nil).Maybe()
+
+	cases := []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{"unfiltered", "", 5},
+		{"band", "band=LOW", 2},
+		{"entity_id", "entity_id=e-2", 2},
+		{"q", "q=needle", 1},
+		{"entity_type", "entity_type=book", 4},
+		{"band and entity_id", "band=LOW&entity_id=e-2", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sep := ""
+			if tc.query != "" {
+				sep = "&"
+			}
+			lw := doReq(t, h.ListDedupCandidates, http.MethodGet,
+				"/api/v1/dedup/candidates?limit=100"+sep+tc.query, nil, nil)
+			if lw.Code != http.StatusOK {
+				t.Fatalf("list status=%d body=%s", lw.Code, lw.Body.String())
+			}
+			var list struct {
+				Data struct {
+					Candidates []struct {
+						ID int64 `json:"id"`
+					} `json:"candidates"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(lw.Body.Bytes(), &list); err != nil {
+				t.Fatalf("decode list: %v", err)
+			}
+			ew := doReq(t, h.ExportDedupCandidates, http.MethodGet,
+				"/api/v1/dedup/candidates/export?format=json"+sep+tc.query, nil, nil)
+			if ew.Code != http.StatusOK {
+				t.Fatalf("export status=%d body=%s", ew.Code, ew.Body.String())
+			}
+			var exp struct {
+				Candidates []struct {
+					CandidateID int64 `json:"candidate_id"`
+				} `json:"candidates"`
+			}
+			if err := json.Unmarshal(ew.Body.Bytes(), &exp); err != nil {
+				t.Fatalf("decode export: %v", err)
+			}
+			listIDs, expIDs := map[int64]bool{}, map[int64]bool{}
+			for _, c := range list.Data.Candidates {
+				listIDs[c.ID] = true
+			}
+			for _, c := range exp.Candidates {
+				expIDs[c.CandidateID] = true
+			}
+			if len(listIDs) != tc.want {
+				t.Fatalf("list returned %d rows, want %d (fixture check)", len(listIDs), tc.want)
+			}
+			if len(expIDs) != len(listIDs) {
+				t.Fatalf("export has %d rows, list has %d", len(expIDs), len(listIDs))
+			}
+			for id := range listIDs {
+				if !expIDs[id] {
+					t.Fatalf("list row %d missing from export", id)
+				}
+			}
+		})
 	}
 }

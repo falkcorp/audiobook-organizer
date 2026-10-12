@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.178.0
+// version: 2.178.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-12
 
@@ -6107,6 +6107,7 @@ export function dedupCandidatesExportUrl(
     status?: string | null;
     q?: string | null;
     entity_id?: string | null;
+    entity_type?: string | null;
   },
   format: 'csv' | 'json'
 ): string {
@@ -6116,6 +6117,7 @@ export function dedupCandidatesExportUrl(
   if (filters.band) qs.set('band', filters.band);
   if (filters.q?.trim()) qs.set('q', filters.q.trim());
   if (filters.entity_id) qs.set('entity_id', filters.entity_id);
+  if (filters.entity_type) qs.set('entity_type', filters.entity_type);
   return `${API_BASE}/dedup/candidates/export?${qs}`;
 }
 
