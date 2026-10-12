@@ -1,5 +1,5 @@
 // file: internal/server/catalog_coverage_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e2c61-0d7f-4a93-b1c4-e9a3f6d82b07
 // last-edited: 2026-10-12
 //
@@ -37,6 +37,10 @@ const catalogCoverageOpID = "catalog.coverage-report"
 // catalogCoverageTopN is how many unharvested credits the report names.
 const catalogCoverageTopN = 50
 
+// catalogCoverageUnreadableLogCap bounds how many unreadable books are logged
+// by id; the full count is always in the result.
+const catalogCoverageUnreadableLogCap = 20
+
 var catalogCoverageLog = logger.New("catalog-coverage-op")
 
 func init() {
@@ -54,7 +58,7 @@ func (s *Server) RegisterCatalogCoverageOp(reg *opsregistry.Registry) error {
 		Liveness:    opsregistry.LivenessRunItems,
 		Plugin:      "catalog",
 		DisplayName: "Author Catalog Coverage Report",
-		Description: "Read-only. Of the primary books that are unidentified (ident:unasked or ident:asked_empty), counts how many have at least one credited author with a harvested catalog block, and names the 50 unharvested credits that would cover the most books. Writes nothing; no network.",
+		Description: "Read-only. Of the primary books that are unidentified (ident:unasked or ident:asked_empty), counts how many have at least one credited author with a harvested catalog block, and names the 50 unharvested credits that would cover the most books. Writes nothing; no network. The covered count is an upper bound: cat_author:name: keys also exist for co-authors of harvested titles, so a credit can have a block without ever having been harvested itself. Books whose rows cannot be read are counted as considered with unknown scope (books_unreadable); a catalog read error fails the run.",
 		Cancellable: true,
 		// A reader of the whole library: low priority so it yields to the ops
 		// that change state.
@@ -64,9 +68,16 @@ func (s *Server) RegisterCatalogCoverageOp(reg *opsregistry.Registry) error {
 		// restart simply runs it again.
 		ResumePolicy:   opsregistry.ResumeRestart,
 		ConcurrencyKey: catalogCoverageOpID,
-		Permissions:    []auth.Permission{auth.PermSettingsManage},
-		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead},
-		Run:            s.runCatalogCoverageOp,
+		// Do not start while the harvest is writing author blocks: the count
+		// would move under the report. DependsOn is one-directional (this op
+		// waits for the harvest); the registry's write-set gate does not
+		// consult Reads, so the harvest itself is not held back by a running
+		// report.
+		DependsOn:    []string{catalogHarvestOpID},
+		Reads:        []opsregistry.Resource{opsregistry.ResBooks, opsregistry.ResAuthors, opsregistry.ResCatalog},
+		Permissions:  []auth.Permission{auth.PermSettingsManage},
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead},
+		Run:          s.runCatalogCoverageOp,
 	})
 }
 
@@ -125,8 +136,8 @@ func catalogCoverageRunOptions(total int) opsregistry.RunItemsOptions {
 	}
 }
 
-// catalogCoverageCredit is one unharvested credit and the unidentified books
-// it is the only way to reach.
+// catalogCoverageCredit is one unharvested credit and the uncovered books it
+// is credited on.
 type catalogCoverageCredit struct {
 	Credit string `json:"credit"`
 	Books  int    `json:"books"`
@@ -134,10 +145,15 @@ type catalogCoverageCredit struct {
 
 // catalogCoverageResult is the single JSON line the op logs.
 type catalogCoverageResult struct {
-	BooksConsidered       int                     `json:"books_considered"`
-	BooksCovered          int                     `json:"books_covered"`
-	BooksUncovered        int                     `json:"books_uncovered"`
-	BooksUnreadable       int                     `json:"books_unreadable"`
+	BooksConsidered int `json:"books_considered"`
+	BooksCovered    int `json:"books_covered"`
+	BooksUncovered  int `json:"books_uncovered"`
+	BooksUnreadable int `json:"books_unreadable"`
+	// UnreadableNote is set when books_unreadable is non-zero: those books
+	// are counted in books_considered but sit in neither covered nor
+	// uncovered, because their scope (and so whether they belong in the
+	// report at all) is unknown.
+	UnreadableNote        string                  `json:"unreadable_note,omitempty"`
 	CatalogAuthorBlocks   int                     `json:"catalog_author_blocks"`
 	TopUnharvestedCredits []catalogCoverageCredit `json:"top_unharvested_credits"`
 }
@@ -149,6 +165,9 @@ type coverageTally struct {
 	covered    int
 	uncovered  int
 	unreadable int
+	// unreadableLogged is how many unreadable books have had their id and
+	// error logged; capped at catalogCoverageUnreadableLogCap.
+	unreadableLogged int
 	// unharvested maps FoldKey(credit) to the credit's display name (the
 	// lexicographically smallest spelling seen, so the output does not depend
 	// on which worker got there first) and the uncovered books it appears on.
@@ -162,11 +181,21 @@ func (t *coverageTally) addCovered() {
 	t.mu.Unlock()
 }
 
-func (t *coverageTally) addUnreadable() {
+// addUnreadable counts a book whose row or credits could not be read. It
+// counts as considered with unknown scope (the row that would say whether the
+// book is in the Library's default view is the one that failed), and its id
+// and error are logged for the first catalogCoverageUnreadableLogCap books so
+// a failing store is diagnosable without flooding the log. IDs only: a book
+// id is not library content, a title or author name is.
+func (t *coverageTally) addUnreadable(bookID string, err error) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.considered++
 	t.unreadable++
-	t.mu.Unlock()
+	if t.unreadableLogged < catalogCoverageUnreadableLogCap {
+		t.unreadableLogged++
+		catalogCoverageLog.Warn("catalog coverage: book %s unreadable, counted as considered with unknown scope: %v", bookID, err)
+	}
 }
 
 // addUncovered records an uncovered book and each of its credits (deduplicated
@@ -257,8 +286,7 @@ func runCatalogCoverage(ctx context.Context, reporter opsregistry.Reporter, book
 		catalogCoverageOptsObserver(opts)
 	}
 	err = opsregistry.RunItems(ctx, reporter, ids, func(_ context.Context, id string) error {
-		coverBook(books, cat, tally, id)
-		return nil
+		return coverBook(books, cat, tally, id)
 	}, opts)
 	if err != nil {
 		return err
@@ -271,6 +299,12 @@ func runCatalogCoverage(ctx context.Context, reporter opsregistry.Reporter, book
 		BooksUnreadable:       tally.unreadable,
 		CatalogAuthorBlocks:   blocks,
 		TopUnharvestedCredits: tally.top(catalogCoverageTopN),
+	}
+	if res.BooksUnreadable > 0 {
+		res.UnreadableNote = "unreadable books are counted in books_considered with unknown scope; they are in neither books_covered nor books_uncovered"
+		msg := fmt.Sprintf("%d books could not be read (first %d logged by id at warn): %s",
+			res.BooksUnreadable, min(res.BooksUnreadable, catalogCoverageUnreadableLogCap), res.UnreadableNote)
+		_ = reporter.Log(slog.LevelWarn, msg)
 	}
 	line, err := json.Marshal(res)
 	if err != nil {
@@ -290,22 +324,25 @@ func runCatalogCoverage(ctx context.Context, reporter opsregistry.Reporter, book
 }
 
 // coverBook classifies one book into the tally. A book that is gone, or no
-// longer in the Library's default view, is not considered; one whose row or
-// credits cannot be read counts as unreadable, never as covered or uncovered.
-func coverBook(books catalogCoverageBooks, cat catalogCoverageCatalog, tally *coverageTally, id string) {
+// longer in the Library's default view, is not considered. A book whose row or
+// credit list cannot be read is a book-level failure: it counts as
+// unreadable (considered, unknown scope; never covered or uncovered) and the
+// run continues. A catalog read error is not book-level -- the catalog is
+// what the report measures against, so a failing read would silently skew
+// every count -- and is returned so RunItems fails the op.
+func coverBook(books catalogCoverageBooks, cat catalogCoverageCatalog, tally *coverageTally, id string) error {
 	book, err := books.GetBookByID(id)
 	if err != nil {
-		tally.addUnreadable()
-		return
+		tally.addUnreadable(id, err)
+		return nil
 	}
-	if book == nil || !database.EffectiveIsPrimaryVersion(book.IsPrimaryVersion) ||
-		book.IsSoftDeleted() || book.QuarantinedAt != nil {
-		return
+	if !database.InLibraryDefaultView(book) {
+		return nil
 	}
 	credits, err := database.LiveBookAuthorNames(books, book)
 	if err != nil {
-		tally.addUnreadable()
-		return
+		tally.addUnreadable(id, err)
+		return nil
 	}
 	unharvested := make(map[string]string, len(credits))
 	for _, credit := range credits {
@@ -318,16 +355,16 @@ func coverBook(books catalogCoverageBooks, cat catalogCoverageCatalog, tally *co
 		}
 		has, err := cat.HasAuthorKey(fold)
 		if err != nil {
-			tally.addUnreadable()
-			return
+			return fmt.Errorf("%s: catalog author lookup for book %s: %w", catalogCoverageOpID, id, err)
 		}
 		if has {
 			tally.addCovered()
-			return
+			return nil
 		}
 		if prev, dup := unharvested[fold]; !dup || credit < prev {
 			unharvested[fold] = credit
 		}
 	}
 	tally.addUncovered(unharvested)
+	return nil
 }

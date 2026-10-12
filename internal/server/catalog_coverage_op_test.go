@@ -1,5 +1,5 @@
 // file: internal/server/catalog_coverage_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d94f17-8a2e-4b60-9d15-7e1b0a6f3c82
 // last-edited: 2026-10-12
 
@@ -169,6 +169,9 @@ func TestCatalogCoverage_ThreeCounts(t *testing.T) {
 	if res.CatalogAuthorBlocks != 6 {
 		t.Errorf("catalog_author_blocks = %d; want 6", res.CatalogAuthorBlocks)
 	}
+	if !strings.Contains(res.UnreadableNote, "unknown scope") {
+		t.Errorf("unreadable_note = %q; want it to say unreadable books are counted with unknown scope", res.UnreadableNote)
+	}
 	if got, want := rep.lastProgress(), "covered 6 of 10 (60.0%)"; got != want {
 		t.Errorf("final progress = %q; want %q", got, want)
 	}
@@ -211,6 +214,15 @@ func TestCatalogCoverage_IgnoresIdentifiedAndNonPrimary(t *testing.T) {
 		b.QuarantinedAt = &now
 	})
 	seedCoverageBook(t, ps, "Title 000008", []string{"Author 31"}, func(b *database.Book) { b.IsPrimaryVersion = &yes })
+	// has_candidates: a covered author and a metadata_cache row with one
+	// candidate. Fetched-but-unapproved is not "missing", so it is excluded.
+	hasCandidates := seedCoverageBook(t, ps, "Title 000009", []string{"Author 30"}, nil)
+	if err := ps.PutMetadataCache(&database.MetadataCandidateCache{
+		BookID:     hasCandidates,
+		Candidates: []json.RawMessage{json.RawMessage(`{"title":"a candidate"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	rep, err := runCoverage(t, ps, ps, cat)
 	if err != nil {
@@ -222,6 +234,15 @@ func TestCatalogCoverage_IgnoresIdentifiedAndNonPrimary(t *testing.T) {
 	if res.BooksConsidered != 3 || res.BooksCovered != 1 || res.BooksUncovered != 2 {
 		t.Fatalf("considered=%d covered=%d uncovered=%d; want 3/1/2 (identified, held, non-primary, trashed and quarantined books are not measured)",
 			res.BooksConsidered, res.BooksCovered, res.BooksUncovered)
+	}
+	// The op's selection must agree with the number the Library's
+	// "ident:missing" filter and the review summary show.
+	counts := ps.IdentCounts()
+	if !counts.Ready {
+		t.Fatal("ident index not ready")
+	}
+	if want := database.IdentMissing(counts.Primary); int64(res.BooksConsidered) != want {
+		t.Fatalf("books_considered = %d; the ident index's primary missing count = %d", res.BooksConsidered, want)
 	}
 }
 
@@ -411,6 +432,77 @@ func TestCatalogCoverage_FailsWhenIdentIndexNotReady(t *testing.T) {
 	err := runCatalogCoverage(context.Background(), &coverageReporter{}, ps, notReadyIdents{}, cat)
 	if !errors.Is(err, database.ErrIdentIndexBuilding) {
 		t.Fatalf("err = %v; want it to wrap ErrIdentIndexBuilding", err)
+	}
+}
+
+// failingCatalog is a catalog whose exact-key read fails.
+type failingCatalog struct{ err error }
+
+func (f failingCatalog) HasAuthorKey(string) (bool, error) { return false, f.err }
+func (failingCatalog) CountAuthorNameBlocks() (int, error) { return 5, nil }
+
+// A catalog read error is not a book-level problem: the catalog is what the
+// report measures against, so the run must fail rather than report numbers
+// that quietly treat a failing read as "no block".
+func TestCatalogCoverage_CatalogReadErrorFailsTheOp(t *testing.T) {
+	ps, _ := newCoverageStore(t)
+	for i := range 5 {
+		seedCoverageBook(t, ps, fmt.Sprintf("Title %06d", i), []string{fmt.Sprintf("Author %02d", i)}, nil)
+	}
+	boom := errors.New("synthetic catalog failure")
+	rep := &coverageReporter{}
+	err := runCatalogCoverage(context.Background(), rep, ps, ps, failingCatalog{err: boom})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want the catalog error to fail the op", err)
+	}
+	rep.mu.Lock()
+	defer rep.mu.Unlock()
+	for _, l := range rep.logs {
+		if strings.HasPrefix(l, "{") {
+			t.Fatalf("a failed run still logged a result line: %q", l)
+		}
+	}
+}
+
+// Through the real wiring: runCatalogCoverageOp resolves the store, the
+// catalog store and the ident index capability from the Server itself, so a
+// regression in storeForWiring, NewCatalogStoreFromStore or AsCapability
+// shows here and not in the injected-dependency tests above.
+func TestCatalogCoverage_RunsThroughServerWiring(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	ps := database.AsPebbleStore(s.storeForWiring())
+	if ps == nil {
+		t.Fatal("test server has no Pebble store")
+	}
+	cat := database.NewCatalogStoreFromStore(ps)
+	seedCoverageBook(t, ps, "Title 000001", []string{"Author 70"}, nil)
+	seedCoverageBook(t, ps, "Title 000002", []string{"Author 71"}, nil)
+	seedCatalogBlock(t, cat, "Author 70")
+
+	rep := &coverageReporter{}
+	if err := s.runCatalogCoverageOp(context.Background(), nil, rep); err != nil {
+		t.Fatal(err)
+	}
+	res := rep.result(t)
+	if res.BooksConsidered != 2 || res.BooksCovered != 1 || res.BooksUncovered != 1 || res.CatalogAuthorBlocks != 1 {
+		t.Fatalf("considered=%d covered=%d uncovered=%d blocks=%d; want 2/1/1/1",
+			res.BooksConsidered, res.BooksCovered, res.BooksUncovered, res.CatalogAuthorBlocks)
+	}
+
+	// The def the server registered declares what the review asked for.
+	def, ok := s.OpRegistry().Def(catalogCoverageOpID)
+	if !ok {
+		t.Fatalf("%s is not registered on the server", catalogCoverageOpID)
+	}
+	if !slices.Contains(def.DependsOn, catalogHarvestOpID) {
+		t.Errorf("DependsOn = %v; want it to include %s", def.DependsOn, catalogHarvestOpID)
+	}
+	if !slices.Contains(def.Reads, opsregistry.ResCatalog) || len(def.Writes) != 0 {
+		t.Errorf("Reads = %v Writes = %v; want a catalog reader that writes nothing", def.Reads, def.Writes)
+	}
+	if !strings.Contains(def.Description, "upper bound") {
+		t.Errorf("description does not say the covered count is an upper bound: %q", def.Description)
 	}
 }
 

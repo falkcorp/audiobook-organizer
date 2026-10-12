@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_ident.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 181ccbf7-b0ca-4392-83cf-f054eb73e20d
 // last-edited: 2026-10-12
 
@@ -172,7 +172,7 @@ func (svc *AudiobookService) resolveIdentFilters(f ListFilters) (ListFilters, er
 // counters when the request is exactly "ident: filters over the Library's
 // default view": primary versions, quarantined books excluded, trash
 // excluded (no marked_for_deletion filter), and nothing else. That is the
-// scope the primary counters count (database.identInScope), so the counter
+// scope the primary counters count (database.InLibraryDefaultView), so the counter
 // and the walk agree. ok is false for any other request, which then takes
 // the restricted walk.
 func (svc *AudiobookService) identCounterCount(f ListFilters) (n int, ok bool, err error) {
