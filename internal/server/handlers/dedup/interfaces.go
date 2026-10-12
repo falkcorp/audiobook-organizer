@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
 // last-edited: 2026-10-12
 
@@ -58,13 +58,20 @@ type DedupStore interface {
 	// per-candidate lookup.
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error) // BookBulkReader
 	GetAllAuthors() ([]database.Author, error)                      // AuthorStore
+}
 
-	// GetBooksBySeriesIDAllVersions backs the list's series_id filter: the
-	// members of one series, every version included (not only primaries). The
-	// store answers from its series index when that index is complete; a
-	// Pebble-only store falls back to scanning the library, so this is one
-	// bounded read per request rather than a free one. The Core variant is
-	// primary-only and would drop pairs whose book is a non-primary version.
+// SeriesBooksStore is the one read behind the candidate list's series_id
+// filter. It is its own interface rather than a DedupStore method because
+// DedupStore is already at the 8-method interfacebloat limit, and this read is
+// used by one handler path (candidateFilterFromParams) and nothing else.
+//
+// GetBooksBySeriesIDAllVersions returns the members of one series, every
+// version included (not only primaries). The store answers from its series
+// index when that index is complete; a Pebble-only store falls back to scanning
+// the library, so this is one bounded read per request rather than a free one.
+// The Core variant is primary-only and would drop pairs whose book is a
+// non-primary version.
+type SeriesBooksStore interface {
 	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error) // BookStore
 }
 

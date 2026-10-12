@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.17.0
+// version: 1.17.1
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-10-12
 
@@ -1175,7 +1175,7 @@ export function useDupesLane(
           void runSequential(action.ids, (id) => api.rejectDedupCandidate(id), 'Dismissed');
           return;
 
-        case 'linkCluster':
+        case 'linkCluster': {
           // Two books is the smallest cluster; the endpoint refuses fewer, and a
           // card cannot produce fewer, so this is the invariant, not the UI.
           if (action.ids.length < 2) return;
@@ -1216,6 +1216,7 @@ export function useDupesLane(
             }
           );
           return;
+        }
 
         case 'rejectCluster':
           if (action.ids.length < 2 || action.candidateIds.length === 0) return;

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.32.1
+// version: 1.33.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-12
 
@@ -73,6 +73,11 @@ type Handler struct {
 	// from this field directly (no lazy provider needed).
 	store DedupStore
 
+	// seriesBooks backs the list's series_id filter (see SeriesBooksStore).
+	// Same wire-time snapshot as store, held separately so DedupStore stays
+	// within the interface-width limit.
+	seriesBooks SeriesBooksStore
+
 	// embeddingStore is the wire-time snapshot of the concrete
 	// *database.EmbeddingStore. Concrete pointer (not interface) because
 	// EmbeddingStore is a clean db type under heavy multi-method use.
@@ -136,6 +141,7 @@ func (h *Handler) writeCandidateStatus(es *database.EmbeddingStore, id int64, st
 // New constructs a dedup Handler from its dependencies.
 func New(
 	store DedupStore,
+	seriesBooks SeriesBooksStore,
 	embeddingStore *database.EmbeddingStore,
 	opRegistry OperationsRegistry,
 	mergeService MergeService,
@@ -145,6 +151,7 @@ func New(
 ) *Handler {
 	return &Handler{
 		store:                      store,
+		seriesBooks:                seriesBooks,
 		embeddingStore:             embeddingStore,
 		opRegistry:                 opRegistry,
 		mergeService:               mergeService,
@@ -212,7 +219,7 @@ func (h *Handler) candidateFilterFromParams(c *gin.Context, param func(string) s
 		// version. The store answers from its series index when that is complete;
 		// on a Pebble-only store it falls back to a scan of the library, so this
 		// is one read per request, not a free one.
-		books, berr := h.store.GetBooksBySeriesIDAllVersions(sid)
+		books, berr := h.seriesBooks.GetBooksBySeriesIDAllVersions(sid)
 		if berr != nil {
 			httputil.InternalError(c, "failed to resolve series books", berr)
 			return filter, false
