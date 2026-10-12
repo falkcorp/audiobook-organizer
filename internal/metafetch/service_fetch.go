@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-11
 
@@ -740,13 +740,13 @@ func (mfs *Service) cachedSearchByContext(ctx context.Context, bookID string, sr
 	provider := metadata.ProviderKey(src)
 	endpoint := endpointWithMarketplace(provider, EndpointSearchContext)
 	key := NormalizeQuestion(provider, endpoint, SearchContextQuestion(sc))
-	rs, fromCache, err := cachedCall(mfs.db, provider, endpoint, key, cacheUse{}, func() ([]metadata.BookMetadata, error) {
+	rs, cachedAt, err := cachedCall(mfs.db, provider, endpoint, key, cacheUse{}, func() ([]metadata.BookMetadata, error) {
 		return cs.SearchByContext(ctx, sc)
 	})
 	if err != nil {
 		return rs, err
 	}
-	if fromCache {
+	if !cachedAt.IsZero() {
 		markReleaseYear(rs, src.Name())
 	}
 	if perr := database.RecordPCachePointer(mfs.db, bookID, map[string][]string{provider: {key}}, pcacheNow()); perr != nil {

@@ -1,5 +1,5 @@
 // file: internal/metafetch/pcache.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0e7a4c92-3b15-4d68-8f2e-a91c5d73b046
 // last-edited: 2026-10-11
 
@@ -155,25 +155,27 @@ type cacheUse struct {
 
 // cachedCall answers one provider question from P1, else asks live and
 // stores the raw answer (empty included) when, and only when, the call
-// returned no error. It reports whether the answer came from the cache.
-// use.bypass skips the read; use.readOnly skips the write.
-func cachedCall[T any](store database.PCacheStore, provider, endpoint, key string, use cacheUse, call func() ([]T, error)) ([]T, bool, error) {
+// returned no error. askedAt is when the provider gave a cached answer (the
+// entry's AskedAt), zero when the answer is live: a caller copying a cached
+// answer elsewhere keeps its age. use.bypass skips the read; use.readOnly
+// skips the write.
+func cachedCall[T any](store database.PCacheStore, provider, endpoint, key string, use cacheUse, call func() ([]T, error)) (rs []T, askedAt time.Time, err error) {
 	ttl := questionTTL(provider)
 	if use.bypass {
 		metrics.RecordCacheMiss(pcacheName, pcacheMissBypass)
 	} else if e, ok := pcacheRead(store, key, ttl); ok {
 		if rs, ok := decodeEntry[T](e); ok {
-			return rs, true, nil
+			return rs, e.AskedAt, nil
 		}
 	}
-	rs, err := call()
+	rs, err = call()
 	if err != nil {
-		return rs, false, err
+		return rs, time.Time{}, err
 	}
 	if !use.readOnly {
 		pcacheWrite(store, key, provider, endpoint, rs, len(rs) == 0, ttl, time.Time{})
 	}
-	return rs, false, nil
+	return rs, time.Time{}, nil
 }
 
 // pcacheKeyLog collects the P1 keys one search or walk read or wrote, by
