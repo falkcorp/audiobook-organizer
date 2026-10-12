@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
 // last-edited: 2026-10-11
 
@@ -14,10 +14,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,6 +245,22 @@ func TestBulkDelugeImportJob_ExistingDestinationNeverOverwritten(t *testing.T) {
 		assert.Equal(t, "another book's bytes", string(got), "the file already at the destination was overwritten")
 		assert.Nil(t, updated, "the row must not be repointed to a file that is not its copy")
 	})
+	// Same size, other bytes: only a content comparison refuses this one.
+	t.Run("same size, other bytes: refused, untouched", func(t *testing.T) {
+		root, full := bdiFixture(t)
+		dest := filepath.Join(root, "book.m4b")
+		require.NoError(t, os.WriteFile(dest, []byte("audiodatA"), 0o644)) // fixture source is "audiodata"
+
+		store, updated, _ := runBDI(t, full, func(string, string) (*database.BookFile, error) { return full, nil })
+
+		require.Len(t, store.results, 1)
+		assert.Equal(t, "error", store.results[0].Status)
+		assert.Contains(t, bdiResultError(t, store.results[0]), "already exists with different content")
+		got, err := os.ReadFile(dest)
+		require.NoError(t, err)
+		assert.Equal(t, "audiodatA", string(got), "the file already at the destination was overwritten")
+		assert.Nil(t, updated, "the row must not be repointed to a file that is not its copy")
+	})
 	t.Run("same bytes: adopted without a rewrite", func(t *testing.T) {
 		root, full := bdiFixture(t)
 		dest := filepath.Join(root, "book.m4b")
@@ -376,7 +394,9 @@ func bdiSeedingDeluge(t *testing.T, savePath string) string {
 // left pending with nothing written, as /discovery/import's
 // ImportToLibraryWith refuses it (tagger.ErrProtectedPathWrite). The preview
 // says "protected" with the same predicate, and the live run reports it
-// under that status, not already_in_library or an error.
+// under that status, not already_in_library or an error. While the Deluge
+// list has never loaded the row is left pending the same way but reported
+// protected_list_not_loaded: Deluge being down is no verdict on the file.
 func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -425,14 +445,18 @@ func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 			ctx := maintenance.WithOperationID(context.Background(), bdiOpID)
 			j := &bulkDelugeImportJob{}
 
+			wantStatus := bdiStatusProtected
+			if tc.unloaded {
+				wantStatus = bdiStatusListNotLoaded
+			}
 			require.NoError(t, j.Run(ctx, store, &bdiReporter{}, true))
 			require.Len(t, store.results, 1)
-			assert.Contains(t, store.results[0].ResultJSON, `"action":"protected"`)
+			assert.Contains(t, store.results[0].ResultJSON, `"action":"`+wantStatus+`"`)
 
 			store.results = nil
 			require.NoError(t, j.Run(ctx, store, &bdiReporter{}, false))
 			require.Len(t, store.results, 1)
-			assert.Equal(t, bdiStatusProtected, store.results[0].Status)
+			assert.Equal(t, wantStatus, store.results[0].Status)
 
 			got, err := ps.GetBookFileByID(book.ID, row.ID)
 			require.NoError(t, err)
@@ -442,6 +466,165 @@ func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 			pending, err := ps.GetBookFilesNeedingDelugeImportCore()
 			require.NoError(t, err)
 			assert.Len(t, pending, 1, "the protected row stays pending")
+		})
+	}
+}
+
+// bdiPebbleWorld is a Pebble store with RootDir pointed at a fresh library
+// root and the Deluge globals cleared, so no test reaches a real Deluge.
+func bdiPebbleWorld(t *testing.T) (root string, ps *database.PebbleStore, store *bdiPebbleStore) {
+	t.Helper()
+	root = t.TempDir()
+	c := &config.AppConfig
+	origRoot, origMove, origProt, origURL := c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL
+	origHost := c.DownloadClient.Torrent.Deluge.Host
+	t.Cleanup(func() {
+		c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = origRoot, origMove, origProt, origURL
+		c.DownloadClient.Torrent.Deluge.Host = origHost
+	})
+	c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
+	c.DownloadClient.Torrent.Deluge.Host = ""
+
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	return root, ps, &bdiPebbleStore{PebbleStore: ps}
+}
+
+// TestBulkDelugeImportJob_SameBasenameSameBytesSecondRefused: two pending rows
+// in two download directories outside the library, one basename, identical
+// bytes. Both resolve to RootDir/<basename>. The first is copied there and
+// repointed; the second must be refused, because that file is now the first
+// row's. Until review round 3 the job called deluge.CopyIntoLibrary without
+// the ownership check ImportToLibraryWith makes, so the second row adopted the
+// first row's copy and two book_file rows named one file. No row is deleted:
+// the refused one stays pending at its source.
+func TestBulkDelugeImportJob_SameBasenameSameBytesSecondRefused(t *testing.T) {
+	root, ps, store := bdiPebbleWorld(t)
+	book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: root})
+	require.NoError(t, err)
+	var rows []*database.BookFile
+	for i, dir := range []string{t.TempDir(), t.TempDir()} {
+		src := filepath.Join(dir, "01.mp3")
+		require.NoError(t, os.WriteFile(src, []byte("identical audio bytes"), 0o644))
+		row := &database.BookFile{BookID: book.ID, FilePath: src, DelugeHash: fmt.Sprintf("%040d", i+1)}
+		require.NoError(t, ps.CreateBookFile(row))
+		rows = append(rows, row)
+	}
+	dest := filepath.Join(root, "01.mp3")
+
+	ctx := maintenance.WithOperationID(context.Background(), bdiOpID)
+	require.NoError(t, (&bulkDelugeImportJob{}).Run(ctx, store, &bdiReporter{}, false))
+
+	require.Len(t, store.results, 2)
+	statuses := map[string]int{}
+	for _, r := range store.results {
+		statuses[r.Status]++
+	}
+	assert.Equal(t, map[string]int{"imported": 1, "error": 1}, statuses)
+
+	owner, err := ps.GetBookFileByPath(dest)
+	require.NoError(t, err)
+	require.NotNil(t, owner, "the first row must own the library copy")
+	var first, second *database.BookFile
+	for _, r := range rows {
+		got, err := ps.GetBookFileByID(book.ID, r.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got, "no book_file row may be deleted")
+		if got.ID == owner.ID {
+			first = got
+		} else {
+			second = got
+		}
+	}
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	assert.Equal(t, dest, first.FilePath)
+	assert.NotNil(t, first.ImportedFromDelugeAt)
+	assert.NotEqual(t, dest, second.FilePath, "two rows name one file")
+	assert.Nil(t, second.ImportedFromDelugeAt, "the refused row stays pending")
+	assert.Empty(t, second.DelugeOriginalPath)
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "identical audio bytes", string(got), "the first row's copy was disturbed")
+	for _, r := range store.results {
+		if r.Status == "error" {
+			assert.Contains(t, bdiResultError(t, r), "already recorded for book file "+owner.ID)
+		}
+	}
+}
+
+// TestBulkDelugeImportJob_StaticProtectedSourceNotCopied: a source under a
+// static protected prefix (config.ProtectedPaths here; the iTunes library is
+// the same rule) is never copied out and repointed, as /discovery/import's
+// ImportToLibraryWith refuses it. The preview says "protected", the live run
+// reports it under that status, writes nothing and creates no file.
+func TestBulkDelugeImportJob_StaticProtectedSourceNotCopied(t *testing.T) {
+	root, ps, store := bdiPebbleWorld(t)
+	srcDir := t.TempDir()
+	config.AppConfig.ProtectedPaths = []string{srcDir}
+	src := filepath.Join(srcDir, "01.mp3")
+	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
+	book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: srcDir})
+	require.NoError(t, err)
+	row := &database.BookFile{BookID: book.ID, FilePath: src, DelugeHash: "0123456789abcdef0123456789abcdef01234567"}
+	require.NoError(t, ps.CreateBookFile(row))
+
+	ctx := maintenance.WithOperationID(context.Background(), bdiOpID)
+	j := &bulkDelugeImportJob{}
+	require.NoError(t, j.Run(ctx, store, &bdiReporter{}, true))
+	require.Len(t, store.results, 1)
+	assert.Contains(t, store.results[0].ResultJSON, `"action":"protected"`)
+
+	store.results = nil
+	require.NoError(t, j.Run(ctx, store, &bdiReporter{}, false))
+	require.Len(t, store.results, 1)
+	assert.Equal(t, bdiStatusProtected, store.results[0].Status)
+	got, err := ps.GetBookFileByID(book.ID, row.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, src, got.FilePath)
+	assert.Nil(t, got.ImportedFromDelugeAt)
+	_, statErr := os.Stat(filepath.Join(root, "01.mp3"))
+	assert.True(t, os.IsNotExist(statErr), "a static protected source was copied into the library")
+}
+
+// TestBulkDelugeImportJob_UnloadedListProbedOnce: with Deluge configured but
+// down, the run asks it for the protected list once, not twice per in-place
+// row: three in-place rows cost the same Deluge requests as one.
+func TestBulkDelugeImportJob_UnloadedListProbedOnce(t *testing.T) {
+	hitsFor := func(t *testing.T, n int, dryRun bool) int64 {
+		root, ps, store := bdiPebbleWorld(t)
+		var hits atomic.Int64
+		down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+			http.Error(w, "down", http.StatusServiceUnavailable)
+		}))
+		t.Cleanup(down.Close)
+		config.AppConfig.DelugeWebURL = down.URL
+		dir := filepath.Join(root, "Example Author")
+		book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: dir})
+		require.NoError(t, err)
+		for i := range n {
+			row := &database.BookFile{BookID: book.ID, FilePath: filepath.Join(dir, fmt.Sprintf("%02d.mp3", i+1)), DelugeHash: fmt.Sprintf("%040d", i+1)}
+			require.NoError(t, ps.CreateBookFile(row))
+		}
+		ctx := maintenance.WithOperationID(context.Background(), bdiOpID)
+		require.NoError(t, (&bulkDelugeImportJob{}).Run(ctx, store, &bdiReporter{}, dryRun))
+		require.Len(t, store.results, n)
+		for _, r := range store.results {
+			assert.Contains(t, r.Status+r.ResultJSON, bdiStatusListNotLoaded)
+		}
+		pending, err := ps.GetBookFilesNeedingDelugeImportCore()
+		require.NoError(t, err)
+		assert.Len(t, pending, n, "every row stays pending")
+		return hits.Load()
+	}
+	for _, dry := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry_run=%v", dry), func(t *testing.T) {
+			one, three := hitsFor(t, 1, dry), hitsFor(t, 3, dry)
+			assert.Positive(t, one, "fixture: the probe must reach the Deluge endpoint")
+			assert.Equal(t, one, three, "Deluge requests grew with the in-place rows")
 		})
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-11
 //
@@ -386,6 +386,16 @@ func CopyIntoLibrary(src, dest string) (created bool, err error) {
 // path is protected.
 type protectionClassifier interface {
 	ProtectedBy(filePath string) string
+}
+
+// StaticProtection names the static protected prefix path lies under (the
+// checker's static list, config.ProtectedPaths, the iTunes library), or ""
+// when there is none. A source it names is never imported: ImportToLibraryWith
+// refuses it with tagger.ErrProtectedPathWrite. Exported so a preview can say
+// "protected" with the same rule; a nil (or typed-nil) checker leaves only
+// cfg's prefixes, which needs no Deluge list.
+func StaticProtection(cfg *config.Config, protected tagger.PathChecker, path string) string {
+	return staticProtection(cfg, normalizeChecker(protected), path)
 }
 
 // staticProtection names the static protected prefix path lies under -- the
