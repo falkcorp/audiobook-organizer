@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/split_books_fixer.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b55e5de5-a785-4658-9cb0-ab1d3f20a781
 // last-edited: 2026-10-12
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,16 +22,21 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
-// splitBooksFixerID is the Repairs-lane id of the split-book fixer. It
-// replaces the old Split Books tab of the dedup page (owner decision D21:
-// port it as a fixer, then measure it against the fragment fixer's
-// "no parent" rows before deciding whether to retire either).
+// splitBooksFixerID is the Repairs-lane id of the split-book fixer. It takes
+// over from the old Split Books tab of the dedup page (the tab is retired in
+// 03-PR10; owner decision D21: port it as a fixer, then measure it against
+// the fragment fixer's "no parent" rows before deciding whether to retire
+// either).
 const splitBooksFixerID = "dedup.split-books"
+
+var sbLog = logger.New("repairs.split-books")
 
 // Skip kinds of a split-book row (the framework adds its own guard kinds).
 const (
@@ -43,15 +49,6 @@ const (
 	// sbSkipError: a member could not be read, so the row cannot be decided.
 	sbSkipError = "error"
 )
-
-// sbChangeType is the op-journal change type of the two ledger rows an apply
-// writes on the keep book: "row:<row id>" (the decision, journaled before the
-// merge) and "combine_journal" (the merge's undo journal id, after it). The
-// op revert has no case for it, so it is record-only
-// (undo.NotRestorableLabel): the merge is undone through its combine journal
-// (merge.Service.UndoCombine, POST /merge/undo/:journal_id), not through the
-// apply operation's revert.
-const sbChangeType = dedup.SplitBookMergeJournalOrigin
 
 // splitBooksFixer merges split-book clusters: one book stored as several
 // short books (one per chapter file) in one folder, as
@@ -74,9 +71,9 @@ const sbChangeType = dedup.SplitBookMergeJournalOrigin
 // APPLY PATH (03-PR9c, the brief's DISCREPANCY). The spec named an op
 // "dedup.split-book-merge"; no such op exists (op_ids.golden has only
 // dedup.split-book-bulk-merge, whose ConcurrencyKey carries that name). The
-// bulk op is not used: it is an enqueued batch with its own dry-run default,
-// it deletes candidate-store rows, and it writes nothing to the Repairs
-// journal. Apply calls the single-merge core the merge route
+// bulk op is not used: it is an enqueued batch of reviewed candidate
+// snapshots with its own dry-run default, and it writes nothing to the
+// Repairs journal. Apply calls the single-merge core the merge route
 // (MergeSplitBookCandidate) and the bulk op both call,
 // dedup.MergeSplitBookClusterWithOptions, for exactly one cluster: files are
 // MOVED onto the keep (MoveBookFilesToBook repoints book_file rows; none is
@@ -85,24 +82,52 @@ const sbChangeType = dedup.SplitBookMergeJournalOrigin
 // is locked. The core writes its own undo journal (combine journal).
 //
 // The core writes through the store, not through repairs.Writer, so the
-// Writer's per-write fence and lease checks do not cover it. Precheck closes
-// that: it runs under the merge lock (the core takes merge.LockMergeRMW
-// itself; Apply must not hold it, the mutex is not re-entrant), immediately
-// before the core reads anything, and beats the Writer (fence, then lease)
-// before re-checking every member against the row. A run stopped or a lease
-// lost while the core waited for the lock refuses the row with nothing
-// written.
+// Writer's per-write fence and lease checks do not cover its writes. Its
+// hooks put them back:
 //
-// JOURNAL. The decision is journaled on the keep (sbChangeType,
-// "row:<row id>") BEFORE the merge, voided if the merge refuses, and the
-// combine journal id after it, so the Repairs journal records every merge
-// and names its undo.
+//   - AcquireLock: the core takes merge.LockMergeRMW through
+//     Writer.LockWaiting, which renews the stand-down lease while an outside
+//     merge holds the lock and beats once more after taking it. Apply must
+//     not hold the lock itself (the mutex is not re-entrant).
+//   - Precheck, under the lock before the core reads anything: beats the
+//     Writer (fence, then lease), then re-checks the cluster against the
+//     row -- every member live, at its path, with its book_file rows and
+//     still no iTunes book (the plan's predicate, re-run), and the folder's
+//     live books exactly the planned set (a book added to the folder since
+//     the run's detector snapshot would be left behind by the merge).
+//     Any change refuses the row changed_since_plan with nothing written.
+//   - OnJournal: journals the pointer to the combine journal (a beat) before
+//     the first mutation; a refusal leaves nothing mutated.
+//   - BeforeSource: beats before each source is absorbed, so a run stopped,
+//     or a lease lost, mid-cluster stops the merge before the next source.
+//     The sources already absorbed stay merged and journaled; the row is
+//     reported aborted or canceled with the fence's or lease's error.
+//
+// JOURNAL. An apply writes two op-journal rows on the keep book, both
+// stamped with this fixer's id (OperationChange.Source):
+//
+//   - the decision, undo.ChangeTypeRepairPlanRecord, FieldName "row:<row
+//     id>", NewValue sbRecord: a ledger note (kept by the journal prune,
+//     restores nothing), journaled before the merge and voided if the merge
+//     refuses. The fragment fixer takes a plan record for its own only
+//     with its own Source; its prune check (fragJournal.pruned) counts any
+//     plan record as a row the prune keeps, which this one is.
+//   - the pointer, undo.ChangeTypeMergeCombineJournal, NewValue the merge's
+//     combine journal id: journaled from the merge's OnJournal hook, after
+//     the journal is written and before the merge's first mutation. It is
+//     restorable: reverting the apply operation undoes the merge through
+//     that journal (merge.Service.UndoCombine).
 //
 // RESUME. A merge cut off part-way (a lost lease, a cancel, a crash) is not
 // resumed as such: the re-plan sees the sources it already retired, the
 // fingerprint differs, and the row settles changed_since_plan. The combine
 // journal names every step already made (it is written before each one), so
-// undoing it reverses the partial merge; a fresh plan offers what is left.
+// reverting the apply operation (or POST /merge/undo/:journal_id) reverses
+// the partial merge; a fresh plan offers what is left.
+//
+// CANDIDATE ROWS. A complete merge deletes the dedup.SplitBookStore row with
+// the same book set, as the bulk merge op does, so the Split Books tab stops
+// listing a cluster that no longer exists.
 //
 // Written Evaluate-style for the ops v3 port: evaluate decides ONE cluster
 // from reads it makes itself, with no writer; Plan and Replan differ only in
@@ -123,8 +148,8 @@ func (f *splitBooksFixer) Description() string {
 		"numbered files in sequence). Applying a row merges the cluster into its suggested keep book: every " +
 		"file row moves onto it (none is deleted), listening progress and external ids follow, the other " +
 		"books are retired, and the keep takes the suggested title unless its title is locked. A cluster " +
-		"with an iTunes book is skipped. A merge is undone from its merge undo journal (the row's " +
-		"\"combine_journal\" entry in the apply operation's changes), not by reverting the apply operation. " +
+		"with an iTunes book is skipped. Reverting the apply operation undoes its merges (through each " +
+		"merge's undo journal, which the operation's changes name). It takes over from the Split Books tab. " +
 		"The fragment fixer's \"no parent\" rows can cover the same clusters; run both trials and compare."
 }
 
@@ -141,6 +166,10 @@ type sbDecision struct {
 	keep  string
 	srcs  []string
 	title string
+	// shape and folder name the detector's bucket; ids is every member,
+	// sorted. Precheck re-lists the bucket's live books against ids.
+	shape, folder string
+	ids           []string
 	// paths and files are every member's book path and sorted book_file ids
 	// as evaluate read them; Precheck refuses the merge when any moved.
 	paths map[string]string
@@ -156,21 +185,29 @@ type sbReader interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 }
 
-// mergeStore returns the store the detector and the merge core run on. The
-// core needs the whole dedup.Store; production's OpsStore is the server's
-// database.Store, which satisfies it (as merge-chapter-groups asserts). The
-// assertion is on the store itself, not through AsCapability, so a decorator
-// (the search index's) is never unwrapped past.
-func (f *splitBooksFixer) mergeStore() (dedup.Store, error) {
+// mergeStore returns the store the detector and the merge core run on, and
+// the folder lister Precheck re-lists a cluster's folder with. The core needs
+// the whole dedup.Store, which OpsStore (a narrow interface) does not
+// declare; production's OpsStore() returns the server's database.Store (the
+// search-index decorator, which embeds it), and database.Store satisfies both
+// dedup.Store and database.BookDirLister (asserted at compile time in
+// split_books_fixer_test.go). The assertions are on the store itself, not
+// through AsCapability, so a decorator is never unwrapped past. A store
+// that is neither refuses the fixer.
+func (f *splitBooksFixer) mergeStore() (dedup.Store, database.BookDirLister, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
-		return nil, fmt.Errorf("database not initialized")
+		return nil, nil, fmt.Errorf("database not initialized")
 	}
 	ds, ok := store.(dedup.Store)
 	if !ok {
-		return nil, fmt.Errorf("%s: store %T does not implement the split-book merge surface; refusing", splitBooksFixerID, store)
+		return nil, nil, fmt.Errorf("%s: store %T does not implement the split-book merge surface; refusing", splitBooksFixerID, store)
 	}
-	return ds, nil
+	dl, ok := store.(database.BookDirLister)
+	if !ok {
+		return nil, nil, fmt.Errorf("%s: store %T cannot list a folder's books; refusing", splitBooksFixerID, store)
+	}
+	return ds, dl, nil
 }
 
 // sbSnapshot is the detector's answer at one moment, indexed by row id.
@@ -185,7 +222,7 @@ type sbSnapshot struct {
 // loadSnapshot runs the detector over the whole library. progress, if set,
 // is told how many books have been read.
 func (f *splitBooksFixer) loadSnapshot(ctx context.Context, progress func(loaded int)) (*sbSnapshot, error) {
-	ds, err := f.mergeStore()
+	ds, _, err := f.mergeStore()
 	if err != nil {
 		return nil, err
 	}
@@ -285,11 +322,18 @@ func (f *splitBooksFixer) Replan(ctx context.Context, _ json.RawMessage, planned
 
 // sbApplySession is one apply run's state (repairs.ApplyScoped): the
 // detector runs ONCE per run, on the first re-plan, instead of once per row
-// (each run reads every book). That is safe against the run's own writes
-// because rows are book-disjoint: merging one cluster retires only its own
-// books, so it changes no other row's membership. Writers outside the run
-// are caught by evaluate's fresh per-member reads and, under the merge lock,
-// by Precheck.
+// (each run reads every book). The run's own writes cannot make that
+// snapshot wrong: rows are book-disjoint, and merging one cluster retires
+// only its own books, so it changes no other row's membership.
+//
+// Writers outside the run can. evaluate re-reads every PLANNED member, which
+// catches a member changed, moved or retired since the snapshot, but a book
+// ADDED to a later row's folder after the snapshot is invisible to it: the
+// stale snapshot still lists the old membership, the fingerprint matches,
+// and the merge would leave the new book behind as an orphan. Precheck
+// closes that under the merge lock: it re-lists the folder's live books and
+// refuses the row (changed_since_plan) when they are not exactly the
+// planned set.
 type sbApplySession struct {
 	once sync.Once
 	snap *sbSnapshot
@@ -452,6 +496,7 @@ func (f *splitBooksFixer) evaluate(ctx context.Context, rd sbReader, res *repair
 	}
 	if r.Applicable() {
 		d := &sbDecision{rowID: r.RowID, keep: keep, title: c.SuggestedTitle,
+			shape: c.Shape, folder: c.ParentFolder, ids: ids,
 			paths: map[string]string{}, files: map[string][]string{}}
 		for _, id := range c.BookIDs {
 			if id != keep {
@@ -550,12 +595,12 @@ type sbRecord struct {
 
 // Apply merges one fresh row's cluster through the merge core (see APPLY
 // PATH on splitBooksFixer).
-func (f *splitBooksFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *splitBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*sbDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", splitBooksFixerID, fresh.RowID)
 	}
-	ds, err := f.mergeStore()
+	ds, dl, err := f.mergeStore()
 	if err != nil {
 		return err
 	}
@@ -563,16 +608,46 @@ func (f *splitBooksFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 	if err != nil {
 		return fmt.Errorf("%s: encode the decision of %s: %w", splitBooksFixerID, fresh.RowID, err)
 	}
-	var res *dedup.SplitBookMergeResult
-	// write returns an error only when the core refused before its first
-	// write (Precheck, the iTunes guard, an unreadable keep, a journal that
-	// could not be written), which is exactly when JournalStep voids the
-	// decision row.
-	err = w.JournalStep(d.keep, repairs.UndoEntry{ChangeType: sbChangeType, Field: "row:" + d.rowID, New: string(rec)}, func() error {
+	var (
+		res *dedup.SplitBookMergeResult
+		// stop is the Writer's refusal that stopped the merge between two
+		// sources (a fence revoked, a lease lost). BeforeSource runs in this
+		// goroutine, inside the core.
+		stop error
+	)
+	// The core returns an error only when it refused before its first
+	// mutation (the lock wait, Precheck, the iTunes guard, an unreadable
+	// keep, a journal or pointer that could not be written): exactly when
+	// JournalStep voids the decision row. Once the pointer row is journaled
+	// (OnJournal) it always returns a result, and the decision stands.
+	//
+	// A resumed run that journaled this same decision before (an identical
+	// row is already in the op's journal) does not journal it again, and a
+	// refusal then voids nothing: Writer.voidRow takes back only a row the
+	// call itself created. That earlier row describes the earlier attempt,
+	// which is what the op revert and the journal should keep.
+	err = w.JournalStep(d.keep, repairs.UndoEntry{ChangeType: undo.ChangeTypeRepairPlanRecord, Field: "row:" + d.rowID, New: string(rec)}, func() error {
 		r, merr := dedup.MergeSplitBookClusterWithOptions(ds, d.keep, d.srcs, d.title, dedup.SplitMergeOptions{
-			Precheck: func() error { return sbPrecheck(w, ds, d) },
+			AcquireLock: func(lock, unlock func()) error {
+				return w.LockWaiting(ctx, "the merge lock", lock, unlock)
+			},
+			Precheck: func() error { return sbPrecheck(w, ds, dl, d) },
+			OnJournal: func(journalID string) error {
+				return w.Journal(d.keep, undo.ChangeTypeMergeCombineJournal, undo.MergeCombineJournalField, "", journalID)
+			},
+			BeforeSource: func(src string) error {
+				w.Touch()
+				if berr := w.Beat("split-book merge of " + src + " into " + d.keep); berr != nil {
+					stop = berr
+					return berr
+				}
+				return nil
+			},
 		})
-		if merr != nil {
+		if r == nil {
+			if merr == nil {
+				merr = fmt.Errorf("%s: row %s: the merge returned no result", splitBooksFixerID, fresh.RowID)
+			}
 			return merr
 		}
 		res = r
@@ -580,44 +655,75 @@ func (f *splitBooksFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 	})
 	if err != nil {
 		if errors.Is(err, merge.ErrITunesProtected) {
-			// The plan ran the same guard and found nothing, so a book's
-			// files moved under the iTunes library since.
+			// The plan and Precheck ran the same guard and found nothing, so
+			// a book's files moved under the iTunes library since.
 			return fmt.Errorf("%w: %w", repairs.ErrChangedSincePlan, err)
 		}
 		return err
 	}
-	if res.JournalID != "" {
-		if jerr := w.Journal(d.keep, sbChangeType, "combine_journal", "", res.JournalID); jerr != nil {
-			// The merge is made; only the pointer to its undo journal is
-			// missing from the op journal. %v, not %w: the row reports
-			// partially_applied (settled, visible) rather than a fence or
-			// lease outcome that would re-run a finished merge.
-			return fmt.Errorf("%w: cluster merged into %s, but its undo journal %s is not recorded in the apply's changes: %v",
-				repairs.ErrPartiallyApplied, d.keep, res.JournalID, jerr)
-		}
-	}
 	if len(res.Errors) == 0 && res.MergedSrcCount == len(d.srcs) {
+		f.dropCandidate(d)
 		return nil
 	}
 	msg := fmt.Sprintf("%s: row %s: %d of %d books merged into %s, %d file rows moved (undo journal %q): %s",
 		splitBooksFixerID, fresh.RowID, res.MergedSrcCount, len(d.srcs), d.keep, res.FilesMoved, res.JournalID,
 		strings.Join(res.Errors, "; "))
-	if res.MergedSrcCount > 0 || res.FilesMoved > 0 {
+	partial := res.MergedSrcCount > 0 || res.FilesMoved > 0
+	switch {
+	case stop != nil && partial:
+		// %w on both: the engine reads the lease or fence error first
+		// (aborted / canceled_skipped, not settled), and the message keeps
+		// how far the merge got.
+		return fmt.Errorf("%w: %s: %w", repairs.ErrPartiallyApplied, msg, stop)
+	case stop != nil:
+		return fmt.Errorf("%s: %w", msg, stop)
+	case partial:
 		return fmt.Errorf("%w: %s", repairs.ErrPartiallyApplied, msg)
 	}
 	return errors.New(msg)
 }
 
+// dropCandidate deletes the split-book candidate rows (dedup.SplitBookStore,
+// what the Split Books tab lists) whose book set is d's, after d merged
+// completely, as the bulk merge op does. The merge is made either way, so a
+// failure is logged, not returned.
+func (f *splitBooksFixer) dropCandidate(d *sbDecision) {
+	cs := f.p.deps.SplitBookCandidates()
+	if cs == nil {
+		return
+	}
+	rows, err := cs.List()
+	if err != nil {
+		sbLog.Warn("%s: split-book candidates not listed after merging %s; a stale candidate may remain: %s",
+			splitBooksFixerID, logger.SanitizeLogValue(d.keep), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	for _, c := range rows {
+		ids := append([]string(nil), c.BookIDs...)
+		sort.Strings(ids)
+		if !slices.Equal(ids, d.ids) {
+			continue
+		}
+		if err := cs.Delete(c.ID); err != nil {
+			sbLog.Warn("%s: split-book candidate %s not deleted after its merge into %s: %s",
+				splitBooksFixerID, logger.SanitizeLogValue(c.ID), logger.SanitizeLogValue(d.keep), logger.SanitizeLogValue(err.Error()))
+		}
+	}
+}
+
 // sbPrecheck runs under the merge lock, before the core reads anything for
 // the merge. It beats the Writer (a run stopped, or a lease lost while the
 // core waited for the lock, refuses with nothing written) and then requires
-// every member to be where the row says: live, at the same path, with the
-// same book_file rows. A change is ErrChangedSincePlan; the core wraps it
-// with %w, so the engine reports changed_since_plan.
-func sbPrecheck(w *repairs.Writer, rd sbReader, d *sbDecision) error {
+// the cluster to be what the row says: every member live, at the same path,
+// with the same book_file rows and still no iTunes book (the plan's
+// predicate on fresh reads), and the folder's live books exactly the
+// planned set. A change is ErrChangedSincePlan; the core wraps it with %w, so
+// the engine reports changed_since_plan.
+func sbPrecheck(w *repairs.Writer, rd sbReader, dl database.BookDirLister, d *sbDecision) error {
 	if err := w.Beat("split-book merge " + d.rowID); err != nil {
 		return err
 	}
+	res := repairs.NewPathResolver()
 	for _, id := range append([]string{d.keep}, d.srcs...) {
 		m, err := sbReadMember(rd, id)
 		if err != nil {
@@ -633,6 +739,45 @@ func sbPrecheck(w *repairs.Writer, rd sbReader, d *sbDecision) error {
 		case strings.Join(m.files, ",") != strings.Join(d.files[id], ","):
 			return fmt.Errorf("%w: book %s file rows changed", repairs.ErrChangedSincePlan, id)
 		}
+		why, unsure, err := sbITunesWhy(rd, res, m)
+		switch {
+		case err != nil:
+			return err
+		case unsure:
+			return fmt.Errorf("%w: could not tell whether book %s is an iTunes book (a path could not be resolved)", repairs.ErrChangedSincePlan, id)
+		case why != "":
+			return fmt.Errorf("%w: book %s is an iTunes book now (%s)", repairs.ErrChangedSincePlan, id, why)
+		}
+	}
+	live, err := dl.LiveBookPathsUnderDir(d.folder)
+	if err != nil {
+		return fmt.Errorf("re-list folder %s: %w", d.folder, err)
+	}
+	now := sbBucketMembers(d.shape, d.folder, live)
+	if !slices.Equal(now, d.ids) {
+		return fmt.Errorf("%w: folder %s now holds books %s, not the planned %s; a merge would leave a book behind",
+			repairs.ErrChangedSincePlan, d.folder, strings.Join(now, ","), strings.Join(d.ids, ","))
 	}
 	return nil
+}
+
+// sbBucketMembers is the detector's bucket of a (shape, folder) cluster among
+// live (id -> FilePath of every live book beneath folder): the books directly
+// in folder for the parent shapes, the books one folder down for the
+// grandparent shape. The detector puts the whole bucket in the cluster, so a
+// book in the bucket that is not in the row would be left behind. Sorted.
+func sbBucketMembers(shape, folder string, live map[string]string) []string {
+	folder = filepath.Clean(folder)
+	ids := make([]string, 0, len(live))
+	for id, p := range live {
+		dir := filepath.Dir(p)
+		if shape == "grandparent" {
+			dir = filepath.Dir(dir)
+		}
+		if dir == folder {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }

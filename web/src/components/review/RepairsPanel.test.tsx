@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.13.0
+// version: 1.13.1
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-12
 //
@@ -1078,9 +1078,10 @@ describe('RepairsPanel — view modes', () => {
   });
 });
 
-// The split-book fixer (dedup.split-books) that replaces the old Split Books
-// tab: a cluster row marks its suggested keep among its books, and a cluster
-// with an iTunes book is listed as skipped with the reason "iTunes".
+// The split-book fixer (dedup.split-books), which takes over from the old Split
+// Books tab (the tab is retired in 03-PR10): a cluster row marks its suggested
+// keep among its books, and a cluster with an iTunes book is listed as
+// skipped with the reason "iTunes".
 describe('RepairsPanel — split books', () => {
   const SPLIT_FIXER: RepairFixer = {
     id: 'dedup.split-books',
