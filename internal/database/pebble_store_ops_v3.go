@@ -61,6 +61,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -336,34 +337,39 @@ func encodeRunHot(r *RunRecord) ([]byte, error) {
 }
 
 // stageRecord stages next's opv3:run: and opv3:prog: values, each only when
-// it differs from prev's (prev nil: both). A progress tick so rewrites only
-// the small key.
+// it differs from prev's (prev nil: both), so a progress tick rewrites only
+// the small key. The comparison is reflect.DeepEqual on the decoded halves,
+// not on their encodings, so a tick never marshals the Params and Result
+// blobs: equal values always encode equally, and the only thing DeepEqual can
+// get "wrong" (a time that is the same instant in another representation) is
+// one redundant write.
 func (s *opsV3Stage) stageRecord(prev, next *RunRecord) error {
-	for _, part := range []struct {
-		key    []byte
-		encode func(*RunRecord) ([]byte, error)
-	}{
-		{opv3RunKey(next.ID), encodeRunCore},
-		{opv3ProgKey(next.ID), encodeRunHot},
-	} {
-		data, err := part.encode(next)
+	if prev == nil || !reflect.DeepEqual(runCoreOf(prev), runCoreOf(next)) {
+		data, err := encodeRunCore(next)
 		if err != nil {
 			return err
 		}
-		if prev != nil {
-			old, err := part.encode(prev)
-			if err != nil {
-				return err
-			}
-			if bytes.Equal(old, data) {
-				continue
-			}
+		if err := s.b.Set(opv3RunKey(next.ID), data, nil); err != nil {
+			return err
 		}
-		if err := s.b.Set(part.key, data, nil); err != nil {
+	}
+	if prev == nil || !reflect.DeepEqual(hotOf(prev), hotOf(next)) {
+		data, err := encodeRunHot(next)
+		if err != nil {
+			return err
+		}
+		if err := s.b.Set(opv3ProgKey(next.ID), data, nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// runCoreOf is r without its runHot fields: what opv3:run: stores.
+func runCoreOf(r *RunRecord) RunRecord {
+	c := *r
+	c.Progress, c.LastProgressAt, c.LastCheckpointAt, c.V2RowHash = ProgressSnapshot{}, nil, nil, ""
+	return c
 }
 
 func (s *opsV3Stage) stageIndexDiff(prev, next []string) error {
