@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.88.4
+// version: 2.89.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-12
 
@@ -522,6 +522,30 @@ func (s *Server) publishEvent(ctx context.Context, event plugin.Event) {
 	}
 }
 
+// opRegistryRunStateGate enforces the invariant that a Pebble-backed server's
+// operations registry has its ops v3 run state (opsregistry.Registry.
+// HasRunStateV3). bare is the store NewServer was given, before the
+// search-index decorator wraps it; it is the only place that sees both that
+// store and the registry built over the wrapped one. It is typed any, like
+// database.AsPebbleStore's argument, because the gate only asks whether a
+// *PebbleStore is in its chain (and a database.Store parameter would count
+// against TestStoreReferenceCount's baseline).
+//
+// A store with no *PebbleStore in its chain (a mockery mock) passes: the
+// registry then runs the pre-05-PR4 v2-only paths, which is what those tests
+// expect. A nil registry passes too; nothing would run on it.
+func opRegistryRunStateGate(bare any, reg *opsregistry.Registry) error {
+	if reg == nil || database.AsPebbleStore(bare) == nil {
+		return nil
+	}
+	if reg.HasRunStateV3() {
+		return nil
+	}
+	return fmt.Errorf("operations registry did not resolve the ops v3 run state from the Pebble store "+
+		"(store type %T); a store decorator between them hides it without an Unwrap, "+
+		"so stopping runs, the boot sweep and requeue successors would silently be recorded v2-only", bare)
+}
+
 // NewServer constructs a Server with an explicit Store dependency.
 // s.Ops() is still assigned at startup for code that hasn't
 // been migrated to use s.Ops() yet (see DI migration plan 4.4).
@@ -729,6 +753,18 @@ func NewServer(store database.Store) *Server {
 		os.Exit(1)
 	}
 	wireServerFromContainer(server, regContainer)
+	// The operations registry resolves its ops v3 run state from the store it
+	// was built with, through the search-index decorator's Unwrap. If that
+	// lookup misses on a Pebble-backed server, every v3 path (stopping runs,
+	// the boot sweep, requeue successors) silently degrades to "no record".
+	// Refuse to construct such a server instead. NewServer has no error
+	// return, and the operation-runner child (cmd/child_mode.go) builds its
+	// server here without ever calling Start, so a Start-time gate such as
+	// opRegistrationGate would miss it: exit, as for a nil store above.
+	if err := opRegistryRunStateGate(store, server.opRegistry); err != nil {
+		lifecycleLog.Error("NewServer: %v", err)
+		os.Exit(1)
+	}
 	server.initSearchResultCache()
 	server.container = regContainer
 	server.registerPebbleMetricsSources()

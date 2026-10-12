@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.52.1
+// version: 1.53.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-10-12
 
@@ -1358,11 +1358,16 @@ func migration064Up(store migrationStore) error {
 // (MigrateOpsV2ToV3), 500 rows per batch. No op id changes and every opv2:
 // key stays: the v2 store methods keep writing both families from here on
 // (the mirror, D25), so the previous binary can be redeployed.
+//
+// A store that cannot build the records is an error, not a skip: returning
+// nil would record 65 as applied, so the records would never be built even
+// after the store is fixed, while the registry and the boot reconcile assume
+// they exist. Every production store is a *PebbleStore; AsCapability also
+// sees through an opted-in decorator.
 func migration065Up(store migrationStore) error {
-	m, ok := store.(opsV3Migrator)
+	m, ok := AsCapability[opsV3Migrator](store)
 	if !ok {
-		opsV3Log.Warn("migration 65: store %T cannot build opv3 run records; nothing to do", store)
-		return nil
+		return fmt.Errorf("migration 65: store %T cannot build opv3 run records (no MigrateOpsV2ToV3)", store)
 	}
 	start := time.Now()
 	rep, err := m.MigrateOpsV2ToV3(opsV3MigrationBatch, nil)

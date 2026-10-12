@@ -1,5 +1,5 @@
 // file: internal/operations/registry/run_state_v3_resolve_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 36be2604-c7f2-40f7-a227-ed84dcfb1b84
 // last-edited: 2026-10-12
 
@@ -37,7 +37,7 @@ type opaqueDecorator struct {
 func TestNew_ResolvesRunStateV3ThroughAnUnwrappingDecorator(t *testing.T) {
 	store := newV3Store(t)
 	r := registry.New(unwrappingDecorator{Store: store}, slog.Default(), 1, nil)
-	if !r.HasRunStateV3ForTest() {
+	if !r.HasRunStateV3() {
 		t.Fatal("registry did not resolve the v3 run state through a decorator that exposes Unwrap; " +
 			"in production every v3 path (stopping, boot sweep, requeue successor) would act as if no run had a record")
 	}
@@ -45,7 +45,7 @@ func TestNew_ResolvesRunStateV3ThroughAnUnwrappingDecorator(t *testing.T) {
 
 func TestNew_ResolvesRunStateV3FromABareStore(t *testing.T) {
 	r := registry.New(newV3Store(t), slog.Default(), 1, nil)
-	if !r.HasRunStateV3ForTest() {
+	if !r.HasRunStateV3() {
 		t.Fatal("registry did not resolve the v3 run state from a bare *PebbleStore")
 	}
 }
@@ -55,8 +55,20 @@ func TestNew_NoRunStateV3BehindAnOpaqueDecorator(t *testing.T) {
 	// Unwrap, so there is nothing to resolve. If this ever passes with a
 	// resolved state, the two tests above prove nothing about the walk.
 	r := registry.New(opaqueDecorator{Store: newV3Store(t)}, slog.Default(), 1, nil)
-	if r.HasRunStateV3ForTest() {
+	if r.HasRunStateV3() {
 		t.Fatal("registry resolved v3 run state through a decorator that neither carries it nor unwraps; " +
 			"database.Store must not carry the v3 surface (TestStoreFlattenedWidth)")
+	}
+}
+
+func TestNew_NilLoggerWithoutRunStateV3DoesNotPanic(t *testing.T) {
+	// The missing-v3 branch logs before the Registry exists; a nil logger
+	// must be defaulted, not dereferenced, and must not leave r.logger nil.
+	r := registry.New(opaqueDecorator{Store: newV3Store(t)}, nil, 1, nil)
+	if r == nil {
+		t.Fatal("New returned nil")
+	}
+	if r.HasRunStateV3() {
+		t.Fatal("opaque decorator unexpectedly resolved the v3 run state")
 	}
 }

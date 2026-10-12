@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.46.0
+// version: 3.47.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-12
 
@@ -297,6 +297,20 @@ type runStateV3 interface {
 	TransitionRunV3(req database.TransitionRequest) (*database.RunRecord, error)
 }
 
+// The production store must satisfy runStateV3, or the capability lookup in
+// NewWithOptions finds nothing even on a bare *PebbleStore and every v3 path
+// silently reads "no record". This package already imports database, so the
+// assertion sits here, next to the interface it pins, rather than in a test.
+var _ runStateV3 = (*database.PebbleStore)(nil)
+
+// HasRunStateV3 reports whether New resolved the ops v3 run state from its
+// store (runStateV3). It is false for a store without the v3 surface (a
+// mockery mock, or a decorator that neither carries it nor unwraps), in
+// which case every v3 path acts as if no run has a v3 record.
+// server.NewServer refuses to start a Pebble-backed server whose registry
+// reports false here.
+func (r *Registry) HasRunStateV3() bool { return r != nil && r.runs != nil }
+
 // New creates a new Registry. workers controls the in-process worker pool size.
 // store must implement database.OpsV2Store; the database.Store composite
 // interface satisfies this automatically. The v3 run state is resolved from
@@ -307,18 +321,34 @@ func New(store database.OpsV2Store, logger *slog.Logger, workers int, bus Bus) *
 }
 
 // NewWithOptions is like New but accepts optional tunable parameters.
-func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int, opts Options) *Registry {
+func NewWithOptions(store database.OpsV2Store, lg *slog.Logger, workers int, opts Options) *Registry {
 	if workers <= 0 {
 		workers = 8
 	}
+	if lg == nil {
+		// logger.FromContext falls back to the process default logger, so a
+		// nil here neither panics below nor leaves r.logger nil.
+		lg = logger.FromContext(context.Background())
+	}
 	runs, ok := database.AsCapability[runStateV3](store)
 	if !ok {
-		// Every production store is a *PebbleStore (behind the search-index
-		// decorator, which Unwrap sees through), so this is a test double or
-		// an opaque decorator. Say so: the v3 paths then act as if no run has
-		// a v3 record, which is the pre-05-PR4 behavior.
-		logger.Warn("registry: store has no ops v3 run state; stopping runs, the boot sweep and requeue successors are recorded the v2 way only",
-			"store_type", fmt.Sprintf("%T", store))
+		// The v3 paths then act as if no run has a v3 record, which is the
+		// pre-05-PR4 behavior. When no *PebbleStore is reachable either, this
+		// is a test double (or an opaque decorator, which hides the Pebble
+		// store too), where the absence is expected and only worth Debug.
+		// The Warn branch is reachable only if *PebbleStore stops satisfying
+		// runStateV3, which the assertion above rules out at compile time;
+		// it stays so that regression is loud should the assertion go. The
+		// production signal is server.NewServer, which refuses to start a
+		// Pebble-backed server whose registry did not resolve the run state
+		// (HasRunStateV3), opaque decorator included.
+		msg := "registry: store has no ops v3 run state; stopping runs, the boot sweep and requeue successors are recorded the v2 way only"
+		storeType := fmt.Sprintf("%T", store)
+		if database.AsPebbleStore(store) != nil {
+			lg.Warn(msg, "store_type", storeType)
+		} else {
+			lg.Debug(msg, "store_type", storeType)
+		}
 	}
 	ops := opts.OpsMetrics
 	if ops == nil {
@@ -337,7 +367,7 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		store:              store,
 		runs:               runs,
 		bus:                opts.Bus,
-		logger:             logger,
+		logger:             lg,
 		workers:            workers,
 		abandoned:          newAbandonedTracker(opts.AbandonedCap),
 		watchdogInterval:   opts.WatchdogInterval,

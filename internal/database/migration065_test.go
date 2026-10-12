@@ -1,5 +1,5 @@
 // file: internal/database/migration065_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
 // last-edited: 2026-10-12
 
@@ -316,6 +316,18 @@ func TestMigration065DownKeepsKeys(t *testing.T) {
 	}
 	if v3Digest(t, p, "opv3:") != before {
 		t.Fatal("re-running Up rewrote opv3: keys")
+	}
+}
+
+// A store that cannot build opv3 records must fail migration 65, not skip
+// it: a nil return records 65 as applied, and the records would then never
+// be built.
+func TestMigration065ErrorsWithoutTheCapability(t *testing.T) {
+	if _, ok := any(&MockStore{}).(opsV3Migrator); ok {
+		t.Fatal("setup: MockStore implements opsV3Migrator; pick a store without it")
+	}
+	if err := migration065Up(&MockStore{}); err == nil {
+		t.Fatal("migration065Up returned nil for a store without MigrateOpsV2ToV3; it would be recorded as applied")
 	}
 }
 
