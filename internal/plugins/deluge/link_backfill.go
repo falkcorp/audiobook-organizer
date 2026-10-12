@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-10-11
 
@@ -778,15 +778,17 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		if err := run.resolveRound(ctx, reporter, torrents, workers); err != nil {
 			return err
 		}
-		lastRound = now().Sub(started)
 		decided = false
 		if limit > 0 {
 			if err := decideWindow(); err != nil {
 				return err
 			}
-			if len(plan) >= limit {
-				break
-			}
+		}
+		// The whole round, decide included, is what the next one is
+		// estimated to take.
+		lastRound = now().Sub(started)
+		if limit > 0 && len(plan) >= limit {
+			break
 		}
 		if admitted == fits && fits < grow {
 			// The budget, not the round allowance, ended this round's
