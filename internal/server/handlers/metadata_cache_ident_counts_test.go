@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_ident_counts_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 12551103-eea0-4207-90b8-15df669deded
 // last-edited: 2026-10-11
 
@@ -38,6 +38,21 @@ func TestIdentCountsSummary(t *testing.T) {
 	held := mk("Title 000004")
 	_, err = s.ModifyBook(held, func(b *database.Book) error { v := "no_match"; b.MetadataReviewStatus = &v; return nil })
 	require.NoError(t, err)
+	// Outside the default view, so in All but not in Primary: a non-primary
+	// unasked book and a trashed held one. The block reports Primary.
+	other := mk("Title 000005")
+	_, err = s.ModifyBook(other, func(b *database.Book) error { f := false; b.IsPrimaryVersion = &f; return nil })
+	require.NoError(t, err)
+	trashed := mk("Title 000006")
+	_, err = s.ModifyBook(trashed, func(b *database.Book) error {
+		v, tr := "no_match", true
+		b.MetadataReviewStatus, b.MarkedForDeletion = &v, &tr
+		return nil
+	})
+	require.NoError(t, err)
+	all := s.IdentCounts().All
+	require.Equal(t, int64(2), all[database.IdentUnasked], "the fixture's All differs from its Primary")
+	require.Equal(t, int64(2), all[database.IdentHeld])
 
 	got := identCountsSummary(s)
 	require.Equal(t, true, got["ready"])

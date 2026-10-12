@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-11
 //
@@ -262,6 +262,42 @@ describe('summary chips filter the list to exactly the books they count', () => 
     expect(chip).toHaveTextContent('3 orphaned');
     expect(chip).not.toHaveAttribute('aria-pressed');
     expect(screen.queryByRole('button', { name: /orphaned/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('identification counts in the rail', () => {
+  it('shows each ident_counts value as a link that opens the Library on its ident: search', async () => {
+    const identCounts = {
+      unasked: 7,
+      asked_empty: 4,
+      has_candidates: 2,
+      applied: 1,
+      held: 1,
+      missing: 11,
+      ready: true,
+    };
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, bucket) =>
+        ({
+          ...summary,
+          ident_counts: identCounts,
+          results: bucket === 'unreviewable' ? unreviewable : reviewable,
+          total_count: bucket === 'unreviewable' ? unreviewable.length : reviewable.length,
+        }) as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    await openWorkspace();
+    const missing = await screen.findByTestId('ident-chip-missing');
+    expect(missing).toHaveAttribute('href', '/library?search=ident%3Amissing');
+    expect(missing).toHaveTextContent('11 missing metadata');
+    expect(screen.getByTestId('ident-chip-held')).toHaveAttribute(
+      'href',
+      '/library?search=ident%3Aheld'
+    );
+  });
+
+  it('shows nothing from an older server that sends no ident_counts', async () => {
+    await openWorkspace();
+    expect(screen.queryByTestId('ident-counts')).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.38.0
+// version: 1.38.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-11
 
@@ -776,8 +776,10 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 
 // identCountsSummary is the review summary's ident_counts block: the
 // identification index's primary-scope counters (the books the Library lists
-// by default), O(1), with missing = unasked + asked_empty -- the goal number,
-// the same count the Library shows for ident:missing. While the index is
+// by default), O(1), with missing = unasked + asked_empty, the same count the
+// Library shows for ident:missing. missing does not exclude appendix C's
+// franchise books, so it is the goal number plus those of them that are
+// unasked or asked_empty (database.DeriveIdentState). While the index is
 // being built ready is false and every count is 0; a store without the index
 // reports the same, so the block's shape never changes.
 func identCountsSummary(store any) gin.H {
