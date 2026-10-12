@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -215,10 +215,14 @@ func (mfs *Service) writeFileTagsSafe(ctx context.Context, path string, tagMap m
 		return mfs.fileTagWrite(path, tagMap)
 	}
 	opts.KeepBackup = tagger.BackupWanted(ctx)
-	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
-		return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
-	}, opts)
-	return err
+	// verify_after_write: metadata.WriteMetadataToFileAtomic reads the file back
+	// after the rename and returns tagger.ErrVerifyAfterWrite when a tag did not
+	// land. The file stays as written, so the callers count it as a failed write
+	// (a Warn and a failed-file count), not a retryable one.
+	return metadata.WriteMetadataToFileAtomic(path, tagMap, opConfig, opts, tagger.SafeWriteDeps{
+		HashStore:  mfs.db,
+		Provenance: opts.Provenance,
+	})
 }
 
 // bookFileWriteOpts returns the WriteTagsSafe options that persist hashes

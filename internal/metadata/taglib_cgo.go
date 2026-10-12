@@ -1,6 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.8.0
-// last-edited: 2026-10-10
+// version: 1.9.0
+// last-edited: 2026-10-11
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -43,7 +43,7 @@ func writeMetadataWithTaglib(ctx context.Context, filePath string, metadata map[
 		return fmt.Errorf("taglib abs path: %w", err)
 	}
 
-	tags := buildWriteTagMap(metadata)
+	tags := tagger.FoldTagKeys(buildWriteTagMap(metadata))
 	if len(tags) == 0 {
 		return fmt.Errorf("no writable metadata supplied")
 	}
@@ -56,10 +56,16 @@ func writeMetadataWithTaglib(ctx context.Context, filePath string, metadata map[
 		return fmt.Errorf("taglib write resolve: %w", err)
 	}
 
-	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
+	opts := writeOptions(ctx, effectivePath)
+	_, postHash, err := fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
-	}, writeOptions(ctx, effectivePath))
+	}, opts)
 	if err != nil {
+		return fmt.Errorf("taglib write: %w", err)
+	}
+	// verify_after_write, through the code tagger.WriteTagsSafe uses: this is
+	// the writer production builds (-tags native_taglib) run.
+	if err := verifyNativeWrite(effectivePath, tags, opts.BookFileID, postHash); err != nil {
 		return fmt.Errorf("taglib write: %w", err)
 	}
 	return nil
@@ -110,30 +116,50 @@ func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value stri
 		return fmt.Errorf("taglib single-tag resolve: %w", err)
 	}
 
-	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
+	opts := writeOptions(ctx, effectivePath)
+	_, postHash, err := fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeSingleTagToPath(effectivePath, tmpPath, tagName, value)
-	}, writeOptions(ctx, effectivePath))
+	}, opts)
 	if err != nil {
+		return fmt.Errorf("taglib single-tag: %w", err)
+	}
+	if err := verifyNativeWrite(effectivePath, map[string][]string{tagName: {value}}, opts.BookFileID, postHash); err != nil {
 		return fmt.Errorf("taglib single-tag: %w", err)
 	}
 	return nil
 }
 
 // writePropertiesWithTaglib writes tags as given, property by property, through
-// the safe copy-and-rename write. WriteTagProperties is the caller and reads
-// the file back, so a property this writer does not remove fails there.
+// the safe copy-and-rename write, then reads the file back and fails unless
+// every property holds what was asked for, whether or not verify_after_write
+// is on: WriteTagProperties promises its caller (an operation revert) that a
+// property this writer did not set or remove is an error.
 func writePropertiesWithTaglib(ctx context.Context, abs string, tags map[string][]string) error {
 	effectivePath, err := resolvePathForWrite(ctx, abs)
 	if err != nil {
 		return fmt.Errorf("taglib properties resolve: %w", err)
 	}
-	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
+	tags = tagger.FoldTagKeys(tags)
+	_, postHash, err := fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
 	}, fileops.WriteTagsSafeOptions{KeepBackup: tagger.BackupWanted(ctx)})
 	if err != nil {
 		return fmt.Errorf("taglib properties: %w", err)
 	}
+	deps := packageSafeWriteDeps
+	deps.ForceVerify = true
+	if err := deps.VerifyWritten(effectivePath, tags, "", postHash); err != nil {
+		return fmt.Errorf("taglib properties: %w", err)
+	}
 	return nil
+}
+
+// verifyNativeWrite reads path back and checks every key in want when
+// verify_after_write is on. The provenance recorder and the event's digest come
+// from the installed book_file hash store and postHash, as they do for
+// tagger.WriteTagsSafe.
+func verifyNativeWrite(path string, want map[string][]string, bookFileID, postHash string) error {
+	return WithBookFileHashes(packageSafeWriteDeps).VerifyWritten(path, want, bookFileID, postHash)
 }
 
 func writeTagMapWithTaglib(effectivePath, tmpPath string, tags map[string][]string) error {

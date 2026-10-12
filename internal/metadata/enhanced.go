@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.29.0
+// version: 1.30.1
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-11
 
@@ -458,14 +458,22 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 // Do NOT call this on a live library file — it has no atomic-rename safety net.
 // Use WriteMetadataToFile for that.
 func WriteMetadataToFileInPlace(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
+	_, err := writeMetadataToFileInPlace(filePath, metadata, config)
+	return err
+}
+
+// writeMetadataToFileInPlace is WriteMetadataToFileInPlace that also reports
+// whether the native taglib writer made the write (false when it failed and a
+// CLI writer ran, or the CLI writer failed too).
+func writeMetadataToFileInPlace(filePath string, metadata map[string]any, config fileops.OperationConfig) (native bool, err error) {
 	if taglibAvailable {
 		if err := writeMetadataWithTaglibInPlace(filePath, metadata, config); err == nil {
-			return nil
+			return true, nil
 		}
 		// Native failed; fall through to the CLI writers, which manage their own
 		// temp files and are safe to run against the caller's temp copy.
 	}
-	return writeMetadataViaCLI(filePath, metadata, config)
+	return false, writeMetadataViaCLI(filePath, metadata, config)
 }
 
 // WriteMetadataToFile is WriteMetadataToFileContext with a background
@@ -508,6 +516,14 @@ func WriteMetadataToFileContext(ctx context.Context, filePath string, metadata m
 		}
 		if errors.Is(nativeErr, tagger.ErrProtectedPathWrite) {
 			return nativeErr
+		}
+		// verify_after_write found a tag missing after the native write. The
+		// file is already written and renamed into place, so AtomicParsley,
+		// eyeD3 or metaflac would rewrite a file taglib wrote, with a different
+		// tag set (none of them writes the AUDIOBOOK_ORGANIZER_* freeform
+		// tags): report the failed verification instead.
+		if errors.Is(nativeErr, tagger.ErrVerifyAfterWrite) {
+			return fmt.Errorf("write metadata to %s: %w", filePath, nativeErr)
 		}
 		// Native failed; continue with CLI fallback
 	}
