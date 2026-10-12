@@ -59,7 +59,10 @@ type Registry struct {
 	writeSetDeferred map[string]string
 	nextRun          chan *queuedRun
 	dispatch         chan struct{}
-	store            database.OpsV2Store
+	// store is the v2 surface the registry still writes through plus the v3
+	// surface for what v2 vocabulary cannot express (a stopping zombie, a
+	// requeue successor, the boot sweep); 05-PR4.
+	store database.OpsStore
 	// warmupGate holds non-exempt ops back while the store warms (dispatcher.go);
 	// warmupHeld remembers each held row's pre-hold message, under warmupMu.
 	warmupGate       WarmupGate
@@ -259,15 +262,15 @@ func (r *Registry) SetScanStandDownGraceFunc(fn func() time.Duration) {
 }
 
 // New creates a new Registry. workers controls the in-process worker pool size.
-// store must implement database.OpsV2Store; the database.Store composite
-// interface satisfies this automatically.
+// store must implement database.OpsStore (OpsV2Store + OpsV3Store); the
+// database.Store composite interface satisfies this automatically.
 // bus may be nil; it will be wired to the real EventHub in UOS-06.
-func New(store database.OpsV2Store, logger *slog.Logger, workers int, bus Bus) *Registry {
+func New(store database.OpsStore, logger *slog.Logger, workers int, bus Bus) *Registry {
 	return NewWithOptions(store, logger, workers, Options{Bus: bus})
 }
 
 // NewWithOptions is like New but accepts optional tunable parameters.
-func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int, opts Options) *Registry {
+func NewWithOptions(store database.OpsStore, logger *slog.Logger, workers int, opts Options) *Registry {
 	if workers <= 0 {
 		workers = 8
 	}
@@ -857,6 +860,19 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				// legitimately have no handle until dispatched.
 				if op.Status == "running" && !r.hasLiveHandle(op.ID) {
 					r.logger.Warn("registry: enqueue dedupe skipping zombie running row (no live handle)",
+						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID))
+					continue
+				}
+				// 05-PR4: a stopping run (its goroutine outlived the abandon
+				// grace) keeps reading "running" in v2 until the goroutine
+				// returns -- v3 stopping mirrors as running -- and it HAS a
+				// live handle, so the skip above does not catch it. Deduping
+				// against it would hand every future enqueue of this def the
+				// stopped run's id, which is the C-3 trap again: the op type
+				// silently disabled until the zombie exits. A new run is
+				// queued instead, and Gate 3 holds it until the key frees.
+				if op.Status == "running" && r.isZombie(op.ID) {
+					r.logger.Info("registry: enqueue dedupe skipping a stopping run (goroutine has not returned)",
 						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID))
 					continue
 				}
@@ -1506,21 +1522,27 @@ var discardableStatuses = state.WithProp(func(p state.Props) bool { return p.Dis
 // (stub or full). Used by EnqueueOp's ConcurrencyKey dedupe to distinguish a
 // genuinely running op from a stale "running" DB row.
 //
-// A zombie handle (goroutine outlived the abandon grace) counts as live. That
-// does not bring back the C-3 dedupe trap: EnqueueOp's dedupe reads active
-// ROWS, and a zombie's row was written terminal (or interrupted_quiesced, for
-// a scan stand-down quiesce) at abandonment, so it is not returned to be asked
-// about. The one exception is a quiesced row re-queued in place under the
-// same id while the zombie lives (resumeQuiescedOp -> requeueInPlace): it is
-// queued, so the dedupe returns it, which is right -- it is the pending run of
-// that def, and Gate 0 starts it once the zombie exits. Discard does refuse a
-// zombie's terminal row until the goroutine exits, which is intended: the run
-// may still be writing progress and logs under that id.
+// A zombie handle (goroutine outlived the abandon grace) counts as live. Since
+// 05-PR4 a zombie's row stays "running" until its goroutine returns (v3
+// stopping), so EnqueueOp's dedupe skips it explicitly (isZombie) rather than
+// relying on the row having left the active set. Discard refuses a zombie's
+// row until the goroutine exits, which is intended: the run may still be
+// writing progress and logs under that id.
 func (r *Registry) hasLiveHandle(opID string) bool {
 	r.mu.RLock()
 	_, ok := r.running[opID]
 	r.mu.RUnlock()
 	return ok
+}
+
+// isZombie reports whether opID's handle is a zombie: its run was stopped and
+// its goroutine outlived the abandon grace, so the run is v3 "stopping" and
+// its row still reads "running".
+func (r *Registry) isZombie(opID string) bool {
+	r.mu.RLock()
+	h, ok := r.running[opID]
+	r.mu.RUnlock()
+	return ok && h != nil && h.zombie.Load()
 }
 
 // AbandonedCount returns the current number of abandoned goroutines for a
@@ -1671,16 +1693,32 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 				r.releaseRunHandleLocked(opID)
 				continue
 			}
-			// A genuinely abandoned zombie (slot already released) had its
-			// TERMINAL status written at abandonment (C-3), usually
-			// "canceled" via finalStatusForCanceledRun. Stamping
-			// interrupted_* over it would make a deliberately stopped run
-			// resumable on the next boot -- the stuck -> cancel -> resume
-			// loop. Leave both the row and the handle alone; goroutineWG
-			// below still waits (bounded) for its goroutine. A zombie from
-			// the shutdown branch has no terminal row yet and is stamped as
-			// before.
+			// A genuinely abandoned zombie (slot already released) is
+			// "stopping" (05-PR4): its row reads "running" and its final
+			// status, decided at abandonment by finalStatusForCanceledRun, is
+			// waiting on the handle for the goroutine to return. The process
+			// is exiting first, so write that decided status now. Stamping
+			// interrupted_* from the ResumePolicy instead would make a
+			// deliberately stopped run resumable on the next boot -- the
+			// stuck -> cancel -> resume loop; leaving the row "running" would
+			// do the same through the boot sweep. A compare-and-set from
+			// "running", so a cancel that already wrote "canceled" stands.
+			// goroutineWG below still waits (bounded) for its goroutine. A
+			// zombie from the shutdown branch has no decided status and is
+			// stamped as before.
 			if h.slotReleased {
+				if out := h.zombieFinal.Load(); out != nil {
+					applied, err := r.store.UpdateOperationV2StatusIf(opID, "running", out.status, nil, &out.at, out.msg)
+					switch {
+					case err != nil:
+						r.logger.Warn("registry: shutdown timeout: could not record a stopping zombie's final status",
+							"op_id", opID, "status", out.status, "error", err)
+					case applied:
+						r.logger.Warn("registry: shutdown timeout: recorded a stopping zombie's final status",
+							"op_id", opID, "status", out.status)
+						r.publishOpTerminal(opID, h.defID, out.status)
+					}
+				}
 				continue
 			}
 			h.abandoned = true

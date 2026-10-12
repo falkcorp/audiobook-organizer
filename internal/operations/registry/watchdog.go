@@ -119,6 +119,13 @@ func (r *Registry) watchdogCycle() {
 	now := r.livenessClock().UTC()
 
 	for _, h := range handles {
+		// A zombie was already stopped (fence revoked, context canceled) and
+		// its row reads "running" until its goroutine returns (v3 stopping,
+		// 05-PR4). Striking or canceling it again does nothing useful;
+		// zombieSweep above is what watches it.
+		if h.zombie.Load() {
+			continue
+		}
 		def, defOK := r.lookupDef(h.defID)
 		if !defOK {
 			continue
@@ -138,8 +145,6 @@ func (r *Registry) watchdogCycle() {
 		// LastProgressAt values from a previous resumed run — inspecting those
 		// here would write spurious stuck strikes.
 		//
-		// A zombie whose row was written terminal at abandonment is skipped
-		// here too; zombieSweep above is what watches it.
 		if row.Status != "running" {
 			continue
 		}
