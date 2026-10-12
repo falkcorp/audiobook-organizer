@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -109,12 +109,9 @@ function viewModeLabel(lane: ReviewLane, mode: SpineViewMode): string {
 }
 
 /**
- * Builds a CSV from the rows currently loaded.
- *
- * There is no server-side export route, and rather than render PLAN.md's
- * "Export CSV" as a dead item this builds the file from what the client already
- * holds. The scope is stated in the toast, because "export" invites the reading
- * "everything" and this is the filtered set.
+ * Builds a CSV from the rows currently loaded. The scope is stated in the
+ * toast, because "export" invites the reading "everything" and this is the
+ * filtered set.
  */
 function exportRowsAsCsv(
   rows: Array<{
@@ -246,6 +243,28 @@ export function ReviewWorkspace() {
     } catch {
       toast('Failed to preview new scores.', 'error');
     }
+  };
+
+  // Download the Dupes lane's candidates with the filters on screen. An anchor
+  // click lets the browser save the file under the server's Content-Disposition
+  // name; nothing is fetched here.
+  const dupesFilters = dupes.filters;
+  const exportDupes = (format: 'csv' | 'json') => {
+    const a = document.createElement('a');
+    a.href = api.dedupCandidatesExportUrl(
+      {
+        layer: dupesFilters.layer,
+        band: dupesFilters.band,
+        status: dupesFilters.status,
+        q: dupesFilters.search,
+        entity_id: dupesFilters.entityId,
+      },
+      format
+    );
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   // The Dedup menu's one-button run. When it finishes, show its results.
@@ -525,7 +544,7 @@ export function ReviewWorkspace() {
           },
           {
             id: 'export-csv',
-            label: 'Export CSV',
+            label: 'Export metadata rows (CSV)',
             scope: 'view',
             startsGroup: true,
             // One export at a time: page mode reads up to ~80 pages for 40k
@@ -552,6 +571,22 @@ export function ReviewWorkspace() {
                 }
               })();
             },
+          },
+          {
+            id: 'export-dupes-csv',
+            label: 'Export duplicates (CSV)',
+            scope: 'view',
+            disabledReason:
+              lane === 'dupes' ? undefined : 'Switch to the Dupes lane to export duplicates.',
+            run: () => exportDupes('csv'),
+          },
+          {
+            id: 'export-dupes-json',
+            label: 'Export duplicates (JSON)',
+            scope: 'view',
+            disabledReason:
+              lane === 'dupes' ? undefined : 'Switch to the Dupes lane to export duplicates.',
+            run: () => exportDupes('json'),
           },
           {
             id: 'purge-stale',

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -929,5 +929,58 @@ describe('the metadata lane distinguishes failed, loading and empty', () => {
     // The Alert clears rather than sitting on top of a page that now loaded.
     await waitFor(() => expect(screen.queryByTestId('metadata-error')).not.toBeInTheDocument());
     expect(await screen.findByTestId('compare-spine')).toBeInTheDocument();
+  });
+});
+
+describe('duplicate export', () => {
+  beforeEach(() => {
+    vi.mocked(api.dedupCandidatesExportUrl).mockImplementation(actualApi.dedupCandidatesExportUrl);
+  });
+
+  async function openQueueMenu(user: ReturnType<typeof userEvent.setup>, route: string) {
+    renderWorkspace([route]);
+    await user.click(await screen.findByTestId('command-menu-queue'));
+  }
+
+  it('export command disabled on metadata lane', async () => {
+    const user = userEvent.setup();
+    await openQueueMenu(user, '/review?lane=metadata');
+    expect(await screen.findByTestId('command-export-dupes-csv')).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByTestId('command-export-dupes-json')).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    // The metadata export keeps working and now says what it exports.
+    expect(screen.getByTestId('command-export-csv')).toHaveTextContent(
+      'Export metadata rows (CSV)'
+    );
+  });
+
+  it('export url carries the lane filters and is enabled on the dupes lane', async () => {
+    const user = userEvent.setup();
+    const hrefs: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        hrefs.push(this.getAttribute('href') ?? '');
+      });
+    try {
+      await openQueueMenu(user, '/review?lane=dupes&layer=acoustid&band=HIGH&book=B1');
+      const item = await screen.findByTestId('command-export-dupes-json');
+      expect(item).not.toHaveAttribute('aria-disabled', 'true');
+      await user.click(item);
+    } finally {
+      click.mockRestore();
+    }
+    expect(hrefs).toHaveLength(1);
+    const p = new URL(hrefs[0], 'http://localhost').searchParams;
+    expect(hrefs[0].startsWith('/api/v1/dedup/candidates/export?')).toBe(true);
+    expect(p.get('format')).toBe('json');
+    expect(p.get('layer')).toBe('acoustid');
+    expect(p.get('band')).toBe('HIGH');
+    expect(p.get('entity_id')).toBe('B1');
   });
 });

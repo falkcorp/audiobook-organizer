@@ -1,0 +1,1 @@
+- Review Queue menu: new "Export duplicates (CSV)" and "Export duplicates (JSON)" items on the Dupes lane, built from the lane's current filters via `dedupCandidatesExportUrl`. The metadata export is now labelled "Export metadata rows (CSV)".
