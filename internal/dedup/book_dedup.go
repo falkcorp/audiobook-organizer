@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -525,7 +525,8 @@ func handOffRetiredPrimaries(ctx context.Context, store Store, groups map[string
 // group), so it only shares the lock. Non-reentrant: this never calls the
 // Service merge paths, so the lock is taken exactly once.
 //
-// F6 (2026-07-18): the POST /audiobooks/merge endpoint (dedup.book-merge op) no
+// F6 (2026-07-18): the dedup.book-merge op (POST /audiobooks/duplicates/link; the old
+// POST /audiobooks/merge route is gone) no
 // longer uses this function — it was rerouted to merge.Service.MergeBooks.
 // 2026-10-05: neither does internal/reconcile/itunes_heal.go, its last caller;
 // it collapses its duplicates through merge.Service with RefuseSharedAudioPaths

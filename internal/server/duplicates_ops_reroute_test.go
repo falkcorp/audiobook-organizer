@@ -1,9 +1,10 @@
 // file: internal/server/duplicates_ops_reroute_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 4a9c1f27-8b3e-4d05-9a61-2f7c0d3e6b58
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
-// F6 regression test: the dedup.book-merge op (POST /audiobooks/merge) was
+// F6 regression test: the dedup.book-merge op (started via POST /audiobooks/duplicates/link; the
+// old POST /audiobooks/merge route is gone) was
 // rerouted from the legacy dedup.MergeBooks hard-delete path to
 // merge.Service.MergeBooks via applyBookMergeReroute. The legacy path hard-
 // deleted losers with store.DeleteBook, which does NOT tombstone external-ID

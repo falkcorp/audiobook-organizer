@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.33.2
+// version: 4.33.3
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-12
 
@@ -1596,23 +1596,25 @@ func (s *Server) setupRoutes() {
 			// /series[/count], /series/:id[/books,/name,/split], PATCH /series/:id,
 			// /series/bulk-delete, and the work routes migrated to the
 			// handlers/entities sub-package (wire_handlers.go).
-			// /authors/duplicates(/refresh), /audiobooks/merge,
+			// /authors/duplicates(/refresh),
 			// /series/duplicates(/refresh), /series/deduplicate, /series/merge,
-			// /series/prune(/preview), /series/normalize(/preview) and
-			// /dedup/validate migrated to the handlers/duplicates sub-package
-			// (wire_handlers.go).
-			// /authors/duplicates/ai-review[/apply] migrated to AIHandler (wire_handlers.go)
+			// /series/prune(/preview) and /dedup/validate migrated to the
+			// handlers/duplicates sub-package (wire_handlers.go).
+			// /audiobooks/merge, /series/normalize(/preview) and
+			// /authors/duplicates/ai-review[/apply] were removed (01-P72); the
+			// ops behind them (dedup.book-merge, dedup.series-normalize,
+			// ai.author-review / ai.author-merge-apply) stay registered and
+			// start through the generic operations endpoints.
 
 			// Embedding-based dedup
 			//
 			// NOTE: the dedup-domain routes (GET /dedup/candidates,
 			// /dedup/candidates/export, /dedup/stats,
 			// /dedup/candidates/series-summary; POST
-			// /dedup/candidates/:id/{merge,dismiss}, /dedup/candidates/
-			// {bulk-merge,merge-cluster,dismiss-cluster,remove-from-cluster,
-			// merge-series}, /dedup/{scan,scan-llm,scan-acoustid,
-			// scan-book-signature,refresh,purge-stale,reset-acoustid,embed,
-			// embed-async} and POST /audiobooks/:id/compare-acoustid) were
+			// /dedup/candidates/:id/{link,reject}, /dedup/candidates/
+			// {bulk-link,link-cluster,reject-cluster,remove-from-cluster,
+			// link-series}, /dedup/{scan,scan-llm,scan-acoustid,
+			// purge-stale,reset-acoustid,embed} and POST /audiobooks/:id/compare-acoustid) were
 			// migrated to deduphandler.Handler and are now registered in
 			// wireHandlers (wire_handlers.go). The survivor below stays here
 			// because it lives in fingerprint_rescan.go, not the migrated

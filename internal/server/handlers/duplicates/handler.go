@@ -1,14 +1,14 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.16.1
+// version: 1.16.3
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-11
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
-// series duplicate listing, async scan / merge / dismiss triggers, series
-// prune / normalize preview + apply, deduplicate, and dedup-entry metadata
-// validation (17 handlers total). Distinct from the embedding-based dedup flow
-// in handlers/dedup.
+// series duplicate listing, async scan / link / reject triggers, series
+// prune preview + apply, deduplicate, and dedup-entry metadata validation.
+// (Series normalize has no handler here any more; it runs only as an op.)
+// Distinct from the embedding-based dedup flow in handlers/dedup.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (DuplicatesStore, OperationsRegistry, MergeService,
@@ -56,7 +56,7 @@ type Handler struct {
 	// nil-checks it where the original did.
 	dedupCache *cache.Cache[gin.H]
 
-	// opRegistry backs the scan / merge / refresh / dedup / prune / normalize
+	// opRegistry backs the scan / merge / refresh / dedup / prune
 	// triggers. Interface snapshot guarded by the controller against typed-nil
 	// boxing so the in-method `== nil` guards (mirroring the old
 	// `s.opRegistry == nil` checks) hold.

@@ -1,7 +1,7 @@
 <!-- file: docs/audio-fingerprint/book-signature.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 4b5c6d7e-8f9a-0b1c-2d3e-4f5a6b7c8d9e -->
-<!-- last-edited: 2026-05-03 -->
+<!-- last-edited: 2026-10-11 -->
 
 # Book Signature: Unified Per-Book Audio Fingerprint
 
@@ -93,20 +93,10 @@ primary books with non-NULL signatures, compares them pairwise, and emits
 `dedup_candidates` rows with `layer="book_signature"` for pairs exceeding
 `FuzzyMinSimilarity` (0.80).
 
-New HTTP endpoint:
-
-```
-POST /api/v1/dedup/scan-book-signature
-Authorization: Bearer <token>  # requires PermScanTrigger
-
-Response: 202 Accepted
-{
-  "id": "<operation_id>",
-  "type": "dedup-book-signature-scan",
-  "status": "queued",
-  ...
-}
-```
+The scan runs as the `dedup.book-signature-scan` operation, started through
+`POST /api/v1/operations/v2` (requires PermScanTrigger). It originally had a
+dedicated `POST /api/v1/dedup/scan-book-signature` endpoint; that route was
+removed in 01-P72.
 
 Tracked as an Operation, progress reported via the standard
 `/api/v1/operations/<id>` status endpoint.
@@ -155,7 +145,7 @@ Unit tests in `internal/fingerprint/book_signature_test.go`:
 Integration test (manual):
 
 1. Run backfill → verify `book_sig_v1` populated.
-2. `POST /api/v1/dedup/scan-book-signature` → verify operation enqueues, runs,
+2. Start the `dedup.book-signature-scan` op via `POST /api/v1/operations/v2` → verify it runs,
    and surfaces candidates with `layer="book_signature"`.
 3. A 1-file vs split-file copy of the same book in the production library
    produces a `book_signature` candidate with similarity ≥ 0.85.

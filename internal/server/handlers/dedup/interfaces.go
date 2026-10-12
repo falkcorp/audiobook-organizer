@@ -1,11 +1,11 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
 // last-edited: 2026-10-11
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
-// cluster / series listing, merge / dismiss / remove, bulk merge, stats,
-// export, and the dedup / embed / acoustid / book-signature scan triggers).
+// cluster / series listing, link / reject / remove, bulk link, stats,
+// export, and the dedup / embed / acoustid scan triggers).
 // Each interface lists only what the handlers actually call so package
 // deduphandler stays decoupled from the concrete store / merge-service / engine
 // / registry implementations and never imports package server (which would
@@ -127,8 +127,8 @@ type DedupEngine interface {
 }
 
 // OperationsRegistry is the narrow operations-registry subset the dedup scan
-// triggers require: only EnqueueOp (dedup / embed / acoustid / book-signature
-// scan starters). The variadic opts param is preserved so the concrete
+// triggers require: only EnqueueOp (dedup / embed / acoustid scan
+// starters). The variadic opts param is preserved so the concrete
 // *opsregistry.Registry satisfies the interface. Unlike the operations domain,
 // dedup never calls Cancel.
 type OperationsRegistry interface {

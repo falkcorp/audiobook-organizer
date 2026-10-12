@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.91.0
+// version: 1.92.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 package dedup
 
@@ -52,8 +52,7 @@ const minFingerprintMatchSeconds = 60
 const partVsWholeDurationRatioMax = 0.5
 
 // wholeBacklogCandidateLimit is the ListCandidates limit shared by every
-// whole-backlog pass (Rescore, PurgeStaleCandidates,
-// ReevaluateAcoustIDConflicts). paginateCandidates hard-slices AFTER the
+// whole-backlog pass (Rescore, PurgeStaleCandidates). paginateCandidates hard-slices AFTER the
 // similarity-desc sort, so a limit smaller than the pending backlog silently
 // processes only the top-similarity subset — any op meaning "all pending
 // candidates" must use this shared value and warn when it is hit exactly.
@@ -2020,13 +2019,13 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 		return nil
 	}
 	// NOTE: an AcoustID-signature emission veto was intentionally NOT wired here.
-	// A prod dry-run (ReevaluateAcoustIDConflicts) showed it is not viable as a
-	// gate: 65% of candidate books have no AcoustID fingerprint (unjudgeable), and
-	// BookSignatureSimilarityMasked returns ~0.50 for UNCORRELATED audio (the
+	// A prod dry-run (of the since-removed ReevaluateAcoustIDConflicts
+	// diagnostic) showed it is not viable as a gate: 65% of candidate books have no AcoustID
+	// fingerprint (unjudgeable), and BookSignatureSimilarityMasked returns ~0.50 for UNCORRELATED audio (the
 	// noise floor: uncorrelated chromaprints differ in ~half their bits). So there
 	// is no defensible similarity threshold that separates dups from non-dups on
-	// this data. The helper + the /dedup/purge-acoustid-conflicts endpoint are
-	// kept as diagnostics; a real veto needs measured dup-vs-nondup separation
+	// this data. The acoustIDSignaturesConflict helper is kept for a future
+	// veto, which needs measured dup-vs-nondup separation
 	// (and fingerprint coverage) first.
 	cand := database.DedupCandidate{
 		EntityType: "book",
@@ -2199,129 +2198,6 @@ func (de *Engine) bookSignature(b *database.Book) (sig, mask string, ok bool) {
 		mask = *b.BookSigV1Mask
 	}
 	return *b.BookSigV1, mask, true
-}
-
-// AcoustIDConflictResult summarizes a ReevaluateAcoustIDConflicts run.
-type AcoustIDConflictResult struct {
-	Checked   int                      `json:"checked"`   // pending non-audio candidates examined
-	Skipped   int                      `json:"skipped"`   // no usable signature / insufficient overlap
-	Conflicts int                      `json:"conflicts"` // pairs whose AcoustID audio clearly disagrees
-	Deleted   int                      `json:"deleted"`   // rows removed (0 when dryRun)
-	DryRun    bool                     `json:"dry_run"`
-	Samples   []AcoustIDConflictSample `json:"samples"`
-}
-
-// AcoustIDConflictSample is one conflicting candidate, for the dry-run report.
-type AcoustIDConflictSample struct {
-	CandidateID int64   `json:"candidate_id"`
-	Layer       string  `json:"layer"`
-	BookAID     string  `json:"book_a_id"`
-	BookBID     string  `json:"book_b_id"`
-	TitleA      string  `json:"title_a"`
-	TitleB      string  `json:"title_b"`
-	Similarity  float64 `json:"similarity"`
-}
-
-const acoustIDConflictSampleCap = 50
-
-// ReevaluateAcoustIDConflicts walks PENDING book dedup candidates and finds
-// those whose two books have clearly-disagreeing book-level AcoustID signatures
-// — the false positives from the title/metadata "exact" layers that the new
-// acoustid veto now suppresses at emission time. The "acoustid" and
-// "book_signature" layers are skipped (they ARE the positive audio evidence, so
-// vetoing them by audio would be circular).
-//
-// When dryRun is true nothing is mutated: the result reports how many WOULD be
-// removed, plus a capped sample for inspection.
-func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) (*AcoustIDConflictResult, error) {
-	if de.embedStore == nil || de.bookStore == nil {
-		return &AcoustIDConflictResult{DryRun: dryRun}, nil
-	}
-	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
-		EntityType: "book",
-		Status:     "pending",
-		Limit:      wholeBacklogCandidateLimit,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list candidates: %w", err)
-	}
-	if len(candidates) == wholeBacklogCandidateLimit {
-		logging.Warn(ctx, "dedup acoustid-conflict reevaluate: candidate list truncated at limit — some pending candidates were not examined",
-			"limit", wholeBacklogCandidateLimit,
-		)
-	}
-
-	res := &AcoustIDConflictResult{DryRun: dryRun}
-	type sigMeta struct {
-		sig, mask, title string
-		ok               bool
-	}
-	cache := make(map[string]sigMeta, len(candidates)*2)
-	lookup := func(id string) sigMeta {
-		if m, ok := cache[id]; ok {
-			return m
-		}
-		m := sigMeta{}
-		b, err := de.bookStore.GetBookByID(id)
-		if err == nil && b != nil {
-			m.title = b.Title
-			// Legacy-era signatures are missing evidence (no veto).
-			if b.HasCurrentBookSig() {
-				m.sig = *b.BookSigV1
-				if b.BookSigV1Mask != nil {
-					m.mask = *b.BookSigV1Mask
-				}
-				m.ok = true
-			}
-		}
-		cache[id] = m
-		return m
-	}
-
-	for _, c := range candidates {
-		select {
-		case <-ctx.Done():
-			return res, ctx.Err()
-		default:
-		}
-		if c.Layer == "acoustid" || c.Layer == "book_signature" {
-			continue // audio-positive layers: never vetoed by audio
-		}
-		if database.IsManualCandidate(c) {
-			continue // a human asked for this pair to be reviewed; not vetoed by a scanner rule
-		}
-		res.Checked++
-		a := lookup(c.EntityAID)
-		b := lookup(c.EntityBID)
-		if !a.ok || !b.ok {
-			res.Skipped++ // conservative: can't judge without both signatures
-			continue
-		}
-		sim, overlap, err := fingerprint.BookSignatureSimilarityMasked(a.sig, b.sig, a.mask, b.mask)
-		if err != nil || overlap < acoustIDVetoMinOverlap {
-			res.Skipped++
-			continue
-		}
-		if sim >= acoustIDVetoMaxSimilarity {
-			continue // audio agrees or is borderline — leave for manual review
-		}
-		res.Conflicts++
-		if len(res.Samples) < acoustIDConflictSampleCap {
-			res.Samples = append(res.Samples, AcoustIDConflictSample{
-				CandidateID: c.ID, Layer: c.Layer,
-				BookAID: c.EntityAID, BookBID: c.EntityBID,
-				TitleA: a.title, TitleB: b.title, Similarity: sim,
-			})
-		}
-		if !dryRun {
-			if err := de.embedStore.DeleteCandidate(c.ID); err != nil {
-				logging.Info(ctx, "dedup acoustid-conflict delete", "c", c.ID, "err", err)
-				continue
-			}
-			res.Deleted++
-		}
-	}
-	return res, nil
 }
 
 func hasPlausibleAudio(book *database.Book) bool {

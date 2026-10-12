@@ -1,7 +1,7 @@
 // file: internal/server/wire_entities_routes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5f6a7b8-c9d0-1234-efab-567890123456
-// last-edited: 2026-09-02
+// last-edited: 2026-10-11
 
 package server
 
@@ -19,8 +19,8 @@ func (s *Server) wireEntitiesRoutes(
 ) {
 	// Entities domain (migrated from server_lifecycle.go): authors, narrators,
 	// series, and works. Paths + permission guards copied verbatim. Sibling
-	// /authors/duplicates*, /series/duplicates*, /authors/duplicates/ai-review*
-	// (now aiH.*) and the entity-tag routes stay on *Server / their own handlers.
+	// /authors/duplicates*, /series/duplicates* and the entity-tag routes stay on
+	// *Server / their own handlers. (/authors/duplicates/ai-review* was removed.)
 	protected.GET("/authors", s.perm(auth.PermLibraryView), entitiesH.ListAuthors)
 	protected.GET("/authors/count", s.perm(auth.PermLibraryView), entitiesH.CountAuthors)
 	// Read-only diagnostic: classify author ids as live / tombstoned (self-healing)

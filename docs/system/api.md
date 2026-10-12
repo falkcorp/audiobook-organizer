@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.5.3 -->
+<!-- version: 1.5.4 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-06 -->
+<!-- last-edited: 2026-10-11 -->
 
 # HTTP API
 
@@ -71,7 +71,7 @@ To obtain an API key:
 | `DELETE` | `/api/v1/authors/:id` | Delete author (`POST /authors/bulk-delete` for many) |
 | `GET` | `/api/v1/series` | List series |
 | `PATCH` | `/api/v1/series/:id` | Update series name (`PUT /series/:id/name`, `/split`, `DELETE` empty series) |
-| `GET` | `/api/v1/series/duplicates` · `/prune/preview` · `/normalize/preview` | Series dedup / prune / normalize previews (POST applies) |
+| `GET` | `/api/v1/series/duplicates` · `/prune/preview` | Series dedup / prune previews (POST applies). Series normalize runs only as the `dedup.series-normalize` op; its HTTP preview/apply routes were removed |
 
 ### Metadata
 
@@ -89,9 +89,9 @@ To obtain an API key:
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/dedup/candidates` | List dedup candidate pairs (`/export`, `/:id/breakdown`) |
-| `POST` | `/api/v1/dedup/candidates/:id/link` | Link (merge) a candidate pair; `/:id/reject` dismisses it. `/merge` and `/dismiss` are deprecated aliases |
+| `POST` | `/api/v1/dedup/candidates/:id/link` | Link a candidate pair; `/:id/reject` rejects it. The old `/merge` and `/dismiss` verb aliases were removed |
 | `POST` | `/api/v1/dedup/candidates/bulk-link` · `/bulk-count` · `/bulk-reject` · `/bulk-reject/revert` · `/link-cluster` · `/reject-cluster` | Bulk and cluster forms of link/reject |
-| `POST` | `/api/v1/dedup/scan` · `/scan-llm` · `/scan-acoustid` · `/scan-book-signature` · `/split-book-scan` | Trigger the dedup scans (each enqueues a v2 op) |
+| `POST` | `/api/v1/dedup/scan` · `/scan-llm` · `/scan-acoustid` · `/split-book-scan` | Trigger the dedup scans (each enqueues a v2 op). The book-signature scan runs only as the `dedup.book-signature-scan` op (`POST /operations/v2`) |
 | `GET` | `/api/v1/dedup/stats` | Dedup statistics |
 
 ### Review Queue
