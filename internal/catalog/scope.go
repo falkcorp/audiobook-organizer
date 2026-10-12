@@ -1,7 +1,7 @@
 // file: internal/catalog/scope.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b9d3f27-8c1a-4e6b-9f42-1d7c0a8e3b56
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 
 package catalog
 
@@ -234,17 +234,6 @@ func publisherShaped(name string) bool {
 	return false
 }
 
-// authorRoleIncluded: author and co-author credits count, as does an
-// unlabelled junction row (older rows carry no role). Narrators, editors,
-// translators and the like are not the author whose catalog we want.
-func authorRoleIncluded(role string) bool {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "", "author", "co-author", "coauthor", "primary":
-		return true
-	}
-	return false
-}
-
 const scopePageSize = 5000
 
 // BuildScope lists the authors to harvest (R10 + owner D1): authors, by
@@ -287,9 +276,11 @@ func BuildScope(ctx context.Context, store any, rd ScopeReader) ([]ScopeAuthor, 
 			if err != nil {
 				return nil, census, fmt.Errorf("catalog scope: authors of %s: %w", b.ID, err)
 			}
+			// Narrators, editors, translators and the like are not the author
+			// whose catalog we want (database.IsAuthorCreditRole).
 			var ids []int
 			for _, l := range links {
-				if authorRoleIncluded(l.Role) && !slices.Contains(ids, l.AuthorID) {
+				if database.IsAuthorCreditRole(l.Role) && !slices.Contains(ids, l.AuthorID) {
 					ids = append(ids, l.AuthorID)
 				}
 			}
