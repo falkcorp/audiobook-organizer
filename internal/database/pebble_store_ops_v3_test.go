@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -858,6 +858,47 @@ func TestSnapshotsIntentsAndCheckpoints(t *testing.T) {
 	evts, err := p.ListRunEventsV3(child, 2)
 	if err != nil || len(evts) != 2 || evts[1].Event != string(state.EvReturnNil) || evts[1].Seq != 3 {
 		t.Fatalf("last two events = %+v %v", evts, err)
+	}
+}
+
+// TestOpv3KeysAllInRegisteredFamilies writes every opv3: family the store
+// writes and requires each key to land in a registered CHILD family (not the
+// opv3: parent, and never "(unregistered)"), which is what db-census-exact
+// reports per family.
+func TestOpv3KeysAllInRegisteredFamilies(t *testing.T) {
+	p := newTimelineStore(t)
+	parent := insertV3(t, p, "test.census", "")
+	child := newRunID()
+	if err := p.InsertRunV3(RunRecord{ID: child, DefID: "test.census", ParentID: parent}); err != nil {
+		t.Fatal(err)
+	}
+	transition(t, p, child, state.EvDispatch, nil)
+	_ = p.PutSnapshotPageV3(child, 0, []string{"a"})
+	_ = p.PutChunkOffsetsV3(child, []int32{0})
+	_ = p.PutIntentV3(child, Intent{Seq: 1})
+	_ = p.AppendLogV3(child, LogLine{Message: "m"})
+	if err := p.CommitLedgerV3(child, LedgerBatch{Ledger: Ledger{ChunkCount: 1},
+		ItemRows: []ItemOutcome{{Key: "k", Outcome: "skipped:dup"}}}); err != nil {
+		t.Fatal(err)
+	}
+	done := insertV3(t, p, "test.census", "")
+	transition(t, p, done, state.EvDispatch, nil)
+	transition(t, p, done, state.EvReturnNil, nil)
+	_ = p.pebbleSetJSON([]byte(opv3SchedPrefix+"test.census"), SchedState{DefID: "test.census"})
+	_ = p.pebbleSetJSON([]byte(opv3DefPrefix+"test.gone"), DefSnapshot{DefID: "test.gone"})
+	ranges := keyFamilyRanges(keyFamilies)
+	seen := map[string]bool{}
+	for _, k := range timelineKeys(t, p, opv3Prefix) {
+		fam := familyForKey(ranges, []byte(k))
+		if fam == unregisteredFamily || fam == opv3Prefix {
+			t.Errorf("key %s is counted as %q, not in a registered opv3 child family", k, fam)
+		}
+		seen[fam] = true
+	}
+	for _, f := range keyFamilies {
+		if strings.HasPrefix(f.Prefix, opv3Prefix) && f.Prefix != opv3Prefix && !seen[f.Prefix] {
+			t.Errorf("registered family %s was not exercised", f.Prefix)
+		}
 	}
 }
 
