@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package server
 
@@ -19,6 +19,7 @@ import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -369,6 +370,44 @@ func TestSeriesRenameOp_UndoRefreshesSeriesList(t *testing.T) {
 	body := list()
 	require.Contains(t, body, "Old Name")
 	require.NotContains(t, body, "New Name")
+}
+
+// Reverting an operation that wrote a merge_combine_journal pointer undoes
+// the merge, and drops the book duplicate caches the way the merge-undo route
+// does; an operation with no such row leaves them alone.
+func TestRevertOperation_MergeCombineJournalDropsBookDuplicateCaches(t *testing.T) {
+	st := newRelinkOpStore(t)
+	keep, err := st.CreateBook(&database.Book{ID: "keep-book", Title: "Keep", FilePath: "/tmp/revert-cache/keep.mp3"})
+	require.NoError(t, err)
+	j := merge.NewCombineJournal(keep.ID)
+	j.Status = merge.CombineJournalApplied // nothing absorbed: the undo has nothing to move
+	require.NoError(t, merge.WriteCombineJournal(st, j))
+	require.NoError(t, st.CreateOperationChange(&database.OperationChange{
+		OperationID: "op-merge", BookID: keep.ID, ChangeType: undo.ChangeTypeMergeCombineJournal,
+		FieldName: undo.MergeCombineJournalField, NewValue: j.ID,
+	}))
+	require.NoError(t, st.CreateOperationChange(&database.OperationChange{
+		OperationID: "op-other", BookID: keep.ID, ChangeType: undo.ChangeTypeRepairOwnerApply, FieldName: "x", NewValue: "y",
+	}))
+
+	srv := newSeriesRenameOpServer(st)
+	prime := func() {
+		srv.dedupCache.Set("book-dedup-scan", gin.H{"stale": true})
+		srv.dedupCache.Set("book-duplicates", gin.H{"stale": true})
+	}
+	cached := func(key string) bool { _, ok := srv.dedupCache.Get(key); return ok }
+
+	prime()
+	res, err := srv.revertOperation("op-merge")
+	require.NoError(t, err)
+	require.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeMergeCombineJournal])
+	require.False(t, cached("book-dedup-scan"), "the scan cache survived an undone merge")
+	require.False(t, cached("book-duplicates"), "the group list cache survived an undone merge")
+
+	prime()
+	_, _ = srv.revertOperation("op-other")
+	require.True(t, cached("book-dedup-scan"), "a revert that undid no merge must not drop the cache")
+	require.True(t, cached("book-duplicates"))
 }
 
 // The ops that rename, merge or prune series declare the series write-set,
