@@ -1,5 +1,5 @@
 // file: internal/server/op_registry_run_state_v3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7be5d482-a71c-4572-86c3-af4eaa876d95
 // last-edited: 2026-10-12
 
@@ -73,16 +73,28 @@ func TestOpRegistryRunStateGate(t *testing.T) {
 		t.Fatal("setup: a registry over an opaque decorator resolved the v3 run state; the negative case proves nothing")
 	}
 
-	if err := opRegistryRunStateGate(pebble, withoutV3); err == nil {
+	// The gate's inputs as NewServer computes them: the *PebbleStore resolved
+	// from the bare store, and the registry. A registry built over the opaque
+	// decorator while the bare store is Pebble is the broken-wrapper case.
+	ps := database.AsPebbleStore(pebble)
+	if ps == nil {
+		t.Fatal("setup: AsPebbleStore did not resolve the bare Pebble store")
+	}
+	if err := opRegistryRunStateGate(ps, withoutV3); err == nil {
 		t.Error("gate passed a Pebble-backed server whose registry has no ops v3 run state; it must refuse")
 	}
-	if err := opRegistryRunStateGate(pebble, withV3); err != nil {
+	if err := opRegistryRunStateGate(ps, withV3); err != nil {
 		t.Errorf("gate refused a Pebble-backed server whose registry has the run state: %v", err)
 	}
-	if err := opRegistryRunStateGate(&database.MockStore{}, withoutV3); err != nil {
+	// A mock store resolves to no *PebbleStore, which is the lenient path.
+	mockPS := database.AsPebbleStore(&database.MockStore{})
+	if mockPS != nil {
+		t.Fatal("setup: AsPebbleStore resolved a *PebbleStore from a MockStore")
+	}
+	if err := opRegistryRunStateGate(mockPS, withoutV3); err != nil {
 		t.Errorf("gate refused a mock-store server; mock stores keep the lenient v2-only path: %v", err)
 	}
-	if err := opRegistryRunStateGate(pebble, nil); err != nil {
+	if err := opRegistryRunStateGate(ps, nil); err != nil {
 		t.Errorf("gate refused a server with no operations registry: %v", err)
 	}
 }
