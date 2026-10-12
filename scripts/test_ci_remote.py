@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_ci_remote.py
-# version: 1.1.2
+# version: 1.2.1
 # guid: b886cb9e-2020-4cfc-806d-6002504520df
 # last-edited: 2026-10-11
 
@@ -200,6 +200,7 @@ class ShardingTest(unittest.TestCase):
             "deadcode-ratchet",
             "sdkguard",
             "bench-check",
+            "pprof-check",
             "fmt-check",
             "web-test",
             "mocks-check",

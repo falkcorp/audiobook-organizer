@@ -1,10 +1,10 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.6.1
+# version: 1.7.0
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
 # last-edited: 2026-10-11
 #
 # The non-linter gates of `make ci`: vet (test-short's prerequisite),
-# fmt-check, sdkguard, bench-check, and the web tests, each step running the
+# fmt-check, sdkguard, bench-check, pprof-check, and the web tests, each step running the
 # same make target `make ci` runs. The linter gates (staticcheck, the errcheck
 # ratchet, mocks-check) are in checks-lint.yaml on U0; the two were one
 # `checks` workflow on U0 until 2026-09-29 and are split so they run on both
@@ -70,6 +70,7 @@ steps:
       - make --no-print-directory sdkguard
       - make --no-print-directory ops-check
       - make --no-print-directory bench-check
+      - make --no-print-directory pprof-check
 
   - name: web-test
     image: bash

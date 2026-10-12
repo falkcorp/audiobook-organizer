@@ -1,5 +1,5 @@
 # file: Makefile.local.example
-# version: 1.6.0
+# version: 1.7.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
 # last-edited: 2026-10-11
 #
@@ -75,13 +75,14 @@ DEPLOY_URL := https://$(DEPLOY_HOST):8484
 # flags and the web-build prerequisite, so this file repeats NO `go build` line.
 # Cross-compiling CGO (fts5/native_taglib) from macOS requires:
 # brew install filosottile/musl-cross/musl-cross
-# Do not assign GO_BUILD_TAGS / GO_BUILD_FLAGS / GO_LDFLAGS here: this file is
-# included after the Makefile defines them, so an assignment would silently
-# override the committed values.
+# GO_BUILD_TAGS / GO_BUILD_FLAGS / GO_LDFLAGS are defined in the committed
+# Makefile ABOVE its `-include Makefile.local`, so an assignment in this file
+# is read after them and DOES override them. Don't, unless you mean the deploy
+# build to differ from everyone else's.
 .PHONY: deploy
 deploy:
 	@bash scripts/deploy-preflight.sh origin/main
-	@$(MAKE) build-linux
+	@$(MAKE) build-linux VERSION=$(VERSION)
 	@echo "→ Copying binary to $(DEPLOY_HOST)..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
@@ -100,16 +101,23 @@ deploy:
 	  esac
 	@echo "✅ Deployed to $(DEPLOY_HOST). Roll back with: make rollback DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_BIN=$(DEPLOY_BIN)"
 
-## deploy-debug: deploy, then turn the pprof listener on (loopback only) via a
-## systemd drop-in. Profile over `ssh -L 6060:localhost:6060 $(DEPLOY_HOST)`.
-.PHONY: deploy-debug
-deploy-debug: deploy
-	@echo "→ Enabling pprof listener (ABK_PPROF_ADDR=localhost:6060) via systemd drop-in..."
+## deploy-debug: deploy with the pprof listener on (loopback only), via a systemd
+## drop-in. Profile over `ssh -L 6060:localhost:6060 $(DEPLOY_HOST)`.
+## The drop-in is written BEFORE `deploy` runs so its single restart already
+## carries ABK_PPROF_ADDR (no second restart). It PERSISTS on the host, across
+## later plain `make deploy` runs too, until `make pprof-off`. Prerequisites run
+## in order, so do not use `make -j` with this target.
+.PHONY: deploy-debug pprof-dropin
+pprof-dropin:
+	@echo "→ Installing pprof drop-in (ABK_PPROF_ADDR=localhost:6060); takes effect on the next restart..."
 	ssh $(DEPLOY_HOST) 'sudo mkdir -p /etc/systemd/system/audiobook-organizer.service.d && \
 	  printf "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n" | sudo tee /etc/systemd/system/audiobook-organizer.service.d/pprof.conf >/dev/null && \
-	  sudo systemctl daemon-reload && sudo systemctl restart audiobook-organizer.service'
+	  sudo systemctl daemon-reload'
+
+deploy-debug: pprof-dropin deploy
+	@echo "→ Checking the pprof listener answers..."
 	@sleep 3
-	ssh $(DEPLOY_HOST) 'curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1" | head -1'
+	ssh $(DEPLOY_HOST) 'out=$$(curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1") && [ -n "$$out" ] && printf "%s\n" "$$out" | head -1'
 	@echo "✅ pprof listening on $(DEPLOY_HOST) localhost:6060. Turn off with: make pprof-off"
 
 ## pprof-off: remove the pprof drop-in and restart (listener goes back to off)

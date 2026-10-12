@@ -36,7 +36,7 @@ test a branch with no PR, use `make ci-woodpecker`.
 | `test-fixtures` | `heavy=true` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
 | `test-native-taglib` | `heavy=true`, `host=u1` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
-| `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, web tests | split out of `checks` on 2026-09-29 |
+| `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, pprof-check, web tests | split out of `checks` on 2026-09-29 |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
 
 Placement follows three rules. First, packages whose tests decode audio

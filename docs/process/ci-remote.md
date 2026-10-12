@@ -1,7 +1,7 @@
 <!-- file: docs/process/ci-remote.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 64ab6c3c-1ce6-48a4-8e4a-0c95ada9ab46 -->
-<!-- last-edited: 2026-09-26 -->
+<!-- last-edited: 2026-10-11 -->
 
 # `make ci-remote`: local CI on a runner pool
 
@@ -31,7 +31,7 @@ The gate set is the same as `make ci`, and so is the verdict:
 |---|---|---|
 | `test-short` (`go test ./... -short -race -coverprofile -covermode=atomic -timeout 25m`) | `test-go-NN` / `test-decode-NN`: the same flags, one shard per package subset | any node; decode shards only on a node that may decode |
 | `vet` (test-short prerequisite) | `vet` (`make vet`) | any node |
-| `staticcheck`, `sdkguard`, `bench-check`, `fmt-check` | same make targets | any node |
+| `staticcheck`, `sdkguard`, `bench-check`, `pprof-check`, `fmt-check` | same make targets | any node |
 | `web-test` | `npm ci --prefix web` + `make web-test` | any node |
 | `lint-errcheck-ratchet` | `errcheck-ratchet` (the same script, which pins GOOS=linux) | any node |
 | `mocks-check` | `mocks-check` | this machine (mockery is only installed on developer machines) |
