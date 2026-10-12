@@ -219,8 +219,8 @@ func (d fakeDeps) RunAutoPurgeSoftDeleted(ctx context.Context, _ string) {
 		*d.purgeCtx = ctx
 	}
 }
-func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error  { return nil }
-func (d fakeDeps) StripMovementAtoms(_ context.Context)                {}
+func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error { return nil }
+func (d fakeDeps) StripMovementAtoms(_ context.Context)               {}
 func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {
 	return nil
 }
