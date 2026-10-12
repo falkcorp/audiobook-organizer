@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_reconcile_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ea4b7eaf-18c6-45d2-9344-3838c68c905f
 // last-edited: 2026-10-11
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -146,6 +147,25 @@ func TestReconcileOpsV3NoWritesAfterEveryWriter(t *testing.T) {
 			return err
 		}},
 		{"DeleteOperationV2", func() error { _, _, err := p.DeleteOperationV2(b, []string{"completed"}); return err }},
+		{"SweepHollowOperationsV2", func() error {
+			// A run with a record whose row an older binary left as a shell
+			// (raw, so stale until the sweep deletes both).
+			h := newRunID()
+			if err := p.InsertOperationV2(OperationV2Row{ID: h, DefID: "test.every-writer", Plugin: "test", Status: "queued", QueuedAt: now}); err != nil {
+				return err
+			}
+			if err := p.db.Set(opv2OpKey(h), []byte(`{}`), pebble.Sync); err != nil {
+				return err
+			}
+			n, err := p.SweepHollowOperationsV2()
+			if err == nil && n != 1 {
+				err = fmt.Errorf("swept %d rows, want 1", n)
+			}
+			if r, gerr := p.GetRunV3(h); err == nil && (gerr != nil || r != nil) {
+				err = fmt.Errorf("the swept row's run record survived: %+v, %v", r, gerr)
+			}
+			return err
+		}},
 	}
 	var nat string
 	steps = append(steps, []struct {
@@ -383,11 +403,22 @@ func TestOpsV3ProgressTickWritesOnlyProgKey(t *testing.T) {
 	}
 	runBefore := v3Digest(t, p, opv3RunPrefix)
 	progBefore := v3Digest(t, p, opv3ProgPrefix)
+	wal := walBytes(t, p)
 	if err := p.UpdateOpProgressV2(id, 7, 9, "item 7"); err != nil {
 		t.Fatal(err)
 	}
 	if v3Digest(t, p, opv3RunPrefix) != runBefore {
 		t.Error("a progress tick rewrote opv3:run:")
+	}
+	// The digest cannot see an identical rewrite of opv3:run:; the WAL can.
+	// The tick's batch is the v2 row (which carries the 2 KiB params) plus
+	// small keys; a rewritten record would add the params a second time.
+	_, raw, err := p.getOpV2Raw(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := walBytes(t, p) - wal; w > uint64(len(raw))+1024 {
+		t.Errorf("a progress tick wrote %d WAL bytes for a %d-byte v2 row; the opv3:run: record (params included) was rewritten", w, len(raw))
 	}
 	if v3Digest(t, p, opv3ProgPrefix) == progBefore {
 		t.Error("a progress tick did not write opv3:prog:")
@@ -412,5 +443,248 @@ func TestOpsV3ProgressTickWritesOnlyProgKey(t *testing.T) {
 	}
 	if v3Digest(t, p, "opv2:", "opv3:") != before {
 		t.Fatal("a failed tick commit changed opv2: or opv3:")
+	}
+}
+
+// batchKeys lists the user keys staged in b, in staging order.
+func batchKeys(t testing.TB, b *GatedBatch) []string {
+	t.Helper()
+	r := b.b.Reader()
+	var out []string
+	for {
+		_, k, _, ok, err := r.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			return out
+		}
+		out = append(out, string(k))
+	}
+}
+
+// TestStageRecordWritesOnlyChangedHalf pins the run record split: a change to
+// the runHot half stages only opv3:prog:, a change to the rest stages only
+// opv3:run:, and no change stages nothing. (A digest of the stored values
+// cannot see an identical rewrite; the staged batch can.)
+func TestStageRecordWritesOnlyChangedHalf(t *testing.T) {
+	p := newTimelineStore(t)
+	id := newRunID()
+	total := int64(10)
+	prev := &RunRecord{ID: id, DefID: "test.split", State: state.V3Running, Attempt: 1,
+		Params:    json.RawMessage(`{"big":"` + strings.Repeat("p", 4096) + `"}`),
+		Progress:  ProgressSnapshot{Done: 1, Total: &total, Current: "item 1"},
+		V2RowHash: "0123"}
+	stage := func(next *RunRecord) []string {
+		t.Helper()
+		b := p.db.NewBatch()
+		defer b.Close()
+		if err := p.newOpsV3Stage(b).stageRecord(prev, next); err != nil {
+			t.Fatal(err)
+		}
+		return batchKeys(t, b)
+	}
+	tick := *prev
+	tick.Progress.Done, tick.Progress.Current, tick.V2RowHash = 2, "item 2", "4567"
+	if got := stage(&tick); len(got) != 1 || got[0] != string(opv3ProgKey(id)) {
+		t.Errorf("a progress tick staged %v; want only %s", got, opv3ProgKey(id))
+	}
+	core := *prev
+	core.Error = "boom"
+	if got := stage(&core); len(got) != 1 || got[0] != string(opv3RunKey(id)) {
+		t.Errorf("a record change with the same progress staged %v; want only %s", got, opv3RunKey(id))
+	}
+	same := *prev
+	if got := stage(&same); len(got) != 0 {
+		t.Errorf("an unchanged record staged %v; want nothing", got)
+	}
+}
+
+// TestNativeWritesRefuseUnsyncedRecord: with the mirror on, a native write
+// whose stored record does not name the current opv2 row bytes (a previous
+// binary changed or deleted the row, and the boot reconcile has not
+// repaired the record) is refused with ErrStaleTransition and writes
+// nothing: no stale state, timestamp or result is mirrored over the newer
+// row, no deleted row is re-created, and no run is discarded by a state it
+// has left. After the reconcile the same writes go through.
+func TestNativeWritesRefuseUnsyncedRecord(t *testing.T) {
+	p := newTimelineStore(t)
+	changed := insertV3(t, p, "test.unsynced", "")
+	transition(t, p, changed, state.EvDispatch, nil)
+	gone := insertV3(t, p, "test.unsynced", "")
+
+	// The previous binary: changes one row, deletes the other, no opv3.
+	row, err := p.GetOperationV2(changed)
+	if err != nil || row == nil {
+		t.Fatal(err)
+	}
+	done := time.Now().UTC()
+	row.Status, row.CompletedAt = "interrupted_quiesced", &done
+	rawSetOp(t, p, *row)
+	if err := p.db.Delete(opv2OpKey(gone), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+
+	before := v3Digest(t, p, "opv2:", "opv3:")
+	cur := mustRun(t, p, changed)
+	_, err = p.TransitionRunV3(TransitionRequest{ID: changed, ExpectState: cur.State, ExpectAttempt: cur.Attempt,
+		ExpectFenceEpoch: cur.FenceEpoch, Event: state.EvStopRequested, StopReason: state.StopUser})
+	if !errors.Is(err, ErrStaleTransition) {
+		t.Errorf("transition of a run whose row changed under it: err = %v, want ErrStaleTransition", err)
+	}
+	if ok, err := p.DeleteRunV3(changed, state.AllV3()); ok || !errors.Is(err, ErrStaleTransition) {
+		t.Errorf("discard of a run whose row changed under it: deleted %v, err %v; want refused", ok, err)
+	}
+	g := mustRun(t, p, gone)
+	_, err = p.TransitionRunV3(TransitionRequest{ID: gone, ExpectState: g.State, ExpectAttempt: g.Attempt,
+		ExpectFenceEpoch: g.FenceEpoch, Event: state.EvDispatch})
+	if !errors.Is(err, ErrStaleTransition) {
+		t.Errorf("transition of a run whose row was deleted: err = %v, want ErrStaleTransition", err)
+	}
+	if v3Digest(t, p, "opv2:", "opv3:") != before {
+		t.Fatal("a refused native write changed opv2: or opv3: (a deleted row re-created, or a stale record mirrored)")
+	}
+
+	rep, err := p.ReconcileOpsV3WithV2(context.Background())
+	if err != nil || rep.Rebuilt != 1 || rep.Orphans != 1 {
+		t.Fatalf("reconcile = %+v, %v; want 1 rebuilt, 1 orphan", rep, err)
+	}
+	r := transition(t, p, changed, state.EvDecideDrop, nil)
+	if r.State != state.V3Dropped {
+		t.Errorf("after the reconcile: %s, want dropped", r.State)
+	}
+	checkV3Consistency(t, p)
+}
+
+// TestReconcileOpsV3LockedRecheckKeepsLiveWrite: a run stale at detection
+// that a live write synced before its repair batch is left as the live write
+// left it. Rebuilding it anyway would push the live "running" row through
+// migration 065's map, which reads "running" as interrupted{crash}.
+func TestReconcileOpsV3LockedRecheckKeepsLiveWrite(t *testing.T) {
+	p := newTimelineStore(t)
+	now := time.Now().UTC()
+	id := newRunID()
+	if err := p.InsertOperationV2(OperationV2Row{ID: id, DefID: "test.recheck", Plugin: "test", Status: "queued", QueuedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := p.GetOperationV2(id)
+	row.ProgressMessage = "written by a binary without the projection"
+	rawSetOp(t, p, *row)
+
+	stale, _, err := p.findStaleRunsV3(context.Background())
+	if err != nil || len(stale) != 1 || stale[0] != id {
+		t.Fatalf("detection = %v, %v; want [%s]", stale, err, id)
+	}
+	// The live dispatch lands between detection and repair.
+	if err := p.UpdateOperationV2Status(id, "running", &now, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	rep := OpsV3MigrationReport{PerStatus: map[string]int{}, Unmapped: map[string]int{}}
+	if _, err := p.migrateOpsV3Batch(stale, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Written != 0 || rep.Skipped != 1 {
+		t.Errorf("repair = %+v; want the synced run skipped under the lock", rep)
+	}
+	if got := assertRecordSynced(t, p, id); got.State != state.V3Running {
+		t.Errorf("live run is %s/%s after the repair; want running", got.State, got.InterruptedWhy)
+	}
+	checkV3Consistency(t, p)
+}
+
+// TestReconcileOpsV3OrphanRecheckUnderLock: a run orphaned at detection whose
+// opv2 row a live write re-created before the delete batch is kept.
+func TestReconcileOpsV3OrphanRecheckUnderLock(t *testing.T) {
+	p := newTimelineStore(t)
+	now := time.Now().UTC()
+	id := newRunID()
+	row := OperationV2Row{ID: id, DefID: "test.orphan-recheck", Plugin: "test", Status: "queued", QueuedAt: now}
+	if err := p.InsertOperationV2(row); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Delete(opv2OpKey(id), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	orphans, err := p.findOrphanRunsV3(context.Background())
+	if err != nil || len(orphans) != 1 || orphans[0] != id {
+		t.Fatalf("detection = %v, %v; want [%s]", orphans, err, id)
+	}
+	if err := p.InsertOperationV2(row); err != nil { // the live re-create
+		t.Fatal(err)
+	}
+	undecodable := 0
+	n, err := p.deleteOrphanRunsV3Batch(orphans, &undecodable)
+	if err != nil || n != 0 {
+		t.Fatalf("delete batch removed %d (%v); want 0: the row exists again", n, err)
+	}
+	assertRecordSynced(t, p, id)
+	checkV3Consistency(t, p)
+}
+
+// TestReconcileOpsV3KeepsNeverMirroredRuns: a run created natively with the
+// mirror off has no opv2 row and an empty V2RowHash. It never had a row to
+// lose, so the orphan pass keeps it even when the reconcile runs with the
+// switch reading "on" (as it does at every boot).
+func TestReconcileOpsV3KeepsNeverMirroredRuns(t *testing.T) {
+	p := newTimelineStore(t)
+	p.setOpsV2MirrorEnabled(false)
+	id := insertV3(t, p, "test.never-mirrored", "")
+	p.setOpsV2MirrorEnabled(true)
+	if row, _ := p.GetOperationV2(id); row != nil {
+		t.Fatal("a mirror-off insert wrote an opv2 row")
+	}
+	rep, err := p.ReconcileOpsV3WithV2(context.Background())
+	if err != nil || rep.Orphans != 0 {
+		t.Fatalf("reconcile = %+v, %v; want no orphan", rep, err)
+	}
+	if r := mustRun(t, p, id); r.State != state.V3Queued {
+		t.Errorf("never-mirrored run is %s", r.State)
+	}
+}
+
+// TestReconcileOpsV3SkipsUndecodableKeepsGoing: a stale run whose checkpoint
+// does not decode and a stale run whose record does not decode are counted
+// and left alone, and the stale run sorted after them is still rebuilt: one
+// bad value must not fail the pass at the same id on every boot.
+func TestReconcileOpsV3SkipsUndecodableKeepsGoing(t *testing.T) {
+	p := newTimelineStore(t)
+	base := time.Now().UTC().Truncate(time.Second)
+	ids := []string{idAt(base), idAt(base.Add(time.Second)), idAt(base.Add(2 * time.Second))}
+	badCkpt, badRec, good := ids[0], ids[1], ids[2]
+	for _, id := range ids {
+		if err := p.InsertOperationV2(OperationV2Row{ID: id, DefID: "test.undecodable", Plugin: "test", Status: "queued", QueuedAt: base}); err != nil {
+			t.Fatal(err)
+		}
+		row, _ := p.GetOperationV2(id)
+		done := base.Add(time.Minute)
+		row.Status, row.CompletedAt = "completed", &done
+		rawSetOp(t, p, *row) // stale: a previous binary finished it
+	}
+	if err := p.UpsertOpStateV2(OpStateV2Row{OperationID: badCkpt, StateBlob: []byte(`{"cursor":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Set(opv3CkptKey(badCkpt), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Set(opv3RunKey(badRec), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := p.ReconcileOpsV3WithV2(context.Background())
+	if err != nil {
+		t.Fatalf("reconcile failed on one bad value: %v", err)
+	}
+	if rep.Undecodable != 1 || rep.Rebuilt != 2 {
+		t.Errorf("report = %+v; want 1 undecodable (the record), 2 rebuilt", rep)
+	}
+	if r := assertRecordSynced(t, p, good); r.State != state.V3Succeeded {
+		t.Errorf("good run: %s", r.State)
+	}
+	if r := assertRecordSynced(t, p, badCkpt); r.State != state.V3Succeeded {
+		t.Errorf("run with the bad checkpoint: %s", r.State)
+	}
+	if raw, closer, err := p.db.Get(opv3CkptKey(badCkpt)); err != nil || string(raw) != "{not json" {
+		t.Errorf("the undecodable checkpoint was overwritten: %q, %v", raw, err)
+	} else {
+		_ = closer.Close()
 	}
 }

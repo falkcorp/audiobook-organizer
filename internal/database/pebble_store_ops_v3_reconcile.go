@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_reconcile.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 65cdda3b-c2ec-4866-88fa-c58559c39f59
 // last-edited: 2026-10-11
 
@@ -20,6 +20,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"slices"
 	"strings"
@@ -30,8 +31,15 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// opsV3ReconcilePage is how many keys one detection page carries.
-const opsV3ReconcilePage = 1000
+// opsV3ReconcilePage is how many keys one detection page carries at most,
+// and opsV3ReconcilePageBytes how many value bytes: a page closes at
+// whichever comes first. The byte cap bounds the detection pass's memory,
+// about (2 x workers + 1) pages in flight, whatever size the rows' params and
+// result blobs are.
+const (
+	opsV3ReconcilePage      = 1000
+	opsV3ReconcilePageBytes = 4 << 20
+)
 
 // opsV3ReconcileWorkers is the detection pass's checker goroutines. A var so
 // a test can force several workers on a small machine.
@@ -74,18 +82,24 @@ type OpsV3ReconcileReport struct {
 // resume acts on opv3 records (bootSweepV3 and retireForRequeue read
 // GetRunV3 and compare-and-set the stored state), so they must be current
 // before it runs. A failure is logged and boot continues: opv2: is still the
-// source of truth the registry runs from.
+// source of truth the registry runs from, and a record the reconcile could
+// not repair cannot be acted on: every native write with the mirror on first
+// checks the stored record against the current opv2 row bytes and refuses
+// with ErrStaleTransition when they differ (syncedV2Row), so the registry's
+// v3 calls fall back to their v2 paths for that run.
 //
 // MIRROR OFF. With the opv2 mirror off (05-PR16) native v3 writes no longer
-// update opv2:, so a stale opv2 row is expected, and rebuilding from it (or
-// deleting a v3-native run with no opv2 row as an orphan) would destroy v3
-// state. The guard below returns early when the switch is off, but the
-// switch is in-memory, not persisted, and reads "on" at every process start,
-// so at InitializeStore it is ALWAYS on: the guard only covers a caller that
-// flipped it earlier in the same process. 05-PR16 MUST therefore delete the
-// InitializeStore call (and this reconcile) in the same change that turns
-// the mirror off; leaving the call in place would run it with the mirror
-// "on" against a store whose opv2 rows have gone stale.
+// update opv2:, so a stale opv2 row is expected, and rebuilding from it would
+// destroy v3 state: a run discarded natively with the mirror off keeps its
+// opv2 row and would be rebuilt from it. (The orphan pass is safe either way:
+// it only removes a run that was synced with an opv2 row, and a run created
+// with the mirror off never was.) The guard below returns early when the
+// switch is off, but the switch is in-memory, not persisted, and reads "on"
+// at every process start, so at InitializeStore it is ALWAYS on: the guard
+// only covers a caller that flipped it earlier in the same process. 05-PR16
+// MUST therefore delete the InitializeStore call (and this reconcile) in the
+// same change that turns the mirror off; leaving the call in place would run
+// it with the mirror "on" against a store whose opv2 rows have gone stale.
 func (p *PebbleStore) ReconcileOpsV3WithV2(ctx context.Context) (rep OpsV3ReconcileReport, err error) {
 	defer recoverPebbleClosed("ReconcileOpsV3WithV2", &err)
 	start := time.Now()
@@ -128,7 +142,7 @@ func (p *PebbleStore) ReconcileOpsV3WithV2(ctx context.Context) (rep OpsV3Reconc
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
-		n, err := p.deleteOrphanRunsV3Batch(orphans[i:min(i+opsV3MigrationBatch, len(orphans))])
+		n, err := p.deleteOrphanRunsV3Batch(orphans[i:min(i+opsV3MigrationBatch, len(orphans))], &rep.Undecodable)
 		if err != nil {
 			return rep, err
 		}
@@ -183,7 +197,8 @@ func (p *PebbleStore) findStaleRunsV3(ctx context.Context) (stale []string, chec
 // findOrphanRunsV3 returns, sorted, the ids of opv3 runs with no opv2:op:
 // row. While the mirror is on every run has one (each write path commits the
 // two together), so an orphan is a run a binary without the projection
-// deleted.
+// deleted. deleteOrphanRunsV3Batch re-checks each under opsMu and keeps a
+// run that never had a row (empty V2RowHash).
 func (p *PebbleStore) findOrphanRunsV3(ctx context.Context) (orphans []string, err error) {
 	var mu sync.Mutex
 	open := func() (*GatedIter, error) {
@@ -211,10 +226,17 @@ func (p *PebbleStore) findOrphanRunsV3(ctx context.Context) (orphans []string, e
 }
 
 // deleteOrphanRunsV3Batch removes, in one batch under opsMu, every run in ids
-// that still has no opv2:op: row, through the façade's delete projection
-// (stageRunV3DeleteForV2: the record, its indexes, counters and per-run opv3
-// families). It returns how many it removed.
-func (p *PebbleStore) deleteOrphanRunsV3Batch(ids []string) (n int, err error) {
+// that still has no opv2:op: row and was synced with one (a non-empty
+// V2RowHash), through the façade's delete projection (s.del: the record, its
+// indexes, counters and per-run opv3 families). It returns how many it
+// removed, and counts a record that does not decode in *undecodable (left
+// alone, like the rebuild does).
+//
+// A record with an empty V2RowHash never had an opv2 row: it was created by
+// a native write with the mirror off. Its missing row is expected, not a
+// deletion, so it is not an orphan -- whatever the in-memory mirror switch
+// reads at the time this runs.
+func (p *PebbleStore) deleteOrphanRunsV3Batch(ids []string, undecodable *int) (n int, err error) {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 	b := p.db.NewBatch()
@@ -228,14 +250,19 @@ func (p *PebbleStore) deleteOrphanRunsV3Batch(ids []string) (n int, err error) {
 		if has {
 			continue // re-created since detection: the live write projected it
 		}
-		ok, err := p.hasKey(opv3RunKey(id))
+		cur, err := p.loadRunV3(id)
 		if err != nil {
-			return 0, err
-		}
-		if !ok {
+			if !errors.Is(err, errOpsV3Undecodable) {
+				return 0, err
+			}
+			*undecodable++
+			opsV3Log.Warn("opv3 reconcile: run record %s has no opv2 row and does not decode; left alone: %v", id, err)
 			continue
 		}
-		if err := p.stageRunV3DeleteForV2(s, id); err != nil {
+		if cur == nil || cur.V2RowHash == "" {
+			continue // gone since detection, or never mirrored (see above)
+		}
+		if err := s.del(cur); err != nil {
 			return 0, err
 		}
 		n++
@@ -253,8 +280,8 @@ func (p *PebbleStore) deleteOrphanRunsV3Batch(ids []string) (n int, err error) {
 }
 
 // walkPagesParallel streams the iterator open returns, in key order, in
-// pages of opsV3ReconcilePage keys (with copies of the values when
-// withValues), and hands each page to one of opsV3ReconcileWorkers goroutines
+// pages of up to opsV3ReconcilePage keys and opsV3ReconcilePageBytes value
+// bytes (with copies of the values when withValues), and hands each page to one of opsV3ReconcileWorkers goroutines
 // running check. The first error (or ctx's) stops the walk. (open, not a
 // prefix, so the opv2:op: key stays inside its reviewed reader:
 // TestOpsV2RowWritesGoThroughStageOpRow.)
@@ -284,6 +311,7 @@ func (p *PebbleStore) walkPagesParallel(ctx context.Context, open func() (*Gated
 			}
 		}
 		var pg page
+		bytesIn := 0
 		for iter.First(); iter.Valid(); iter.Next() {
 			pg.keys = append(pg.keys, append([]byte(nil), iter.Key()...))
 			if withValues {
@@ -292,12 +320,13 @@ func (p *PebbleStore) walkPagesParallel(ctx context.Context, open func() (*Gated
 					return verr
 				}
 				pg.vals = append(pg.vals, append([]byte(nil), v...))
+				bytesIn += len(v)
 			}
-			if len(pg.keys) == opsV3ReconcilePage {
+			if len(pg.keys) == opsV3ReconcilePage || bytesIn >= opsV3ReconcilePageBytes {
 				if err := send(pg); err != nil {
 					return err
 				}
-				pg = page{}
+				pg, bytesIn = page{}, 0
 			}
 		}
 		if err := iter.Error(); err != nil {

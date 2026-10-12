@@ -1,5 +1,5 @@
 // file: internal/database/migration065_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
 // last-edited: 2026-10-11
 
@@ -8,9 +8,11 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,6 +317,90 @@ func TestMigration065DownKeepsKeys(t *testing.T) {
 	if v3Digest(t, p, "opv3:") != before {
 		t.Fatal("re-running Up rewrote opv3: keys")
 	}
+}
+
+// failOpsCommitN makes the nth ops batch commit of p (1-based, counting
+// from now) fail, as a crash at that point would: nothing of that batch
+// lands. The returned func clears the hook.
+func failOpsCommitN(t testing.TB, p *PebbleStore, n int64) func() {
+	t.Helper()
+	var calls atomic.Int64
+	boom := errors.New("injected crash")
+	hook := func(s *PebbleStore) error {
+		if s == p && calls.Add(1) == n {
+			return boom
+		}
+		return nil
+	}
+	opsV2BeforeCommitHook.Store(&hook)
+	clear := func() { opsV2BeforeCommitHook.Store(nil) }
+	t.Cleanup(clear)
+	return clear
+}
+
+// TestMigration065ResumesAfterACrash: a pass that dies part-way (here at a
+// main-pass batch, then again at the successor fill) leaves only whole
+// batches behind, and the next pass (RunMigrations re-runs Up, the version
+// was never advanced) finishes the job: every run migrated once, one migrate
+// event each, the requeued run's successor filled, counts exact.
+func TestMigration065ResumesAfterACrash(t *testing.T) {
+	p := newTimelineStore(t)
+	base := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	rows := make([]OperationV2Row, 1250)
+	for i := range rows {
+		q := base.Add(time.Duration(i) * time.Minute)
+		c := q.Add(time.Second)
+		rows[i] = v2Row(idAt(q), "test.resume", "completed", "", q, &c)
+	}
+	// The last two rows: a v2 requeue and its successor (sort last, so the
+	// successor fill is the one batch after the main pass).
+	retired := base.Add(2000 * time.Minute)
+	old, succ := idAt(retired.Add(-time.Hour)), idAt(retired.Add(300*time.Millisecond))
+	rows = append(rows,
+		v2Row(old, "test.resume-requeue", "interrupted_dropped", state.RequeuedMessage, retired.Add(-time.Hour), &retired),
+		v2Row(succ, "test.resume-requeue", "queued", "", retired.Add(300*time.Millisecond), nil))
+	seedV2Rows(t, p, rows)
+
+	clear := failOpsCommitN(t, p, 2) // die at the second main-pass batch
+	if _, err := p.MigrateOpsV2ToV3(500, nil); err == nil {
+		t.Fatal("the injected crash was not reported")
+	}
+	clear()
+	if n := len(timelineKeys(t, p, opv3RunPrefix)); n != 500 {
+		t.Fatalf("after a crash at batch 2: %d records, want exactly batch 1's 500", n)
+	}
+
+	clear = failOpsCommitN(t, p, 3) // batches 2 and 3 land; die at the successor fill
+	rep, err := p.MigrateOpsV2ToV3(500, nil)
+	if err == nil {
+		t.Fatal("the injected successor-fill crash was not reported")
+	}
+	clear()
+	if rep.Written != len(rows)-500 || rep.Skipped != 500 {
+		t.Fatalf("resumed pass = %+v; want %d written, 500 skipped", rep, len(rows)-500)
+	}
+	if got := mustRun(t, p, old).SuccessorID; got != "" {
+		t.Fatalf("successor %q landed despite the crash", got)
+	}
+
+	rep, err = p.MigrateOpsV2ToV3(500, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Written != 0 || rep.SuccessorsFilled != 1 {
+		t.Errorf("final pass = %+v; want nothing rewritten and the pending successor filled", rep)
+	}
+	if got := mustRun(t, p, old).SuccessorID; got != succ {
+		t.Errorf("successor = %q, want %q", got, succ)
+	}
+	if n := len(timelineKeys(t, p, opv3EvtPrefix)); n != len(rows) {
+		t.Errorf("%d migrate events for %d runs; a resumed pass duplicated or lost some", n, len(rows))
+	}
+	c, err := p.OpCountsV3()
+	if err != nil || c.Total != int64(len(rows)) {
+		t.Errorf("counts = %+v, %v; want %d", c, err, len(rows))
+	}
+	checkV3Consistency(t, p)
 }
 
 // TestMigration065Timing100k seeds 100,000 v2 rows and times the migration.

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-11
 
@@ -450,9 +450,23 @@ func (p *PebbleStore) readOpCountsV3() (OpCounts, error) {
 	return c, nil
 }
 
+// errOpsV3Undecodable is wrapped by every error that says stored bytes (an
+// opv3 run record half, or an opv2:op: row) do not decode, as opposed to a
+// failed read. The migration and the boot reconcile count and skip a run
+// whose bytes do not decode, and stop on any other error.
+var errOpsV3Undecodable = errors.New("does not decode")
+
+// isJSONDecodeError reports whether err is json.Unmarshal rejecting the
+// bytes (as opposed to the read that fetched them failing).
+func isJSONDecodeError(err error) bool {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	return errors.As(err, &syn) || errors.As(err, &typ)
+}
+
 // loadRunV3 reads a stored record. A missing record is (nil, nil). A record
-// that does not decode is reported as an error: overwriting it would orphan
-// its index keys, whose state is unknown.
+// that does not decode is reported as an error wrapping errOpsV3Undecodable:
+// overwriting it would orphan its index keys, whose state is unknown.
 func (p *PebbleStore) loadRunV3(id string) (rec *RunRecord, err error) {
 	defer recoverPebbleClosed("loadRunV3", &err)
 	val, closer, err := p.db.Get(opv3RunKey(id))
@@ -466,15 +480,18 @@ func (p *PebbleStore) loadRunV3(id string) (rec *RunRecord, err error) {
 	uerr := json.Unmarshal(val, &r)
 	_ = closer.Close()
 	if uerr != nil {
-		return nil, fmt.Errorf("opv3: run record %s does not decode: %w", id, uerr)
+		return nil, fmt.Errorf("opv3: run record %s %w: %v", id, errOpsV3Undecodable, uerr)
 	}
 	if r.ID == "" {
-		return nil, fmt.Errorf("opv3: run record %s has no id", id)
+		return nil, fmt.Errorf("opv3: run record %s %w: it has no id", id, errOpsV3Undecodable)
 	}
 	var hot runHot
 	found, err := p.getJSONFound(opv3ProgKey(id), &hot)
+	if isJSONDecodeError(err) {
+		return nil, fmt.Errorf("opv3: progress of run %s %w: %v", id, errOpsV3Undecodable, err)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("opv3: progress of run %s does not decode: %w", id, err)
+		return nil, err
 	}
 	if found {
 		r.Progress, r.LastProgressAt, r.LastCheckpointAt, r.V2RowHash = hot.Progress, hot.LastProgressAt, hot.LastCheckpointAt, hot.V2RowHash
@@ -522,11 +539,23 @@ func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row, data 
 func (p *PebbleStore) stageRunV3DeleteForV2(s *opsV3Stage, id string) error {
 	cur, err := p.loadRunV3(id)
 	if err != nil {
-		// Unknown index keys: delete the record and the per-run families,
-		// leave the indexes to whoever can decode it (none today).
-		opsV3Log.Warn("opv3: deleting an unreadable run record with its v2 row (op %s): %v", id, err)
-		for _, k := range [][]byte{opv3RunKey(id), opv3ProgKey(id)} {
+		if !errors.Is(err, errOpsV3Undecodable) {
+			return err
+		}
+		// Every key named by the id alone goes: both record halves, the
+		// checkpoint, the ledger and the per-run families. The index keys
+		// (ix:state, ix:def, ix:done, ix:parent, q) and the counters embed
+		// fields only the record knew (state, def, queued/completed time,
+		// parent, priority), so they cannot be derived and are left; the
+		// listings skip an index key whose record is gone.
+		opsV3Log.Warn("opv3: deleting an unreadable run record with its v2 row (op %s); its index keys cannot be derived and stay: %v", id, err)
+		for _, k := range [][]byte{opv3RunKey(id), opv3ProgKey(id), opv3CkptKey(id), opv3LedgerKey(id)} {
 			if derr := s.b.Delete(k, nil); derr != nil {
+				return derr
+			}
+		}
+		for _, pfx := range opv3RunScopedPrefixes(id) {
+			if derr := s.b.DeleteRange(pfx, prefixEnd(pfx), nil); derr != nil {
 				return derr
 			}
 		}
@@ -802,31 +831,57 @@ func stageV2QueueAct(b *GatedBatch, prev *OperationV2Row, next *OperationV2Row) 
 	return b.Delete(opv2ActKey(next.ID), nil)
 }
 
+// syncedV2Row returns the opv2:op: row a native write with the mirror on is
+// about to replace or delete (nil: none), after checking that rec, the stored
+// record, was last synced with exactly those bytes (rec.V2RowHash; "" for a
+// run that has no row). A mismatch means a write the record never saw changed
+// or removed the row -- a previous binary after a rollback, with the boot
+// reconcile (ReconcileOpsV3WithV2) failed or not yet run -- so the record's
+// state, timestamps, error and result are stale. Mirroring them would
+// overwrite the newer row, re-create a row that binary deleted, or discard a
+// run by a state it has left, so the write is refused with
+// ErrStaleTransition and nothing is staged; every caller falls back to the
+// v2 write path, which decides from the row. In steady state the check never
+// fires: every writer stamps the hash of the bytes it stores
+// (TestReconcileOpsV3NoWritesAfterEveryWriter). Caller holds opsMu.
+func (p *PebbleStore) syncedV2Row(rec *RunRecord) (*OperationV2Row, error) {
+	row, raw, err := p.getOpV2Raw(rec.ID)
+	if err != nil && raw == nil {
+		return nil, err // the read itself failed
+	}
+	have := ""
+	if raw != nil {
+		have = opsV3RowHash(raw)
+	}
+	if have != rec.V2RowHash {
+		what := "was changed"
+		if raw == nil {
+			what = "was deleted"
+		}
+		return nil, fmt.Errorf("%w: run %s: its opv2 row %s by a write its opv3 record did not see (the boot reconcile has not repaired it); refusing to mirror a stale record over it",
+			ErrStaleTransition, rec.ID, what)
+	}
+	if err != nil {
+		// Unreachable while the hashes agree: no writer stamps the hash of
+		// bytes it did not marshal from a row.
+		return nil, err
+	}
+	return row, nil
+}
+
 // stageMirror stages the opv2: row for rec (and its queue/active/timeline
 // keys) when the mirror is on, and sets rec.V2RowHash to the hash of the row
-// bytes it staged, so call it before staging rec. With the mirror off rec
+// bytes it staged, so call it before staging rec, while rec.V2RowHash is
+// still the stored record's (syncedV2Row checks it). With the mirror off rec
 // keeps the hash it had: the opv2 row it names is unchanged. Caller holds
 // opsMu.
 func (p *PebbleStore) stageMirror(b *GatedBatch, rec *RunRecord, now time.Time) error {
 	if !p.opsV2MirrorEnabled() {
 		return nil
 	}
-	prev, err := p.GetOperationV2(rec.ID)
+	prev, err := p.syncedV2Row(rec)
 	if err != nil {
-		// An undecodable v2 row: replace it, as InsertOperationV2 does, and
-		// drop its timeline keys (its CompletedAt is unknown, so stageOpRow
-		// cannot derive them).
-		opsV3Log.Warn("opv3: mirror is replacing an unreadable opv2 row (op %s): %v", rec.ID, err)
-		prev = nil
-		stale, derr := p.doneKeysForIDs(map[string]struct{}{rec.ID: {}})
-		if derr != nil {
-			return derr
-		}
-		for _, k := range append(stale, opv2OpenKey(rec.ID)) {
-			if err := b.Delete(k, nil); err != nil {
-				return err
-			}
-		}
+		return err
 	}
 	hasLedger, err := p.hasKey(opv3LedgerKey(rec.ID))
 	if err != nil {
@@ -1084,9 +1139,12 @@ func (p *PebbleStore) DeleteRunV3(id string, allowed []state.V3) (deleted bool, 
 		return false, err
 	}
 	if p.opsV2MirrorEnabled() {
-		row, gerr := p.GetOperationV2(id)
+		// allowed was checked against the record's state; refuse when the
+		// row has moved on without it (syncedV2Row), or the discard could
+		// delete a run a previous binary has since re-run.
+		row, gerr := p.syncedV2Row(cur)
 		if gerr != nil {
-			return false, fmt.Errorf("opv3: DeleteRunV3: reading the mirrored opv2 row: %w", gerr)
+			return false, fmt.Errorf("opv3: DeleteRunV3: %w", gerr)
 		}
 		if row != nil {
 			if err := stageOpV2RowDelete(b, row); err != nil {
