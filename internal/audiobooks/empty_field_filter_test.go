@@ -1,7 +1,7 @@
 // file: internal/audiobooks/empty_field_filter_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e8b1a37-9d52-4c06-b3f8-27a1d0e5c964
-// last-edited: 2026-08-13
+// last-edited: 2026-10-11
 
 package audiobooks
 
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
 // emptyFilterTestBook builds a book with a known title/narrator so the tests
@@ -125,4 +126,25 @@ func TestFirstEmptyFilterValue(t *testing.T) {
 				"legitimately means 'no constraint' and must stay allowed")
 		}
 	})
+}
+
+// TestMatchesCompiledFiltersFailsClosedOnEmptyValue pins the last-line guard in
+// matchesCompiledFilters itself. The compiledFilter is built by hand, bypassing
+// compileFieldFilter (which rejects an empty value), and carries a text matcher
+// that WOULD match the book: only the guard stands between it and a match.
+func TestMatchesCompiledFiltersFailsClosedOnEmptyValue(t *testing.T) {
+	tm, err := querygrammar.CompileText("skills", false)
+	if err != nil {
+		t.Fatalf("CompileText: %v", err)
+	}
+	book := emptyFilterTestBook("Skills for Life")
+	for _, negated := range []bool{false, true} {
+		cf := compiledFilter{
+			FieldFilter: FieldFilter{Field: "title", Value: "", Negated: negated},
+			text:        tm,
+		}
+		if matchesCompiledFilters(&book, []compiledFilter{cf}, nil) {
+			t.Errorf("negated=%v: a compiled filter with an empty Value matched; it must fail closed", negated)
+		}
+	}
 }

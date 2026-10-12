@@ -1,5 +1,5 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
 // last-edited: 2026-10-11
 
@@ -96,6 +96,11 @@ type Dispatcher struct {
 	slots          *Slots
 	health         *Health
 	requiredLabels map[string][]string
+	// totals is TEST-ONLY today: nothing in production sets it (WithTotalCap
+	// lives in dispatch_testseams_test.go), so every production Dispatcher has
+	// an empty map and no pool-wide cap. Moving Whisper onto the dispatcher
+	// (transcribe/inflight.go, "PR 3") MUST reintroduce a production setter for
+	// the whisper_max_in_flight cap, or that cap is silently dropped.
 	totals         map[Kind]TotalCap
 	attemptTimeout map[string]time.Duration
 	pinnedModel    map[string]string

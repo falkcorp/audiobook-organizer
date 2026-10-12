@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_testseams_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5ce678f-b1bc-41aa-af30-9e83e2c1b296
 // last-edited: 2026-10-11
 
@@ -21,15 +21,9 @@ func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
 // matchesFieldFiltersRT is matchesFieldFilters with the runtime source the
 // duration: filter compares against (nil = stored Book.Duration).
 func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtimeFunc) bool {
-	// Fail CLOSED on an empty value, as the production predicate paths do (see
-	// FirstEmptyFilterValue and mustCompileForPredicate): falling through would
-	// reach strings.Contains(x, "") == true and match every book. Negated is
-	// deliberately not consulted.
-	for _, f := range filters {
-		if f.Value == "" {
-			return false
-		}
-	}
+	// No empty-value check here on purpose: the seam must exercise the
+	// production path (mustCompileForPredicate, then matchesCompiledFilters'
+	// own fail-closed guard), so a test of it pins production behaviour.
 	cfs, ok := mustCompileForPredicate(filters)
 	if !ok {
 		return false
