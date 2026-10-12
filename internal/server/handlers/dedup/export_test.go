@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/export_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 028a211d-147e-4bdf-bfdc-55af33f7b2b8
 // last-edited: 2026-10-12
 
@@ -42,4 +42,16 @@ func SetExportRowCapForTest(n int) (restore func()) {
 	old := exportRowCap
 	exportRowCap = n
 	return func() { exportRowCap = old }
+}
+
+// SetCandidateStatusWriterForTest replaces the cluster verbs' per-pair status
+// write, so a test can make individual writes fail.
+func SetCandidateStatusWriterForTest(h *Handler, f func(id int64, status string) error) {
+	h.setCandidateStatus = f
+}
+
+// SetCandidateReaderForTest replaces the named-pair reject's per-pair read, so
+// a test can make a read fail.
+func SetCandidateReaderForTest(h *Handler, f func(id int64) (*database.DedupCandidate, error)) {
+	h.getCandidate = f
 }

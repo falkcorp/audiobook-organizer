@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.16.0
+// version: 1.17.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-10-12
 
@@ -22,6 +22,13 @@ import * as api from '../../../services/api';
 import type { DedupBand, DedupCandidate, DedupStats } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
 import { dupesLane } from './dupes';
+import { buildClusters, pairIdsWithin, type DupeCluster } from './dupesClusters';
+import {
+  useClusterOverflow,
+  useSeriesSummary,
+  type ClusterOverflow,
+  type DupesSeries,
+} from './useDupesClusterData';
 import { keepIdForMerge } from './keepDecision';
 import type { Toast } from './useMetadataLane';
 import { PAGE_SIZE_OPTIONS } from './useMetadataLane';
@@ -313,6 +320,23 @@ export interface DupesLane {
    */
   mergeAllFilteredDisabledReason: string | null;
 
+  /**
+   * The Clusters view. `clusters` are the connected components of the loaded
+   * page's pairs (empty unless the hook was told the view is showing).
+   * `clusterOverflow` says how many more pairs a cluster's books have on other
+   * pages; `bySeries` / `series` are the By-series toggle and its list.
+   */
+  clusters: DupeCluster[];
+  clusterOverflow: (cluster: DupeCluster) => ClusterOverflow;
+  bySeries: boolean;
+  setBySeries: (on: boolean) => void;
+  series: DupesSeries;
+  /**
+   * Selects or deselects pairs by id: the cluster card's checkbox. Leaves
+   * all-matching mode like any manual change, so the selected count stays true.
+   */
+  setPairsSelected: (ids: readonly number[], on: boolean) => void;
+
   verbs: (typeof dupesLane)['verbs'];
   dispatch: (action: DupesAction) => void;
   refresh: () => void;
@@ -329,6 +353,10 @@ export interface DupesLane {
  * metadata lane discards late responses by fetch id, this one aborts them, which
  * is strictly better and is kept rather than unified.
  *
+ * @param clusterView Whether the Clusters view is showing. Gates the two extra
+ *               fetches that view needs (other-page pair counts, the series
+ *               summary); false means the lane makes exactly the requests it
+ *               always did.
  * @param active Whether to fetch and bind shortcuts. The workspace passes
  *               `lane === 'dupes'` so switching lanes neither keeps fetches in
  *               flight nor leaves a window key listener stealing `j`.
@@ -336,7 +364,8 @@ export interface DupesLane {
 export function useDupesLane(
   toast: Toast,
   active = true,
-  urlFilters: DupesUrlFilters = NO_URL_FILTERS
+  urlFilters: DupesUrlFilters = NO_URL_FILTERS,
+  clusterView = false
 ): DupesLane {
   const [candidates, setCandidates] = useState<DedupCandidate[]>([]);
   const [total, setTotal] = useState(0);
@@ -529,6 +558,11 @@ export function useDupesLane(
   }, [active, reloadToken]);
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), []);
+
+  // The Clusters view's By-series toggle is view state, not a filter: it picks
+  // between two lists and is never mirrored to the URL.
+  const [bySeries, setBySeries] = useState(false);
+  const series = useSeriesSummary(active && clusterView && bySeries, reloadToken, toast, refresh);
 
   // -------------------------------------------------------------------------
   // Derived
@@ -812,6 +846,43 @@ export function useDupesLane(
   });
   matchingCount.sync(selection.pageFullySelected || selection.allMatching);
   const selectedIds = selection.selected;
+
+  // Components of what is ON SCREEN (`visible`), so a cluster card never holds a
+  // pair the list is not showing; see dupesClusters.ts for the page boundary.
+  const clusters = useMemo(
+    () => (clusterView ? buildClusters(visible) : []),
+    [clusterView, visible]
+  );
+  // The list's own filter, minus paging, entity_id and the row enrichment: what
+  // "other pages" means is "pairs this same list would show on another page".
+  const overflowParams = useMemo(
+    (): Parameters<typeof api.getDedupCandidates>[0] => ({
+      entity_type: 'book',
+      status: filters.status || undefined,
+      band: filters.band ?? undefined,
+      layer: filters.layer ?? undefined,
+      both_unmatched: filters.bothUnmatched || undefined,
+      // The ?book= deep link scopes the list to one book, so the counts of
+      // pairs "on other pages" are scoped to it too.
+      entity_id: filters.entityId ?? undefined,
+      q: appliedSearch.trim() || undefined,
+    }),
+    [
+      filters.status,
+      filters.band,
+      filters.layer,
+      filters.bothUnmatched,
+      filters.entityId,
+      appliedSearch,
+    ]
+  );
+  const clusterOverflow = useClusterOverflow(
+    active && clusterView && !bySeries,
+    clusters,
+    candidates,
+    overflowParams,
+    reloadToken
+  );
   const {
     clear: clearSelectionState,
     toggle: toggleRow,
@@ -911,6 +982,32 @@ export function useDupesLane(
 
   const clearSelection = clearSelectionState;
 
+  // The page's rows and the selection, read at dispatch time without making
+  // `dispatch` / `setPairsSelected` depend on them: their identity must hold
+  // still across a refetch or a tick for the memoized rows. Refreshed after
+  // every commit, so a click always sees what is on screen.
+  const visibleRef = useRef(visible);
+  const selectedRef = useRef(selection);
+  useEffect(() => {
+    visibleRef.current = visible;
+    selectedRef.current = selection;
+  });
+  const { replace: replaceSelection } = selection;
+  const setPairsSelected = useCallback(
+    (ids: readonly number[], on: boolean) => {
+      const sel = selectedRef.current;
+      // In all-matching mode every row on screen reads as selected while the
+      // explicit set is empty, so the edit starts from the page itself.
+      const base = new Set<number>(sel.allMatching ? visibleRef.current.map((c) => c.id) : sel.selected);
+      for (const id of ids) {
+        if (on) base.add(id);
+        else base.delete(id);
+      }
+      replaceSelection(base);
+    },
+    [replaceSelection]
+  );
+
   // -------------------------------------------------------------------------
   // Actions
   // -------------------------------------------------------------------------
@@ -974,6 +1071,47 @@ export function useDupesLane(
     [toast, clearSelection, refresh, markDecided, unmarkDecided]
   );
 
+  /**
+   * One cluster verb: one request over a cluster's BOOK ids.
+   *
+   * The pairs the verb acts on (`pairIds`) are suppressed the moment it is
+   * dispatched, for the reason `decidedIds` exists: a second click on
+   * the same card before the refetch lands would otherwise link the same books
+   * twice. They are put back if the request fails.
+   *
+   * The refetch is requested BEFORE the outcome is reported, and the report is a
+   * toast, which the refetch cannot clear. The tab this replaces parked its
+   * partial-failure report in the same `error` slot the refetch resets, so a
+   * partly-failed bulk merge reported success by erasure; reporting through the
+   * toast keeps the failure on screen however the refetch lands.
+   */
+  const runCluster = useCallback(
+    async (
+      pairIds: number[],
+      failure: string,
+      op: (expectedPairs: number) => Promise<{ message: string; ok: boolean }>
+    ) => {
+      markDecided(pairIds);
+      setBusy(true);
+      let outcome: { message: string; ok: boolean };
+      try {
+        outcome = await op(pairIds.length);
+      } catch (err) {
+        outcome = { message: err instanceof Error ? err.message : failure, ok: false };
+      } finally {
+        setBusy(false);
+      }
+      // A refused or partly-applied request leaves its pairs pending
+      // server-side; only the refetch can say which, so they come back here and
+      // the refetch drops the ones that really went.
+      if (!outcome.ok) unmarkDecided(pairIds);
+      clearSelection();
+      refresh();
+      toast(outcome.message, outcome.ok ? 'success' : 'warning');
+    },
+    [markDecided, unmarkDecided, clearSelection, refresh, toast]
+  );
+
   /** A bulk action's error: a moved filter refreshes and asks to re-confirm. */
   const bulkFailure = useCallback(
     (err: unknown, fallback: string) => {
@@ -1035,6 +1173,90 @@ export function useDupesLane(
         case 'dismissSelected':
           if (action.ids.length === 0) return;
           void runSequential(action.ids, (id) => api.rejectDedupCandidate(id), 'Dismissed');
+          return;
+
+        case 'linkCluster':
+          // Two books is the smallest cluster; the endpoint refuses fewer, and a
+          // card cannot produce fewer, so this is the invariant, not the UI.
+          if (action.ids.length < 2) return;
+          // The pairs on screen among these books are all suppressed while the
+          // request runs, but the server marks only PENDING ones merged, so
+          // that is what the outcome is compared against: under the "All"
+          // status filter a decided pair in the cluster is not a failure.
+          const linkPairIds = pairIdsWithin(visibleRef.current, action.ids);
+          const expectedPending = visibleRef.current.filter(
+            (c) => linkPairIds.includes(c.id) && c.status === 'pending'
+          ).length;
+          void runCluster(
+            linkPairIds,
+            'Link cluster failed',
+            async () => {
+              const expectedPairs = expectedPending;
+              const r = await api.linkDedupCluster(action.ids, action.primaryId);
+              const failed = (r.failed_candidate_ids ?? []).length;
+              // The server links the books first and then marks the pairs; what
+              // it reports is the pairs it could not mark (they still read
+              // pending), or that it could not list them at all. Fewer pairs
+              // marked than the card showed is the same trouble from the
+              // other side: the card's pairs are a subset of what it marks.
+              if (failed > 0 || r.candidates_error || r.candidates_updated < expectedPairs) {
+                const unmarked = failed || Math.max(0, expectedPairs - r.candidates_updated);
+                return {
+                  message:
+                    `Linked ${r.merged_books} books, but ${unmarked || 'some'} pair(s) could not be ` +
+                    `marked merged and still read pending` +
+                    (r.candidates_error ? ` (${r.candidates_error})` : ''),
+                  ok: false,
+                };
+              }
+              return {
+                message: `Linked ${r.merged_books} books into one group (${r.candidates_updated} pair(s) marked merged)`,
+                ok: true,
+              };
+            }
+          );
+          return;
+
+        case 'rejectCluster':
+          if (action.ids.length < 2 || action.candidateIds.length === 0) return;
+          // Exactly the pairs the reviewer confirmed: the server dismisses these
+          // and no others, so pairs the current filter hides survive.
+          void runCluster(
+            action.candidateIds,
+            'Reject cluster failed',
+            async () => {
+              const r = await api.rejectDedupCluster(action.ids, action.candidateIds);
+              const failed = (r.failed_candidate_ids ?? []).length;
+              const skipped = (r.skipped_candidate_ids ?? []).length;
+              if (failed > 0 || skipped > 0 || r.dismissed < action.candidateIds.length) {
+                return {
+                  message:
+                    `Rejected ${r.dismissed} of ${action.candidateIds.length} pair(s)` +
+                    (failed > 0 ? `; ${failed} could not be written` : '') +
+                    (skipped > 0 ? `; ${skipped} were no longer pending in this cluster` : ''),
+                  ok: false,
+                };
+              }
+              return { message: `Rejected cluster: ${r.dismissed} pair(s) dismissed`, ok: true };
+            }
+          );
+          return;
+
+        case 'removeFromCluster':
+          if (action.removeIds.length === 0) return;
+          void runCluster([], 'Remove from cluster failed', async () => {
+            const r = await api.removeFromDedupCluster(action.ids, action.removeIds);
+            const failed = (r.failed_candidate_ids ?? []).length;
+            return failed > 0
+              ? {
+                  message: `Removed from the cluster, but ${failed} pair(s) could not be dismissed (${r.dismissed} were)`,
+                  ok: false,
+                }
+              : {
+                  message: `Removed ${r.removed} book(s) from the cluster (${r.dismissed} pair(s) dismissed)`,
+                  ok: true,
+                };
+          });
           return;
 
         case 'mergeAllFiltered':
@@ -1140,6 +1362,7 @@ export function useDupesLane(
       toast,
       refresh,
       runSequential,
+      runCluster,
       clearSelection,
       mergeAllFilteredDisabledReason,
       selectAllMatchingDisabledReason,
@@ -1188,6 +1411,12 @@ export function useDupesLane(
         setShortcutHelpOpen(!shortcutHelpOpen);
         return;
       }
+
+      // In the Clusters view nothing shows a focus ring, so j/k/s/Enter/d/a/b/m
+      // would act on a pair the reviewer cannot see -- and d/a/b/m merge or
+      // dismiss it. Only Shift+A (select what is on screen, which the header
+      // checkbox does too) stays.
+      if (clusterView && event.key !== 'A') return;
 
       if (visible.length === 0) return;
       const focused = visible[focusedIndex];
@@ -1258,6 +1487,7 @@ export function useDupesLane(
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     active,
+    clusterView,
     visible,
     focusedIndex,
     drawerCandidateId,
@@ -1299,6 +1529,12 @@ export function useDupesLane(
     setShortcutHelpOpen,
     busy,
     mergeAllFilteredDisabledReason,
+    clusters,
+    clusterOverflow,
+    bySeries,
+    setBySeries,
+    series,
+    setPairsSelected,
     verbs: dupesLane.verbs,
     dispatch,
     refresh,

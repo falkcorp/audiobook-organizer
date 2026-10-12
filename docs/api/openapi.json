@@ -5778,6 +5778,32 @@
         }
       }
     },
+    "/dedup/candidates/book-pair-counts": {
+      "post": {
+        "operationId": "bookPairCountsDedupCandidates",
+        "summary": "book Pair Counts Dedup Candidates",
+        "description": "For each cluster of books on the loaded page, how many distinct pairs its books have that the list's filter matches but the page does not show, plus each book's own count. One candidate scan answers the whole page. Body: {clusters:[{key,book_ids}], page_candidate_ids, status, layer, band, q, both_unmatched}. Writes nothing.",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
     "/dedup/candidates/bulk-reject": {
       "post": {
         "operationId": "bulkRejectDedupCandidates",

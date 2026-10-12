@@ -335,6 +335,19 @@ describe('view mode', () => {
     expect(screen.getByRole('button', { name: 'Candidates' })).toBeInTheDocument();
   });
 
+  it('names the third position Clusters on the dupes lane, and shows the cluster view', async () => {
+    const user = userEvent.setup();
+    renderWorkspace(['/review?lane=dupes']);
+    const group = await screen.findByRole('group', { name: 'Comparison layout' });
+    expect(within(group).getByRole('button', { name: 'Compact rows' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Two columns' })).toBeInTheDocument();
+    expect(within(group).queryByRole('button', { name: 'Candidates' })).not.toBeInTheDocument();
+
+    await user.click(within(group).getByRole('button', { name: 'Clusters' }));
+    expect(await screen.findByTestId('dupes-cluster-spine')).toBeInTheDocument();
+    expect(screen.queryByTestId('dupes-spine')).not.toBeInTheDocument();
+  });
+
   it('hides the toggle on the regroup lane, which has no view modes', async () => {
     renderWorkspace(['/review?lane=regroup']);
     expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();

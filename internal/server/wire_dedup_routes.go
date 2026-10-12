@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package server
 
@@ -44,6 +44,8 @@ func (s *Server) wireDedupRoutes(
 	protected.POST("/dedup/candidates/bulk-reject/revert", s.perm(auth.PermLibraryEditMetadata), dedupH.RevertBulkRejectDedupCandidates)
 	// The count a cross-page confirmation shows and sends back as expected_total (writes nothing).
 	protected.POST("/dedup/candidates/bulk-count", s.perm(auth.PermLibraryView), dedupH.BulkCountDedupCandidates)
+	// The Clusters view's per-cluster "pairs on other pages" counts, one scan for the whole page (writes nothing).
+	protected.POST("/dedup/candidates/book-pair-counts", s.perm(auth.PermLibraryView), dedupH.BookPairCounts)
 	protected.POST("/dedup/candidates/link-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster)
 	protected.POST("/dedup/candidates/reject-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster)
 	protected.POST("/dedup/candidates/remove-from-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RemoveFromDedupCluster)

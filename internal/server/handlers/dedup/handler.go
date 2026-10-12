@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.31.2
+// version: 1.32.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-12
 
@@ -105,6 +105,32 @@ type Handler struct {
 	// held as a field only so a test can make the restore fail after the
 	// status step (export_test.go). nil = the store's own method.
 	restoreBulkLabel func(candidateID int64) (bool, error)
+
+	// setCandidateStatus overrides embeddingStore.UpdateCandidateStatus for the
+	// cluster verbs' per-pair writes, held as a field only so a test can make
+	// individual writes fail (export_test.go). nil = the store's own method.
+	setCandidateStatus func(id int64, status string) error
+
+	// getCandidate overrides embeddingStore.GetCandidateByID for the named-pair
+	// reject's per-pair read, held as a field only so a test can make a read
+	// fail (export_test.go). nil = the store's own method.
+	getCandidate func(id int64) (*database.DedupCandidate, error)
+}
+
+// readCandidate is the named-pair reject's per-pair read.
+func (h *Handler) readCandidate(es *database.EmbeddingStore, id int64) (*database.DedupCandidate, error) {
+	if h.getCandidate != nil {
+		return h.getCandidate(id)
+	}
+	return es.GetCandidateByID(id)
+}
+
+// writeCandidateStatus is the cluster verbs' per-pair status write.
+func (h *Handler) writeCandidateStatus(es *database.EmbeddingStore, id int64, status string) error {
+	if h.setCandidateStatus != nil {
+		return h.setCandidateStatus(id, status)
+	}
+	return es.UpdateCandidateStatus(id, status)
 }
 
 // New constructs a dedup Handler from its dependencies.
@@ -135,17 +161,25 @@ func New(
 // where the export silently ignored band, q and entity_id. It writes the error
 // response itself and returns false when the request is refused.
 func (h *Handler) candidateFilterFromQuery(c *gin.Context) (database.CandidateFilter, bool) {
+	return h.candidateFilterFromParams(c, c.Query)
+}
+
+// candidateFilterFromParams is candidateFilterFromQuery over any source of the
+// same named parameters: the list and export read them from the query string,
+// book-pair-counts from its JSON body, so a count and the list it describes
+// cannot disagree about what a parameter means.
+func (h *Handler) candidateFilterFromParams(c *gin.Context, param func(string) string) (database.CandidateFilter, bool) {
 	filter := database.CandidateFilter{}
-	if v := c.Query("entity_type"); v != "" {
+	if v := param("entity_type"); v != "" {
 		filter.EntityType = v
 	}
-	if v := c.Query("status"); v != "" {
+	if v := param("status"); v != "" {
 		filter.Status = v
 	}
-	if v := c.Query("layer"); v != "" {
+	if v := param("layer"); v != "" {
 		filter.Layer = v
 	}
-	if v := c.Query("min_similarity"); v != "" {
+	if v := param("min_similarity"); v != "" {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid min_similarity")
@@ -155,19 +189,44 @@ func (h *Handler) candidateFilterFromQuery(c *gin.Context) (database.CandidateFi
 	}
 	// T016: band filter — evaluated at the store scan level so pagination
 	// totals are accurate even on large datasets.
-	if v := c.Query("band"); v != "" {
+	if v := param("band"); v != "" {
 		filter.Band = v
 	}
 	// entity_id backs the ?book= deep link. Before this existed the frontend
 	// filtered the loaded page client-side, so arriving for a book whose
 	// candidate sat on page 2 showed an empty list under a banner naming it.
-	if v := c.Query("entity_id"); v != "" {
+	if v := param("entity_id"); v != "" {
 		filter.EntityID = v
+	}
+	// series_id lists the pairs whose BOTH books belong to that series -- the
+	// rows the By-series view's counts are made of. The series' book ids are
+	// resolved first (one read of the series' books) and the pair predicate runs at
+	// scan level, so paging and `total` cover the whole series.
+	if v := param("series_id"); v != "" {
+		sid, perr := strconv.Atoi(v)
+		if perr != nil || sid <= 0 {
+			httputil.RespondWithBadRequest(c, "invalid series_id")
+			return filter, false
+		}
+		// Every version, not only primaries: a pair can name a non-primary
+		// version. The store answers from its series index when that is complete;
+		// on a Pebble-only store it falls back to a scan of the library, so this
+		// is one read per request, not a free one.
+		books, berr := h.store.GetBooksBySeriesIDAllVersions(sid)
+		if berr != nil {
+			httputil.InternalError(c, "failed to resolve series books", berr)
+			return filter, false
+		}
+		filter.SeriesScoped = true
+		filter.SeriesBookIDs = make(map[string]struct{}, len(books))
+		for _, b := range books {
+			filter.SeriesBookIDs[b.ID] = struct{}{}
+		}
 	}
 	// source=manual lists the hand-enqueued candidates, including scanner
 	// rows a human pinned (those keep their scanner layer, so layer=manual
 	// alone would miss them).
-	if v := c.Query("source"); v != "" {
+	if v := param("source"); v != "" {
 		filter.Source = v
 	}
 	// q is the panel's free-text search. Until this existed the search box
@@ -181,7 +240,7 @@ func (h *Handler) candidateFilterFromQuery(c *gin.Context) (database.CandidateFi
 	// while the book-derived fields (title, author, path) are resolved to a
 	// book-ID set FIRST and matched via SearchEntityIDs. Both are scan-level,
 	// so `total` stays consistent with the rows returned.
-	if v := strings.TrimSpace(c.Query("q")); v != "" {
+	if v := strings.TrimSpace(param("q")); v != "" {
 		filter.Search = v
 		ids, rerr := resolveBookIDsMatching(h.store, v)
 		if rerr != nil {
@@ -208,6 +267,7 @@ func (h *Handler) candidateFilterFromQuery(c *gin.Context) (database.CandidateFi
 //	band        — filter by unified scoring band: CERTAIN|HIGH|MEDIUM|REVIEW
 //	             (T016 extension; empty = no filter; pre-T015 rows without
 //	             a stored band will not match any non-empty band filter)
+//	series_id   — only pairs whose BOTH books are in this series
 //	entity_id   — restrict to candidates where EITHER side of the pair is this
 //	             entity ("this book's duplicates"). Filtered at scan level, so
 //	             "total" reflects the whole matching set, not one page.
@@ -1606,6 +1666,9 @@ const bulkRejectMaxWorkers = 8
 // every value it formats is an int.
 var bulkRejectLog = logger.New("dedup.bulk-reject")
 
+// clusterLog is the cluster verbs' logger (link / reject / remove-from-cluster).
+var clusterLog = logger.New("dedup.cluster")
+
 // BulkRejectDedupCandidates handles POST /api/v1/dedup/candidates/bulk-reject.
 //
 // The reject counterpart of BulkLinkDedupCandidates, for the review UI's
@@ -1921,8 +1984,14 @@ func (h *Handler) LinkDedupCluster(c *gin.Context) {
 		Limit:      100000,
 	})
 	updated := 0
+	// The books are already linked by here, so a failure to mark the pairs
+	// is reported, not turned into a 500: the caller must learn that some
+	// pairs will still read pending, and which.
+	failedIDs := []int64{}
+	candidatesErr := ""
 	if listErr != nil {
-		slog.Info("dedup cluster merge list candidates failed", "listErr", listErr)
+		clusterLog.Warn("dedup cluster merge: listing candidates to mark merged failed: %v", listErr)
+		candidatesErr = "could not list the pairs to mark merged"
 	} else {
 		for _, cand := range candidates {
 			_, aIn := inCluster[cand.EntityAID]
@@ -1930,20 +1999,26 @@ func (h *Handler) LinkDedupCluster(c *gin.Context) {
 			if !aIn || !bIn {
 				continue
 			}
-			if err := es.UpdateCandidateStatus(cand.ID, "merged"); err != nil {
-				slog.Info("dedup cluster merge status update", "cand", cand.ID, "err", err)
+			if err := h.writeCandidateStatus(es, cand.ID, "merged"); err != nil {
+				clusterLog.Warn("dedup cluster merge: marking pair %d merged failed: %v", cand.ID, err)
+				failedIDs = append(failedIDs, cand.ID)
 				continue
 			}
 			updated++
 		}
 	}
-	slog.Info("dedup cluster merge merged books, marked candidate row(s) as merged", "count", len(body.BookIDs), "updated", updated)
+	clusterLog.Info("dedup cluster merge: linked %d books, marked %d candidate row(s) merged", len(body.BookIDs), updated)
 
 	httputil.RespondWithOK(c, gin.H{
 		"status":             "merged",
 		"merged_books":       len(body.BookIDs),
 		"candidates_updated": updated,
-		"result":             mergeResult,
+		// Pairs the books were linked for but whose status could not be
+		// written (they still read pending), and the list-failure message
+		// when none could be looked up. Empty / absent on a clean run.
+		"failed_candidate_ids": failedIDs,
+		"candidates_error":     candidatesErr,
+		"result":               mergeResult,
 	})
 }
 
@@ -1969,6 +2044,12 @@ func (h *Handler) RejectDedupCluster(c *gin.Context) {
 
 	var body struct {
 		BookIDs []string `json:"book_ids"`
+		// CandidateIDs, when present, names EXACTLY the pairs to dismiss: the
+		// ones the reviewer saw on the card. Without it the endpoint dismisses
+		// every pending pair among BookIDs, including ones hidden by the
+		// reviewer's filter or sitting on other pages. Each named pair must
+		// still be pending and lie within BookIDs, or it is skipped.
+		CandidateIDs []int64 `json:"candidate_ids,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
@@ -1983,6 +2064,14 @@ func (h *Handler) RejectDedupCluster(c *gin.Context) {
 	for _, id := range body.BookIDs {
 		inCluster[id] = struct{}{}
 	}
+	if len(body.CandidateIDs) > maxPairCountPageIDs {
+		httputil.RespondWithBadRequest(c, "too many candidate_ids in one request")
+		return
+	}
+	if body.CandidateIDs != nil {
+		h.rejectNamedClusterPairs(c, es, inCluster, body.CandidateIDs)
+		return
+	}
 	candidates, _, err := es.ListCandidates(database.CandidateFilter{
 		EntityType: "book",
 		Status:     "pending",
@@ -1993,26 +2082,74 @@ func (h *Handler) RejectDedupCluster(c *gin.Context) {
 		return
 	}
 	dismissed := 0
+	failedIDs := []int64{}
 	for _, cand := range candidates {
 		_, aIn := inCluster[cand.EntityAID]
 		_, bIn := inCluster[cand.EntityBID]
 		if !aIn || !bIn {
 			continue
 		}
-		if err := es.UpdateCandidateStatus(cand.ID, "dismissed"); err != nil {
-			slog.Info("dedup cluster dismiss status update", "cand", cand.ID, "err", err)
+		if err := h.writeCandidateStatus(es, cand.ID, "dismissed"); err != nil {
+			clusterLog.Warn("dedup cluster dismiss: status update of pair %d failed: %v", cand.ID, err)
+			failedIDs = append(failedIDs, cand.ID)
 			continue
 		}
 		dismissed++
 		// Capture each dismissed pair as a gold not_dup label (best-effort).
 		h.recordHumanLabel(h.snapshotCandidateExample(&cand), labelNotDup, labelReasonUserDismiss)
 	}
-	slog.Info("dedup cluster dismiss dismissed candidate row(s) across books", "dismissed", dismissed, "count", len(body.BookIDs))
+	clusterLog.Info("dedup cluster dismiss: dismissed %d candidate row(s) across %d books", dismissed, len(body.BookIDs))
 	h.markDuplicatesFlaggedDirty("dismiss_cluster")
 
 	httputil.RespondWithOK(c, gin.H{
-		"status":    "dismissed",
-		"dismissed": dismissed,
+		"status":               "dismissed",
+		"dismissed":            dismissed,
+		"failed_candidate_ids": failedIDs,
+	})
+}
+
+// rejectNamedClusterPairs dismisses exactly the named pairs of a cluster: the
+// candidate_ids form of reject-cluster. A pair that is gone, no longer
+// pending, is not a book pair, or is not wholly inside the cluster is skipped
+// (reported in skipped_candidate_ids), never dismissed: the reviewer confirmed
+// THESE pairs and nothing else. A read or status write that fails is reported
+// in failed_candidate_ids, not skipped: the pair may well still be pending.
+func (h *Handler) rejectNamedClusterPairs(c *gin.Context, es *database.EmbeddingStore, inCluster map[string]struct{}, ids []int64) {
+	dismissed := 0
+	failedIDs := []int64{}
+	skippedIDs := []int64{}
+	for _, id := range ids {
+		cand, err := h.readCandidate(es, id)
+		if err != nil {
+			clusterLog.Warn("dedup cluster dismiss: reading pair %d failed: %v", id, err)
+			failedIDs = append(failedIDs, id)
+			continue
+		}
+		if cand == nil || cand.Status != "pending" || cand.EntityType != "book" {
+			skippedIDs = append(skippedIDs, id)
+			continue
+		}
+		_, aIn := inCluster[cand.EntityAID]
+		_, bIn := inCluster[cand.EntityBID]
+		if !aIn || !bIn {
+			skippedIDs = append(skippedIDs, id)
+			continue
+		}
+		if err := h.writeCandidateStatus(es, id, "dismissed"); err != nil {
+			clusterLog.Warn("dedup cluster dismiss: status update of pair %d failed: %v", id, err)
+			failedIDs = append(failedIDs, id)
+			continue
+		}
+		dismissed++
+		h.recordHumanLabel(h.snapshotCandidateExample(cand), labelNotDup, labelReasonUserDismiss)
+	}
+	clusterLog.Info("dedup cluster dismiss: dismissed=%d failed=%d skipped=%d of the named pairs", dismissed, len(failedIDs), len(skippedIDs))
+	h.markDuplicatesFlaggedDirty("dismiss_cluster")
+	httputil.RespondWithOK(c, gin.H{
+		"status":                "dismissed",
+		"dismissed":             dismissed,
+		"failed_candidate_ids":  failedIDs,
+		"skipped_candidate_ids": skippedIDs,
 	})
 }
 
@@ -2099,6 +2236,7 @@ func (h *Handler) RemoveFromDedupCluster(c *gin.Context) {
 	}
 
 	dismissed := 0
+	failedIDs := []int64{}
 	for _, cand := range candidates {
 		// A pair is dismissible if at least one side is in the remove
 		// set AND the other side is either also in the remove set or in
@@ -2124,18 +2262,21 @@ func (h *Handler) RemoveFromDedupCluster(c *gin.Context) {
 			continue
 		}
 
-		if err := es.UpdateCandidateStatus(cand.ID, "dismissed"); err != nil {
-			slog.Info("dedup remove-from-cluster status update", "cand", cand.ID, "err", err)
+		if err := h.writeCandidateStatus(es, cand.ID, "dismissed"); err != nil {
+			clusterLog.Warn("dedup remove-from-cluster: status update of pair %d failed: %v", cand.ID, err)
+			failedIDs = append(failedIDs, cand.ID)
 			continue
 		}
 		dismissed++
 	}
-	slog.Info("dedup remove-from-cluster dismissed edge(s), removed book(s) from cluster of", "dismissed", dismissed, "removeSet_count", len(removeSet), "count", len(body.ClusterBookIDs))
+	clusterLog.Info("dedup remove-from-cluster: dismissed %d edge(s), removed %d book(s) from a cluster of %d", dismissed, len(removeSet), len(body.ClusterBookIDs))
 
 	httputil.RespondWithOK(c, gin.H{
 		"status":    "removed",
 		"dismissed": dismissed,
 		"removed":   len(removeSet),
+		// Edges that should have been dismissed but whose write failed.
+		"failed_candidate_ids": failedIDs,
 	})
 }
 

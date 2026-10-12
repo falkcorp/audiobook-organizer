@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.27.0
-// last-edited: 2026-10-11
+// version: 2.28.0
+// last-edited: 2026-10-12
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -245,6 +245,15 @@ type CandidateFilter struct {
 	// lookup per candidate. Search reaches scan level instead, which is why it
 	// can page normally.
 	SearchEntityIDs map[string]struct{}
+
+	// SeriesScoped restricts results to pairs whose BOTH sides are in
+	// SeriesBookIDs -- the book set of one series, resolved by the caller. The
+	// same rule the series summary counts by (cross-series pairs belong to no
+	// series). A bool rather than len()>0 because a series with no books must
+	// match NOTHING, not everything. Applied at scan level, before pagination,
+	// so `total` counts the whole series.
+	SeriesScoped  bool
+	SeriesBookIDs map[string]struct{}
 
 	Limit  int
 	Offset int
@@ -1313,6 +1322,14 @@ func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus boo
 	// position the pair-ordering happened to put it in.
 	if f.EntityID != "" && c.EntityAID != f.EntityID && c.EntityBID != f.EntityID {
 		return false
+	}
+	if f.SeriesScoped {
+		if _, ok := f.SeriesBookIDs[c.EntityAID]; !ok {
+			return false
+		}
+		if _, ok := f.SeriesBookIDs[c.EntityBID]; !ok {
+			return false
+		}
 	}
 	// Search unions across two SOURCES -- the candidate row and the book joined
 	// to it -- which is what makes it different from the EntityID clause above.

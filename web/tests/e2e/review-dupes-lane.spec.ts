@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.3.0
+// version: 2.4.0
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // End-to-end coverage for the dupes lane of /review.
 //
@@ -373,5 +373,58 @@ test.describe('the dupes lane of /review', () => {
     await expect(page.locator('[data-testid="dupes-rail"]')).toBeVisible();
     await expect(page.locator('[data-testid="dupes-deeplink-banner"]')).toBeVisible();
     await expect.poll(() => entityFiltered).toBe(true);
+  });
+  test('the Clusters view joins connected pairs into one card and links it with the chosen primary', async ({
+    page,
+  }) => {
+    // Pair 42 joins books 01 and 02 (MOCK_CANDIDATE); pair 44 joins 02 and 05,
+    // so the three books are one connected component.
+    const third = {
+      ...MOCK_CANDIDATE,
+      id: 44,
+      entity_a_id: MOCK_CANDIDATE.entity_b_id,
+      entity_b_id: '01ABCDEFGHIJKLMNOPQRSTUV05',
+      book_a: MOCK_CANDIDATE.book_b,
+      book_b: { ...MOCK_CANDIDATE.book_b, id: '01ABCDEFGHIJKLMNOPQRSTUV05', title: 'Foundation (Third)' },
+    };
+    let linkBody: { book_ids?: string[]; primary_book_id?: string } | null = null;
+    await setupPhase2Interactive(page);
+    await mockDedupRoutes(page);
+    await page.route('**/api/v1/dedup/candidates?**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { candidates: [MOCK_CANDIDATE, third], total: 2 } }),
+      })
+    );
+    await page.route('**/api/v1/dedup/candidates/link-cluster', (route) => {
+      linkBody = route.request().postDataJSON();
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: { status: 'merged', merged_books: 3, candidates_updated: 2 },
+        }),
+      });
+    });
+
+    await page.goto('/review?lane=dupes');
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('[data-testid="dupes-row-42"]')).toBeVisible();
+
+    // The third toggle position reads Clusters (it said Candidates).
+    await page.getByRole('button', { name: 'Clusters' }).click();
+    const card = page.locator(`[data-testid="dupes-cluster-${MOCK_CANDIDATE.entity_a_id}"]`);
+    await expect(card).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-row-42"]')).toHaveCount(0);
+    await expect(card.getByRole('radio', { name: /as the primary/ })).toHaveCount(3);
+    await expect(card.getByRole('button', { name: 'Remove from cluster' })).toHaveCount(3);
+
+    await card.getByRole('radio', { name: 'Keep Foundation (Third) as the primary' }).check();
+    await card.getByRole('button', { name: 'Link cluster' }).click();
+    await page.locator('[data-testid="cluster-link-confirm-btn"]').click();
+
+    await expect.poll(() => linkBody?.primary_book_id).toBe('01ABCDEFGHIJKLMNOPQRSTUV05');
+    expect(linkBody?.book_ids).toHaveLength(3);
   });
 });

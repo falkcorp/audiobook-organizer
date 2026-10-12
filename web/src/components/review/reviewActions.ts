@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.8.0
+// version: 1.10.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -65,7 +65,23 @@ export type DupesAction =
    * smaller ULID as A) or the B side (`keepBAllFiltered`, the newer one). Same
    * server-resolved, `expectedTotal`-guarded path as mergeAllFiltered.
    */
-  | { lane: 'dupes'; type: 'keepAAllFiltered' | 'keepBAllFiltered'; expectedTotal: number };
+  | { lane: 'dupes'; type: 'keepAAllFiltered' | 'keepBAllFiltered'; expectedTotal: number }
+  /**
+   * The three cluster verbs of the Clusters view. Their `ids` are BOOK ids (a
+   * cluster's members), not the numeric candidate-pair ids every action above
+   * carries: the cluster endpoints take books, and the string/number split is
+   * what stops a pair id reaching one.
+   *
+   * `linkCluster` links every id into one version group; `primaryId`, when set,
+   * must be one of `ids` and is forced as the group's primary (omitted: the
+   * server auto-picks). `rejectCluster` marks exactly the pairs in
+   * `candidateIds` (the ones the card showed) "not a duplicate"; pairs among the
+   * same books that the current filter hides are left alone. `removeFromCluster` dismisses only the edges between
+   * `removeIds` (a subset of `ids`) and the rest of the cluster.
+   */
+  | { lane: 'dupes'; type: 'linkCluster'; ids: string[]; primaryId?: string }
+  | { lane: 'dupes'; type: 'rejectCluster'; ids: string[]; candidateIds: number[] }
+  | { lane: 'dupes'; type: 'removeFromCluster'; ids: string[]; removeIds: string[] };
 
 /**
  * Metadata lane. Ids are book ids.
@@ -195,6 +211,8 @@ export function needsConfirmation(action: ReviewAction): boolean {
     case 'keepAAllFiltered':
     case 'keepBAllFiltered':
     case 'dismissAllFiltered':
+    case 'linkCluster': // folds N books into one version group; no inverse
+    case 'rejectCluster': // retires every pair it names, for all of them at once
       return true;
     case 'dismissSelected':
       return action.ids.length > 1;
@@ -226,6 +244,12 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'mergeSelected':
     case 'dismissSelected':
       return action.ids.length;
+    case 'linkCluster':
+      return action.ids.length;
+    case 'rejectCluster':
+      return action.candidateIds.length;
+    case 'removeFromCluster':
+      return action.removeIds.length;
     case 'applySelected':
     case 'rejectGroup':
       return action.ids.length;

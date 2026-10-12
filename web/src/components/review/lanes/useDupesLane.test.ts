@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.11.0
+// version: 1.14.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 //
 // The behaviour under test is mostly the behaviour that a port loses silently:
 // eight keyboard shortcuts, a suppression guard, a keep-side decision shared
@@ -1179,5 +1179,449 @@ describe('mergeSelected outcome report', () => {
     // replace or repeat it; the failed pair is back on screen to retry.
     const reports = toast.mock.calls.filter((c) => String(c[0]).startsWith('Merged'));
     expect(reports).toEqual([['Merged 1, failed 1', 'warning']]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Clusters view: cluster verbs, other-page counts, By series.
+// ---------------------------------------------------------------------------
+
+describe('useDupesLane Clusters view', () => {
+  const pair = (id: number, a: string, b: string) =>
+    makeCandidate(id, {
+      entity_a_id: a,
+      entity_b_id: b,
+      book_a: { id: a, title: `Title ${a}` } as api.Book,
+      book_b: { id: b, title: `Title ${b}` } as api.Book,
+    });
+  // Page one holds pairs 1 and 2 (cluster b1-b2-b3); pair 10 (b3-b9) is on
+  // another page, as is pair 11 (b1-b7). The server filters by entity_id.
+  const PAGE = [pair(1, 'b1', 'b2'), pair(2, 'b2', 'b3')];
+  const ELSEWHERE = [pair(10, 'b3', 'b9'), pair(11, 'b1', 'b7')];
+  const ALL = [...PAGE, ...ELSEWHERE];
+
+  beforeEach(() => {
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: PAGE, total: ALL.length });
+    // The server's one-scan answer: for each requested cluster, the distinct
+    // pairs touching its books that are off the page (here pairs 10 and 11).
+    vi.mocked(api.getDedupBookPairCounts).mockImplementation(async (req) =>
+      req.clusters.map((cl) => {
+        const off = ELSEWHERE.filter(
+          (c) => cl.book_ids.includes(c.entity_a_id) || cl.book_ids.includes(c.entity_b_id)
+        );
+        const per = cl.book_ids
+          .map((b) => ({
+            book_id: b,
+            count: off.filter((c) => c.entity_a_id === b || c.entity_b_id === b).length,
+          }))
+          .filter((x) => x.count > 0);
+        return { key: cl.key, other_pairs: off.length, per_book: per };
+      })
+    );
+  });
+
+  async function renderClusters(clusterView = true) {
+    const view = renderHook(() => useDupesLane(toast, true, undefined, clusterView));
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    return view;
+  }
+
+  const listCalls = () => vi.mocked(api.getDedupCandidates).mock.calls.length;
+
+  it('builds clusters from the page only while the Clusters view is showing', async () => {
+    const on = await renderClusters(true);
+    expect(on.result.current.clusters).toHaveLength(1);
+    expect(on.result.current.clusters[0].bookIds).toEqual(['b1', 'b2', 'b3']);
+
+    const off = await renderClusters(false);
+    expect(off.result.current.clusters).toEqual([]);
+  });
+
+  it('makes no extra requests when the Clusters view is not showing', async () => {
+    await renderClusters(false);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(vi.mocked(api.getDedupCandidates)).toHaveBeenCalledTimes(1);
+    expect(api.getDedupBookPairCounts).not.toHaveBeenCalled();
+    expect(api.listDedupCandidateSeries).not.toHaveBeenCalled();
+  });
+
+  it('counts the pairs a cluster has on other pages with ONE request for the whole page', async () => {
+    const { result } = await renderClusters();
+    const cluster = () => result.current.clusters[0];
+    await waitFor(() => expect(result.current.clusterOverflow(cluster()).state).toBe('ready'));
+    expect(result.current.clusterOverflow(cluster())).toMatchObject({
+      state: 'ready',
+      count: 2,
+      perBook: [
+        { bookId: 'b1', count: 1 },
+        { bookId: 'b3', count: 1 },
+      ],
+    });
+    // One request, however many books the page holds, carrying the clusters,
+    // the pairs already on the page and the list's own filter.
+    expect(api.getDedupBookPairCounts).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.getDedupBookPairCounts).mock.calls[0][0]).toEqual({
+      clusters: [{ key: 'b1', book_ids: ['b1', 'b2', 'b3'] }],
+      page_candidate_ids: [1, 2],
+      status: 'pending',
+      layer: undefined,
+      band: undefined,
+      q: undefined,
+      both_unmatched: undefined,
+      entity_id: undefined,
+    });
+    // No per-book entity_id fan-out.
+    expect(
+      vi.mocked(api.getDedupCandidates).mock.calls.filter(([p]) => p?.entity_id)
+    ).toHaveLength(0);
+  });
+
+  it('asks again after a refresh, still in one request', async () => {
+    // A refused link leaves the pairs where they were, so the page comes back
+    // with its clusters and the counts are asked for again.
+    vi.mocked(api.linkDedupCluster).mockRejectedValue(new Error('refused'));
+    const { result } = await renderClusters();
+    await waitFor(() => expect(api.getDedupBookPairCounts).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] });
+    });
+    await waitFor(() => expect(api.getDedupBookPairCounts).toHaveBeenCalledTimes(2));
+  });
+
+  it('reports an other-pages count that failed, instead of saying zero', async () => {
+    vi.mocked(api.getDedupBookPairCounts).mockRejectedValue(new Error('count broke'));
+    const { result } = await renderClusters();
+    await waitFor(() =>
+      expect(result.current.clusterOverflow(result.current.clusters[0])).toEqual({
+        state: 'error',
+        message: 'count broke',
+      })
+    );
+  });
+
+  it('link cluster sends the books and the chosen primary, then refetches', async () => {
+    vi.mocked(api.linkDedupCluster).mockResolvedValue({
+      status: 'merged',
+      merged_books: 3,
+      candidates_updated: 2,
+      failed_candidate_ids: [],
+      candidates_error: '',
+    });
+    const { result } = await renderClusters();
+    const before = listCalls();
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'dupes',
+        type: 'linkCluster',
+        ids: ['b1', 'b2', 'b3'],
+        primaryId: 'b2',
+      });
+    });
+    expect(api.linkDedupCluster).toHaveBeenCalledWith(['b1', 'b2', 'b3'], 'b2');
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Linked 3 books'), 'success');
+  });
+
+  it('link cluster without a primary lets the server pick', async () => {
+    vi.mocked(api.linkDedupCluster).mockResolvedValue({
+      status: 'merged',
+      merged_books: 2,
+      candidates_updated: 1,
+      failed_candidate_ids: [],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2'] });
+    });
+    expect(api.linkDedupCluster).toHaveBeenCalledWith(['b1', 'b2'], undefined);
+  });
+
+  it('a cluster smaller than two books is refused before any request', async () => {
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1'] });
+      result.current.dispatch({ lane: 'dupes', type: 'rejectCluster', ids: [], candidateIds: [] });
+    });
+    expect(api.linkDedupCluster).not.toHaveBeenCalled();
+    expect(api.rejectDedupCluster).not.toHaveBeenCalled();
+  });
+
+  it('a rejected request is reported after the refetch, and the pairs come back', async () => {
+    vi.mocked(api.linkDedupCluster).mockRejectedValue(new Error('409: refused for b2'));
+    const { result } = await renderClusters();
+    const before = listCalls();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] });
+    });
+    // The refetch went out, and the failure is still reported once it landed.
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(toast).toHaveBeenCalledWith('409: refused for b2', 'warning');
+    expect(toast).not.toHaveBeenCalledWith(expect.stringContaining('Linked'), 'success');
+    // The pairs were suppressed while the request ran and are back after it.
+    expect(result.current.candidates.map((c) => c.id)).toEqual([1, 2]);
+    expect(result.current.clusters).toHaveLength(1);
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('a link whose pairs could not all be marked is a warning naming the count', async () => {
+    // What the server really sends on a partial failure: the books are linked
+    // (merged_books is always the full list) and the pairs it could not write
+    // come back as ids.
+    vi.mocked(api.linkDedupCluster).mockResolvedValue({
+      status: 'merged',
+      merged_books: 3,
+      candidates_updated: 1,
+      failed_candidate_ids: [2],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] });
+    });
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringContaining('1 pair(s) could not be marked merged'),
+      'warning'
+    );
+    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'success');
+  });
+
+  it('a link that marked fewer pairs than the card showed is a warning even with no failed ids', async () => {
+    vi.mocked(api.linkDedupCluster).mockResolvedValue({
+      status: 'merged',
+      merged_books: 3,
+      candidates_updated: 0,
+      failed_candidate_ids: [],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] });
+    });
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('could not be marked merged'), 'warning');
+  });
+
+  it('a decided pair in the cluster (status filter All) is not a false link warning', async () => {
+    // The server marks only PENDING pairs merged, so a merged pair on the card
+    // must not count against `candidates_updated`.
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      candidates: [PAGE[0], { ...PAGE[1], status: 'merged' }],
+      total: 2,
+    });
+    vi.mocked(api.linkDedupCluster).mockResolvedValue({
+      status: 'merged',
+      merged_books: 3,
+      candidates_updated: 1,
+      failed_candidate_ids: [],
+    });
+    const { result } = await renderClusters();
+    act(() => result.current.setFilters({ status: '' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.clusters).toHaveLength(1));
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] });
+    });
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Linked 3 books into one group'), 'success');
+    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'warning');
+  });
+
+  it('the ?book= deep link scopes the other-pages counts to that book', async () => {
+    const view = renderHook(() =>
+      useDupesLane(toast, true, { band: null, entityId: 'b1' }, true)
+    );
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    await waitFor(() => expect(api.getDedupBookPairCounts).toHaveBeenCalled());
+    expect(vi.mocked(api.getDedupBookPairCounts).mock.calls[0][0]).toMatchObject({
+      entity_id: 'b1',
+    });
+  });
+
+  it('a link whose pairs could not even be listed says why', async () => {
+    vi.mocked(api.linkDedupCluster).mockResolvedValue({
+      status: 'merged',
+      merged_books: 3,
+      candidates_updated: 0,
+      failed_candidate_ids: [],
+      candidates_error: 'could not list the pairs to mark merged',
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'linkCluster', ids: ['b1', 'b2', 'b3'] });
+    });
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringContaining('could not list the pairs to mark merged'),
+      'warning'
+    );
+  });
+
+  it('reject cluster sends the books AND the pairs the card showed', async () => {
+    vi.mocked(api.rejectDedupCluster).mockResolvedValue({
+      status: 'dismissed',
+      dismissed: 2,
+      failed_candidate_ids: [],
+      skipped_candidate_ids: [],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'dupes',
+        type: 'rejectCluster',
+        ids: ['b1', 'b2', 'b3'],
+        candidateIds: [1, 2],
+      });
+    });
+    expect(api.rejectDedupCluster).toHaveBeenCalledWith(['b1', 'b2', 'b3'], [1, 2]);
+    expect(toast).toHaveBeenCalledWith('Rejected cluster: 2 pair(s) dismissed', 'success');
+  });
+
+  it('reject cluster that wrote fewer pairs than named reports the failed and skipped ones', async () => {
+    vi.mocked(api.rejectDedupCluster).mockResolvedValue({
+      status: 'dismissed',
+      dismissed: 1,
+      failed_candidate_ids: [2],
+      skipped_candidate_ids: [],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'dupes',
+        type: 'rejectCluster',
+        ids: ['b1', 'b2', 'b3'],
+        candidateIds: [1, 2],
+      });
+    });
+    expect(toast).toHaveBeenCalledWith(
+      'Rejected 1 of 2 pair(s); 1 could not be written',
+      'warning'
+    );
+  });
+
+  it('remove from cluster sends the whole cluster and the removed books', async () => {
+    vi.mocked(api.removeFromDedupCluster).mockResolvedValue({
+      status: 'removed',
+      dismissed: 1,
+      removed: 1,
+      failed_candidate_ids: [],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'dupes',
+        type: 'removeFromCluster',
+        ids: ['b1', 'b2', 'b3'],
+        removeIds: ['b3'],
+      });
+    });
+    expect(api.removeFromDedupCluster).toHaveBeenCalledWith(['b1', 'b2', 'b3'], ['b3']);
+    expect(toast).toHaveBeenCalledWith(
+      'Removed 1 book(s) from the cluster (1 pair(s) dismissed)',
+      'success'
+    );
+  });
+
+  it('remove from cluster with edges the server could not dismiss is a warning', async () => {
+    vi.mocked(api.removeFromDedupCluster).mockResolvedValue({
+      status: 'removed',
+      dismissed: 1,
+      removed: 2,
+      failed_candidate_ids: [7],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      result.current.dispatch({
+        lane: 'dupes',
+        type: 'removeFromCluster',
+        ids: ['b1', 'b2', 'b3'],
+        removeIds: ['b2', 'b3'],
+      });
+    });
+    expect(toast).toHaveBeenCalledWith(
+      'Removed from the cluster, but 1 pair(s) could not be dismissed (1 were)',
+      'warning'
+    );
+  });
+
+  describe('keyboard shortcuts', () => {
+    const press = (key: string, init: KeyboardEventInit = {}) =>
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key, ...init }));
+      });
+
+    it('d, a, b and m act on the focused pair in the pair views', async () => {
+      vi.mocked(api.rejectDedupCandidate).mockResolvedValue(undefined);
+      await renderClusters(false);
+      await press('d');
+      await waitFor(() => expect(api.rejectDedupCandidate).toHaveBeenCalledWith(1));
+    });
+
+    it.each(['d', 'a', 'b', 'm', 's', 'Enter', 'j', 'k'])(
+      '%s does nothing in the Clusters view, where no focus ring shows which pair it would hit',
+      async (key) => {
+        const { result } = await renderClusters(true);
+        await press(key);
+        expect(api.rejectDedupCandidate).not.toHaveBeenCalled();
+        expect(api.linkDedupCandidate).not.toHaveBeenCalled();
+        expect(result.current.selectedIds.size).toBe(0);
+        expect(result.current.drawerCandidateId).toBeNull();
+        expect(result.current.focusedIndex).toBe(0);
+      }
+    );
+
+    it('Shift+A still selects what is on screen', async () => {
+      const { result } = await renderClusters(true);
+      await press('A', { shiftKey: true });
+      expect(result.current.selectedIds.size).toBe(2);
+    });
+  });
+
+  it('By series fetches the summary only once the toggle is on, and link-all reports and refetches', async () => {
+    vi.mocked(api.listDedupCandidateSeries).mockResolvedValue([
+      { series_id: 7, series_name: 'Series A', cluster_count: 2, book_count: 5, candidate_count: 6 },
+    ]);
+    vi.mocked(api.linkDedupCandidateSeries).mockResolvedValue({
+      series_id: 7,
+      clusters_merged: 2,
+      books_merged: 5,
+      candidates_updated: 6,
+    });
+    const { result } = await renderClusters();
+    expect(api.listDedupCandidateSeries).not.toHaveBeenCalled();
+
+    act(() => result.current.setBySeries(true));
+    await waitFor(() => expect(result.current.series.summary.state).toBe('ready'));
+    expect(api.listDedupCandidateSeries).toHaveBeenCalledTimes(1);
+    // The By-series list replaces the cluster cards, so no other-page counts run.
+    const before = listCalls();
+
+    await act(async () => {
+      await result.current.series.linkSeries(7);
+    });
+    expect(api.linkDedupCandidateSeries).toHaveBeenCalledWith(7);
+    expect(toast).toHaveBeenCalledWith('Series link: 2 cluster(s), 5 book(s) linked', 'success');
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+    await waitFor(() => expect(api.listDedupCandidateSeries).toHaveBeenCalledTimes(2));
+  });
+
+  it('a series link with failures is a warning', async () => {
+    vi.mocked(api.listDedupCandidateSeries).mockResolvedValue([]);
+    vi.mocked(api.linkDedupCandidateSeries).mockResolvedValue({
+      series_id: 7,
+      clusters_merged: 1,
+      books_merged: 2,
+      candidates_updated: 1,
+      failures: ['cluster x: refused'],
+    });
+    const { result } = await renderClusters();
+    await act(async () => {
+      await result.current.series.linkSeries(7);
+    });
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('1 failed'), 'warning');
+  });
+
+  it('a failed series summary is an error state, not an empty list', async () => {
+    vi.mocked(api.listDedupCandidateSeries).mockRejectedValue(new Error('summary broke'));
+    const { result } = await renderClusters();
+    act(() => result.current.setBySeries(true));
+    await waitFor(() =>
+      expect(result.current.series.summary).toEqual({ state: 'error', message: 'summary broke' })
+    );
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.9.0
+// version: 1.14.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -10,8 +10,8 @@
 // three lanes own their own layout and the shell owns only lane selection and
 // the cross-lane chrome.
 
-import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -26,7 +26,9 @@ import {
   Divider,
   FormControlLabel,
   LinearProgress,
+  Link,
   MenuItem,
+  Switch,
   Pagination,
   Stack,
   TextField,
@@ -37,6 +39,7 @@ import type { DedupBand } from '../../services/api';
 import { CandidateCompareDrawer } from './compare/CandidateCompareDrawer';
 import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
 import { DupesSpine } from './spine/DupesSpine';
+import { DupesClusterSpine } from './spine/DupesClusterSpine';
 import type { SpineViewMode } from './spine/CompareSpine';
 import { dupesLane } from './lanes/dupes';
 import {
@@ -48,6 +51,9 @@ import {
   type DupesLane,
 } from './lanes/useDupesLane';
 import { DEFAULT_BULK_APPLY_MAX_ITEMS } from './lanes/useMetadataLane';
+import type { DedupSeriesSummary } from '../../services/api';
+import { useSeriesPairs } from './lanes/useDupesClusterData';
+import { buildClusters } from './lanes/dupesClusters';
 
 const BANDS: DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
 const STATUSES: { value: DedupStatusFilter; label: string }[] = [
@@ -77,6 +83,224 @@ type PendingBulk =
 /** Side A is the older record (smaller ULID); B is the newer. */
 function keepSideNoun(type: PendingBulk): 'older' | 'newer' {
   return type === 'keepAAllFiltered' ? 'older' : 'newer';
+}
+
+/**
+ * The By-series list of the Clusters view: one row per series that has pending
+ * cluster candidates, each with a link-all that asks first and names its count.
+ * Four states: loading, error, empty, populated.
+ */
+function SeriesList({ dupes }: { dupes: DupesLane }) {
+  const { summary, linking, linkSeries } = dupes.series;
+  const [confirming, setConfirming] = useState<DedupSeriesSummary | null>(null);
+  // What a series row's count opens: its pairs, its clusters or its books.
+  const [detail, setDetail] = useState<{
+    row: DedupSeriesSummary;
+    view: 'pairs' | 'clusters' | 'books';
+  } | null>(null);
+  const detailPairs = useSeriesPairs(
+    detail ? detail.row.series_id : null,
+    detail !== null && detail.view !== 'pairs'
+  );
+  const detailClusters = useMemo(
+    () => (detailPairs.state === 'ready' ? buildClusters(detailPairs.pairs) : []),
+    [detailPairs]
+  );
+
+  return (
+    <Box sx={{ p: 2 }} data-testid="dupes-series-list">
+      {summary.state === 'loading' && <LinearProgress />}
+      {summary.state === 'error' && (
+        <Alert severity="error" data-testid="dupes-series-error">
+          {summary.message}
+        </Alert>
+      )}
+      {summary.state === 'ready' && summary.rows.length === 0 && (
+        <Typography color="text.secondary" sx={{ textAlign: 'center', p: 2 }}>
+          No series have pending duplicate clusters.
+        </Typography>
+      )}
+      {summary.state === 'ready' && (
+        <Stack spacing={1}>
+          {summary.rows.map((row) => (
+            <Stack
+              key={row.series_id}
+              direction="row"
+              spacing={2}
+              data-testid={`dupes-series-${row.series_id}`}
+              sx={{
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                p: 1.5,
+                border: 1,
+                borderRadius: 1,
+                borderColor: 'divider',
+              }}
+            >
+              <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 160 }}>
+                {row.series_name}
+              </Typography>
+              {/* Each count opens the pairs it counts. */}
+              <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`${row.cluster_count.toLocaleString()} cluster${row.cluster_count === 1 ? '' : 's'}`}
+                  onClick={() => setDetail({ row, view: 'clusters' })}
+                  data-testid={`dupes-series-clusters-${row.series_id}`}
+                />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`${row.book_count.toLocaleString()} book${row.book_count === 1 ? '' : 's'}`}
+                  onClick={() => setDetail({ row, view: 'books' })}
+                  data-testid={`dupes-series-books-${row.series_id}`}
+                />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`${row.candidate_count.toLocaleString()} pending pair${row.candidate_count === 1 ? '' : 's'}`}
+                  onClick={() => setDetail({ row, view: 'pairs' })}
+                  data-testid={`dupes-series-pairs-${row.series_id}`}
+                />
+              </Stack>
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                disabled={dupes.busy || linking !== null}
+                onClick={() => setConfirming(row)}
+              >
+                Link all pending pairs in this series
+              </Button>
+            </Stack>
+          ))}
+        </Stack>
+      )}
+
+      <Dialog
+        open={detail !== null}
+        onClose={() => setDetail(null)}
+        fullWidth
+        maxWidth="sm"
+        data-testid="dupes-series-detail"
+      >
+        <DialogTitle>
+          {detail?.row.series_name}:{' '}
+          {detail?.view === 'clusters'
+            ? 'clusters'
+            : detail?.view === 'books'
+              ? 'books'
+              : 'pending pairs'}
+        </DialogTitle>
+        <DialogContent>
+          {detailPairs.state === 'loading' && <LinearProgress />}
+          {detailPairs.state === 'error' && (
+            <Alert severity="error" data-testid="dupes-series-detail-error">
+              {detailPairs.message}
+            </Alert>
+          )}
+          {detailPairs.state === 'ready' && detailPairs.pairs.length === 0 && (
+            <Typography color="text.secondary">No pending pairs found for this series.</Typography>
+          )}
+          {detailPairs.state === 'ready' && detailPairs.pairs.length > 0 && (
+            <Typography variant="caption" color="text.secondary" data-testid="dupes-series-detail-count">
+              {detail?.view === 'clusters'
+                ? `${detailClusters.length.toLocaleString()} cluster${detailClusters.length === 1 ? '' : 's'}`
+                : detail?.view === 'books'
+                  ? `${new Set(detailClusters.flatMap((c) => c.bookIds)).size.toLocaleString()} books`
+                  : `Showing ${detailPairs.pairs.length.toLocaleString()} of ${detailPairs.total.toLocaleString()} pending pairs`}
+              {detail?.view !== 'pairs' && detailPairs.pairs.length < detailPairs.total
+                ? ` (built from the first ${detailPairs.pairs.length.toLocaleString()} of ${detailPairs.total.toLocaleString()} pairs)`
+                : ''}
+            </Typography>
+          )}
+          {detailPairs.state === 'ready' && detail?.view === 'clusters' && (
+            <Stack component="ul" spacing={1} sx={{ m: 0, pl: 2 }} data-testid="dupes-series-detail-clusters">
+              {detailClusters.map((cl) => (
+                <li key={cl.key}>
+                  {cl.bookIds.length} books:{' '}
+                  {cl.members.map((m) => m.book?.title ?? m.bookId).join(' / ')}
+                </li>
+              ))}
+            </Stack>
+          )}
+          {detailPairs.state === 'ready' && detail?.view === 'books' && (
+            <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2 }} data-testid="dupes-series-detail-books">
+              {detailClusters
+                .flatMap((cl) => cl.members)
+                .map((m) => (
+                  <li key={m.bookId}>
+                    <Link component={RouterLink} to={`/library/${m.bookId}`} underline="hover">
+                      {m.book?.title ?? m.bookId}
+                    </Link>
+                  </li>
+                ))}
+            </Stack>
+          )}
+          {detailPairs.state === 'ready' && detail?.view === 'pairs' && (
+            <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2 }} data-testid="dupes-series-detail-pairs">
+              {detailPairs.pairs.map((c) => (
+                <li key={c.id}>
+                  {`${c.book_a?.title ?? c.entity_a_id} / ${c.book_b?.title ?? c.entity_b_id}`}{' '}
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      setDetail(null);
+                      dupes.setDrawerCandidateId(c.id);
+                    }}
+                  >
+                    Compare
+                  </Button>
+                </li>
+              ))}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {detailPairs.state === 'ready' && detailPairs.loadMore && (
+            <Button onClick={detailPairs.loadMore} data-testid="dupes-series-detail-more">
+              Load more
+            </Button>
+          )}
+          <Button onClick={() => setDetail(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={confirming !== null}
+        onClose={() => setConfirming(null)}
+        data-testid="dupes-series-confirm"
+      >
+        <DialogTitle>
+          Link all {confirming?.candidate_count.toLocaleString()} pending pairs in{' '}
+          {confirming?.series_name}?
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Links {confirming?.cluster_count.toLocaleString()} cluster
+            {confirming?.cluster_count === 1 ? '' : 's'} ({confirming?.book_count.toLocaleString()}{' '}
+            books) into version groups, letting the server pick each primary. This cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirming(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            data-testid="dupes-series-confirm-btn"
+            onClick={() => {
+              const target = confirming;
+              setConfirming(null);
+              if (target) void linkSeries(target.series_id);
+            }}
+          >
+            Link {confirming?.candidate_count.toLocaleString()} pairs
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
 }
 
 export interface DupesPanelProps {
@@ -391,21 +615,58 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
             </Box>
           )}
 
-          <DupesSpine
-            candidates={dupes.candidates}
-            viewMode={viewMode}
-            emptyMessage={dupesLane.emptyMessage}
-            deepLinkedBookId={bookParam}
-            ctx={{
-              isSelected: sel.isSelected,
-              onToggleSelect: dupes.toggleSelect,
-              onAction: dupes.dispatch,
-              focusedId: dupes.candidates[dupes.focusedIndex]?.id ?? null,
-              expandedId,
-              onToggleExpand,
-              onOpenCompare: dupes.setDrawerCandidateId,
-            }}
-          />
+          {viewMode === 'candidates' && (
+            <Box sx={{ px: 2, pt: 1 }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={dupes.bySeries}
+                    onChange={(e) => dupes.setBySeries(e.target.checked)}
+                    slotProps={{ input: { 'aria-label': 'By series' } }}
+                  />
+                }
+                label="By series"
+              />
+            </Box>
+          )}
+
+          {viewMode === 'candidates' && dupes.bySeries ? (
+            <SeriesList dupes={dupes} />
+          ) : viewMode === 'candidates' ? (
+            <DupesClusterSpine
+              clusters={dupes.clusters}
+              candidates={dupes.candidates}
+              overflow={dupes.clusterOverflow}
+              emptyMessage={dupesLane.emptyMessage}
+              deepLinkedBookId={bookParam}
+              busy={dupes.busy}
+              isSelected={sel.isSelected}
+              onSetPairsSelected={dupes.setPairsSelected}
+              onAction={dupes.dispatch}
+              onOpenCompare={dupes.setDrawerCandidateId}
+              bookLinkQuery={
+                (dupes.filters.layer ? `&layer=${encodeURIComponent(dupes.filters.layer)}` : '') +
+                (dupes.filters.band ? `&band=${encodeURIComponent(dupes.filters.band)}` : '')
+              }
+            />
+          ) : (
+            <DupesSpine
+              candidates={dupes.candidates}
+              viewMode={viewMode}
+              emptyMessage={dupesLane.emptyMessage}
+              deepLinkedBookId={bookParam}
+              ctx={{
+                isSelected: sel.isSelected,
+                onToggleSelect: dupes.toggleSelect,
+                onAction: dupes.dispatch,
+                focusedId: dupes.candidates[dupes.focusedIndex]?.id ?? null,
+                expandedId,
+                onToggleExpand,
+                onOpenCompare: dupes.setDrawerCandidateId,
+              }}
+            />
+          )}
         </Box>
       </Box>
 
