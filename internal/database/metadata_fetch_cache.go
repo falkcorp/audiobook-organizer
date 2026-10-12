@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -311,15 +311,24 @@ func CountCachedMetadataFetches(store RawKVStore) (int64, error) {
 // five identity fields changes.
 //
 // The shared provider-answer rows (pcache:q:) the book's searches read or
-// wrote are deleted first, through the book's pointer row, so the bust also
+// wrote are deleted too, through the book's pointer row, so the bust also
 // reaches the answers the book shares with other books (DeletePCacheForBook).
+// Both deletes are attempted whatever the other did: a failed shared bust
+// must not leave the book's own rows replaying the rejected answer, and the
+// errors are joined.
 func InvalidateAllCachedMetadataFetchesForBook(store RawKVStore, bookID string) error {
 	if bookID == "" {
 		return nil
 	}
+	var sharedErr error
 	if _, err := DeletePCacheForBook(store, bookID, nil); err != nil {
-		return err
+		sharedErr = fmt.Errorf("shared cache bust: %w", err)
 	}
+	return errors.Join(sharedErr, invalidatePerBookFetchRows(store, bookID))
+}
+
+// invalidatePerBookFetchRows deletes every metadata_fetch_cache:<bookID>: row.
+func invalidatePerBookFetchRows(store RawKVStore, bookID string) error {
 	prefix := "metadata_fetch_cache:" + bookID + ":"
 	pairs, err := store.ScanPrefix(prefix)
 	if err != nil {
@@ -374,8 +383,8 @@ const PCacheBookPrefix = "pcache:book:"
 
 // pcachePointerMaxPerProvider caps the keys a pointer row keeps per provider:
 // a book whose title changed many times would otherwise grow its row forever.
-// The oldest keys fall off first; a key that falls off is not deleted by a
-// bust, so it costs at most one stale answer until its TTL.
+// The earliest-recorded keys fall off first; a key that falls off is not
+// deleted by a bust, so it costs at most one stale answer until its TTL.
 const pcachePointerMaxPerProvider = 64
 
 // PCacheStore is what the P1/P2 reads and writes need: two raw calls, so a
@@ -612,8 +621,10 @@ func readPCachePointer(store PCacheStore, bookID string) (PCachePointer, error) 
 }
 
 // RecordPCachePointer adds keys (provider -> P1 keys) to bookID's pointer
-// row: a union per provider, newest last, capped at
-// pcachePointerMaxPerProvider. A no-op when there is nothing to record.
+// row: a union per provider in first-recorded order, capped at
+// pcachePointerMaxPerProvider (the earliest-recorded keys fall off first).
+// It writes only when the set of keys changes: nothing to record, or keys
+// the row already lists, is no write.
 func RecordPCachePointer(store PCacheStore, bookID string, keys map[string][]string, now time.Time) error {
 	if bookID == "" || len(keys) == 0 {
 		return nil
@@ -625,18 +636,16 @@ func RecordPCachePointer(store PCacheStore, bookID string, keys map[string][]str
 	if err != nil {
 		return err
 	}
+	// Only a key the row does not list yet changes it. A key already listed
+	// is left where it is: re-recording the same set (every repeat search
+	// records every key it touched) must not rewrite the row, and moving a
+	// re-read key to the end would turn each repeat into a write.
 	changed := false
 	for provider, add := range keys {
 		cur := ptr.Keys[provider]
 		for _, k := range add {
-			if k == "" {
+			if k == "" || indexOf(cur, k) >= 0 {
 				continue
-			}
-			if i := indexOf(cur, k); i >= 0 {
-				if i == len(cur)-1 {
-					continue
-				}
-				cur = append(cur[:i:i], cur[i+1:]...)
 			}
 			cur = append(cur, k)
 			changed = true
