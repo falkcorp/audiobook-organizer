@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.9 -->
+<!-- version: 10.76.10 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-12 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,39 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **FILTER-UNCHANGED-TAGS-REWRITES-UNVERIFIABLE-KEYS** The metafetch write-back
+      (`FilterUnchangedTags` in `internal/metafetch/service_writeback.go`) keeps a
+      key in the write whenever the file's value differs from the wanted one. A key
+      the container cannot hold (for example a `track` that is not an integer on an
+      MP4 file, or a value TagLib cuts) never reads back as wanted, so with
+      `verify_after_write` on every run re-writes the whole file, fails verification
+      on that key (`tagger.ErrVerifyAfterWrite`), and records another observed
+      event, forever. Make the filter skip such a key, or back it off, once a
+      verification failure names it: for example remember the failing keys per
+      `book_file` row (the verification event already carries the key and the
+      value read) and leave them out of the next write until the wanted value
+      changes. Found reviewing verify_after_write (#3968); not fixed there.
+
+- [ ] **MASKSECRET-REVEALS-TOO-MUCH** `database.MaskSecret`
+      (`internal/database/settings.go:313`) masks a secret of 8 or more characters
+      as its first 3 and last 4 characters around `****`, so an 8-character
+      password shows 7 of its 8 characters in `GET /api/v1/config` (the Deluge web
+      password, the OAuth client secrets, the download-client credentials and
+      the API keys all go through it). Decide on a mask that reveals a fixed
+      small amount regardless of length (for example only a length-independent
+      `****`, or the last 2 characters of a secret of 20 or more), and update
+      `restoreRoundTripSecrets` and the mask-comparison callers together, since
+      they match a payload against the mask this function produced. Found
+      reviewing the Deluge settings lock (#3966); not fixed there.
+
+- [ ] **WHISPER-DISPATCHER-TOTAL-CAP-SETTER** `aidispatch.WithTotalCap` was
+      deleted from production (it lives in `dispatch_testseams_test.go`), so
+      `Dispatcher.totals` is set by tests only. `internal/transcribe/inflight.go`
+      says Whisper will move onto the dispatcher in "PR 3"; that move must
+      reintroduce a production way to set the pool-wide cap (group `whisper`,
+      limit `whisper_max_in_flight`), or the `whisper_max_in_flight` cap is
+      silently dropped.
 
 - [ ] **AI-METRICS-UNTYPED-REPLY-FAILURES** Untyped bad replies are not counted
       in `ai_failures_total` (N2 of PR #3938 round 1). Only `*ReplyParseError`
