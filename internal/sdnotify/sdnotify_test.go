@@ -1,5 +1,5 @@
 // file: internal/sdnotify/sdnotify_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 9009cd80-44b0-462e-a2ad-d3e325def504
 // last-edited: 2026-10-12
 
@@ -33,7 +33,7 @@ func fakeNotifySocket(t *testing.T) *net.UnixConn {
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	t.Setenv(socketEnv, path)
+	t.Setenv(SocketEnv, path)
 	return conn
 }
 
@@ -78,8 +78,8 @@ func TestExtendTimeoutDatagram(t *testing.T) {
 }
 
 func TestUnsetIsNoOp(t *testing.T) {
-	t.Setenv(socketEnv, "")
-	require.NoError(t, os.Unsetenv(socketEnv))
+	t.Setenv(SocketEnv, "")
+	require.NoError(t, os.Unsetenv(SocketEnv))
 	require.NoError(t, Ready())
 	require.NoError(t, Stopping())
 	require.NoError(t, Status("x"))
@@ -91,7 +91,7 @@ func TestMissingSocketErrorOmitsPath(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := filepath.Join(dir, "absent.sock")
-	t.Setenv(socketEnv, path)
+	t.Setenv(SocketEnv, path)
 	err = Ready()
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), dir, "the notify error must not carry the socket path")
@@ -124,7 +124,7 @@ func TestAbstractSocketRoundTrip(t *testing.T) {
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: "\x00" + name, Net: "unixgram"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	t.Setenv(socketEnv, "@"+name)
+	t.Setenv(SocketEnv, "@"+name)
 	require.NoError(t, Ready())
 	require.Equal(t, "READY=1", readNotify(t, conn, 5*time.Second))
 }

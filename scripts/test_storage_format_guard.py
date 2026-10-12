@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_storage_format_guard.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 75f5cdf5-6d94-4c67-a679-062b1e13e414
-# last-edited: 2026-10-04
+# last-edited: 2026-10-12
 
 """Unit tests for scripts/storage_format_guard.py, the `make rollback` guard.
 
@@ -76,12 +76,17 @@ class StorageFormatGuardTest(unittest.TestCase):
         self.assertIn(f"checkpoint_dir: {ckpt}", out)
         self.assertIn(f"sudo cp -a {ckpt}/db {DB}", out)
         # The .pre-format step and its note print even though no such file
-        # exists here: A9's deploy-cutover.sh is what creates it.
+        # exists here: nothing creates it automatically until A9 lands.
         self.assertFalse(Path(f"{BIN}.pre-format-2").exists())
         self.assertIn(f"install {BIN}.pre-format-2 as {BIN} (never {BIN}.prev)", out)
         self.assertIn(
-            f"note: {BIN}.pre-format-2 is saved by scripts/deploy-cutover.sh at deploy time; "
-            "if it is absent, build the release that matches format 2 and install that binary", out)
+            f"note: nothing saves {BIN}.pre-format-2 automatically yet (scripts/deploy-cutover.sh "
+            "is planned, TASK-A9); copy it by hand before a format-changing deploy. "
+            "If it is absent, build the release that matches format 2 and install that binary", out)
+        # The binary is matched to the unit type before it is started, or a
+        # pre-readiness binary restart-loops under Type=notify.
+        self.assertIn(f"5. from your workstation: bash scripts/deploy-match-unit-type.sh <host> {BIN}", out)
+        self.assertIn("6. sudo systemctl start audiobook-organizer.service", out)
         self.assertIn("docs/system/runbooks.md#storage-format-restore", out)
 
     def test_case5_store_above_prev_ignore_flag_still_refused(self):

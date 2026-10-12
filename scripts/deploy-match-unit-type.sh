@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/deploy-match-unit-type.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: 1d0e4dbc-b932-4379-a497-d08d32b6e0a9
 # last-edited: 2026-10-12
 #
@@ -18,12 +18,14 @@ host="${1:?usage: deploy-match-unit-type.sh HOST BINARY}"
 bin="${2:?usage: deploy-match-unit-type.sh HOST BINARY}"
 dir=/etc/systemd/system/audiobook-organizer.service.d
 dropin="$dir/zz-rollback-type-simple.conf"
-caps=$(ssh "$host" "$bin --print-capabilities" 2>/dev/null) || caps=""
+# Fail fast instead of hanging on an unreachable host or a password prompt.
+sshq=(ssh -o ConnectTimeout=10 -o BatchMode=yes "$host")
+caps=$("${sshq[@]}" "$bin --print-capabilities" 2>/dev/null) || caps=""
 if grep -qx sd_notify <<<"$caps"; then
   echo "   $bin reports sd_notify: Type=notify (removing $dropin if present)"
-  ssh "$host" "sudo -n rm -f $dropin"
+  "${sshq[@]}" "sudo -n rm -f $dropin"
 else
   echo "   $bin does not report sd_notify: installing $dropin (Type=simple)"
-  ssh "$host" "sudo -n mkdir -p $dir && printf '[Service]\\nType=simple\\n' | sudo -n tee $dropin >/dev/null"
+  "${sshq[@]}" "sudo -n mkdir -p $dir && printf '[Service]\\nType=simple\\n' | sudo -n tee $dropin >/dev/null"
 fi
-ssh "$host" "sudo -n systemctl daemon-reload"
+"${sshq[@]}" "sudo -n systemctl daemon-reload"
