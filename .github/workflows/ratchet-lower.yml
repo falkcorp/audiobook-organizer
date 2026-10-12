@@ -1,0 +1,128 @@
+# file: .github/workflows/ratchet-lower.yml
+# version: 1.0.0
+# guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
+# last-edited: 2026-10-12
+
+# Weekly: measure every file-backed ratchet baseline listed in ci/gates.txt and,
+# when a measured count is now LOWER, open a PR that lowers the file (07-G4,
+# owner decision D47: ratchets fail only on a rise; a bot lowers the baseline).
+#
+# This workflow only ever opens a PR. It never pushes to main, never edits Go
+# source (Go-constant baselines are only listed in the PR body), and
+# scripts/ci/run_gates.py --lower cannot write a higher number or add an
+# identifier to the deadcode set. Merge the PR with --rebase like any other.
+name: Lower Ratchet Baselines
+
+on:
+  schedule:
+    # Mondays 06:43 UTC, off the top of the hour.
+    - cron: '43 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ratchet-lower-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  lower:
+    name: Lower baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+
+      # Same pins as ci.yml: a version bump changes the count on its own.
+      - name: Install golangci-lint and deadcode
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+          go -C tools/deadcode install tool
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          echo "DEADCODE_BIN=$(go env GOPATH)/bin/deadcode" >> "$GITHUB_ENV"
+
+      - name: Lower baselines
+        run: python3 scripts/ci/run_gates.py --lower --report "$RUNNER_TEMP/ratchet-report.md"
+
+      - name: Open PR if a baseline changed
+        env:
+          PAT: ${{ secrets.JF_CI_GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT: ${{ runner.temp }}/ratchet-report.md
+        run: |
+          set -euo pipefail
+          BRANCH=bot/lower-ratchet-baselines
+
+          if git diff --quiet; then
+            echo "::notice::No baseline is higher than its measured value; no PR."
+            cat "$REPORT"
+            exit 0
+          fi
+
+          # Only baseline files may change; anything else is a bug in the bot.
+          bad=$(git diff --name-only | grep -vxE '\.errcheck-baseline|\.interface-width-baseline|scripts/deadcode-baseline\.txt' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::unexpected files changed by --lower: $bad"
+            exit 1
+          fi
+
+          # PRs opened with GITHUB_TOKEN do not trigger CI; prefer the PAT.
+          export GH_TOKEN="${PAT:-$GITHUB_TOKEN}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add .errcheck-baseline .interface-width-baseline scripts/deadcode-baseline.txt
+          git commit -m "chore(ci): lower ratchet baselines"
+
+          {
+            echo "Lowers ratchet baselines whose measured count has fallen (ci/gates.txt, scripts/ci/run_gates.py --lower)."
+            echo "The bot only writes smaller numbers and never adds an identifier to the deadcode set."
+            echo
+            cat "$REPORT"
+            echo
+            echo "Merge with rebase (this repo does not squash)."
+          } > "$RUNNER_TEMP/pr-body.md"
+
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease "$REMOTE" "HEAD:refs/heads/${BRANCH}"
+
+          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base "${{ github.event.repository.default_branch }}" \
+              --title "chore(ci): lower ratchet baselines" --body-file "$RUNNER_TEMP/pr-body.md"
+          fi

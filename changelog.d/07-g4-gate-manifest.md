@@ -1,0 +1,1 @@
+- CI now lists its gates once in `ci/gates.txt` and runs them through `scripts/ci/run_gates.py`. A weekly job opens a pull request that lowers any ratchet baseline (`.errcheck-baseline`, `.interface-width-baseline`, the deadcode list) whose measured count has fallen, so a good change never needs a hand-edited number. Ratchets still fail only when a count rises.
