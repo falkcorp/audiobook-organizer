@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-10-11
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -37,6 +38,31 @@ const linkBackfillOpID = "deluge.link-backfill"
 // file at a time (filehash.BookFileHash reads head and tail above 100 MB, the
 // whole file below it), so the cap bounds disk pressure on the download volume.
 const linkMaxWorkers = 8
+
+// linkHashesPerLimit and linkNoLimitHashBudget are the default hash budget
+// (max_hashed_files): limit x 50 torrent files for a limited run, 100000 for
+// an unlimited one. See linkHashBudget.
+const (
+	linkHashesPerLimit    = 50
+	linkNoLimitHashBudget = 100000
+)
+
+// linkHashBudget resolves max_hashed_files: the number of torrent files a run
+// may hash before it stops admitting torrents. An explicit request wins. The
+// default for a limited run is limit x linkHashesPerLimit, enough for tens of
+// files per written torrent and for the torrents held back or unmatched that
+// sit in front of it, yet far below the whole listing. Without a limit the
+// run is meant to cover the listing, so the default (linkNoLimitHashBudget)
+// only keeps a pathological listing inside the op's timeout.
+func linkHashBudget(limit, requested int) int64 {
+	switch {
+	case requested > 0:
+		return int64(requested)
+	case limit > 0:
+		return min(int64(limit), math.MaxInt64/linkHashesPerLimit) * linkHashesPerLimit
+	}
+	return linkNoLimitHashBudget
+}
 
 // linkBackfillStore is the slice of the store this op reads and writes. It is
 // embedded in pluginStore rather than listed there method by method, so
@@ -83,9 +109,14 @@ func (p *Plugin) linkBackfillDef() sdk.OperationDef {
 			"caps the torrents written, counted after the hold-back; torrents are hashed in batches, torrents no " +
 			"file carries yet first, until that many have writes, and the rest of the listing only for files " +
 			"whose size equals one in the batches, for the cross-seed check. The batches grow past held, " +
-			"unmatched and already-linked torrents, so while many are held a limited run can hash most of the " +
-			"listing; deferred_by_limit counts the torrents left for a later run), include_unsettled_relink, " +
-			"workers (default: CPUs, max 8).",
+			"unmatched and already-linked torrents; deferred_by_limit counts the torrents left for a later " +
+			"run), max_hashed_files (the most torrent files a run hashes, cross-seed checks included: no more " +
+			"torrents are admitted once the files of the next one would pass it, so a limited run cannot hash " +
+			"most of the listing while torrents are held; default limit x 50, 100000 with no limit; the first " +
+			"torrent is always examined; deferred_by_hash_budget counts the torrents left), start_after " +
+			"(a torrent hash: begin the torrent order after it, wrapping round; a run that left torrents " +
+			"unexamined reports next_start_after, so held or unmatched torrents at the front of the order " +
+			"cannot starve the rest), include_unsettled_relink, workers (default: CPUs, max 8).",
 		ResumePolicy:    sdk.ResumeRestart, // idempotent: a linked row is skipped as already_linked
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  linkBackfillOpID,
@@ -112,6 +143,12 @@ type linkBackfillParams struct {
 	Label       string `json:"label,omitempty"`
 	Limit       int    `json:"limit,omitempty"`
 	Workers     int    `json:"workers,omitempty"`
+	// MaxHashedFiles bounds the torrent files one run hashes (linkHashBudget).
+	MaxHashedFiles int `json:"max_hashed_files,omitempty"`
+	// StartAfter is a torrent hash: the window order begins after it
+	// (linkOrder). A run that leaves torrents unexamined reports the hash to
+	// pass next as next_start_after.
+	StartAfter string `json:"start_after,omitempty"`
 	// IncludeUnsettledRelink writes the rows the relink hold-back would hold
 	// (held_for_relink). Opt-in: the default holds them.
 	IncludeUnsettledRelink bool `json:"include_unsettled_relink,omitempty"`
@@ -152,8 +189,17 @@ type linkTally struct {
 	// beyondLimit counts the files of torrents outside the limit window that
 	// were hashed for the cross-seed check.
 	beyondLimit atomic.Int64
-	linked         atomic.Int64
-	errors         atomic.Int64
+	// hashedTotal counts every torrent file hashed so far this run, in the
+	// window or not: what the hash budget is spent from. hashed (below) is
+	// the window's share, counted once the run ends.
+	hashedTotal atomic.Int64
+	// hashBudget is the run's max_hashed_files, for the result.
+	hashBudget atomic.Int64
+	// deferredByBudget counts the torrents left outside the window because
+	// the hash budget was spent (deferred counts the ones left by limit).
+	deferredByBudget atomic.Int64
+	linked           atomic.Int64
+	errors           atomic.Int64
 	// hashed and hashMissing count torrent-file hash attempts and the ones
 	// that failed because the file was not there, for the path-view note.
 	hashed      atomic.Int64
@@ -169,27 +215,37 @@ func (t *linkTally) summary(dry bool) string {
 	if dry {
 		linkKey = "would_link"
 	}
-	return fmt.Sprintf("%s=%d already_linked=%d unverified=%d ambiguous=%d conflict=%d book_deleted=%d held_for_relink=%d deferred_by_limit=%d errors=%d",
+	return fmt.Sprintf("%s=%d already_linked=%d unverified=%d ambiguous=%d conflict=%d book_deleted=%d held_for_relink=%d deferred_by_limit=%d deferred_by_hash_budget=%d errors=%d",
 		linkKey, t.linked.Load(), t.alreadyLinked.Load(), t.unverified.Load(),
-		t.ambiguous.Load(), t.conflict.Load(), t.bookDeleted.Load(), t.heldForRelink.Load(), t.deferred.Load(), t.errors.Load())
+		t.ambiguous.Load(), t.conflict.Load(), t.bookDeleted.Load(), t.heldForRelink.Load(), t.deferred.Load(),
+		t.deferredByBudget.Load(), t.errors.Load())
 }
 
 // linkBackfillResult is the op's persisted result. Exactly one of Linked and
 // WouldLink is set: Linked on a live run, WouldLink on a preview.
 type linkBackfillResult struct {
-	DryRun                bool     `json:"dry_run"`
-	Label                 string   `json:"label"`
-	Torrents              int64    `json:"torrents"`
-	Files                 int64    `json:"files"`
-	Linked                *int64   `json:"linked,omitempty"`
-	WouldLink             *int64   `json:"would_link,omitempty"`
-	AlreadyLinked         int64    `json:"already_linked"`
-	Unverified            int64    `json:"unverified"`
-	Ambiguous             int64    `json:"ambiguous"`
-	Conflict              int64    `json:"conflict"`
-	BookDeleted           int64    `json:"book_deleted"`
-	DeferredByLimit       int64    `json:"deferred_by_limit"`
-	BeyondLimitHashed     int64    `json:"beyond_limit_hashed"`
+	DryRun            bool   `json:"dry_run"`
+	Label             string `json:"label"`
+	Torrents          int64  `json:"torrents"`
+	Files             int64  `json:"files"`
+	Linked            *int64 `json:"linked,omitempty"`
+	WouldLink         *int64 `json:"would_link,omitempty"`
+	AlreadyLinked     int64  `json:"already_linked"`
+	Unverified        int64  `json:"unverified"`
+	Ambiguous         int64  `json:"ambiguous"`
+	Conflict          int64  `json:"conflict"`
+	BookDeleted       int64  `json:"book_deleted"`
+	DeferredByLimit   int64  `json:"deferred_by_limit"`
+	BeyondLimitHashed int64  `json:"beyond_limit_hashed"`
+	// HashedFiles is every torrent file hashed (cross-seed checks included),
+	// HashBudget the max_hashed_files it was held to, DeferredByHashBudget
+	// the torrents left unexamined for want of it, and NextStartAfter the
+	// start_after that continues past the last torrent examined ("" when no
+	// torrent that no row carries yet is left).
+	HashedFiles           int64    `json:"hashed_files"`
+	HashBudget            int64    `json:"hash_budget"`
+	DeferredByHashBudget  int64    `json:"deferred_by_hash_budget"`
+	NextStartAfter        string   `json:"next_start_after,omitempty"`
 	HeldForRelink         int64    `json:"held_for_relink"`
 	RelinkFixerWouldLink  int64    `json:"relink_fixer_would_link"`
 	NonAudio              int64    `json:"non_audio"`
@@ -216,6 +272,9 @@ func (t *linkTally) result(dry bool, label string, notes []string) linkBackfillR
 		BookDeleted:           t.bookDeleted.Load(),
 		DeferredByLimit:       t.deferred.Load(),
 		BeyondLimitHashed:     t.beyondLimit.Load(),
+		HashedFiles:           t.hashedTotal.Load(),
+		HashBudget:            t.hashBudget.Load(),
+		DeferredByHashBudget:  t.deferredByBudget.Load(),
 		HeldForRelink:         t.heldForRelink.Load(),
 		RelinkFixerWouldLink:  t.relinkPending.Load(),
 		NonAudio:              t.nonAudio.Load(),
@@ -475,6 +534,15 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	root := config.AppConfig.RootDir
 	workers := linkWorkers(params.Workers)
 	limit := max(params.Limit, 0)
+	budget := linkHashBudget(limit, params.MaxHashedFiles)
+	startAfter := ""
+	if s := strings.TrimSpace(params.StartAfter); s != "" {
+		norm, err := delugeclient.NormalizeTorrentID(s)
+		if err != nil {
+			return fmt.Errorf("%s: start_after %q is not a torrent hash: %w; nothing was written", linkBackfillOpID, s, err)
+		}
+		startAfter = norm
+	}
 
 	if p.client == nil {
 		return fmt.Errorf("%s: deluge is not configured; nothing was written", linkBackfillOpID)
@@ -499,6 +567,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 
 	tally := &linkTally{}
 	tally.torrents.Store(int64(len(details)))
+	tally.hashBudget.Store(budget)
 	run := &linkRun{
 		store:    p.store,
 		versions: p.store,
@@ -529,13 +598,14 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	}
 
 	log.Info("starting", "dry_run", dry, "label", label, "torrents", len(details),
-		"workers", workers, "limit", limit, "include_unsettled_relink", params.IncludeUnsettledRelink)
+		"workers", workers, "limit", limit, "max_hashed_files", budget, "start_after", startAfter,
+		"include_unsettled_relink", params.IncludeUnsettledRelink)
 
 	torrents := make([]*linkTorrent, len(details))
 	for i := range details {
 		torrents[i] = run.prepare(&details[i])
 	}
-	order := linkOrder(torrents, run.idx)
+	order := linkOrder(torrents, run.idx, startAfter)
 
 	// Phases 1 and 2, repeated while limit is unmet. Nothing is written here.
 	//
@@ -545,30 +615,42 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	// in full. So the hashing stops once limit torrents have writes, but a
 	// window that keeps meeting torrents with nothing to write (held for the
 	// relink fixer, unmatched; those carry no row's hash and stay at the
-	// front of order on every run) keeps growing: before the relink fixer has
-	// run, a limited run can hash most of the listing. That is the price of
-	// never stalling on them. A torrent outside the window has only the
-	// files whose Deluge size equals the size of a window file hashed: a
-	// cross-seed holds identical bytes, so a size no window file has cannot
-	// make a window row ambiguous (filehash.BookFileHash digests the size
-	// with a sampled file, and a whole file's size is its own). Each torrent
+	// front of order on every run) keeps growing. The hash budget
+	// (max_hashed_files) is what stops that: admitWithinBudget takes torrents
+	// in order only while the files they and their cross-seed checks will
+	// hash fit in what is left of it, and the first torrent that does not fit
+	// ends the run's examining (the later ones are not skipped to, so the
+	// order stays the order). Torrents it leaves are deferred_by_hash_budget,
+	// and the next run continues past the last one examined (start_after /
+	// next_start_after). A torrent outside the window has only the files whose
+	// Deluge size equals the size of a window file hashed: a cross-seed holds
+	// identical bytes, so a size no window file has cannot make a window row
+	// ambiguous (filehash.BookFileHash digests the size with a sampled file,
+	// and a whole file's size is its own). That check is never skipped to save
+	// budget -- a skipped cross-seed could link a row two torrents hold -- so
+	// its files are charged to the budget in advance instead. Each torrent
 	// file is hashed at most once per run, however many rounds there are.
 	// Torrents some row already carries go to the back of order, so a later
 	// limited run reaches new torrents instead of re-hashing linked ones.
 	var (
-		plan   []torrentWrites
-		stats  decideStats
-		window int
+		plan       []torrentWrites
+		stats      decideStats
+		window     int
+		budgetStop bool
 	)
 	for {
 		grow := len(order) - window
 		if limit > 0 {
 			grow = min(grow, limit-len(plan))
 		}
-		for _, i := range order[window : window+grow] {
+		admitted := admitWithinBudget(torrents, order[window:window+grow], budget-tally.hashedTotal.Load(), window == 0)
+		if admitted < grow {
+			budgetStop = true
+		}
+		for _, i := range order[window : window+admitted] {
 			run.enterWindow(torrents[i])
 		}
-		window += grow
+		window += admitted
 
 		if err := run.resolveRound(ctx, reporter, torrents, workers); err != nil {
 			return err
@@ -595,7 +677,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		}
 		plan, stats.held, stats.fixerWouldLink = run.holdBack(plan, params.IncludeUnsettledRelink)
 
-		if limit == 0 || len(plan) >= limit || window == len(order) {
+		if limit == 0 || len(plan) >= limit || window == len(order) || budgetStop {
 			break
 		}
 	}
@@ -607,9 +689,18 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		tally.deferred.Add(int64(len(plan) - limit))
 		plan = plan[:limit]
 	}
+	// The torrents left outside the window are the hash budget's when
+	// admitting stopped for want of it (a round that admits fewer torrents
+	// than it wanted adds at most one plan entry each, so the plan is then
+	// still short of limit), the limit's otherwise.
 	if rest := len(order) - window; rest > 0 {
-		tally.deferred.Add(int64(rest))
+		if budgetStop {
+			tally.deferredByBudget.Add(int64(rest))
+		} else {
+			tally.deferred.Add(int64(rest))
+		}
 	}
+	nextAfter := run.nextStartAfter(torrents, order, window, startAfter)
 	for _, t := range torrents {
 		if t.inWindow {
 			continue
@@ -624,6 +715,11 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		notes = append(notes, fmt.Sprintf("limit: %d torrent(s) written; deferred_by_limit counts the %d torrent(s) "+
 			"left for a later run, and beyond_limit_hashed the %d file(s) of those hashed only for the cross-seed check",
 			len(plan), n, tally.beyondLimit.Load()))
+	}
+	if n := tally.deferredByBudget.Load(); n > 0 {
+		notes = append(notes, fmt.Sprintf("hash_budget: %d file(s) hashed of the max_hashed_files budget of %d, so %d torrent(s) "+
+			"were not examined (deferred_by_hash_budget); raise max_hashed_files or run again with start_after=%q "+
+			"(next_start_after) to continue past the last torrent examined", tally.hashedTotal.Load(), budget, n, nextAfter))
 	}
 	if n, missing := tally.hashed.Load(), tally.hashMissing.Load(); n > 0 && missing == n {
 		notes = append(notes, fmt.Sprintf("path_views_differ: none of the %d torrent file(s) hashed was found on disk; "+
@@ -671,6 +767,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	}
 
 	res := tally.result(dry, label, notes)
+	res.NextStartAfter = nextAfter
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
 		return fmt.Errorf("%s: persist result: %w", linkBackfillOpID, err)
 	}
@@ -679,6 +776,8 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		"empty_files", res.EmptyFiles, "deselected", res.Deselected,
 		"unmatched", res.Unmatched, "outside_library", res.OutsideLibrary,
 		"beyond_limit_hashed", res.BeyondLimitHashed,
+		"hashed_files", res.HashedFiles, "hash_budget", res.HashBudget,
+		"deferred_by_hash_budget", res.DeferredByHashBudget, "next_start_after", res.NextStartAfter,
 		"relink_fixer_would_link", res.RelinkFixerWouldLink,
 		"provenance_unavailable", res.ProvenanceUnavailable)
 	sdk.NewProgress(reporter, len(details)).Done(tally.summary(dry))
@@ -716,33 +815,123 @@ func (r *linkRun) prepare(d *delugeclient.TorrentDetail) *linkTorrent {
 	return t
 }
 
+// linkRank groups torrents for the window order: 0 for a torrent no
+// book_file row carries the hash of yet (work to do, or held or unmatched
+// forever), 1 for one some row already carries (linked or imported before),
+// 2 for an invalid id.
+func linkRank(t *linkTorrent, idx *linkLibraryIndex) int {
+	switch {
+	case t.hash == "":
+		return 2
+	case idx.rowHashes[t.hash]:
+		return 1
+	}
+	return 0
+}
+
 // linkOrder is the order torrents enter the limit window: torrents whose
 // hash no book_file row carries yet first, then the ones some row already
-// carries (linked or imported before), each group by hash, and invalid ids
-// last. So a limited run that linked a batch reaches new torrents the next
-// time instead of re-hashing the same ones.
-func linkOrder(ts []*linkTorrent, idx *linkLibraryIndex) []int {
+// carries (linked or imported before), and invalid ids last. So a limited run
+// that linked a batch reaches new torrents the next time instead of
+// re-hashing the same ones.
+//
+// Within each group torrents are by hash, rotated to begin after startAfter
+// (those with a greater hash first, then the rest, wrapping round). Torrents
+// held for the relink fixer or matching no row write nothing, so no row ever
+// carries their hash and they keep their place at the front of the first
+// group; under the hash budget a fixed order would examine the same few of
+// them on every run and never reach the rest. A run reports where it stopped
+// (nextStartAfter) and the next one is given that, so successive runs
+// cover the whole group before any torrent is examined twice. Empty
+// startAfter is the plain hash order.
+func linkOrder(ts []*linkTorrent, idx *linkLibraryIndex, startAfter string) []int {
 	order := make([]int, len(ts))
 	for i := range order {
 		order[i] = i
 	}
-	rank := func(t *linkTorrent) int {
-		switch {
-		case t.hash == "":
-			return 2
-		case idx.rowHashes[t.hash]:
-			return 1
-		}
-		return 0
-	}
 	sort.SliceStable(order, func(a, b int) bool {
 		ta, tb := ts[order[a]], ts[order[b]]
-		if ra, rb := rank(ta), rank(tb); ra != rb {
+		if ra, rb := linkRank(ta, idx), linkRank(tb, idx); ra != rb {
 			return ra < rb
+		}
+		if wa, wb := ta.hash > startAfter, tb.hash > startAfter; wa != wb {
+			return wa
 		}
 		return ta.hash < tb.hash
 	})
 	return order
+}
+
+// nextStartAfter is the start_after that continues past the torrents this
+// run examined: the hash of the last window torrent no row carries yet, when
+// such a torrent is left outside the window. When none is left (the whole
+// group was examined) it is "" and a later run starts over from the
+// beginning. When the window took none, the cursor stays where it was.
+func (r *linkRun) nextStartAfter(ts []*linkTorrent, order []int, window int, startAfter string) string {
+	if window >= len(order) || linkRank(ts[order[window]], r.idx) != 0 {
+		return ""
+	}
+	for k := window - 1; k >= 0; k-- {
+		if t := ts[order[k]]; linkRank(t, r.idx) == 0 {
+			return t.hash
+		}
+	}
+	return startAfter
+}
+
+// admitWithinBudget returns how many of the leading torrents of cand (indexes
+// into ts, in window order) can enter the window with the files they will
+// cost to hash within remaining. The cost of a torrent is its own unhashed
+// files plus the unhashed files of torrents outside the window whose size
+// equals one of its file sizes the window did not have before (the
+// cross-seed check resolveRound will run), each file counted once however
+// many admitted torrents pull it in. It stops at the first torrent that does
+// not fit rather than skipping to a cheaper one. A first admission (first:
+// the window is empty) takes the first torrent whatever it costs, or a
+// budget below one torrent's size would examine nothing on every run.
+func admitWithinBudget(ts []*linkTorrent, cand []int, remaining int64, first bool) int {
+	// Sizes the window already holds need no entry: resolveRound hashes every
+	// file of such a size the moment it enters, so none is left unhashed. So
+	// sizes holds only those this pass admits, and outside the unhashed files
+	// of torrents outside the window, by size.
+	sizes := make(map[int64]bool)
+	outside := make(map[int64]int64)
+	for _, t := range ts {
+		if t.inWindow {
+			continue
+		}
+		for i, f := range t.files {
+			if !t.results[i].done {
+				outside[f.size]++
+			}
+		}
+	}
+	n := 0
+	for _, idx := range cand {
+		t := ts[idx]
+		fresh := make(map[int64]bool) // sizes of t's files the window lacks
+		for _, f := range t.files {
+			if !sizes[f.size] {
+				fresh[f.size] = true
+			}
+		}
+		// Every unhashed file of a fresh size is hashed once t is in: t's
+		// own (outside[s] counts them while t is outside the window) and
+		// those of the other torrents outside it.
+		var cost int64
+		for s := range fresh {
+			cost += outside[s]
+		}
+		if cost > remaining && !(first && n == 0) {
+			break
+		}
+		n++
+		remaining -= cost
+		for s := range fresh {
+			sizes[s] = true
+		}
+	}
+	return n
 }
 
 // enterWindow moves t into the limit window and counts its torrent-level
@@ -789,6 +978,7 @@ func (r *linkRun) resolveRound(ctx context.Context, reporter sdk.Reporter, ts []
 				return err
 			}
 			t.results[i] = r.resolveFile(f.abs, f.size)
+			r.tally.hashedTotal.Add(1)
 			if t.results[i].failed {
 				r.tally.errors.Add(1)
 				r.log.Warn("torrent file lookup failed; this torrent links nothing", "torrent", t.hash,
