@@ -1,5 +1,5 @@
 // file: internal/scanner/unit_test.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
 // last-edited: 2026-10-11
 
@@ -18,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -447,9 +446,6 @@ func TestProcessBooksParallelWithProgressCallback(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
 
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
-
 	tmp := t.TempDir()
 	books := []Book{
 		{FilePath: filepath.Join(tmp, "b1.m4b"), Format: ".m4b"},
@@ -667,9 +663,6 @@ func TestProcessBooksParallelWithScanCache(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
 
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
-
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "cached.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("cached content"), 0o644))
@@ -681,6 +674,7 @@ func TestProcessBooksParallelWithScanCache(t *testing.T) {
 	cache := map[string]database.ScanCacheEntry{
 		filePath: {Mtime: fi.ModTime().Unix(), Size: fi.Size(), NeedsRescan: false},
 	}
+	resetScanCacheRefsForTest(t)
 	t.Cleanup(AcquireScanCache(cache))
 
 	books := []Book{{FilePath: filePath, Format: ".m4b"}}
@@ -968,8 +962,6 @@ func TestResolveSeriesID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProcessBooksParallelContextCancelled(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
@@ -998,8 +990,6 @@ func TestProcessBooksParallelContextCancelled(t *testing.T) {
 }
 
 func TestProcessBooksParallelWorkersMinimum(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
@@ -1020,8 +1010,6 @@ func TestProcessBooksParallelWorkersMinimum(t *testing.T) {
 }
 
 func TestProcessBooksParallelSaveError(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -1042,8 +1030,6 @@ func TestProcessBooksParallelSaveError(t *testing.T) {
 }
 
 func TestProcessBooksParallelAIParsingEnabled(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)
@@ -1077,8 +1063,6 @@ func TestProcessBooksParallelAIParsingEnabled(t *testing.T) {
 }
 
 func TestProcessBooksParallelAIParsingWithBadKey(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)
@@ -1112,8 +1096,6 @@ func TestProcessBooksParallelAIParsingWithBadKey(t *testing.T) {
 }
 
 func TestProcessBooksParallelGenericFilename(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)
@@ -1144,8 +1126,6 @@ func TestProcessBooksParallelGenericFilename(t *testing.T) {
 }
 
 func TestProcessBooksParallelSaveWithScanCacheUpdate(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	// Use a mock store so scan cache update path is exercised
 	store := dbmocks.NewMockStore(t)
@@ -1189,49 +1169,6 @@ func TestProcessBooksParallelSaveWithScanCacheUpdate(t *testing.T) {
 	books := []Book{{FilePath: p, Format: ".m4b"}}
 	err := ProcessBooksParallel(t.Context(), books, 1, nil, nil)
 	assert.NoError(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// ProcessBooks — with active scanner
-// ---------------------------------------------------------------------------
-
-func TestProcessBooksWithActiveScanner(t *testing.T) {
-	mockScanner := &mockScannerImpl{
-		processErr: nil,
-	}
-	SetScanner(mockScanner)
-	t.Cleanup(func() { SetScanner(nil) })
-
-	books := []Book{{FilePath: "/tmp/test.m4b", Format: ".m4b"}}
-	err := ProcessBooks(books, nil)
-	assert.NoError(t, err)
-	assert.True(t, mockScanner.processCalled)
-}
-
-type mockScannerImpl struct {
-	processCalled bool
-	processErr    error
-}
-
-func (m *mockScannerImpl) ScanDirectory(rootDir string, scanLog logger.Logger) ([]Book, error) {
-	return nil, nil
-}
-
-func (m *mockScannerImpl) ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
-	return nil, nil
-}
-
-func (m *mockScannerImpl) ProcessBooks(books []Book, scanLog logger.Logger) error {
-	m.processCalled = true
-	return m.processErr
-}
-
-func (m *mockScannerImpl) ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger, onAIPhaseWarning ...func(string)) error {
-	return nil
-}
-
-func (m *mockScannerImpl) ComputeFileHash(filePath string) (string, error) {
-	return "", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1699,8 +1636,6 @@ func TestExtractInfoFromPathMoreBranches(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProcessBooksParallelNormalFile(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)
@@ -1730,8 +1665,6 @@ func TestProcessBooksParallelNormalFile(t *testing.T) {
 }
 
 func TestProcessBooksParallelDirectoryBook(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)
@@ -1763,8 +1696,6 @@ func TestProcessBooksParallelDirectoryBook(t *testing.T) {
 }
 
 func TestProcessBooksParallelMultipleErrors(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)
@@ -1794,8 +1725,6 @@ func TestProcessBooksParallelMultipleErrors(t *testing.T) {
 }
 
 func TestProcessBooksParallelWithSegmentFiles(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(nil)

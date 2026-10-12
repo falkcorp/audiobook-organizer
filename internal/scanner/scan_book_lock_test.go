@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -33,8 +33,6 @@ type scanLockFixture struct {
 
 func newScanLockFixture(t *testing.T, rootDir string) scanLockFixture {
 	t.Helper()
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	store, cleanup := setupPebbleStore(t)
 	t.Cleanup(cleanup)
 	orig := database.GetGlobalStore()

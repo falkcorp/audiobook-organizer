@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.2
+// version: 1.22.3
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-10-11
 
@@ -385,7 +385,7 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	}
 
 	// Persist the checksum in a sidecar file next to the archive so a later
-	// RestoreBackup(verify=true) has something durable to compare against.
+	// RestoreBackupIn(verify=true) has something durable to compare against.
 	// Without this, BackupInfo.Checksum only ever existed in memory for the
 	// duration of this call -- see TASK-306. A failed sidecar write is treated
 	// as a failed backup (not a warning): a backup nobody can verify defeats
@@ -623,7 +623,7 @@ func sweepStaleCheckpoints(stagingRoot, backupDir string, now time.Time) {
 	sweep(backupDir, "pebble-checkpoint-")
 }
 
-// ErrVerificationUnsupported is returned by RestoreBackup when the caller
+// ErrVerificationUnsupported is returned by RestoreBackupIn when the caller
 // requests checksum verification (verify=true) but the backup has no checksum
 // sidecar to verify against -- almost always because it was created before
 // this feature existed (see writeChecksumSidecar / checksumSidecarPath).
@@ -632,7 +632,7 @@ func sweepStaleCheckpoints(stagingRoot, backupDir string, now time.Time) {
 // would be a no-op wearing the name.
 var ErrVerificationUnsupported = errors.New("no stored checksum for this backup")
 
-// ErrChecksumMismatch is returned by RestoreBackup when verify=true and the
+// ErrChecksumMismatch is returned by RestoreBackupIn when verify=true and the
 // backup archive's current SHA-256 does not match the checksum recorded in
 // its sidecar at creation time -- i.e. the archive has been corrupted,
 // truncated, or tampered with since it was created.
@@ -1260,7 +1260,7 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
 			continue
 		}
-		// Best-effort, same as DeleteBackup: an orphaned sidecar cannot be
+		// Best-effort, same as DeleteBackupIn: an orphaned sidecar cannot be
 		// mistaken for a backup (hasArchiveExtension never matches ".sha256"),
 		// so a failure here does not affect the budget accounting above.
 		if err := os.Remove(checksumSidecarPath(backups[i].Path)); err != nil && !os.IsNotExist(err) {

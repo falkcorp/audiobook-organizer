@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_review2_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8b2f6a-1c3e-4a97-b5d0-7e2c9f1a3b68
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -27,8 +27,6 @@ import (
 // nomination resolved to no row and was dropped, so removing the withdrawal
 // passed it.
 func TestProcessBooksParallel_SkippedNominationIsWithdrawn(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	f := newOwnershipFixture(t)
 	origGlobal := database.GetGlobalStore()
 	database.SetGlobalStore(f.store)
@@ -71,8 +69,6 @@ func TestProcessBooksParallel_SkippedNominationIsWithdrawn(t *testing.T) {
 // after import. createBookFilesForBook returns as soon as a book has rows, so
 // before this they were never imported.
 func TestProcessBooksParallel_DirectoryBookGainsNewFiles(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	f := newOwnershipFixture(t)
 	useScannerStore(t, f.store)
 	config.AppConfig.EnableAIParsing = false
@@ -151,8 +147,6 @@ func TestHandleOwnershipSkip_FailedAppendIsCountedAndListed(t *testing.T) {
 // rebuilds only a chapter list synthesized from the files. A provider's or
 // user's list is kept.
 func TestProcessBooksParallel_StagedArrivalKeepsProviderChapters(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 	f := newOwnershipFixture(t)
 	useScannerStore(t, f.store)
 	config.AppConfig.EnableAIParsing = false

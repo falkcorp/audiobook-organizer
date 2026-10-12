@@ -1,7 +1,7 @@
 // file: internal/scanner/book_file_creation_repro_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c5bbcdd4-c7d5-4eea-b8d5-c111e1836398
-// last-edited: 2026-08-25
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -41,8 +41,6 @@ import (
 // a directory of audio goes in, and the book must come out PLAYABLE -- meaning
 // its row has book_file rows pointing at the individual files.
 func TestProcessBooksParallelDirectoryBookAcquiresBookFileRows(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

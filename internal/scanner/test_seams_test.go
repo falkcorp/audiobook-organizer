@@ -1,17 +1,11 @@
 // file: internal/scanner/test_seams_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e730461-420b-4319-99ae-b84b53fc5585
 // last-edited: 2026-10-11
 
 package scanner
 
 import "github.com/falkcorp/audiobook-organizer/internal/logger"
-
-// SetScanner overrides the default scanner implementation for tests. Pass nil
-// to restore the default. Production code never installs a scanner override.
-func SetScanner(s Scanner) {
-	activeScanner = s
-}
 
 // createBookFilesForBook is createBookFilesForBookWithAudio with the default
 // file ceiling and no known media info or run counters. Tests call it to

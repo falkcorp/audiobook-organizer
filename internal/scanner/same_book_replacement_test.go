@@ -1,7 +1,7 @@
 // file: internal/scanner/same_book_replacement_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f0b7c2e-81d3-4a96-b5e7-2c9d0a6f3e18
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -18,25 +18,22 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
-// countingHashScanner counts ComputeFileHash calls and returns the real digest.
-// Everything else comes from mockScannerImpl.
-type countingHashScanner struct {
-	mockScannerImpl
+// hashCounter counts ComputeFileHash calls.
+type hashCounter struct {
 	hashes atomic.Int64
 }
 
-func (c *countingHashScanner) ComputeFileHash(filePath string) (string, error) {
-	c.hashes.Add(1)
-	return filehash.BookFileHash(filePath)
-}
-
-// installHashCounter routes ComputeFileHash through a counter for the rest of
-// the test.
-func installHashCounter(t *testing.T) *countingHashScanner {
+// installHashCounter routes the scanner's hash implementation through a
+// counter (which still returns the real digest) for the rest of the test.
+func installHashCounter(t *testing.T) *hashCounter {
 	t.Helper()
-	c := &countingHashScanner{}
-	SetScanner(c)
-	t.Cleanup(func() { SetScanner(nil) })
+	c := &hashCounter{}
+	orig := computeFileHash
+	computeFileHash = func(filePath string) (string, error) {
+		c.hashes.Add(1)
+		return orig(filePath)
+	}
+	t.Cleanup(func() { computeFileHash = orig })
 	return c
 }
 

@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.35.1
+// version: 1.35.2
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-11
 
@@ -109,10 +109,14 @@ const (
 	// demoted), the operation gave the book's version group (NewValue) a
 	// primary again (versionprimary.EnsureSinglePrimary). A ledger note,
 	// written only once the hand-off succeeded, so it is evidence the
-	// operation changed the group's flags: the primary demote's revert
-	// re-crowns BookID over an already-restored flag only when this row
-	// exists (undo.RevertPlan.handedOff). Restorable with nothing to write:
-	// the demote row's revert (versionprimary.Crown) undoes the hand-off.
+	// operation changed the group's flags: it makes undo.RevertPlan.
+	// ChangedPrimary true for BookID, and the revert's settle pass
+	// (audiobooks.RevertService.settleGroups) names BookID an original of
+	// its group. Restorable with nothing to write itself: once every row
+	// has run, settleGroups crowns the first live, electable original over
+	// the group (versionprimary.CrownEnv), which undoes the hand-off -- unless
+	// another member is explicit primary that the operation did not write,
+	// which the original then yields to.
 	// OldValue names the member the hand-off left primary, as
 	// HandOffNoteValue writes it ("" on rows journaled before 2026-10-02):
 	// since 2026-10-06 "wrote:<id>" when the hand-off wrote that member's

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.88.1
+// version: 2.88.2
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-11
 
@@ -646,7 +646,7 @@ func NewServer(store database.Store) *Server {
 	server.authorityEvidence = newAuthorityEvidence(bgCtx, store, config.AuthorityEvidenceEnabled, server.bgWG.Go)
 	indexed.authority = server.authorityEvidence
 	// Wire the scanner package's local store so its free helpers
-	// (createBookFilesForBook, saveBookToDatabase, ProcessBooksParallel
+	// (createBookFilesForBookWithAudio, saveBookToDatabase, ProcessBooksParallel
 	// inline DB calls) no longer reach for database.GetGlobalStore
 	// (SERVER-GLOBAL-STORE-AUDIT phase 7). The indexing store, so books a scan
 	// creates or updates reach search.
@@ -1360,7 +1360,7 @@ func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scan
 		// A book outside RootDir with no book_files is SKIPPED by
 		// FilterBooksNeedingOrganization ("rely on book_files to determine
 		// readiness"). The scan path only creates book_files for DIRECTORY and
-		// MULTI-FILE books -- createBookFilesForBook is never called for a
+		// MULTI-FILE books -- createBookFilesForBookWithAudio is never called for a
 		// genuinely single-file book -- so without this, handing work to the
 		// real pipeline would silently stop auto-organizing every single-file
 		// book. The old hand-rolled path bypassed that filter entirely, which
@@ -1414,7 +1414,7 @@ func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scan
 //
 // It is deliberately narrow: it does nothing when the book already has rows,
 // and nothing when FilePath is not a regular file. In particular it does NOT
-// go through scanner.createBookFilesForBook, which also NORMALIZES
+// go through scanner.createBookFilesForBookWithAudio, which also NORMALIZES
 // Book.FilePath to the containing directory -- correct for a multi-file book,
 // wrong for a single-file one, and not a side effect the organize hook should
 // be triggering.

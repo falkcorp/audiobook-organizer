@@ -1,7 +1,7 @@
 // file: internal/scanner/same_book_replacement.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9222d374-25de-4cf6-932b-d8f13ccb6f3d
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -14,7 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
-// Same-book replacement counters. Atomic because createBookFilesForBook runs
+// Same-book replacement counters. Atomic because createBookFilesForBookWithAudio runs
 // inside ProcessBooksParallel's worker goroutines.
 var (
 	sameBookReplacedCount   atomic.Int64 // stored row's file was replaced in place; row refreshed through the merge
@@ -28,7 +28,7 @@ var (
 // path: a re-rip, another edition, a user swapping the file), refreshes the row
 // through the same scanner upsert the first scan uses.
 //
-// Before this, createBookFilesForBook returned as soon as the book had rows, so
+// Before this, createBookFilesForBookWithAudio returned as soon as the book had rows, so
 // a replaced file kept the old FileHash, duration, codec, stream info,
 // fingerprint and transcript forever, and dedup and content matching kept
 // comparing signals of bytes that no longer exist.
@@ -41,7 +41,7 @@ var (
 // proves the audio is the same. That is the exact rule #3394 applies to a path
 // taken over by another book; there is one rule, not two.
 //
-// COST. This runs for every book that reaches createBookFilesForBook on a
+// COST. This runs for every book that reaches createBookFilesForBookWithAudio on a
 // rescan (~742k rows library-wide), so it must stay a stat per file for files
 // that did not change.
 // looksChangedSinceStored decides from stat data alone; only a file it flags
@@ -159,7 +159,7 @@ func looksChangedSinceStored(stored *database.BookFile, fi os.FileInfo) bool {
 // scanner-built row: RawTags and Title from the file's tags, and FileHash /
 // OriginalFileHash / OriginalFileHashKind from hash, or from ComputeFileHash
 // when hash is empty. It returns the tag's stated placement (zero on a failed
-// tag read). Shared by the first-scan loop in createBookFilesForBook and the
+// tag read). Shared by the first-scan loop in createBookFilesForBookWithAudio and the
 // same-book replacement refresh, so both build the row the same way.
 func readScannedFileTagsAndHash(bf *database.BookFile, filePath, hash string, scanLog logger.Logger) metadata.TagPlacement {
 	var placement metadata.TagPlacement

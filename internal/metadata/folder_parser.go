@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 package metadata
 
@@ -188,7 +188,7 @@ func splitPathSegments(path string) []string {
 		// it out at ConfidenceHigh. Nothing downstream catches it: scanner.go
 		// assigns bm.PrimaryAuthor() to book.Author, whose recovery guard is
 		// `Author == ""`, so a non-empty placeholder SKIPS the guard whose
-		// defer would have cleared it, and resolveAuthorID then creates or
+		// defer would have cleared it, and resolveAuthorIDs then creates or
 		// attaches a real "Unknown Author" row.
 		//
 		// This parser was missed when the same guard was added to the two

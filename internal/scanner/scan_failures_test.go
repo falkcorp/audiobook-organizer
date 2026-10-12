@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_failures_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1d90e5-d60a-429e-b3c4-0a6908457406
-// last-edited: 2026-09-12
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -113,8 +113,6 @@ func TestProcessBooksParallelSurfacesUnreadableFile(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can open a mode-000 file, so the unreadable fixture would not fail")
 	}
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

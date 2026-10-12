@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-11
 
@@ -1111,10 +1111,6 @@ func TestMarkNoMatch(t *testing.T) {
 		assert.Contains(t, err.Error(), "not found")
 	})
 }
-
-// ---------------------------------------------------------------------------
-// ComputeTargetPathsFromSegments (backward compat wrapper)
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // ApplyMetadataSystemTags

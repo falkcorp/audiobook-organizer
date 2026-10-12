@@ -1,7 +1,7 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -197,8 +197,6 @@ func TestPlaceholderAuthorsCachesAndIsConcurrencySafe(t *testing.T) {
 // unit test in this file green. That is the same failure this package already
 // shipped once, on the AI-enqueue test, and it is why this test exists.
 func TestScanNominatesABookWhoseOnlyAuthorIsThePlaceholder(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

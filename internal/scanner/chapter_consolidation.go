@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -129,7 +129,7 @@ const (
 // stands in for when there is none: an author shelf is whole books, and a
 // shelf of whole books cannot pass "every file short". So a 1,200-chapter
 // single title becomes one book (marked chapterSequence, which exempts it from
-// createBookFilesForBook's backstop too) instead of importing nothing.
+// createBookFilesForBookWithAudio's backstop too) instead of importing nothing.
 func consolidateChapterGroups(ctx context.Context, files []string) []Book {
 	return consolidateChapterGroupsMode(ctx, files, consolidateUntagged)
 }

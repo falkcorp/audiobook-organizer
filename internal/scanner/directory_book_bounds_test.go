@@ -1,7 +1,7 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -359,8 +359,6 @@ func TestSaveBookToDatabase_ConcurrentWritersMintOneRowPerPath(t *testing.T) {
 // one more twin per scan, which is the eight-times-over shape measured in prod.
 // Scanning the same folder twice must not grow the row count.
 func TestProcessBooksParallel_RescanOfAnOversizedFolderDoesNotGrowTheRowCount(t *testing.T) {
-	SetScanner(nil)
-	t.Cleanup(func() { SetScanner(nil) })
 
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
