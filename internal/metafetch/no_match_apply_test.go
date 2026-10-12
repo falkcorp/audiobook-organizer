@@ -1,11 +1,12 @@
 // file: internal/metafetch/no_match_apply_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b0e7c3a-91d4-4f62-8a1e-3c7d2f90b6a4
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package metafetch
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestApplyCandidate_NoMatchSetDuringApplyIsNotOverwritten(t *testing.T) {
 // FetchMetadataForBook does.
 func TestFetchMetadataForBookByTitle_RefusesNoMatchBook(t *testing.T) {
 	store, updated := noMatchFixture()
-	_, err := NewService(store).FetchMetadataForBookByTitle("stamp-1")
+	_, err := NewService(store).FetchMetadataForBookByTitle(context.Background(), "stamp-1")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrMarkedNoMatch), "the refusal is typed: %v", err)
 	require.Nil(t, *updated, "nothing was committed")

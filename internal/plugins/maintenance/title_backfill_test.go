@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.49.0
+// version: 1.49.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-12
 
@@ -174,7 +174,7 @@ func (d fakeDeps) CachedMetadataCandidates(bookID string) (*database.MetadataCan
 
 // FetchMetadataByTitle: no metadata fetch service is wired in these fakes
 // (HasMetadataFetchService is false), so a call is a failure.
-func (d fakeDeps) FetchMetadataByTitle(string) (*int, error) {
+func (d fakeDeps) FetchMetadataByTitle(context.Context, string) (*int, error) {
 	return nil, errors.New("fakeDeps: no metadata fetch service")
 }
 

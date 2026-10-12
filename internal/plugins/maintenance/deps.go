@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.86.0
+// version: 1.86.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-12
 
@@ -620,8 +620,9 @@ type MetadataRunners interface {
 	// metafetch.Service.FetchMetadataForBookByTitle does; it refuses a book
 	// marked no-match. It returns the author ID the book carries afterwards
 	// (nil when it has none). An error when the metadata fetch service is not
-	// wired; callers gate on HasMetadataFetchService first.
-	FetchMetadataByTitle(bookID string) (authorID *int, err error)
+	// wired; callers gate on HasMetadataFetchService first. ctx bounds the
+	// provider searches, and a cancelled ctx refuses the write.
+	FetchMetadataByTitle(ctx context.Context, bookID string) (authorID *int, err error)
 }
 
 // MediaFileRunners runs the audio-container repair operations.
