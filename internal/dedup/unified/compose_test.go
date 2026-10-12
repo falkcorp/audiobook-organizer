@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/compose_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e1fb3967-2f53-41fd-ac9d-0cbcb3b03668
-// last-edited: 2026-08-20
+// last-edited: 2026-10-11
 
 package unified
 
@@ -258,8 +258,8 @@ func TestComposeScore_PairPassedThrough(t *testing.T) {
 func TestComposeScore_FormulaVersion(t *testing.T) {
 	cfg := DefaultScoreConfig()
 	result := ComposeScore(nil, nil, cfg, defaultPair)
-	if result.Formula != "noisy-or-v1" {
-		t.Errorf("expected formula %q, got %q", "noisy-or-v1", result.Formula)
+	if result.Formula != "noisy-or-v2" {
+		t.Errorf("expected formula %q, got %q", "noisy-or-v2", result.Formula)
 	}
 }
 

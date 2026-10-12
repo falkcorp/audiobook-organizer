@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/score.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e12361d1-96ea-4301-919d-3fdb51e12f8f
-// last-edited: 2026-09-27
+// last-edited: 2026-10-11
 
 // Package unified provides the scoring core for the unified deduplication
 // pipeline (SPEC 1, fable5). It is intentionally pure: no I/O, no storage
@@ -83,6 +83,18 @@ const (
 	// Adds a bounded boost of +3 (config.FolderBoost).
 	SigFolderPath SignalKind = "folder_path"
 
+	// SigWindowAcoustID is a window-print match (02-PR8, owner decisions D14a
+	// and D34): the fpwinidx: band index proposed the candidate file and
+	// fingerprint.WindowSetSimilarity verified the two files' window prints
+	// (Raw = the median per-slot similarity). SUPPORTING on purpose: it adds
+	// KindConfig.Boost (default +6, 0 disables it) after the noisy-OR and can
+	// never make a candidate on its own. Window prints sample three 120 s
+	// spans of a file, so agreement says "the same recording at these spots",
+	// which corroborates other evidence but is not, alone, proof of the same
+	// edition. One signal per candidate BOOK per scored pair, however many of
+	// the book's files matched (the collector and engine dedupe by book).
+	SigWindowAcoustID SignalKind = "window_acoustid"
+
 	// SigSamePath is a non-scoring, informational signal (CHAPTER-SUBFOLDER-
 	// NN-ROWS, 2026-09-25): both books resolve to the SAME cleaned
 	// file-system path. It carries no configured boost (BoostFor returns 0
@@ -152,5 +164,6 @@ func isSupportingKind(k SignalKind) bool {
 // drain's content-evidence check) that must agree with the scorer on which
 // kinds can never be the reason a pair exists.
 func IsSupportingKind(k SignalKind) bool {
-	return k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText || k == SigExactRule
+	return k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText || k == SigExactRule ||
+		k == SigWindowAcoustID
 }

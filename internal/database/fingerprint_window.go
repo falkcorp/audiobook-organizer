@@ -1,18 +1,21 @@
 // file: internal/database/fingerprint_window.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c23e6967-5192-4584-a48c-2b5d89c2e887
-// last-edited: 2026-09-19
+// last-edited: 2026-10-11
 
 package database
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 
 // Windowed AcoustID fingerprints: the stored format.
@@ -24,8 +27,11 @@ import (
 // per window in a sidecar keyspace so a later whole-file print is just another
 // row of kind "whole", with no schema change.
 //
-// The kind and ref types live here, not in internal/fingerprint, so the store
-// has no dependency on the package that computes prints.
+// The kind and ref types live here, not in internal/fingerprint, so the stored
+// format does not depend on the package that computes prints. The one
+// exception is the window-band index below, whose keys are the bands
+// fingerprint.WindowBands computes (a pure function of the stored Raw bytes);
+// the store imports that package for them, as the head-print LSH index does.
 
 // FingerprintWindowKind is what part of the file a window covers.
 type FingerprintWindowKind string
@@ -66,14 +72,76 @@ const MaxWindowSlotBP = 10000
 //	fpwin:f:<file_id>:<kind>:<slot_bp>                        tracked BookFile rows
 //	fpwin:p:<sha256(library-relative path)>:<kind>:<slot_bp>  untracked on-disk candidates
 //	fpwin_fail:<ref>                                          window failure tombstone
+//	fpwinidx:<ver:1B><band:1B><hash:8B BE>:<file_id>          window-band index row (empty value)
+//	fpwinidx_meta:<file_id>                                   1B ver + N x (1B band + 8B hash BE)
 //
-// NOTE for a rollback wipe: "fpwin_fail:" sorts OUTSIDE ["fpwin:", "fpwin;"),
-// so a DeleteRange over the window prefix leaves the tombstones behind. Wipe
-// both ranges.
+// The two fpwinidx families are the inverted index over window prints (02-PR8,
+// pebble_store_fpwinidx.go): one row per distinct (band, hash) of a tracked
+// file's banded windows, plus the file's member list, which is what lets a
+// replaced or deleted window remove its rows without recomputing the old
+// print. Only f: refs are indexed, only kind "window" rows are banded, and the
+// rows are written in the SAME batch as the window write that changes them.
+//
+// NOTE for a rollback wipe: "fpwin_fail:", "fpwinidx:" and "fpwinidx_meta:"
+// each sort OUTSIDE ["fpwin:", "fpwin;"), so a DeleteRange over the window
+// prefix leaves the tombstones and the whole index behind. Wipe all four
+// ranges (and clear system:flag:fpwinidx_v1_done with the index).
 const (
-	fpwinKeyPrefix     = "fpwin:"
-	fpwinFailKeyPrefix = "fpwin_fail:"
+	fpwinKeyPrefix        = "fpwin:"
+	fpwinFailKeyPrefix    = "fpwin_fail:"
+	fpwinIdxKeyPrefix     = "fpwinidx:"
+	fpwinIdxMetaKeyPrefix = "fpwinidx_meta:"
 )
+
+// fpwinIdxFileIDOffset is where the file ID starts in an fpwinidx: key:
+// prefix 9 + version 1 + band 1 + hash 8 + ':' 1.
+const fpwinIdxFileIDOffset = len(fpwinIdxKeyPrefix) + 1 + 1 + 8 + 1
+
+// fpwinIdxBandPrefix is the key prefix of every index row of one (band,
+// hash), including the trailing ':' so a probe's range covers exactly them.
+func fpwinIdxBandPrefix(b fingerprint.WindowBand) []byte {
+	out := make([]byte, 0, fpwinIdxFileIDOffset)
+	out = append(out, fpwinIdxKeyPrefix...)
+	out = append(out, fingerprint.WindowBandVersion, b.Band)
+	out = binary.BigEndian.AppendUint64(out, b.Hash)
+	return append(out, ':')
+}
+
+// fpwinIdxKey is the index row of one (band, hash) for fileID.
+func fpwinIdxKey(b fingerprint.WindowBand, fileID string) []byte {
+	return append(fpwinIdxBandPrefix(b), fileID...)
+}
+
+// fpwinIdxMetaKey is fileID's member-list row.
+func fpwinIdxMetaKey(fileID string) []byte {
+	return []byte(fpwinIdxMetaKeyPrefix + fileID)
+}
+
+// encodeWindowIndexMeta packs the version byte and the file's bands.
+func encodeWindowIndexMeta(bands []fingerprint.WindowBand) []byte {
+	out := make([]byte, 1, 1+9*len(bands))
+	out[0] = fingerprint.WindowBandVersion
+	for _, b := range bands {
+		out = append(out, b.Band)
+		out = binary.BigEndian.AppendUint64(out, b.Hash)
+	}
+	return out
+}
+
+// decodeWindowIndexMeta unpacks a member list. ok is false for a row of
+// another band-scheme version or a malformed length: the caller treats the
+// file as not indexed under this version.
+func decodeWindowIndexMeta(v []byte) (bands []fingerprint.WindowBand, ok bool) {
+	if len(v) == 0 || v[0] != fingerprint.WindowBandVersion || (len(v)-1)%9 != 0 {
+		return nil, false
+	}
+	body := v[1:]
+	bands = make([]fingerprint.WindowBand, 0, len(body)/9)
+	for off := 0; off < len(body); off += 9 {
+		bands = append(bands, fingerprint.WindowBand{Band: body[off], Hash: binary.BigEndian.Uint64(body[off+1 : off+9])})
+	}
+	return bands, true
+}
 
 // ErrFingerprintWindowRowGone is wrapped by every window write refused because
 // the f: ref's book_file row does not exist (or was deleted while the write

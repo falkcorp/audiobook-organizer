@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/config.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: d8a383db-5083-4257-be54-686ac2e72d32
-// last-edited: 2026-09-22
+// last-edited: 2026-10-11
 
 package unified
 
@@ -40,7 +40,7 @@ type KindConfig struct {
 
 	// Boost is the additive score points added when this supporting signal
 	// is present. Only meaningful for supporting kinds (SigDuration,
-	// SigFolderPath); ignored for primary kinds.
+	// SigFolderPath, SigWindowAcoustID); ignored for primary kinds.
 	Boost float64 `mapstructure:"boost" json:"boost"`
 }
 
@@ -157,6 +157,16 @@ func DefaultScoreConfig() ScoreConfig {
 				MaxConfidence: 0,
 				Boost:         3.0, // SPEC 1 §4: +3 for matching folder path
 			},
+			string(SigWindowAcoustID): {
+				// 02-PR8 starting value. Supporting: duration (4) + folder
+				// (3) + window (6) = 13 cannot reach the review floor alone.
+				// dedup.signals.window_acoustid.boost: 0 switches it off.
+				Base:          0,
+				Scale:         0,
+				MinConfidence: 0,
+				MaxConfidence: 0,
+				Boost:         6.0,
+			},
 		},
 	}
 }
@@ -243,7 +253,7 @@ func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 		SigExactFile, SigExactAcoustID, SigISBNASIN,
 		SigLSHAcoustID, SigEmbedHigh, SigMetaSrcHash,
 		SigMetaFuzzy, SigEmbedMedium, SigChapterStructure,
-		SigDuration, SigFolderPath,
+		SigDuration, SigFolderPath, SigWindowAcoustID,
 	} {
 		key := "dedup.signals." + string(kind)
 		if !viper.IsSet(key) {

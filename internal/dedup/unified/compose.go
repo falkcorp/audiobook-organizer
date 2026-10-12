@@ -1,6 +1,7 @@
 // file: internal/dedup/unified/compose.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 73a952d9-e850-493a-ae72-a7eb16b0e168
+// last-edited: 2026-10-11
 
 package unified
 
@@ -9,7 +10,17 @@ import "time"
 // FormulaVersion is the version tag embedded in every UnifiedDedupScore.
 // Changing this constant causes the corpus-wide re-score detector to
 // identify all candidates computed under the old formula.
-const FormulaVersion = "noisy-or-v1"
+//
+// !!! BUMPING THIS MAKES EVERY STORED PAIR STALE. !!!
+//
+// History: "noisy-or-v1" until 02-PR8 (2026-10-11), which added the supporting
+// kind SigWindowAcoustID; the signal set changed, so the stamp moved to
+// "noisy-or-v2". Nothing rescans on the bump: pairs keep their v1 stamp and
+// score until the OWNER schedules the corpus rescore (dedup.rescore) in a
+// window with no library scan running (owner decision D33). Do not trigger or
+// schedule one from code. 02-PR13 is meant to ride this same version, so the
+// corpus is rescored once for both.
+const FormulaVersion = "noisy-or-v2"
 
 // ComposeScore combines a set of evidence signals into a single
 // UnifiedDedupScore following SPEC 1 §4.

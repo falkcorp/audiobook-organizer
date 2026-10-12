@@ -1,11 +1,12 @@
 // file: internal/server/registry_wire.go
-// version: 1.29.2
+// version: 1.30.0
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -247,6 +249,15 @@ func init() {
 			// whole re-band synchronously inside the HTTP PUT with a
 			// Background context and no concurrency key against a running
 			// dedup.full-scan (PR #3052 follow-up, D4).
+			// Window-print signal (02-PR8). The index methods are a Pebble
+			// capability the decorator does not carry, so resolve them through
+			// the chain. The collector emits nothing until
+			// dedup.window-index-build has completed a pass.
+			if ws, ok := database.AsCapability[dedup.WindowAcoustIDStore](store); ok {
+				engine.SetWindowStore(ws)
+			} else {
+				logging.Info(context.Background(), "dedup engine: store has no window-print index (non-Pebble backend) — window_acoustid signal off")
+			}
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
 			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
 			engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold

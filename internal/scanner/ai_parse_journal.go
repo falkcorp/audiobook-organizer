@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_journal.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d3f4b17-6c92-4e05-a71d-5f0b29ce8a46
-// last-edited: 2026-09-20
+// last-edited: 2026-10-11
 
 package scanner
 
@@ -30,7 +30,8 @@ const aiParseJournalKind = resultjournal.KindLLMFilenameParse
 // produced by the OLD prompt, forever, with nothing reporting a problem. There
 // is no automatic way to notice: the input filename is unchanged, so the key is
 // unchanged. The same pattern and the same reason as
-// unified.FormulaVersion ("noisy-or-v1") in dedup scoring.
+// unified.FormulaVersion in dedup scoring (bumped by hand from "noisy-or-v1"
+// to "noisy-or-v2" when 02-PR8 added a signal kind).
 //
 // The model is deliberately NOT in the key. With ai_endpoints routing on, the
 // pool picks the endpoint at call time, so the model is not known at Lookup

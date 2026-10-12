@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-09-28
+// last-edited: 2026-10-11
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -95,6 +95,7 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 		p.splitBookBulkMergeDef(),
 		p.purgeStaleDef(),
 		p.lshIndexBuildDef(),
+		p.windowIndexBuildDef(),              // 02-PR8: fpwinidx: window-print band index backfill (preview default, not scheduled)
 		p.purgeLegacyFPDef(),                 // T015: legacy fingerprint purge op
 		p.embReencodeDef(),                   // T021: float16+zstd re-encode op
 		p.bookfileSegDropDef(),               // T020: drop AcoustID segment fields from stored values

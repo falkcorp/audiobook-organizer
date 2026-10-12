@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.50.1
+// version: 1.51.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -230,6 +230,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -822,6 +823,96 @@ func provenMatch(kind, evidence string) bool {
 		return kind == fragClassMoved
 	}
 	return false
+}
+
+// ---- window containment (02-PR8) -----------------------------------------
+
+// fragWindowIndexReader is the window-band member-list read the containment
+// evidence needs. A *database.PebbleStore capability, resolved through the
+// decorator chain; absent (another backend), the evidence is simply not shown.
+type fragWindowIndexReader interface {
+	WindowIndexMembers(fileID string) ([]fingerprint.WindowBand, bool, error)
+}
+
+// fragWindowPair is one fragment file and the parent row it is matched to.
+type fragWindowPair struct {
+	fragFile  fragFile
+	parentRow fragFile
+}
+
+// fragEvWindowContainment opens the containment evidence line.
+const fragEvWindowContainment = "window containment"
+
+func (f *fragmentFixer) windowIndex() fragWindowIndexReader {
+	if f.p == nil || f.p.deps == nil {
+		return nil
+	}
+	r, ok := database.AsCapability[fragWindowIndexReader](f.p.deps.OpsStore())
+	if !ok {
+		return nil
+	}
+	return r
+}
+
+// addWindowContainment appends, for every pair whose fragment and parent
+// files both have window-band member lists, the share of the fragment's band
+// keys the parent also has (an exact set intersection of the two lists, no
+// index probe), labelled supporting or weak against
+// fragment_window_containment_min, and counts them in Current. INFORMATIONAL
+// ONLY: owner decisions D14a/D34 keep the windowed prints as a supporting
+// signal, and the approval-by-id flow decides every apply. Nothing here is
+// read by provenMatch, the row's Skipped state, its fingerprint or its State.
+//
+// With r = 1 MinHash bands the value estimates the fraction of the fragment's
+// window audio that also lies in the parent's windows. ws1 windows sit at
+// 10/50/90 percent of each file, so a fragment's window and its parent's
+// windows often cover different stretches of the same book: a low value is
+// weak evidence, never evidence against.
+func (f *fragmentFixer) addWindowContainment(r *repairs.Row, pairs []fragWindowPair) {
+	if len(pairs) == 0 {
+		return
+	}
+	idx := f.windowIndex()
+	if idx == nil {
+		return
+	}
+	minC := -1.0 // read on the first line: most rows have no member lists
+	supporting, weak := 0, 0
+	for _, p := range pairs {
+		if p.fragFile.ID == "" || p.parentRow.ID == "" {
+			continue
+		}
+		fb, ok, err := idx.WindowIndexMembers(p.fragFile.ID)
+		if err != nil || !ok || len(fb) == 0 {
+			continue
+		}
+		pb, ok, err := idx.WindowIndexMembers(p.parentRow.ID)
+		if err != nil || !ok {
+			continue
+		}
+		if minC < 0 {
+			cfg := config.Snapshot()
+			minC = cfg.ResolveFragmentWindowContainmentMin()
+		}
+		c := fingerprint.WindowBandContainment(fb, pb)
+		label := "weak"
+		if c >= minC {
+			label = "supporting"
+			supporting++
+		} else {
+			weak++
+		}
+		r.Evidence = append(r.Evidence, fmt.Sprintf(
+			"%s ← parent row %s: %s %.2f of the fragment's bands appear in the parent (%s, threshold %.2f; informational, never makes a row applicable)",
+			filepath.Base(p.fragFile.Path), p.parentRow.ID, fragEvWindowContainment, c, label, minC))
+	}
+	if supporting+weak == 0 {
+		return
+	}
+	if r.Current == nil {
+		r.Current = map[string]string{}
+	}
+	r.Current["window_containment"] = fmt.Sprintf("%d supporting, %d weak", supporting, weak)
 }
 
 // ---- stores ---------------------------------------------------------------
@@ -3259,8 +3350,10 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 	r.BookIDs = []string{c.Book.ID}
 	r.Members = []repairs.RowMember{member(lib, c.Book, "fragment")}
 	seen := map[string]bool{}
+	var winPairs []fragWindowPair
 	for _, m := range ms {
 		r.Evidence = append(r.Evidence, fmt.Sprintf("%s → parent %s row %s (%s)", filepath.Base(c.File.Path), m.Row.BookID, m.Row.ID, m.Evidence))
+		winPairs = append(winPairs, fragWindowPair{fragFile: c.File, parentRow: m.Row})
 		if !seen[m.Row.BookID] {
 			seen[m.Row.BookID] = true
 			if pb, ok := lib.books[m.Row.BookID]; ok {
@@ -3269,6 +3362,7 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 			}
 		}
 	}
+	f.addWindowContainment(&r, winPairs)
 	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" {
 		r.Class = fragClassManual
 	}
@@ -3366,6 +3460,15 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 			}
 		}
 	}
+	// Window containment (02-PR8): evidence text and a Current entry only.
+	// It is never part of p.Evidence (provenMatch compares that string), the
+	// fingerprint or the state, so it cannot make a row applicable or turn a
+	// planned row changed_since_plan.
+	winPairs := make([]fragWindowPair, 0, len(pairs))
+	for _, p := range pairs {
+		winPairs = append(winPairs, fragWindowPair{fragFile: p.Frag.File, parentRow: p.Parent})
+	}
+	f.addWindowContainment(&r, winPairs)
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
 	}

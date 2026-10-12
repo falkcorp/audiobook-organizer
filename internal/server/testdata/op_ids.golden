@@ -1,5 +1,5 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.11.0
+# version: 1.12.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
 # last-edited: 2026-10-12
 #
@@ -268,3 +268,4 @@ maintenance.credit-census
 maintenance.authority-build
 maintenance.ident-index-rebuild
 catalog.coverage-report
+dedup.window-index-build

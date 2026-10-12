@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-11
 
@@ -195,6 +195,8 @@ var keyFamilies = []KeyFamily{
 	{"fpidx_meta:", "fingerprint LSH index metadata", "internal/database/pebble_store.go"},
 	{"fpwin:", "windowed fingerprints", "internal/database/fingerprint_window.go"},
 	{"fpwin_fail:", "windowed fingerprint failures", "internal/database/fingerprint_window.go"},
+	{"fpwinidx:", "window-print band index (one row per band key and file)", "internal/database/fingerprint_window.go"},
+	{"fpwinidx_meta:", "window-print band index member lists", "internal/database/fingerprint_window.go"},
 
 	// ── Metrics, counters, settings, system ──
 	{"asinbackfill:", "ASIN/ISBN backfill per-book miss markers", "internal/plugins/metafetch/asin_backfill.go"},

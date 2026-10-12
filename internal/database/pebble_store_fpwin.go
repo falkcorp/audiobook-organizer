@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
 // last-edited: 2026-10-11
 
@@ -35,6 +35,10 @@ import (
 //     the donor's windows onto the keeper before the donor is deleted.
 //   - Repoint of an untracked candidate: CarryOverFingerprintWindows from its
 //     p: ref to the new row's f: ref.
+//
+// Window index (02-PR8): every change to a tracked file's stored windows also
+// rewrites the file's fpwinidx: rows in the same batch; see
+// pebble_store_fpwinidx.go for the scheme and the list of paths.
 //
 // Locking: fpwinLocks is a stripe set keyed by window ref (lockWindowRefs). A
 // window write and the delete cascade of the SAME file take the same stripe
@@ -77,16 +81,47 @@ func (s *PebbleStore) PutFingerprintWindow(w *FingerprintWindow) error {
 
 	unlock := s.lockWindowRefs(row.Ref)
 	defer unlock()
-	if isFile {
-		ok, cerr := s.fileRowStillExists(fileID, hint)
-		if cerr != nil {
-			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, cerr)
+	if !isFile {
+		if err := s.db.Set(fpwinKey(&row), data, pebble.Sync); err != nil {
+			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
 		}
-		if !ok {
-			return fmt.Errorf("PutFingerprintWindow %s: %w: %s was deleted", row.Ref, ErrFingerprintWindowRowGone, fileID)
+		return nil
+	}
+	ok, cerr := s.fileRowStillExists(fileID, hint)
+	if cerr != nil {
+		return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, cerr)
+	}
+	if !ok {
+		return fmt.Errorf("PutFingerprintWindow %s: %w: %s was deleted", row.Ref, ErrFingerprintWindowRowGone, fileID)
+	}
+	// The file's window set after this write, for its index rows: the stored
+	// windows with this row in place of any it replaces.
+	stored, err := s.readFingerprintWindows(row.Ref)
+	if err != nil {
+		return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
+	}
+	key := string(fpwinKey(&row))
+	final := make([]FingerprintWindow, 0, len(stored)+1)
+	for i := range stored {
+		if string(fpwinKey(&stored[i])) != key {
+			final = append(final, stored[i])
 		}
 	}
-	if err := s.db.Set(fpwinKey(&row), data, pebble.Sync); err != nil {
+	final = append(final, row)
+	batch := s.db.NewBatch()
+	if err := batch.Set([]byte(key), data, nil); err != nil {
+		batch.Close()
+		return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
+	}
+	if err := s.stageWindowIndexDelete(batch, fileID); err != nil {
+		batch.Close()
+		return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
+	}
+	if _, err := stageWindowIndexWrite(batch, fileID, final); err != nil {
+		batch.Close()
+		return fmt.Errorf("PutFingerprintWindow %s: window index: %w", row.Ref, err)
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
 	}
 	return nil
@@ -237,6 +272,8 @@ func (s *PebbleStore) CarryOverFingerprintWindows(from []FingerprintWindowRef, t
 	if err != nil {
 		return 0, err
 	}
+	// final is the keeper's window set after the move, for its index rows.
+	final := append([]FingerprintWindow(nil), existing...)
 	taken := make(map[string]struct{}, len(existing))
 	for i := range existing {
 		taken[string(fpwinKey(&existing[i]))] = struct{}{}
@@ -267,11 +304,22 @@ func (s *PebbleStore) CarryOverFingerprintWindows(from []FingerprintWindowRef, t
 				return 0, err
 			}
 			taken[string(key)] = struct{}{}
+			final = append(final, w)
 			moved++
 		}
 		if _, err := s.stageFingerprintWindowDeletes(batch, ref); err != nil {
 			batch.Close()
 			return 0, err
+		}
+	}
+	if toIsFile && moved > 0 {
+		if err := s.stageWindowIndexDelete(batch, toFileID); err != nil {
+			batch.Close()
+			return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: %w", to, err)
+		}
+		if _, err := stageWindowIndexWrite(batch, toFileID, final); err != nil {
+			batch.Close()
+			return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: window index: %w", to, err)
 		}
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
@@ -411,6 +459,13 @@ func (s *PebbleStore) stageFingerprintWindowDeletes(batch *GatedBatch, ref Finge
 	if err := batch.Delete(fpwinFailKey(ref), nil); err != nil {
 		return 0, err
 	}
+	// The file's window-index rows go with its windows (02-PR8). A caller
+	// that writes a new set afterwards stages its rows after this.
+	if fileID, isFile := fileIDOfWindowRef(ref); isFile {
+		if err := s.stageWindowIndexDelete(batch, fileID); err != nil {
+			return 0, err
+		}
+	}
 	return len(keys), nil
 }
 
@@ -548,6 +603,13 @@ func (s *PebbleStore) ReplaceFingerprintWindows(ref FingerprintWindowRef, ws []F
 		for _, kv := range encoded {
 			if err := batch.Set(kv[0], kv[1], nil); err != nil {
 				return err
+			}
+		}
+		// commitRefWrite staged the old index rows' delete with the old
+		// windows; ws is the file's whole new set.
+		if fileID, isFile := fileIDOfWindowRef(ref); isFile {
+			if _, err := stageWindowIndexWrite(batch, fileID, ws); err != nil {
+				return fmt.Errorf("window index: %w", err)
 			}
 		}
 		return nil

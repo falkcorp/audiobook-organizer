@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.91.0
+// version: 1.92.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 package dedup
 
@@ -157,6 +157,13 @@ type Engine struct {
 	// CollectLSHAcoustID; set via SetLSHStore.
 	lshAcoustIDStore LSHAcoustIDStore
 
+	// windowAcoustIDStore feeds CollectWindowAcoustIDForBook (02-PR8); set via
+	// SetWindowStore. nil = the window_acoustid signal is off.
+	windowAcoustIDStore WindowAcoustIDStore
+	// windowStats accumulates the window collector's counts (incomparable
+	// pairs among them) across every scan this engine runs.
+	windowStats WindowCollectStats
+
 	// isbnIndexStore is the narrow interface used by checkExactISBN to
 	// perform O(1) prefix scans instead of O(N) full-book scans.
 	// Set via SetISBNIndexStore. When nil, checkExactISBN falls back to
@@ -248,6 +255,27 @@ func (de *Engine) SetAcoustIDBookFileStore(s ExactAcoustIDStore) {
 // In production the caller passes the same *database.PebbleStore as bookStore.
 func (de *Engine) SetLSHStore(s LSHAcoustIDStore) {
 	de.lshAcoustIDStore = s
+}
+
+// SetWindowStore wires the WindowAcoustIDStore the window-print collector
+// reads (02-PR8). registry_wire.go resolves it from the store with
+// database.AsCapability, since the decorator production uses does not carry
+// the index methods. The collector stays silent until the window index has
+// been built, so wiring it changes no score until then.
+func (de *Engine) SetWindowStore(s WindowAcoustIDStore) {
+	de.windowAcoustIDStore = s
+}
+
+// WindowStats returns the window collector's running counts.
+func (de *Engine) WindowStats() *WindowCollectStats {
+	return &de.windowStats
+}
+
+// windowAcoustIDConfig is the collector config the scan and rescore share.
+func (de *Engine) windowAcoustIDConfig() WindowAcoustIDConfig {
+	cfg := DefaultWindowAcoustIDConfig()
+	cfg.Stats = &de.windowStats
+	return cfg
 }
 
 // lshCandidateStore is the pair of methods AcoustIDScan's Tier-0 candidate
@@ -982,6 +1010,9 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 			allLSHAcoustSigs = append(allLSHAcoustSigs, sigs...)
 		}
 	}
+	// Window prints (02-PR8): one signal per candidate book across all of
+	// this book's files, so the supporting boost is added once per pair.
+	allWindowAcoustSigs := CollectWindowAcoustIDForBook(de.windowAcoustIDStore, bookFiles, book.ID, de.windowAcoustIDConfig())
 
 	// PH-3b: build O(1) embedding map so the per-candidate inner scan
 	// (previously O(k)) becomes a single map lookup.
@@ -999,16 +1030,17 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// Reusing the SAME collectPairSignals helper is what keeps the two scoring
 	// paths bit-identical — there is no second copy of the collection logic.
 	batches := pairSignalBatches{
-		exactHashSigs:   allExactHashSigs,
-		isbnSigs:        allISBNSigs,
-		metaSrcSigs:     allMetaSrcSigs,
-		durationSigs:    allDurationSigs,
-		exactAcoustSigs: allExactAcoustSigs,
-		lshAcoustSigs:   allLSHAcoustSigs,
-		embeddingMap:    embeddingMap,
-		embCfg:          embCfg,
-		fuzCfg:          fuzCfg,
-		authorName:      authorName,
+		exactHashSigs:    allExactHashSigs,
+		isbnSigs:         allISBNSigs,
+		metaSrcSigs:      allMetaSrcSigs,
+		durationSigs:     allDurationSigs,
+		exactAcoustSigs:  allExactAcoustSigs,
+		lshAcoustSigs:    allLSHAcoustSigs,
+		windowAcoustSigs: allWindowAcoustSigs,
+		embeddingMap:     embeddingMap,
+		embCfg:           embCfg,
+		fuzCfg:           fuzCfg,
+		authorName:       authorName,
 	}
 
 	// C7: accumulate suppression outcomes across the whole per-book scan so ONE
