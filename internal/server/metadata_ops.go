@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.39.2
+// version: 1.40.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-10-11
 //
@@ -409,13 +409,13 @@ func (s *Server) runBulkMetadataFetchAll(
 		resultStatus := out.Status()
 		sourceName := out.SourceName
 		providerKey := out.ProviderKey
-		cacheHit := out.CacheHit
 		switch resultStatus {
 		case metafetch.FetchStatusCached:
-			if !cacheHit {
-				if blob, merr := json.Marshal(out.Results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, out.SearchIdentity, blob, 0)
-				}
+			if werr := metafetch.WriteBackOutcome(store, bookID, out); werr != nil {
+				// Still found; only the book's own row is missing, so a later
+				// "fetch only what is missing" pass refetches it.
+				logging.Warn(gctx, "bulk-metadata-fetch: caching the result failed",
+					"book_id", bookID, "provider", providerKey, "error", werr)
 			}
 			found.Add(1)
 		case metafetch.FetchStatusFetchError:
@@ -449,7 +449,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		// The condition covers a FAILED live call too (sourceName is empty then):
 		// gating on success alone meant the pause was skipped exactly when a
 		// provider was throttling us, which is when backing off matters most.
-		if !cacheHit && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
+		if !out.FromCache() && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
 			select {
 			case <-gctx.Done():
 				return gctx.Err()
@@ -941,13 +941,13 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		resultStatus := out.Status()
 		sourceName := out.SourceName
 		providerKey := out.ProviderKey
-		cacheHit := out.CacheHit
 		switch resultStatus {
 		case metafetch.FetchStatusCached:
-			if !cacheHit {
-				if blob, merr := json.Marshal(out.Results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, out.SearchIdentity, blob, 0)
-				}
+			if werr := metafetch.WriteBackOutcome(store, bookID, out); werr != nil {
+				// Still found; only the book's own row is missing, so a later
+				// "fetch only what is missing" pass refetches it.
+				logging.Warn(gctx, "bulk-metadata-fetch: caching the result failed",
+					"book_id", bookID, "provider", providerKey, "error", werr)
 			}
 			found.Add(1)
 		case metafetch.FetchStatusFetchError:
@@ -979,7 +979,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		// The condition covers a FAILED live call too (sourceName is empty then):
 		// gating on success alone meant the pause was skipped exactly when a
 		// provider was throttling us, which is when backing off matters most.
-		if !cacheHit && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
+		if !out.FromCache() && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
 			select {
 			case <-gctx.Done():
 				return gctx.Err()

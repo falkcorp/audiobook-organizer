@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -256,18 +256,30 @@ func GetCachedMetadataFetch(store RawKVStore, bookID, source, identity string) (
 // fetched for; an empty identity returns ErrNoSearchIdentity and writes
 // nothing, because the row could never be read back.
 func PutCachedMetadataFetch(store RawKVStore, bookID, source, identity string, results json.RawMessage, bestScore float64) error {
+	return PutCachedMetadataFetchAt(store, bookID, source, identity, results, bestScore, time.Time{})
+}
+
+// PutCachedMetadataFetchAt is PutCachedMetadataFetch with the row's CachedAt
+// given: the time the provider produced the results. A copy of an older
+// answer (a shared provider-answer cache hit written back to the book's own
+// row) keeps that answer's age, so the TTL counts from when the provider
+// answered, not from when the answer was copied. Zero means now.
+func PutCachedMetadataFetchAt(store RawKVStore, bookID, source, identity string, results json.RawMessage, bestScore float64, cachedAt time.Time) error {
 	if bookID == "" || source == "" {
 		return nil
 	}
 	if identity == "" {
 		return ErrNoSearchIdentity
 	}
+	if cachedAt.IsZero() {
+		cachedAt = time.Now()
+	}
 	entry := CachedMetadataEntry{
 		BookID:         bookID,
 		Source:         util.NormalizeString(source),
 		Results:        results,
 		BestScore:      bestScore,
-		CachedAt:       time.Now().UTC(),
+		CachedAt:       cachedAt.UTC(),
 		SearchIdentity: identity,
 	}
 	blob, err := json.Marshal(entry)
