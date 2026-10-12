@@ -1,5 +1,5 @@
 // file: internal/tagger/verify_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b2c9e17-8a40-4d63-9f1e-d07a3c6b8e24
 // last-edited: 2026-10-11
 
@@ -65,6 +65,22 @@ func TestFoldTagKeys(t *testing.T) {
 	}
 	if len(in) != 5 {
 		t.Fatal("FoldTagKeys modified its input")
+	}
+}
+
+// "The key already upper-case wins" must hold even where the upper-case
+// spelling does not sort first: Georgian Mkhedruli "\u10d0" (U+10D0) upper-cases
+// to Mtavruli "\u1c90" (U+1C90), which sorts after it, so the exact upper-case
+// key arrives second and has to displace the lower-case spelling.
+func TestFoldTagKeys_UpperCaseKeyWinsWhenItSortsAfter(t *testing.T) {
+	t.Parallel()
+	lower, upper := "\u10d0", "\u1c90"
+	if strings.ToUpper(lower) != upper || lower >= upper {
+		t.Fatalf("fixture error: want %q to upper-case to %q and sort before it", lower, upper)
+	}
+	got := FoldTagKeys(map[string][]string{lower: {"lower"}, upper: {"UPPER"}})
+	if len(got) != 1 || len(got[upper]) != 1 || got[upper][0] != "UPPER" {
+		t.Fatalf("FoldTagKeys = %v; want the upper-case spelling's value", got)
 	}
 }
 

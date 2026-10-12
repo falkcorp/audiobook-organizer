@@ -8,8 +8,9 @@ case-insensitively, values as ordered lists). A mismatch returns
 differing key with the value wanted and the value read) and records a
 `FileEventObserved` event carrying that diff (bounded in length) and the
 file's post-write SHA-256 and size. The event is keyed on the `book_file` row
-when the file has one, else on the digest, so `AdoptOrphanEvents` can attach it
-later. The file stays as written. A caller that used to get `nil` from a lossy
+when the file has one, else on the digest (an orphan observation, found through
+`FindFileEventsByHash`; nothing in production attaches orphan observations to a
+row yet). The file stays as written. A caller that used to get `nil` from a lossy
 write now gets an error.
 
 Verified writers: `tagger.WriteTagsSafe` (the default build's
