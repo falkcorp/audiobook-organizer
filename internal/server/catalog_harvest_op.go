@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).
@@ -109,7 +109,12 @@ func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 		// all spend Audible's token bucket; DependsOn is one-directional
 		// ("must not be running for THIS op to start"), so each of the
 		// others carries the reverse entry for catalog.harvest-authors.
-		DependsOn:    []string{"metadata.candidate-fetch", "metafetch.asin-backfill"},
+		//
+		// catalog.coverage-report is listed too: it reads the author blocks
+		// this op writes and itself depends on this op, so each refuses to
+		// start while the other runs (the write-set gate does not consult
+		// Reads, so DependsOn is the only way to hold the harvest back).
+		DependsOn:    []string{"metadata.candidate-fetch", "metafetch.asin-backfill", catalogCoverageOpID},
 		Writes:       []opsregistry.Resource{opsregistry.ResCatalog},
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkAudible},
