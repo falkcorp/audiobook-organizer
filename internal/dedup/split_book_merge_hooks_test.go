@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge_hooks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c7e2f4a-9b13-4d58-a6e1-3f82d5b7c904
 // last-edited: 2026-10-12
 
@@ -153,6 +153,7 @@ func TestMergeSplitBookCluster_BeforeSourceStopsAtFirstSrc(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, merge.CombineJournalApplied, j.Status)
 	assert.Empty(t, j.Absorbed)
+	assert.Empty(t, j.SurvivorOwnFiles, "an undo of it touches nothing")
 }
 
 // OnJournal is told the journal id after the Pending journal is written and
