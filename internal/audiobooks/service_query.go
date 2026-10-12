@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -710,13 +710,13 @@ func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit 
 			// same id→name hydration as the memdb pushdown predicate — see
 			// buildAuthorSeriesNameMaps / hydrateAuthorSeriesNames in
 			// service_filtering.go (TODO 16b).
-			authorNames, seriesNames := svc.buildAuthorSeriesNameMaps(f.FieldFilters)
+			authorNames, seriesNames, creditNames := svc.buildAuthorSeriesNameMaps(f.FieldFilters)
 			rtFn := svc.runtimeFuncFor(f.FieldFilters)
 			var scratch database.Book // one per goroutine; this loop is sequential
 			fieldFiltered := make([]database.Book, 0, len(filtered))
 			for i := range filtered {
 				b := filtered[i]
-				if matchesFieldFiltersWithStrippedFallback(&b, cheapFF, strippedFF, fetchFull, &pebbleLookups, warnFn, authorNames, seriesNames, rtFn, &scratch) {
+				if matchesFieldFiltersWithStrippedFallback(&b, cheapFF, strippedFF, fetchFull, &pebbleLookups, warnFn, authorNames, seriesNames, creditNames, rtFn, &scratch) {
 					fieldFiltered = append(fieldFiltered, b)
 				}
 			}
