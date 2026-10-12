@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
 // last-edited: 2026-10-11
 
@@ -7,6 +7,7 @@ package deluge
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -102,10 +103,11 @@ func TestRunCentralization_HydratesBeforeWriteback(t *testing.T) {
 	}
 }
 
-// centralize copies with fileops.ReflinkOrCopy, which refuses an existing
-// destination, so a file already at RootDir/<basename> (another book's, or
-// one a torrent seeds from the library root) is never overwritten: the row is
-// counted an error, left pending, and the file keeps its bytes.
+// centralize copies through deluge.ImportToLibraryWith, whose copy step
+// refuses an existing destination with other bytes, so a file already at
+// RootDir/<basename> (another book's, or one a torrent seeds from the library
+// root) is never overwritten: the row is counted an error, left pending, and
+// the file keeps its bytes.
 func TestRunCentralization_ExistingDestinationNeverOverwritten(t *testing.T) {
 	root := t.TempDir()
 	srcPath := filepath.Join(t.TempDir(), "book.mp3")
@@ -226,5 +228,115 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 				t.Errorf("centralize created the row's directory (stat err %v)", err)
 			}
 		})
+	}
+}
+
+// A failed hydrate or a failed row update leaves no copy in the library. The
+// copy used to come before the hydrate, and nothing removed it when the row
+// update failed, so the orphan at RootDir/<basename> refused every later run
+// with EEXIST (a different-content check would not even apply: it was the
+// row's own bytes, stranded with nothing naming it). Now the hydrate comes
+// first and ImportToLibraryWith removes the copy it made, so the next run
+// imports the file.
+func TestRunCentralization_FailureLeavesNoOrphanCopy(t *testing.T) {
+	setup := func(t *testing.T) (dest string, row *database.BookFile) {
+		root := t.TempDir()
+		src := filepath.Join(t.TempDir(), "book.mp3")
+		if err := os.WriteFile(src, []byte("test data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		origRoot := config.AppConfig.RootDir
+		config.AppConfig.RootDir = root
+		t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+		return filepath.Join(root, "book.mp3"), &database.BookFile{ID: "f1", BookID: "b1", FilePath: src}
+	}
+	assertNoDest := func(t *testing.T, dest string) {
+		t.Helper()
+		if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+			t.Errorf("a copy was left at %s (lstat err %v)", dest, err)
+		}
+	}
+
+	t.Run("hydrate fails", func(t *testing.T) {
+		dest, row := setup(t)
+		store := &database.MockStore{
+			GetBookFilesNeedingDelugeImportCoreFunc: func() ([]database.BookFileCore, error) {
+				return []database.BookFileCore{row.Core()}, nil
+			},
+			GetBookFileByIDFunc: func(string, string) (*database.BookFile, error) { return nil, errors.New("read failed") },
+		}
+		if err := (&Plugin{store: store}).runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+			t.Fatalf("runCentralization: %v", err)
+		}
+		assertNoDest(t, dest)
+	})
+	t.Run("row update fails, then the next run imports it", func(t *testing.T) {
+		dest, row := setup(t)
+		fail := true
+		var updated *database.BookFile
+		store := &database.MockStore{
+			GetBookFilesNeedingDelugeImportCoreFunc: func() ([]database.BookFileCore, error) {
+				return []database.BookFileCore{row.Core()}, nil
+			},
+			GetBookFileByIDFunc: func(string, string) (*database.BookFile, error) { cp := *row; return &cp, nil },
+			UpdateBookFileFunc: func(_ string, f *database.BookFile) error {
+				if fail {
+					return errors.New("write failed")
+				}
+				updated = f
+				return nil
+			},
+		}
+		p := &Plugin{store: store}
+		if err := p.runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+			t.Fatalf("runCentralization: %v", err)
+		}
+		assertNoDest(t, dest)
+
+		fail = false
+		if err := p.runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+			t.Fatalf("second runCentralization: %v", err)
+		}
+		if updated == nil || updated.FilePath != dest {
+			t.Fatalf("the retry did not import the file: updated=%+v", updated)
+		}
+		if got, err := os.ReadFile(dest); err != nil || string(got) != "test data" {
+			t.Errorf("dest holds %q (err %v)", got, err)
+		}
+	})
+}
+
+// A source under a static protected prefix (config.ProtectedPaths here; the
+// iTunes library is the same rule) is never copied out and repointed, as
+// /discovery/import's ImportToLibraryWith refuses it. centralize used to copy
+// it: its own description is "moves Deluge-sourced audiobooks from protected
+// paths", and only a Deluge save path may be.
+func TestRunCentralization_StaticProtectedSourceNotCopied(t *testing.T) {
+	root := t.TempDir()
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "book.mp3")
+	if err := os.WriteFile(src, []byte("test data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origRoot, origProt := config.AppConfig.RootDir, config.AppConfig.ProtectedPaths
+	config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = root, []string{srcDir}
+	t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = origRoot, origProt })
+
+	row := database.BookFile{ID: "f1", BookID: "b1", FilePath: src}
+	store := &database.MockStore{
+		GetBookFilesNeedingDelugeImportCoreFunc: func() ([]database.BookFileCore, error) {
+			return []database.BookFileCore{row.Core()}, nil
+		},
+		GetBookFileByIDFunc: func(string, string) (*database.BookFile, error) { cp := row; return &cp, nil },
+		UpdateBookFileFunc: func(string, *database.BookFile) error {
+			t.Error("UpdateBookFile called: a static protected source must stay pending")
+			return nil
+		},
+	}
+	if err := (&Plugin{store: store}).runCentralization(context.Background(), nil, &centralizationTestReporter{}); err != nil {
+		t.Fatalf("runCentralization: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "book.mp3")); !os.IsNotExist(err) {
+		t.Errorf("a static protected source was copied into the library (lstat err %v)", err)
 	}
 }

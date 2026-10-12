@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -8,8 +8,8 @@ package deluge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -17,8 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
@@ -97,7 +95,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		fmt.Sprintf("Centralizing %d files (%d remaining)...", total, len(resumeSlice)),
 	)
 
-	var successCount, skipCount, inPlaceCount, protectedCount, errCount atomic.Int64
+	var successCount, skipCount, inPlaceCount, protectedCount, notLoadedCount, errCount atomic.Int64
 
 	// The protected-path predicate for in-place marking: the plugin's cache
 	// (register.go builds it as NewProtectedPathCache(client,
@@ -150,6 +148,9 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			case outcome == delugeclient.InPlaceProtected:
 				protectedCount.Add(1)
 				reporter.Logger().Info("file is its own library destination but protected; left pending", "id", bf.ID, "path", srcPath)
+			case outcome == delugeclient.InPlaceListNotLoaded:
+				notLoadedCount.Add(1)
+				reporter.Logger().Info("file is its own library destination and the Deluge protected list has not loaded; left pending", "id", bf.ID, "path", srcPath)
 			default:
 				// Moved, removed or marked by another writer meanwhile.
 				skipCount.Add(1)
@@ -157,27 +158,12 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			return nil
 		}
 
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			errCount.Add(1)
-			checkpoint.LastError = fmt.Sprintf("mkdir %s: %v", destDir, err)
-			reporter.Logger().Error("mkdir failed", "path", destDir, "error", err)
-			return nil // non-fatal
-		}
-
-		// Clone into the central library. This used to call a local
-		// reflinkCopy that was a permanent stub returning an error, so every
-		// file this op ever centralized was byte-copied in full even though
-		// the pool supports cloning.
-		if err := fileops.ReflinkOrCopy(srcPath, dest); err != nil {
-			errCount.Add(1)
-			checkpoint.LastError = fmt.Sprintf("copy %s: %v", srcPath, err)
-			reporter.Logger().Error("copy failed", "src", srcPath, "dest", dest, "error", err)
-			return nil // non-fatal
-		}
-
-		// Hydrate the full row before writing back — bf is the Core (memdb-slim)
-		// projection, and a naive UpdateBookFile(bf.ID, bf) here would silently
-		// wipe the fingerprint-diagnostic fields (STOREFID PR-D).
+		// Hydrate the full row first -- bf is the Core (memdb-slim)
+		// projection, and writing it back would silently wipe the
+		// fingerprint-diagnostic fields (STOREFID PR-D) -- and before
+		// anything touches the disk, so a failed read leaves no copy behind.
+		// It used to come after the copy: a failed hydrate left an orphan at
+		// dest that refused every later run with EEXIST.
 		full, hydrateErr := p.store.GetBookFileByID(bf.BookID, bf.ID)
 		if hydrateErr != nil || full == nil {
 			errCount.Add(1)
@@ -186,25 +172,38 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			return nil // non-fatal
 		}
 
-		now := time.Now()
-		full.DelugeOriginalPath = srcPath
-		full.FilePath = dest
-		full.ImportedFromDelugeAt = &now
-
-		if err := p.store.UpdateBookFile(full.ID, full); err != nil {
+		// The importer /discovery/import and maintenance.bulk-deluge-import
+		// use: it holds the destination lock, refuses a destination another
+		// book_file row names and a source under a static protected prefix
+		// (iTunes, config.ProtectedPaths -- this op used to copy those out
+		// and repoint them), never overwrites, removes its copy when the row
+		// update fails (so a retry is not refused by an orphan), and asks
+		// Deluge to move the torrent's storage when that is enabled.
+		newPath, importErr := delugeclient.ImportToLibraryWith(cfg, p.client, p.store, full, delugeclient.ImportOptions{
+			Protected:          protected,
+			ExpectedBookFileID: full.ID,
+		})
+		switch {
+		case errors.Is(importErr, tagger.ErrProtectedListNotLoaded):
+			// Checked before ErrProtectedPathWrite, which it also wraps.
+			notLoadedCount.Add(1)
+			reporter.Logger().Info("file left pending: the Deluge protected list has not loaded", "id", bf.ID, "path", srcPath)
+			return nil
+		case errors.Is(importErr, tagger.ErrProtectedPathWrite):
+			protectedCount.Add(1)
+			reporter.Logger().Info("file is protected; left pending", "id", bf.ID, "path", srcPath, "reason", importErr)
+			return nil
+		case importErr != nil:
 			errCount.Add(1)
-			checkpoint.LastError = fmt.Sprintf("update book file: %v", err)
-			reporter.Logger().Error("update book file failed", "id", bf.ID, "error", err)
+			checkpoint.LastError = fmt.Sprintf("import %s: %v", srcPath, importErr)
+			if newPath != "" {
+				reporter.Logger().Error("import failed and its copy could not be removed", "id", bf.ID, "src", srcPath, "left_at", newPath, "error", importErr)
+			} else {
+				reporter.Logger().Error("import failed", "id", bf.ID, "src", srcPath, "dest", dest, "error", importErr)
+			}
 			return nil // non-fatal
 		}
-
-		if cfg.DelugeMoveEnabled && bf.DelugeHash != "" && p.client != nil {
-			if moveErr := p.client.MoveStorage([]string{bf.DelugeHash}, filepath.Dir(dest)); moveErr != nil {
-				reporter.Logger().Warn("deluge move_storage failed", "hash", bf.DelugeHash, "error", moveErr)
-			} else {
-				logging.Info(ctx, "deluge move_storage succeeded", "hash", bf.DelugeHash, "dir", filepath.Dir(dest))
-			}
-		}
+		dest = newPath
 
 		n := successCount.Add(1)
 		checkpoint.ProcessedFiles = globalIdx + 1
@@ -219,11 +218,13 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		"succeeded", successCount.Load(),
 		"already_in_library", inPlaceCount.Load(),
 		"protected", protectedCount.Load(),
+		"protected_list_not_loaded", notLoadedCount.Load(),
 		"skipped", skipCount.Load(),
 		"errors", errCount.Load())
 	sdk.NewProgress(reporter, total).Done(
-		fmt.Sprintf("Done: %d succeeded, %d already in library (marked imported), %d protected (left pending), %d skipped, %d errors",
-			successCount.Load(), inPlaceCount.Load(), protectedCount.Load(), skipCount.Load(), errCount.Load()),
+		fmt.Sprintf("Done: %d succeeded, %d already in library (marked imported), %d protected (left pending), "+
+			"%d left pending (Deluge protected list not loaded), %d skipped, %d errors",
+			successCount.Load(), inPlaceCount.Load(), protectedCount.Load(), notLoadedCount.Load(), skipCount.Load(), errCount.Load()),
 	)
 	return runErr
 }
