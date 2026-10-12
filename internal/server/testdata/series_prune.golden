@@ -1,0 +1,135 @@
+{
+  "preview": {
+    "groups": [
+      {
+        "name": "Series One",
+        "canonical_id": 1,
+        "merge_ids": [
+          2
+        ],
+        "book_count": 3,
+        "type": "duplicate"
+      },
+      {
+        "name": "Series Two",
+        "canonical_id": 3,
+        "merge_ids": [
+          4
+        ],
+        "book_count": 1,
+        "type": "duplicate"
+      },
+      {
+        "name": "series three",
+        "canonical_id": 6,
+        "merge_ids": [
+          5
+        ],
+        "book_count": 1,
+        "type": "duplicate"
+      },
+      {
+        "name": "Series Seven",
+        "canonical_id": 10,
+        "merge_ids": [
+          11
+        ],
+        "book_count": 0,
+        "type": "duplicate"
+      },
+      {
+        "name": "series two ",
+        "canonical_id": 4,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      },
+      {
+        "name": "Series Three",
+        "canonical_id": 5,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      },
+      {
+        "name": "Series Four",
+        "canonical_id": 7,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      },
+      {
+        "name": "Series Five",
+        "canonical_id": 8,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      },
+      {
+        "name": "Series Six",
+        "canonical_id": 9,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      },
+      {
+        "name": "Series Seven",
+        "canonical_id": 10,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      },
+      {
+        "name": "SERIES SEVEN",
+        "canonical_id": 11,
+        "merge_ids": null,
+        "book_count": 0,
+        "type": "orphan"
+      }
+    ],
+    "duplicate_count": 4,
+    "orphan_count": 7,
+    "total_count": 11
+  },
+  "error": "series prune recorded 1 error(s) (2 series merged, 2 orphans deleted, 2 books repointed): series 4 (\"series two \"): 1 book(s) still reference it after reassigning 0 to 3 (trashed rows, which cannot be repointed, or rows the reference count sees and this run could not); REFUSING to delete it, which would leave them holding a series row that no longer exists",
+  "series": [
+    "1 \"Series One\" held=false",
+    "3 \"Series Two\" held=false",
+    "4 \"series two \" held=false",
+    "5 \"Series Three\" held=true",
+    "6 \"series three\" held=false",
+    "8 \"Series Five\" held=false",
+    "9 \"Series Six\" held=true"
+  ],
+  "books": {
+    "b01": "1",
+    "b02": "1",
+    "b03": "1",
+    "b04": "1",
+    "b05": "3",
+    "b06": "4",
+    "b07": "6",
+    "b08": "8"
+  },
+  "changes": [
+    "series_delete||orphan_series|10: Series Seven|deleted (0 book references, any state)",
+    "series_delete||orphan_series|7: Series Four|deleted (0 book references, any state)",
+    "series_delete||series|11: SERIES SEVEN|merged into 10: Series Seven",
+    "series_delete||series|2: series one|merged into 1: Series One",
+    "series_merge|b03|series_id|2 (series one)|1 (Series One)",
+    "series_merge|b04|series_id|2 (series one)|1 (Series One)",
+    "series_prune_summary||summary|11 total series scanned|Series prune complete: 2 duplicates merged, 2 orphans deleted (4 total cleaned, 1 errors)"
+  ],
+  "progress": [
+    "info 2 held series rows were kept (an undo links books back to them)",
+    "info Invalidated the cached series list (4 rows removed, 2 books repointed)",
+    "info Phase 1 complete: merged 2 duplicate series from 3 groups",
+    "info Reference scan: 5 series are referenced by at least one book (any state)",
+    "info Series prune complete: 2 duplicates merged, 2 orphans deleted (4 total cleaned, 1 errors)",
+    "info Starting series auto-prune...",
+    "progress 0/13 Scanning 11 series... (0/13 0.00%)",
+    "progress 12/13 Scanning for orphan series... (12/13 92.31%)",
+    "progress 13/13 Series prune complete: 2 duplicates merged, 2 orphans deleted (4 total cleaned, 1 errors) (13/13 100.00%)",
+    "warn Errors: series 4 (\"series two \"): 1 book(s) still reference it after reassigning 0 to 3 (trashed rows, which cannot be repointed, or rows the reference count sees and this run could not); REFUSING to delete it, which would leave them holding a series row that no longer exists"
+  ]
+}
