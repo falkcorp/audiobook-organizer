@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
 // last-edited: 2026-10-11
 
@@ -1493,5 +1493,27 @@ func TestLinkBackfill_RelinkFixerWouldLinkCounted(t *testing.T) {
 				t.Errorf("order note present = %v, want %v: %v", hasNote, tc.want > 0, res.Notes)
 			}
 		})
+	}
+}
+
+// would_link counts rows, not torrents, and matches what the live run links.
+func TestLinkBackfill_PreviewCountsRowsLikeLive(t *testing.T) {
+	f := newLinkFixture(t)
+	c2 := []byte("example audio bytes, chapter two")
+	tor := f.torrent(t, 1, f.downloads, tfile{"Example Book/01.mp3", exampleAudio}, tfile{"Example Book/02.mp3", c2})
+	rows := []database.BookFile{f.libraryRow("bf-1", "01.mp3", exampleAudio), f.libraryRow("bf-2", "02.mp3", c2)}
+	rows[1].BookID = rows[0].BookID
+	_, client := newFakeDelugeClient(t, tor)
+
+	preview, err := runLink(t, &Plugin{client: client, store: newLinkMock(rows...)}, `{}`)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	live, err := runLink(t, &Plugin{client: client, store: newLinkMock(rows...)}, `{"dry_run":false}`)
+	if err != nil {
+		t.Fatalf("live: %v", err)
+	}
+	if p, l := linkedCount(t, preview), linkedCount(t, live); p != 2 || l != 2 {
+		t.Errorf("would_link=%d linked=%d, want 2 and 2", p, l)
 	}
 }
