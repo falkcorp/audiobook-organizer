@@ -1,7 +1,7 @@
 // file: internal/audioext/audioext_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c5f1959-a0d9-45e7-8b2d-0420aff37b6e
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package audioext
 
@@ -33,7 +33,7 @@ func TestDefaultIsTheCanonicalList(t *testing.T) {
 func TestDefaultCarriesTheDRMAndLongTailExtensions(t *testing.T) {
 	set := DefaultSet()
 	for _, ext := range []string{".aax", ".aaxc", ".aiff", ".aif", ".mka", ".oga", ".wav", ".wma"} {
-		if !set.Has(ext) {
+		if !set[ext] {
 			t.Errorf("DefaultSet() is missing %q", ext)
 		}
 	}
@@ -43,7 +43,7 @@ func TestDefaultCarriesTheDRMAndLongTailExtensions(t *testing.T) {
 // decision so that adding it becomes a conscious edit to a failing test
 // rather than a one-word change nobody notices.
 func TestDefaultExcludesMP4(t *testing.T) {
-	if DefaultSet().Has(".mp4") {
+	if DefaultSet()[".mp4"] {
 		t.Fatal("Default() must not contain .mp4: it feeds the ingest scanner, " +
 			"and .mp4 is overwhelmingly a video container")
 	}
@@ -75,7 +75,7 @@ func TestResolveFailsOpenOnEmptyInput(t *testing.T) {
 				t.Fatalf("Resolve(%v) has %d extensions, want the %d-entry default set",
 					in, len(got), len(canonicalExtensions))
 			}
-			if !got.Has(".aax") || !got.Has(".mp3") {
+			if !got[".aax"] || !got[".mp3"] {
 				t.Fatalf("Resolve(%v) = %v, want the compiled-in default", in, got.Sorted())
 			}
 		})
@@ -87,7 +87,7 @@ func TestResolveUsesConfiguredListWhenNonEmpty(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("Resolve() = %v, want exactly the 2 configured extensions", got.Sorted())
 	}
-	if got.Has(".aax") {
+	if got[".aax"] {
 		t.Fatal("Resolve() fell back to the default even though a list was configured")
 	}
 }

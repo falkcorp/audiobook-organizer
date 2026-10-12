@@ -1,7 +1,7 @@
 // file: internal/syncapi/progress/policy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f93d8147-df19-4993-a09b-39f727b522ad
-// last-edited: 2026-07-30
+// last-edited: 2026-10-12
 
 // Package progress implements the ABS-sync progress conflict-resolution policy
 // from docs/specs/2026-07-29-abs-sync-api-design.md §5, §5b and §1.8.7 as pure,
@@ -13,7 +13,7 @@
 // deterministically unit-testable ahead of the Phase-6 UserBookState /
 // UserPosition store adapter and the handlers that will eventually call it.
 // This package is modeled on the sibling pure package internal/audioutil
-// (CumulativeOffsets, SynthesizeChapters).
+// (SynthesizeChapters).
 //
 // Every rule below exists because a real client silently loses data without it;
 // the per-function doc comments cite the spec section and, where the spec cites

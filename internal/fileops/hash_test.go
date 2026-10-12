@@ -1,7 +1,7 @@
 // file: internal/fileops/hash_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package fileops
 
@@ -157,67 +157,5 @@ func TestComputeFileHashAndSize_LargeFile(t *testing.T) {
 	}
 	if len(hash) != 64 {
 		t.Errorf("Expected hash length 64, got %d", len(hash))
-	}
-}
-
-func TestGetFileSize(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-
-	content := []byte("Test content")
-	if err := os.WriteFile(testFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	size, err := GetFileSize(testFile)
-	if err != nil {
-		t.Fatalf("GetFileSize failed: %v", err)
-	}
-
-	expectedSize := int64(len(content))
-	if size != expectedSize {
-		t.Errorf("Expected size %d, got %d", expectedSize, size)
-	}
-}
-
-func TestGetFileSize_EmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	emptyFile := filepath.Join(tmpDir, "empty.txt")
-
-	if err := os.WriteFile(emptyFile, []byte{}, 0644); err != nil {
-		t.Fatalf("Failed to create empty file: %v", err)
-	}
-
-	size, err := GetFileSize(emptyFile)
-	if err != nil {
-		t.Fatalf("GetFileSize failed: %v", err)
-	}
-
-	if size != 0 {
-		t.Errorf("Expected size 0 for empty file, got %d", size)
-	}
-}
-
-func TestGetFileSize_NonExistentFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	nonExistent := filepath.Join(tmpDir, "nonexistent.txt")
-
-	_, err := GetFileSize(nonExistent)
-	if err == nil {
-		t.Error("Expected error for non-existent file")
-	}
-}
-
-func TestGetFileSize_Directory(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	size, err := GetFileSize(tmpDir)
-	if err != nil {
-		t.Fatalf("GetFileSize failed for directory: %v", err)
-	}
-
-	// Directories have a size (typically small, representing metadata)
-	if size < 0 {
-		t.Errorf("Expected non-negative size, got %d", size)
 	}
 }

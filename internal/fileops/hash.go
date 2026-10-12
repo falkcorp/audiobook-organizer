@@ -1,7 +1,7 @@
 // file: internal/fileops/hash.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package fileops
 
@@ -50,13 +50,4 @@ func ComputeFileHashAndSize(filePath string) (string, int64, error) {
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), info.Size(), nil
-}
-
-// GetFileSize returns the size of a file in bytes
-func GetFileSize(filePath string) (int64, error) {
-	info, err := os.Stat(filePath)
-	if err != nil {
-		return 0, err
-	}
-	return info.Size(), nil
 }

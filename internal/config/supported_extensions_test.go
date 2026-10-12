@@ -1,7 +1,7 @@
 // file: internal/config/supported_extensions_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 505e0a00-d587-4090-b366-3eaea1af006c
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package config
 
@@ -36,7 +36,7 @@ func TestSupportedExtensionSetFailsOpenOnNilConfig(t *testing.T) {
 			"to the compiled-in audioext.Default list")
 	}
 	for _, ext := range audioext.Default() {
-		if !got.Has(ext) {
+		if !got[ext] {
 			t.Errorf("fallback set is missing %q", ext)
 		}
 	}
@@ -45,7 +45,7 @@ func TestSupportedExtensionSetFailsOpenOnNilConfig(t *testing.T) {
 // The same hole reached the other way: a user writing `supported_extensions: []`.
 func TestSupportedExtensionSetFailsOpenOnEmptyConfig(t *testing.T) {
 	withSupportedExtensions(t, []string{})
-	if !SupportedExtensionSet().Has(".aax") {
+	if !SupportedExtensionSet()[".aax"] {
 		t.Fatal("an explicitly empty supported_extensions must fall back to the default set")
 	}
 }
@@ -53,10 +53,10 @@ func TestSupportedExtensionSetFailsOpenOnEmptyConfig(t *testing.T) {
 func TestSupportedExtensionSetHonoursAConfiguredList(t *testing.T) {
 	withSupportedExtensions(t, []string{".mp3"})
 	got := SupportedExtensionSet()
-	if !got.Has(".mp3") {
+	if !got[".mp3"] {
 		t.Fatal("configured .mp3 not present")
 	}
-	if got.Has(".aax") {
+	if got[".aax"] {
 		t.Fatal("SupportedExtensionSet() fell back to the default despite a configured list")
 	}
 }
@@ -92,7 +92,7 @@ func TestInitConfigIgnoresAnExplicitlyEmptyExtensionList(t *testing.T) {
 		t.Fatal("an empty supported_extensions was written straight into AppConfig; " +
 			"the len > 0 guard is gone")
 	}
-	if !audioext.NewSet(got).Has(".aax") {
+	if !audioext.NewSet(got)[".aax"] {
 		t.Fatalf("expected the compiled-in default after an empty list, got %v", got)
 	}
 	viper.Reset()

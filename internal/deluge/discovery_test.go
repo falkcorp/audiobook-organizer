@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 //
 // Tests for the four-tier discovery matching helpers in internal/deluge/discovery.go.
 
@@ -206,6 +206,6 @@ func TestAudioExtensions_ContainsExpectedFormats(t *testing.T) {
 		".aaxc", ".aiff", ".aif", ".mka", ".oga", ".wma"}
 	got := AudioExtensions()
 	for _, ext := range expected {
-		assert.True(t, got.Has(ext), "AudioExtensions should contain %q", ext)
+		assert.True(t, got[ext], "AudioExtensions should contain %q", ext)
 	}
 }

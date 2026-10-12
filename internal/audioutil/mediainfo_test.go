@@ -1,7 +1,7 @@
 // file: internal/audioutil/mediainfo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 98daa3c4-1532-4a6d-870b-49e528645a14
-// last-edited: 2026-08-31
+// last-edited: 2026-10-12
 
 package audioutil
 
@@ -49,12 +49,24 @@ func writeWAV(t *testing.T, dir string, durSec float64) string {
 	return p
 }
 
+// mediaInfoAvailable and ffprobeAvailable gate the tests below on the tool
+// being installed (and, for mediainfo, not disabled by the kill switch).
+func mediaInfoAvailable() bool {
+	_, err := LookupMediaInfo()
+	return err == nil
+}
+
+func ffprobeAvailable() bool {
+	_, err := LookupFFprobe()
+	return err == nil
+}
+
 // THE test. mediainfo exits 0 with empty stdout for a file it cannot parse and
 // for one that does not exist, so exit status carries no information. If this
 // ever returns (0, nil), every unreadable file in the library is recorded as a
 // successfully-probed zero-length one and the ffprobe fallback never runs.
 func TestMediaInfoEmptyOutputIsAnErrorNotZero(t *testing.T) {
-	if !MediaInfoAvailable() {
+	if !mediaInfoAvailable() {
 		t.Skip("mediainfo not installed")
 	}
 	bin, err := LookupMediaInfo()
@@ -86,7 +98,7 @@ func TestMediaInfoEmptyOutputIsAnErrorNotZero(t *testing.T) {
 }
 
 func TestMediaInfoReadsRealDuration(t *testing.T) {
-	if !MediaInfoAvailable() {
+	if !mediaInfoAvailable() {
 		t.Skip("mediainfo not installed")
 	}
 	bin, _ := LookupMediaInfo()
@@ -104,7 +116,7 @@ func TestMediaInfoReadsRealDuration(t *testing.T) {
 // mediainfo and ffprobe must agree, or swapping the primary silently changes
 // every duration in the library.
 func TestMediaInfoAndFFprobeAgree(t *testing.T) {
-	if !MediaInfoAvailable() || !FFprobeAvailable() {
+	if !mediaInfoAvailable() || !ffprobeAvailable() {
 		t.Skip("need both mediainfo and ffprobe")
 	}
 	p := writeWAV(t, t.TempDir(), 3.5)
@@ -123,11 +135,11 @@ func TestMediaInfoAndFFprobeAgree(t *testing.T) {
 
 // ProbeDurationSeconds must still answer when mediainfo cannot.
 func TestProbeDurationFallsBackToFFprobe(t *testing.T) {
-	if !FFprobeAvailable() {
+	if !ffprobeAvailable() {
 		t.Skip("ffprobe not installed")
 	}
 	t.Setenv(disableMediaInfoEnv, "1")
-	if MediaInfoAvailable() {
+	if mediaInfoAvailable() {
 		t.Fatal("kill switch did not disable mediainfo")
 	}
 	p := writeWAV(t, t.TempDir(), 1.5)
@@ -141,13 +153,13 @@ func TestProbeDurationFallsBackToFFprobe(t *testing.T) {
 }
 
 func TestKillSwitchValues(t *testing.T) {
-	if !MediaInfoAvailable() {
+	if !mediaInfoAvailable() {
 		t.Skip("mediainfo not installed")
 	}
 	for _, v := range []string{"1", "true", "yes"} {
 		t.Run("disabled_"+v, func(t *testing.T) {
 			t.Setenv(disableMediaInfoEnv, v)
-			if MediaInfoAvailable() {
+			if mediaInfoAvailable() {
 				t.Fatalf("%q should disable mediainfo", v)
 			}
 		})
@@ -155,20 +167,10 @@ func TestKillSwitchValues(t *testing.T) {
 	for _, v := range []string{"", "0", "false", "FALSE"} {
 		t.Run("enabled_"+v, func(t *testing.T) {
 			t.Setenv(disableMediaInfoEnv, v)
-			if !MediaInfoAvailable() {
+			if !mediaInfoAvailable() {
 				t.Fatalf("%q should leave mediainfo enabled", v)
 			}
 		})
-	}
-}
-
-func TestDurationProbeAvailableAcceptsEitherTool(t *testing.T) {
-	if !DurationProbeAvailable() {
-		t.Skip("neither prober installed")
-	}
-	t.Setenv(disableMediaInfoEnv, "1")
-	if FFprobeAvailable() && !DurationProbeAvailable() {
-		t.Fatal("ffprobe alone must satisfy DurationProbeAvailable")
 	}
 }
 
@@ -177,7 +179,7 @@ func TestDurationProbeAvailableAcceptsEitherTool(t *testing.T) {
 // and fails too — but the error the caller sees must come from ffprobe. If the
 // fallback were removed, this error would name mediainfo instead.
 func TestProbeDurationSurfacesFFprobeErrorAfterMediaInfoFails(t *testing.T) {
-	if !MediaInfoAvailable() || !FFprobeAvailable() {
+	if !mediaInfoAvailable() || !ffprobeAvailable() {
 		t.Skip("need both mediainfo and ffprobe")
 	}
 	dir := t.TempDir()
