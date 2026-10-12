@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.12.1
+// version: 1.13.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -1075,5 +1075,88 @@ describe('RepairsPanel — view modes', () => {
     // The finished apply clears the selection, as Apply selected does.
     await screen.findByTestId('repairs-apply-result');
     expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('0 selected');
+  });
+});
+
+// The split-book fixer (dedup.split-books) that replaces the old Split Books
+// tab: a cluster row marks its suggested keep among its books, and a cluster
+// with an iTunes book is listed as skipped with the reason "iTunes".
+describe('RepairsPanel — split books', () => {
+  const SPLIT_FIXER: RepairFixer = {
+    id: 'dedup.split-books',
+    title: 'Split books',
+    description: 'One book stored as several short books, one per chapter file, in one folder.',
+    last_plan: {
+      operation_id: 'plan-split',
+      status: 'completed',
+      queued_at: '2026-10-12T10:00:00Z',
+      completed_at: '2026-10-12T10:01:00Z',
+      total: 2,
+      applicable: 1,
+    },
+  };
+  const CLUSTER = row('split:a', {
+    class: 'parent',
+    book_ids: ['K', 'F1', 'F2'],
+    title: 'Book One',
+    members: [
+      { book_id: 'K', title: 'Book One 01', role: 'keep', files: 1 },
+      { book_id: 'F1', title: 'Book One 02', role: 'fragment', files: 1 },
+      { book_id: 'F2', title: 'Book One 03', role: 'fragment', files: 1 },
+    ],
+  });
+  const ITUNES = row('split:b', {
+    class: 'parent',
+    book_ids: ['T1', 'T2', 'T3'],
+    title: 'Book Two',
+    skipped: 'skipped_itunes',
+    skip_reason: 'iTunes',
+  });
+
+  beforeEach(() => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([SPLIT_FIXER]);
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+        const all = q.filter === 'applicable' ? [CLUSTER] : q.filter.startsWith('skipped') ? [ITUNES] : [];
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-10-12T10:01:00Z',
+          filter: q.filter,
+          offset: q.offset,
+          limit: q.limit,
+          total: all.length,
+          applicable: 1,
+          skipped_by_kind: { skipped_itunes: 1 },
+          rows: all.slice(q.offset, q.offset + q.limit),
+        };
+      }
+    );
+  });
+
+  it('lists the fixer titled Split books and marks the suggested keep among the cluster books', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const fixer = await screen.findByTestId('repairs-fixer-dedup.split-books');
+    expect(within(fixer).getByText('Split books')).toBeInTheDocument();
+    const r = await screen.findByTestId('repairs-row-split:a');
+    await expandRow(user, 'split:a');
+    const toggle = within(r).getByTestId('repairs-row-members-split:a');
+    expect(toggle).toHaveTextContent('3 books in this row');
+    await user.click(toggle);
+    expect(within(r).getByRole('link', { name: 'Book One 01' })).toHaveAttribute('href', '/library/K');
+    expect(within(r).getAllByText(/^keep · 1 file$/)).toHaveLength(1);
+    expect(within(r).getAllByText(/^fragment · 1 file$/)).toHaveLength(2);
+  });
+
+  it('lists a cluster with an iTunes book as skipped with the reason iTunes', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-split:a');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    const skipped = await screen.findByTestId('repairs-row-split:b');
+    expect(within(skipped).getByText('iTunes')).toBeInTheDocument();
+    expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repairs-skip-kind-skipped_itunes')).toHaveTextContent('iTunes library (hands-off) (1)');
   });
 });
