@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_fieldfilter_authorseries_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d4c2e91-8a3f-4b6d-9e5c-1f2a3b4c5d6e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -153,4 +153,109 @@ func TestFieldFilterSeries_MemdbHydration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, got)
+}
+
+// b5SeedCoAuthoredBook adds a book whose primary is authorA and whose second
+// credit is authorB, in credit order, to the fixture's store.
+func b5SeedCoAuthoredBook(t *testing.T, ps *database.PebbleStore, fx b5AuthorSeriesFixture) string {
+	t.Helper()
+	book, err := ps.CreateBook(&database.Book{Title: "Synthetic Co-Authored", AuthorID: &fx.authorAID})
+	require.NoError(t, err)
+	require.NoError(t, ps.SetBookAuthors(book.ID, []database.BookAuthor{
+		{BookID: book.ID, AuthorID: fx.authorAID, Role: "author", Position: 0},
+		{BookID: book.ID, AuthorID: fx.authorBID, Role: "co-author", Position: 1},
+	}))
+	return book.ID
+}
+
+func b5AuthorFilterIDs(t *testing.T, svc *AudiobookService, ff FieldFilter) []string {
+	t.Helper()
+	got, err := svc.GetAudiobooks(context.Background(), 1000, 0, "", nil, nil, ListFilters{FieldFilters: []FieldFilter{ff}})
+	require.NoError(t, err)
+	ids := make([]string, 0, len(got))
+	for _, b := range got {
+		ids = append(ids, b.ID)
+	}
+	return ids
+}
+
+func b5AuthorFilterSvc(t *testing.T) (*AudiobookService, b5AuthorSeriesFixture, string) {
+	t.Helper()
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+	fx := b5SeedAuthorSeriesBooks(t, ps)
+	co := b5SeedCoAuthoredBook(t, ps, fx)
+	return NewAudiobookService(ps), fx, co
+}
+
+// author:<second credit> matches the co-authored book, and still matches
+// the book that credits that author as its only author.
+func TestAuthorFilter_MatchesSecondCredit(t *testing.T) {
+	svc, fx, co := b5AuthorFilterSvc(t)
+	ids := b5AuthorFilterIDs(t, svc, FieldFilter{Field: "author", Value: "Herbert"})
+	require.ElementsMatch(t, []string{fx.bookBID, co}, ids)
+	count, err := svc.CountAudiobooksFiltered(context.Background(), ListFilters{
+		FieldFilters: []FieldFilter{{Field: "author", Value: "Herbert"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+}
+
+func TestAuthorFilter_PrimaryStillMatches(t *testing.T) {
+	svc, fx, co := b5AuthorFilterSvc(t)
+	ids := b5AuthorFilterIDs(t, svc, FieldFilter{Field: "author", Value: "Le Guin"})
+	require.ElementsMatch(t, []string{fx.bookAID, co}, ids)
+}
+
+// -author:<second credit> excludes the co-authored book: a negated filter
+// holds only when NO credit matches.
+func TestAuthorFilter_NegationRequiresNoCreditMatch(t *testing.T) {
+	svc, fx, co := b5AuthorFilterSvc(t)
+	ids := b5AuthorFilterIDs(t, svc, FieldFilter{Field: "author", Value: "Herbert", Negated: true})
+	require.Equal(t, []string{fx.bookAID}, ids)
+	require.NotContains(t, ids, co)
+}
+
+// A book with no junction rows behaves exactly as before: its primary author
+// (resolved from AuthorID) is the only value.
+func TestAuthorFilter_NoCreditsFallsBackToPrimary(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+	fx := b5SeedAuthorSeriesBooks(t, ps)
+	bare, err := ps.CreateBook(&database.Book{Title: "Synthetic No Credits", AuthorID: &fx.authorBID})
+	require.NoError(t, err)
+	svc := NewAudiobookService(ps)
+
+	ids := b5AuthorFilterIDs(t, svc, FieldFilter{Field: "author", Value: "Herbert"})
+	require.ElementsMatch(t, []string{fx.bookBID, bare.ID}, ids)
+	require.NotContains(t, b5AuthorFilterIDs(t, svc, FieldFilter{Field: "author", Value: "Le Guin"}), bare.ID)
+}
+
+// A regex is tried against each name on its own: author:^A B$ must not match
+// a book credited to A and B.
+func TestAuthorFilter_RegexDoesNotSpanNames(t *testing.T) {
+	credits := func(id string) []string {
+		if id == "co" {
+			return []string{"Synthetic A", "Synthetic B"}
+		}
+		return nil
+	}
+	book := database.Book{ID: "co", Author: &database.Author{Name: "Synthetic A"}}
+	match := func(value string) bool {
+		cf, err := compileFieldFilter(FieldFilter{Field: "author", Value: value})
+		require.NoError(t, err)
+		return fieldMatchesCompiled(&book, &cf, nil, credits)
+	}
+	require.False(t, match("/^Synthetic A Synthetic B$/"), "a regex must not see the names joined")
+	require.False(t, match("/^Synthetic A, Synthetic B$/"))
+	require.True(t, match("/^Synthetic B$/"), "an anchored regex matches the second credit alone")
+	require.True(t, match("/^Synthetic A$/"))
+
+	vals, known := bookFieldValues(book, "author", credits)
+	require.True(t, known)
+	require.Equal(t, []string{"Synthetic A", "Synthetic B"}, vals, "primary first, credit order kept, no duplicate")
 }

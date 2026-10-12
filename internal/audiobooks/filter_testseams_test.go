@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_testseams_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e5ce678f-b1bc-41aa-af30-9e83e2c1b296
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -28,7 +28,7 @@ func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtime
 	if !ok {
 		return false
 	}
-	return matchesCompiledFilters(&book, cfs, rt)
+	return matchesCompiledFilters(&book, cfs, rt, nil)
 }
 
 // fieldMatchesValue checks whether a book's field value matches the search
@@ -45,5 +45,5 @@ func fieldMatchesValueRT(book database.Book, field, value string, rt runtimeFunc
 	if err != nil {
 		return false
 	}
-	return fieldMatchesCompiled(&book, &cf, rt)
+	return fieldMatchesCompiled(&book, &cf, rt, nil)
 }

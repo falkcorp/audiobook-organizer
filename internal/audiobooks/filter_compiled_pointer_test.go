@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_pointer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b7e2c14-8a93-4d60-b1f7-3c9a0e6d2f58
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -26,7 +26,7 @@ func TestCompiledDuration_ParsedOnce(t *testing.T) {
 	}
 	matched := 0
 	for i := range books {
-		if matchesCompiledFilters(&books[i], cfs, nil) {
+		if matchesCompiledFilters(&books[i], cfs, nil, nil) {
 			matched++
 		}
 	}

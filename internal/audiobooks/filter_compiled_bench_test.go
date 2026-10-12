@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_bench_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d90d532-6d88-49e0-b5b8-a4bba9dc1ace
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 package audiobooks
 
@@ -79,7 +79,7 @@ func BenchmarkCompiledPredicate_100k(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				n = 0
 				for j := range books {
-					if matchesCompiledFilters(&books[j], cfs, ri.runtimeOf) {
+					if matchesCompiledFilters(&books[j], cfs, ri.runtimeOf, nil) {
 						n++
 					}
 				}
