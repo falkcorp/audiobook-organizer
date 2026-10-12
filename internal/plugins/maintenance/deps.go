@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.85.0
+// version: 1.86.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -715,6 +716,19 @@ type DedupRunners interface {
 	// and unknown candidates are never touched. Returns an error if the
 	// embedding store is not initialised.
 	DedupTriageExactPending(ctx context.Context, apply bool) (*TriageReport, error)
+	// SplitBookCandidates is the persisted split-book candidate list the
+	// Split Books tab lists (dedup.SplitBookStore, on the embedding store),
+	// or nil when the embedding store is not wired. The split-books Repairs
+	// fixer deletes the row of a cluster it merged completely, as the bulk
+	// merge op does, so the tab does not offer a merged cluster again.
+	SplitBookCandidates() SplitBookCandidateRows
+}
+
+// SplitBookCandidateRows is the slice of dedup.SplitBookStore the
+// split-books fixer uses: list the rows, delete one.
+type SplitBookCandidateRows interface {
+	List() ([]dedup.SplitBookCandidate, error)
+	Delete(id string) error
 }
 
 // CacheInvalidator drops cached aggregates so they recompute.

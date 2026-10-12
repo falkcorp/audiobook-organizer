@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/split_books_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 946919fd-5279-41f2-bb7e-1331ea924e5e
 // last-edited: 2026-10-12
 
@@ -7,21 +7,26 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // sbCluster seeds n books in dir, one numbered chapter file each
@@ -41,6 +46,13 @@ func sbCluster(t *testing.T, f *fragFixture, dir, stem string, n, dur int) []str
 	sort.Strings(ids)
 	return ids
 }
+
+// The fixer runs the merge core and re-lists folders on the server's store:
+// database.Store must satisfy both surfaces mergeStore asserts.
+var (
+	_ dedup.Store            = database.Store(nil)
+	_ database.BookDirLister = database.Store(nil)
+)
 
 func sbFixer(f *fragFixture) *splitBooksFixer { return newSplitBooksFixer(f.p) }
 
@@ -251,8 +263,8 @@ func TestSplitBooksFixer_ApplyMergesOneClusterIntoTheKeep(t *testing.T) {
 		assert.False(t, sbBook(t, f, id).IsSoftDeleted(), "the other cluster is untouched")
 	}
 	assert.Equal(t, []string{
-		sbChangeType + "|combine_journal|" + ids[0],
-		sbChangeType + "|row|" + ids[0],
+		undo.ChangeTypeMergeCombineJournal + "|" + undo.MergeCombineJournalField + "|" + ids[0],
+		undo.ChangeTypeRepairPlanRecord + "|row|" + ids[0],
 	}, sbLiveJournal(t, f, "op-apply"))
 
 	// Applying the same plan again finds the cluster gone.
@@ -357,9 +369,12 @@ func sbApplyHeld(f *fragFixture, fx repairs.Fixer, res *repairs.PlanResult, opID
 
 // The stand-down lease is lost while the row waits for the process-wide
 // merge lock (an outside merge holds it). The merge core writes through the
-// store, not the Writer, so the beat under the lock is what stops it: the
-// row is aborted, no source is retired, no file row moves, and the decision
-// row journaled before the wait is voided.
+// store, not the Writer, so a beat between the wait and its first mutation
+// is what stops it: the row is aborted, no source is retired, no file row
+// moves, and the decision row journaled before the wait is voided. Three
+// beats stand there now (LockWaiting's after taking the lock, Precheck's,
+// the pointer row's journal); this test went red when Precheck's was the
+// only one and it was removed.
 //
 // Not parallel: it holds the process-wide merge lock.
 func TestSplitBooksFixer_LeaseLostWhileWaitingForTheMergeLock(t *testing.T) {
@@ -418,6 +433,206 @@ func TestSplitBooksFixer_LeaseLostWhileWaitingForTheMergeLock(t *testing.T) {
 		assert.Len(t, sbFileOwners(t, f, []string{id}), 1, "book %s keeps its file row", id)
 	}
 	assert.Empty(t, sbLiveJournal(t, f, "op-held"), "the decision row of the stopped merge is voided")
+}
+
+// sbAfterFirstReplan runs after() once, right after the first row of an
+// apply run is re-planned: the run's detector snapshot is taken by then.
+type sbAfterFirstReplan struct {
+	*splitBooksFixer
+	once  sync.Once
+	after func(first repairs.Row)
+}
+
+func (b *sbAfterFirstReplan) Replan(ctx context.Context, p json.RawMessage, planned repairs.Row, rep registry.Reporter) (repairs.Row, error) {
+	row, err := b.splitBooksFixer.Replan(ctx, p, planned, rep)
+	b.once.Do(func() { b.after(planned) })
+	return row, err
+}
+
+// A book lands in a later row's folder after the run's detector snapshot (the
+// first re-plan). The later row's re-plan reads that stale snapshot and its
+// planned members are unchanged, so its fingerprint matches; Precheck re-lists
+// the folder under the merge lock and refuses the row, so the new book is not
+// left behind by a merge of the others. The first row applies.
+func TestSplitBooksFixer_BookAddedToALaterRowsFolderIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	one := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+	two := sbCluster(t, f, "lib/Author A/Book Two", "Book Two", 3, 300)
+	base := sbFixer(f)
+	res := sbPlan(t, f, base)
+	rowOne, rowTwo := sbRowWith(t, res, one), sbRowWith(t, res, two)
+
+	var added string
+	var laterIDs []string
+	fx := &sbAfterFirstReplan{splitBooksFixer: base, after: func(first repairs.Row) {
+		dir, stem := "lib/Author A/Book Two", "Book Two"
+		laterIDs = two
+		if slices.Equal(first.BookIDs, two) {
+			dir, stem, laterIDs = "lib/Author A/Book One", "Book One", one
+		}
+		rel := filepath.Join(dir, stem+" 04.mp3")
+		p := f.file(t, rel, 904)
+		added = f.book(t, "added", stem+" 04", p, nil)
+		f.row(t, "added", added, p, stem+" 04.mp3", 904, 300, 0)
+	}}
+	out, err := repairs.RunApply(context.Background(), fx, res, "plan-1", []string{rowOne.RowID, rowTwo.RowID}, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: sbWriter(f, "op-two"), OpID: "op-two", Concurrency: 1}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Len(t, out.Rows, 2)
+	outcomes := map[string]repairs.RowResult{}
+	for _, r := range out.Rows {
+		outcomes[r.RowID] = r
+	}
+	laterRow, firstRow := rowTwo, rowOne
+	if slices.Equal(laterIDs, one) {
+		laterRow, firstRow = rowOne, rowTwo
+	}
+	assert.Equal(t, repairs.OutcomeApplied, outcomes[firstRow.RowID].Outcome, outcomes[firstRow.RowID].Error)
+	later := outcomes[laterRow.RowID]
+	assert.Equal(t, repairs.OutcomeChangedSincePlan, later.Outcome, later.Error)
+	assert.Contains(t, later.Error, added)
+	for _, src := range laterIDs[1:] {
+		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "the refused row merges nothing")
+	}
+	assert.False(t, sbBook(t, f, added).IsSoftDeleted())
+	assert.Len(t, sbFileOwners(t, f, []string{added}), 1, "the new book keeps its file")
+}
+
+// A member that became an iTunes book after the re-plan (here a book iTunes
+// persistent id, which the merge's own path guard does not see) is caught by
+// the plan's iTunes predicate, re-run under the merge lock: the row is
+// changed_since_plan and nothing is merged or journaled.
+func TestSplitBooksFixer_ITunesBookSinceTheReplanIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	ids := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+	base := sbFixer(f)
+	res := sbPlan(t, f, base)
+	row := sbRowWith(t, res, ids)
+	fx := sbBeforeApply{splitBooksFixer: base, before: func() {
+		pid := "ABCDEF0123456789"
+		_, err := f.s.ModifyBook(ids[1], func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+		require.NoError(t, err)
+	}}
+	out := sbApply(t, f, fx, res, "op-tunes", row.RowID)
+	assert.Equal(t, repairs.OutcomeChangedSincePlan, out.Outcome, out.Error)
+	assert.Contains(t, out.Error, "iTunes")
+	for _, src := range ids[1:] {
+		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "nothing is merged")
+	}
+	assert.Empty(t, sbLiveJournal(t, f, "op-tunes"))
+}
+
+// Reverting the apply operation undoes the merge through the combine journal
+// its pointer row names: the sources are live again with their own file
+// rows, and the keep has its old title back. The ledger decision is marked
+// with the rest.
+func TestSplitBooksFixer_RevertingTheApplyUndoesTheMerge(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	ids := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+	fx := sbFixer(f)
+	res := sbPlan(t, f, fx)
+	row := sbRowWith(t, res, ids)
+	before := sbFileOwners(t, f, ids)
+	keepTitle := sbBook(t, f, ids[0]).Title
+	out := sbApply(t, f, fx, res, "op-undo", row.RowID)
+	require.Equal(t, repairs.OutcomeApplied, out.Outcome, out.Error)
+	require.True(t, sbBook(t, f, ids[1]).IsSoftDeleted())
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-undo")
+	require.NoError(t, err)
+	assert.Equal(t, 1, rr.Restored)
+	for _, src := range ids[1:] {
+		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "source %s is live again", src)
+	}
+	assert.Equal(t, before, sbFileOwners(t, f, ids), "every file row is back on its own book")
+	assert.Equal(t, keepTitle, sbBook(t, f, ids[0]).Title)
+	assert.Empty(t, sbLiveJournal(t, f, "op-undo"), "every row of the operation is marked reverted")
+}
+
+// setSplitCandidates wires the fixture's SplitBookCandidates.
+func (f *fragFixture) setSplitCandidates(t *testing.T, cs SplitBookCandidateRows) {
+	t.Helper()
+	sd, ok := f.p.deps.(scanDeps)
+	require.True(t, ok, "fixture deps are %T, not scanDeps", f.p.deps)
+	sd.fakeDeps.splitCands = cs
+	f.p.deps = sd
+}
+
+// A complete merge deletes the Split Books tab's candidate row with the same
+// books (as the bulk merge op does); the other cluster's row stays.
+func TestSplitBooksFixer_CompleteMergeDropsItsCandidateRow(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	one := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+	two := sbCluster(t, f, "lib/Author A/Book Two", "Book Two", 3, 300)
+	cands, err := dedup.DetectSplitBookCandidates(context.Background(), f.s, nil)
+	require.NoError(t, err)
+	cs := dedup.NewSplitBookStore(f.s.DB())
+	require.NoError(t, cs.SaveAll(cands))
+	f.setSplitCandidates(t, cs)
+
+	fx := sbFixer(f)
+	res := sbPlan(t, f, fx)
+	out := sbApply(t, f, fx, res, "op-cands", sbRowWith(t, res, one).RowID)
+	require.Equal(t, repairs.OutcomeApplied, out.Outcome, out.Error)
+
+	listed, err := cs.List()
+	require.NoError(t, err)
+	require.Len(t, listed, 1, "the merged cluster's row is gone")
+	got := append([]string(nil), listed[0].BookIDs...)
+	sort.Strings(got)
+	assert.Equal(t, two, got, "the other cluster's row stays")
+}
+
+// The lease is lost between two sources of one cluster: the merge stops
+// before the next source (BeforeSource), the source already absorbed stays
+// merged, the rest are untouched, and the row is aborted (not settled) with
+// both journal rows standing, so reverting the operation undoes the part
+// that was made.
+func TestSplitBooksFixer_LeaseLostBetweenSourcesStopsTheMerge(t *testing.T) {
+	t.Parallel()
+	probe := newFragFixture(t)
+	sbCluster(t, probe, "lib/Author A/Book One", "Book One", 4, 300)
+	pfx := sbFixer(probe)
+	pres := sbPlan(t, probe, pfx)
+	pout, err := sbApplyHeld(probe, pfx, pres, "op-probe", pres.Rows[0].RowID)
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeApplied, pout.Rows[0].Outcome, pout.Rows[0].Error)
+	total := probe.scan().renews
+
+	f := newFragFixture(t)
+	ids := sbCluster(t, f, "lib/Author A/Book One", "Book One", 4, 300)
+	fx := sbFixer(f)
+	res := sbPlan(t, f, fx)
+	scan := f.scan()
+	scan.mu.Lock()
+	scan.renewsLeft = total - 2 // the beats before the last two sources' are allowed
+	scan.mu.Unlock()
+	out, err := sbApplyHeld(f, fx, res, "op-stop", res.Rows[0].RowID)
+	require.ErrorIs(t, err, repairs.ErrStandDownLost)
+	require.Len(t, out.Rows, 1)
+	r := out.Rows[0]
+	assert.Equal(t, repairs.OutcomeAborted, r.Outcome, r.Error)
+	assert.Contains(t, r.Error, "1 of 3 books merged")
+	assert.True(t, sbBook(t, f, ids[1]).IsSoftDeleted(), "the source absorbed before the stop stays merged")
+	for _, src := range ids[2:] {
+		assert.False(t, sbBook(t, f, src).IsSoftDeleted(), "source %s is not attempted", src)
+		assert.Len(t, sbFileOwners(t, f, []string{src}), 1, "source %s keeps its file", src)
+	}
+	assert.Equal(t, []string{
+		undo.ChangeTypeMergeCombineJournal + "|" + undo.MergeCombineJournalField + "|" + ids[0],
+		undo.ChangeTypeRepairPlanRecord + "|row|" + ids[0],
+	}, sbLiveJournal(t, f, "op-stop"), "the decision and the pointer stand")
+
+	scan.mu.Lock()
+	scan.renewsLeft = -1
+	scan.mu.Unlock()
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-stop")
+	require.NoError(t, err)
+	assert.False(t, sbBook(t, f, ids[1]).IsSoftDeleted(), "the revert undoes the partial merge")
 }
 
 // TestSplitBooksFixer_D21OverlapWithFragmentNoParent is the measurement owner
