@@ -1,7 +1,7 @@
 // file: internal/database/iface_assert.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2b9b0aba-e44f-43f0-a40b-56de5e95ab8e
-// last-edited: 2026-08-22
+// last-edited: 2026-10-11
 
 package database
 
@@ -47,6 +47,7 @@ var (
 	_ SystemActivityStore   = (*PebbleStore)(nil)
 	_ AIJobsStore           = (*PebbleStore)(nil)
 	_ OpsV2Store            = (*PebbleStore)(nil)
+	_ OpsV3Store            = (*PebbleStore)(nil)
 	_ OAuthIdentityStore    = (*PebbleStore)(nil)
 	_ MetadataCacheStore    = (*PebbleStore)(nil)
 	_ RejectedMetadataStore = (*PebbleStore)(nil)

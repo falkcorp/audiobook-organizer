@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.30.1
+// version: 3.31.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -354,6 +354,14 @@ func (p *PebbleStore) updateOperationV2Status(id string, expect *string, status 
 	if err := stageOpRow(batch, &prev, &row); err != nil {
 		return false, err
 	}
+	// The opv3: projection of this write, in the same batch (05-PR4).
+	v3 := p.newOpsV3Stage(batch)
+	if err := p.stageRunV3FromV2(v3, &row); err != nil {
+		return false, err
+	}
+	if err := v3.flush(); err != nil {
+		return false, err
+	}
 
 	// Maintain queue index.
 	if oldStatus == "queued" && status != "queued" {
@@ -433,6 +441,13 @@ func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
 	}
 	// Terminal/interrupted → queued moves the row from opv2:done: to opv2:open:.
 	if err := stageOpRow(batch, &prev, &row); err != nil {
+		return err
+	}
+	v3 := p.newOpsV3Stage(batch)
+	if err := p.stageRunV3FromV2(v3, &row); err != nil {
+		return err
+	}
+	if err := v3.flush(); err != nil {
 		return err
 	}
 	if oldStatus != "queued" {
@@ -596,6 +611,15 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 		if err := batch.Delete(key, nil); err != nil {
 			return 0, err
 		}
+	}
+	v3 := p.newOpsV3Stage(batch)
+	for _, id := range hollow {
+		if err := p.stageRunV3DeleteForV2(v3, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := v3.flush(); err != nil {
+		return 0, err
 	}
 	if err := p.runOpsV2BeforeCommitHook(); err != nil {
 		return 0, err
@@ -873,6 +897,14 @@ func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (st
 			return status, false, err
 		}
 	}
+	// The run's opv3: record and everything keyed by it go too (05-PR4).
+	v3 := p.newOpsV3Stage(batch)
+	if err := p.stageRunV3DeleteForV2(v3, id); err != nil {
+		return status, false, err
+	}
+	if err := v3.flush(); err != nil {
+		return status, false, err
+	}
 	if err := p.runOpsV2BeforeCommitHook(); err != nil {
 		return status, false, err
 	}
@@ -897,6 +929,80 @@ func (p *PebbleStore) UpdateOperationV2Params(id string, params []byte) error {
 	prev := row
 	row.Params = string(params)
 	return p.commitOpV2Row(&prev, &row, nil)
+}
+
+// listOpV2IDsPage returns up to n opv2:op: row ids after the id `after` ("":
+// from the start), in key order, reading keys only. Migration 065 pages
+// through the keyspace with it, opening a fresh iterator per page so no
+// iterator is held across a batch commit.
+func (p *PebbleStore) listOpV2IDsPage(after string, n int) (ids []string, err error) {
+	defer recoverPebbleClosed("listOpV2IDsPage", &err)
+	prefix := []byte(opv2OpPrefix)
+	lower := prefix
+	if after != "" {
+		lower = append(opv2OpKey(after), 0)
+	}
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: prefixEnd(prefix)})
+	if err != nil {
+		return nil, err
+	}
+	for iter.First(); iter.Valid() && len(ids) < n; iter.Next() {
+		ids = append(ids, strings.TrimPrefix(string(iter.Key()), opv2OpPrefix))
+	}
+	iterErr := iter.Error()
+	if cerr := iter.Close(); cerr != nil && iterErr == nil {
+		iterErr = cerr
+	}
+	return ids, iterErr
+}
+
+// stageOpV2RowWrite stages an opv2:op: row and its timeline-index delta
+// against prev into b. It is the opv2 half of a native opv3 write
+// (pebble_store_ops_v3.go stageMirror), which builds its own batch so the v3
+// record and this mirror row commit together; the v2 façade writers use
+// commitOpV2Row instead. The caller stages the queue and active keys.
+func stageOpV2RowWrite(b *GatedBatch, prev, row *OperationV2Row) error {
+	if row == nil || row.ID == "" {
+		return errors.New("opv2: stageOpV2RowWrite: row has no id")
+	}
+	data, err := json.Marshal(row)
+	if err != nil {
+		return err
+	}
+	if err := b.Set(opv2OpKey(row.ID), data, nil); err != nil {
+		return err
+	}
+	return stageOpRow(b, prev, row)
+}
+
+// stageOpV2RowDelete stages the deletion of a decoded opv2:op: row and every
+// key derived from its id -- queue and active entries, checkpoint state, the
+// timeline key (stageOpRow), and the opv2:log:{id}: and opv2:err:{id}: ranges
+// -- into b: exactly what DeleteOperationV2 deletes for a decoded row. The v3
+// discard (DeleteRunV3) uses it for the mirror; TestDeleteRunV3LeavesNoV2Keys
+// holds the two to the same key set.
+func stageOpV2RowDelete(b *GatedBatch, row *OperationV2Row) error {
+	id := row.ID
+	for _, key := range [][]byte{
+		opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id),
+		opv2QueueKey(row.Priority, row.QueuedAt, id),
+	} {
+		if err := b.Delete(key, nil); err != nil {
+			return err
+		}
+	}
+	if err := stageOpRow(b, row, nil); err != nil {
+		return err
+	}
+	for _, prefix := range [][]byte{
+		[]byte("opv2:log:" + id + ":"),
+		[]byte("opv2:err:" + id + ":"),
+	} {
+		if err := b.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AppendOpLogsV2 bulk-inserts log rows.

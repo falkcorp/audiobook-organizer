@@ -214,6 +214,7 @@ type PebbleStore struct {
 	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors -> book_narrators (pebble_store_authors.go)
 	bookNarratorLocks        bookLocks            // per-book-ID stripes for the book_narrators join: SetBookNarrators, ModifyBookNarrators and ModifyBookCredits hold one across read AND commit, DeleteBook from its probe through its commit; taken last in the order above (credits_store.go)
 	opsLogSeq                atomic.Int64         // monotonic counter for log key uniqueness; accessed via atomic
+	opsV2MirrorOff           atomic.Bool          // true turns off the opv2: mirror of native opv3 writes (05-PR16, D25); off by default means mirror ON (pebble_store_ops_v3.go)
 	rootDir                  string               // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
 	UseMemDB                 bool                 // feature flag: use in-memory query layer for aggregations / filtered reads
