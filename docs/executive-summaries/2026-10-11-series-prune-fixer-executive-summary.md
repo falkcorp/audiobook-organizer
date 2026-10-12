@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-11-series-prune-fixer-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 9655a812-fe48-4e5f-89a7-6584be12a076 -->
 <!-- last-edited: 2026-10-11 -->
 
@@ -30,11 +30,11 @@ Branch `task/03-pr9a`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   it. Rows that fail this are listed as "still referenced" and cannot be
   applied, because removing them would leave books naming a series that no
   longer exists (the damage behind 6,893 missing series found in August).
-- **Series repairs never run at the same time as other series changes.** The
-  repair and the nightly prune now wait for the series rename, normalize and
-  merge jobs (and those wait for them), and each removal re-counts, right
-  before it happens, whether any book has started pointing at that series in
-  the meantime. Each step is written to the change log before it is made, so
+- **Series repairs wait for the other series jobs.** The repair and the
+  nightly prune now wait for the series rename, normalize and merge jobs (and
+  those wait for them). Other jobs can still change which series a book is in
+  while a repair runs, so each removal re-counts, right before it happens,
+  whether any book has started pointing at that series in the meantime. Each step is written to the change log before it is made, so
   a run stopped in between never leaves a change with no record.
 - **The nightly job and the repair share one piece of code.** The merge and
   delete steps were moved out of the nightly job, unchanged, so both use them.

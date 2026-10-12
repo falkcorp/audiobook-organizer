@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_prune_fixer_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f6b2d84-93e1-4c57-a8d2-5e17b4c9a3f0
 // last-edited: 2026-10-11
 
