@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 package database
 
@@ -212,4 +212,49 @@ func TestSeriesBookRefCounts_CountsALetterLeadingBookID(t *testing.T) {
 	require.Equal(t, 1, fromPebble[lonely],
 		"a referenced series the ref counter cannot see reads as safe-to-delete, "+
 			"and the delete strands the very book the scan missed")
+}
+
+// TestSeriesBookRefCount_AgreesWithTheMapOnBothArms: the per-series counter
+// (a delete's last re-check) must answer exactly what the library-wide map
+// answers for the same series, from the memdb index and from the Pebble
+// fall-through alike, trashed and non-primary rows included.
+func TestSeriesBookRefCount_AgreesWithTheMapOnBothArms(t *testing.T) {
+	store := seedRefStore(t)
+	require.True(t, store.IsMemReady(), "fixture check: the memdb arm must be the one serving")
+	for i := range 30 {
+		mkBook(t, store, fmt.Sprintf("one-%02d", i), 960+(i%5), i%2 == 0, i%3 == 0)
+	}
+	refs, err := store.getAllSeriesBookRefCountsPebble()
+	require.NoError(t, err)
+	require.Equal(t, 30, sumCounts(refs), "fixture must produce references")
+
+	for sid := 959; sid <= 965; sid++ {
+		fromMem, err := store.mem().GetSeriesBookRefCount(sid)
+		require.NoError(t, err)
+		require.Equal(t, refs[sid], fromMem, "memdb arm, series %d", sid)
+		viaStore, err := SeriesRefCount(&decoratorStore{Store: store}, sid)
+		require.NoError(t, err)
+		require.Equal(t, refs[sid], viaStore, "through the decorator, series %d", sid)
+	}
+
+	// A memdb known to be missing book rows refuses; the store falls through
+	// to the Pebble scan and still answers correctly.
+	store.mem().recordLostRows(memTableBooks, 1)
+	_, err = store.mem().GetSeriesBookRefCount(960)
+	require.ErrorIs(t, err, ErrMemdbIncomplete, "a short memdb must refuse, never answer low")
+	got, err := store.GetSeriesBookRefCount(960)
+	require.NoError(t, err)
+	require.Equal(t, refs[960], got, "the Pebble fall-through answers")
+	got, err = store.GetSeriesBookRefCount(999)
+	require.NoError(t, err)
+	require.Zero(t, got)
+}
+
+// TestSeriesRefCount_FailsClosed: a store without the capability is an
+// error, never a zero (zero authorizes the delete).
+func TestSeriesRefCount_FailsClosed(t *testing.T) {
+	_, err := SeriesRefCount(struct{}{}, 1)
+	require.Error(t, err)
+	_, err = SeriesRefCount(&decoratorNoUnwrap{Store: seedRefStore(t)}, 1)
+	require.Error(t, err, "a decorator without Unwrap must not be reached around")
 }
