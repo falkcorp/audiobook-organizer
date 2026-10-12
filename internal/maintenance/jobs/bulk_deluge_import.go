@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
 // last-edited: 2026-10-11
 
@@ -8,9 +8,9 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -81,6 +81,16 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 	// library destination under it is left pending (bdiStatusProtected), in
 	// the preview as in the live run.
 	protected := bdi_protectedPaths(client)
+	// Probed once: while the Deluge list has never loaded, no in-place row
+	// can be cleared, and asking per row cost two ListTorrents attempts each
+	// (InPlaceProtection's ProtectedBy and Loaded both retry a refresh). The
+	// in-place rows of such a run are reported bdiStatusListNotLoaded --
+	// or protected, when a static prefix names them, which needs no list --
+	// and left pending; the next run with Deluge reachable clears them.
+	listLoaded := tagger.ProtectedListLoaded(protected)
+	if !listLoaded {
+		bdiLog.Warn("bulk-deluge-import: the Deluge protected-path list has not loaded; files already at their library destination are left pending this run (%s)", bdiStatusListNotLoaded)
+	}
 
 	pending, err := store.GetBookFilesNeedingDelugeImportCore()
 	if err != nil {
@@ -94,7 +104,20 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 	slog.Info("bulk-deluge-import files pending (dry_run)", "opID", opID, "total", total, "dryRun", dryRun)
 	reporter.SetTotal(total)
 
-	imported, inPlace, protectedN, failed := 0, 0, 0, 0
+	record := func(f *database.BookFileCore, status string, payload map[string]any) {
+		if opID == "" {
+			return
+		}
+		resultJSON, _ := json.Marshal(payload)
+		_ = store.CreateOperationResult(&database.OperationResult{
+			OperationID: opID,
+			BookID:      f.ID,
+			ResultJSON:  string(resultJSON),
+			Status:      status,
+		})
+	}
+
+	imported, inPlace, protectedN, notLoadedN, failed := 0, 0, 0, 0, 0
 	for i := range pending {
 		select {
 		case <-ctx.Done():
@@ -103,32 +126,20 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 		}
 		f := &pending[i]
 		if dryRun {
-			// A file already at its library destination would be marked
-			// imported in place, not copied, or left pending when protected:
-			// say so in the preview, with the live run's own predicate.
-			action := "dry_run"
-			if src := filepath.Clean(f.FilePath); f.FilePath != "" {
-				if dest, derr := bdi_destination(config.AppConfig.RootDir, src); derr == nil && dest == src {
-					action = bdiStatusInPlace
-					if deluge.InPlaceProtection(&config.AppConfig, protected, f.FilePath) != "" {
-						action = bdiStatusProtected
-					}
-				}
-			}
-			resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "action": action})
-			if opID != "" {
-				_ = store.CreateOperationResult(&database.OperationResult{
-					OperationID: opID,
-					BookID:      f.ID,
-					ResultJSON:  string(resultJSON),
-					Status:      "dry_run",
-				})
-			}
+			// Say in the preview what the live run would do, with its own
+			// predicates: mark a file already at its library destination
+			// imported in place (or leave it pending when protected or the
+			// list has not loaded), refuse a source under a static protected
+			// prefix, and copy the rest.
+			action := bdi_previewAction(&config.AppConfig, protected, listLoaded, f.FilePath)
+			record(f, "dry_run", map[string]any{"path": f.FilePath, "action": action})
 			switch action {
 			case bdiStatusInPlace:
 				inPlace++
 			case bdiStatusProtected:
 				protectedN++
+			case bdiStatusListNotLoaded:
+				notLoadedN++
 			default:
 				imported++
 			}
@@ -145,67 +156,43 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 					errMsg = hydrateErr.Error()
 				}
 				slog.Warn("bulk-deluge-import hydrate failed", "opID", opID, "f", f.FilePath, "err", errMsg)
-				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "error": errMsg})
-				if opID != "" {
-					_ = store.CreateOperationResult(&database.OperationResult{
-						OperationID: opID,
-						BookID:      f.ID,
-						ResultJSON:  string(resultJSON),
-						Status:      "error",
-					})
-				}
+				record(f, "error", map[string]any{"path": f.FilePath, "error": errMsg})
 				failed++
 				continue
 			}
-			newPath, outcome, importErr := bdi_importToLibrary(&config.AppConfig, client, protected, store, full)
-			switch {
-			case importErr == nil && outcome == bdiProtected:
-				// Its own library destination, but protected: left pending,
-				// nothing written, as /discovery/import leaves it.
-				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath})
-				if opID != "" {
-					_ = store.CreateOperationResult(&database.OperationResult{
-						OperationID: opID,
-						BookID:      f.ID,
-						ResultJSON:  string(resultJSON),
-						Status:      bdiStatusProtected,
-					})
+			newPath, outcome, importErr := bdi_importToLibrary(&config.AppConfig, client, protected, listLoaded, store, full)
+			switch outcome {
+			case bdiProtected:
+				// Protected (its own library destination under a protected
+				// path, or a source under a static protected prefix): left
+				// pending, nothing written, as /discovery/import leaves it.
+				payload := map[string]any{"path": f.FilePath}
+				if importErr != nil {
+					payload["reason"] = importErr.Error()
 				}
+				record(f, bdiStatusProtected, payload)
 				protectedN++
-			case importErr == nil && outcome == bdiInPlace:
+			case bdiListNotLoaded:
+				// Unknown whether it is seeding: left pending, nothing
+				// written, until a run finds the list loaded.
+				record(f, bdiStatusListNotLoaded, map[string]any{"path": f.FilePath})
+				notLoadedN++
+			case bdiInPlace:
 				// Already in the library: marked imported, nothing copied.
-				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "new_path": newPath})
-				if opID != "" {
-					_ = store.CreateOperationResult(&database.OperationResult{
-						OperationID: opID,
-						BookID:      f.ID,
-						ResultJSON:  string(resultJSON),
-						Status:      bdiStatusInPlace,
-					})
-				}
+				record(f, bdiStatusInPlace, map[string]any{"path": f.FilePath, "new_path": newPath})
 				inPlace++
-			case importErr != nil:
-				slog.Warn("bulk-deluge-import", "opID", opID, "f", f.FilePath, "importErr", importErr)
-				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "error": importErr.Error()})
-				if opID != "" {
-					_ = store.CreateOperationResult(&database.OperationResult{
-						OperationID: opID,
-						BookID:      f.ID,
-						ResultJSON:  string(resultJSON),
-						Status:      "error",
-					})
+			case bdiFailed:
+				bdiLog.Warn("bulk-deluge-import: %s: %v", logger.SanitizeLogValue(f.FilePath), importErr)
+				payload := map[string]any{"path": f.FilePath, "error": importErr.Error()}
+				if newPath != "" {
+					// ImportToLibraryWith could not remove a copy it made:
+					// name the file left in the library.
+					payload["left_at"] = newPath
 				}
+				record(f, "error", payload)
 				failed++
 			default:
-				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "new_path": newPath})
-				if opID != "" {
-					_ = store.CreateOperationResult(&database.OperationResult{
-						OperationID: opID,
-						BookID:      f.ID,
-						ResultJSON:  string(resultJSON),
-						Status:      "imported",
-					})
-				}
+				record(f, "imported", map[string]any{"path": f.FilePath, "new_path": newPath})
 				imported++
 			}
 		}
@@ -213,7 +200,8 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 	}
 
 	slog.Info("bulk-deluge-import done. imported failed", "opID", opID, "imported", imported, "already_in_library", inPlace, "protected", protectedN, "failed", failed)
-	slog.Info("imported failed total", "imported", imported, "already_in_library", inPlace, "protected", protectedN, "failed", failed, "total", total)
+	bdiLog.Info("bulk-deluge-import: %d imported, %d already in library, %d protected, %d left pending (protected list not loaded), %d failed, of %d",
+		imported, inPlace, protectedN, notLoadedN, failed, total)
 	return nil
 }
 
@@ -258,12 +246,21 @@ func bdi_protectedPaths(client *deluge.Client) tagger.PathChecker {
 // its library destination: marked imported, nothing copied.
 const bdiStatusInPlace = "already_in_library"
 
-// bdiStatusProtected is the result status of a pending file that is its own
-// library destination but protected (deluge.InPlaceProtection): left
-// pending, nothing written.
+// bdiStatusProtected is the result status of a pending file left pending
+// because it is protected: its own library destination under a protected
+// path (deluge.InPlaceProtection), or a source under a static protected
+// prefix (deluge.StaticProtection: config.ProtectedPaths, the iTunes
+// library), which is never copied out. Nothing written.
 const bdiStatusProtected = "protected"
 
-// bdiOutcome is what bdi_importToLibrary did with a file it did not fail on.
+// bdiStatusListNotLoaded is the result status of a pending file already at its
+// library destination while the Deluge protected-path list has never loaded:
+// whether a torrent seeds from it is unknown, so it is left pending with
+// nothing written. Not "protected": Deluge being unreachable is no verdict on
+// the file, and the next run with the list loaded clears it.
+const bdiStatusListNotLoaded = "protected_list_not_loaded"
+
+// bdiOutcome is what bdi_importToLibrary did.
 type bdiOutcome int
 
 const (
@@ -272,14 +269,20 @@ const (
 	bdiCopied bdiOutcome = iota
 	// bdiInPlace: already at its library destination; marked imported.
 	bdiInPlace
-	// bdiProtected: at its library destination but protected; left pending.
+	// bdiProtected: protected; left pending.
 	bdiProtected
+	// bdiListNotLoaded: at its library destination, and the Deluge list has
+	// not loaded; left pending.
+	bdiListNotLoaded
+	// bdiFailed: the import failed; err says why.
+	bdiFailed
 )
 
-// bdiBookFileStore is what bdi_importToLibrary writes: the whole-row update of
-// a copied file, and ModifyBookFile for marking one already in place.
+// bdiBookFileStore is what bdi_importToLibrary reads and writes:
+// deluge.ImportToLibraryWith's store (the path-index ownership check and the
+// whole-row repoint) and ModifyBookFile for marking a file already in place.
 type bdiBookFileStore interface {
-	bookFileWriter
+	deluge.Store
 	deluge.BookFileModifier
 }
 
@@ -301,79 +304,132 @@ func bdi_destination(root, src string) (string, error) {
 	return util.SafeJoin(destDir, filepath.Base(src))
 }
 
-// bdi_importToLibrary copies a book file into the library root and updates the
-// DB record. A file already at its library destination is not copied: it is
-// marked imported (bdiInPlace: ImportedFromDelugeAt only,
-// deluge.MarkImportedInPlace), or it would stay pending and be listed on every
-// run -- unless protected (deluge.InPlaceProtection over protected and cfg),
-// which leaves it pending with nothing written (bdiProtected), as
-// ImportToLibraryWith refuses it.
-func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, protected tagger.PathChecker, store bdiBookFileStore, bookFile *database.BookFile) (newPath string, outcome bdiOutcome, err error) {
+// bdi_inPlaceUnloaded is the verdict on a file at its own library destination
+// while the Deluge list has not loaded: protected when a static prefix names
+// it (cfg's prefixes need no list, and a nil checker asks Deluge nothing),
+// list-not-loaded otherwise. Never "may be marked": a nil checker alone counts
+// as loaded, so it is used here only for the static half.
+func bdi_inPlaceUnloaded(cfg *config.Config, src string) bdiOutcome {
+	if deluge.StaticProtection(cfg, nil, src) != "" {
+		return bdiProtected
+	}
+	return bdiListNotLoaded
+}
+
+// bdi_previewAction is the dry run's verdict on one pending file, from the
+// live run's own predicates.
+func bdi_previewAction(cfg *config.Config, protected tagger.PathChecker, listLoaded bool, path string) string {
+	if path == "" {
+		return "dry_run"
+	}
+	src := filepath.Clean(path)
+	dest, derr := bdi_destination(cfg.RootDir, src)
+	if derr != nil {
+		return "dry_run"
+	}
+	if dest != src {
+		// A static protected source is refused by ImportToLibraryWith. When
+		// the list has not loaded, cfg's prefixes alone (the cache's static
+		// list is cfg.ProtectedPaths) answer without asking Deluge.
+		checker := protected
+		if !listLoaded {
+			checker = nil
+		}
+		if deluge.StaticProtection(cfg, checker, src) != "" {
+			return bdiStatusProtected
+		}
+		return "dry_run"
+	}
+	if !listLoaded {
+		if bdi_inPlaceUnloaded(cfg, src) == bdiProtected {
+			return bdiStatusProtected
+		}
+		return bdiStatusListNotLoaded
+	}
+	if deluge.InPlaceProtection(cfg, protected, path) != "" {
+		return bdiStatusProtected
+	}
+	return bdiStatusInPlace
+}
+
+// bdi_importToLibrary imports one pending book file.
+//
+// A file already at its library destination is not copied: it is marked
+// imported (bdiInPlace: ImportedFromDelugeAt only, deluge.MarkImportedInPlace),
+// or it would stay pending and be listed on every run -- unless protected
+// (deluge.InPlaceProtection over protected and cfg: bdiProtected) or the
+// Deluge list has not loaded (listLoaded false, probed once per run:
+// bdiListNotLoaded), which leave it pending with nothing written.
+//
+// Every other file goes through deluge.ImportToLibraryWith, the importer
+// /discovery/import uses, with the caller's row as ExpectedBookFileID. That
+// is what holds the destination lock and refuses a destination another
+// book_file row already names: this job used to call deluge.CopyIntoLibrary
+// itself, without either, so two pending rows with one basename and the same
+// bytes both landed on RootDir/<basename> (the first copied it, the second
+// adopted it) and two rows named one file. It also refuses a source under a
+// static protected prefix (the iTunes library, config.ProtectedPaths), which
+// this job used to copy out and repoint, and on a failed row update it
+// removes the copy it made so the next run does not find it in the way. A
+// refusal wrapping tagger.ErrProtectedPathWrite is bdiProtected (err says
+// why); any other error is bdiFailed, and newPath then names a copy left in
+// the library when one could not be removed.
+func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, protected tagger.PathChecker, listLoaded bool, store bdiBookFileStore, bookFile *database.BookFile) (newPath string, outcome bdiOutcome, err error) {
 	if bookFile == nil {
-		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: bookFile is nil")
+		return "", bdiFailed, fmt.Errorf("bdi_importToLibrary: bookFile is nil")
 	}
 	if bookFile.ImportedFromDelugeAt != nil {
 		slog.Info("bdi_importToLibrary already imported, skipping", "bookFile", bookFile.FilePath)
 		return bookFile.FilePath, bdiCopied, nil
 	}
 	if bookFile.FilePath == "" {
-		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: bookFile.FilePath is empty")
+		return "", bdiFailed, fmt.Errorf("bdi_importToLibrary: bookFile.FilePath is empty")
 	}
 	src := filepath.Clean(bookFile.FilePath)
 
 	dest, destErr := bdi_destination(cfg.RootDir, src)
 	if destErr != nil {
-		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: unsafe dest path: %w", destErr)
+		return "", bdiFailed, fmt.Errorf("bdi_importToLibrary: unsafe dest path: %w", destErr)
 	}
-	destDir := filepath.Dir(dest)
 	if src == dest {
+		if !listLoaded {
+			got := bdi_inPlaceUnloaded(cfg, src)
+			bdiLog.Info("bdi_importToLibrary: %s is its own library destination and the Deluge protected list has not loaded; left pending", logger.SanitizeLogValue(src))
+			return src, got, nil
+		}
 		marked, markErr := deluge.MarkImportedInPlace(store, cfg, protected, bookFile.BookID, bookFile.ID, bookFile.FilePath, time.Now())
 		switch {
 		case markErr != nil:
-			return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: %w", markErr)
+			return "", bdiFailed, fmt.Errorf("bdi_importToLibrary: %w", markErr)
 		case marked == deluge.InPlaceProtected:
 			bdiLog.Info("bdi_importToLibrary: %s is its own library destination but protected; left pending", logger.SanitizeLogValue(src))
 			return src, bdiProtected, nil
+		case marked == deluge.InPlaceListNotLoaded:
+			return src, bdiListNotLoaded, nil
 		case marked == deluge.InPlaceMoved, marked == deluge.InPlaceGone:
-			return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: book file %s changed or was removed while being marked imported in place at %s; nothing written", bookFile.ID, src)
+			return "", bdiFailed, fmt.Errorf("bdi_importToLibrary: book file %s changed or was removed while being marked imported in place at %s; nothing written", bookFile.ID, src)
 		}
 		slog.Info("bdi_importToLibrary source is already at its library destination; marked imported, nothing copied", "src", src)
 		return src, bdiInPlace, nil
 	}
 
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: create dest dir %s: %w", destDir, err)
+	newPath, err = deluge.ImportToLibraryWith(cfg, delugeClient, store, bookFile, deluge.ImportOptions{
+		Protected:          protected,
+		ExpectedBookFileID: bookFile.ID,
+	})
+	switch {
+	case errors.Is(err, tagger.ErrProtectedListNotLoaded):
+		// ImportToLibraryWith resolved the destination to the source itself
+		// and the list has not loaded. Checked before ErrProtectedPathWrite,
+		// which this error also wraps.
+		return src, bdiListNotLoaded, nil
+	case errors.Is(err, tagger.ErrProtectedPathWrite):
+		bdiLog.Info("bdi_importToLibrary: %s is protected; left pending: %v", logger.SanitizeLogValue(src), err)
+		return src, bdiProtected, err
+	case err != nil:
+		return newPath, bdiFailed, fmt.Errorf("bdi_importToLibrary: %w", err)
 	}
-
-	// The importers' shared copy step: it never overwrites. This used to be
-	// bdi_ioCopy, which opened dest with os.Create and so truncated whatever
-	// was there: a second pending file with the same basename, or a file a
-	// torrent was seeding from RootDir. An identical dest (a copy an earlier
-	// run made and could not record) is adopted, a different one refuses the
-	// file with an error.
-	if _, copyErr := deluge.CopyIntoLibrary(src, dest); copyErr != nil {
-		return "", bdiCopied, fmt.Errorf("bdi_importToLibrary: %w", copyErr)
-	}
-
-	now := time.Now()
-	bookFile.DelugeOriginalPath = src
-	bookFile.FilePath = dest
-	bookFile.ImportedFromDelugeAt = &now
-
-	if err := store.UpdateBookFile(bookFile.ID, bookFile); err != nil {
-		return dest, bdiCopied, fmt.Errorf("bdi_importToLibrary: UpdateBookFile %s: %w", bookFile.ID, err)
-	}
-
-	slog.Info("bdi_importToLibrary copied ->", "src", src, "dest", dest)
-
-	if cfg.DelugeMoveEnabled && bookFile.DelugeHash != "" && delugeClient != nil {
-		moveErr := delugeClient.MoveStorage([]string{bookFile.DelugeHash}, filepath.Dir(dest))
-		if moveErr != nil {
-			slog.Warn("bdi_importToLibrary MoveStorage for hash failed (non-fatal)", "bookFile", bookFile.DelugeHash, "moveErr", moveErr)
-		}
-	}
-
-	return dest, bdiCopied, nil
+	return newPath, bdiCopied, nil
 }
 
 // Policy: ResumeRestart. CanResume() is true and this job checkpoints nothing,
