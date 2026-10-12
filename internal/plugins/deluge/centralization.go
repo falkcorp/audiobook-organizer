@@ -193,4 +193,3 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 	)
 	return runErr
 }
-
