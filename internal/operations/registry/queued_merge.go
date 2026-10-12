@@ -1,7 +1,7 @@
 // file: internal/operations/registry/queued_merge.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 342326a8-40f7-440f-b6a6-0f7f8255b6b6
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry
 
@@ -30,12 +30,14 @@ func (r *Registry) tryMergeQueuedParams(
 		if r.canonicalDefID(op.DefID) != defID || op.Status != "queued" {
 			continue
 		}
-		// A zombie's row is usually terminal, but one quiesced by a scan
-		// stand-down can be re-queued in place under the same id while its
-		// goroutine still runs (resumeQuiescedOp -> requeueInPlace). That row
-		// is queued and matches here; it is skipped as claimed, so new params
-		// are not merged into it. Harmless: the caller enqueues a fresh row,
-		// which Gate 3 holds until the zombie exits.
+		// A zombie's row reads "running" until its goroutine returns (v3
+		// stopping, 05-PR4), but the exit monitor writes the final status
+		// before releasing the handle, and in that window a scan quiesced by
+		// a stand-down can be re-queued in place under the same id
+		// (resumeQuiescedOp -> requeueInPlace). That row is queued and
+		// matches here; it is skipped as claimed, so new params are not
+		// merged into it. Harmless: the caller enqueues a fresh row, which
+		// Gate 3 holds until the handle is released.
 		if _, claimed := r.running[op.ID]; claimed {
 			continue
 		}

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/zombie_v3_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2d29b34-41c4-40f1-93e1-3d616e6251bc
 // last-edited: 2026-10-11
 
@@ -14,7 +14,10 @@ package registry_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -40,11 +43,12 @@ func newV3Store(t *testing.T) *database.PebbleStore {
 // newV3Registry is a registry on a real store with a short abandon grace and
 // a watchdog that stays out of the way. Shutdown runs at cleanup before the
 // store closes (cleanups run last-in first-out).
-func newV3Registry(t *testing.T, store *database.PebbleStore, release ...func()) *registry.Registry {
+func newV3Registry(t *testing.T, store database.OpsStore, release ...func()) *registry.Registry {
 	t.Helper()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
 		AbandonGrace:     50 * time.Millisecond,
 		WatchdogInterval: time.Hour,
+		SweepInterval:    time.Hour,
 		AbandonedCap:     100,
 	})
 	t.Cleanup(func() {
@@ -145,8 +149,28 @@ func TestZombieIsStoppingNotTerminal(t *testing.T) {
 	if ev := eventNames(t, store, id); ev != "enqueue dispatch stop_requested" {
 		t.Fatalf("events while stopping = %q", ev)
 	}
+	// A second cancel of a run already stopping as canceled writes nothing:
+	// the run ends when its goroutine returns, not when it is asked again.
+	if err := r.Cancel(id); err != nil {
+		t.Fatalf("cancel of a stopping run: %v", err)
+	}
+	if got := v2Status(t, store, id); got != "running" {
+		t.Fatalf("after a second cancel the row is %q, want running until the goroutine returns", got)
+	}
+	if ev := eventNames(t, store, id); ev != "enqueue dispatch stop_requested" {
+		t.Fatalf("a second cancel recorded events: %q", ev)
+	}
 	s.releaseRun()
-	awaitV2(t, store, id, "canceled")
+	// Status first, release second: by the time the handle is gone (the
+	// zombie count drops) the row must already be terminal, or a new run of
+	// the key could start beside a row that still reads running.
+	deadline := time.Now().Add(5 * time.Second)
+	for r.ZombieCount() != 0 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if got := v2Status(t, store, id); got != "canceled" {
+		t.Fatalf("row = %q when the zombie's handle was released, want canceled already", got)
+	}
 	if rec := runV3(t, store, id); rec.State != state.V3Canceled || rec.Zombie || rec.StopReason != state.StopUser {
 		t.Fatalf("after the goroutine returned: %s zombie=%v reason=%q, want canceled", rec.State, rec.Zombie, rec.StopReason)
 	}
@@ -320,5 +344,239 @@ func TestResumeRequeueSetsSuccessor(t *testing.T) {
 	}
 	if got := v2Status(t, store, queuedID); got != "interrupted_dropped" {
 		t.Fatalf("queued row v2 status = %q", got)
+	}
+}
+
+// TestZombieTimeoutIsTimedOut: a run whose deadline expired and whose
+// goroutine outlived the grace is stopping{timeout} while it lives, and
+// timed_out (v2 "canceled", message starting "timeout:") when it returns --
+// the same outcome the boot sweep gives it after a crash. Mutation checks:
+// putting "abandoned: ..." before the reason in the message records canceled;
+// mapping a deadline to the "user" stop reason fails the stopping check.
+func TestZombieTimeoutIsTimedOut(t *testing.T) {
+	store := newV3Store(t)
+	s := newStubbornRun()
+	r := newV3Registry(t, store, s.releaseRun)
+	def := makeValidDef("test.v3-timeout")
+	def.Timeout = 100 * time.Millisecond
+	def.Run = s.run
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	id, err := r.EnqueueOp(t.Context(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	awaitZombieCount(t, r, 1)
+	if rec := runV3(t, store, id); rec.State != state.V3Stopping || rec.StopReason != state.StopTimeout {
+		t.Fatalf("timed-out zombie in v3 = %s{%s}, want stopping{timeout}", rec.State, rec.StopReason)
+	}
+	s.releaseRun()
+	awaitV2(t, store, id, "canceled")
+	row, err := store.GetOperationV2(id)
+	if err != nil || row == nil || row.ErrorMessage == nil || !strings.HasPrefix(*row.ErrorMessage, state.TimeoutPrefix) {
+		t.Fatalf("v2 row = %+v %v, want canceled with a %q message", row, err, state.TimeoutPrefix)
+	}
+	if rec := runV3(t, store, id); rec.State != state.V3TimedOut {
+		t.Fatalf("after the goroutine returned: %s, want timed_out", rec.State)
+	}
+}
+
+// TestRetryNotBlockedByStoppingRun: a stopping run (zombie) reads "running"
+// with a live handle until its goroutine returns; Retry of ANOTHER row of the
+// same def must not be refused because of it (the C-3 trap on the Retry
+// path). The retried row is queued and Gate 3 holds it until the key frees.
+func TestRetryNotBlockedByStoppingRun(t *testing.T) {
+	store := newV3Store(t)
+	s := newStubbornRun()
+	r := newV3Registry(t, store, s.releaseRun)
+	def := makeValidDef("test.v3-retry")
+	def.ConcurrencyKey = "v3.retry-key"
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = s.run
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	first, err := r.EnqueueOp(t.Context(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	if err := r.Cancel(first); err != nil {
+		t.Fatal(err)
+	}
+	awaitZombieCount(t, r, 1)
+	other := ulid.Make().String()
+	now := time.Now().UTC()
+	msg := "quiesced earlier"
+	if err := store.InsertOperationV2(database.OperationV2Row{ID: other, DefID: def.ID, Plugin: "test", Status: "interrupted_quiesced",
+		Params: "{}", QueuedAt: now, CompletedAt: &now, ErrorMessage: &msg}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RetryInterrupted(t.Context(), other, "tester"); err != nil {
+		t.Fatalf("retry of another row while a run of the def is stopping: %v, want nil", err)
+	}
+	for range 10 {
+		r.DispatchCycleForTest(t.Context())
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := v2Status(t, store, other); got != "queued" {
+		t.Fatalf("retried row is %q while the stopping run holds the key, want queued", got)
+	}
+	s.releaseRun()
+	awaitV2(t, store, other, "completed")
+}
+
+// TestZombieExitNotifiesDependents: the dependency scheduler hears about a
+// zombie when its goroutine returns, not at abandonment: a dependent stays
+// waiting_deps while the stopped run's goroutine still writes, and is failed
+// once it ends canceled.
+func TestZombieExitNotifiesDependents(t *testing.T) {
+	store := newV3Store(t)
+	s := newStubbornRun()
+	r := newV3Registry(t, store, s.releaseRun)
+	defA := makeValidDef("test.v3-dep-a")
+	defA.Run = s.run
+	defB := makeValidDef("test.v3-dep-b")
+	defB.Requires = []registry.Requirement{{Kind: registry.ReqOpCompleted, OpType: defA.ID}}
+	for _, d := range []registry.OperationDef{defA, defB} {
+		if err := r.RegisterOp(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.SetDepsScheduler(registry.NewDepsScheduler(r, &pebbleSchedulerStore{PebbleStore: store}))
+	reqs, _ := json.Marshal(defB.Requires)
+	waiting := ulid.Make().String()
+	if err := store.InsertOperationV2(database.OperationV2Row{ID: waiting, DefID: defB.ID, Plugin: "test", Status: "waiting_deps",
+		QueuedAt: time.Now().UTC(), SubjectType: "book", SubjectID: "book-42", Requirements: string(reqs), Params: `{"book_id":"book-42"}`}); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	a, err := r.EnqueueOp(t.Context(), defA.ID, map[string]any{"book_id": "book-42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	if err := r.Cancel(a); err != nil {
+		t.Fatal(err)
+	}
+	awaitZombieCount(t, r, 1)
+	time.Sleep(50 * time.Millisecond)
+	if got := v2Status(t, store, waiting); got != "waiting_deps" {
+		t.Fatalf("dependent is %q while its prerequisite's goroutine still runs, want waiting_deps", got)
+	}
+	s.releaseRun()
+	awaitV2(t, store, a, "canceled")
+	awaitV2(t, store, waiting, "failed")
+}
+
+// transitionFailingStore is a real store whose TransitionRunV3 fails with err
+// for event (every event when ""), so a test can drive the registry's v3
+// fallbacks.
+type transitionFailingStore struct {
+	*database.PebbleStore
+	event state.Event
+	err   error
+}
+
+func (s *transitionFailingStore) TransitionRunV3(req database.TransitionRequest) (*database.RunRecord, error) {
+	if s.event == "" || req.Event == s.event {
+		return nil, s.err
+	}
+	return s.PebbleStore.TransitionRunV3(req)
+}
+
+func opTerminalCount(b *recordingBus, opID string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, ev := range b.events {
+		if p, ok := ev.payload.(map[string]any); ok && ev.name == "op.terminal" && p["op_id"] == opID {
+			n++
+		}
+	}
+	return n
+}
+
+// TestBootSweepFallbacks: a stopping{user} run at boot whose native boot
+// write fails. With ErrStaleTransition the record does not describe the row
+// any more and the row decides (ResumeRestart: it runs again). With any other
+// error the record is current and the stop's outcome is kept through the v2
+// write: canceled, not run, op.terminal published.
+func TestBootSweepFallbacks(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantV2   string
+		wantRuns int32
+		wantTerm int
+	}{
+		{"stale record: the row decides", fmt.Errorf("wrapped: %w", database.ErrStaleTransition), "completed", 1, 1},
+		{"store error: the stop stands", errors.New("injected store failure"), "canceled", 0, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := newV3Store(t)
+			def := makeValidDef("test.v3-boot-fallback")
+			def.ResumePolicy = registry.ResumeRestart
+			id := seedStoppingRun(t, store, def.ID, state.StopUser)
+			var runs atomic.Int32
+			def.Run = func(context.Context, json.RawMessage, registry.Reporter) error { runs.Add(1); return nil }
+			r := newV3Registry(t, &transitionFailingStore{PebbleStore: store, err: c.err})
+			bus := &recordingBus{}
+			r.SetBus(bus)
+			if err := r.RegisterOp(def); err != nil {
+				t.Fatal(err)
+			}
+			r.Start(t.Context())
+			awaitV2(t, store, id, c.wantV2)
+			time.Sleep(20 * time.Millisecond)
+			if got := runs.Load(); got != c.wantRuns {
+				t.Fatalf("Run called %d times, want %d", got, c.wantRuns)
+			}
+			if n := opTerminalCount(bus, id); n < c.wantTerm {
+				t.Fatalf("op.terminal published %d times, want at least %d", n, c.wantTerm)
+			}
+		})
+	}
+}
+
+// TestResumeRequeueStaleRecordFallsBackToV2: when the native retire is
+// refused as stale, the requeue still retires the original the v2 way
+// (interrupted_dropped, the requeue message) and inserts the replacement; no
+// successor is recorded because the record could not be trusted.
+func TestResumeRequeueStaleRecordFallsBackToV2(t *testing.T) {
+	store := newV3Store(t)
+	def := makeValidDef("test.v3-requeue-stale")
+	def.ResumePolicy = registry.ResumeRequeue
+	running := seedStoppingRun(t, store, def.ID, "")
+	r := newV3Registry(t, &transitionFailingStore{PebbleStore: store, event: state.EvDecideDrop,
+		err: fmt.Errorf("wrapped: %w", database.ErrStaleTransition)})
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	row, err := store.GetOperationV2(running)
+	if err != nil || row == nil || row.Status != "interrupted_dropped" || row.ErrorMessage == nil || *row.ErrorMessage != state.RequeuedMessage {
+		t.Fatalf("retired v2 row = %+v %v, want interrupted_dropped %q", row, err, state.RequeuedMessage)
+	}
+	if rec := runV3(t, store, running); rec.State != state.V3Dropped || rec.SuccessorID != "" {
+		t.Fatalf("retired run = %s successor %q, want dropped with no successor", rec.State, rec.SuccessorID)
+	}
+	rows, err := store.ListOperationsV2Since(time.Time{}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacements := 0
+	for _, o := range rows {
+		if o.DefID == def.ID && o.ID != running {
+			replacements++
+		}
+	}
+	if replacements != 1 {
+		t.Fatalf("%d replacement rows, want 1", replacements)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/retry.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
 // last-edited: 2026-10-11
 
@@ -150,7 +150,12 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 // activeRunOfDef returns the id of another queued/running run of def, or "".
 // Mirrors EnqueueOp's dedupe source (ListActiveOperationsV2) and its C-3 rule:
 // a "running" row with no live handle is a crash leftover and does not count,
-// or a stale row would refuse every retry of the def until restart.
+// or a stale row would refuse every retry of the def until restart. Nor does
+// a stopping run (a zombie, 05-PR4): its row reads "running" with a live
+// handle until its goroutine returns, which for a wedged goroutine is never,
+// so counting it would refuse every retry of the def until restart. The
+// retried row is queued, and Gate 3 holds it until the zombie releases the
+// key, as EnqueueOp's skip does for a new run.
 func (r *Registry) activeRunOfDef(def OperationDef, excludeID string) (string, error) {
 	if def.MergeQueuedParams != nil {
 		return "", nil
@@ -163,7 +168,7 @@ func (r *Registry) activeRunOfDef(def OperationDef, excludeID string) (string, e
 		if r.canonicalDefID(op.DefID) != def.ID || op.ID == excludeID {
 			continue
 		}
-		if op.Status == "running" && !r.hasLiveHandle(op.ID) {
+		if op.Status == "running" && (!r.hasLiveHandle(op.ID) || r.isZombie(op.ID)) {
 			continue
 		}
 		return op.ID, nil

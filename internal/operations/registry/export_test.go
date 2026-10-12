@@ -1,5 +1,5 @@
 // file: internal/operations/registry/export_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5c45952c-3393-4f33-9784-efd565ec8c49
 // last-edited: 2026-10-11
 
@@ -49,6 +49,24 @@ func (r *Registry) HeldConcurrencyKeysForTest() map[string]string {
 		held[k] = holder
 	}
 	return held
+}
+
+// ShuttingDownForTest reports whether Shutdown has begun.
+func (r *Registry) ShuttingDownForTest() bool { return r.shuttingDown.Load() }
+
+// MarkUserCanceledForTest sets userCanceled on opID's handle and nothing
+// else: the state a Cancel leaves when it reaches a handle between the
+// abandonment decision (finalStatusForCanceledRun) and the zombie flag, so it
+// cancels a "live" handle and never sees zombieFinal. Reports whether a
+// handle was found.
+func (r *Registry) MarkUserCanceledForTest(opID string) bool {
+	r.mu.RLock()
+	h, ok := r.running[opID]
+	r.mu.RUnlock()
+	if ok && h != nil {
+		h.userCanceled.Store(true)
+	}
+	return ok
 }
 
 // BoundToForTest reports whether f was built bound to done: the channel its

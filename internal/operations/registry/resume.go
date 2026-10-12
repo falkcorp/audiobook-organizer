@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
 // last-edited: 2026-10-11
 
@@ -8,10 +8,9 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"time"
-
-	"errors"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
@@ -487,7 +486,14 @@ func mergeJSONParams(base, overlay []byte) ([]byte, error) {
 //     goroutine was all that was left). It takes goroutine_returned to that
 //     outcome (canceled / timed_out) and is NOT resumed: resuming it would
 //     bring back the stuck -> cancel -> resume loop that
-//     finalStatusForCanceledRun exists to prevent. It is dropped from rows.
+//     finalStatusForCanceledRun exists to prevent. It is dropped from rows,
+//     and op.terminal and the dependency scheduler are told, as its exit
+//     would have.
+//
+// When the native write fails the row goes to the policy switch as before,
+// except a finished stop whose record is current (any error but
+// ErrStaleTransition): its outcome is written the v2 way instead
+// (finishStoppedRunV2).
 //
 // A row with no v3 record (a store without one, or a row written by a binary
 // that predates migration 065) is left exactly as before.
@@ -518,23 +524,59 @@ func (r *Registry) bootSweepV3(rows []database.OperationV2Row) []database.Operat
 				finished = true
 			}
 		}
+		final, _ := state.StopTerminal(rec.StopReason)
 		if _, err := r.store.TransitionRunV3(req); err != nil {
+			// ErrStaleTransition: the record does not reflect this row (a
+			// previous binary wrote it since, and the boot reconcile did not
+			// repair it), so its stop reason says nothing about the run the
+			// row describes now: the row decides, as before 05-PR4. Any other
+			// error is the store's, and the record is current: a finished
+			// stop keeps its outcome through the plain v2 write rather than
+			// being resumed, which would bring back the run a user canceled
+			// or a timeout stopped.
+			if finished && !errors.Is(err, database.ErrStaleTransition) && r.finishStoppedRunV2(row, final, req.Error) {
+				continue
+			}
 			r.logger.Warn("registry: resumeAfterStartup: v3 boot sweep failed; handling the row as v2 did",
 				"op_id", row.ID, "v3_state", rec.State, "event", req.Event, "error", err)
 			out = append(out, row)
 			continue
 		}
 		if finished {
-			final, _ := state.StopTerminal(rec.StopReason)
 			r.logger.Info("registry: resumeAfterStartup: a run stopped before the restart keeps its stop outcome",
 				"op_id", row.ID, "def_id", row.DefID, "stop_reason", rec.StopReason, "v3_state", final)
-			// Both canceled and timed_out mirror as v2 "canceled".
-			r.publishOpTerminal(row.ID, row.DefID, "canceled")
+			r.endStoppedRunAtBoot(row)
 			continue
 		}
 		out = append(out, row)
 	}
 	return out
+}
+
+// finishStoppedRunV2 records a finished stop's outcome (final: canceled or
+// timed_out) with a plain v2 compare-and-set from "running" when the native
+// boot-sweep write failed, and reports whether it applied.
+func (r *Registry) finishStoppedRunV2(row database.OperationV2Row, final state.V3, why string) bool {
+	status, msg := state.ToV2(final, "", "", false, false, why)
+	now := time.Now().UTC()
+	applied, err := r.store.UpdateOperationV2StatusIf(row.ID, "running", status, nil, &now, &msg)
+	if err != nil || !applied {
+		r.logger.Warn("registry: resumeAfterStartup: could not record a stopped run's outcome; handling the row as v2 did",
+			"op_id", row.ID, "status", status, "applied", applied, "error", err)
+		return false
+	}
+	r.logger.Info("registry: resumeAfterStartup: recorded a stopped run's outcome with the v2 write",
+		"op_id", row.ID, "def_id", row.DefID, "status", status)
+	r.endStoppedRunAtBoot(row)
+	return true
+}
+
+// endStoppedRunAtBoot announces a run the boot sweep finished (canceled or
+// timed_out, both v2 "canceled"): op.terminal for the UI, and the dependency
+// scheduler, exactly as the run's exit would have.
+func (r *Registry) endStoppedRunAtBoot(row database.OperationV2Row) {
+	r.publishOpTerminal(row.ID, row.DefID, "canceled")
+	r.notifyDepTerminal("canceled", &queuedRun{opID: row.ID, defID: row.DefID, params: json.RawMessage(row.Params)})
 }
 
 // retireForRequeue closes the original row of a requeue as dropped with its

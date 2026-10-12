@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.44.0
+// version: 3.45.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-11
 
@@ -1168,7 +1168,10 @@ func (r *Registry) publishOpTerminal(opID, defID, status string) {
 //     no-op and the op ran anyway);
 //   - a zombie (its goroutine outlived the abandon grace, so its handle stays
 //     in r.running until the goroutine exits) was already stopped -- fence
-//     revoked, context canceled -- and only its row is left to cancel.
+//     revoked, context canceled -- and is v3 "stopping": its row reads
+//     "running" until the goroutine returns. cancelStoppingRun records the
+//     cancel on its decided final status, and the row is written now only
+//     when the cancel changes that outcome (see there).
 //
 // Then the row is moved to "canceled" with a compare-and-set from the status
 // Cancel read, so no concurrent writer's status is ever overwritten: first
@@ -1187,18 +1190,13 @@ func (r *Registry) Cancel(opID string) error {
 
 	// A zombie skips ONLY the handle work below and goes on to the row. Its
 	// context is already canceled and its fence revoked, so there is nothing
-	// to stop, and userCanceled must not be touched: it already decided the
-	// terminal status written at abandonment. But its row is not always
-	// terminal, so the row still has to be canceled:
-	//   - a scan stand-down quiesce writes interrupted_quiesced
-	//     (finalStatusForCanceledRun), a live, resumable status;
-	//   - a holder that stops waiting re-queues that row IN PLACE, under the
-	//     same op id, while the zombie still runs (resumeQuiescedOp ->
-	//     requeueInPlace); Gate 0 keeps it from dispatching until the zombie
-	//     exits, and then it would run;
-	//   - a shutdown-branch zombie's row is still "running".
-	// Returning early here (as 05-PR3 first did) answered success and left
-	// such a row live, so the scan the user had just canceled ran again.
+	// to stop. Its row reads "running" (v3 stopping) until its goroutine
+	// returns, and the status written then was decided at abandonment: for a
+	// scan stand-down quiesce that is interrupted_quiesced, a live,
+	// resumable status. cancelByRow hands such a row to cancelStoppingRun,
+	// which makes the cancel win over that outcome. Returning early here (as
+	// 05-PR3 first did) answered success and left the quiesce outcome in
+	// place, so the scan the user had just canceled ran again.
 	zombie := running && h.cancel != nil && h.zombie.Load()
 	if zombie {
 		r.logger.Info("registry: cancel of an op already stopping (goroutine has not exited yet); canceling its row",
@@ -1363,20 +1361,28 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 			// that: finalStatusForCanceledRun checks it first, and
 			// writeRunTerminalStatus turns an interrupted_* status it has just
 			// written into "canceled" when it is set.
-			if h, ok := r.handleForCancel(opID); ok && h.cancel != nil && !h.zombie.Load() {
-				if h != in.live {
-					r.cancelLiveHandle(opID, h)
+			if h, ok := r.handleForCancel(opID); ok && h.cancel != nil {
+				if !h.zombie.Load() {
+					if h != in.live {
+						r.cancelLiveHandle(opID, h)
+					}
+					return nil
 				}
-				return nil
+				// A stopping run: settled without a row write unless the
+				// cancel changes its decided outcome.
+				if r.cancelStoppingRun(opID, h) {
+					return nil
+				}
 			}
-			// No live handle. Either nothing in this process owns the row
-			// (a crash left it "running"), it is a zombie's, or the run has
-			// finished and released its handle but not yet written its final
-			// status (the worker releases first). Cancel the row. The worker's
-			// final write is a compare-and-set from "running": it keeps this
-			// "canceled" when the run was stopped (interrupted_* or canceled),
-			// and records a completed or failed run's real outcome over it
-			// (writeRunTerminalStatus, keepsUserCancel).
+			// Nothing live owns the row: either nothing in this process does
+			// (a crash left it "running"), the run has finished and released
+			// its handle but not yet written its final status (the worker
+			// releases first), or it is a zombie whose decided outcome this
+			// cancel just changed (cancelStoppingRun). Cancel the row. The
+			// worker's final write is a compare-and-set from "running": it
+			// keeps this "canceled" when the run was stopped (interrupted_* or
+			// canceled), and records a completed or failed run's real outcome
+			// over it (writeRunTerminalStatus, keepsUserCancel).
 		}
 		now := time.Now().UTC()
 		msg := fmt.Sprintf("canceled by user while %s (not running)", row.Status)
@@ -1399,6 +1405,47 @@ func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 	}
 	return r.cancelStoreError(opID, in,
 		fmt.Errorf("its status kept changing; gave up after %d attempts", cancelRowAttempts))
+}
+
+// cancelStoppingRun records a user cancel on a stopping run: a zombie, whose
+// goroutine outlived the abandon grace and whose final status was decided at
+// abandonment, to be written when the goroutine returns (the exit monitor)
+// or by Shutdown if the process exits first. userCanceled is set first, so
+// either writer that already loaded the old decision still turns an
+// interrupted_* status into "canceled" (settleInterrupted, Shutdown). It
+// reports whether that settles the cancel without writing the row:
+//   - decided "canceled" (a user cancel, a watchdog kill or a timeout): the
+//     run is already being canceled. Its row keeps reading "running" until
+//     the goroutine returns -- what a stopping run is (05-PR4), so op.terminal
+//     and the v3 goroutine_returned event come when it really ends -- and a
+//     crash before then leaves it to the boot sweep, which keeps a user or
+//     timeout stop's outcome. True.
+//   - decided interrupted_* (a scan stand-down quiesce): the cancel changes
+//     the outcome. The decision is replaced with "canceled", and false, so
+//     the row is written "canceled" now as well: a crash before the goroutine
+//     returns would otherwise leave a quiesce stop, which the boot sweep
+//     resumes, and the scan the user canceled would run again. The row then
+//     goes terminal while the goroutine still runs; durability of the cancel
+//     is the reason.
+//   - no decided status (a zombie from the shutdown branch): false; the row
+//     is written now, as before 05-PR4.
+func (r *Registry) cancelStoppingRun(opID string, h *runHandle) bool {
+	h.userCanceled.Store(true)
+	for {
+		cur := h.zombieFinal.Load()
+		if cur == nil {
+			return false
+		}
+		if cur.status == "canceled" {
+			r.logger.Info("registry: cancel of a run already stopping as canceled; its row is written when its goroutine returns",
+				"op_id", logger.SanitizeLogValue(opID))
+			return true
+		}
+		msg := "canceled by user while the run was stopping (its goroutine had not exited yet)"
+		if h.zombieFinal.CompareAndSwap(cur, &zombieOutcome{status: "canceled", msg: &msg}) {
+			return false
+		}
+	}
 }
 
 // cancelStoreError answers a store failure in Cancel's row follow-up. When
@@ -1553,9 +1600,10 @@ func (r *Registry) AbandonedCount(plugin string) int {
 
 // GetCurrentItem returns the last SetCurrentItem label for a running operation.
 // Returns empty string if the op is not running or no label has been set.
-// A zombie still answers its last label; its row is not "running" (terminal,
-// interrupted_quiesced, or re-queued), so the handlers that ask only do so
-// for rows they list as running.
+// A zombie still answers its last label. Its row reads "running" until its
+// goroutine returns (v3 stopping, 05-PR4), so the handlers that ask for rows
+// they list as running show the item a stopped run was on when it stopped
+// responding, which is where it is stuck.
 func (r *Registry) GetCurrentItem(opID string) string {
 	r.mu.RLock()
 	h, ok := r.running[opID]
@@ -1703,20 +1751,34 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 			// stuck -> cancel -> resume loop; leaving the row "running" would
 			// do the same through the boot sweep. A compare-and-set from
 			// "running", so a cancel that already wrote "canceled" stands.
-			// goroutineWG below still waits (bounded) for its goroutine. A
-			// zombie from the shutdown branch has no decided status and is
-			// stamped as before.
+			// A user cancel that landed after the status was decided turns an
+			// interrupted_* status into "canceled" here, as settleInterrupted
+			// does for the exit monitor's write (Cancel sets userCanceled
+			// before it touches zombieFinal, and may reach a handle that was
+			// not yet flagged as a zombie). goroutineWG below still waits
+			// (bounded) for its goroutine; if the goroutine returns first,
+			// the monitor's compare-and-set from "running" finds this status,
+			// keeps it, publishes op.terminal again (harmless, as for the
+			// stamp below) and tells the dependency scheduler, which this
+			// branch does not. A zombie from the shutdown branch has no
+			// decided status and is stamped as before.
 			if h.slotReleased {
 				if out := h.zombieFinal.Load(); out != nil {
-					applied, err := r.store.UpdateOperationV2StatusIf(opID, "running", out.status, nil, &out.at, out.msg)
+					status, msg := out.status, out.msg
+					if h.userCanceled.Load() && strings.HasPrefix(status, "interrupted_") {
+						m := "canceled by user while the run was being interrupted"
+						status, msg = "canceled", &m
+					}
+					now := time.Now().UTC()
+					applied, err := r.store.UpdateOperationV2StatusIf(opID, "running", status, nil, &now, msg)
 					switch {
 					case err != nil:
 						r.logger.Warn("registry: shutdown timeout: could not record a stopping zombie's final status",
-							"op_id", opID, "status", out.status, "error", err)
+							"op_id", opID, "status", status, "error", err)
 					case applied:
 						r.logger.Warn("registry: shutdown timeout: recorded a stopping zombie's final status",
-							"op_id", opID, "status", out.status)
-						r.publishOpTerminal(opID, h.defID, out.status)
+							"op_id", opID, "status", status)
+						r.publishOpTerminal(opID, h.defID, status)
 					}
 				}
 				continue
