@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -62,21 +62,36 @@ func (p *Plugin) repairsApplyDef() sdk.OperationDef {
 			"PREVIEW BY DEFAULT: only dry_run=false writes. Each row is re-planned and refused as " +
 			"changed_since_plan when its fingerprint moved; hands-off rows are refused again on fresh reads. " +
 			"A write pauses a running library.scan through the scan stand-down (waiting until it parks) " +
-			"instead of refusing, and records metadata history for every changed field. Nothing is deleted. " +
+			"instead of refusing, and records metadata history for every changed field. No book and no book_file " +
+			"row is ever deleted; the series prune fixer (dedup.series-prune) removes the series rows it empties " +
+			"and series rows no book names. " +
 			"Resumable: settled rows are checkpointed, and a restart re-queues the run, which keeps their " +
 			"results and applies only the rest.",
 		// ResumeRestart: the run checkpoints every settled row (params
 		// "resume"), so a restart re-applies only the rows still open. A row
-		// cut off mid-write is re-planned; the fixers recognise their own
-		// finished steps, so it resumes rather than reporting changed.
+		// cut off mid-write is re-planned; most fixers recognise their own
+		// finished steps, so it resumes rather than reporting changed. The
+		// series prune fixer does not: a cut-off merge re-plans with the
+		// moved books on the kept series and settles changed_since_plan, and
+		// a fresh plan offers what is left.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityNormal,
 		// One apply at a time: two applies of overlapping plans would race.
 		ConcurrencyKey: repairs.ApplyOpID,
-		Cancellable:    true,
-		Timeout:        6 * time.Hour,
-		Capabilities:   []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:            p.runRepairsApply,
+		// Writes: the series prune fixer (dedup.series-prune) repoints books
+		// between series and deletes series rows, so the write-set gate must
+		// keep every apply away from the other series writers
+		// (dedup.series-prune, -normalize, -merge, entities.series-rename).
+		// The write-set is static per op def -- the dispatcher reads
+		// def.Writes before Run, with no per-run or per-fixer hook -- so it
+		// is declared for every fixer's apply: coarse, and safe, since applies
+		// are manual. Its cost is that a long apply holds those ops queued
+		// until it ends (and they hold an apply queued while they run).
+		Writes:       []sdk.Resource{sdk.ResSeries},
+		Cancellable:  true,
+		Timeout:      6 * time.Hour,
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runRepairsApply,
 	}
 }
 

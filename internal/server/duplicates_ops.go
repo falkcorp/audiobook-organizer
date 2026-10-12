@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.25.0
+// version: 2.26.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -600,8 +600,14 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 		Timeout:         2 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeDrop,
 		ConcurrencyKey:  "dedup.series-prune",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		// Writes: repoints books between series and deletes series rows, so
+		// the write-set gate serializes it against the other series writers
+		// (series-normalize, series-merge, entities.series-rename) and
+		// repairs.apply, whose series prune fixer applies these same cores
+		// one row at a time.
+		Writes:       []opsregistry.Resource{opsregistry.ResSeries},
+		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesPruneParams
 			// Empty params are legitimate (four of these ops take none at
