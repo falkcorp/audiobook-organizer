@@ -599,6 +599,19 @@ func (f *seriesPruneFixer) applyMerge(w *repairs.Writer, store OpsStore, d *spDe
 			from[b.ID] = s.ID
 		}
 	}
+	// Every book must still be where the row says before the first write, so
+	// a book moved since the re-plan refuses the row whole instead of leaving
+	// it half-merged. The same check runs again under each book's write lock
+	// (spWriteStore.ModifyBook) for a move that lands after this read.
+	for id, sid := range from {
+		b, err := store.GetBookByID(id)
+		if err != nil {
+			return fmt.Errorf("read book %s: %w", id, err)
+		}
+		if b == nil || b.SeriesID == nil || *b.SeriesID != sid {
+			return fmt.Errorf("%w: book %s is no longer in series %d", repairs.ErrChangedSincePlan, id, sid)
+		}
+	}
 	res := dedup.MergeSeriesGroup(spWriteStore{store: store, w: w, from: from}, d.keep, d.away, d.refs, d.members, record)
 	wrote := res.Repointed > 0 || res.Merged > 0
 	if wrote {
