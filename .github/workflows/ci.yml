@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.28.0
+# version: 3.29.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-12
 
@@ -344,7 +344,8 @@ jobs:
   # One job over the gate manifest (07-G4): ci/gates.txt is the single list of
   # gates and scripts/ci/run_gates.py runs them. The three golangci-lint/deadcode
   # ratchets keep their own jobs above under their existing display names (the
-  # required-check names), so they are skipped here rather than run twice; this
+  # required-check names); the manifest marks them own-job, so they are skipped
+  # here rather than run twice; this
   # job covers the Go-test ratchets and checks. The owner may later collapse the
   # names; .github/branch-protection.json is deliberately untouched.
   gates:
@@ -382,7 +383,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libtag1-dev
 
       - name: Run gates (ci/gates.txt)
-        run: python3 scripts/ci/run_gates.py --skip errcheck,interface-width,deadcode-ratchet
+        run: python3 scripts/ci/run_gates.py --exclude-own-jobs
 
   # Non-blocking report of unused frontend files and exports (01-P9). It never
   # fails the run: continue-on-error is set on the job and on the step.

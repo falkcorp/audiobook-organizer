@@ -1,5 +1,5 @@
 # file: scripts/tests/test_run_gates.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 5b9d2e74-c1a6-4380-9f2e-d4a7b6c30e18
 # last-edited: 2026-10-12
 """Tests for scripts/ci/run_gates.py and the one-way ratchet rule (07-G4)."""
@@ -41,16 +41,20 @@ class ManifestTests(unittest.TestCase):
 
     def test_rejects_bad_rows(self):
         with self.assertRaises(rg.ManifestError):
-            rg.parse_manifest("a\tb\t-\tcheck\n")  # 4 columns
+            rg.parse_manifest("a\tb\t-\tcheck\t-\n")  # 4 columns
         with self.assertRaises(rg.ManifestError):
-            rg.parse_manifest(f"a{T}b{T}-{T}weird{T}-\n")
+            rg.parse_manifest(f"a{T}b{T}-{T}weird{T}-{T}shared\n")
         with self.assertRaises(rg.ManifestError):
-            rg.parse_manifest(f"a{T}b{T}-{T}ratchet{T}-\n")  # ratchet needs baseline
+            rg.parse_manifest(f"a{T}b{T}-{T}ratchet{T}-{T}shared\n")  # ratchet needs baseline
         with self.assertRaises(rg.ManifestError):
-            rg.parse_manifest(f"a{T}b{T}-{T}check{T}-\na{T}b{T}-{T}check{T}-\n")  # dup
+            rg.parse_manifest(
+                f"a{T}b{T}-{T}check{T}-{T}shared\na{T}b{T}-{T}check{T}-{T}shared\n"
+            )  # dup
 
     def test_select(self):
-        gates = rg.parse_manifest(f"a{T}x{T}-{T}check{T}-\nb{T}y{T}-{T}check{T}-\n")
+        gates = rg.parse_manifest(
+            f"a{T}x{T}-{T}check{T}-{T}shared\nb{T}y{T}-{T}check{T}-{T}shared\n"
+        )
         self.assertEqual([g.name for g in rg.select(gates, "a", None)], ["a"])
         self.assertEqual([g.name for g in rg.select(gates, None, "a")], ["b"])
         with self.assertRaises(rg.ManifestError):
@@ -126,6 +130,32 @@ class OneWayRuleTests(unittest.TestCase):
         # ratchet scripts expose --measure for the bot
         for script in ("check-errcheck-ratchet.sh", "check-interface-width.sh"):
             self.assertIn("--measure", (ROOT / "scripts" / script).read_text())
+
+
+class OwnJobTests(unittest.TestCase):
+    def _ci(self) -> str:
+        return (ROOT / ".github/workflows/ci.yml").read_text()
+
+    def test_gates_invocation_runs_exactly_non_own_job_gates(self):
+        gates = rg.parse_manifest((ROOT / "ci/gates.txt").read_text())
+        m = re.search(r"python3 scripts/ci/run_gates\.py([^\n]*)", self._ci())
+        self.assertIsNotNone(m)
+        flags = m.group(1).split()
+        self.assertEqual(flags, ["--exclude-own-jobs"])
+        ran = {g.name for g in rg.select(gates, None, None, True)}
+        self.assertEqual(ran, {g.name for g in gates if not g.own_job})
+        self.assertEqual(
+            {g.name for g in gates if g.own_job},
+            {"errcheck", "interface-width", "deadcode-ratchet"},
+        )
+
+    def test_ci_yml_names_no_gates(self):
+        names = {g.name for g in rg.parse_manifest((ROOT / "ci/gates.txt").read_text())}
+        m = re.search(r"python3 scripts/ci/run_gates\.py([^\n]*)", self._ci())
+        for tok in re.split(r"[\s,=]+", m.group(1)):
+            self.assertNotIn(tok, names, "ci.yml must not name gates; use the manifest")
+        self.assertNotIn("--skip", m.group(1))
+        self.assertNotIn("--only", m.group(1))
 
 
 if __name__ == "__main__":
