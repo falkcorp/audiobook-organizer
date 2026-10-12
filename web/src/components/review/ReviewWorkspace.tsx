@@ -249,23 +249,30 @@ export function ReviewWorkspace() {
   // click lets the browser save the file under the server's Content-Disposition
   // name; nothing is fetched here.
   const dupesFilters = dupes.filters;
-  const exportDupes = (format: 'csv' | 'json') => {
-    const a = document.createElement('a');
-    a.href = api.dedupCandidatesExportUrl(
-      {
-        layer: dupesFilters.layer,
-        band: dupesFilters.band,
-        status: dupesFilters.status,
-        q: dupesFilters.search,
-        entity_id: dupesFilters.entityId,
-      },
-      format
-    );
-    a.download = '';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
+  const dupesAppliedSearch = dupes.appliedSearch;
+  const exportDupes = useCallback(
+    (format: 'csv' | 'json') => {
+      const a = document.createElement('a');
+      a.href = api.dedupCandidatesExportUrl(
+        {
+          layer: dupesFilters.layer,
+          band: dupesFilters.band,
+          status: dupesFilters.status,
+          // The SETTLED term, the one the visible rows were fetched with.
+          q: dupesAppliedSearch,
+          entity_id: dupesFilters.entityId,
+          // The lane lists book pairs only; without this the file would add author pairs.
+          entity_type: 'book',
+        },
+        format
+      );
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    },
+    [dupesFilters.layer, dupesFilters.band, dupesFilters.status, dupesFilters.entityId, dupesAppliedSearch]
+  );
 
   // The Dedup menu's one-button run. When it finishes, show its results.
   const refreshDupes = dupes.refresh;
@@ -613,6 +620,8 @@ export function ReviewWorkspace() {
       dedupPipeline.request,
       navigate,
       toast,
+      lane,
+      exportDupes,
     ]
   );
 

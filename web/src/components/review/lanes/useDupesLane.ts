@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 import {
   startTransition,
@@ -225,6 +225,11 @@ export interface DupesLane {
   setPageSize: (n: number) => void;
 
   filters: DupesFilters;
+  /**
+   * The search term the visible rows were fetched with (the debounced, settled
+   * value). Differs from `filters.search` while the reviewer is still typing.
+   */
+  appliedSearch: string;
   /**
    * Patches only the filters this hook owns. `band` and `entityId` are not
    * accepted -- they live in the URL, and the caller changes them by navigating.
@@ -1273,6 +1278,7 @@ export function useDupesLane(
     setPage,
     setPageSize,
     filters,
+    appliedSearch,
     setFilters,
     pendingTotal,
     countByLayer,

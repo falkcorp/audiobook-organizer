@@ -3,7 +3,7 @@
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-12
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -982,5 +982,58 @@ describe('duplicate export', () => {
     expect(p.get('layer')).toBe('acoustid');
     expect(p.get('band')).toBe('HIGH');
     expect(p.get('entity_id')).toBe('B1');
+  });
+  it('export url carries the applied search term and only book pairs', async () => {
+    const user = userEvent.setup();
+    const hrefs: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        hrefs.push(this.getAttribute('href') ?? '');
+      });
+    try {
+      renderWorkspace(['/review?lane=dupes']);
+      await user.type(await screen.findByPlaceholderText(/title, author, path/i), 'Book One');
+      // The settled term: the lane has fetched with it, so it is what the rows show.
+      await waitFor(() =>
+        expect(api.getDedupCandidates).toHaveBeenCalledWith(
+          expect.objectContaining({ q: 'Book One' }),
+          expect.anything()
+        )
+      );
+      // The applied term is recorded when that fetch settles; let it.
+      await act(async () => {});
+      await user.click(await screen.findByTestId('command-menu-queue'));
+      await user.click(await screen.findByTestId('command-export-dupes-csv'));
+    } finally {
+      click.mockRestore();
+    }
+    expect(hrefs).toHaveLength(1);
+    const p = new URL(hrefs[0], 'http://localhost').searchParams;
+    expect(p.get('q')).toBe('Book One');
+    expect(p.get('entity_type')).toBe('book');
+    expect(p.get('format')).toBe('csv');
+  });
+  it('export url ignores a search term that has been typed but not applied yet', async () => {
+    const user = userEvent.setup();
+    const hrefs: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        hrefs.push(this.getAttribute('href') ?? '');
+      });
+    try {
+      renderWorkspace(['/review?lane=dupes']);
+      await screen.findByTestId('dupes-rail');
+      // Export straight after typing, inside the debounce window: the visible
+      // rows were fetched without this term, so the file must not carry it.
+      await user.type(await screen.findByPlaceholderText(/title, author, path/i), 'Book One');
+      await user.click(await screen.findByTestId('command-menu-queue'));
+      await user.click(await screen.findByTestId('command-export-dupes-csv'));
+    } finally {
+      click.mockRestore();
+    }
+    expect(hrefs).toHaveLength(1);
+    expect(new URL(hrefs[0], 'http://localhost').searchParams.has('q')).toBe(false);
   });
 });
