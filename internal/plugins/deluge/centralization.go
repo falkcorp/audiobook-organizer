@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -95,7 +96,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		fmt.Sprintf("Centralizing %d files (%d remaining)...", total, len(resumeSlice)),
 	)
 
-	var successCount, skipCount, errCount atomic.Int64
+	var successCount, skipCount, inPlaceCount, errCount atomic.Int64
 
 	// localCount tracks how many items RunItems has dispatched so far.
 	// Sequential (Concurrency=0 default), so plain increment is safe, but
@@ -121,7 +122,23 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 
 		dest := filepath.Join(destDir, filepath.Base(srcPath))
 		if srcPath == dest {
-			skipCount.Add(1)
+			// Already at its library path: nothing to copy. Mark it imported
+			// (ImportedFromDelugeAt only, under the row's lock), or it stays
+			// on GetBookFilesNeedingDelugeImportCore and every run lists it
+			// again. A row deluge.link-backfill linked is this case.
+			outcome, markErr := delugeclient.MarkImportedInPlace(p.store, bf.BookID, bf.ID, srcPath, time.Now())
+			switch {
+			case markErr != nil:
+				errCount.Add(1)
+				checkpoint.LastError = markErr.Error()
+				reporter.Logger().Error("mark in-place file imported failed", "id", bf.ID, "error", markErr)
+			case outcome == delugeclient.InPlaceMarked:
+				inPlaceCount.Add(1)
+				reporter.Logger().Debug("file already in the library; marked imported", "path", srcPath)
+			default:
+				// Moved, removed or marked by another writer meanwhile.
+				skipCount.Add(1)
+			}
 			return nil
 		}
 
@@ -185,11 +202,12 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 
 	reporter.Logger().Info("deluge centralization complete",
 		"succeeded", successCount.Load(),
+		"already_in_library", inPlaceCount.Load(),
 		"skipped", skipCount.Load(),
 		"errors", errCount.Load())
 	sdk.NewProgress(reporter, total).Done(
-		fmt.Sprintf("Done: %d succeeded, %d skipped, %d errors",
-			successCount.Load(), skipCount.Load(), errCount.Load()),
+		fmt.Sprintf("Done: %d succeeded, %d already in library (marked imported), %d skipped, %d errors",
+			successCount.Load(), inPlaceCount.Load(), skipCount.Load(), errCount.Load()),
 	)
 	return runErr
 }

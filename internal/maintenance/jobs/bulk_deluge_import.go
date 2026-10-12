@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
 // last-edited: 2026-10-11
 
@@ -82,7 +82,7 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 	slog.Info("bulk-deluge-import files pending (dry_run)", "opID", opID, "total", total, "dryRun", dryRun)
 	reporter.SetTotal(total)
 
-	imported, failed := 0, 0
+	imported, inPlace, failed := 0, 0, 0
 	for i := range pending {
 		select {
 		case <-ctx.Done():
@@ -91,7 +91,15 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 		}
 		f := &pending[i]
 		if dryRun {
-			resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "action": "dry_run"})
+			// A file already at its library destination would be marked
+			// imported in place, not copied: say so in the preview.
+			action := "dry_run"
+			if src := filepath.Clean(f.FilePath); f.FilePath != "" {
+				if dest, derr := bdi_destination(config.AppConfig.RootDir, src); derr == nil && dest == src {
+					action = bdiStatusInPlace
+				}
+			}
+			resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "action": action})
 			if opID != "" {
 				_ = store.CreateOperationResult(&database.OperationResult{
 					OperationID: opID,
@@ -126,8 +134,21 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 				failed++
 				continue
 			}
-			newPath, importErr := bdi_importToLibrary(&config.AppConfig, client, store, full)
-			if importErr != nil {
+			newPath, wasInPlace, importErr := bdi_importToLibrary(&config.AppConfig, client, store, full)
+			switch {
+			case importErr == nil && wasInPlace:
+				// Already in the library: marked imported, nothing copied.
+				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "new_path": newPath})
+				if opID != "" {
+					_ = store.CreateOperationResult(&database.OperationResult{
+						OperationID: opID,
+						BookID:      f.ID,
+						ResultJSON:  string(resultJSON),
+						Status:      bdiStatusInPlace,
+					})
+				}
+				inPlace++
+			case importErr != nil:
 				slog.Warn("bulk-deluge-import", "opID", opID, "f", f.FilePath, "importErr", importErr)
 				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "error": importErr.Error()})
 				if opID != "" {
@@ -139,7 +160,7 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 					})
 				}
 				failed++
-			} else {
+			default:
 				resultJSON, _ := json.Marshal(map[string]any{"path": f.FilePath, "new_path": newPath})
 				if opID != "" {
 					_ = store.CreateOperationResult(&database.OperationResult{
@@ -155,8 +176,8 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 		reporter.Increment()
 	}
 
-	slog.Info("bulk-deluge-import done. imported failed", "opID", opID, "imported", imported, "failed", failed)
-	slog.Info("imported failed total", "imported", imported, "failed", failed, "total", total)
+	slog.Info("bulk-deluge-import done. imported failed", "opID", opID, "imported", imported, "already_in_library", inPlace, "failed", failed)
+	slog.Info("imported failed total", "imported", imported, "already_in_library", inPlace, "failed", failed, "total", total)
 	return nil
 }
 
@@ -189,47 +210,75 @@ func bdi_buildDelugeClient() *deluge.Client {
 	return c
 }
 
-// bdi_importToLibrary copies a book file into the library root and updates the DB record.
-func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store bookFileWriter, bookFile *database.BookFile) (newPath string, err error) {
+// bdiStatusInPlace is the result status of a pending file that was already at
+// its library destination: marked imported, nothing copied.
+const bdiStatusInPlace = "already_in_library"
+
+// bdiBookFileStore is what bdi_importToLibrary writes: the whole-row update of
+// a copied file, and ModifyBookFile for marking one already in place.
+type bdiBookFileStore interface {
+	bookFileWriter
+	deluge.BookFileModifier
+}
+
+// bdi_destination is where src lands in the library: under the same relative
+// directory when src is inside root (pathutil.RelEscapesBase, shared with the
+// other importers), directly under root otherwise.
+func bdi_destination(root, src string) (string, error) {
+	var destDir string
+	rel, relErr := filepath.Rel(root, filepath.Dir(src))
+	if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
+		var joinErr error
+		destDir, joinErr = util.SafeJoin(root, rel)
+		if joinErr != nil {
+			destDir = filepath.Clean(root)
+		}
+	} else {
+		destDir = filepath.Clean(root)
+	}
+	return util.SafeJoin(destDir, filepath.Base(src))
+}
+
+// bdi_importToLibrary copies a book file into the library root and updates the
+// DB record. inPlace reports a file already at its library destination: it is
+// marked imported (ImportedFromDelugeAt only, deluge.MarkImportedInPlace) and
+// nothing is copied, or it would stay pending and be listed on every run.
+func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store bdiBookFileStore, bookFile *database.BookFile) (newPath string, inPlace bool, err error) {
 	if bookFile == nil {
-		return "", fmt.Errorf("bdi_importToLibrary: bookFile is nil")
+		return "", false, fmt.Errorf("bdi_importToLibrary: bookFile is nil")
 	}
 	if bookFile.ImportedFromDelugeAt != nil {
 		slog.Info("bdi_importToLibrary already imported, skipping", "bookFile", bookFile.FilePath)
-		return bookFile.FilePath, nil
+		return bookFile.FilePath, false, nil
+	}
+	if bookFile.FilePath == "" {
+		return "", false, fmt.Errorf("bdi_importToLibrary: bookFile.FilePath is empty")
 	}
 	src := filepath.Clean(bookFile.FilePath)
-	if src == "" {
-		return "", fmt.Errorf("bdi_importToLibrary: bookFile.FilePath is empty")
-	}
 
-	var destDir string
-	rel, relErr := filepath.Rel(cfg.RootDir, filepath.Dir(src))
-	if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
-		var joinErr error
-		destDir, joinErr = util.SafeJoin(cfg.RootDir, rel)
-		if joinErr != nil {
-			destDir = filepath.Clean(cfg.RootDir)
-		}
-	} else {
-		destDir = filepath.Clean(cfg.RootDir)
-	}
-
-	dest, destErr := util.SafeJoin(destDir, filepath.Base(src))
+	dest, destErr := bdi_destination(cfg.RootDir, src)
 	if destErr != nil {
-		return "", fmt.Errorf("bdi_importToLibrary: unsafe dest path: %w", destErr)
+		return "", false, fmt.Errorf("bdi_importToLibrary: unsafe dest path: %w", destErr)
 	}
+	destDir := filepath.Dir(dest)
 	if src == dest {
-		slog.Info("bdi_importToLibrary source and dest are the same (), skipping copy", "src", src)
-		return src, nil
+		outcome, markErr := deluge.MarkImportedInPlace(store, bookFile.BookID, bookFile.ID, bookFile.FilePath, time.Now())
+		switch {
+		case markErr != nil:
+			return "", false, fmt.Errorf("bdi_importToLibrary: %w", markErr)
+		case outcome == deluge.InPlaceMoved, outcome == deluge.InPlaceGone:
+			return "", false, fmt.Errorf("bdi_importToLibrary: book file %s changed or was removed while being marked imported in place at %s; nothing written", bookFile.ID, src)
+		}
+		slog.Info("bdi_importToLibrary source is already at its library destination; marked imported, nothing copied", "src", src)
+		return src, true, nil
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", fmt.Errorf("bdi_importToLibrary: create dest dir %s: %w", destDir, err)
+		return "", false, fmt.Errorf("bdi_importToLibrary: create dest dir %s: %w", destDir, err)
 	}
 
 	if copyErr := bdi_ioCopy(src, dest); copyErr != nil {
-		return "", fmt.Errorf("bdi_importToLibrary: copy %s -> %s: %w", src, dest, copyErr)
+		return "", false, fmt.Errorf("bdi_importToLibrary: copy %s -> %s: %w", src, dest, copyErr)
 	}
 
 	now := time.Now()
@@ -238,7 +287,7 @@ func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store 
 	bookFile.ImportedFromDelugeAt = &now
 
 	if err := store.UpdateBookFile(bookFile.ID, bookFile); err != nil {
-		return dest, fmt.Errorf("bdi_importToLibrary: UpdateBookFile %s: %w", bookFile.ID, err)
+		return dest, false, fmt.Errorf("bdi_importToLibrary: UpdateBookFile %s: %w", bookFile.ID, err)
 	}
 
 	slog.Info("bdi_importToLibrary copied ->", "src", src, "dest", dest)
@@ -250,7 +299,7 @@ func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store 
 		}
 	}
 
-	return dest, nil
+	return dest, false, nil
 }
 
 func bdi_ioCopy(src, dest string) error {

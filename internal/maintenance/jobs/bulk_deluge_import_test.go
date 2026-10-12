@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
-// last-edited: 2026-10-09
+// last-edited: 2026-10-11
 
 // package jobs, not jobs_test: bulkDelugeImportJob is unexported, so the test
 // has to live inside the package to construct it directly. That is also why
@@ -214,4 +214,84 @@ func TestBulkDelugeImportJob_HydrateSuccess(t *testing.T) {
 
 	require.NotNil(t, updated, "a successful hydrate must reach bdi_importToLibrary's UpdateBookFile")
 	assert.NotNil(t, updated.ImportedFromDelugeAt)
+}
+
+// bdiPebbleStore is a real Pebble store that records operation results.
+type bdiPebbleStore struct {
+	*database.PebbleStore
+	results []*database.OperationResult
+}
+
+func (s *bdiPebbleStore) CreateOperationResult(r *database.OperationResult) error {
+	s.results = append(s.results, r)
+	return nil
+}
+
+// TestBulkDelugeImportJob_LinkedRowMarkedInPlace: a row already at its library
+// destination (deluge.link-backfill links exactly these: in the library, with
+// a DelugeHash, ImportedFromDelugeAt unset) is marked imported in place --
+// ImportedFromDelugeAt only, nothing copied -- reported already_in_library
+// rather than imported, and leaves the pending list, so the next run does not
+// list it again. Until review round 1 it was skipped unmarked and counted
+// "imported" on every run. The "..Extras" directory is inside the root
+// (pathutil.RelEscapesBase): the importer used to read it as outside and copy
+// the file to the top of the root.
+func TestBulkDelugeImportJob_LinkedRowMarkedInPlace(t *testing.T) {
+	for _, dir := range []string{"Example Author", "..Extras"} {
+		t.Run(dir, func(t *testing.T) {
+			root := t.TempDir()
+			origRoot, origMove := config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled
+			config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled = root, false
+			t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled = origRoot, origMove })
+
+			ps, err := database.NewPebbleStore(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ps.Close() })
+			store := &bdiPebbleStore{PebbleStore: ps}
+			book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: filepath.Join(root, dir)})
+			require.NoError(t, err)
+			path := filepath.Join(root, dir, "01.mp3")
+			row := &database.BookFile{BookID: book.ID, FilePath: path, DelugeHash: "0123456789abcdef0123456789abcdef01234567", FileHash: "example-hash"}
+			require.NoError(t, ps.CreateBookFile(row))
+			pending, err := ps.GetBookFilesNeedingDelugeImportCore()
+			require.NoError(t, err)
+			require.Len(t, pending, 1, "fixture: the linked row is pending")
+
+			ctx := maintenance.WithOperationID(context.Background(), bdiOpID)
+			j := &bulkDelugeImportJob{}
+
+			// Preview: says already_in_library, writes nothing.
+			require.NoError(t, j.Run(ctx, store, &bdiReporter{}, true))
+			require.Len(t, store.results, 1)
+			assert.Contains(t, store.results[0].ResultJSON, `"action":"already_in_library"`)
+			pending, err = ps.GetBookFilesNeedingDelugeImportCore()
+			require.NoError(t, err)
+			require.Len(t, pending, 1, "a preview must not mark the row")
+
+			store.results = nil
+			require.NoError(t, j.Run(ctx, store, &bdiReporter{}, false))
+			require.Len(t, store.results, 1)
+			assert.Equal(t, bdiStatusInPlace, store.results[0].Status)
+
+			got, err := ps.GetBookFileByID(book.ID, row.ID)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.NotNil(t, got.ImportedFromDelugeAt)
+			assert.Equal(t, path, got.FilePath)
+			assert.Empty(t, got.DelugeOriginalPath)
+			assert.Equal(t, row.DelugeHash, got.DelugeHash)
+			assert.Equal(t, row.FileHash, got.FileHash)
+			_, statErr := os.Stat(filepath.Join(root, "01.mp3"))
+			assert.True(t, os.IsNotExist(statErr), "nothing may be copied to the top of the root")
+
+			pending, err = ps.GetBookFilesNeedingDelugeImportCore()
+			require.NoError(t, err)
+			assert.Empty(t, pending, "the marked row must leave the pending list")
+
+			reporter := &bdiReporter{}
+			store.results = nil
+			require.NoError(t, j.Run(ctx, store, reporter, false))
+			assert.Equal(t, 0, reporter.total, "a second run lists nothing")
+		})
+	}
 }
