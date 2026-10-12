@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-10-12
 
@@ -338,12 +338,12 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 				// leaves an undo that "restores" books never touched.
 				journal.Absorbed = journal.Absorbed[:i]
 				plans = plans[:i]
-				if i == 0 {
-					// Nothing at all was absorbed and nothing will be
-					// stamped: an undo restoring the keep's own disc/track
-					// numbers would only clobber a renumbering made since.
-					journal.SurvivorOwnFiles = nil
-				}
+				// A stopped merge never stamps the play order (step 2b
+				// sets order = nil), so the keep's own files are never
+				// renumbered, whichever src it stopped before: an undo
+				// restoring their disc/track numbers would only clobber a
+				// renumbering made since.
+				journal.SurvivorOwnFiles = nil
 				journal.Warnings = append(journal.Warnings, msg)
 				persist()
 				break
@@ -415,20 +415,25 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		persist()
 	}
 
-	// Step 2: recompute keep duration from its file rows.
+	// Step 2: recompute keep duration from its file rows -- only when the
+	// merge changed the keep's file set. A merge that absorbed nothing and
+	// moved nothing (stopped before its first src, or every src left live)
+	// must not write the keep's duration.
 	total := 0
-	allFiles, err := store.GetBookFiles(keepID)
-	if err != nil {
-		result.Errors = append(result.Errors,
-			fmt.Sprintf("recount files on keep: %v", err))
-	} else {
-		// Canonical runtime rows (database.ComputeBookRuntime), stored as
-		// RecomputeBookAggregates stores it: the same number the
-		// BookFile-chokepoint recompute would write, never a raw sum that
-		// counts missing rows beside their present copies.
-		total, _ = database.ComputeBookRuntime(nil, allFiles).StoredAggregateSec()
-		if total > 0 {
-			result.NewDuration = total
+	if len(kept) > 0 || result.FilesMoved > 0 {
+		allFiles, err := store.GetBookFiles(keepID)
+		if err != nil {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("recount files on keep: %v", err))
+		} else {
+			// Canonical runtime rows (database.ComputeBookRuntime), stored as
+			// RecomputeBookAggregates stores it: the same number the
+			// BookFile-chokepoint recompute would write, never a raw sum that
+			// counts missing rows beside their present copies.
+			total, _ = database.ComputeBookRuntime(nil, allFiles).StoredAggregateSec()
+			if total > 0 {
+				result.NewDuration = total
+			}
 		}
 	}
 

@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge_hooks_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c7e2f4a-9b13-4d58-a6e1-3f82d5b7c904
 // last-edited: 2026-10-12
 
@@ -95,6 +95,7 @@ func TestMergeSplitBookCluster_BeforeSourceStopsMidCluster(t *testing.T) {
 	assert.Equal(t, merge.CombineJournalApplied, j.Status)
 	require.Len(t, j.Absorbed, 1, "only the absorbed src is journaled")
 	assert.Equal(t, srcs[0], j.Absorbed[0].BookID)
+	assert.Empty(t, j.SurvivorOwnFiles, "a stopped merge never renumbers the keep's own files, so none are journaled")
 
 	_, err = ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
@@ -136,6 +137,12 @@ func TestMergeSplitBookCluster_BeforeSourceStopStillHandsOnARetiredPrimary(t *te
 func TestMergeSplitBookCluster_BeforeSourceStopsAtFirstSrc(t *testing.T) {
 	store := newConcurrentTestStore(t)
 	keep, srcs, files := hookCluster(t, store, 2)
+	// A stale stored duration that a recompute over the keep's one 60 s file
+	// would "correct": the merge must leave it alone when it moved nothing.
+	_, merr := store.ModifyBook(keep, func(b *database.Book) error { d := 5; b.Duration = &d; return nil })
+	require.NoError(t, merr)
+	durBefore := hookBook(t, store, keep).Duration
+	require.NotNil(t, durBefore)
 	res, err := MergeSplitBookClusterWithOptions(store, keep, srcs, "Keep (Complete)", SplitMergeOptions{
 		BeforeSource: func(string) error { return errors.New("fenced") },
 	})
@@ -154,6 +161,8 @@ func TestMergeSplitBookCluster_BeforeSourceStopsAtFirstSrc(t *testing.T) {
 	assert.Equal(t, merge.CombineJournalApplied, j.Status)
 	assert.Empty(t, j.Absorbed)
 	assert.Empty(t, j.SurvivorOwnFiles, "an undo of it touches nothing")
+	assert.Zero(t, res.NewDuration, "nothing moved, so no duration is recomputed")
+	assert.Equal(t, durBefore, hookBook(t, store, keep).Duration, "the keep's duration is not written by a merge that moved nothing")
 }
 
 // OnJournal is told the journal id after the Pending journal is written and
