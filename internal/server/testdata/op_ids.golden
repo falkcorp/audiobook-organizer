@@ -237,6 +237,7 @@ metadata.bulk-apply-preview
 metadata.candidate-fetch
 metafetch.asin-backfill
 metafetch.calibrate-scoring
+metafetch.pcache-sweep
 openlibrary.download
 openlibrary.import
 operations.backfill-legacy-status

@@ -78,6 +78,18 @@ func productTTL(provider string) database.PCacheTTL {
 	return database.PCacheTTL{Positive: pcacheProductTTL, Negative: negativeTTL(provider)}
 }
 
+// PCacheTTLFor is the TTL rule the read path applies to a stored row of kind
+// (database.PCacheKindQuestion or database.PCacheKindProduct) from provider:
+// questionTTL for a question, productTTL for a product. The sweep and the
+// counts judge rows with it (database.PCacheTTLRule), so they call a row
+// expired exactly when a read would not serve it.
+func PCacheTTLFor(kind, provider string) database.PCacheTTL {
+	if kind == database.PCacheKindProduct {
+		return productTTL(provider)
+	}
+	return questionTTL(provider)
+}
+
 // pcacheRead reads one entry and records the decision on the
 // provider_answer counters. A store error is logged and read as a miss: the
 // cache is an optimization, never a reason to fail a search.

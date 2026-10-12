@@ -519,19 +519,30 @@ func GetPCache(store PCacheStore, key string, ttl PCacheTTL, now time.Time) (*PC
 	if err := json.Unmarshal(blob, &e); err != nil {
 		return nil, PCacheMissCorrupt, nil
 	}
-	if e.Empty {
-		if ttl.Negative <= 0 {
-			return nil, PCacheMissNegativeOff, nil
-		}
-		if now.Sub(e.AskedAt) > ttl.Negative {
-			return nil, PCacheMissExpired, nil
-		}
-		return &e, "", nil
-	}
-	if ttl.Positive > 0 && now.Sub(e.AskedAt) > ttl.Positive {
-		return nil, PCacheMissExpired, nil
+	if reason := pcacheUnservable(&e, ttl, now); reason != "" {
+		return nil, reason, nil
 	}
 	return &e, "", nil
+}
+
+// pcacheUnservable is the one freshness rule of a decoded P1/P2 entry: why
+// it would not be served at now under ttl, or "" when it would. GetPCache
+// reads with it and the sweep and the counts (PCacheRowDead) judge rows with
+// it, so a row the sweep deletes is exactly a row no read would serve.
+func pcacheUnservable(e *PCacheEntry, ttl PCacheTTL, now time.Time) string {
+	if e.Empty {
+		if ttl.Negative <= 0 {
+			return PCacheMissNegativeOff
+		}
+		if now.Sub(e.AskedAt) > ttl.Negative {
+			return PCacheMissExpired
+		}
+		return ""
+	}
+	if ttl.Positive > 0 && now.Sub(e.AskedAt) > ttl.Positive {
+		return PCacheMissExpired
+	}
+	return ""
 }
 
 // PutPCache writes one entry and reports whether it wrote.
