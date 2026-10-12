@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: de3f610d-605b-4338-96c9-3316a2dcd8d4
-// last-edited: 2026-10-01
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -61,8 +61,13 @@ func fanoutHarness(t *testing.T, book *database.Book, providers ...metadata.Meta
 }
 
 // fanoutHarnessFiles is fanoutHarness with the book's file rows.
+//
+// The harness runs with metadata_fetch.shared_cache OFF: the per-book cache
+// rows these tests count calls against. A test that wants the shared cache
+// turns it on after building the harness (readThroughHarness does).
 func fanoutHarnessFiles(t *testing.T, book *database.Book, files []database.BookFile, providers ...metadata.MetadataSource) *Service {
 	t.Helper()
+	withSharedCache(t, false)
 	raw := map[string][]byte{}
 	var mu sync.Mutex
 	mock := &database.MockStore{
@@ -124,9 +129,10 @@ func TestSearchFanout_GoogleOnceCapHoldsAudnexusNeverTitleSearched(t *testing.T)
 	assert.Zero(t, audnexus.callCount(), "Audnexus is never title-searched")
 	assert.ElementsMatch(t, []string{"Audible", "Open Library", "Google Books", "Audnexus (Audible)"}, resp.SourcesAnswered)
 
-	// A second search replays every variant from the per-variant cache rows
-	// only for questions that had an answer; empty answers are never cached,
-	// so they are asked again.
+	// With the shared cache off (this harness), a second search replays every
+	// variant from the per-variant cache rows only for questions that had an
+	// answer; empty answers are never cached, so they are asked again. With
+	// it on, empty answers are cached too (TestAskVariant_EmptyAnswer*).
 	_, err = svc.SearchMetadataForBookWithOptions("b1", reacherTitle, "Lee Child", "", "", SearchOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 2*maxQueryVariants, audible.callCount())

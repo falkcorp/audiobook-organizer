@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_cache_readthrough_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7de1cf53-bf29-420d-bfad-f87e0fe4db96
-// last-edited: 2026-10-07
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -58,6 +58,9 @@ func readThroughHarness(t *testing.T) (svc *Service, book *database.Book, audibl
 		}}}
 	audnexus := &fakeProvider{id: metadata.SourceIDAudnexus, name: "Audnexus (Audible)"}
 	svc = fanoutHarness(t, book, audible, audnexus)
+	// These tests run on the shared provider-answer cache (the default):
+	// the ASIN lookups land on the shared product rows (cachedASINRow).
+	withSharedCache(t, true)
 	asinCalls = &atomic.Int32{}
 	asinAnswer = &atomic.Value{}
 	asinAnswer.Store(asinResult{rec: &metadata.BookMetadata{Title: "A Wanted Man", Author: "Lee Child", ASIN: own, DurationSec: 36000}})
@@ -169,11 +172,13 @@ func TestSearchCache_EmptyForcedRefreshKeepsGoodRow(t *testing.T) {
 	assert.Equal(t, "A Wanted Man", rec.Title)
 }
 
-func cachedASINRow(t *testing.T, svc *Service, book *database.Book, providerID string) *metadata.BookMetadata {
+// cachedASINRow reads the shared product row (P2) of the book's own ASIN
+// for providerID: nil when there is none or it records "no such ASIN".
+func cachedASINRow(t *testing.T, svc *Service, _ *database.Book, providerID string) *metadata.BookMetadata {
 	t.Helper()
-	entry, err := database.GetCachedMetadataFetch(svc.db, "b1", asinCacheSource(providerID, readThroughASIN), svc.fetchCacheIdentity(book))
+	entry, _, err := database.GetPCache(svc.db, database.PCacheASINKey(providerID, readThroughASIN, ""), productTTL(providerID), pcacheNow())
 	require.NoError(t, err)
-	if entry == nil {
+	if entry == nil || entry.Empty {
 		return nil
 	}
 	var rs []metadata.BookMetadata

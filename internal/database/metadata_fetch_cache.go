@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-11
 
 package database
 
@@ -11,7 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -306,9 +309,16 @@ func CountCachedMetadataFetches(store RawKVStore) (int64, error) {
 // SearchIdentity stamp still matches and would replay it. Edit, apply and
 // rename paths do not call this; the stamp makes rows miss when one of the
 // five identity fields changes.
+//
+// The shared provider-answer rows (pcache:q:) the book's searches read or
+// wrote are deleted first, through the book's pointer row, so the bust also
+// reaches the answers the book shares with other books (DeletePCacheForBook).
 func InvalidateAllCachedMetadataFetchesForBook(store RawKVStore, bookID string) error {
 	if bookID == "" {
 		return nil
+	}
+	if _, err := DeletePCacheForBook(store, bookID, nil); err != nil {
+		return err
 	}
 	prefix := "metadata_fetch_cache:" + bookID + ":"
 	pairs, err := store.ScanPrefix(prefix)
@@ -324,4 +334,406 @@ func InvalidateAllCachedMetadataFetchesForBook(store RawKVStore, bookID string) 
 		metrics.RecordCacheInvalidation("metadata_fetch", "book")
 	}
 	return nil
+}
+
+// ── Shared provider-answer cache (P1 questions, P2 products by id) ──
+//
+// The rows above are keyed per BOOK, so the same question asked for a second
+// book (a duplicate copy, a track row, a re-import) missed, and an empty answer
+// was never stored, so a book no provider can answer was re-asked on every
+// pass. The pcache: family is keyed by the QUESTION instead:
+//
+//	pcache:q:<provider>:<endpoint>:<hex sha256(normalized question)>
+//	pcache:asin:<provider>:<ASIN>
+//	pcache:isbn:<provider>:<ISBN>
+//	pcache:book:<bookID>            the book's pointer row (PCachePointer)
+//
+// The normalized question is built by metafetch.NormalizeQuestion (this
+// package cannot import metafetch); the provider id and endpoint stay outside
+// the hash so a bust by provider is a prefix delete. A configured marketplace
+// (a provider base URL other than the default) is appended to the endpoint
+// segment, or to the ASIN/ISBN, as "@<host>", so it is outside the hash too.
+//
+// An entry holds the RAW answer the provider gave, before any per-book filter,
+// including an EMPTY answer (a negative entry). Errors, throttle refusals and
+// 429s are never written: callers write only after err == nil.
+
+// PCachePrefix is the root of the shared provider-answer family.
+const (
+	PCachePrefix         = "pcache:"
+	PCacheQuestionPrefix = "pcache:q:"
+	PCacheASINPrefix     = "pcache:asin:"
+	PCacheISBNPrefix     = "pcache:isbn:"
+)
+
+// PCacheBookPrefix holds each book's pointer row (pcache:book:<bookID>): the
+// P1 keys the book's questions map to. It is its own family rather than a row
+// under metadata_fetch_cache:<bookID>:, whose scanners (the db-health deep
+// expired count) decode every row as a CachedMetadataEntry.
+const PCacheBookPrefix = "pcache:book:"
+
+// pcachePointerMaxPerProvider caps the keys a pointer row keeps per provider:
+// a book whose title changed many times would otherwise grow its row forever.
+// The oldest keys fall off first; a key that falls off is not deleted by a
+// bust, so it costs at most one stale answer until its TTL.
+const pcachePointerMaxPerProvider = 64
+
+// PCacheStore is what the P1/P2 reads and writes need: two raw calls, so a
+// caller with a narrow store (the ASIN backfill's marker store) can use the
+// cache without growing its interface.
+type PCacheStore interface {
+	GetRaw(key string) ([]byte, error)
+	SetRaw(key string, value []byte) error
+}
+
+// PCacheEntry is one stored provider answer.
+type PCacheEntry struct {
+	Provider string `json:"provider"`
+	Endpoint string `json:"endpoint"`
+	// AskedAt is when the provider gave this answer. TTLs are measured from
+	// it, and a re-ask scheduler orders by it (oldest question first).
+	AskedAt time.Time `json:"asked_at"`
+	// Results is the raw answer (a JSON array), left as RawMessage so this
+	// package does not depend on internal/metadata.
+	Results json.RawMessage `json:"results"`
+	// Empty marks a negative entry: the provider answered and had nothing.
+	Empty bool `json:"empty"`
+}
+
+// PCacheTTL is the freshness rule for one provider's entries.
+//
+// Positive bounds a non-empty entry; <= 0 means no age limit (the same rule
+// as MetadataFetchCacheTTLDays = 0). Negative bounds an EMPTY entry; <= 0
+// means negative caching is off for the provider: an empty entry is never
+// served and never written. Unlike Positive, 0 never means "forever": an
+// unanswerable question would then stay unanswerable for good.
+type PCacheTTL struct {
+	Positive time.Duration
+	Negative time.Duration
+}
+
+// Miss reasons GetPCache reports (the {reason} label of the cache counters).
+const (
+	PCacheMissNotFound    = "not_found"
+	PCacheMissExpired     = "expired"
+	PCacheMissNegativeOff = "negative_disabled"
+	PCacheMissCorrupt     = "corrupt"
+)
+
+// PCacheMetricName is the {cache} label of the shared provider-answer cache
+// on audiobook_organizer_cache_{hits,misses,sets,invalidations}_total.
+const PCacheMetricName = "provider_answer"
+
+// pcacheSegmentReplacements are the runes a key segment may not carry.
+const pcacheSegmentReplacements = ": \t\n"
+
+// pcacheSegment makes a provider or endpoint id safe as one key segment:
+// lower-cased, trimmed, and with the key separator and whitespace replaced.
+func pcacheSegment(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(pcacheSegmentReplacements, r) {
+			return '_'
+		}
+		return r
+	}, s)
+}
+
+// PCacheQuestionKey is the P1 key of one provider question. normalized is
+// the canonical question (metafetch.NormalizeQuestion builds it); it is
+// hashed, and provider and endpoint are a clear-text prefix.
+func PCacheQuestionKey(provider, endpoint, normalized string) string {
+	sum := sha256.Sum256([]byte(normalized))
+	return PCacheQuestionPrefix + pcacheSegment(provider) + ":" + pcacheSegment(endpoint) + ":" + hex.EncodeToString(sum[:])
+}
+
+// PCacheQuestionProviderPrefix is the prefix every P1 key of provider shares,
+// for a bust by provider.
+func PCacheQuestionProviderPrefix(provider string) string {
+	return PCacheQuestionPrefix + pcacheSegment(provider) + ":"
+}
+
+// PCacheASINKey is the P2 key of one product lookup by ASIN. The provider is
+// part of the key: Audible and Audnexus return different records for the
+// same ASIN (Audnexus carries the runtime chapters, Audible the catalog
+// view), so one must never answer for the other. marketplace is "" for the
+// provider's default store.
+func PCacheASINKey(provider, asin, marketplace string) string {
+	return PCacheASINPrefix + pcacheSegment(provider) + ":" + pcacheIdentifier(asin) + pcacheMarketplace(marketplace)
+}
+
+// PCacheISBNKey is the P2 key of one product lookup by ISBN (hyphens and
+// spaces removed, upper-cased so a trailing 'x' check digit matches 'X').
+func PCacheISBNKey(provider, isbn, marketplace string) string {
+	return PCacheISBNPrefix + pcacheSegment(provider) + ":" + pcacheIdentifier(isbn) + pcacheMarketplace(marketplace)
+}
+
+func pcacheIdentifier(id string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '-' || r == ' ' || r == '\t' {
+			return -1
+		}
+		return r
+	}, strings.ToUpper(strings.TrimSpace(id)))
+}
+
+func pcacheMarketplace(m string) string {
+	if m = pcacheSegment(m); m == "" {
+		return ""
+	}
+	return "@" + m
+}
+
+// GetPCache reads one P1/P2 entry and applies the TTL for its kind. It
+// returns (nil, reason, nil) on a miss: no row, a row past its TTL (kept,
+// not deleted -- the next answer overwrites it), an empty row while negative
+// caching is off, or a row that does not decode. now is the caller's clock.
+func GetPCache(store PCacheStore, key string, ttl PCacheTTL, now time.Time) (*PCacheEntry, string, error) {
+	blob, err := store.GetRaw(key)
+	if err != nil {
+		return nil, "", fmt.Errorf("pcache get %s: %w", key, err)
+	}
+	if blob == nil {
+		return nil, PCacheMissNotFound, nil
+	}
+	var e PCacheEntry
+	if err := json.Unmarshal(blob, &e); err != nil {
+		return nil, PCacheMissCorrupt, nil
+	}
+	if e.Empty {
+		if ttl.Negative <= 0 {
+			return nil, PCacheMissNegativeOff, nil
+		}
+		if now.Sub(e.AskedAt) > ttl.Negative {
+			return nil, PCacheMissExpired, nil
+		}
+		return &e, "", nil
+	}
+	if ttl.Positive > 0 && now.Sub(e.AskedAt) > ttl.Positive {
+		return nil, PCacheMissExpired, nil
+	}
+	return &e, "", nil
+}
+
+// PutPCache writes one entry and reports whether it wrote.
+//
+// It writes nothing for an empty entry when negative caching is off for the
+// provider (ttl.Negative <= 0), and an empty entry never replaces a fresh
+// non-empty one: a forced refresh (which skips the read) that comes back
+// empty for a moment would otherwise wipe the answer for every book sharing
+// the question. A "Search again" bust deletes the book's keys first
+// (DeletePCacheForBook), so a provider that really dropped a title is still
+// recorded as empty after the bust. The read-then-write is not atomic; two
+// writers of one key race to last-writer-wins, which at worst costs one
+// re-ask.
+//
+// e.AskedAt zero means now.
+func PutPCache(store PCacheStore, key string, e PCacheEntry, ttl PCacheTTL, now time.Time) (bool, error) {
+	if key == "" {
+		return false, nil
+	}
+	if e.Empty {
+		if ttl.Negative <= 0 {
+			return false, nil
+		}
+		if cur, _, err := GetPCache(store, key, PCacheTTL{Positive: ttl.Positive}, now); err != nil {
+			return false, err
+		} else if cur != nil && !cur.Empty {
+			return false, nil
+		}
+		e.Results = json.RawMessage("[]")
+	}
+	if e.AskedAt.IsZero() {
+		e.AskedAt = now
+	}
+	e.AskedAt = e.AskedAt.UTC()
+	blob, err := json.Marshal(e)
+	if err != nil {
+		return false, fmt.Errorf("pcache marshal: %w", err)
+	}
+	if err := store.SetRaw(key, blob); err != nil {
+		return false, fmt.Errorf("pcache set %s: %w", key, err)
+	}
+	return true, nil
+}
+
+// DeletePCacheForQuestion deletes one P1/P2 entry.
+func DeletePCacheForQuestion(store RawKVStore, key string) error {
+	if key == "" {
+		return nil
+	}
+	if err := store.DeleteRaw(key); err != nil {
+		return fmt.Errorf("pcache delete %s: %w", key, err)
+	}
+	return nil
+}
+
+// PCachePointer is a book's pointer row: the P1 keys its searches read or
+// wrote, by provider, so a per-book bust can delete the shared answers the
+// book's questions map to. It replaces nothing: the book's legacy per-book
+// rows stay where they are and are still read as a fallback.
+type PCachePointer struct {
+	Keys      map[string][]string `json:"keys"`
+	UpdatedAt time.Time           `json:"updated_at"`
+}
+
+// pcachePointerKey is the pointer row's key for bookID.
+func pcachePointerKey(bookID string) string {
+	return PCacheBookPrefix + bookID
+}
+
+// pcachePointerLocks serialize the read-modify-write of one book's pointer
+// row inside this process: the chain walk, the search and the ASIN backfill
+// may each record keys for the same book at once. Striped by book id.
+var pcachePointerLocks [64]sync.Mutex
+
+func pcachePointerLock(bookID string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(bookID)) // hash.Hash.Write never returns an error
+	return &pcachePointerLocks[h.Sum32()%uint32(len(pcachePointerLocks))]
+}
+
+func readPCachePointer(store PCacheStore, bookID string) (PCachePointer, error) {
+	var ptr PCachePointer
+	blob, err := store.GetRaw(pcachePointerKey(bookID))
+	if err != nil {
+		return ptr, fmt.Errorf("pcache pointer get: %w", err)
+	}
+	if blob != nil {
+		// A row that does not decode is replaced: it only lists keys to bust.
+		if json.Unmarshal(blob, &ptr) != nil {
+			ptr = PCachePointer{}
+		}
+	}
+	if ptr.Keys == nil {
+		ptr.Keys = map[string][]string{}
+	}
+	return ptr, nil
+}
+
+// RecordPCachePointer adds keys (provider -> P1 keys) to bookID's pointer
+// row: a union per provider, newest last, capped at
+// pcachePointerMaxPerProvider. A no-op when there is nothing to record.
+func RecordPCachePointer(store PCacheStore, bookID string, keys map[string][]string, now time.Time) error {
+	if bookID == "" || len(keys) == 0 {
+		return nil
+	}
+	mu := pcachePointerLock(bookID)
+	mu.Lock()
+	defer mu.Unlock()
+	ptr, err := readPCachePointer(store, bookID)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for provider, add := range keys {
+		cur := ptr.Keys[provider]
+		for _, k := range add {
+			if k == "" {
+				continue
+			}
+			if i := indexOf(cur, k); i >= 0 {
+				if i == len(cur)-1 {
+					continue
+				}
+				cur = append(cur[:i:i], cur[i+1:]...)
+			}
+			cur = append(cur, k)
+			changed = true
+		}
+		if n := len(cur) - pcachePointerMaxPerProvider; n > 0 {
+			cur = cur[n:]
+		}
+		if len(cur) > 0 {
+			ptr.Keys[provider] = cur
+		}
+	}
+	if !changed {
+		return nil
+	}
+	ptr.UpdatedAt = now.UTC()
+	blob, err := json.Marshal(ptr)
+	if err != nil {
+		return fmt.Errorf("pcache pointer marshal: %w", err)
+	}
+	if err := store.SetRaw(pcachePointerKey(bookID), blob); err != nil {
+		return fmt.Errorf("pcache pointer set: %w", err)
+	}
+	return nil
+}
+
+func indexOf(list []string, s string) int {
+	for i, v := range list {
+		if v == s {
+			return i
+		}
+	}
+	return -1
+}
+
+// PCachePointedKeys returns bookID's pointer row (provider -> P1 keys).
+func PCachePointedKeys(store PCacheStore, bookID string) (map[string][]string, error) {
+	if bookID == "" {
+		return nil, nil
+	}
+	ptr, err := readPCachePointer(store, bookID)
+	if err != nil {
+		return nil, err
+	}
+	return ptr.Keys, nil
+}
+
+// DeletePCacheForBook is the per-book "Search again" bust (owner decision
+// D30): it deletes the shared P1 entries bookID's pointer row lists for
+// providers (nil = every provider) and drops those providers from the row.
+// It returns how many entries it deleted. Other books asking the same
+// question re-ask once; that is the cost of the bust, and the reason no
+// automatic bust exists beyond TTL expiry.
+func DeletePCacheForBook(store RawKVStore, bookID string, providers []string) (int, error) {
+	if bookID == "" {
+		return 0, nil
+	}
+	mu := pcachePointerLock(bookID)
+	mu.Lock()
+	defer mu.Unlock()
+	ptr, err := readPCachePointer(store, bookID)
+	if err != nil {
+		return 0, err
+	}
+	if len(ptr.Keys) == 0 {
+		return 0, nil
+	}
+	n := 0
+	for provider, keys := range ptr.Keys {
+		if providers != nil && indexOf(providers, provider) < 0 {
+			continue
+		}
+		for _, k := range keys {
+			if !strings.HasPrefix(k, PCachePrefix) {
+				continue // never delete outside the family, whatever the row says
+			}
+			if err := DeletePCacheForQuestion(store, k); err != nil {
+				return n, err
+			}
+			n++
+		}
+		delete(ptr.Keys, provider)
+	}
+	if len(ptr.Keys) == 0 {
+		if err := store.DeleteRaw(pcachePointerKey(bookID)); err != nil {
+			return n, fmt.Errorf("pcache pointer delete: %w", err)
+		}
+	} else {
+		blob, err := json.Marshal(ptr)
+		if err != nil {
+			return n, fmt.Errorf("pcache pointer marshal: %w", err)
+		}
+		if err := store.SetRaw(pcachePointerKey(bookID), blob); err != nil {
+			return n, fmt.Errorf("pcache pointer set: %w", err)
+		}
+	}
+	if n > 0 {
+		metrics.RecordCacheInvalidation(PCacheMetricName, "book")
+	}
+	return n, nil
 }

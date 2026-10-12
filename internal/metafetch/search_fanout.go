@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -153,15 +153,35 @@ type fanoutParams struct {
 	opts     SearchOptions
 	people   string
 	strong   strongCriteria
+	// pkeys collects the shared-cache (P1) keys this search reads or writes,
+	// for the book's pointer row; runSearchFanout sets it when the shared
+	// cache is on.
+	pkeys *pcacheKeyLog
 }
 
 // variantCacheSource is the per-variant fetch-cache "source" key: the
 // provider key plus a digest of the question. It lives under the same
 // metadata_fetch_cache:<bookID>: prefix as the per-provider rows, so a
 // book's prefix delete still clears it, and it never collides with them.
+//
+// These per-book rows are the LEGACY layer: with metadata_fetch.shared_cache
+// on, a variant is answered from the shared P1 row (variantQuestion) first
+// and this row is only read as a fallback, never written.
 func variantCacheSource(src metadata.MetadataSource, v queryVariant) string {
 	sum := sha256.Sum256([]byte(v.key()))
 	return metadata.ProviderKey(src) + "#q" + hex.EncodeToString(sum[:8])
+}
+
+// variantQuestion is the shared P1 endpoint and key of the call askVariant
+// makes for v: title and author when the variant carries an author
+// (SearchByTitleAndAuthor), else the title alone (SearchByTitle).
+func variantQuestion(provider string, v queryVariant) (endpoint, key string) {
+	if v.Author != "" {
+		endpoint = endpointWithMarketplace(provider, EndpointSearchTitleAuthor)
+		return endpoint, NormalizeQuestion(provider, endpoint, Question{Title: v.Title, Authors: CreditsFromFlat(v.Author)})
+	}
+	endpoint = endpointWithMarketplace(provider, EndpointSearchTitle)
+	return endpoint, NormalizeQuestion(provider, endpoint, Question{Title: v.Title})
 }
 
 // runSearchFanout asks every source its variants in ROUNDS: round k asks
@@ -171,7 +191,28 @@ func variantCacheSource(src metadata.MetadataSource, v queryVariant) string {
 // async stop flag would make it depend on timing), and let a source that can
 // never produce a runtime-verified match by itself (Open Library) stop on
 // Audible's evidence instead of spending its whole cap.
+//
+// With the shared cache on, a forced search (BypassFetchCache: "Search
+// again", a forced batch refetch) first deletes the shared answers the book's
+// pointer row lists for these sources (database.DeletePCacheForBook), and the
+// keys the search touches are recorded on the pointer row when it ends.
 func (mfs *Service) runSearchFanout(p fanoutParams, sources []metadata.MetadataSource, variants []queryVariant) []*fanoutSource {
+	if sharedCacheEnabled() && p.bookID != "" {
+		if p.opts.BypassFetchCache {
+			providers := make([]string, 0, len(sources))
+			for _, s := range sources {
+				providers = append(providers, metadata.ProviderKey(s))
+			}
+			if _, err := database.DeletePCacheForBook(mfs.db, p.bookID, providers); err != nil {
+				searchFanoutLog.Warn("search again: shared cache bust failed: book=%s err=%v",
+					logger.SanitizeLogValue(p.bookID), err)
+			}
+		}
+		if p.pkeys == nil {
+			p.pkeys = newPCacheKeyLog()
+		}
+		defer p.pkeys.flush(mfs.db, p.bookID)
+	}
 	states := make([]*fanoutSource, len(sources))
 	for i, s := range sources {
 		states[i] = &fanoutSource{src: s, name: s.Name(), policy: sourcePolicyFor(metadata.ProviderIDOf(s)), open: true}
@@ -240,33 +281,50 @@ func poolHasStrong(states []*fanoutSource, c strongCriteria) bool {
 	return false
 }
 
-// askVariant asks st one variant: from the per-variant fetch cache unless
-// opts.BypassFetchCache, else live after a limiter token. The raw answer is
-// cached (never an empty one) and the variant's filter is applied on both
-// paths, so an answer that is non-empty but entirely filtered is replayed
-// rather than re-asked.
+// askVariant asks st one variant: from the cache unless
+// opts.BypassFetchCache, else live after a limiter token. A cache hit costs
+// no limiter token; a miss still waits for one.
+//
+// With metadata_fetch.shared_cache on, the cache is the shared P1 row of the
+// exact call (variantQuestion), shared by every book that asks the same
+// question, then the book's legacy per-variant row as a fallback (read old,
+// write new: a legacy hit is copied into P1 with its original age). The RAW
+// answer is stored, an EMPTY one included (until the provider's negative
+// TTL), and only after the call returned no error: an error, a throttle
+// refusal or a 429 writes nothing. The variant's filter (p.accept) runs
+// after the read on both paths, so a strict variant that keeps nothing can
+// never make another book's looser variant read "no answer".
+//
+// With it off, the book's per-variant row is read and written, and only a
+// non-empty answer is cached, exactly as before the shared cache.
 func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant) {
 	st.asked++
-	cacheSource := variantCacheSource(st.src, v)
+	provider := metadata.ProviderKey(st.src)
+	shared := sharedCacheEnabled()
+	var endpoint, pkey string
+	if shared {
+		endpoint, pkey = variantQuestion(provider, v)
+		p.pkeys.add(provider, pkey)
+	}
 	if p.opts.BypassFetchCache {
 		metrics.RecordCacheMiss(searchCacheName, searchCacheMissBypass)
-	} else {
-		if cached, _, err := database.GetCachedMetadataFetchWithMaxAge(mfs.db, p.bookID, cacheSource, p.identity, fetchCacheMaxAge()); err == nil && cached != nil {
-			var rs []metadata.BookMetadata
-			if jerr := json.Unmarshal(cached.Results, &rs); jerr == nil {
-				// Entries cached before #1940 lack the year-kind flag; re-derive
-				// it from the source, as the per-provider replay does.
-				isRelease := metadata.SourceProducesAudiobookReleaseYear(st.name)
-				for i := range rs {
-					rs[i].PublishYearIsAudiobookRelease = isRelease
-				}
-				metrics.IncMetadataFetch(metadata.ProviderKey(st.src), metrics.FetchSourceCacheHit)
-				metrics.RecordCacheHit(searchCacheName)
-				st.results = append(st.results, p.accept(v, rs)...)
-				return
-			}
+		if shared {
+			metrics.RecordCacheMiss(pcacheName, pcacheMissBypass)
 		}
-		metrics.IncMetadataFetch(metadata.ProviderKey(st.src), metrics.FetchSourceCacheMiss)
+	} else {
+		if rs, ok := mfs.variantFromCache(p, st, v, provider, endpoint, pkey); ok {
+			// Entries cached before #1940 lack the year-kind flag; re-derive
+			// it from the source, as the per-provider replay does.
+			isRelease := metadata.SourceProducesAudiobookReleaseYear(st.name)
+			for i := range rs {
+				rs[i].PublishYearIsAudiobookRelease = isRelease
+			}
+			metrics.IncMetadataFetch(provider, metrics.FetchSourceCacheHit)
+			metrics.RecordCacheHit(searchCacheName)
+			st.results = append(st.results, p.accept(v, rs)...)
+			return
+		}
+		metrics.IncMetadataFetch(provider, metrics.FetchSourceCacheMiss)
 		metrics.RecordCacheMiss(searchCacheName, searchCacheMissNotCached)
 	}
 	if err := waitForLimiter(p.ctx, p.limiter); err != nil {
@@ -287,9 +345,12 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 			logger.SanitizeLogValue(v.Title), logger.SanitizeLogValue(v.Author), err)
 		return
 	}
-	if len(rs) > 0 {
+	switch {
+	case shared:
+		pcacheWrite(mfs.db, pkey, provider, endpoint, rs, len(rs) == 0, questionTTL(provider), time.Time{})
+	case len(rs) > 0:
 		if blob, merr := json.Marshal(rs); merr == nil {
-			if perr := database.PutCachedMetadataFetch(mfs.db, p.bookID, cacheSource, p.identity, blob, 0); perr != nil {
+			if perr := database.PutCachedMetadataFetch(mfs.db, p.bookID, variantCacheSource(st.src, v), p.identity, blob, 0); perr != nil {
 				searchFanoutLog.Warn("search variant cache put failed: book=%s source=%s err=%v",
 					logger.SanitizeLogValue(p.bookID), st.name, perr)
 			} else {
@@ -298,6 +359,33 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 		}
 	}
 	st.results = append(st.results, p.accept(v, rs)...)
+}
+
+// variantFromCache is askVariant's read: the shared P1 row when pkey is set
+// (an empty raw answer is a hit with no results), then the book's legacy
+// per-variant row. ok reports a hit.
+func (mfs *Service) variantFromCache(p fanoutParams, st *fanoutSource, v queryVariant, provider, endpoint, pkey string) ([]metadata.BookMetadata, bool) {
+	if pkey != "" {
+		if e, hit := pcacheRead(mfs.db, pkey, questionTTL(provider)); hit {
+			if rs, ok := decodeEntry[metadata.BookMetadata](e); ok {
+				return rs, true
+			}
+		}
+	}
+	cached, _, err := database.GetCachedMetadataFetchWithMaxAge(mfs.db, p.bookID, variantCacheSource(st.src, v), p.identity, fetchCacheMaxAge())
+	if err != nil || cached == nil {
+		return nil, false
+	}
+	var rs []metadata.BookMetadata
+	if json.Unmarshal(cached.Results, &rs) != nil {
+		return nil, false
+	}
+	if pkey != "" && len(rs) > 0 {
+		// Read old, write new: the legacy row is the same question's raw
+		// answer, so it is valid for every book; it keeps its age.
+		pcacheWrite(mfs.db, pkey, provider, endpoint, rs, false, questionTTL(provider), cached.CachedAt)
+	}
+	return rs, true
 }
 
 // searchCacheName is the {cache} label of the interactive/batch SEARCH's
@@ -332,20 +420,50 @@ func asinCacheSource(providerID, asin string) string {
 	return providerID + "#asin" + strings.ToUpper(strings.TrimSpace(asin))
 }
 
-// cachedLookupASIN is lookupASIN behind the per-book fetch cache. Before this
+// cachedLookupASIN is lookupASIN behind the fetch cache. Before this
 // existed every search -- including an identical repeat of one the user had
 // just run -- re-asked Audible/Audnexus for the book's own ASIN and for the
 // runtime enrichment, because only the title variants were cached.
 //
-// Read unless p.opts.BypassFetchCache (a forced refresh still writes). Only a
-// found record is written: an error, a throttle refusal and a "no such ASIN"
-// (nil, nil) are never cached, so a transient failure or an empty answer can
-// never stand in for a good record on the next search.
+// Read unless p.opts.BypassFetchCache (a forced refresh still writes).
+//
+// With metadata_fetch.shared_cache on, the cache is the shared product row
+// (P2, pcache:asin:<provider>:<ASIN>), then the book's legacy per-book row as
+// a fallback. A found record is kept 30 days. A "no such ASIN" -- lookupASIN
+// returns (nil, nil) ONLY for the provider's not-found, never for an error or
+// a throttle refusal -- is stored as an empty negative entry for the
+// provider's negative TTL, and never replaces a fresh found record
+// (database.PutPCache), so an empty forced refresh cannot erase a good one.
+//
+// With it off, only a found record is written, to the book's own row: an
+// error, a throttle refusal and a "no such ASIN" are never cached.
 func (mfs *Service) cachedLookupASIN(p fanoutParams, providerID, asin string) (*metadata.BookMetadata, error) {
 	cacheSource := asinCacheSource(providerID, asin)
+	shared := sharedCacheEnabled()
+	pkey := ""
+	if shared {
+		pkey = database.PCacheASINKey(providerID, asin, providerMarketplace(providerID))
+	}
 	if p.opts.BypassFetchCache {
 		metrics.RecordCacheMiss(searchCacheName, searchCacheMissBypass)
+		if shared {
+			metrics.RecordCacheMiss(pcacheName, pcacheMissBypass)
+		}
 	} else {
+		if shared {
+			if e, hit := pcacheRead(mfs.db, pkey, productTTL(providerID)); hit {
+				if rs, ok := decodeEntry[metadata.BookMetadata](e); ok {
+					metrics.IncMetadataFetch(providerID, metrics.FetchSourceCacheHit)
+					metrics.RecordCacheHit(searchCacheName)
+					if len(rs) == 0 {
+						return nil, nil // the provider's "no such ASIN", replayed
+					}
+					// Audible and Audnexus both report the audiobook RELEASE year.
+					rs[0].PublishYearIsAudiobookRelease = true
+					return &rs[0], nil
+				}
+			}
+		}
 		if cached, _, err := database.GetCachedMetadataFetchWithMaxAge(mfs.db, p.bookID, cacheSource, p.identity, fetchCacheMaxAge()); err == nil && cached != nil {
 			var rs []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &rs); jerr == nil && len(rs) > 0 {
@@ -353,6 +471,9 @@ func (mfs *Service) cachedLookupASIN(p fanoutParams, providerID, asin string) (*
 				rs[0].PublishYearIsAudiobookRelease = true
 				metrics.IncMetadataFetch(providerID, metrics.FetchSourceCacheHit)
 				metrics.RecordCacheHit(searchCacheName)
+				if shared {
+					pcacheWrite(mfs.db, pkey, providerID, EndpointLookupASIN, rs[:1], false, productTTL(providerID), cached.CachedAt)
+				}
 				return &rs[0], nil
 			}
 		}
@@ -360,8 +481,19 @@ func (mfs *Service) cachedLookupASIN(p fanoutParams, providerID, asin string) (*
 		metrics.RecordCacheMiss(searchCacheName, searchCacheMissNotCached)
 	}
 	res, err := mfs.lookupASIN(p.ctx, p.limiter, providerID, asin)
-	if err != nil || res == nil {
+	if err != nil {
 		return res, err
+	}
+	if shared {
+		var rs []metadata.BookMetadata
+		if res != nil {
+			rs = []metadata.BookMetadata{*res}
+		}
+		pcacheWrite(mfs.db, pkey, providerID, EndpointLookupASIN, rs, res == nil, productTTL(providerID), time.Time{})
+		return res, nil
+	}
+	if res == nil {
+		return nil, nil
 	}
 	if blob, merr := json.Marshal([]metadata.BookMetadata{*res}); merr == nil {
 		if perr := database.PutCachedMetadataFetch(mfs.db, p.bookID, cacheSource, p.identity, blob, 0); perr != nil {

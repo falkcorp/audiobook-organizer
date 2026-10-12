@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package metafetch
 
@@ -299,7 +299,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// fall through to the title/author path below.
 			if ctxSearch, ok := src.(metadata.ContextualSearch); ok {
 				sctx := mfs.buildSearchContext(book, searchTitle, currentAuthor, currentNarrator)
-				results, searchErr = ctxSearch.SearchByContext(ctx, sctx)
+				results, searchErr = mfs.cachedSearchByContext(ctx, id, src, ctxSearch, sctx)
 				if searchErr != nil {
 					slog.Warn("context search failed for", "name", src.Name(), "value", book.Title, "error", searchErr)
 					// Context search failure is non-fatal — fall through
@@ -711,4 +711,57 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		return nil, fmt.Errorf("no metadata found from any source (last error: %v)", lastErr)
 	}
 	return nil, fmt.Errorf("no metadata found for '%s' from any source (title-only search)", book.Title)
+}
+
+// SearchContextQuestion is the shared-cache question of one SearchByContext
+// call: every field the call sends -- title, the ordered author credits,
+// narrator, series, both ISBNs and the ASIN -- so two books that differ in any
+// of them (only in series, say) never share an answer.
+func SearchContextQuestion(sc *metadata.SearchContext) Question {
+	if sc == nil {
+		return Question{}
+	}
+	return Question{
+		Title: sc.Title, Authors: CreditsFromFlat(sc.Author), Narrator: sc.Narrator, Series: sc.Series,
+		ISBN10: sc.ISBN10, ISBN13: sc.ISBN13, ASIN: sc.ASIN,
+	}
+}
+
+// cachedSearchByContext is the SearchByContext call FetchMetadataForBook
+// makes, behind the shared provider-answer cache (P1, endpoint
+// search_context) when metadata_fetch.shared_cache is on: the key hashes the
+// FULL SearchContext, the raw answer is stored (empty included) only when the
+// call returned no error, and the key is recorded on the book's pointer row.
+// Off, it is the bare call.
+func (mfs *Service) cachedSearchByContext(ctx context.Context, bookID string, src metadata.MetadataSource, cs metadata.ContextualSearch, sc *metadata.SearchContext) ([]metadata.BookMetadata, error) {
+	if !sharedCacheEnabled() || !supportsContextSearch(src) {
+		return cs.SearchByContext(ctx, sc)
+	}
+	provider := metadata.ProviderKey(src)
+	endpoint := endpointWithMarketplace(provider, EndpointSearchContext)
+	key := NormalizeQuestion(provider, endpoint, SearchContextQuestion(sc))
+	rs, fromCache, err := cachedCall(mfs.db, provider, endpoint, key, false, func() ([]metadata.BookMetadata, error) {
+		return cs.SearchByContext(ctx, sc)
+	})
+	if err != nil {
+		return rs, err
+	}
+	if fromCache {
+		markReleaseYear(rs, src.Name())
+	}
+	if perr := database.RecordPCachePointer(mfs.db, bookID, map[string][]string{provider: {key}}, pcacheNow()); perr != nil {
+		pcacheLog.Warn("pointer row write failed: book=%s err=%v", logger.SanitizeLogValue(bookID), perr)
+	}
+	return rs, nil
+}
+
+// supportsContextSearch reports whether src really searches by context. A
+// ProtectedSource always has the method but answers (nil, nil) when the
+// source it wraps has none; that is not an answer and is never cached.
+func supportsContextSearch(src metadata.MetadataSource) bool {
+	if w, ok := src.(interface{ SupportsContextSearch() bool }); ok {
+		return w.SupportsContextSearch()
+	}
+	_, ok := src.(metadata.ContextualSearch)
+	return ok
 }
