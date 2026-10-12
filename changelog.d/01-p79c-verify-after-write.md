@@ -19,15 +19,27 @@ movement-atom cleanup); in the `-tags native_taglib` build that production
 uses, `writeMetadataWithTaglib`, `writeSingleTagWithTaglib` and
 `writePropertiesWithTaglib`, which share the same read-back code
 (`SafeWriteDeps.VerifyWritten`); and the metafetch write-back
-(`metadata.WriteMetadataToFileAtomic`), when the native taglib writer made the
-write.
+(`metadata.WriteMetadataToFileAtomic`). That write-back checks what the writer
+that made the write was asked to set: everything the native taglib writer sets,
+or, when native TagLib failed and a CLI writer made the write, the tags that
+writer sets and TagLib reads back under a stable name (AtomicParsley:
+`TITLE`, `ARTIST`, `ALBUMARTIST`, `ALBUM`, `DATE`, `TRACKNUMBER`, `GROUPING`;
+eyeD3: the same with `NARRATOR`, `RELEASEDATE` for the year and the
+`AUDIOBOOK_ORGANIZER_*` tags; metaflac: every tag it sets). AtomicParsley's
+reverse-DNS atoms are not read back by TagLib, so they are written but not
+checked.
+
+`PUT /audiobooks/:id` no longer drops a failed file write-back silently. The
+edit is still saved (the response stays 200), but the response now carries a
+`warnings` entry saying the audio file does not hold the edit; for a failed
+verification it names the tag keys that did not stick.
 
 Not verified: `tagger.WriteTagsInPlace` and `metadata.WriteMetadataToFileInPlace`
 (they write a caller's temp copy; the metafetch write-back verifies the file
 after its own rename instead), `tagger.WriteImageSafe` (cover art is not a tag
-map), and any write the AtomicParsley, eyeD3 or metaflac fallback made after
-native TagLib failed (those tools write a different tag set, so the native map
-is not what they were asked for).
+map), and the CLI fallback of `metadata.WriteMetadataToFileContext` (the
+package-level write, which hands the file to AtomicParsley, eyeD3 or metaflac
+after native TagLib failed, outside the safe wrapper).
 
 Comparison rules. A key written as `{}` or `{""}` is a delete (TagLib erases a
 key whose joined value is empty) and must read back absent. MP4 stores
@@ -44,3 +56,9 @@ written, and the fallback would rewrite it with a different tag set.
 default build) and always verifies, even with `verify_after_write` off, because
 operation reverts rely on a failed removal being an error. Set
 `verify_after_write: false` to turn the check off elsewhere.
+
+Revert writes (`WriteTagProperties`, used by operation reverts) now also record
+the new hashes on the file's `book_file` row, as every other tag write does,
+and a failed read-back reaches the provenance recorder. Both were missing
+before: the revert writers did not go through the installed `book_file` hash
+store, so a revert left the row holding the pre-revert hash.
