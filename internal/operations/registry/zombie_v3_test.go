@@ -1,5 +1,5 @@
 // file: internal/operations/registry/zombie_v3_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2d29b34-41c4-40f1-93e1-3d616e6251bc
 // last-edited: 2026-10-11
 
@@ -578,5 +578,55 @@ func TestResumeRequeueStaleRecordFallsBackToV2(t *testing.T) {
 	}
 	if replacements != 1 {
 		t.Fatalf("%d replacement rows, want 1", replacements)
+	}
+}
+
+// TestShutdownZombieRecordsStoppingShutdown: a run Shutdown stops whose
+// goroutine outlives the grace is recorded stopping{shutdown} (the shutdown
+// branch of executeRun) before Shutdown's timeout stamp ends it interrupted,
+// so its audit trail says why it stopped. Mutation check: drop markStopping
+// from the shutdown branch and the stop_requested event is missing.
+func TestShutdownZombieRecordsStoppingShutdown(t *testing.T) {
+	store := newV3Store(t)
+	s := newStubbornRun()
+	defer s.releaseRun()
+	def := makeValidDef("test.v3-shutdown-zombie")
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = s.run
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		AbandonGrace:     50 * time.Millisecond,
+		WatchdogInterval: time.Hour,
+		SweepInterval:    time.Hour,
+		AbandonedCap:     100,
+	})
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	id, err := r.EnqueueOp(t.Context(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	sctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := r.Shutdown(sctx); err == nil {
+		t.Fatal("Shutdown returned nil; the zombie should have held the drain until the context expired")
+	}
+	evts, err := store.ListRunEventsV3(id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	for _, e := range evts {
+		if e.Event == string(state.EvStopRequested) && e.Reason == state.StopShutdown {
+			stopped = true
+		}
+	}
+	if !stopped {
+		t.Fatalf("events = %q, want a stop_requested{shutdown}", eventNames(t, store, id))
+	}
+	if rec := runV3(t, store, id); rec.State != state.V3Interrupted {
+		t.Fatalf("after the shutdown stamp: %s, want interrupted", rec.State)
 	}
 }
