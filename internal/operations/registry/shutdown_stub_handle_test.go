@@ -1,7 +1,7 @@
 // file: internal/operations/registry/shutdown_stub_handle_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b3c9d1e-4a52-4c8f-9e0a-2f6b1d8c4a37
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 // White-box regression tests for the "stub handle" nil-cancel race.
 //

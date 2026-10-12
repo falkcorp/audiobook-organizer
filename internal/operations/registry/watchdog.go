@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry
 

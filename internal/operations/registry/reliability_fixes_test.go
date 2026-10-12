@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reliability_fixes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f1c2a3b-4d5e-6f70-8192-a3b4c5d6e7f8
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry_test
 
@@ -79,14 +79,18 @@ func TestWatchdog_StuckBeforeFirstProgress(t *testing.T) {
 	}
 }
 
-// TestAbandoned_TerminalStatusAllowsReenqueue verifies that a genuinely
-// abandoned op (ctx-canceled, goroutine doesn't return within grace) gets a
-// terminal status — so its row leaves the active index — and that a
-// subsequent enqueue of the same ConcurrencyKey'd def creates a NEW op
-// instead of returning the zombie's ID forever (C-3). Since 05-PR3 (owner
-// decision D6) the zombie keeps its ConcurrencyKey until its goroutine
-// returns, so the new op stays queued until then and runs once it does.
-func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
+// TestAbandoned_StoppingRunAllowsReenqueue verifies that a subsequent enqueue
+// of a ConcurrencyKey'd def whose previous run was genuinely abandoned
+// (ctx-canceled, goroutine doesn't return within grace) creates a NEW op
+// instead of returning the zombie's ID forever (C-3). Since 05-PR4 the zombie
+// is v3 "stopping": its row reads "running" (in the active set) until the
+// goroutine returns, so the dedupe must skip it by its handle (isZombie), not
+// by its row. Since 05-PR3 (owner decision D6) the zombie keeps its
+// ConcurrencyKey until its goroutine returns, so the new op stays queued until
+// then and runs once it does; the zombie's own decided status ("canceled")
+// lands at that moment. Mutation check: drop the isZombie skip in EnqueueOp
+// and the re-enqueue returns op1.
+func TestAbandoned_StoppingRunAllowsReenqueue(t *testing.T) {
 	ctx := t.Context()
 
 	store := newFakeStore()
@@ -125,12 +129,19 @@ func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 		t.Fatal("op1 did not start within 5s")
 	}
 
-	// Cancel op1; after AbandonGrace it is classified abandoned and must get a
-	// terminal status so it leaves the active index. A deliberate Cancel is
-	// "canceled" however slowly the Run unwinds -- never a resumable
-	// interrupted_* status, which would bring a killed op back on next boot.
+	// Cancel op1; after AbandonGrace it is a zombie whose row still reads
+	// "running" (v3 stopping).
 	_ = r.Cancel(op1)
-	awaitStatus(t, store, op1, "canceled", 5*time.Second)
+	deadline := time.Now().Add(5 * time.Second)
+	for r.ZombieCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ZombieCount() != 1 {
+		t.Fatal("op1 never became a zombie")
+	}
+	if got := store.statusOf(op1); got != "running" {
+		t.Fatalf("op1 is %q while its goroutine lives, want running (v3 stopping)", got)
+	}
 
 	// Re-enqueue: the ConcurrencyKey dedupe must NOT return the zombie's ID.
 	op2, err := r.EnqueueOp(ctx, "test.abandoned-reenqueue", nil)
@@ -145,8 +156,12 @@ func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 	if got := store.statusOf(op2); got != "queued" {
 		t.Fatalf("op2 is %q while op1's goroutine is still running, want queued", got)
 	}
-	// Once the runaway goroutine returns, the key is released and op2 runs.
+	// Once the runaway goroutine returns, op1 gets the status decided at
+	// abandonment -- a deliberate Cancel is "canceled" however slowly the Run
+	// unwinds, never a resumable interrupted_* status -- the key is released
+	// and op2 runs.
 	releaseRun()
+	awaitStatus(t, store, op1, "canceled", 5*time.Second)
 	awaitStatus(t, store, op2, "completed", 5*time.Second)
 }
 
@@ -226,7 +241,9 @@ func TestCancel_OpQueuedInWorkerChannelNeverRuns(t *testing.T) {
 // watchdog cancelled it, and it took 87s to unwind -- past the abandon grace.
 // The abandon path wrote interrupted_quiesced from the ResumePolicy alone, so a
 // deliberately killed op was left to resume on the next boot. A watchdog kill
-// must be "canceled" however slowly the run unwinds.
+// must be "canceled" however slowly the run unwinds. Since 05-PR4 the status
+// is decided at abandonment and written when the goroutine returns; until
+// then the row reads "running" (v3 stopping).
 func TestAbandoned_WatchdogKillIsNotResumable(t *testing.T) {
 	ctx := t.Context()
 	store := newFakeStore()
@@ -237,7 +254,9 @@ func TestAbandoned_WatchdogKillIsNotResumable(t *testing.T) {
 	})
 
 	release := make(chan struct{})
-	defer close(release)
+	var releaseOnce sync.Once
+	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseRun()
 	def := makeValidDef("test.watchdog-abandoned")
 	def.ResumePolicy = registry.ResumeRestart
 	def.ProgressTimeout = 200 * time.Millisecond
@@ -250,5 +269,16 @@ func TestAbandoned_WatchdogKillIsNotResumable(t *testing.T) {
 	r.Start(ctx)
 
 	id, _ := r.EnqueueOp(ctx, def.ID, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for r.ZombieCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ZombieCount() != 1 {
+		t.Fatal("the watchdog-killed run never became a zombie")
+	}
+	if got := store.statusOf(id); got != "running" {
+		t.Fatalf("status while the killed run unwinds = %q, want running (v3 stopping)", got)
+	}
+	releaseRun()
 	awaitStatus(t, store, id, "canceled", 5*time.Second)
 }

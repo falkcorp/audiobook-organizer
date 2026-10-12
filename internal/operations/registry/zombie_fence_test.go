@@ -1,7 +1,7 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry_test
 
@@ -102,7 +102,9 @@ func (s *stubbornRun) run(ctx context.Context, _ json.RawMessage, _ registry.Rep
 }
 
 // zombify enqueues def, waits for it to start, cancels it and waits until it
-// is a zombie (terminal "canceled" row, listed by Zombies()).
+// is a zombie (listed by Zombies()). Since 05-PR4 a zombie is v3 "stopping":
+// its row keeps reading "running" until its goroutine returns, and only then
+// is its final status ("canceled" here) written.
 func (h *zombieHarness) zombify(t *testing.T, defID string, s *stubbornRun) string {
 	t.Helper()
 	id, err := h.r.EnqueueOp(t.Context(), defID, nil)
@@ -113,7 +115,15 @@ func (h *zombieHarness) zombify(t *testing.T, defID string, s *stubbornRun) stri
 	if err := h.r.Cancel(id); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	awaitStatus(t, h.store, id, "canceled", 5*time.Second)
+	h.awaitZombie(t, id)
+	return id
+}
+
+// awaitZombie waits until id is a zombie and checks its row still reads
+// "running" (stopping mirrors as running; nothing terminal is written while
+// the goroutine lives).
+func (h *zombieHarness) awaitZombie(t *testing.T, id string) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for h.r.ZombieCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -121,7 +131,9 @@ func (h *zombieHarness) zombify(t *testing.T, defID string, s *stubbornRun) stri
 	if h.r.ZombieCount() != 1 {
 		t.Fatalf("ZombieCount = %d, want 1", h.r.ZombieCount())
 	}
-	return id
+	if got := h.store.statusOf(id); got != "running" {
+		t.Fatalf("zombie row = %q while its goroutine lives, want running (v3 stopping)", got)
+	}
 }
 
 // stayQueued runs n dispatch passes and fails if id leaves "queued".
@@ -191,10 +203,8 @@ func TestZombie_HoldsKeyUntilGoroutineExits(t *testing.T) {
 	h.start(t, s.releaseRun)
 
 	first := h.zombify(t, def.ID, s)
-	// (a) C-3: the row is terminal at abandonment.
-	if got := h.store.statusOf(first); got != "canceled" {
-		t.Fatalf("first row = %q, want canceled", got)
-	}
+	// (a) the row still reads "running" (v3 stopping, checked by zombify);
+	// the dedupe skips it anyway (c).
 	// (b) the zombie is listed with its key.
 	z := h.r.Zombies()
 	if len(z) != 1 || z[0].OpID != first || z[0].Key != "k" || z[0].DefID != def.ID || z[0].Since.IsZero() {
@@ -222,6 +232,11 @@ func TestZombie_HoldsKeyUntilGoroutineExits(t *testing.T) {
 	}
 	if n := h.r.ZombieCount(); n != 0 {
 		t.Fatalf("ZombieCount = %d after exit, want 0", n)
+	}
+	// The final status decided at abandonment lands when the goroutine
+	// returns, before the key is released.
+	if got := h.store.statusOf(first); got != "canceled" {
+		t.Fatalf("first row = %q after the zombie exited, want canceled", got)
 	}
 	// Ask who holds k, not whether k is held: the background dispatcher can
 	// claim second (and with it k) the moment the zombie frees it, while
@@ -335,8 +350,10 @@ func TestZombie_CancelTwiceIsNoop(t *testing.T) {
 	}
 }
 
-// The retryable zombie is one a scan stand-down quiesced: the only
-// non-shutdown path that leaves an abandoned run's row interrupted_*.
+// The zombie a user is most likely to press Retry on is a scan a stand-down
+// quiesced: its final status is interrupted_quiesced. Until its goroutine
+// returns its row reads "running" (05-PR4), and Retry must still answer
+// ErrOpActive, not "not interrupted".
 func TestZombie_RetryRefused(t *testing.T) {
 	h := newZombieHarness(t, 2, nil)
 	s := newStubbornRun()
@@ -360,7 +377,7 @@ func TestZombie_RetryRefused(t *testing.T) {
 		}
 		acquired <- rel
 	}()
-	awaitStatus(t, h.store, id, "interrupted_quiesced", 5*time.Second)
+	h.awaitZombie(t, id)
 	if err := h.r.RetryInterrupted(t.Context(), id, "tester"); !errors.Is(err, registry.ErrOpActive) {
 		t.Fatalf("retry of a live zombie = %v, want ErrOpActive", err)
 	}
@@ -372,27 +389,16 @@ func TestZombie_RetryRefused(t *testing.T) {
 	rel()
 }
 
-// A zombie's row is not always terminal. A scan stand-down quiesce leaves it
-// interrupted_quiesced (live, resumable), and a holder that gives up waiting
-// re-queues it in place under the SAME op id while the zombie still runs. A
-// user Cancel of such a zombie must still reach the row: the zombie handle
-// only means "do not cancel the context twice", not "nothing left to do".
-// Before the fix Cancel returned nil at the zombie handle and left the row
-// live, and the scan the user canceled ran again once the zombie exited.
+// A user Cancel of a zombie must reach its row: the zombie handle only means
+// "do not cancel the context twice", not "nothing left to do". Since 05-PR4 a
+// zombie's row reads "running" (v3 stopping) until its goroutine returns, for
+// a scan quiesced by a stand-down too, and a holder that gives up while the
+// zombie lives no longer re-queues it in place (resumeQuiescedOp only takes an
+// interrupted_quiesced row). Either way the user's cancel must win over the
+// quiesce outcome decided at abandonment, and the scan must not run again.
 func TestZombie_CancelReachesALiveRow(t *testing.T) {
-	cases := []struct {
-		name string
-		// liveStatus is the zombie row's status when the user cancels.
-		liveStatus string
-		// holderGivesUp cancels the stand-down acquire while the zombie lives,
-		// so releaseScanStandDown re-queues the row in place (same op id).
-		holderGivesUp bool
-	}{
-		{name: "interrupted_quiesced", liveStatus: "interrupted_quiesced"},
-		{name: "re-queued under the same id", liveStatus: "queued", holderGivesUp: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, holderGivesUp := range []bool{false, true} {
+		t.Run(map[bool]string{false: "holder still waiting", true: "holder gave up"}[holderGivesUp], func(t *testing.T) {
 			h := newZombieHarness(t, 2, nil)
 			s := newStubbornRun()
 			def := makeValidDef(registry.ScanStandDownDefIDForTest)
@@ -418,20 +424,15 @@ func TestZombie_CancelReachesALiveRow(t *testing.T) {
 				}
 				acquired <- rel
 			}()
-			awaitStatus(t, h.store, id, "interrupted_quiesced", 5*time.Second)
-			if z := h.r.Zombies(); len(z) != 1 || z[0].OpID != id {
-				t.Fatalf("Zombies() = %+v, want the quiesced scan %s", z, id)
-			}
-			if tc.holderGivesUp {
+			h.awaitZombie(t, id)
+			if holderGivesUp {
 				acancel()
 				(<-acquired)()
-				awaitStatus(t, h.store, id, "queued", 5*time.Second)
-				if h.r.ZombieCount() != 1 {
-					t.Fatal("the zombie exited before the cancel; the case needs it alive")
+				// The release found the row still "running" and left it.
+				h.r.DispatchCycleForTest(t.Context())
+				if got := h.store.statusOf(id); got != "running" {
+					t.Fatalf("status after the holder gave up = %q, want running (no re-queue while the zombie lives)", got)
 				}
-			}
-			if got := h.store.statusOf(id); got != tc.liveStatus {
-				t.Fatalf("status before cancel = %q, want %q", got, tc.liveStatus)
 			}
 
 			if err := h.r.Cancel(id); err != nil {
@@ -444,7 +445,7 @@ func TestZombie_CancelReachesALiveRow(t *testing.T) {
 			// Let the zombie exit and the holder release: nothing may bring
 			// the canceled scan back.
 			s.releaseRun()
-			if !tc.holderGivesUp {
+			if !holderGivesUp {
 				(<-acquired)()
 			}
 			deadline := time.Now().Add(5 * time.Second)
@@ -468,8 +469,57 @@ func TestZombie_CancelReachesALiveRow(t *testing.T) {
 	}
 }
 
-// Mutation check: drop the slotReleased skip in Shutdown's timeout loop and
-// the row is stamped interrupted_dropped.
+// TestZombie_QuiescedScanRequeuedAfterExit: a scan a stand-down quiesced, whose
+// goroutine outlives the grace, gets interrupted_quiesced only when its
+// goroutine returns (05-PR4). If the holder already released by then, the
+// release found a "running" row and could not re-queue it; the exit monitor
+// must hand the scan back to the stand-down, or it would sit quiesced until
+// the next boot. Mutation check: drop the resumeDroppedScanOnRelease call in
+// executeRun's exit monitor and the scan never runs again.
+func TestZombie_QuiescedScanRequeuedAfterExit(t *testing.T) {
+	h := newZombieHarness(t, 2, nil)
+	s := newStubbornRun()
+	def := makeValidDef(registry.ScanStandDownDefIDForTest)
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = s.run
+	if err := h.r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	h.start(t, s.releaseRun)
+	id, err := h.r.EnqueueOp(t.Context(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "scan to start")
+	actx, acancel := context.WithCancel(t.Context())
+	acquired := make(chan func(), 1)
+	go func() {
+		rel, aerr := h.r.AcquireScanStandDown(actx, "holder-op", "test")
+		if aerr != nil {
+			rel = func() {}
+		}
+		acquired <- rel
+	}()
+	h.awaitZombie(t, id)
+	acancel()
+	(<-acquired)()
+	if got := h.store.statusOf(id); got != "running" {
+		t.Fatalf("status after the holder released = %q, want running", got)
+	}
+	s.releaseRun()
+	awaitStatus(t, h.store, id, "completed", 5*time.Second)
+	if n := s.calls.Load(); n != 2 {
+		t.Fatalf("Run called %d times, want 2 (the quiesced scan resumed once)", n)
+	}
+}
+
+// A zombie still alive when Shutdown times out is "stopping" with a final
+// status decided at abandonment ("canceled": the user canceled it). Shutdown
+// writes that status, since the goroutine will not get to. Mutation check:
+// drop the zombieFinal write in Shutdown's slotReleased branch and the row is
+// left "running" (the boot sweep would then decide it); drop the whole
+// slotReleased branch and it is stamped interrupted_dropped from the
+// ResumePolicy -- a stopped run made resumable.
 func TestZombie_ShutdownTimeoutKeepsTerminalStatus(t *testing.T) {
 	h := newZombieHarness(t, 2, nil)
 	s := newStubbornRun()
