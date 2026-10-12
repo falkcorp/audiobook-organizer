@@ -162,7 +162,7 @@ func backupNameTime(name string, now time.Time) (time.Time, bool) {
 
 // KeepBackupCopy makes a fresh sibling <path>.bak-<unix>[-N] that is a full,
 // fsynced COPY of path, and returns its name. It is for writers that rewrite
-// path in place (the AtomicParsley/eyeD3/ffmpeg CLI fallbacks): a hardlink
+// path in place (the AtomicParsley/eyeD3/metaflac CLI fallbacks): a hardlink
 // there would share the inode the writer is about to change, and the backup
 // would end up holding the new bytes.
 func KeepBackupCopy(path string) (string, error) {

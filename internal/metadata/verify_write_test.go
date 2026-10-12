@@ -85,7 +85,7 @@ func TestWriters_VerifyAfterWrite_LossyWriteFails(t *testing.T) {
 }
 
 // verify_after_write fails a write the file already received. The CLI writers
-// (AtomicParsley, ffmpeg) must not then run over a file taglib wrote: the error
+// (AtomicParsley, eyeD3, metaflac) must not then run over a file taglib wrote: the error
 // comes back as the verification error, not as whatever the fallback did.
 func TestWriteMetadataToFile_VerifyFailureDoesNotFallBackToCLI(t *testing.T) {
 	setVerifyAfterWrite(t, true)

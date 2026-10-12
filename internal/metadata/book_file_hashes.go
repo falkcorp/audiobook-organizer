@@ -41,7 +41,7 @@ func bookFileHashStore() fileops.BookFileHashRecorder {
 // write's hashes on the book_file row at path, or zero options when no store
 // is installed or no row owns the path. It serves the writers that go through
 // fileops directly rather than tagger: the native (cgo) taglib writer, which
-// passes the already-resolved path, and the ffmpeg fallback. Tagger writes use
+// passes the already-resolved path, and the CLI fallback. Tagger writes use
 // WithBookFileHashes instead, so the row is found after any redirect.
 func BookFileHashOptions(path string) fileops.WriteTagsSafeOptions {
 	store := bookFileHashStore()
@@ -63,7 +63,7 @@ func WithBookFileHashes(deps tagger.SafeWriteDeps) tagger.SafeWriteDeps {
 	return deps
 }
 
-// writeMetadataViaCLIRecordingHashes runs the CLI (ffmpeg) writers, which
+// writeMetadataViaCLIRecordingHashes runs the CLI writers (AtomicParsley, eyeD3, metaflac), which
 // rewrite the file outside fileops.WriteTagsSafe, through fileops.RecordRewrite,
 // which records the same three hashes WriteTagsSafe would on the file's
 // book_file row.
