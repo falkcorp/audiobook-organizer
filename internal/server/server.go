@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.88.3
+// version: 2.88.4
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-12
 
@@ -283,6 +283,10 @@ type Server struct {
 	// every remaining key; see reconcileStuckPassLimit.
 	reconcileStuckPasses atomic.Int32
 	http3Server          *http3.Server
+	// httpRedirectServer is the port-80 HTTP->HTTPS redirect server, set
+	// only when TLS is on and port 80 could be bound; Start shuts it down
+	// with the main server.
+	httpRedirectServer *http.Server
 
 	// candidateRefetchGate is the provider gate every lost-candidates refetch
 	// shares (candidate_refetch.go), built once from the enabled sources'

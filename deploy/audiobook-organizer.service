@@ -1,5 +1,5 @@
 # file: deploy/audiobook-organizer.service
-# version: 4.5.0
+# version: 4.6.0
 # guid: f1e2d3c4-b5a6-9870-8765-4321fedcba98
 # last-edited: 2026-10-12
 #
@@ -10,14 +10,21 @@
 # runs `sudo systemctl daemon-reload` and restarts the service. The server
 # sends READY=1 once its startup steps have passed and its HTTP port is bound
 # (not after the in-memory warmup, which /health reports as "ready"), and
-# STOPPING=1 when shutdown begins. Order matters one way only: a new binary
-# under the older Type=simple unit has no NOTIFY_SOCKET and behaves exactly
-# as before, but an OLD binary (one that never sends READY=1) under this unit
-# is killed at TimeoutStartSec and restarted in a loop. Install this unit
-# only after a binary with readiness notification is deployed (and keep
-# Type=simple on any host that rolls back past it). TimeoutStartSec=300 sits
-# above the 130-200 s warmup measured on prod; it is the number to tune for a
-# stricter start bound.
+# STOPPING=1 when shutdown begins. A new binary under the older Type=simple
+# unit has no NOTIFY_SOCKET and behaves exactly as before. An OLD binary (one
+# that never sends READY=1) under this unit would be killed at
+# TimeoutStartSec and restarted in a loop, so the committed recipes never let
+# that happen: before every restart, scripts/deploy-match-unit-type.sh asks
+# the binary about to run for `--print-capabilities`. Without `sd_notify` it
+# installs the drop-in
+#   /etc/systemd/system/audiobook-organizer.service.d/zz-rollback-type-simple.conf
+# ([Service] Type=simple) and daemon-reloads; with it, it removes that
+# drop-in. `make rollback` runs it on .prev; the deploy in
+# Makefile.local.example runs it on the new binary.
+# TimeoutStartSec=300 sits above the 130-200 s warmup measured on prod and is
+# the number to tune for a stricter start bound. Long startup steps (opening
+# the store, each migration, opening the search index) push it out with
+# EXTEND_TIMEOUT_USEC as they make progress, never on a timer.
 #
 # Installation:
 #   1. Create service user:

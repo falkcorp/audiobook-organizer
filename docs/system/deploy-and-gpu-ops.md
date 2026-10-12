@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-10-12 -->
 
@@ -77,7 +77,11 @@ Once your real `Makefile.local`'s `deploy` target includes this same
    gives no answer at all (a crash, an ssh failure). Only a printed format, or
    the old-build "unknown flag: --print-storage-format" error, counts. Nothing
    overrides a format change.
-5. Only then does it copy the *currently installed* (bad) binary to
+5. It asks `.prev` for `--print-capabilities` and, when `.prev` predates
+   readiness notification, installs a `Type=simple` drop-in so systemd does
+   not kill it at the start timeout (see
+   [Rollback-safe unit type](#rollback-safe-unit-type)).
+   Only then does it copy the *currently installed* (bad) binary to
    `$(DEPLOY_BIN).rolled-back` for forensics, restore `.prev` back to
    `$(DEPLOY_BIN)`, and restart `audiobook-organizer.service`. It then
    waits for `/health` to report `"ready":true` (see
@@ -102,24 +106,77 @@ The server reports readiness in two places:
   its fatal startup steps have passed and its HTTP port is bound, which is
   before the warmup, and sends `STOPPING=1` when shutdown begins. A port
   that is already taken now fails startup instead of leaving a process that
-  looks alive.
+  looks alive. Steps before that which can legitimately take long (opening
+  the store, which may replay a large WAL; each migration applied; opening
+  the search index) each send `EXTEND_TIMEOUT_USEC` for 10 minutes as they
+  start, so a long migration run is not killed at `TimeoutStartSec`, while a
+  single step that hangs still is. Nothing extends the timeout on a timer.
 
 `make deploy`, `make deploy-debug` and `make rollback` run
-`scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300` after the restart. The
+`scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300` after the restart.
+`DEPLOY_URL` defaults, when unset, to `API_URL` with a trailing `/api/v1`
+removed, or else to `https://<DEPLOY_HOST without user@>:8484`. The
 script polls `$(DEPLOY_URL)/health` every 5 s, for up to 300 s, until the body
 contains `"ready":true`, and prints the elapsed seconds. No answer, or
 `"ready":false`, keeps it polling. A 200 body with no `ready` field fails at
 once, because that binary predates readiness reporting. `deploy` runs its
 version check only after the wait succeeds.
 
-**The owner installs the unit.** `deploy/audiobook-organizer.service` sets
-`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`, but no target
-in this repo copies it to a host. To install it:
+#### Rollback-safe unit type
 
-1. Deploy a binary that sends `READY=1` first. An older binary under this
-   unit never reports ready, so systemd kills it at `TimeoutStartSec` and
-   restarts it in a loop. A new binary under the old `Type=simple` unit is
-   fine; it simply has no socket to notify.
+An older binary never sends `READY=1`, so under the `Type=notify` unit
+systemd would kill it at `TimeoutStartSec` and restart it in a loop. The
+committed recipes rule that out. Before every restart,
+`scripts/deploy-match-unit-type.sh HOST BINARY` runs
+`BINARY --print-capabilities` on the host:
+
+- **The output has a `sd_notify` line** (any build with readiness
+  notification). The script removes
+  `/etc/systemd/system/audiobook-organizer.service.d/zz-rollback-type-simple.conf`
+  if it is there.
+- **Anything else.** An older build fails with "unknown flag" and prints
+  nothing, and an unreachable binary prints nothing too. The script installs
+  that drop-in, containing `[Service]` and `Type=simple`, so the binary runs
+  as it did before.
+
+Either way it then runs `systemctl daemon-reload`. `make rollback` runs it on
+`$(DEPLOY_BIN).prev` before the swap, and the `deploy` in
+`Makefile.local.example` runs it on the uploaded binary before the `mv`.
+Being wrong in the fail-safe direction costs nothing: a notify-capable binary
+under `Type=simple` runs exactly as it did before this change.
+
+The script uses `sudo -n`, so the sudoers drop-in below needs its four
+commands.
+
+#### Your own `Makefile.local`
+
+`Makefile.local` is gitignored, so it does not pick any of this up by itself.
+Paste these two lines into its `deploy` (and `deploy-debug`) recipe. Put the
+first after the binary is copied to the host and before the `ssh` that moves
+it into place and restarts. Put the second after that `ssh`, in place of any
+`sleep`. Replace `/home/USER/audiobook-organizer` with the path your `scp`
+uploads to:
+
+```make
+	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) /home/USER/audiobook-organizer
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
+```
+
+The first line also clears the `Type=simple` drop-in that a `make rollback`
+to an older binary leaves behind. Without it, that drop-in stays in place and
+the service keeps running as `Type=simple`. That is safe, but the server
+never reports readiness to systemd.
+
+#### Installing the unit
+
+**The owner installs the unit.** `deploy/audiobook-organizer.service` sets
+`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`. No committed
+target copies it to a host, but a local `deploy` recipe that copies it on
+every deploy installs it on the next deploy. To install it by hand:
+
+1. Deploy a binary that sends `READY=1` first (or run
+   `scripts/deploy-match-unit-type.sh` before restarting). A new binary under
+   the old `Type=simple` unit is fine; it simply has no socket to notify.
 2. Copy the unit: `sudo cp deploy/audiobook-organizer.service /etc/systemd/system/`.
    Your `local.conf` drop-in keeps overriding `ExecStart`. It must start the
    binary directly, not through a wrapper shell, because `NotifyAccess=main`
@@ -129,9 +186,9 @@ in this repo copies it to a host. To install it:
    `systemctl restart` now returns once the port is bound, and
    `systemctl status` shows the server's status line.
 
-To undo, put `Type=simple` back (and drop the two added lines), then run
-`daemon-reload` and restart. Do this before rolling back to a binary older
-than readiness notification.
+To undo by hand, put `Type=simple` back (and drop the two added lines), then
+run `daemon-reload` and restart. `make rollback` does not need this: it
+installs the `Type=simple` drop-in itself when `.prev` is older.
 
 ### sudoers for `make rollback` (owner action)
 
@@ -141,7 +198,10 @@ checkpoint record are read with `sudo -n cat` (fail at once instead of
 hanging), and the store's parent directory (`.appdata` on prod) is not
 readable without sudo. Without passwordless rules for exactly these commands,
 every rollback refuses with "cannot read the store's storage format", and the
-swap itself would fail too.
+swap itself would fail too. `scripts/deploy-match-unit-type.sh` (run by
+`rollback` and by the template's `deploy`) adds four more commands: the
+`mkdir`, `tee` and `rm` of the `Type=simple` drop-in, and
+`systemctl daemon-reload`.
 
 Add a drop-in with `sudo visudo -f /etc/sudoers.d/audiobook-organizer-rollback`
 on the deploy host. Replace `deploy` with the ssh user, and the two paths with
@@ -153,7 +213,11 @@ deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-form
     /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
     /usr/bin/cp /usr/local/bin/audiobook-organizer /usr/local/bin/audiobook-organizer.rolled-back, \
     /usr/bin/cp /usr/local/bin/audiobook-organizer.prev /usr/local/bin/audiobook-organizer, \
-    /usr/bin/systemctl restart audiobook-organizer.service
+    /usr/bin/systemctl restart audiobook-organizer.service, \
+    /usr/bin/mkdir -p /etc/systemd/system/audiobook-organizer.service.d, \
+    /usr/bin/tee /etc/systemd/system/audiobook-organizer.service.d/zz-rollback-type-simple.conf, \
+    /usr/bin/rm -f /etc/systemd/system/audiobook-organizer.service.d/zz-rollback-type-simple.conf, \
+    /usr/bin/systemctl daemon-reload
 ```
 
 Check it with `ssh HOST 'sudo -n cat /path/to/audiobooks.pebble.storage-format'`.

@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.44.0
+# version: 2.45.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-12
 
@@ -49,8 +49,11 @@ DEPLOY_BIN  ?=
 # value); required by rollback.
 DEPLOY_DB   ?=
 # Base URL of the deployed server (e.g. https://192.0.2.10:8484); rollback
-# waits on $(DEPLOY_URL)/health for "ready":true after its restart.
-DEPLOY_URL  ?=
+# waits on $(DEPLOY_URL)/health for "ready":true after its restart. Unset, it
+# is derived when used (`?=` is recursive, so Makefile.local's values count):
+# API_URL with a trailing /api/v1 removed if API_URL is set, otherwise
+# https://<DEPLOY_HOST without any user@>:8484.
+DEPLOY_URL  ?= $(if $(API_URL),$(patsubst %/api/v1,%,$(patsubst %/,%,$(API_URL))),$(if $(DEPLOY_HOST),https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484))
 BACKUP_DIR  ?= $(CURDIR)/backups
 
 # Generic build flags (owner decision D37). The committed Makefile owns these so
@@ -831,7 +834,7 @@ backup:
 		ssh $(DEPLOY_HOST) "rm -f /tmp/aobackup-$$STAMP.tar.gz"; \
 		echo "✅ Backup saved to $(BACKUP_DIR)/aobackup-$$STAMP.tar.gz"
 
-## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
+## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL defaults from API_URL or DEPLOY_HOST)
 #
 # Storage-format guard (docs/system/runbooks.md#storage-format-restore): the
 # swap happens only when the store's storage format (DEPLOY_DB.storage-format)
@@ -846,12 +849,19 @@ backup:
 # of waiting for a password no tty can type. Each ssh command's stderr is
 # captured and handed to the guard, so a refusal names its cause. The sudoers
 # lines this needs are in docs/system/deploy-and-gpu-ops.md.
+#
+# Unit type: before the swap, scripts/deploy-match-unit-type.sh asks .prev
+# for --print-capabilities. A .prev without sd_notify (any build older than
+# readiness notification) never sends READY=1, so under the Type=notify unit
+# systemd would kill it at TimeoutStartSec and restart it in a loop; the
+# script installs a Type=simple drop-in (zz-rollback-type-simple.conf) and
+# daemon-reloads first. The next deploy of a notify-capable binary removes it.
 .PHONY: rollback
 rollback:
 	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
-	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is not set. Set it to the server's base URL (e.g. https://HOST:8484) in Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
 	@echo "→ Rolling back $(DEPLOY_BIN) on $(DEPLOY_HOST)..."
 	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST) — nothing to roll back to."; exit 1)
 	@errs=$$(mktemp -d) && trap 'rm -rf "$$errs"' EXIT; \
@@ -865,6 +875,8 @@ rollback:
 	    --current="$$current_fmt" --current-err="$$(cat "$$errs/current")" \
 	    --sidecar="$$sidecar" --sidecar-err="$$(cat "$$errs/sidecar")" \
 	    --checkpoint="$$checkpoint" --checkpoint-err="$$(cat "$$errs/checkpoint")"
+	@echo "→ Matching the service type to $(DEPLOY_BIN).prev..."
+	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) $(DEPLOY_BIN).prev
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
 	  sudo cp $(DEPLOY_BIN).prev $(DEPLOY_BIN) && \
 	  sudo systemctl restart audiobook-organizer.service'
