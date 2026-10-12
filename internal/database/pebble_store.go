@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.216.0
+// version: 1.217.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-11
 
@@ -702,8 +702,10 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 		}
 	}
 
-	// The identification index: load its counters when it is built, stamp it
-	// when the store is empty, or leave it not ready for EnsureIdentIndex.
+	// The identification index: recount its counters when it is built, stamp
+	// it when the store is empty, or leave it not ready for
+	// SuperviseIdentIndex's build.
+	store.ident.wake = make(chan struct{}, 1)
 	if err := store.loadIdentIndexState(); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			identLog.Error("close PebbleDB after identification index load failure: path=%s error=%s",
@@ -3025,8 +3027,10 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	if err := ValidateBookID(book.ID); err != nil {
 		return nil, err
 	}
-	// Generate ULID if not provided
-	if book.ID == "" {
+	// Generate ULID if not provided. minted: nothing else can name this id
+	// before the commit below makes the book visible.
+	minted := book.ID == ""
+	if minted {
 		id, err := newULID()
 		if err != nil {
 			return nil, err
@@ -3162,20 +3166,30 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 		}
 	}
 
-	// The new book's identification state (ident_state.go), in this batch,
-	// under the book's cache stripe (book -> cache order). A caller-supplied
-	// ID can find a cache row already there, so it is read, not assumed absent.
-	identMuBook := p.metadataCacheLock(book.ID)
-	identMuBook.Lock()
+	// The new book's identification state (ident_state.go), in this batch.
+	// A caller-supplied ID can find a cache row (or an ident: row) already
+	// there and race a PutMetadataCache for it, so it takes the book's cache
+	// stripe (book -> cache order) and reads the row, not assuming it absent.
+	// A minted ID cannot: no other writer can name it until this commit, so
+	// it skips the stripe -- 64 stripes shared by every concurrent creator
+	// would otherwise serialize colliding creates behind each other's fsync.
+	// The cache row is still read: it costs one point read and keeps the
+	// derivation the same either way.
+	unlockIdentBook := func() {}
+	if !minted {
+		mu := p.metadataCacheLock(book.ID)
+		mu.Lock()
+		unlockIdentBook = mu.Unlock
+	}
 	identBookLocked := true
 	defer func() {
 		if identBookLocked {
-			identMuBook.Unlock()
+			unlockIdentBook()
 		}
 	}()
 	identTx := p.beginIdent(batch)
 	defer identTx.end(false)
-	identCache, err := p.getMetadataCacheForIdent(book.ID)
+	identCache, err := p.readIdentCacheView(book.ID)
 	if err != nil {
 		batch.Close()
 		return nil, err
@@ -3184,15 +3198,10 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 		batch.Close()
 		return nil, err
 	}
-	if err := identTx.prepare(); err != nil {
-		batch.Close()
+	if err := p.commitIdentBatch(batch, identTx, pebble.Sync); err != nil {
 		return nil, err
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return nil, err
-	}
-	identTx.end(true)
-	identMuBook.Unlock()
+	unlockIdentBook()
 	identBookLocked = false
 
 	// Record the original import path so full provenance is preserved forever.
@@ -3602,15 +3611,11 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// (ident_state.go) is derived from on the book side -- its review status
 	// class, or its membership of the primary scope (primary flag, trash,
 	// quarantine). A retitle moves it too, through the Stale stamp below.
-	// Only these writes take the cache stripe and identMu; every other book
-	// write (the scanner's bulk of them) touches neither.
+	// Only these writes take the cache stripe and identMu (for read); every
+	// other book write (the scanner's bulk of them) touches neither.
 	identInputs := identBookInputsChanged(oldBook, book)
 	var identTx *identTxn
-	defer func() {
-		if identTx != nil {
-			identTx.end(false)
-		}
-	}()
+	defer func() { identTx.end(false) }()
 	if identityChanged || asinReplaced || identInputs {
 		// A retitle or re-credit keeps the row but marks it Stale (it used to
 		// delete it, which lost 1,180 candidate rows on 2026-10-06): the apply
@@ -3635,7 +3640,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			}
 		}()
 		var staged bool
-		var cacheAfter *MetadataCandidateCache
+		var cacheAfter identCacheView
 		var err error
 		switch {
 		case identityChanged:
@@ -3645,11 +3650,17 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			if asinReplaced {
 				stampASIN = oldASIN
 			}
-			staged, cacheAfter, err = p.stageCacheStaleStamp(batch, id, stampASIN)
+			var after *MetadataCandidateCache
+			staged, after, err = p.stageCacheStaleStamp(batch, id, stampASIN)
+			cacheAfter = identCacheViewOf(after)
 		case asinReplaced:
-			staged, cacheAfter, err = p.stageCacheASINStamp(batch, id, oldASIN)
+			var after *MetadataCandidateCache
+			staged, after, err = p.stageCacheASINStamp(batch, id, oldASIN)
+			cacheAfter = identCacheViewOf(after)
 		default:
-			cacheAfter, err = p.getMetadataCacheForIdent(id)
+			// Only the review status or the scope moved: the row is not
+			// rewritten, so its partial view is all the derivation needs.
+			cacheAfter, err = p.readIdentCacheView(id)
 		}
 		if err != nil {
 			batch.Close()
@@ -3690,18 +3701,11 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	if bookWriteBatchPreCommitHook != nil {
 		bookWriteBatchPreCommitHook("update", id, batch)
 	}
-	if identTx != nil {
-		// identMu from the counter read through the commit (identTxn).
-		if err := identTx.prepare(); err != nil {
-			batch.Close()
-			return nil, err
-		}
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// identTx may be nil (no identification input moved): commitIdentBatch
+	// then only commits. Its counter move lands before the stripe is
+	// released below.
+	if err := p.commitIdentBatch(batch, identTx, pebble.Sync); err != nil {
 		return nil, err
-	}
-	if identTx != nil {
-		identTx.end(true)
 	}
 	if unlockCache != nil {
 		unlockCache()
@@ -4305,7 +4309,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}()
 	identTx := p.beginIdent(batch)
 	defer identTx.end(false)
-	if err := identTx.stage(id, nil, nil); err != nil {
+	if err := identTx.stage(id, nil, identCacheView{}); err != nil {
 		batch.Close()
 		return err
 	}
@@ -4352,14 +4356,9 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	if bookWriteBatchPreCommitHook != nil {
 		bookWriteBatchPreCommitHook("delete", id, batch)
 	}
-	if err := identTx.prepare(); err != nil {
-		batch.Close()
+	if err := p.commitIdentBatch(batch, identTx, pebble.Sync); err != nil {
 		return err
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return err
-	}
-	identTx.end(true)
 	identMuBook.Unlock()
 	identBookLocked = false
 	if cacheRowDeleted {
@@ -5589,7 +5588,7 @@ func (p *PebbleStore) SetRaw(key string, value []byte) error {
 // commitRawWrites sets (values[i] non-nil) or deletes (nil) each key in one
 // synced batch. When any key is a metadata_cache: row, the books those rows
 // belong to are restaged in the identification index in the same batch,
-// under their cache stripes (taken in stripe order) and identMu.
+// under their cache stripes (taken in stripe order) and identMu for read.
 func (p *PebbleStore) commitRawWrites(keys []string, values [][]byte) error {
 	batch := p.db.NewBatch()
 	defer batch.Close()
@@ -5631,14 +5630,7 @@ func (p *PebbleStore) commitRawWrites(keys []string, values [][]byte) error {
 	if err := p.stageIdentForRawCacheWrites(t, ids, vals); err != nil {
 		return err
 	}
-	if err := t.prepare(); err != nil {
-		return err
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return err
-	}
-	t.end(true)
-	return nil
+	return p.commitIdentBatch(batch, t, pebble.Sync)
 }
 
 // GetRaw reads a single key. Returns (nil, nil) on miss so callers
@@ -5996,13 +5988,16 @@ func (p *PebbleStore) Reset() error {
 		return fmt.Errorf("reset: stage identification index marker: %w", err)
 	}
 
-	// Commit with sync for durability. identMu spans the commit so no
-	// identification write can interleave with the zeroing of the counters.
+	// Commit with sync for durability. identMu (for write) spans the commit
+	// so no identification write can interleave with the zeroing of the
+	// counters; the generation bump makes a rebuild already running end
+	// without overwriting them (errIdentRebuildSuperseded).
 	p.ident.mu.Lock()
 	if err := batch.Commit(pebble.Sync); err != nil {
 		p.ident.mu.Unlock()
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
+	p.ident.gen.Add(1)
 	p.ident.setCounts([2][numIdentStates]int64{})
 	p.ident.ready.Store(true)
 	p.ident.mu.Unlock()
@@ -6105,7 +6100,8 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 	// (or rows) of the identification index without going through its
 	// write-through. The index is marked not ready (and its marker removed,
 	// so a crash mid-wipe rebuilds on boot) before the first delete, and
-	// rebuilt from what is left after the last, error or not.
+	// rebuilt from what is left after the last, error or not. A failed
+	// rebuild wakes SuperviseIdentIndex, which retries it with backoff.
 	identCovered := false
 	for _, prefix := range prefixes {
 		if covers(prefix, bookRowPrefix) || covers(prefix, metadataCacheKeyPrefix) || covers(prefix, "ident:") {
@@ -6118,7 +6114,8 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 		}
 		defer func() {
 			if _, err := p.RebuildIdentIndex(p.closingContext()); err != nil {
-				identLog.Warn("identification index rebuild after a wipe failed; it is rebuilt on the next boot: %v", err)
+				identLog.Warn("identification index rebuild after a wipe failed; the supervisor retries it (and the next boot rebuilds it): %v", err)
+				p.ident.nudge()
 			}
 		}()
 	}

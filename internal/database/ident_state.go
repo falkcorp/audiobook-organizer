@@ -1,5 +1,5 @@
 // file: internal/database/ident_state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
 // last-edited: 2026-10-11
 
@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"runtime"
 	"sort"
 	"strings"
@@ -35,20 +34,35 @@ import (
 //	ident:state:<bookID>          -> identRow JSON {state, reason, primary}
 //	ident:by:<state>:<bookID>     -> one byte: '1' when the book is in the
 //	                                 primary scope, '0' otherwise. Membership
-//	                                 is the key; the byte lets a recount and
-//	                                 the primary counters be checked from the
-//	                                 keys alone, without reading state rows.
-//	ident:n:<scope>:<state>       -> 8-byte big-endian counter, scope all|primary
+//	                                 is the key; the byte lets the counters be
+//	                                 recounted from the keys alone, without
+//	                                 reading state rows.
 //	ident:dirty:<bookID>          -> 8-byte big-endian epoch (the dirty set)
 //	ident:meta:built              -> the index format version, as decimal text
 //
-// Who keeps it current, and under which lock: see stageIdent and the writer
+// The counters are NOT stored. They live in memory only (identIndex.published)
+// and are recounted from the ident:by: keys at open (a keys-only scan: about
+// 4 ms at 40,000 books, 9 ms at 120,000) and at the end of every rebuild.
+// The membership keys commit in the same batch as the change that moves them,
+// so they are crash-atomic with it, and a counter derived from them can never
+// disagree with them after a restart. A persisted counter could (the first
+// version of this index stored them, and serializing their read-modify-write
+// put every identification write behind one fsync).
+//
+// Who keeps it current, and under which lock: see identTxn and the writer
 // list on MetadataCacheGeneration. Every writer of an input -- a cache row, a
 // book's review status, its primary flag, its trash or quarantine bit --
 // holds the book's metadataCacheLock stripe from its read of the old state row
-// through its commit, and identMu (identIndex.mu) from the counter read
-// through the commit. Lock order: book-family stripes, then the cache stripe,
-// then identMu. Nothing holding identMu takes another lock.
+// through its commit AND the in-memory counter move that follows it, so one
+// book's transitions are applied one at a time and in commit order. It also
+// holds identMu (identIndex.mu) for READ over the same span: writers of
+// different books run, and fsync, concurrently. Only the whole-index
+// operations -- a rebuild's final recount, Reset, an invalidation, the drift
+// check -- take identMu for WRITE, which waits for every in-flight writer to
+// finish its commit and counter move. Lock order: book-family stripes, then
+// the cache stripe, then identMu. Nothing holding identMu takes another lock,
+// and nothing holding it for read takes it again (an RWMutex read lock is not
+// reentrant once a writer waits).
 
 // IdentState is a book's identification state.
 type IdentState string
@@ -121,13 +135,12 @@ const identIndexVersion = 1
 const (
 	identStatePrefix = "ident:state:"
 	identByPrefix    = "ident:by:"
-	identCountPrefix = "ident:n:"
 	identDirtyPrefix = "ident:dirty:"
 	identMetaPrefix  = "ident:meta:"
 	identBuiltKey    = identMetaPrefix + "built"
 )
 
-// identScopeAll and identScopePrimary index identIndex.counts.
+// identScopeAll and identScopePrimary index identIndex.published.
 const (
 	identScopeAll     = 0
 	identScopePrimary = 1
@@ -142,10 +155,6 @@ func identByKey(s IdentState, bookID string) []byte {
 }
 
 func identByStatePrefix(s IdentState) []byte { return []byte(identByPrefix + string(s) + ":") }
-
-func identCountKey(scope int, s IdentState) []byte {
-	return []byte(identCountPrefix + identScopeNames[scope] + ":" + string(s))
-}
 
 func identDirtyKey(bookID string) []byte { return []byte(identDirtyPrefix + bookID) }
 
@@ -194,8 +203,13 @@ func identInScope(b *Book) bool {
 // to read. That is the one judgement call in this mapping and is left for
 // the owner to confirm.
 //
-// The goal number ("missing" in appendix C) is unasked + asked_empty over the
-// primary scope: fetched-but-unapproved books are not missing.
+// "missing" (IdentMissing) is unasked + asked_empty over the primary scope:
+// fetched-but-unapproved books are not missing, and an ASIN alone does not
+// make a book identified. It is appendix C's count BEFORE that appendix's
+// exclusion of the excluded franchise (about 281 books), which nothing here
+// can tell apart yet: it waits on a later manual_only reason. Until then
+// missing exceeds the goal number by the franchise books in those two
+// states.
 func DeriveIdentState(book *Book, cache *MetadataCandidateCache) (IdentState, string) {
 	var status *string
 	if book != nil {
@@ -241,41 +255,64 @@ func identBookInputsChanged(oldBook, newBook *Book) bool {
 
 // identIndex is the in-process half of the index.
 type identIndex struct {
-	// mu is identMu: it serializes the counter read-modify-write AND the
-	// commit that carries it, so two batches can never stage the same old
-	// counter value. It also serializes the rebuild's final recount and the
-	// ready flip against every writer's commit.
-	mu sync.Mutex
-	// counts mirrors the persisted ident:n: counters. Guarded by mu; only
-	// meaningful while ready.
-	counts [2][numIdentStates]int64
-	// published is counts as last published (setCounts / publish), read
-	// without mu by IdentCounts: a counter read must not wait behind a
-	// writer holding mu across its synced commit.
+	// mu is identMu. Writers (identTxn) hold it for READ from their read of
+	// the old state row through their commit and counter move; the
+	// whole-index operations (identFinishRebuild, Reset,
+	// invalidateIdentIndex, IdentCountersDrift) hold it for WRITE, so they
+	// see no commit whose counter move is still pending.
+	mu sync.RWMutex
+	// published is the per-scope, per-state counter: the number of
+	// ident:by: keys. A writer adds its batch's delta after a successful
+	// commit (atomic, under mu for read); a recount stores over it under mu
+	// for write. Read without any lock by IdentCounts.
 	published [2][numIdentStates]atomic.Int64
 	// ready is true when the counters and membership keys can be trusted.
-	// Written under mu; read without it by the query paths.
+	// Written under mu for write; read without it by the query paths.
 	ready atomic.Bool
+	// gen counts invalidations (bumped under mu for write). A rebuild that
+	// sees it move between its start and its final recount was overtaken by
+	// a wipe, and leaves the index not ready for the rebuild that follows the
+	// wipe, rather than declaring ready an index built over rows the wipe
+	// removed.
+	gen atomic.Uint64
 	// rebuildMu serializes RebuildIdentIndex runs.
 	rebuildMu sync.Mutex
 	// lastEpoch is the last dirty-set epoch handed out.
 	lastEpoch atomic.Uint64
+	// wake nudges SuperviseIdentIndex: sent (without blocking) when the
+	// index is invalidated or a rebuild fails.
+	wake chan struct{}
 }
 
-// publish copies counts into published. Called with mu held, after every
-// change of counts.
-func (x *identIndex) publish() {
-	for scope := range x.counts {
-		for i := range x.counts[scope] {
-			x.published[scope][i].Store(x.counts[scope][i])
+// setCounts stores c as the counters. Called with mu held for write.
+func (x *identIndex) setCounts(c [2][numIdentStates]int64) {
+	for scope := range c {
+		for i := range c[scope] {
+			x.published[scope][i].Store(c[scope][i])
 		}
 	}
 }
 
-// setCounts replaces counts and publishes them. Called with mu held.
-func (x *identIndex) setCounts(c [2][numIdentStates]int64) {
-	x.counts = c
-	x.publish()
+// loadCounts reads the counters, unclamped.
+func (x *identIndex) loadCounts() [2][numIdentStates]int64 {
+	var c [2][numIdentStates]int64
+	for scope := range c {
+		for i := range c[scope] {
+			c[scope][i] = x.published[scope][i].Load()
+		}
+	}
+	return c
+}
+
+// nudge wakes SuperviseIdentIndex, if one runs, without blocking.
+func (x *identIndex) nudge() {
+	if x.wake == nil {
+		return
+	}
+	select {
+	case x.wake <- struct{}{}:
+	default:
+	}
 }
 
 // IdentCounts is a snapshot of the per-state counters.
@@ -287,7 +324,8 @@ type IdentCounts struct {
 	Primary map[IdentState]int64
 }
 
-// Missing is the goal number for a scope's counts: unasked + asked_empty.
+// IdentMissing is a scope's "missing" count: unasked + asked_empty. It does
+// not exclude the franchise appendix C excludes (see DeriveIdentState).
 func IdentMissing(m map[IdentState]int64) int64 {
 	return m[IdentUnasked] + m[IdentAskedEmpty]
 }
@@ -302,10 +340,16 @@ type IdentIndexReader interface {
 var _ IdentIndexReader = (*PebbleStore)(nil)
 
 // IdentCounts returns the counters. O(1) and lock-free: it reads the
-// published mirror of the persisted counters, never waiting on identMu
-// (which a writer holds across its synced commit). A read that races a
-// write can see that one write half applied (a book leaving one state
-// before it arrives in the other); the next read sees it whole.
+// in-memory counters, never waiting on identMu. A read that races a write can
+// see that one write half applied (a book leaving one state before it arrives
+// in the other); the next read sees it whole.
+//
+// A counter cannot go negative while every writer follows identTxn's
+// protocol: a book's decrement out of a state is applied only after the
+// increment that put it there (the book's stripe orders them). A negative
+// value would mean a writer bypassed the index; it reads as 0 here, the one
+// place a count leaves the store, and IdentCountersDrift reports the raw
+// value.
 func (p *PebbleStore) IdentCounts() IdentCounts {
 	out := IdentCounts{
 		All:     make(map[IdentState]int64, numIdentStates),
@@ -316,8 +360,8 @@ func (p *PebbleStore) IdentCounts() IdentCounts {
 	}
 	out.Ready = true
 	for i, s := range AllIdentStates {
-		out.All[s] = p.ident.published[identScopeAll][i].Load()
-		out.Primary[s] = p.ident.published[identScopePrimary][i].Load()
+		out.All[s] = max(0, p.ident.published[identScopeAll][i].Load())
+		out.Primary[s] = max(0, p.ident.published[identScopePrimary][i].Load())
 	}
 	return out
 }
@@ -377,23 +421,26 @@ func (p *PebbleStore) readIdentRow(bookID string) (identRow, bool, error) {
 
 // identTxn stages the identification changes of one batch. The protocol:
 //
-//	t := p.beginIdent(batch)
-//	defer t.end(false)           // releases identMu on every early return
-//	t.stage(id, book, cache)     // per book, under that book's cache stripe
-//	t.prepare()                  // takes identMu when any row changed
-//	batch.Commit(...)
-//	t.end(true)                  // mirrors the counters, releases identMu
+//	// the caller holds every staged book's cache stripe
+//	t := p.beginIdent(batch)          // takes identMu for read
+//	defer t.end(false)                // releases it on every early return
+//	t.stage(id, book, cache)          // per book: old row -> new row, delta
+//	p.commitIdentBatch(batch, t, ...) // commit, then t.end(err == nil)
+//	// release the stripes
 //
-// stage reads each book's old row and stages the new row and membership key.
-// prepare takes identMu (held through the commit) and, when the index is
-// ready, stages the new absolute counter values. A batch that changes no row
-// never takes identMu.
+// stage reads each book's old row and stages the new row and membership key
+// in the batch, and adds the move to the transaction's delta. end(true) adds
+// the delta to the in-memory counters; end(false) -- a failed or abandoned
+// commit -- drops it, so a batch that did not commit moves no counter. The
+// read lock spans the old-row read, the commit and the counter move, so a
+// recount (which takes the lock for write) never sees a commit without its
+// move, or a move without its commit. The cache stripes, held by the caller
+// over the same span, make one book's transactions apply in commit order.
 type identTxn struct {
 	p       *PebbleStore
 	batch   *GatedBatch
 	changed bool
 	locked  bool
-	counted bool
 	delta   [2][numIdentStates]int64
 	// staged maps book id -> the row this batch leaves (present=false for a
 	// removal), so a second stage of one book in the same batch reads it.
@@ -405,18 +452,22 @@ type identStaged struct {
 	present bool
 }
 
+// beginIdent opens an identification transaction over batch and takes
+// identMu for read. The caller must already hold the cache stripe of every
+// book it will stage, and must call end.
 func (p *PebbleStore) beginIdent(batch *GatedBatch) *identTxn {
-	return &identTxn{p: p, batch: batch}
+	p.ident.mu.RLock()
+	return &identTxn{p: p, batch: batch, locked: true}
 }
 
 // stage stages bookID's identification state as derived from book (nil: the
-// book does not exist, so its rows are removed) and cache (nil: no row). The
-// caller holds bookID's metadataCacheLock stripe until the batch commits.
-func (t *identTxn) stage(bookID string, book *Book, cache *MetadataCandidateCache) error {
+// book does not exist or will not decode, so its rows are removed) and cache
+// (the book's metadata_cache row as this batch leaves it).
+func (t *identTxn) stage(bookID string, book *Book, cache identCacheView) error {
 	if book == nil {
 		return t.stageRow(bookID, identRow{}, false)
 	}
-	s, reason := DeriveIdentState(book, cache)
+	s, reason := deriveIdent(book.MetadataReviewStatus, cache.present, cache.candidates, cache.stale)
 	return t.stageRow(bookID, identRow{State: s, Reason: reason, Primary: identInScope(book)}, true)
 }
 
@@ -474,151 +525,194 @@ func (t *identTxn) count(r identRow, d int64) {
 	}
 }
 
-// prepare takes identMu when the batch changes any row, and, when the index
-// is ready, stages the counters this batch moves at their new absolute
-// values. identMu is then held until end.
-func (t *identTxn) prepare() error {
-	if !t.changed || t.locked {
-		return nil
-	}
-	t.p.ident.mu.Lock()
-	t.locked = true
-	if !t.p.ident.ready.Load() {
-		// Not ready: the rebuild's final recount (under identMu, after this
-		// commit) counts these rows.
-		return nil
-	}
-	for scope := range t.delta {
-		for i, d := range t.delta[scope] {
-			if d == 0 {
-				continue
-			}
-			v := t.p.ident.counts[scope][i] + d
-			if err := t.batch.Set(identCountKey(scope, AllIdentStates[i]), encodeIdentCounter(v), nil); err != nil {
-				return err
-			}
-		}
-	}
-	t.counted = true
-	return nil
-}
-
-// end mirrors the staged counters into memory when the batch committed, and
-// releases identMu. It is idempotent, so a deferred end(false) is safe after
-// an explicit end(true).
+// end settles the transaction and releases identMu: with committed true it
+// adds the staged delta to the in-memory counters first. It applies the
+// delta whether or not the index is ready: while it is not, the rebuild's
+// final recount (under identMu for write, so after this) stores over it.
+// end is idempotent, so a deferred end(false) is safe after an explicit
+// end(true).
 func (t *identTxn) end(committed bool) {
-	if !t.locked {
+	if t == nil || !t.locked {
 		return
 	}
-	if committed && t.counted {
+	if committed && t.changed {
+		if h := identBeforeCountMove.Load(); h != nil {
+			(*h)(t.p)
+		}
 		for scope := range t.delta {
 			for i, d := range t.delta[scope] {
-				t.p.ident.counts[scope][i] += d
+				if d != 0 {
+					t.p.ident.published[scope][i].Add(d)
+				}
 			}
 		}
-		t.p.ident.publish()
 	}
-	t.locked, t.counted = false, false
-	t.p.ident.mu.Unlock()
+	t.locked = false
+	t.p.ident.mu.RUnlock()
 }
 
-// encodeIdentCounter encodes a counter. A negative value (only reachable
-// through a writer that bypassed the index) is stored as 0; the drift check
-// reports and repairs it.
-func encodeIdentCounter(v int64) []byte {
-	if v < 0 {
-		v = 0
-	}
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], uint64(v))
-	return b[:]
-}
+// identCommitFault, when set, is consulted by commitIdentBatch before the
+// commit with the committing store; a non-nil error is returned as the
+// commit's. Tests only: it is how a failed commit is produced to prove it
+// moves no counter (the store argument keeps a fault aimed at one test's
+// store from failing another test's commits).
+var identCommitFault atomic.Pointer[func(*PebbleStore) error]
 
-func decodeIdentCounter(b []byte) (int64, bool) {
-	if len(b) != 8 {
-		return 0, false
+// identBeforeCountMove, when set, is called by end after a successful
+// commit and before its counter move, with identMu still held for read.
+// Tests only: it holds a committed write at exactly the point a recount must
+// not run, to prove the recount waits for it.
+var identBeforeCountMove atomic.Pointer[func(*PebbleStore)]
+
+// commitIdentBatch commits batch and settles t (nil: no identification
+// change in the batch) with the commit's outcome: the counters move only
+// for a batch that committed.
+func (p *PebbleStore) commitIdentBatch(batch *GatedBatch, t *identTxn, o *pebble.WriteOptions) error {
+	var err error
+	if f := identCommitFault.Load(); f != nil {
+		err = (*f)(p)
 	}
-	return int64(binary.BigEndian.Uint64(b)), true
+	if err == nil {
+		err = batch.Commit(o)
+	}
+	t.end(err == nil)
+	return err
 }
 
 // writeIdentForBook re-derives bookID's state from what is stored now and
 // commits it on its own (sync is the commit's durability). It takes the
 // book's cache stripe itself; the caller must hold none of the ident locks.
-//
-// A book row that will not decode is treated as no book: its ident: rows are
-// removed and undecodable is true. Memdb warmup skips such a row too
-// (skipped_total), so the Library never lists it, and a count that included
-// it would disagree with the listing. Every write path refuses the row
-// (UpdateBook's read of it fails), so nothing can move it until it is
-// repaired; the next rebuild then indexes it.
+// undecodable reports a book row that will not decode (readIdentBook): its
+// ident: rows are removed.
 func (p *PebbleStore) writeIdentForBook(bookID string, sync *pebble.WriteOptions) (changed, undecodable bool, err error) {
 	mu := p.metadataCacheLock(bookID)
 	mu.Lock()
 	defer mu.Unlock()
-	book, err := p.GetBookByID(bookID)
-	if err != nil {
-		if !isJSONDecodeError(err) {
-			return false, false, err
-		}
-		book, undecodable = nil, true
-	}
-	var cache *MetadataCandidateCache
-	if book != nil {
-		cache, err = p.getMetadataCacheForIdent(bookID)
-		if err != nil {
-			return false, false, err
-		}
-	}
 	batch := p.db.NewBatch()
 	defer func() { _ = batch.Close() }()
 	t := p.beginIdent(batch)
 	defer t.end(false)
+	book, undecodable, err := p.readIdentBook(bookID)
+	if err != nil {
+		return false, false, err
+	}
+	var cache identCacheView
+	if book != nil {
+		cache, err = p.readIdentCacheView(bookID)
+		if err != nil {
+			return false, undecodable, err
+		}
+	}
 	if err := t.stage(bookID, book, cache); err != nil {
 		return false, undecodable, err
 	}
 	if !t.changed {
 		return false, undecodable, nil
 	}
-	if err := t.prepare(); err != nil {
+	if err := p.commitIdentBatch(batch, t, sync); err != nil {
 		return false, undecodable, err
 	}
-	if err := batch.Commit(sync); err != nil {
-		return false, undecodable, err
-	}
-	t.end(true)
 	return true, undecodable, nil
 }
 
-// isJSONDecodeError reports whether err is a JSON decode failure (a row
-// that will not decode), as opposed to a read error.
-func isJSONDecodeError(err error) bool {
-	var syn *json.SyntaxError
-	var typ *json.UnmarshalTypeError
-	return errors.As(err, &syn) || errors.As(err, &typ) || errors.Is(err, io.ErrUnexpectedEOF)
+// identBookView is the part of a book row the derivation reads. Every
+// identification read of a book row decodes this view and nothing more:
+// the write-through, the rebuild's comparison and its repair, so they can
+// never disagree about a row (a full decode that failed where this one
+// succeeded used to make the rebuild "repair" the same row on every boot).
+type identBookView struct {
+	MetadataReviewStatus *string    `json:"metadata_review_status,omitempty"`
+	IsPrimaryVersion     *bool      `json:"is_primary_version,omitempty"`
+	MarkedForDeletion    *bool      `json:"marked_for_deletion,omitempty"`
+	QuarantinedAt        *time.Time `json:"quarantined_at,omitempty"`
 }
 
-// getMetadataCacheForIdent reads bookID's cache row for derivation. A row
-// that exists but will not decode is read as a row with no candidates
-// (asked_empty): it exists, and nothing in it can be applied.
-func (p *PebbleStore) getMetadataCacheForIdent(bookID string) (*MetadataCandidateCache, error) {
-	entry, err := p.GetMetadataCache(bookID)
-	if err == nil {
-		return entry, nil
+// identBookFromRaw decodes a book row value for derivation. ok is false for
+// a value that will not decode (as JSON, or in one of the four fields): such
+// a book is treated as no book -- not indexed, its ident: rows removed. Memdb
+// warmup skips a row that will not decode too (skipped_total), so the Library
+// never lists it, and a count that included it would disagree with the
+// listing. A row that decodes here but fails Book's full decode elsewhere is
+// indexed by these four fields; warmup skips it, so it is the one case where
+// the count can exceed the listing, by the number of such rows (memdb
+// warmup's skipped_total names them).
+func identBookFromRaw(value []byte) (*Book, bool) {
+	var v identBookView
+	if err := json.Unmarshal(value, &v); err != nil {
+		return nil, false
 	}
-	if isJSONDecodeError(err) {
-		return &MetadataCandidateCache{BookID: bookID}, nil
-	}
-	return nil, err
+	return &Book{
+		MetadataReviewStatus: v.MetadataReviewStatus,
+		IsPrimaryVersion:     v.IsPrimaryVersion,
+		MarkedForDeletion:    v.MarkedForDeletion,
+		QuarantinedAt:        v.QuarantinedAt,
+	}, true
 }
 
-// identCacheFromRaw decodes a raw metadata_cache value for derivation, with
-// getMetadataCacheForIdent's rule for an undecodable value.
-func identCacheFromRaw(bookID string, value []byte) *MetadataCandidateCache {
-	var entry MetadataCandidateCache
-	if err := json.Unmarshal(value, &entry); err != nil {
-		return &MetadataCandidateCache{BookID: bookID}
+// readIdentBook reads bookID's book row for derivation: (nil, false, nil)
+// when there is none, (nil, true, nil) when it will not decode. It reads the
+// raw row, never GetBookByID: the derivation needs four fields, not the
+// signature sidecar, and a sidecar or full-decode failure must not fail a
+// metadata_cache write (the cache row is written either way).
+func (p *PebbleStore) readIdentBook(bookID string) (book *Book, undecodable bool, err error) {
+	val, closer, err := p.db.Get([]byte(bookRowPrefix + bookID))
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read book:%s for identification state: %w", bookID, err)
 	}
-	return &entry
+	defer closer.Close()
+	b, ok := identBookFromRaw(val)
+	if !ok {
+		return nil, true, nil
+	}
+	return b, false, nil
+}
+
+// identCacheView is what the derivation reads of a book's metadata_cache row.
+type identCacheView struct {
+	present    bool
+	candidates int
+	stale      bool
+}
+
+// identCacheViewOf is the view of a decoded row (nil: no row).
+func identCacheViewOf(c *MetadataCandidateCache) identCacheView {
+	if c == nil {
+		return identCacheView{}
+	}
+	return identCacheView{present: true, candidates: len(c.Candidates), stale: c.Stale}
+}
+
+// identCacheJSON is the part of a cache row identCacheViewFromRaw decodes.
+type identCacheJSON struct {
+	Candidates []json.RawMessage `json:"candidates"`
+	Stale      bool              `json:"stale,omitempty"`
+}
+
+// identCacheViewFromRaw is the view of a stored row value. A row that exists
+// but will not decode is a row with no candidate (asked_empty): it exists,
+// and nothing in it can be applied.
+func identCacheViewFromRaw(value []byte) identCacheView {
+	var v identCacheJSON
+	if json.Unmarshal(value, &v) != nil {
+		return identCacheView{present: true}
+	}
+	return identCacheView{present: true, candidates: len(v.Candidates), stale: v.Stale}
+}
+
+// readIdentCacheView reads bookID's cache row for derivation.
+func (p *PebbleStore) readIdentCacheView(bookID string) (identCacheView, error) {
+	val, closer, err := p.db.Get(metadataCacheKey(bookID))
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return identCacheView{}, nil
+		}
+		return identCacheView{}, fmt.Errorf("read metadata_cache:%s for identification state: %w", bookID, err)
+	}
+	defer closer.Close()
+	return identCacheViewFromRaw(val), nil
 }
 
 // lockIdentStripes takes the metadataCacheLock stripes of every id, each
@@ -647,16 +741,17 @@ func (p *PebbleStore) lockIdentStripes(ids []string) func() {
 
 // stageIdentForRawCacheWrites stages the identification state of every book
 // whose metadata_cache: row a raw write sets (values[i] non-nil) or deletes
-// (values[i] nil). The caller holds every such book's stripe.
+// (values[i] nil). The caller holds every such book's stripe. A book row that
+// will not decode is staged as no book, and the raw write goes ahead.
 func (p *PebbleStore) stageIdentForRawCacheWrites(t *identTxn, ids []string, values [][]byte) error {
 	for i, id := range ids {
-		book, err := p.GetBookByID(id)
+		book, _, err := p.readIdentBook(id)
 		if err != nil {
 			return err
 		}
-		var cache *MetadataCandidateCache
+		var cache identCacheView
 		if values[i] != nil {
-			cache = identCacheFromRaw(id, values[i])
+			cache = identCacheViewFromRaw(values[i])
 		}
 		if err := t.stage(id, book, cache); err != nil {
 			return err
@@ -668,10 +763,10 @@ func (p *PebbleStore) stageIdentForRawCacheWrites(t *identTxn, ids []string, val
 // --- load, rebuild, drift ---
 
 // loadIdentIndexState runs at open. A built index (marker at the current
-// version) is loaded and served at once. An absent marker on a store with no
-// book and no cache row is stamped as built (an empty index is a correct
-// one). Otherwise the index stays not ready until EnsureIdentIndex rebuilds
-// it.
+// version) has its counters recounted from the membership keys and is served
+// at once. An absent marker on a store with no book and no cache row is
+// stamped as built (an empty index is a correct one). Otherwise the index
+// stays not ready until EnsureIdentIndex rebuilds it.
 func (p *PebbleStore) loadIdentIndexState() error {
 	ver, ok, err := p.readIdentMarker()
 	if err != nil {
@@ -736,55 +831,130 @@ func (p *PebbleStore) identSourcesEmpty() (bool, error) {
 	return empty, nil
 }
 
+// loadIdentCounters recounts the counters from the membership keys and makes
+// the index ready: the every-boot path of a built index.
 func (p *PebbleStore) loadIdentCounters() error {
-	counts, err := p.identPersistedCounters()
-	if err != nil {
-		return fmt.Errorf("read identification counters: %w", err)
-	}
 	p.ident.mu.Lock()
+	defer p.ident.mu.Unlock()
+	counts, err := p.identRecount()
+	if err != nil {
+		return fmt.Errorf("count identification membership keys: %w", err)
+	}
 	p.ident.setCounts(counts)
 	p.ident.ready.Store(true)
-	p.ident.mu.Unlock()
 	return nil
 }
 
 // invalidateIdentIndex marks the index not ready and removes its marker, so
 // a crash before the next rebuild finishes leaves a store that rebuilds on
-// boot. Used by a wipe that removed book or cache rows the change paths
-// could not see.
+// boot. Used by a rebuild from scratch and by a wipe that removed book or
+// cache rows the change paths could not see. It bumps the invalidation
+// generation, which makes a rebuild already running leave the index not
+// ready at its end.
 func (p *PebbleStore) invalidateIdentIndex() error {
 	p.ident.mu.Lock()
 	defer p.ident.mu.Unlock()
 	p.ident.ready.Store(false)
+	p.ident.gen.Add(1)
 	return p.db.Delete([]byte(identBuiltKey), pebble.Sync)
 }
 
 // IdentIndexReady reports whether the counters and membership can be read.
 func (p *PebbleStore) IdentIndexReady() bool { return p.ident.ready.Load() }
 
-// EnsureIdentIndex is the boot entry point, run after memdb warmup on a
-// tracked background goroutine. With no marker (or an old one) it rebuilds
-// from scratch while the index reports not ready. With a current marker the
-// index is already being served and this reconciles it in place: a build
-// that predates the index (a rollback) wrote books and cache rows without
-// maintaining it, and the reconcile finds and fixes those rows, with every
-// fix moving the counters as an ordinary write does.
+// EnsureIdentIndex is one boot build: with no marker (or an old one) it
+// rebuilds from scratch while the index reports not ready. With a current
+// marker the index is already being served and this reconciles it in place:
+// a build that predates the index (a rollback) wrote books and cache rows
+// without maintaining it, and the reconcile finds and fixes those rows, with
+// every fix moving the counters as an ordinary write does.
+// SuperviseIdentIndex runs it, and retries it, on the server's background
+// goroutine.
 func (p *PebbleStore) EnsureIdentIndex(ctx context.Context) error {
 	_, err := p.RebuildIdentIndex(ctx)
 	return err
 }
+
+// identRetryDelays are SuperviseIdentIndex's waits between failed builds:
+// six retries over about two minutes, then it stops and logs an ERROR naming
+// the manual op. A variable so tests can shorten it.
+var identRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 64 * time.Second}
+
+// IdentIndexRebuildOpID is the maintenance op that rebuilds the index by
+// hand (internal/plugins/maintenance/ident_index.go).
+const IdentIndexRebuildOpID = "maintenance.ident-index-rebuild"
+
+// SuperviseIdentIndex is the identification index's background keeper, run
+// for the life of the server on a tracked goroutine after memdb warmup. It
+// runs the boot build (EnsureIdentIndex) at once, retrying a failure with
+// backoff (identRetryDelays), and afterwards sleeps until a wipe's own
+// rebuild fails (WipeByPrefixes nudges it) and then builds again, with the
+// same retries, if the index is still not ready. After the last retry of an
+// episode it logs an ERROR naming the manual op and waits for the next
+// nudge. It returns when ctx ends.
+func (p *PebbleStore) SuperviseIdentIndex(ctx context.Context) {
+	boot := true
+	for {
+		if boot || !p.ident.ready.Load() {
+			p.ensureIdentIndexRetrying(ctx, boot)
+		}
+		boot = false
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.ident.wake: // nil (no supervisor channel): waits for ctx
+		}
+	}
+}
+
+// ensureIdentIndexRetrying runs EnsureIdentIndex until it succeeds, ctx
+// ends, or identRetryDelays is spent. Outside the boot build it stops as soon
+// as the index is ready (another rebuild -- a wipe's -- finished it).
+func (p *PebbleStore) ensureIdentIndexRetrying(ctx context.Context, boot bool) {
+	for attempt := 0; ; attempt++ {
+		if !boot && p.ident.ready.Load() {
+			return
+		}
+		err := p.EnsureIdentIndex(ctx)
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		if attempt >= len(identRetryDelays) {
+			identLog.Error("identification index build failed %d times; ident: queries answer 503 until it is rebuilt (run %s, or restart): %v",
+				attempt+1, IdentIndexRebuildOpID, err)
+			return
+		}
+		wait := identRetryDelays[attempt]
+		identLog.Warn("identification index build failed (attempt %d of %d); retrying in %s: %v",
+			attempt+1, len(identRetryDelays)+1, wait, err)
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// errIdentRebuildSuperseded is a rebuild that a wipe invalidated while it
+// ran: it leaves the index not ready, for the rebuild that follows the wipe.
+var errIdentRebuildSuperseded = errors.New("identification index was invalidated while it was being rebuilt")
 
 // IdentRebuildStats reports what a rebuild did.
 type IdentRebuildStats struct {
 	Books int
 	// Undecodable counts book rows that would not decode: not indexed, and
 	// any ident: rows they had were removed.
-	Undecodable  int
-	RowsFixed    int
-	RowsRemoved  int
-	KeysRemoved  int
-	FromScratch  bool
-	Duration     time.Duration
+	Undecodable int
+	RowsFixed   int
+	RowsRemoved int
+	KeysRemoved int
+	FromScratch bool
+	Duration    time.Duration
+	// CounterDrift is the sum over every counter of |recount - counter| at
+	// the final recount of a rebuild over a ready index: 0 unless a writer
+	// bypassed the write-through.
 	CounterDrift int64
 }
 
@@ -792,10 +962,10 @@ type IdentRebuildStats struct {
 // book and cache row. It is idempotent: a row already correct is not
 // rewritten.
 //
-// From scratch (no current marker) the index reports not ready for the whole
-// run, and Library ident: queries answer 503. Over a built index it stays
-// ready, and each row it fixes moves the counters through the same identTxn
-// a write uses.
+// From scratch (no current marker, or the index not ready) the index reports
+// not ready for the whole run, and Library ident: queries answer 503. Over a
+// built index it stays ready, and each row it fixes moves the counters
+// through the same identTxn a write uses.
 //
 // Concurrency (the repo's whole-library rule): the book rows are read by ONE
 // sequential Pebble iterator -- the scan is IO-bound on it -- and derived on a
@@ -804,9 +974,11 @@ type IdentRebuildStats struct {
 // the book's cache stripe, re-reads the book and its cache row and derives
 // again before writing (writeIdentForBook): a worker's derivation may be
 // older than a write-through that landed since, and must never overwrite it.
-// At the end, under identMu, the counters are recounted from the membership
-// keys, compared with the counters as they stood (the drift, logged at WARN
-// when non-zero) and rewritten, the marker is stamped and the index is ready.
+// At the end, under identMu for write, the counters are recounted from the
+// membership keys, compared with the counters as they stood (the drift,
+// logged at WARN when non-zero) and replaced, the marker is stamped and the
+// index is ready -- unless a wipe invalidated the index meanwhile
+// (errIdentRebuildSuperseded).
 func (p *PebbleStore) RebuildIdentIndex(ctx context.Context) (IdentRebuildStats, error) {
 	p.ident.rebuildMu.Lock()
 	defer p.ident.rebuildMu.Unlock()
@@ -823,30 +995,85 @@ func (p *PebbleStore) RebuildIdentIndex(ctx context.Context) (IdentRebuildStats,
 			return st, err
 		}
 	}
+	gen := p.ident.gen.Load()
 
 	// Pass 1: every book row.
-	books, fixed, undecodable, err := p.identReconcileBooks(ctx)
+	books, fixed, undecodable, err := p.identReconcileBooks(ctx, false)
 	st.Books, st.RowsFixed, st.Undecodable = books, fixed, undecodable
 	if err != nil {
 		return st, err
 	}
 	// Pass 2: state rows of books that no longer exist, and membership keys
 	// that disagree with their state row.
-	removed, keys, err := p.identReconcileOrphans(ctx)
+	removed, keys, err := p.identReconcileOrphans(ctx, false)
 	st.RowsRemoved, st.KeysRemoved = removed, keys
 	if err != nil {
 		return st, err
 	}
-	// Final: recount, rewrite counters, stamp, ready.
-	drift, err := p.identFinishRebuild()
+	// Final: recount, replace the counters, stamp, ready.
+	drift, err := p.identFinishRebuild(gen)
 	st.CounterDrift = drift
 	st.Duration = time.Since(began)
 	if err != nil {
 		return st, err
 	}
-	identLog.Info("identification index rebuilt: books=%d rows_fixed=%d rows_removed=%d keys_removed=%d from_scratch=%v duration=%s",
-		st.Books, st.RowsFixed, st.RowsRemoved, st.KeysRemoved, st.FromScratch, st.Duration.Round(time.Millisecond))
+	identLog.Info("identification index rebuilt: books=%d rows_fixed=%d rows_removed=%d keys_removed=%d undecodable=%d from_scratch=%v duration=%s",
+		st.Books, st.RowsFixed, st.RowsRemoved, st.KeysRemoved, st.Undecodable, st.FromScratch, st.Duration.Round(time.Millisecond))
 	return st, nil
+}
+
+// IdentIndexReport is VerifyIdentIndex's read-only finding: what a rebuild
+// would change.
+type IdentIndexReport struct {
+	Ready bool
+	Books int
+	// Undecodable book rows are not indexed (identBookFromRaw).
+	Undecodable int
+	// RowsWrong: books whose state row or membership key is missing or
+	// differs from a derivation over their stored rows.
+	RowsWrong int
+	// OrphanRows: state rows of books that no longer exist.
+	OrphanRows int
+	// BadKeys: membership keys that disagree with their state row.
+	BadKeys int
+	// CounterDrift: sum of |recount - counter| (0 while not ready).
+	CounterDrift int64
+}
+
+// Clean reports whether a rebuild would change nothing.
+func (r IdentIndexReport) Clean() bool {
+	return r.Ready && r.RowsWrong == 0 && r.OrphanRows == 0 && r.BadKeys == 0 && r.CounterDrift == 0
+}
+
+// VerifyIdentIndex compares the index with a derivation over every stored
+// book and cache row, writing nothing: the preview of RebuildIdentIndex (the
+// maintenance.ident-index-rebuild op). It runs the rebuild's two passes in
+// their read-only form, with the same worker pool. It does not stop writers:
+// a book written while it runs can show as a difference that is already gone
+// (the rebuild re-checks each one under the book's stripe before changing
+// anything), so a non-zero preview on a busy store is an upper bound.
+func (p *PebbleStore) VerifyIdentIndex(ctx context.Context) (IdentIndexReport, error) {
+	p.ident.rebuildMu.Lock()
+	defer p.ident.rebuildMu.Unlock()
+	var r IdentIndexReport
+	r.Ready = p.ident.ready.Load()
+	var err error
+	r.Books, r.RowsWrong, r.Undecodable, err = p.identReconcileBooks(ctx, true)
+	if err != nil {
+		return r, err
+	}
+	r.OrphanRows, r.BadKeys, err = p.identReconcileOrphans(ctx, true)
+	if err != nil {
+		return r, err
+	}
+	if r.Ready {
+		d, err := p.IdentCountersDrift()
+		if err != nil {
+			return r, err
+		}
+		r.CounterDrift = d.Total()
+	}
+	return r, nil
 }
 
 func ctxErr(ctx context.Context) error {
@@ -861,20 +1088,6 @@ func ctxErr(ctx context.Context) error {
 	}
 }
 
-// identRebuildBookView is the part of a book row the derivation reads.
-type identRebuildBookView struct {
-	MetadataReviewStatus *string    `json:"metadata_review_status,omitempty"`
-	IsPrimaryVersion     *bool      `json:"is_primary_version,omitempty"`
-	MarkedForDeletion    *bool      `json:"marked_for_deletion,omitempty"`
-	QuarantinedAt        *time.Time `json:"quarantined_at,omitempty"`
-}
-
-// identRebuildCacheView is the part of a cache row the derivation reads.
-type identRebuildCacheView struct {
-	Candidates []json.RawMessage `json:"candidates"`
-	Stale      bool              `json:"stale,omitempty"`
-}
-
 // identRebuildWorkers sizes the rebuild's derive pool: the work per book is
 // JSON decoding (CPU-bound), so one worker per CPU.
 func identRebuildWorkers() int { return max(1, runtime.NumCPU()) }
@@ -884,15 +1097,16 @@ type identRebuildJob struct {
 	value []byte
 }
 
-// identReconcileBooks is pass 1 of RebuildIdentIndex.
+// identReconcileBooks is pass 1 of RebuildIdentIndex (and, with dryRun, of
+// VerifyIdentIndex, where fixed counts the books a rebuild would rewrite).
 //
 // Failure handling: the first read or write error cancels the pass (the scan
 // stops, the workers and the writer drain without working) and is returned;
 // every channel send also gives up on cancellation, so neither an error
 // storm nor a shutdown can leave the scan blocked on a full channel. An
-// undecodable book row is not an error (writeIdentForBook): it is counted
+// undecodable book row is not an error (identBookFromRaw): it is counted
 // and logged once at the end, and the index still becomes ready.
-func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed, undecodable int, err error) {
+func (p *PebbleStore) identReconcileBooks(parent context.Context, dryRun bool) (books, fixed, undecodable int, err error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -912,6 +1126,7 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 	workers := identRebuildWorkers()
 	jobs := make(chan identRebuildJob, workers*4)
 	mismatches := make(chan string, workers*4)
+	var undecodableN atomic.Int64
 
 	var wg sync.WaitGroup
 	for range workers {
@@ -920,10 +1135,13 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 				if ctx.Err() != nil {
 					continue // drain: the scan may still be sending
 				}
-				same, err := p.identRowMatches(j.id, j.value)
+				same, bad, err := p.identRowMatches(j.id, j.value)
 				if err != nil {
 					fail(err)
 					continue
+				}
+				if bad {
+					undecodableN.Add(1)
 				}
 				if !same {
 					select {
@@ -934,7 +1152,7 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 			}
 		})
 	}
-	// The one writer. fixed and undecodable are read only after writerDone.
+	// The one writer. fixed is read only after writerDone.
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
@@ -942,16 +1160,17 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 			if ctx.Err() != nil {
 				continue
 			}
-			changed, bad, err := p.writeIdentForBook(id, pebble.NoSync)
+			if dryRun {
+				fixed++
+				continue
+			}
+			changed, _, err := p.writeIdentForBook(id, pebble.NoSync)
 			if err != nil {
 				fail(fmt.Errorf("identification rebuild of %s: %w", id, err))
 				continue
 			}
 			if changed {
 				fixed++
-			}
-			if bad {
-				undecodable++
 			}
 		}
 	}()
@@ -972,6 +1191,7 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 	wg.Wait()
 	close(mismatches)
 	<-writerDone
+	undecodable = int(undecodableN.Load())
 
 	errMu.Lock()
 	err = firstErr
@@ -985,8 +1205,11 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 	if err != nil {
 		return books, fixed, undecodable, err
 	}
-	if undecodable > 0 {
+	if undecodable > 0 && !dryRun {
 		identLog.Warn("identification rebuild skipped %d book rows that will not decode; they are not indexed until repaired", undecodable)
+	}
+	if dryRun || fixed == 0 {
+		return books, fixed, undecodable, nil
 	}
 	// The writer committed NoSync; one synced write makes them durable
 	// before the marker can claim the index is built.
@@ -997,59 +1220,45 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context) (books, fixed,
 }
 
 // identRowMatches derives a book's state from its row value and its cache
-// row, and reports whether the stored state row already says the same.
-func (p *PebbleStore) identRowMatches(id string, value []byte) (bool, error) {
-	var bv identRebuildBookView
-	if err := json.Unmarshal(value, &bv); err != nil {
-		// Undecodable book row: let the writer decide from a full read.
-		return false, nil
-	}
-	book := &Book{
-		MetadataReviewStatus: bv.MetadataReviewStatus,
-		IsPrimaryVersion:     bv.IsPrimaryVersion,
-		MarkedForDeletion:    bv.MarkedForDeletion,
-		QuarantinedAt:        bv.QuarantinedAt,
-	}
-	hasRow, nCand, stale := false, 0, false
-	val, closer, err := p.db.Get(metadataCacheKey(id))
-	switch {
-	case errors.Is(err, pebble.ErrNotFound):
-	case err != nil:
-		return false, fmt.Errorf("read metadata_cache:%s: %w", id, err)
-	default:
-		hasRow = true
-		var cv identRebuildCacheView
-		if json.Unmarshal(val, &cv) == nil {
-			nCand, stale = len(cv.Candidates), cv.Stale
-		}
-		closer.Close()
-	}
-	s, reason := deriveIdent(book.MetadataReviewStatus, hasRow, nCand, stale)
-	want := identRow{State: s, Reason: reason, Primary: identInScope(book)}
-	have, ok, err := p.readIdentRow(id)
+// row, and reports whether the stored state row and membership key already
+// say the same. undecodable reports a book row identBookFromRaw refuses: it
+// must have no ident: rows.
+func (p *PebbleStore) identRowMatches(id string, value []byte) (same, undecodable bool, err error) {
+	book, ok := identBookFromRaw(value)
+	have, haveOK, err := p.readIdentRow(id)
 	if err != nil {
-		return false, err
+		return false, !ok, err
 	}
-	if !ok || have != want {
-		return false, nil
+	if !ok {
+		return !haveOK, true, nil
+	}
+	cache, err := p.readIdentCacheView(id)
+	if err != nil {
+		return false, false, err
+	}
+	s, reason := deriveIdent(book.MetadataReviewStatus, cache.present, cache.candidates, cache.stale)
+	want := identRow{State: s, Reason: reason, Primary: identInScope(book)}
+	if !haveOK || have != want {
+		return false, false, nil
 	}
 	// The row is right; its membership key must be too.
 	v, c, err := p.db.Get(identByKey(want.State, id))
 	if errors.Is(err, pebble.ErrNotFound) {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	same := bytes.Equal(v, want.scopeByte())
+	same = bytes.Equal(v, want.scopeByte())
 	c.Close()
-	return same, nil
+	return same, false, nil
 }
 
 // identReconcileOrphans is pass 2 of RebuildIdentIndex: a state row whose
 // book is gone is removed, and a membership key that disagrees with its
-// state row (another state, another scope byte, or no row) is deleted.
-func (p *PebbleStore) identReconcileOrphans(ctx context.Context) (rows, keys int, err error) {
+// state row (another state, another scope byte, or no row) is deleted. With
+// dryRun it only counts them.
+func (p *PebbleStore) identReconcileOrphans(ctx context.Context, dryRun bool) (rows, keys int, err error) {
 	var orphans []string
 	prefix := []byte(identStatePrefix)
 	if err := forEachKeyInRange(p.db, prefix, prefixUpperBound(prefix), func(key, _ []byte) error {
@@ -1070,13 +1279,17 @@ func (p *PebbleStore) identReconcileOrphans(ctx context.Context) (rows, keys int
 	}); err != nil {
 		return 0, 0, err
 	}
-	for _, id := range orphans {
-		changed, _, err := p.writeIdentForBook(id, pebble.NoSync)
-		if err != nil {
-			return rows, keys, err
-		}
-		if changed {
-			rows++
+	if dryRun {
+		rows = len(orphans)
+	} else {
+		for _, id := range orphans {
+			changed, _, err := p.writeIdentForBook(id, pebble.NoSync)
+			if err != nil {
+				return rows, keys, err
+			}
+			if changed {
+				rows++
+			}
 		}
 	}
 
@@ -1087,6 +1300,9 @@ func (p *PebbleStore) identReconcileOrphans(ctx context.Context) (rows, keys int
 	var bad []badKey
 	byPrefix := []byte(identByPrefix)
 	if err := forEachKeyInRange(p.db, byPrefix, prefixUpperBound(byPrefix), func(key, value []byte) error {
+		if err := ctxErr(ctx); err != nil {
+			return err
+		}
 		rest := string(key[len(byPrefix):])
 		i := strings.LastIndexByte(rest, ':')
 		if i < 0 {
@@ -1105,11 +1321,17 @@ func (p *PebbleStore) identReconcileOrphans(ctx context.Context) (rows, keys int
 	}); err != nil {
 		return rows, 0, err
 	}
+	if dryRun {
+		return rows, len(bad), nil
+	}
 	for _, b := range bad {
-		if err := p.deleteBadIdentByKey(b.key, b.id); err != nil {
+		changed, err := p.deleteBadIdentByKey(b.key, b.id)
+		if err != nil {
 			return rows, keys, err
 		}
-		keys++
+		if changed {
+			keys++
+		}
 	}
 	if rows > 0 || keys > 0 {
 		if err := p.db.LogData(nil, pebble.Sync); err != nil {
@@ -1120,38 +1342,46 @@ func (p *PebbleStore) identReconcileOrphans(ctx context.Context) (rows, keys int
 }
 
 // deleteBadIdentByKey removes a membership key that disagrees with its state
-// row, re-checking under the book's stripe (a write may have fixed it). It
-// goes through identMu so a ready index's final recount stays serialized
-// with it; the counters themselves are recounted at the end of the rebuild.
-func (p *PebbleStore) deleteBadIdentByKey(key []byte, id string) error {
+// row, re-checking under the book's stripe (a write may have fixed it, or
+// moved the book so that the write itself deleted the key), and reports
+// whether it changed anything. It moves no counter: the counters are
+// recounted from the keys at the end of the rebuild that calls it
+// (identFinishRebuild), and its NoSync write is made durable by that
+// rebuild's synced marker write. It holds identMu for read like any writer,
+// so that recount cannot run mid-write.
+func (p *PebbleStore) deleteBadIdentByKey(key []byte, id string) (bool, error) {
 	if id != "" {
 		mu := p.metadataCacheLock(id)
 		mu.Lock()
 		defer mu.Unlock()
+	}
+	p.ident.mu.RLock()
+	defer p.ident.mu.RUnlock()
+	v, c, err := p.db.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil // gone since the scan
+	}
+	if err != nil {
+		return false, err
+	}
+	have := append([]byte(nil), v...)
+	c.Close()
+	if id != "" {
 		rest := string(key[len(identByPrefix):])
 		state := IdentState(rest[:strings.LastIndexByte(rest, ':')])
 		r, ok, err := p.readIdentRow(id)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if ok && r.State == state {
-			v, c, gerr := p.db.Get(key)
-			if gerr == nil {
-				same := bytes.Equal(v, r.scopeByte())
-				c.Close()
-				if same {
-					return nil // fixed since the scan
-				}
-				// Right state, wrong scope byte: rewrite it.
-				p.ident.mu.Lock()
-				defer p.ident.mu.Unlock()
-				return p.db.Set(key, r.scopeByte(), pebble.NoSync)
+			if bytes.Equal(have, r.scopeByte()) {
+				return false, nil // fixed since the scan
 			}
+			// Right state, wrong scope byte: rewrite it.
+			return true, p.db.Set(key, r.scopeByte(), pebble.NoSync)
 		}
 	}
-	p.ident.mu.Lock()
-	defer p.ident.mu.Unlock()
-	return p.db.Delete(key, pebble.NoSync)
+	return true, p.db.Delete(key, pebble.NoSync)
 }
 
 // identRecount counts the membership keys per scope and state.
@@ -1177,79 +1407,52 @@ func (p *PebbleStore) identRecount() ([2][numIdentStates]int64, error) {
 	return counts, err
 }
 
-// identPersistedCounters reads the ident:n: counters as stored.
-func (p *PebbleStore) identPersistedCounters() ([2][numIdentStates]int64, error) {
-	var counts [2][numIdentStates]int64
-	for scope := range counts {
-		for i, s := range AllIdentStates {
-			val, closer, err := p.db.Get(identCountKey(scope, s))
-			if errors.Is(err, pebble.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return counts, err
-			}
-			counts[scope][i], _ = decodeIdentCounter(val)
-			closer.Close()
-		}
-	}
-	return counts, nil
-}
-
-// identFinishRebuild recounts under identMu, logs and repairs any drift,
-// stamps the marker and makes the index ready.
-func (p *PebbleStore) identFinishRebuild() (int64, error) {
+// identFinishRebuild, under identMu for write: unless the invalidation
+// generation moved since gen (a wipe overtook the rebuild), it recounts the
+// membership keys, logs any drift from the counters (when the index was
+// ready), replaces the counters, stamps the marker and makes the index
+// ready.
+func (p *PebbleStore) identFinishRebuild(gen uint64) (int64, error) {
 	p.ident.mu.Lock()
 	defer p.ident.mu.Unlock()
+	if p.ident.gen.Load() != gen {
+		return 0, errIdentRebuildSuperseded
+	}
 	recount, err := p.identRecount()
 	if err != nil {
 		return 0, err
 	}
-	persisted, err := p.identPersistedCounters()
-	if err != nil {
-		return 0, err
-	}
-	wasReady := p.ident.ready.Load()
 	var drift int64
-	var details []string
-	for scope := range recount {
-		for i, s := range AllIdentStates {
-			d := recount[scope][i] - persisted[scope][i]
-			if wasReady && p.ident.counts[scope][i] != persisted[scope][i] {
-				// The in-memory mirror and the store disagree too.
-				d2 := recount[scope][i] - p.ident.counts[scope][i]
-				if abs64(d2) > abs64(d) {
-					d = d2
-				}
-			}
-			if d != 0 {
-				drift += abs64(d)
-				details = append(details, fmt.Sprintf("%s/%s:%+d", identScopeNames[scope], s, d))
-			}
+	if p.ident.ready.Load() {
+		var details []string
+		drift, details = identDriftOf(recount, p.ident.loadCounts())
+		if drift != 0 {
+			identLog.Warn("identification counters drifted from the membership keys; replacing them: total=%d %s",
+				drift, strings.Join(details, " "))
 		}
 	}
-	if drift != 0 && wasReady {
-		identLog.Warn("identification counters drifted from the membership keys; rewriting them: total=%d %s",
-			drift, strings.Join(details, " "))
-	}
-	batch := p.db.NewBatch()
-	defer batch.Close()
-	for scope := range recount {
-		for i, s := range AllIdentStates {
-			if err := batch.Set(identCountKey(scope, s), encodeIdentCounter(recount[scope][i]), nil); err != nil {
-				return drift, err
-			}
-		}
-	}
-	if err := batch.Set([]byte(identBuiltKey), []byte(fmt.Sprint(identIndexVersion)), nil); err != nil {
-		return drift, err
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
+	if err := p.db.Set([]byte(identBuiltKey), []byte(fmt.Sprint(identIndexVersion)), pebble.Sync); err != nil {
 		return drift, err
 	}
 	p.ident.setCounts(recount)
 	p.ident.ready.Store(true)
 	return drift, nil
+}
+
+// identDriftOf compares a recount with the counters: the total absolute
+// difference and one "<scope>/<state>:<+d>" entry per counter that differs.
+func identDriftOf(recount, counts [2][numIdentStates]int64) (int64, []string) {
+	var total int64
+	var details []string
+	for scope := range recount {
+		for i, s := range AllIdentStates {
+			if d := recount[scope][i] - counts[scope][i]; d != 0 {
+				total += abs64(d)
+				details = append(details, fmt.Sprintf("%s/%s:%+d", identScopeNames[scope], s, d))
+			}
+		}
+	}
+	return total, details
 }
 
 func abs64(v int64) int64 {
@@ -1260,8 +1463,7 @@ func abs64(v int64) int64 {
 }
 
 // IdentDrift is IdentCountersDrift's report: per "<scope>/<state>", the
-// recount from the membership keys minus the counter (persisted, or the
-// in-memory mirror when that one is further off).
+// recount from the membership keys minus the counter.
 type IdentDrift struct {
 	Deltas map[string]int64
 }
@@ -1277,10 +1479,11 @@ func (d IdentDrift) Total() int64 {
 }
 
 // IdentCountersDrift recounts the membership keys and compares them with the
-// counters, both the persisted ones and the in-memory mirror. It is the guard
-// for a writer that was missed: the rebuild runs it at its end and repairs
-// what it finds, and the tests call it after every batch of writes. It
-// returns ErrIdentIndexBuilding while the index is not ready.
+// in-memory counters, under identMu for write (so no commit is between its
+// write and its counter move). It is the guard for a writer that was missed:
+// the tests call it after every batch of writes, and the rebuild performs
+// the same comparison at its end and repairs what it finds. It returns
+// ErrIdentIndexBuilding while the index is not ready.
 func (p *PebbleStore) IdentCountersDrift() (IdentDrift, error) {
 	p.ident.mu.Lock()
 	defer p.ident.mu.Unlock()
@@ -1291,18 +1494,11 @@ func (p *PebbleStore) IdentCountersDrift() (IdentDrift, error) {
 	if err != nil {
 		return IdentDrift{}, err
 	}
-	persisted, err := p.identPersistedCounters()
-	if err != nil {
-		return IdentDrift{}, err
-	}
+	counts := p.ident.loadCounts()
 	out := IdentDrift{Deltas: map[string]int64{}}
 	for scope := range recount {
 		for i, s := range AllIdentStates {
-			d := recount[scope][i] - persisted[scope][i]
-			if dm := recount[scope][i] - p.ident.counts[scope][i]; abs64(dm) > abs64(d) {
-				d = dm
-			}
-			if d != 0 {
+			if d := recount[scope][i] - counts[scope][i]; d != 0 {
 				out.Deltas[identScopeNames[scope]+"/"+string(s)] = d
 			}
 		}

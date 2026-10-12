@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-11
 
@@ -122,7 +122,6 @@ var keyFamilies = []KeyFamily{
 	{"metadata_cache:", "metadata provider response cache", "internal/database/pebble_store_metadata_cache.go"},
 	{"ident:state:", "book identification state and reason per book (derived, rebuilt on boot)", "internal/database/ident_state.go"},
 	{"ident:by:", "book identification membership by state, keys only plus a primary-scope byte", "internal/database/ident_state.go"},
-	{"ident:n:", "book identification counters per scope and state", "internal/database/ident_state.go"},
 	{"ident:dirty:", "book identification dirty set (epoch per book)", "internal/database/ident_state.go"},
 	{"ident:meta:", "book identification index format marker", "internal/database/ident_state.go"},
 	{"metadata_change:", "metadata change records", "internal/database/pebble_store_metadata.go"},
