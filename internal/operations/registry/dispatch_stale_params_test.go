@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatch_stale_params_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e18d3b7-0c92-44a6-8f31-b7d260e94a18
-// last-edited: 2026-10-03
+// last-edited: 2026-10-11
 
 // White-box regression tests for the dispatcher's stale-snapshot TOCTOU: stale
 // params (below) and, since 2026-10-03, a stale status, where the snapshot still

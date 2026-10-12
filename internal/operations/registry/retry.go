@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry
 
@@ -81,28 +81,29 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 	if row == nil || row.ID == "" {
 		return ErrOpNotFound
 	}
-	if !IsInterruptedStatus(row.Status) {
-		return fmt.Errorf("%w: op %s is %s, not interrupted", ErrOpNotRetryable, opID, row.Status)
-	}
-
 	r.mu.RLock()
 	def, defOK := r.lookupDefLocked(row.DefID)
 	// A zombie's handle stays in r.running until its goroutine returns
 	// (worker.go, genuine abandonment), so live alone refuses it; zombie only
-	// picks the message.
+	// picks the message. Checked before the status: since 05-PR4 a zombie's
+	// row reads "running" (v3 stopping) until its goroutine returns, and the
+	// answer for it is still "active", not "not interrupted".
 	h, live := r.running[opID]
 	zombie := live && h.zombie.Load()
 	r.mu.RUnlock()
+	if zombie {
+		return fmt.Errorf("%w: op %s's previous run was stopped and has not exited yet; retry once it does",
+			ErrOpActive, opID)
+	}
+	if !IsInterruptedStatus(row.Status) {
+		return fmt.Errorf("%w: op %s is %s, not interrupted", ErrOpNotRetryable, opID, row.Status)
+	}
 	if !defOK {
 		return fmt.Errorf("%w: op %s's definition %q is not registered", ErrOpNotRetryable, opID, row.DefID)
 	}
 	// Retry is in place: the row keeps its stored def_id, which may be a
 	// former ID. The dispatcher resolves it again when it picks the row up.
 	r.noteAliasUse(row.DefID, aliasEntryRetry)
-	if zombie {
-		return fmt.Errorf("%w: op %s's previous run was abandoned by the watchdog and has not exited yet; retry once it does",
-			ErrOpActive, opID)
-	}
 	if live {
 		return fmt.Errorf("%w: op %s still has a live run handle", ErrOpActive, opID)
 	}

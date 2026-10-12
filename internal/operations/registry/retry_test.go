@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7c2e9f14-5b3a-4d86-a1f0-3e8b6c9d2a47
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry_test
 
@@ -546,10 +546,13 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 		rel, aerr := r.AcquireScanStandDown(ctx, "holder-op", "test")
 		acquired <- acquireResult{rel, aerr}
 	}()
-	// The run is marked abandoned-but-alive before this status is written, so
-	// once the status is visible the guard is armed.
-	awaitStatus(t, store, id, "interrupted_quiesced", 5*time.Second)
-
+	// Since 05-PR4 the abandoned scan is v3 "stopping": its row reads
+	// "running" until its goroutine returns (interrupted_quiesced is written
+	// then), and the zombie handle is what arms the guard.
+	deadline := time.Now().Add(5 * time.Second)
+	for r.ZombieCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if z := r.Zombies(); len(z) != 1 || z[0].OpID != id {
 		t.Fatalf("Zombies() = %+v, want the abandoned scan %s", z, id)
 	}
@@ -557,7 +560,7 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 	if !errors.Is(err, registry.ErrOpActive) {
 		t.Fatalf("err = %v, want ErrOpActive while the abandoned Run is still executing", err)
 	}
-	if got := store.statusOf(id); got != "interrupted_quiesced" {
+	if got := store.statusOf(id); got != "running" {
 		t.Errorf("refused retry wrote status %q; must leave the row untouched", got)
 	}
 	if n := calls.Load(); n != 1 {
@@ -572,7 +575,7 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 	if res.err != nil {
 		t.Fatalf("stand-down acquire: %v", res.err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for r.AbandonedCount(def.Plugin) > 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-11
+// last-edited: 2026-10-11
 
 package registry
 

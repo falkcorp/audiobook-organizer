@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.33.0
+// version: 2.34.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry
 
@@ -649,11 +649,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// Reported by Zombies(). The slot is NOT released here (the pool
 				// is going away) and no terminal status is written, so Shutdown's
 				// timeout loop still stamps this row interrupted_*.
+				// v3: the run is stopping, a zombie (05-PR4), recorded before
+				// it is listed as one. Its row keeps reading "running";
+				// Shutdown's timeout loop stamps it.
+				r.markStopping(qr, r.stopReasonFor(runCtx, h))
 				h.zombieSince.Store(r.livenessClock().UnixNano())
 				h.zombie.Store(true)
-				// v3: the run is stopping, a zombie (05-PR4). Its row keeps
-				// reading "running"; Shutdown's timeout loop stamps it.
-				r.markStopping(qr, r.stopReasonFor(runCtx, h))
 				// R-3: same rationale as the genuine-abandonment path — the
 				// wedged goroutine's flushLoop is gone, so no-op its Log calls.
 				if dbr, ok := reporter.(*dbReporter); ok {
@@ -675,16 +676,6 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// whole handle here (as this branch did until 05-PR3) freed the key
 			// at the 5s grace while the runaway Run was still writing.
 			//
-			// The flag is set BEFORE the slot is released, and the handle never
-			// leaves r.running until the goroutine exits, so RetryInterrupted
-			// and Cancel always see either a live handle or a finished run.
-			// The fence was already revoked (select above).
-			h.zombieSince.Store(r.livenessClock().UnixNano())
-			h.zombie.Store(true)
-			r.mu.Lock()
-			r.releaseSlotKeepKeyLocked(qr.opID)
-			r.mu.Unlock()
-			r.pingDispatch()
 			// The run is now v3 "stopping" (05-PR4, owner decision D6): it was
 			// stopped, its fence is revoked, and it keeps its key until the
 			// goroutine returns. Its final status is decided NOW, by
@@ -704,6 +695,15 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// 2026-09-22: a watchdog-killed library.scan returned 87s later and
 			// was left resumable). Whether a run is abandoned says how slowly
 			// it unwound, not why it was stopped.
+			//
+			// Order: the decided status is stored before the slot is released
+			// (Shutdown reads zombieFinal for a handle whose slot is released,
+			// under r.mu), and v3 records stopping before Zombies() lists the
+			// run, so the two never disagree. The zombie flag is set BEFORE the
+			// slot is released, and the handle never leaves r.running until the
+			// goroutine exits, so RetryInterrupted and Cancel always see either
+			// a live handle or a finished run. The fence was already revoked
+			// (select above).
 			abandonStatus, reason := r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
 			if reason != nil {
@@ -711,6 +711,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			}
 			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg, at: time.Now().UTC()})
 			r.markStopping(qr, r.stopReasonFor(runCtx, h))
+			h.zombieSince.Store(r.livenessClock().UnixNano())
+			h.zombie.Store(true)
+			r.mu.Lock()
+			r.releaseSlotKeepKeyLocked(qr.opID)
+			r.mu.Unlock()
+			r.pingDispatch()
 			// R-3: the runaway goroutine keeps calling reporter.Log even though
 			// its flushLoop has exited (runCtx canceled) — the buffered lines are
 			// unrecoverable by design, so flip the reporter's terminal flag to make
@@ -721,7 +727,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.logger.Warn("registry: op goroutine abandoned; spawning replacement worker",
 				"op_id", qr.opID, "plugin", qr.plugin, "final_status", abandonStatus)
 			r.goroutineWG.Go(func() { r.startWorker(parentCtx, -1) })
-			go func() {
+			// Enrolled in goroutineWG: since 05-PR4 this monitor writes the
+			// final status, publishes and may re-queue a scan, so Shutdown's
+			// drain must cover it like any other store writer. Go from this
+			// already-enrolled worker goroutine, so the counter is non-zero.
+			r.goroutineWG.Go(func() {
 				<-done
 				age := r.livenessClock().Sub(time.Unix(0, h.zombieSince.Load())).Round(time.Millisecond)
 				// Status first, release second: the row leaves "running" while
@@ -759,7 +769,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				}
 				r.logger.Info("registry: abandoned goroutine returned",
 					"op_id", qr.opID, "plugin", qr.plugin, "zombie_age", age, "status", out.status)
-			}()
+			})
 			return true // signal caller to exit
 		}
 	}

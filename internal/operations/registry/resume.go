@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package registry
 

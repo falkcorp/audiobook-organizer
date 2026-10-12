@@ -1,7 +1,7 @@
 // file: internal/operations/registry/terminal_completed_at_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 65ef6402-0192-4d0d-ac5a-0314f463137c
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry_test
 
@@ -131,7 +131,8 @@ func TestTerminalCompletedAt_CanceledWhileQueued(t *testing.T) {
 
 // TestTerminalCompletedAt_Abandoned covers the abandonment path: a run that
 // ignores cancellation still gets completed_at stamped. A deliberate Cancel is
-// written "canceled" however slowly the Run unwinds.
+// written "canceled" however slowly the Run unwinds. Since 05-PR4 that write
+// (and op.terminal) happens when the goroutine returns, not at abandonment.
 func TestTerminalCompletedAt_Abandoned(t *testing.T) {
 	ctx := t.Context()
 	store := newFakeStore()
@@ -144,7 +145,6 @@ func TestTerminalCompletedAt_Abandoned(t *testing.T) {
 	})
 
 	release := make(chan struct{})
-	defer close(release)
 	started := make(chan struct{})
 	def := makeValidDef("test.t12-dropped")
 	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
@@ -162,6 +162,19 @@ func TestTerminalCompletedAt_Abandoned(t *testing.T) {
 		t.Fatal("op did not start")
 	}
 	_ = r.Cancel(opID)
+	deadline := time.Now().Add(5 * time.Second)
+	for r.ZombieCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ZombieCount() != 1 {
+		close(release)
+		t.Fatal("the run never became a zombie")
+	}
+	if got := store.statusOf(opID); got != "running" {
+		close(release)
+		t.Fatalf("status while the goroutine lives = %q, want running", got)
+	}
+	close(release)
 	bus.waitTerminal(t, opID, 5*time.Second)
 	requireCompletedAtT12(t, store, opID, "canceled")
 }

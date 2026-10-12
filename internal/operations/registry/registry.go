@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.43.0
+// version: 3.44.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package registry
 

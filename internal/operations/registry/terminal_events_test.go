@@ -1,7 +1,7 @@
 // file: internal/operations/registry/terminal_events_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e3d9c1a-2b46-4f80-9c5e-1a7f2b3c4d5e
-// last-edited: 2026-09-22
+// last-edited: 2026-10-11
 
 package registry_test
 
@@ -37,6 +37,20 @@ func (b *t06TermBus) Publish(_ context.Context, name string, payload any) error 
 	m, _ := payload.(map[string]any)
 	b.events = append(b.events, t06TermEvent{name: name, payload: m})
 	return nil
+}
+
+// terminalStatus reports the status of an op.terminal event already
+// published for opID, if any.
+func (b *t06TermBus) terminalStatus(opID string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, ev := range b.events {
+		if ev.name == "op.terminal" && ev.payload["op_id"] == opID {
+			status, _ := ev.payload["status"].(string)
+			return status, true
+		}
+	}
+	return "", false
 }
 
 // waitTerminal polls for an op.terminal event for opID and returns its status,
@@ -139,7 +153,10 @@ func TestTerminalEvent_CanceledRunning(t *testing.T) {
 
 // TestTerminalEvent_Abandoned asserts op.terminal fires when a run ignores
 // cancellation and is abandoned. The status follows WHY the run was stopped,
-// not how slowly it unwound: a Registry.Cancel is "canceled".
+// not how slowly it unwound: a Registry.Cancel is "canceled". Since 05-PR4 the
+// run is v3 "stopping" until its goroutine returns, and op.terminal fires
+// then, not at abandonment: the UI keeps showing the run while it still
+// writes.
 func TestTerminalEvent_Abandoned(t *testing.T) {
 	ctx := t.Context()
 
@@ -171,11 +188,27 @@ func TestTerminalEvent_Abandoned(t *testing.T) {
 	}
 	_ = r.Cancel(opID)
 
+	deadline := time.Now().Add(5 * time.Second)
+	for r.ZombieCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ZombieCount() != 1 {
+		close(release)
+		t.Fatal("the run never became a zombie")
+	}
+	if got := store.statusOf(opID); got != "running" {
+		close(release)
+		t.Fatalf("status while the goroutine lives = %q, want running", got)
+	}
+	if got, ok := bus.terminalStatus(opID); ok {
+		close(release)
+		t.Fatalf("op.terminal (%q) published while the goroutine still runs", got)
+	}
+	close(release)
 	awaitStatus(t, store, opID, "canceled", 5*time.Second)
 	if got := bus.waitTerminal(t, opID, 5*time.Second); got != "canceled" {
 		t.Errorf("op.terminal status: got %q want canceled", got)
 	}
-	close(release)
 }
 
 // TestTerminalEvent_ForceDropped asserts op.terminal fires with
