@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-09-15
+// last-edited: 2026-10-11
 
 package jobs
 
@@ -99,11 +99,6 @@ type bookFileReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
-// bookFileWriter updates an existing book file in place.
-type bookFileWriter interface {
-	UpdateBookFile(id string, file *database.BookFile) error
-}
-
 // bookFileCreator adds new book-file rows.
 type bookFileCreator interface {
 	CreateBookFile(file *database.BookFile) error
@@ -170,7 +165,6 @@ var (
 	_ bookMutator             = (*database.PebbleStore)(nil)
 	_ bookFileMutator         = (*database.PebbleStore)(nil)
 	_ bookFileReader          = (*database.PebbleStore)(nil)
-	_ bookFileWriter          = (*database.PebbleStore)(nil)
 	_ bookFileCreator         = (*database.PebbleStore)(nil)
 	_ bookPager               = (*database.PebbleStore)(nil)
 	_ userLister              = (*database.PebbleStore)(nil)
