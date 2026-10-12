@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -499,7 +500,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 // path. A refusal (tagger.ErrProtectedPathWrite) is returned at once. Until
 // 2026-09-14 the guard ran only inside the native writer, and its refusal
 // was treated as a native failure: the CLI writers (AtomicParsley
-// --overWrite, ffmpeg) then rewrote the ORIGINAL protected file.
+// --overWrite, eyeD3, metaflac) then rewrote the ORIGINAL protected file.
 func WriteMetadataToFileContext(ctx context.Context, filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	target := filePath
 	if abs, err := filepath.Abs(filePath); err == nil {
@@ -512,7 +513,8 @@ func WriteMetadataToFileContext(ctx context.Context, filePath string, metadata m
 
 	// Attempt native writer first if compiled in.
 	// Upstream taglib v0.11.1+ writes custom freeform atoms natively for MP4.
-	// Do NOT run ffmpeg after taglib — ffmpeg's -map_metadata strips freeform atoms.
+	// Do NOT run a CLI writer after a successful taglib write: it would rewrite a
+	// file taglib already tagged, and none of them writes the freeform atoms.
 	if taglibAvailable {
 		nativeErr := writeMetadataWithTaglib(ctx, target, metadata, config)
 		if nativeErr == nil {
@@ -583,7 +585,8 @@ func fileUnchangedSince(path string, before os.FileInfo) bool {
 	return os.SameFile(before, now) && now.Size() == before.Size() && now.ModTime().Equal(before.ModTime())
 }
 
-// writeMetadataViaCLI dispatches to the per-container ffmpeg/CLI writers. Shared
+// writeMetadataViaCLI dispatches to the per-container CLI writers (AtomicParsley for
+// m4b/m4a, eyeD3 for mp3, metaflac for flac; there is no ffmpeg writer). Shared
 // by WriteMetadataToFile and WriteMetadataToFileInPlace so the format dispatch
 // exists once.
 func writeMetadataViaCLI(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
@@ -815,8 +818,22 @@ func mp3TagPlan(metadata map[string]any) *cliTagPlan {
 		p.expect("RELEASEDATE", fmt.Sprintf("%d", year))
 	}
 	if track, ok := metadata["track"].(string); ok && track != "" {
-		p.arg("-n", track)
-		p.expect("TRACKNUMBER", track)
+		// eyeD3 takes the number and the total as two flags and rejects "3/12"
+		// ("invalid PositiveIntArg value"), which failed the whole write.
+		// eyeD3 stores TRCK zero-padded ("03/12"); verification compares
+		// TRACKNUMBER numerically, so the canonical "3/12" matches. A value that
+		// is not "N" or "N/M" with N > 0 is left unwritten, since eyeD3 would
+		// refuse it and fail every other tag with it. There is no disc flag here:
+		// the mp3 plan writes no disc number.
+		if n, total, ok := splitTrackNumber(track); ok {
+			p.arg("-n", n)
+			want := n
+			if total != "" {
+				p.arg("-N", total)
+				want = n + "/" + total
+			}
+			p.expect("TRACKNUMBER", want)
+		}
 	}
 	// Write custom AUDIOBOOK_ORGANIZER_* TXXX frames
 	customPairs := [][2]string{
@@ -834,6 +851,26 @@ func mp3TagPlan(metadata map[string]any) *cliTagPlan {
 	p.arg("--user-text-frame=" + TagVersion + ":" + CustomTagVersion)
 	p.expect(TagVersion, CustomTagVersion)
 	return p
+}
+
+// splitTrackNumber splits a track value "N" or "N/M" into its number and
+// optional total, as plain decimal strings without leading zeros. ok is false
+// unless N is a positive integer and M, when present, is a positive integer.
+func splitTrackNumber(track string) (n, total string, ok bool) {
+	numPart, totalPart, hasTotal := strings.Cut(strings.TrimSpace(track), "/")
+	nv, err := strconv.Atoi(strings.TrimSpace(numPart))
+	if err != nil || nv <= 0 {
+		return "", "", false
+	}
+	n = strconv.Itoa(nv)
+	if !hasTotal {
+		return n, "", true
+	}
+	tv, err := strconv.Atoi(strings.TrimSpace(totalPart))
+	if err != nil || tv <= 0 {
+		return "", "", false
+	}
+	return n, strconv.Itoa(tv), true
 }
 
 // writeMP3Metadata writes metadata to MP3 files using eyeD3

@@ -25,7 +25,7 @@ func (d dirProtected) IsProtected(path string) bool {
 
 // The guard ran only inside the native taglib writer. Its refusal was treated
 // as an ordinary native failure, and WriteMetadataToFile fell back to the CLI
-// writers (AtomicParsley --overWrite, ffmpeg) on the ORIGINAL protected path.
+// writers (AtomicParsley --overWrite, eyeD3, metaflac) on the ORIGINAL protected path.
 // The refusal must come back as tagger.ErrProtectedPathWrite, with no fallback
 // and the file untouched.
 func TestWriteMetadataToFile_ProtectedRefusalDoesNotFallBackToCLI(t *testing.T) {

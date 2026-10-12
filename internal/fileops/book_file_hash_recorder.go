@@ -49,7 +49,7 @@ func HashOptionsForPath(store BookFileHashRecorder, path string) WriteTagsSafeOp
 }
 
 // RecordRewrite runs rewrite, which replaces the file at path by some means
-// other than WriteTagsSafe (an ffmpeg remux or transcode, the CLI tag writer),
+// other than WriteTagsSafe (an ffmpeg remux or transcode, the AtomicParsley/eyeD3/metaflac tag writers),
 // and records the new bytes' hashes on the book_file row at path: the sampled
 // digest before and after, and the whole-file SHA-256 after -- the three
 // WriteTagsSafe records. With no store, or no row at path, it only runs
