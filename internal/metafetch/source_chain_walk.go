@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-10-11
 
@@ -200,13 +200,13 @@ func (o ChainOutcome) Status() string {
 // Shared cache (metadata_fetch.shared_cache): each rung of a source's ladder
 // is one provider question with its own P1 row. Per source the walk first
 // replays the ladder from P1 without the semaphore -- the first rung whose
-// stored answer survives the rung's filter wins with no call, and a ladder
-// whose every rung is stored EMPTY means the source has nothing for this book
-// until its negative TTL, so no call is made either -- then reads the book's
-// legacy per-book row, and only then asks live from the first rung with no
-// stored answer, writing each answer (empty included) when the call returned
-// no error. The P1 keys read or written are recorded on the book's pointer
-// row.
+// stored answer survives the rung's filter wins with no call -- then reads the
+// book's own per-book row (which may hold the answer to a question outside the
+// ladder), and only then, unless every rung is stored EMPTY (the source has
+// nothing for this book until its negative TTL: no call), asks live from the
+// first rung with no stored answer, writing each answer (empty included) when
+// the call returned no error. The P1 keys read or written are recorded on the
+// book's pointer row.
 func WalkSourceChain(
 	ctx context.Context,
 	store database.RawKVStore,
@@ -271,16 +271,13 @@ func WalkSourceChain(
 					return out, nil
 				}
 			}
-			if start == len(attempts) {
-				// Every question this source would be asked is stored as
-				// answered-with-nothing: the source has nothing for the book
-				// until a negative TTL runs out. Not a throttle, and no call,
-				// so throttledAll is left as it is.
-				metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheHit)
-				continue
-			}
 		}
 
+		// The book's own per-provider row is read BEFORE the all-empty
+		// short-circuit below: FetchMetadataForBook's context search and its
+		// transcribed-title fallback, and the interactive search's pooled
+		// write, store answers to questions outside this ladder there, so an
+		// empty ladder (another copy of the book walked it) must not hide them.
 		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, identity, maxAge); cerr == nil && cached != nil {
 			var cr []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cr); jerr == nil && len(cr) > 0 {
@@ -288,6 +285,14 @@ func WalkSourceChain(
 				out.Results, out.SourceName, out.ProviderKey, out.CacheHit = cr, name, slotKey, true
 				return out, nil
 			}
+		}
+		if shared && start == len(attempts) {
+			// Every question this source would be asked is stored as
+			// answered-with-nothing, and the book has no row of its own: the
+			// source has nothing for the book until a negative TTL runs out.
+			// Not a throttle, and no call, so throttledAll is left as it is.
+			metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheHit)
+			continue
 		}
 		metrics.IncMetadataFetch(slotKey, metrics.FetchSourceCacheMiss)
 
