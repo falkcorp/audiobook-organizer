@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-11
 
@@ -129,6 +129,21 @@ func checkV3Consistency(t testing.TB, p *PebbleStore) {
 	for k := range got {
 		if !want[k] {
 			t.Errorf("orphan index key: %s", k)
+		}
+	}
+	// Every run record has its opv3:prog: half and every opv3:prog: key has a
+	// run: no write or delete path leaves one without the other.
+	progs := map[string]bool{}
+	for _, k := range timelineKeys(t, p, opv3ProgPrefix) {
+		id := strings.TrimPrefix(k, opv3ProgPrefix)
+		progs[id] = true
+		if _, ok := runs[id]; !ok {
+			t.Errorf("orphan opv3:prog: key for %s", id)
+		}
+	}
+	for id := range runs {
+		if !progs[id] {
+			t.Errorf("run %s has no opv3:prog: key", id)
 		}
 	}
 	stored, err := p.OpCountsV3()

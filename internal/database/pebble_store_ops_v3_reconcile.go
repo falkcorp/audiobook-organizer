@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_reconcile.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 65cdda3b-c2ec-4866-88fa-c58559c39f59
 // last-edited: 2026-10-11
 
@@ -77,9 +77,15 @@ type OpsV3ReconcileReport struct {
 // source of truth the registry runs from.
 //
 // MIRROR OFF. With the opv2 mirror off (05-PR16) native v3 writes no longer
-// update opv2:, so a stale opv2 row is expected and rebuilding from it would
-// destroy v3 state: the reconcile then does nothing. 05-PR16 removes it with
-// the mirror.
+// update opv2:, so a stale opv2 row is expected, and rebuilding from it (or
+// deleting a v3-native run with no opv2 row as an orphan) would destroy v3
+// state. The guard below returns early when the switch is off, but the
+// switch is in-memory, not persisted, and reads "on" at every process start,
+// so at InitializeStore it is ALWAYS on: the guard only covers a caller that
+// flipped it earlier in the same process. 05-PR16 MUST therefore delete the
+// InitializeStore call (and this reconcile) in the same change that turns
+// the mirror off; leaving the call in place would run it with the mirror
+// "on" against a store whose opv2 rows have gone stale.
 func (p *PebbleStore) ReconcileOpsV3WithV2(ctx context.Context) (rep OpsV3ReconcileReport, err error) {
 	defer recoverPebbleClosed("ReconcileOpsV3WithV2", &err)
 	start := time.Now()
