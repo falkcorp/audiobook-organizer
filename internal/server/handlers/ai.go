@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-10-06
+// last-edited: 2026-10-11
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -21,10 +21,8 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -158,7 +156,6 @@ type AIMergeApplyOpParams struct {
 type aiStore interface {
 	aiReviewGroupsStore
 	aiAuthorReviewStore
-	aiOperationStore
 	// BookFilesGetter feeds the parse context's runtime
 	// (database.LoadBookRuntime), which sums the book's files.
 	database.BookFilesGetter
@@ -207,57 +204,11 @@ const (
 // a run whose suggestions were never stored has not succeeded.
 type SaveResultFunc func(payload any) error
 
-// activeAuthorReview returns the in-flight ai.author-review of the given mode,
-// or nil if none is running.
-//
-// The mode lives in the run's params rather than in its def id — there is one
-// def for both modes — so this decodes Params to compare. ListActiveOperationsV2
-// is already scoped to non-terminal statuses, which is why no status list
-// appears here: the v1 version hard-coded {"pending","running"} and would have
-// silently stopped matching if the registry ever added a third active status.
-func (h *AIHandler) activeAuthorReview(mode string) *database.OperationV2Row {
-	if h.store == nil {
-		return nil
-	}
-	rows, err := h.store.ListActiveOperationsV2()
-	if err != nil {
-		// A failed lookup must not block the user from starting a review; the
-		// worst case is two concurrent runs of the same mode, which is what the
-		// v1 scan also did when ListOperations errored (it discarded the error).
-		slog.Warn("ai author review: active-op lookup failed, not deduping", "err", err)
-		return nil
-	}
-	for i := range rows {
-		if rows[i].DefID != AIAuthorReviewDefID {
-			continue
-		}
-		var p AIReviewOpParams
-		if err := json.Unmarshal([]byte(rows[i].Params), &p); err != nil {
-			continue
-		}
-		if p.Mode == mode {
-			return &rows[i]
-		}
-	}
-	return nil
-}
-
-// aiOperationStore is the operation bookkeeping the AI review paths do.
-//
-// CreateOperation and ListOperations are deliberately ABSENT. The handlers used
-// to mint a v1 row and scan v1 rows for an in-flight run of the same mode; both
-// now go through the v2 keyspace, and leaving the methods off makes a
-// reintroduction a compile error rather than something a reviewer has to catch.
-type aiOperationStore interface {
-	ListActiveOperationsV2() ([]database.OperationV2Row, error)
-}
-
 type AIHandler struct {
 	store      aiStore                  // 8 methods; see aiStore
 	scanStore  AIScanStore              // AI scan persistence
 	pipeline   AIPipeline               // scan pipeline manager (start/cancel)
 	updater    AudiobookUpdater         // audiobook update service (parse-with-ai)
-	dedupCache *cache.Cache[gin.H]      // dedup-group cache (spec cache exception)
 	registry   OperationsRegistry       // shared ops registry (EnqueueOp only)
 	enrichBook func(*database.Book) any // wraps server.enrichBookForResponseSingle
 }
@@ -270,7 +221,6 @@ func NewAIHandler(
 	scanStore AIScanStore,
 	pipeline AIPipeline,
 	updater AudiobookUpdater,
-	dedupCache *cache.Cache[gin.H],
 	registry OperationsRegistry,
 	enrichBook func(*database.Book) any,
 ) *AIHandler {
@@ -279,7 +229,6 @@ func NewAIHandler(
 		scanStore:  scanStore,
 		pipeline:   pipeline,
 		updater:    updater,
-		dedupCache: dedupCache,
 		registry:   registry,
 		enrichBook: enrichBook,
 	}
@@ -807,148 +756,6 @@ func (h *AIHandler) CompareScans(c *gin.Context) {
 		"new_in_b":        newInB,
 		"resolved_from_a": resolvedFromA,
 		"unchanged":       unchanged,
-	})
-}
-
-// ReviewDuplicateAuthors enqueues an AI duplicate-author review operation.
-func (h *AIHandler) ReviewDuplicateAuthors(c *gin.Context) {
-	parser := newAIParser(config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
-	if !parser.IsEnabled() {
-		httputil.RespondWithBadRequest(c, "AI parsing is not enabled")
-		return
-	}
-
-	if h.registry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	// Parse optional mode from request body
-	var reqBody struct {
-		Mode string `json:"mode"`
-	}
-	_ = c.ShouldBindJSON(&reqBody)
-	mode := reqBody.Mode
-	if mode == "" {
-		mode = "groups"
-	}
-	if mode != "full" && mode != "groups" {
-		httputil.RespondWithBadRequest(c, fmt.Sprintf("invalid mode %q; must be full or groups", mode))
-		return
-	}
-
-	store := h.store
-
-	// Block concurrent same-mode runs by answering with the run already in
-	// flight. This used to scan ListOperations(50, 0) for a v1 row of type
-	// "ai-author-review-<mode>"; it now asks the v2 keyspace, which is where the
-	// run actually lives.
-	//
-	// Not ConcurrencyKey: that gate is per-DEF and makes the second op WAIT in
-	// the queue, where this contract is per-MODE and hands the caller back the
-	// running op immediately. Those are different behaviours, and the caller's
-	// is the one clients depend on.
-	//
-	// ListActiveOperationsV2 is already status-scoped, so unlike the v1 scan
-	// there is no status list here to drift out of sync with the registry's own
-	// idea of "active".
-	if existing := h.activeAuthorReview(mode); existing != nil {
-		httputil.RespondWithSuccess(c, 202, gin.H{
-			"operation_id": existing.ID,
-			"status":       existing.Status,
-			"mode":         mode,
-		})
-		return
-	}
-
-	// For groups mode, we need dedup groups — use cache if available, otherwise compute inline
-	var dedupGroups []dedup.AuthorDedupGroup
-	if mode == "groups" {
-		cached, ok := h.dedupCache.Get("author-duplicates")
-		if ok {
-			groupsRaw, ok2 := cached["groups"]
-			if ok2 {
-				groupsJSON, err := json.Marshal(groupsRaw)
-				if err == nil {
-					_ = json.Unmarshal(groupsJSON, &dedupGroups)
-				}
-			}
-		}
-		if len(dedupGroups) == 0 {
-			// Cache is cold — compute dedup groups inline instead of requiring a separate refresh
-			authors, err := store.GetAllAuthors()
-			if err != nil {
-				httputil.InternalError(c, "failed to fetch authors", err)
-				return
-			}
-			bookCounts, err := store.GetAllAuthorBookCounts()
-			if err != nil {
-				httputil.InternalError(c, "failed to fetch book counts", err)
-				return
-			}
-			bookCountFn := func(authorID int) int { return bookCounts[authorID] }
-			dedupGroups = dedup.FindDuplicateAuthors(authors, 0.9, bookCountFn, nil)
-			// Warm the cache for subsequent requests
-			result := gin.H{"groups": dedupGroups, "count": len(dedupGroups)}
-			h.dedupCache.SetWithTTL("author-duplicates", result, 30*time.Minute)
-		}
-		if len(dedupGroups) == 0 {
-			httputil.RespondWithOK(c, gin.H{"message": "no duplicate groups to review"})
-			return
-		}
-	}
-
-	// No v1 row is minted. The id handed back is the one EnqueueOp keyed the run
-	// under, so it resolves at GET /operations/v2/:id — the only place a client
-	// can poll it. Returning a separately-minted id here is the defect that made
-	// the diagnostics export undownloadable (#2747) and the folder scan's
-	// progress unpollable (#2762).
-	reviewParams := AIReviewOpParams{Mode: mode, DedupGroups: dedupGroups}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), AIAuthorReviewDefID, reviewParams)
-	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue operation", enqErr)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, gin.H{
-		"operation_id": opID,
-		"status":       "queued",
-		"mode":         mode,
-	})
-}
-
-// ApplyAuthorReview enqueues an AI author merge-apply operation.
-func (h *AIHandler) ApplyAuthorReview(c *gin.Context) {
-	var req struct {
-		Suggestions []AIMergeApplySuggestion `json:"suggestions"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-
-	if len(req.Suggestions) == 0 {
-		httputil.RespondWithBadRequest(c, "no suggestions provided")
-		return
-	}
-
-	if h.registry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	// See ReviewDuplicateAuthors: the returned id is EnqueueOp's, and no v1 row
-	// is minted alongside it.
-	applyParams := AIMergeApplyOpParams{Suggestions: req.Suggestions}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), AIAuthorMergeApplyDefID, applyParams)
-	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue operation", enqErr)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, gin.H{
-		"operation_id": opID,
-		"status":       "queued",
 	})
 }
 

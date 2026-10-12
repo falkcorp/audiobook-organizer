@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-05
+// last-edited: 2026-10-11
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -95,13 +95,6 @@ type Handler struct {
 	// (server_title_helpers.go) over the live store, returning the preview payload
 	// (any) and an error. seriesPrunePreview serializes the payload verbatim.
 	computeSeriesPrunePreview func() (any, error)
-
-	// seriesNormalizePreview wraps the relocated computeSeriesNormalizeActions
-	// over the live store and builds the dry-run preview response payload
-	// server-side (the seriesNormalizeAction / seriesNormalizePreviewResult types
-	// stay in package server — duplicates_helpers.go — because a server unit test
-	// references them). The handler serializes the returned payload verbatim.
-	seriesNormalizePreview func() any
 }
 
 // New constructs a duplicates Handler from its dependencies.
@@ -115,7 +108,6 @@ func New(
 	dedupEngine DedupEngine,
 	dismissDedupGroup func(groupKey string),
 	computeSeriesPrunePreview func() (any, error),
-	seriesNormalizePreview func() any,
 ) *Handler {
 	return &Handler{
 		store:                     store,
@@ -127,7 +119,6 @@ func New(
 		dedupEngine:               dedupEngine,
 		dismissDedupGroup:         dismissDedupGroup,
 		computeSeriesPrunePreview: computeSeriesPrunePreview,
-		seriesNormalizePreview:    seriesNormalizePreview,
 	}
 }
 
@@ -785,26 +776,4 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 	detail := fmt.Sprintf("merge-series:keep=%d,merge=%v", req.KeepID, req.MergeIDs)
 	h.launchOp(c, "dedup.series-merge", "series-merge", detail,
 		seriesMergeOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, CustomName: req.CustomName, Detail: detail})
-}
-
-// SeriesNormalizePreview returns a dry-run preview of what the series
-// name-normalization pass would do, with no database writes.
-// GET /series/normalize/preview.
-func (h *Handler) SeriesNormalizePreview(c *gin.Context) {
-	store := h.store
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	httputil.RespondWithOK(c, h.seriesNormalizePreview())
-}
-
-// SeriesNormalize enqueues an async operation that renames/merges contaminated
-// series and re-organizes affected books in place. POST /series/normalize.
-func (h *Handler) SeriesNormalize(c *gin.Context) {
-	// This was a hand-inlined copy of launchOp's predecessor. With the legacy
-	// row gone there is nothing left that differed, so it delegates.
-	h.launchOp(c, "dedup.series-normalize", "series-normalize", "series-normalize",
-		seriesNormalizeOpParams{})
 }

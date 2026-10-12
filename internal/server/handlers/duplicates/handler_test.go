@@ -1,12 +1,12 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
 // generated mocks; the injected helper funcs (getMergeService,
-// dismissDedupGroup, computeSeriesPrunePreview, seriesNormalizePreview) are stub
+// dismissDedupGroup, computeSeriesPrunePreview) are stub
 // closures that record their invocations or return canned payloads. There is at
 // least one test per public method (17 methods).
 
@@ -45,8 +45,6 @@ type recorders struct {
 	prunePreviewCalls  int
 	prunePreviewResult any
 	prunePreviewErr    error
-	normalizeCalls     int
-	normalizeResult    any
 }
 
 type testDeps struct {
@@ -119,10 +117,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 		func() (any, error) {
 			rec.prunePreviewCalls++
 			return rec.prunePreviewResult, rec.prunePreviewErr
-		},
-		func() any {
-			rec.normalizeCalls++
-			return rec.normalizeResult
 		},
 	)
 	return h, testDeps{store, reg, mergeMock, audMock, metaMock, dedupEngMock, dc, rec}
@@ -541,32 +535,6 @@ func TestMergeSeriesGroup_KeepNotFound(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
 	}
-}
-
-// --- SeriesNormalizePreview ---
-
-func TestSeriesNormalizePreview_OK(t *testing.T) {
-	h, d := newHandler(t)
-	d.rec.normalizeResult = gin.H{"total_series_affected": 2}
-	w := doReq(t, h.SeriesNormalizePreview, http.MethodGet, "/series/normalize/preview", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if d.rec.normalizeCalls != 1 {
-		t.Fatalf("expected normalize preview closure called once, got %d", d.rec.normalizeCalls)
-	}
-}
-
-// --- SeriesNormalize (apply) ---
-
-func TestSeriesNormalize_Enqueues202(t *testing.T) {
-	h, d := newHandler(t)
-	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-normalize", mock.Anything).Return("rid", nil)
-	w := doReq(t, h.SeriesNormalize, http.MethodPost, "/series/normalize", nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
-	}
-	assertReturnsV2OpID(t, w)
 }
 
 // errString is a tiny error helper so tests can return sentinel errors.

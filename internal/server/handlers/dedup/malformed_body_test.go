@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/malformed_body_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c4f0b62-19ae-4d37-95e1-7f2a6d0c3b84
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package deduphandler_test
 
@@ -89,16 +89,16 @@ func TestBulkMerge_EmptyBodyStillAccepted(t *testing.T) {
 
 // TestRescoreAndPurge_KeepTheirDiscards pins a DELIBERATE non-change.
 //
-// RescoreDedupCandidates and PurgeAcoustIDConflicts also discard their bind
-// error, and Wave 2 leaves them alone: their only field is an `apply` gate whose
+// RescoreDedupCandidates also discards its bind
+// error, and Wave 2 leaves it alone: its only field is an `apply` gate whose
 // zero value is dry-run, i.e. the SAFE direction — the exact inverse of
 // BulkMerge. Blanket-converting every discard in this file would have turned a
 // correct fail-safe into a 400 for callers who send no body.
 //
 // This test exists so that non-change is recorded as a decision rather than an
 // oversight: if someone later "finishes the job" on this file, this test tells
-// them why these two were skipped.
-// Both assertions below use a body that ASKS TO APPLY but is malformed
+// them why this was skipped.
+// The assertion below uses a body that ASKS TO APPLY but is malformed
 // (`{"apply":true,}` — trailing comma). The mock expectation is the assertion:
 // it only matches if the engine was called with the DRY-RUN value, proving the
 // discarded parse error left the safe default in place rather than honouring
@@ -117,20 +117,6 @@ func TestRescoreAndPurge_KeepTheirDiscards(t *testing.T) {
 			t.Fatalf("rescore now 400s on a malformed body. That may be an improvement, but it is a "+
 				"BEHAVIOUR CHANGE Wave 2 deliberately did not make — the zero value here is "+
 				"apply=false (dry run), the safe direction. Update this test consciously. body=%s",
-				w.Body.String())
-		}
-	})
-
-	t.Run("purge_acoustid_falls_back_to_dry_run", func(t *testing.T) {
-		h, d := newHandler(t)
-		// ReevaluateAcoustIDConflicts(ctx, dryRun) is called with !apply, so
-		// dryRun MUST be true.
-		d.engine.EXPECT().ReevaluateAcoustIDConflicts(mock.Anything, true).
-			Return(&dedup.AcoustIDConflictResult{}, nil).Once()
-
-		w := w2rawReq(t, h.PurgeAcoustIDConflicts, "/api/v1/dedup/purge-acoustid", applyButMalformed, true)
-		if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "invalid request body") {
-			t.Fatalf("purge_acoustid now 400s on a malformed body — see the rescue note above. body=%s",
 				w.Body.String())
 		}
 	})

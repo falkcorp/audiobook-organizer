@@ -242,7 +242,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/abs/stats.go":                      1,
 	"internal/server/handlers/abs/stream.go":                     1,
 	"internal/server/handlers/activity.go":                       1,
-	"internal/server/handlers/ai.go":                             3,
+	"internal/server/handlers/ai.go":                             2,
 	"internal/server/handlers/apikeys.go":                        5,
 	"internal/server/handlers/audiobooks/handler_crud.go":        3,
 	"internal/server/handlers/audiobooks/handler_files.go":       1,

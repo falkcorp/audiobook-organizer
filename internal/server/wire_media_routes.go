@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-10-08
+// last-edited: 2026-10-11
 
 package server
 
@@ -45,8 +45,6 @@ func (s *Server) wireMediaRoutes(
 	}
 
 	// AI domain (migrated from server_lifecycle.go).
-	protected.POST("/authors/duplicates/ai-review", s.perm(auth.PermLibraryEditMetadata), aiH.ReviewDuplicateAuthors)
-	protected.POST("/authors/duplicates/ai-review/apply", s.perm(auth.PermLibraryEditMetadata), aiH.ApplyAuthorReview)
 	protected.POST("/ai/parse-filename", s.perm(auth.PermLibraryEditMetadata), aiH.ParseFilename)
 	protected.POST("/ai/test-connection", s.perm(auth.PermLibraryEditMetadata), aiH.TestConnection)
 	aiScans := protected.Group("/ai/scans")

@@ -412,7 +412,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	//
 	// The merge service is reached through getMergeService, which reproduces the
 	// original nil-fallback (s.mergeService when set, else merge.NewService(s.Ops())).
-	// dismissDedupGroup / computeSeriesPrunePreview / seriesNormalizePreview wrap
+	// dismissDedupGroup / computeSeriesPrunePreview wrap
 	// helpers that STAY in package server (server_middleware.go, server_title_helpers.go,
 	// duplicates_helpers.go) because they are shared with files that did not move;
 	// the closures let the sub-package call them without importing package server.
@@ -461,9 +461,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			}
 			return computeSeriesPrunePreview(store)
 		},
-		func() any {
-			return buildSeriesNormalizePreview(s.storeForWiring())
-		},
 	)
 
 	// iTunes handlers. Guard the service/importer wiring: s.itunesSvc is set
@@ -500,7 +497,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		aiScanStore,
 		aiPipeline,
 		aiUpdater,
-		s.dedupCache,
 		opReg,
 		func(b *database.Book) any { return s.enrichBookForResponseSingle(b) },
 	)

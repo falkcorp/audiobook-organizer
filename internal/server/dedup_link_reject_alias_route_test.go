@@ -1,7 +1,7 @@
 // file: internal/server/dedup_link_reject_alias_route_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a7e2c19-6b3d-4f81-9e05-2c6b8a1d7f43
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package server
 
@@ -58,67 +58,6 @@ func TestDeprecatedMergeDismissAliases_StillRoute(t *testing.T) {
 			body:       `{}`, // missing required group_key
 			wantStatus: http.StatusBadRequest,
 		},
-		{
-			name:       "audiobooks merge->link",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/audiobooks/merge",
-			newPath:    "/api/v1/audiobooks/link",
-			body:       `{}`, // missing required keep_id
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "dedup candidate merge->link",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/dedup/candidates/abc/merge",
-			newPath:    "/api/v1/dedup/candidates/abc/link",
-			body:       ``,
-			wantStatus: http.StatusBadRequest, // "abc" is not a valid candidate id
-		},
-		{
-			name:       "dedup candidate dismiss->reject",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/dedup/candidates/abc/dismiss",
-			newPath:    "/api/v1/dedup/candidates/abc/reject",
-			body:       ``,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "dedup candidates bulk-merge->bulk-link",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/dedup/candidates/bulk-merge",
-			newPath:    "/api/v1/dedup/candidates/bulk-link",
-			body:       `{}`,
-			wantStatus: http.StatusServiceUnavailable, // no embedding store wired in setupTestServer
-		},
-		{
-			name:    "dedup candidates merge-cluster->link-cluster",
-			method:  http.MethodPost,
-			oldPath: "/api/v1/dedup/candidates/merge-cluster",
-			newPath: "/api/v1/dedup/candidates/link-cluster",
-			body:    `{}`,
-			// setupTestServer wires no dedup engine, and MergeDedupCluster
-			// checks h.dedupEngine before parsing book_ids.
-			wantStatus: http.StatusServiceUnavailable,
-		},
-		{
-			name:       "dedup candidates dismiss-cluster->reject-cluster",
-			method:     http.MethodPost,
-			oldPath:    "/api/v1/dedup/candidates/dismiss-cluster",
-			newPath:    "/api/v1/dedup/candidates/reject-cluster",
-			body:       `{}`, // missing required book_ids
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:    "dedup candidates merge-series->link-series",
-			method:  http.MethodPost,
-			oldPath: "/api/v1/dedup/candidates/merge-series",
-			newPath: "/api/v1/dedup/candidates/link-series",
-			body:    `{}`,
-			// setupTestServer wires no dedup engine, and
-			// LinkDedupCandidateSeries checks h.dedupEngine before parsing
-			// series_id.
-			wantStatus: http.StatusServiceUnavailable,
-		},
 	}
 
 	for _, p := range pairs {
@@ -138,6 +77,48 @@ func TestDeprecatedMergeDismissAliases_StillRoute(t *testing.T) {
 
 			assert.NotEqual(t, http.StatusNotFound, newW.Code, "new path %s must be registered", p.newPath)
 			assert.Equal(t, oldW.Code, newW.Code, "old alias %s and new path %s must reach the same handler (same status for the same body)", p.oldPath, p.newPath)
+		})
+	}
+}
+
+// TestRemovedDedupRoutes_Return404 pins the 01-P72 retirement: the deprecated
+// merge/dismiss verb aliases and the dead operator-trigger routes are gone from
+// the route table. The operations behind the triggers (embed, LSH build, purge,
+// re-encode, series normalize, AI author review) stay registered as ops; only
+// the HTTP entry points were removed. The /audiobooks/duplicates/merge and
+// /dismiss aliases are NOT in this list: they are still routed and are asserted
+// by TestDeprecatedMergeDismissAliases_StillRoute.
+func TestRemovedDedupRoutes_Return404(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	removed := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/dedup/purge-acoustid-conflicts"},
+		{http.MethodPost, "/api/v1/dedup/candidates/abc/merge"},
+		{http.MethodPost, "/api/v1/dedup/candidates/abc/dismiss"},
+		{http.MethodPost, "/api/v1/dedup/candidates/bulk-merge"},
+		{http.MethodPost, "/api/v1/dedup/candidates/merge-cluster"},
+		{http.MethodPost, "/api/v1/dedup/candidates/dismiss-cluster"},
+		{http.MethodPost, "/api/v1/dedup/candidates/merge-series"},
+		{http.MethodPost, "/api/v1/dedup/scan-book-signature"},
+		{http.MethodPost, "/api/v1/dedup/refresh"},
+		{http.MethodPost, "/api/v1/dedup/purge-legacy-fp"},
+		{http.MethodPost, "/api/v1/dedup/embed-async"},
+		{http.MethodPost, "/api/v1/dedup/lsh-index"},
+		{http.MethodPost, "/api/v1/dedup/emb-reencode"},
+		{http.MethodPost, "/api/v1/audiobooks/merge"},
+		{http.MethodGet, "/api/v1/series/normalize/preview"},
+		{http.MethodPost, "/api/v1/series/normalize"},
+		{http.MethodPost, "/api/v1/authors/duplicates/ai-review"},
+		{http.MethodPost, "/api/v1/authors/duplicates/ai-review/apply"},
+	}
+	for _, r := range removed {
+		t.Run(r.method+" "+r.path, func(t *testing.T) {
+			req := httptest.NewRequest(r.method, r.path, bytes.NewBufferString(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusNotFound, w.Code, "%s %s must no longer be routed", r.method, r.path)
 		})
 	}
 }

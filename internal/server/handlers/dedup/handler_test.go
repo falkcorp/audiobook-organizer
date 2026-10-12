@@ -859,15 +859,6 @@ func TestTriggerDedupLLM(t *testing.T) {
 	}
 }
 
-func TestTriggerDedupRefresh(t *testing.T) {
-	h, d := newHandler(t)
-	expectEnqueue(d)
-	w := doReq(t, h.TriggerDedupRefresh, http.MethodPost, "/api/v1/dedup/refresh", nil, nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("status=%d want 202; body=%s", w.Code, w.Body.String())
-	}
-}
-
 func TestTriggerDedupAcoustID(t *testing.T) {
 	h, d := newHandler(t)
 	expectEnqueue(d)
@@ -906,24 +897,6 @@ func TestTriggerEmbedScan(t *testing.T) {
 	}
 }
 
-func TestTriggerEmbedAsync(t *testing.T) {
-	h, d := newHandler(t)
-	expectEnqueue(d)
-	w := doReq(t, h.TriggerEmbedAsync, http.MethodPost, "/api/v1/dedup/embed-async", nil, nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("status=%d want 202; body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestTriggerBookSignatureScan(t *testing.T) {
-	h, d := newHandler(t)
-	expectEnqueue(d)
-	w := doReq(t, h.TriggerBookSignatureScan, http.MethodPost, "/api/v1/dedup/scan-book-signature", nil, nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("status=%d want 202; body=%s", w.Code, w.Body.String())
-	}
-}
-
 // ───────────────────────── compare-acoustid ─────────────────────────
 
 func TestHandleCompareAcoustID(t *testing.T) {
@@ -945,41 +918,6 @@ func TestHandleCompareAcoustID_MissingOther(t *testing.T) {
 		gin.Params{{Key: "id", Value: "a"}})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", w.Code, w.Body.String())
-	}
-}
-
-// ──────────────── T015: purge-legacy-fp endpoint ─────────────────────────────
-
-// TestPurgeLegacyFPCandidates verifies the happy path: a POST with apply=true
-// body enqueues the correct op and returns 202 Accepted with an op_id.
-func TestPurgeLegacyFPCandidates(t *testing.T) {
-	h, d := newHandler(t)
-	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.purge-legacy-fp-candidates", mock.Anything).Return("op-fp-1", nil).Once()
-	w := doReq(t, h.PurgeLegacyFPCandidates, http.MethodPost, "/api/v1/dedup/purge-legacy-fp",
-		map[string]bool{"apply": true}, nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("status=%d want 202; body=%s", w.Code, w.Body.String())
-	}
-}
-
-// TestPurgeLegacyFPCandidates_DryRun verifies that a request with no body
-// (dry-run mode) also enqueues successfully and returns 202.
-func TestPurgeLegacyFPCandidates_DryRun(t *testing.T) {
-	h, d := newHandler(t)
-	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.purge-legacy-fp-candidates", mock.Anything).Return("op-fp-dry", nil).Once()
-	w := doReq(t, h.PurgeLegacyFPCandidates, http.MethodPost, "/api/v1/dedup/purge-legacy-fp", nil, nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("status=%d want 202; body=%s", w.Code, w.Body.String())
-	}
-}
-
-// TestPurgeLegacyFPCandidates_NoRegistry verifies that a missing op registry
-// returns 500.
-func TestPurgeLegacyFPCandidates_NoRegistry(t *testing.T) {
-	h, _ := newHandler(t, noReg)
-	w := doReq(t, h.PurgeLegacyFPCandidates, http.MethodPost, "/api/v1/dedup/purge-legacy-fp", nil, nil)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d want 500; body=%s", w.Code, w.Body.String())
 	}
 }
 
