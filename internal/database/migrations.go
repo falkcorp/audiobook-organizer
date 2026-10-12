@@ -1370,7 +1370,7 @@ func migration065Up(store migrationStore) error {
 		return fmt.Errorf("migration 65: build opv3 run records: %w", err)
 	}
 	opsV3Log.Info("migration 65: %d opv2 rows scanned, %d opv3 runs written, %d already current, in %s",
-		rep.Scanned, rep.Written, rep.Skipped+rep.SkippedLive, time.Since(start).Round(time.Millisecond))
+		rep.Scanned, rep.Written, rep.Skipped, time.Since(start).Round(time.Millisecond))
 	if n := len(rep.Unmapped); n > 0 {
 		opsV3Log.Warn("migration 65: %d v2 status string(s) are not in the mapping table and were recorded as failed: %v", n, rep.Unmapped)
 	}
@@ -1392,11 +1392,18 @@ func migration065Up(store migrationStore) error {
 //     (migrationStore cannot delete a preference), so RunMigrations advances
 //     the version again without re-running Up.
 //
-// Either way, a run the previous binary created or changed gets a correct
-// opv3: record only on its next v2 write (the façade projection reads the v2
-// row). A run it finished and never touches again keeps a stale record or
-// none, and the opv3 census undercounts it until something reconciles opv3:
-// against opv2: at boot (not built in 05-PR4).
+// Neither is needed for roll-forward. While the previous binary runs, the
+// runs it creates, changes or deletes go stale in opv3:, and Up never sees
+// them again; ReconcileOpsV3WithV2 (pebble_store_ops_v3_reconcile.go), which
+// InitializeStore runs on EVERY boot after the migrations, rebuilds each
+// record whose opv2 row's bytes no longer hash to its V2RowHash, through Up's
+// own projection, and removes each opv3 run whose opv2 row is gone, before
+// the operations registry starts. A rebuild keeps what the stored record has
+// and the row does not carry (approval, attempt, fence epoch, typed progress;
+// checkpoints, intents and events live under their own keys and stay), and
+// takes state, timestamps, error and result from the row through Up's v2->v3
+// map: the v3-only nuance of a run the previous binary rewrote (stopping, a
+// wait reason other than deps) is what a rollback loses.
 func migration065Down(store migrationStore) error {
 	return setVersion(store, 64)
 }

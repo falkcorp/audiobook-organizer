@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
 // last-edited: 2026-10-11
 
@@ -240,7 +240,7 @@ func (p *PebbleStore) commitOpV2Row(prev *OperationV2Row, row *OperationV2Row, e
 	// The opv3: projection of this write, in the same batch (05-PR4). Every
 	// caller holds opsMu, which the projection's counter update relies on.
 	v3 := p.newOpsV3Stage(b)
-	if err := p.stageRunV3FromV2(v3, row); err != nil {
+	if err := p.stageRunV3FromV2(v3, row, data); err != nil {
 		return err
 	}
 	if err := v3.flush(); err != nil {

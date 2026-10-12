@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.31.0
+// version: 3.32.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -356,7 +356,7 @@ func (p *PebbleStore) updateOperationV2Status(id string, expect *string, status 
 	}
 	// The opv3: projection of this write, in the same batch (05-PR4).
 	v3 := p.newOpsV3Stage(batch)
-	if err := p.stageRunV3FromV2(v3, &row); err != nil {
+	if err := p.stageRunV3FromV2(v3, &row, data); err != nil {
 		return false, err
 	}
 	if err := v3.flush(); err != nil {
@@ -444,7 +444,7 @@ func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
 		return err
 	}
 	v3 := p.newOpsV3Stage(batch)
-	if err := p.stageRunV3FromV2(v3, &row); err != nil {
+	if err := p.stageRunV3FromV2(v3, &row, data); err != nil {
 		return err
 	}
 	if err := v3.flush(); err != nil {
@@ -956,23 +956,39 @@ func (p *PebbleStore) listOpV2IDsPage(after string, n int) (ids []string, err er
 	return ids, iterErr
 }
 
+// opv2RowExists reports whether an opv2:op: row is stored for id, without
+// decoding it (the opv3 reconcile's orphan check).
+func (p *PebbleStore) opv2RowExists(id string) (ok bool, err error) {
+	defer recoverPebbleClosed("opv2RowExists", &err)
+	_, closer, err := p.db.Get(opv2OpKey(id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_ = closer.Close()
+	return true, nil
+}
+
 // stageOpV2RowWrite stages an opv2:op: row and its timeline-index delta
 // against prev into b. It is the opv2 half of a native opv3 write
 // (pebble_store_ops_v3.go stageMirror), which builds its own batch so the v3
 // record and this mirror row commit together; the v2 façade writers use
-// commitOpV2Row instead. The caller stages the queue and active keys.
-func stageOpV2RowWrite(b *GatedBatch, prev, row *OperationV2Row) error {
+// commitOpV2Row instead. The caller stages the queue and active keys. It
+// returns the row bytes it staged, which the mirror hashes into V2RowHash.
+func stageOpV2RowWrite(b *GatedBatch, prev, row *OperationV2Row) ([]byte, error) {
 	if row == nil || row.ID == "" {
-		return errors.New("opv2: stageOpV2RowWrite: row has no id")
+		return nil, errors.New("opv2: stageOpV2RowWrite: row has no id")
 	}
 	data, err := json.Marshal(row)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := b.Set(opv2OpKey(row.ID), data, nil); err != nil {
-		return err
+		return nil, err
 	}
-	return stageOpRow(b, prev, row)
+	return data, stageOpRow(b, prev, row)
 }
 
 // stageOpV2RowDelete stages the deletion of a decoded opv2:op: row and every

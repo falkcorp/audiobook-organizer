@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
 // last-edited: 2026-10-11
 
@@ -983,6 +983,9 @@ var opv2OpKeyAllowlist = map[string]string{
 	"internal/database/pebble_store_ops_v2.go:stageOpV2RowWrite":                                    "stage", // the opv2 mirror row of a native opv3 write (05-PR4)
 	"internal/database/pebble_store_ops_v2.go:stageOpV2RowDelete":                                   "stage", // DeleteRunV3's mirror row delete (05-PR4)
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).listOpV2IDsPage":                       "read",  // migration 065's key-only pager (05-PR4)
+	"internal/database/pebble_store_ops_v3_migrate.go:(*PebbleStore).getOpV2Raw":                    "read",  // migration 065 / the opv3 reconcile hash the stored row bytes (05-PR4)
+	"internal/database/pebble_store_ops_v3_reconcile.go:(*PebbleStore).findStaleRunsV3":             "read",  // the opv3 boot reconcile's detection walk (05-PR4)
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).opv2RowExists":                         "read",  // the opv3 reconcile's orphan check
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).InsertOperationV2":                     "read",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).PromoteToQueued":                       "read",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOperationV2Result":                  "read",

@@ -1,12 +1,13 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-11
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
 //
-//	opv3:run:{op_id}                               → JSON(RunRecord)
+//	opv3:run:{op_id}                               → JSON(RunRecord) without the runHot fields
+//	opv3:prog:{op_id}                              → JSON(runHot)  progress, last_progress_at, last_checkpoint_at, v2_row_hash
 //	opv3:q:{999-prio:03d}:{queued_ns:020d}:{op_id} → ""  dispatch order; queued with empty wait_reason only
 //	opv3:ix:state:{state}:{op_id}                  → ""  exact count per state
 //	opv3:ix:def:{def_id}:{queued_ns:020d}:{op_id}  → ""  runs of one def
@@ -39,6 +40,14 @@
 // previous binary, which reads only opv2:, can be redeployed at any time
 // (owner decision D25: the mirror stays on until 05-PR16).
 //
+// RUN RECORD SPLIT. A run is stored under two keys. opv3:prog: holds the
+// fields a progress, phase or checkpoint tick changes (runHot) and the hash of
+// the opv2:op: row the record was last synced with; opv3:run: holds the rest,
+// including the large Params and Result blobs. put writes each key only when
+// its bytes change, so a tick writes the small key and not the record
+// (BenchmarkOpsV3ProgressTick). loadRunV3 is the one place the two are joined;
+// every reader goes through it.
+//
 // The stored opv3:run: record, not the back-mapped v2 status, is the "prev"
 // of every write: ToV2 loses information (stopping and running both mirror as
 // running, timed_out as canceled, queued{pause} as queued), so deriving prev
@@ -69,6 +78,7 @@ var opsV3Log = logger.New("database.opsv3")
 const (
 	opv3Prefix         = "opv3:"
 	opv3RunPrefix      = "opv3:run:"
+	opv3ProgPrefix     = "opv3:prog:"
 	opv3QueuePrefix    = "opv3:q:"
 	opv3IxStatePrefix  = "opv3:ix:state:"
 	opv3IxDefPrefix    = "opv3:ix:def:"
@@ -96,7 +106,8 @@ const (
 
 // ── key builders ────────────────────────────────────────────────────────────
 
-func opv3RunKey(id string) []byte { return []byte(opv3RunPrefix + id) }
+func opv3RunKey(id string) []byte  { return []byte(opv3RunPrefix + id) }
+func opv3ProgKey(id string) []byte { return []byte(opv3ProgPrefix + id) }
 
 // opv3QueueKey uses opv2QueueKey's encoding: priority DESC, queued_at ASC.
 func opv3QueueKey(priority int, queuedAt *time.Time, id string) []byte {
@@ -246,11 +257,7 @@ func (s *opsV3Stage) put(prev, next *RunRecord, tr *Transition) error {
 			return err
 		}
 	}
-	data, err := json.Marshal(next)
-	if err != nil {
-		return err
-	}
-	if err := s.b.Set(opv3RunKey(next.ID), data, nil); err != nil {
+	if err := s.stageRecord(prev, next); err != nil {
 		return err
 	}
 	if err := s.stageIndexDiff(opv3IndexKeys(prev), opv3IndexKeys(next)); err != nil {
@@ -278,13 +285,10 @@ func (s *opsV3Stage) put(prev, next *RunRecord, tr *Transition) error {
 // under opv3:.
 func (s *opsV3Stage) del(prev *RunRecord) error {
 	id := prev.ID
-	if err := s.b.Delete(opv3RunKey(id), nil); err != nil {
-		return err
-	}
 	if err := s.stageIndexDiff(opv3IndexKeys(prev), nil); err != nil {
 		return err
 	}
-	for _, k := range [][]byte{opv3CkptKey(id), opv3LedgerKey(id)} {
+	for _, k := range [][]byte{opv3RunKey(id), opv3ProgKey(id), opv3CkptKey(id), opv3LedgerKey(id)} {
 		if err := s.b.Delete(k, nil); err != nil {
 			return err
 		}
@@ -295,6 +299,70 @@ func (s *opsV3Stage) del(prev *RunRecord) error {
 		}
 	}
 	s.count(prev, -1)
+	return nil
+}
+
+// runHot is the opv3:prog:{id} value: the part of a run that a progress,
+// phase or checkpoint tick changes, and the hash of the opv2:op: row the run
+// was last synced with (which every v2 write changes). See "RUN RECORD
+// SPLIT" at the top of this file.
+type runHot struct {
+	Progress         ProgressSnapshot `json:"progress"`
+	LastProgressAt   *time.Time       `json:"last_progress_at,omitempty"`
+	LastCheckpointAt *time.Time       `json:"last_checkpoint_at,omitempty"`
+	V2RowHash        string           `json:"v2_row_hash,omitempty"`
+}
+
+func hotOf(r *RunRecord) runHot {
+	return runHot{Progress: r.Progress, LastProgressAt: r.LastProgressAt, LastCheckpointAt: r.LastCheckpointAt, V2RowHash: r.V2RowHash}
+}
+
+// runCoreJSON encodes a RunRecord without its runHot fields: each shadowing
+// field below is shallower than the embedded one of the same JSON name, so it
+// wins, and being nil it is omitted.
+type runCoreJSON struct {
+	*RunRecord
+	Progress         *struct{} `json:"progress,omitempty"`
+	LastProgressAt   *struct{} `json:"last_progress_at,omitempty"`
+	LastCheckpointAt *struct{} `json:"last_checkpoint_at,omitempty"`
+	V2RowHash        *struct{} `json:"v2_row_hash,omitempty"`
+}
+
+func encodeRunCore(r *RunRecord) ([]byte, error) { return json.Marshal(runCoreJSON{RunRecord: r}) }
+
+func encodeRunHot(r *RunRecord) ([]byte, error) {
+	h := hotOf(r)
+	return json.Marshal(&h)
+}
+
+// stageRecord stages next's opv3:run: and opv3:prog: values, each only when
+// it differs from prev's (prev nil: both). A progress tick so rewrites only
+// the small key.
+func (s *opsV3Stage) stageRecord(prev, next *RunRecord) error {
+	for _, part := range []struct {
+		key    []byte
+		encode func(*RunRecord) ([]byte, error)
+	}{
+		{opv3RunKey(next.ID), encodeRunCore},
+		{opv3ProgKey(next.ID), encodeRunHot},
+	} {
+		data, err := part.encode(next)
+		if err != nil {
+			return err
+		}
+		if prev != nil {
+			old, err := part.encode(prev)
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(old, data) {
+				continue
+			}
+		}
+		if err := s.b.Set(part.key, data, nil); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -388,13 +456,22 @@ func (p *PebbleStore) loadRunV3(id string) (rec *RunRecord, err error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closer.Close()
 	var r RunRecord
-	if err := json.Unmarshal(val, &r); err != nil {
-		return nil, fmt.Errorf("opv3: run record %s does not decode: %w", id, err)
+	uerr := json.Unmarshal(val, &r)
+	_ = closer.Close()
+	if uerr != nil {
+		return nil, fmt.Errorf("opv3: run record %s does not decode: %w", id, uerr)
 	}
 	if r.ID == "" {
 		return nil, fmt.Errorf("opv3: run record %s has no id", id)
+	}
+	var hot runHot
+	found, err := p.getJSONFound(opv3ProgKey(id), &hot)
+	if err != nil {
+		return nil, fmt.Errorf("opv3: progress of run %s does not decode: %w", id, err)
+	}
+	if found {
+		r.Progress, r.LastProgressAt, r.LastCheckpointAt, r.V2RowHash = hot.Progress, hot.LastProgressAt, hot.LastCheckpointAt, hot.V2RowHash
 	}
 	return &r, nil
 }
@@ -409,10 +486,12 @@ var (
 )
 
 // stageRunV3FromV2 stages the v3 projection of one opv2:op: row write into s.
-// Caller holds opsMu. A record that does not decode is left alone (logged):
-// the v2 write must not fail on v3 trouble, and overwriting it would orphan
-// its index keys.
-func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row) error {
+// data is the exact value staged under opv2:op:{row.ID}; its hash becomes the
+// record's V2RowHash, which is how the boot reconcile (ReconcileOpsV3WithV2)
+// knows the record reflects this row. Caller holds opsMu. A record that does
+// not decode is left alone (logged): the v2 write must not fail on v3
+// trouble, and overwriting it would orphan its index keys.
+func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row, data []byte) error {
 	cur, err := p.loadRunV3(row.ID)
 	if err != nil {
 		opsV3Log.Warn("opv3: not mirroring a v2 write onto an unreadable run record (op %s): %v", row.ID, err)
@@ -428,18 +507,7 @@ func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row) error
 		}
 	}
 	next, tr := projectRunFromV2(cur, curHasLedger, row, time.Now().UTC())
-	if next.FromV2 != nil {
-		// A migrated run now reflects this write, so its SourceHash names
-		// this row: a later migration pass then sees an unchanged row and
-		// leaves the record (and any v3-only state on it) alone.
-		h, err := opsV3SourceHash(row)
-		if err != nil {
-			return err
-		}
-		o := *next.FromV2
-		o.SourceHash = h
-		next.FromV2 = &o
-	}
+	next.V2RowHash = opsV3RowHash(data)
 	return s.put(cur, next, tr)
 }
 
@@ -451,8 +519,10 @@ func (p *PebbleStore) stageRunV3DeleteForV2(s *opsV3Stage, id string) error {
 		// Unknown index keys: delete the record and the per-run families,
 		// leave the indexes to whoever can decode it (none today).
 		opsV3Log.Warn("opv3: deleting an unreadable run record with its v2 row (op %s): %v", id, err)
-		if derr := s.b.Delete(opv3RunKey(id), nil); derr != nil {
-			return derr
+		for _, k := range [][]byte{opv3RunKey(id), opv3ProgKey(id)} {
+			if derr := s.b.Delete(k, nil); derr != nil {
+				return derr
+			}
 		}
 		return nil
 	}
@@ -727,7 +797,10 @@ func stageV2QueueAct(b *GatedBatch, prev *OperationV2Row, next *OperationV2Row) 
 }
 
 // stageMirror stages the opv2: row for rec (and its queue/active/timeline
-// keys) when the mirror is on. Caller holds opsMu.
+// keys) when the mirror is on, and sets rec.V2RowHash to the hash of the row
+// bytes it staged, so call it before staging rec. With the mirror off rec
+// keeps the hash it had: the opv2 row it names is unchanged. Caller holds
+// opsMu.
 func (p *PebbleStore) stageMirror(b *GatedBatch, rec *RunRecord, now time.Time) error {
 	if !p.opsV2MirrorEnabled() {
 		return nil
@@ -754,9 +827,11 @@ func (p *PebbleStore) stageMirror(b *GatedBatch, rec *RunRecord, now time.Time) 
 		return err
 	}
 	row := mirrorRowFromRecord(rec, prev, hasLedger, now)
-	if err := stageOpV2RowWrite(b, prev, &row); err != nil {
+	data, err := stageOpV2RowWrite(b, prev, &row)
+	if err != nil {
 		return err
 	}
+	rec.V2RowHash = opsV3RowHash(data)
 	return stageV2QueueAct(b, prev, &row)
 }
 
@@ -814,10 +889,11 @@ func (p *PebbleStore) InsertRunV3(rec RunRecord) (err error) {
 	defer b.Close()
 	s := p.newOpsV3Stage(b)
 	tr := &Transition{From: "", To: state.V3Queued, Event: string(state.EvEnqueue), Reason: rec.WaitReason, Actor: actorPtr(rec.Actor), At: now}
-	if err := s.put(nil, &rec, tr); err != nil {
+	rec.V2RowHash = ""
+	if err := p.stageMirror(b, &rec, now); err != nil { // before put: it sets rec.V2RowHash
 		return err
 	}
-	if err := p.stageMirror(b, &rec, now); err != nil {
+	if err := s.put(nil, &rec, tr); err != nil {
 		return err
 	}
 	if err := s.flush(); err != nil {
@@ -955,10 +1031,10 @@ func (p *PebbleStore) TransitionRunV3(req TransitionRequest) (out *RunRecord, er
 	b := p.db.NewBatch()
 	defer b.Close()
 	s := p.newOpsV3Stage(b)
-	if err := s.put(cur, &next, tr); err != nil {
+	if err := p.stageMirror(b, &next, now); err != nil { // before put: it sets next.V2RowHash
 		return nil, err
 	}
-	if err := p.stageMirror(b, &next, now); err != nil {
+	if err := s.put(cur, &next, tr); err != nil {
 		return nil, err
 	}
 	if err := s.flush(); err != nil {

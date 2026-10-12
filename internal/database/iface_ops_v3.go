@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
 // last-edited: 2026-10-11
 
@@ -42,10 +42,13 @@ type ApprovalRecord struct {
 	Note       string    `json:"note,omitempty"`
 }
 
-// V2Origin is set only on rows made by migration 065.
+// V2Origin is set on a record built from an opv2:op: row rather than by the
+// live write paths: by migration 065, or by the boot reconcile
+// (ReconcileOpsV3WithV2) rebuilding a record whose row a binary without the
+// v2 façade projection changed. It describes that row as it was then;
+// RunRecord.V2RowHash, not this, says whether the record is current.
 type V2Origin struct {
 	Status      string `json:"status"`               // original v2 status string
-	SourceHash  string `json:"source_hash"`          // hash of the v2 row; makes the migration idempotent
 	HighWater   int64  `json:"high_water,omitempty"` // v2 resume high-water mark
 	ResumeCount int    `json:"resume_count,omitempty"`
 	ErrMessage  string `json:"err_message,omitempty"`
@@ -140,8 +143,17 @@ type RunRecord struct {
 	// UnmappedV2Status is the original v2 status of a live v2 write the
 	// mapping table does not know (the run is recorded as failed).
 	UnmappedV2Status string `json:"unmapped_v2_status,omitempty"`
-	// Migrated rows only.
+	// FromV2 is set on records built from a v2 row (V2Origin).
 	FromV2 *V2Origin `json:"from_v2,omitempty"`
+	// V2RowHash is the hash (opsV3RowHash) of the opv2:op: row bytes this
+	// record was last synced with: stamped by every v2 façade write, by every
+	// native write while the mirror is on, and by migration 065. A stored row
+	// with a different hash was written by something that did not update this
+	// record -- a previous binary after a rollback -- and the boot reconcile
+	// rebuilds the record from it. Stored on opv3:prog:, not opv3:run:,
+	// because every v2 write changes it (pebble_store_ops_v3.go "RUN RECORD
+	// SPLIT").
+	V2RowHash string `json:"v2_row_hash,omitempty"`
 }
 
 // KeyRange is one completed AppendOnly range in a Ledger.

@@ -106,7 +106,7 @@ func TestMigration065MapsEveryV2Status(t *testing.T) {
 		if r.State != w {
 			t.Errorf("%s (%s): v3 %s, want %s", id, r.FromV2.Status, r.State, w)
 		}
-		if r.FromV2 == nil || r.FromV2.SourceHash == "" {
+		if r.FromV2 == nil || r.V2RowHash == "" {
 			t.Errorf("%s: no V2Origin", id)
 		}
 	}
