@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -366,20 +367,45 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 
 // --- resolve-production-authors ---
 
+// resolveProductionAuthorsDef is the only registration of this op.
+// scheduler.resolve-production-authors ran a second copy under its own ID and
+// ConcurrencyKey until 2026-10-11 (04-P4d); it resolves here as a FormerID and
+// the resolve_production_authors scheduler task enqueues this def.
+//
+// The copies were not twins. The scheduler copy's apply re-fetched metadata by
+// title for every book credited to a production company; this def's apply
+// resolved nothing (its loop only reported progress) and only invalidated the
+// dedup cache. The fetching body moved here, so an apply under either ID does
+// the work the scheduler copy did.
+//
+// Permissions and Timeout are the scheduler copy's (it gated on settings.manage
+// and carried 2h), so the alias neither widens who can run a deleting op nor
+// shortens the budget prod runs were sized against. ResumeDrop is the scheduler
+// copy's, not this def's old ResumeRequeue: the apply now issues one metadata
+// provider lookup per book, a requeue after a restart repeats the lookups for
+// every book that did not resolve, against provider quotas, with nobody having
+// asked for the second pass, and the preview is cheap enough that the next
+// scheduled run replaces a dropped one. CapNetworkGeneric stays: the body calls
+// the metadata source chain (Audible, OpenLibrary, Google Books and so on),
+// none of which is OpenAI-backed, so the scheduler copy's network.openai
+// declaration gated nothing real.
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.resolve-production-authors",
+		FormerIDs:   []string{"scheduler.resolve-production-authors"},
+		Permissions: []auth.Permission{auth.PermSettingsManage},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Resolve production company authors",
 		Description: "Resolves real authors for production company entries using external metadata. " +
-			"DRY RUN BY DEFAULT: lists the production-company authors; pass dry_run=false to write.",
-		ResumePolicy:    sdk.ResumeRequeue,
+			"DRY RUN BY DEFAULT, including the scheduled run: counts the books it would re-fetch; " +
+			"pass dry_run=false to fetch and write.",
+		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.resolve-production-authors",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         60 * time.Minute,
+		Timeout:         2 * time.Hour,
 		Schedule:        nil,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapNetworkGeneric},
 		Run:             p.runResolveProductionAuthors,
@@ -394,6 +420,12 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
+	}
+	if !dryRun && !p.deps.HasMetadataFetchService() {
+		// The apply is a metadata fetch per book. Without the service it would
+		// resolve nothing and report success, which is the silent no-op this
+		// def used to be.
+		return fmt.Errorf("metadata fetch service not initialized")
 	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Starting production author resolution (dry_run=%v)", dryRun))
 
@@ -410,35 +442,70 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Found %d production company authors", len(prodAuthors)))
-	if dryRun {
-		// NOTE: the apply path below resolves nothing yet (its loop only
-		// reports progress); the only thing it changes is the dedup cache.
-		// The dry run lists the rows so the operator sees the scope.
-		for _, a := range prodAuthors {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Production-company author %q (id %d)", a.Name, a.ID))
-		}
-		resultMsg := fmt.Sprintf("DRY RUN: %d production company authors found; pass dry_run=false to write", len(prodAuthors))
-		_ = reporter.Log(slog.LevelInfo, resultMsg)
-		return nil
-	}
 	total := len(prodAuthors)
 	resolved := 0
+	wouldFetch := 0
+	fetchFailed := 0
+	lookupFailed := 0
 	prog := sdk.NewProgress(reporter, total)
 	prog.Start(fmt.Sprintf("Processing %d production companies", total))
 
-	for i := range prodAuthors {
+	for i, author := range prodAuthors {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if reporter.IsCanceled() {
 			return context.Canceled
 		}
-		prog.StepN(i+1,
-			fmt.Sprintf("Processed %d/%d production companies (%d resolved)", i+1, total, resolved))
+		books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
+		if err != nil {
+			lookupFailed++
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Could not list books for production company %q (id %d): %v", author.Name, author.ID, err))
+			prog.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
+			continue
+		}
+		if dryRun {
+			// The fetch applies as well as searches, so the dry run must not
+			// call it; it counts the books instead.
+			wouldFetch += len(books)
+			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Would re-fetch metadata for %d books credited to %q (id %d)",
+				len(books), author.Name, author.ID))
+			prog.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (dry run)", i+1, total))
+			continue
+		}
+		for _, book := range books {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if reporter.IsCanceled() {
+				return context.Canceled
+			}
+			newAuthorID, fetchErr := p.deps.FetchMetadataByTitle(book.ID)
+			if fetchErr != nil {
+				fetchFailed++
+				continue
+			}
+			if newAuthorID == nil {
+				continue
+			}
+			if newAuthor, _ := store.GetAuthorByID(*newAuthorID); newAuthor != nil && !dedup.IsProductionCompany(newAuthor.Name) {
+				resolved++
+			}
+		}
+		prog.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
+	}
+
+	if dryRun {
+		resultMsg := fmt.Sprintf("DRY RUN: would re-fetch metadata for %d books across %d production companies; "+
+			"pass dry_run=false to write", wouldFetch, total)
+		_ = reporter.Log(slog.LevelInfo, resultMsg)
+		prog.Done(resultMsg)
+		return nil
 	}
 
 	p.deps.InvalidateDedupCache()
-	resultMsg := fmt.Sprintf("Resolved %d books across %d production companies", resolved, total)
+	resultMsg := fmt.Sprintf("Resolved %d books across %d production companies (%d fetches failed, %d companies' book lists unreadable)",
+		resolved, total, fetchFailed, lookupFailed)
 	_ = reporter.Log(slog.LevelInfo, resultMsg)
 	prog.Done(resultMsg)
 	return nil

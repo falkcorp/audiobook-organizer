@@ -1,9 +1,9 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-11
 
-// extra_ops registers OperationDefs for 5 scheduler tasks that previously
+// extra_ops registers OperationDefs for 4 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
 // extracts the closure logic into a typed Run func so the UOS v2 dispatcher
 // can manage lifecycle, cancellation, and concurrency without the old
@@ -55,14 +55,16 @@ type ExtraOpsDeps struct {
 	ScanStandDown opsregistry.ScanStandDownGate
 }
 
-// ExtraOpsStore is everything the 5 scheduler OperationDefs need from the
+// ExtraOpsStore is everything the 4 scheduler OperationDefs need from the
 // store: metabatch.Store, which the metadata upgrade forwards into its
 // service, plus the author, author-link and book methods the author ops call
 // directly. Was database.Store (398 methods) until 2026-08-19;
 // versions.TrashedVersionCleaner and the db-optimize/tombstone methods left
 // with scheduler.trash-cleanup, scheduler.db-optimize and
 // scheduler.tombstone-cleanup on 2026-10-10, and GetAllBooksCore left with
-// scheduler.metadata-refresh on 2026-10-11 (04-P4c).
+// scheduler.metadata-refresh on 2026-10-11 (04-P4c); GetAuthorByID and
+// GetBooksByAuthorIDWithRoleCore left with scheduler.resolve-production-authors
+// the same day (04-P4d).
 type ExtraOpsStore interface {
 	metabatch.Store // NewMetadataUpgradeService
 
@@ -82,7 +84,6 @@ type extraOpsAuthorStore interface {
 	CreateAuthor(name string) (*database.Author, error)
 	DeleteAuthor(id int) error
 	GetAllAuthors() ([]database.Author, error)
-	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
 }
 
@@ -90,14 +91,13 @@ type extraOpsAuthorStore interface {
 // reads and rewrites.
 type extraOpsAuthorLinkStore interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 	// GetBooksByAuthorIDForRelinkCore includes the trash; the split path's
 	// relink list, because DeleteAuthor sweeps trashed books' credits too.
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
-// ExtraOpsRegistrar holds a Store reference and typed Deps so the 5 scheduler
+// ExtraOpsRegistrar holds a Store reference and typed Deps so the 4 scheduler
 // OperationDefs can be registered without a *Server pointer.
 type ExtraOpsRegistrar struct {
 	Deps  ExtraOpsDeps
@@ -236,13 +236,14 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 
 // --- author-split-scan ---
 
-// scheduler.author-split-scan and scheduler.resolve-production-authors take
-// only a mode. Both ignored their params until 2026-09-25 and wrote on every
-// run. They resolve it through opmode.ParseDryRun: dry_run defaults to TRUE when
-// absent; dryRun is accepted as an alias; disagreeing values are an error. The
-// scheduled trigger (tasks.go) sends schedulerExtraOpParams{}, which carries
-// neither key, so a scheduled run is a dry run -- deliberately, by owner
-// decision; do not add dry_run=false to those two enqueues.
+// scheduler.author-split-scan takes only a mode. It ignored its params until
+// 2026-09-25 and wrote on every run. It resolves the mode through
+// opmode.ParseDryRun: dry_run defaults to TRUE when absent; dryRun is accepted
+// as an alias; disagreeing values are an error. The scheduled trigger
+// (tasks.go) sends schedulerExtraOpParams{}, which carries neither key, so a
+// scheduled run is a dry run -- deliberately, by owner decision; do not add
+// dry_run=false to that enqueue. (scheduler.resolve-production-authors had the
+// same contract until 04-P4d moved it to maintenance.resolve-production-authors.)
 
 // RegisterAuthorSplitScanOp registers the scheduler.author-split-scan OperationDef.
 func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry) error {
@@ -583,104 +584,4 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	})
 	_ = progress.Log("info", fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed), nil)
 	return err
-}
-
-// --- resolve-production-authors ---
-
-// RegisterResolveProductionAuthorsOp registers the scheduler.resolve-production-authors OperationDef.
-func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.resolve-production-authors",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "scheduler",
-		DisplayName:     "Resolve Production Authors",
-		Description:     "Resolve real authors for production company entries. Dry run by default (scheduled runs too): counts the books it would re-fetch; pass dry_run=false to fetch and write.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.resolve-production-authors",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			dryRun, err := opmode.ParseDryRun("scheduler.resolve-production-authors", rawParams)
-			if err != nil {
-				return err
-			}
-			progress := extraOpsProgressAdapter{r: reporter}
-			store := r.Store
-			if store == nil {
-				return fmt.Errorf("database not initialized")
-			}
-			_ = progress.Log("info", fmt.Sprintf("Starting production author resolution (dry_run=%v)", dryRun), nil)
-			authors, err := store.GetAllAuthors()
-			if err != nil {
-				return fmt.Errorf("failed to get authors: %w", err)
-			}
-
-			var prodAuthors []database.Author
-			for _, a := range authors {
-				if dedup.IsProductionCompany(a.Name) {
-					prodAuthors = append(prodAuthors, a)
-				}
-			}
-
-			_ = progress.Log("info", fmt.Sprintf("Found %d production company authors", len(prodAuthors)), nil)
-			total := len(prodAuthors)
-			resolved := 0
-			wouldFetch := 0
-			p := sdk.NewProgress(reporter, total)
-			p.Start(fmt.Sprintf("Processing %d production companies", total))
-			for i, author := range prodAuthors {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
-				if err != nil {
-					p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
-					continue
-				}
-				if dryRun {
-					// FetchMetadataForBookByTitle fetches AND applies, so the
-					// dry run must not call it; it counts the books instead.
-					wouldFetch += len(books)
-					_ = progress.Log("info", fmt.Sprintf("Would re-fetch metadata for %d books credited to %q (id %d)",
-						len(books), author.Name, author.ID), nil)
-					p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (dry run)", i+1, total))
-					continue
-				}
-				for _, book := range books {
-					if r.Deps.MetadataFetchService == nil {
-						continue
-					}
-					resp, fetchErr := r.Deps.MetadataFetchService.FetchMetadataForBookByTitle(book.ID)
-					if fetchErr == nil && resp != nil && resp.Book != nil && resp.Book.AuthorID != nil {
-						newAuthor, _ := store.GetAuthorByID(*resp.Book.AuthorID)
-						if newAuthor != nil && !dedup.IsProductionCompany(newAuthor.Name) {
-							resolved++
-						}
-					}
-				}
-				p.StepN(i+1, fmt.Sprintf("Processed %d/%d production companies (%d books resolved)", i+1, total, resolved))
-			}
-
-			if dryRun {
-				resultMsg := fmt.Sprintf("DRY RUN: would re-fetch metadata for %d books across %d production companies; "+
-					"pass dry_run=false to write", wouldFetch, total)
-				_ = progress.Log("info", resultMsg, nil)
-				p.Done(resultMsg)
-				return nil
-			}
-
-			if r.Deps.DedupCache != nil {
-				r.Deps.DedupCache.Invalidate("author-duplicates")
-			}
-
-			resultMsg := fmt.Sprintf("Resolved %d books across %d production companies", resolved, total)
-			_ = progress.Log("info", resultMsg, nil)
-			p.Done(resultMsg)
-			return nil
-		},
-	})
 }
