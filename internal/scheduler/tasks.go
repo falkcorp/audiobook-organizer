@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-11
 
@@ -1185,9 +1185,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			// EMPTY ON PURPOSE (2026-09-25): no dry_run key means a dry run;
 			// see the author_split_scan trigger above.
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.resolve-production-authors", schedulerExtraOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.resolve-production-authors", struct{}{})
 			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.resolve-production-authors: %w", enqErr)
+				return nil, fmt.Errorf("failed to enqueue maintenance.resolve-production-authors: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "resolve-production-authors"), nil
 		},

@@ -1,7 +1,7 @@
 // file: internal/scheduler/author_ops_dry_run_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c85db25f-dd3e-4ee4-9c2a-560665e7027c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-11
 
 package scheduler
 
@@ -11,20 +11,18 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
-// scheduler.author-split-scan and scheduler.resolve-production-authors
-// ignored their params and wrote on every run until 2026-09-25. The scheduled
-// trigger sends schedulerExtraOpParams{}; that must now be a dry run.
+// scheduler.author-split-scan ignored its params and wrote on every run until
+// 2026-09-25. The scheduled trigger sends schedulerExtraOpParams{}; that must
+// now be a dry run. (The resolve-production-authors half of this file moved to
+// internal/plugins/maintenance with the op, 04-P4d.)
 
 func runSchedulerAuthorOp(t *testing.T, store ExtraOpsStore, deps ExtraOpsDeps, opID string, params any) (*splitRelinkReporter, error) {
 	t.Helper()
@@ -33,7 +31,6 @@ func runSchedulerAuthorOp(t *testing.T, store ExtraOpsStore, deps ExtraOpsDeps, 
 	reg := opsregistry.New(m, slog.New(slog.DiscardHandler), 1, nil)
 	r := NewExtraOpsRegistrar(store, deps)
 	require.NoError(t, r.RegisterAuthorSplitScanOp(reg))
-	require.NoError(t, r.RegisterResolveProductionAuthorsOp(reg))
 	def, ok := reg.Def(opID)
 	require.True(t, ok)
 	var raw json.RawMessage
@@ -74,28 +71,4 @@ func TestAuthorSplitScanOp_DisagreeingKeysAreAnError(t *testing.T) {
 	_, err := runSchedulerAuthorOp(t, st, ExtraOpsDeps{}, "scheduler.author-split-scan",
 		json.RawMessage(`{"dry_run":false,"dryRun":true}`))
 	require.ErrorContains(t, err, "disagree")
-}
-
-// The dry run neither fetches (which applies metadata) nor invalidates the
-// dedup cache; the apply invalidates it.
-func TestResolveProductionAuthorsOp_DefaultIsDryRun(t *testing.T) {
-	st := newSplitRelinkStore(t)
-	prod, err := st.CreateAuthor("Tantor Media")
-	require.NoError(t, err)
-	mkSplitTrashedBook(t, st, prod.ID)
-
-	c := cache.New[gin.H]("test-dedup", time.Hour)
-	c.Set("author-duplicates", gin.H{"k": 1})
-	deps := ExtraOpsDeps{DedupCache: c}
-
-	rep, err := runSchedulerAuthorOp(t, st, deps, "scheduler.resolve-production-authors", schedulerExtraOpParams{})
-	require.NoError(t, err)
-	_, cached := c.Get("author-duplicates")
-	require.True(t, cached, "dry run invalidated the dedup cache")
-	require.Contains(t, strings.Join(rep.logs, "\n"), "DRY RUN: would re-fetch metadata for")
-
-	_, err = runSchedulerAuthorOp(t, st, deps, "scheduler.resolve-production-authors", json.RawMessage(`{"dry_run":false}`))
-	require.NoError(t, err)
-	_, cached = c.Get("author-duplicates")
-	require.False(t, cached, "apply should invalidate the dedup cache")
 }

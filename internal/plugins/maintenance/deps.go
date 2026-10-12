@@ -614,6 +614,14 @@ type MetadataRunners interface {
 	// is not wired. Read it here, never through MetadataCacheStore, whose raw
 	// rows skip that filter.
 	CachedMetadataCandidates(bookID string) (*database.MetadataCandidateCache, error)
+	// FetchMetadataByTitle searches the metadata sources by the book's title
+	// alone (the author is suppressed, so a production-company credit does not
+	// steer the search) and APPLIES the best match, as
+	// metafetch.Service.FetchMetadataForBookByTitle does; it refuses a book
+	// marked no-match. It returns the author ID the book carries afterwards
+	// (nil when it has none). An error when the metadata fetch service is not
+	// wired; callers gate on HasMetadataFetchService first.
+	FetchMetadataByTitle(bookID string) (authorID *int, err error)
 }
 
 // MediaFileRunners runs the audio-container repair operations.

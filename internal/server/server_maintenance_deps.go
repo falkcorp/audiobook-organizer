@@ -718,6 +718,23 @@ func (s *Server) CachedMetadataCandidates(bookID string) (*database.MetadataCand
 	return entry, err
 }
 
+// FetchMetadataByTitle implements maintenance.ServerDeps: the title-only
+// metadata fetch-and-apply the production-author resolvers loop over. It hands
+// back only the author ID the book ends with, the one thing they read.
+func (s *Server) FetchMetadataByTitle(bookID string) (*int, error) {
+	if s.metadataFetchService == nil {
+		return nil, errors.New("metadata fetch service not initialized")
+	}
+	resp, err := s.metadataFetchService.FetchMetadataForBookByTitle(bookID)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || resp.Book == nil {
+		return nil, nil
+	}
+	return resp.Book.AuthorID, nil
+}
+
 // SearchTranscriptionCandidate implements maintenance.ServerDeps.
 // Uses the local metadata cache — no external API calls. Returns the top
 // cached candidate (title, author, series, score) and true when one exists;

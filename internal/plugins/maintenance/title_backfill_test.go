@@ -172,6 +172,12 @@ func (d fakeDeps) CachedMetadataCandidates(bookID string) (*database.MetadataCan
 	return d.store.GetMetadataCache(bookID)
 }
 
+// FetchMetadataByTitle: no metadata fetch service is wired in these fakes
+// (HasMetadataFetchService is false), so a call is a failure.
+func (d fakeDeps) FetchMetadataByTitle(string) (*int, error) {
+	return nil, errors.New("fakeDeps: no metadata fetch service")
+}
+
 // OperationQueueStore hands back the store unchanged: ListActiveOperationsV2 is
 // part of database.Store, so no capability resolution is needed. A MockStore
 // answers (nil, nil) — "no active ops" — so mock-backed tests see an idle queue

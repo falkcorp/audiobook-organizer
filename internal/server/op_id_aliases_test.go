@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-11
 
@@ -256,6 +256,7 @@ var renamedOpIDs = map[string]string{
 	"scheduler.db-optimize":                 "maintenance.db-optimize",
 	"scheduler.purge-deleted":               "maintenance.purge-deleted",
 	"scheduler.metadata-refresh":            "maintenance.metadata-refresh",
+	"scheduler.resolve-production-authors":  "maintenance.resolve-production-authors",
 }
 
 func TestOpIDs_EveryAliasResolves(t *testing.T) {
