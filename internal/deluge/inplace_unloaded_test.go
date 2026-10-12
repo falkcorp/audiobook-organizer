@@ -1,5 +1,5 @@
 // file: internal/deluge/inplace_unloaded_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d0b6c52-7a41-4e98-8f15-c2e9a04b7d63
 // last-edited: 2026-10-11
 //
@@ -121,12 +121,20 @@ func TestMarkImportedInPlace_UnloadedListLeftPending(t *testing.T) {
 	row := database.BookFile{ID: "bf-1", BookID: "book-1", FilePath: path, DelugeHash: "abc"}
 	s := &modifyOnlyStore{row: &row}
 
+	// Not InPlaceProtected: Deluge being down is no verdict on the file, and
+	// the importers report it as its own status.
 	got, err := MarkImportedInPlace(s, &config.Config{}, cache, "book-1", "bf-1", path, now)
-	if err != nil || got != InPlaceProtected {
-		t.Fatalf("got %v, %v; want InPlaceProtected, nil", got, err)
+	if err != nil || got != InPlaceListNotLoaded {
+		t.Fatalf("got %v, %v; want InPlaceListNotLoaded, nil", got, err)
 	}
 	if s.calls != 0 || s.wrote || s.row.ImportedFromDelugeAt != nil {
 		t.Errorf("calls=%d wrote=%v imported_at=%v; want the row untouched", s.calls, s.wrote, s.row.ImportedFromDelugeAt)
+	}
+
+	// A static prefix needs no list: it is still named protected.
+	staticCfg := &config.Config{ProtectedPaths: []string{"/library/Example Author"}}
+	if got, err := MarkImportedInPlace(s, staticCfg, cache, "book-1", "bf-1", path, now); err != nil || got != InPlaceProtected {
+		t.Errorf("static prefix with the list unloaded: got %v, %v; want InPlaceProtected", got, err)
 	}
 
 	// The next run, with Deluge back, marks it.
