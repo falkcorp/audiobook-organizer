@@ -1,7 +1,7 @@
 // file: internal/pathutil/root.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b80aa1d4-2163-4b47-b76d-27c524672a3c
-// last-edited: 2026-09-19
+// last-edited: 2026-10-12
 
 package pathutil
 
@@ -20,7 +20,7 @@ import (
 // ("libroot") and a relative path, and each side joins the relative path onto
 // its OWN mount of that root, so no prefix string is ever rewritten.
 //
-// The match uses Abbreviate's separator boundary (p == root, or p starts with
+// The match uses a separator boundary (p == root, or p starts with
 // root + "/"), so a sibling whose name merely extends a root ("/lib-old" next
 // to "/lib") never matches it. vars are checked in order, most specific first,
 // exactly as PathVars returns them. ok is false when p is under no root, when p

@@ -1,5 +1,5 @@
 // file: internal/fileops/copy_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7d4b0c19-5e83-4a26-9f10-2b6ce8417d3a
 // last-edited: 2026-10-12
 
@@ -261,6 +261,9 @@ func TestCopyPathsFsyncBeforeClosing(t *testing.T) {
 		{"CopyFileExclusive", func(t *testing.T, dir, src string) error {
 			return CopyFileExclusive(src, filepath.Join(dir, "dst.bin"))
 		}},
+		{"CopyFileIngestExclusive", func(t *testing.T, dir, src string) error {
+			return CopyFileIngestExclusive(src, filepath.Join(dir, "dst.bin"))
+		}},
 		{"CopyFileInto", func(t *testing.T, dir, src string) error {
 			dst := filepath.Join(dir, "dst.bin")
 			writeFileMode(t, dst, "old", 0o644)
@@ -439,6 +442,9 @@ func TestCopyPathsFsyncTheParentDirectory(t *testing.T) {
 		}},
 		{"CopyFileExclusive", true, func(t *testing.T, dir, src string) error {
 			return CopyFileExclusive(src, filepath.Join(dir, "dst.bin"))
+		}},
+		{"CopyFileIngestExclusive", true, func(t *testing.T, dir, src string) error {
+			return CopyFileIngestExclusive(src, filepath.Join(dir, "dst.bin"))
 		}},
 		// CopyFileInto writes into a name that already exists and is already
 		// durable, so there is nothing for a directory sync to commit.

@@ -1,5 +1,5 @@
 // file: internal/audioutil/duration.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 03399668-0f87-4d27-b118-8315b574ef23
 // last-edited: 2026-10-12
 
@@ -93,7 +93,7 @@ func ProbeDurationSeconds(ctx context.Context, ffprobePath, filePath string) (fl
 // Fallback warning. A per-file log line would be 60k lines of noise across a
 // library scan, but a SILENT fallback is worse: if mediainfo failed on every
 // file we would quietly do two subprocess calls per file instead of one, be
-// slower than before the change, and have no signal saying so. So: warn once
+// slower than before the change, and have no signal saying so. So: warn
 // once with the concrete reason.
 var mediaInfoWarnOnce sync.Once
 

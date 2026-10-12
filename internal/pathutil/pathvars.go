@@ -1,12 +1,14 @@
-// file: internal/pathutil/abbreviate.go
-// version: 1.0.2
+// file: internal/pathutil/pathvars.go
+// version: 1.0.3
 // guid: 4a7d2e91-3c58-4b06-9f2a-1d8e6b07c534
 // last-edited: 2026-10-12
 
-// Package pathutil renders filesystem paths in a short, readable form for the
-// UI by replacing known library roots with literal $(var) tokens. The same
-// rules are mirrored by the frontend formatter (web/src/utils/formatPath.ts);
-// PathVars is the single source of truth for the root values both sides use.
+// Package pathutil holds the filesystem path helpers shared across the server:
+// the named library roots (PathVars) and splitting a path against them
+// (SplitRoot, JoinRoot, ValidateRel), separator-boundary prefix and containment
+// checks (CutPathPrefix, IsWithin), hidden and app-directory skip rules, and
+// the frozen iTunes tree test. It is a leaf package and imports no other
+// internal package.
 package pathutil
 
 import "strings"
