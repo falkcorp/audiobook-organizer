@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.23.3
+// version: 1.23.4
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-11
 
@@ -564,8 +564,9 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 //
 // ctx bounds the provider searches and gates the apply: a cancelled ctx (a user
 // cancel, the op's Timeout, or a lost scan stand-down lease, which cancels the
-// holder's ctx) stops the search loop and refuses the write rather than letting
-// an in-flight fetch apply after its caller has given up.
+// holder's ctx) stops the search loop, and the write is refused when the cancel
+// lands before the apply starts. A cancel that lands during the apply itself
+// (guardedApply/commitApply) does not interrupt it: that one write completes.
 func (mfs *Service) FetchMetadataForBookByTitle(ctx context.Context, id string) (*FetchMetadataResponse, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {

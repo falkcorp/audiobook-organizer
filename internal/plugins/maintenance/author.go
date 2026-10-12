@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-10-11
 
@@ -397,6 +397,14 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 // scorer, an OpenAI-backed client, when metadata_scoring.embedding_enabled is
 // on. The scheduler copy's network.openai was right; this def's
 // network.generic alone under-declared it.
+//
+// Writes: neither copy declared a write set, which made the dispatcher's
+// write-set gate skip the op. The apply rewrites book rows (fill-only fields
+// and the author credit join), can create author rows for the credits it
+// resolves and series rows for the series it fills, so it declares those three
+// tables, as the author ops in this plugin (author-id-repair, author-path-link)
+// declare theirs: it then waits for, rather than interleaves with, another
+// running writer of the same rows.
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.resolve-production-authors",
@@ -419,7 +427,8 @@ func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 			sdk.CapLibraryRead, sdk.CapLibraryWrite,
 			sdk.CapNetworkAudible, sdk.CapNetworkGeneric, sdk.CapNetworkOpenAI,
 		},
-		Run: p.runResolveProductionAuthors,
+		Writes: []sdk.Resource{sdk.ResBooks, sdk.ResAuthors, sdk.ResSeries},
+		Run:    p.runResolveProductionAuthors,
 	}
 }
 
@@ -540,7 +549,9 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 	// refuse: the acquire asks it to park and waits, and the op fails only if it
 	// never parks. RunItems renews the lease per book and stops before the next
 	// fetch once it is lost; the hold's ctx, which every fetch runs under, is
-	// cancelled then too, so an in-flight fetch does not write after it.
+	// cancelled then too, so an in-flight fetch stops searching and refuses its
+	// write if the loss lands before its apply starts. A loss that lands during
+	// the apply itself can still complete that one book's write.
 	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.resolve-production-authors apply")
 	if sdErr != nil {
 		return sdErr
