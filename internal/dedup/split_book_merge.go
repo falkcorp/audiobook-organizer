@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-10-12
 
@@ -338,6 +338,12 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 				// leaves an undo that "restores" books never touched.
 				journal.Absorbed = journal.Absorbed[:i]
 				plans = plans[:i]
+				if i == 0 {
+					// Nothing at all was absorbed and nothing will be
+					// stamped: an undo restoring the keep's own disc/track
+					// numbers would only clobber a renumbering made since.
+					journal.SurvivorOwnFiles = nil
+				}
 				journal.Warnings = append(journal.Warnings, msg)
 				persist()
 				break
