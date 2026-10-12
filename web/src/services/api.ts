@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.177.0
+// version: 2.178.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -6092,6 +6092,31 @@ export interface DedupStats {
   layer: string;
   status: string;
   count: number;
+}
+
+/**
+ * URL of the duplicate-candidate export (GET /dedup/candidates/export) for the
+ * given filters. Pure: builds a string and performs no request, so the caller
+ * can hand it to an anchor click and let the browser save the file. Empty
+ * filters are omitted.
+ */
+export function dedupCandidatesExportUrl(
+  filters: {
+    layer?: string | null;
+    band?: string | null;
+    status?: string | null;
+    q?: string | null;
+    entity_id?: string | null;
+  },
+  format: 'csv' | 'json'
+): string {
+  const qs = new URLSearchParams({ format });
+  if (filters.status) qs.set('status', filters.status);
+  if (filters.layer) qs.set('layer', filters.layer);
+  if (filters.band) qs.set('band', filters.band);
+  if (filters.q?.trim()) qs.set('q', filters.q.trim());
+  if (filters.entity_id) qs.set('entity_id', filters.entity_id);
+  return `${API_BASE}/dedup/candidates/export?${qs}`;
 }
 
 export async function getDedupCandidates(
