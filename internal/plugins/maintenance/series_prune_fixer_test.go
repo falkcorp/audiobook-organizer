@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_prune_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 30beca88-5314-4b9d-92de-0c91dc9f4151
 // last-edited: 2026-10-11
 
@@ -399,8 +399,18 @@ func TestSeriesPruneFixer_FingerprintFollowsBookCounts(t *testing.T) {
 	res := spPlan(t, l, f)
 	dup, empty := spRowFor(t, res, l.s2), spRowFor(t, res, l.s10)
 
-	l.book(t, "b10", l.s1, false, false)
+	// A trashed book on the KEPT series changes no listed count, no
+	// membership and no skip; only the reference count moves, and the
+	// fingerprint must follow it.
+	l.book(t, "b12", l.s1, true, false)
 	fresh, err := f.Replan(context.Background(), nil, dup, nil)
+	require.NoError(t, err)
+	assert.Empty(t, fresh.Skipped, "precondition: the kept series' trashed book skips nothing")
+	assert.Equal(t, dup.BookIDs, fresh.BookIDs, "precondition: the membership is unchanged")
+	assert.NotEqual(t, dup.Fingerprint, fresh.Fingerprint, "a reference count is a decision input")
+
+	l.book(t, "b10", l.s1, false, false)
+	fresh, err = f.Replan(context.Background(), nil, dup, nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, dup.Fingerprint, fresh.Fingerprint, "a book added to the kept series")
 

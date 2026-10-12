@@ -1,5 +1,5 @@
 // file: internal/dedup/series_prune_core.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 92abb0d6-3922-4a56-a82d-50c26ed23424
 // last-edited: 2026-10-11
 
@@ -29,10 +29,13 @@ import (
 //     in. Both resolve the store through database.AsCapability, so a caller
 //     handing the cores a wrapper store (the fixer routes its writes through
 //     the Repairs Writer) would otherwise miss the capability and refuse.
-//   - write the ledger. Every change row goes to the caller's
-//     SeriesPruneRecorder AFTER the write it describes, exactly as the op
-//     always wrote them; the op stamps its operation id on them, the fixer
-//     journals them under its apply op.
+//   - order the ledger. Every write goes through the caller's
+//     SeriesPruneLedger with the change row that describes it, and the
+//     ledger decides which comes first: the op records each row AFTER its
+//     write, exactly as it always did (RecordAfterWrite), stamped with its
+//     operation id; the fixer journals each row BEFORE its write under its
+//     apply op (the Repairs Writer's JOURNAL FIRST rule), so a run stopped
+//     between the two never leaves a write with no record.
 
 // SeriesPruneReader is what the grouping and the canonical vote read.
 type SeriesPruneReader interface {
@@ -65,12 +68,28 @@ type SeriesPruneStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// SeriesPruneRecorder records one ledger row of a prune step, called after
-// the write it describes. change carries ChangeType, BookID, FieldName,
-// OldValue and NewValue; the recorder fills in the id and the operation. An
-// error is collected in the step's result (Unrecorded) and never stops the
-// step: the write it describes has already been made.
-type SeriesPruneRecorder func(change *database.OperationChange) error
+// SeriesPruneLedger makes one write of a prune step (write) and records the
+// ledger row that describes it (change: ChangeType, BookID, FieldName,
+// OldValue and NewValue; the ledger fills in the id and the operation), in
+// the order the ledger chooses.
+//
+// writeErr non-nil means the write was NOT made (write refused, or a
+// journal-first ledger could not record the row and so never wrote). recErr
+// non-nil means the write WAS made but its row was not recorded; it is
+// collected in the step's result (Unrecorded) and never stops the step.
+type SeriesPruneLedger func(change *database.OperationChange, write func() error) (writeErr, recErr error)
+
+// RecordAfterWrite is the whole-library op's ledger: make the write, then
+// record its row with rec, exactly as the op always wrote them. A failed
+// write records nothing.
+func RecordAfterWrite(rec func(change *database.OperationChange) error) SeriesPruneLedger {
+	return func(change *database.OperationChange, write func() error) (error, error) {
+		if err := write(); err != nil {
+			return err, nil
+		}
+		return nil, rec(change)
+	}
+}
 
 // SeriesGroupKey is what makes series duplicates of each other: the name
 // normalised by util.NormalizeString, and the author id (0 for none).
@@ -192,8 +211,8 @@ type SeriesGroupMergeResult struct {
 	// WriteErrs are the errors ModifyBook and DeleteSeries returned, so a
 	// caller can tell a stopped run (a fenced Writer) from a store failure.
 	WriteErrs []error
-	// Unrecorded are the recorder's errors: writes that were made but whose
-	// ledger row was not.
+	// Unrecorded are the ledger's record errors: writes that were made but
+	// whose ledger row was not.
 	Unrecorded []error
 }
 
@@ -231,14 +250,9 @@ type SeriesGroupMergeResult struct {
 // re-strand them. A surviving series row is visible and re-cleanable; a
 // deleted one is not.
 func MergeSeriesGroup(store SeriesPruneWriter, keep database.Series, away []database.Series,
-	refCounts map[int]int, members database.SeriesBooksMap, rec SeriesPruneRecorder) SeriesGroupMergeResult {
+	refCounts map[int]int, members database.SeriesBooksMap, ledger SeriesPruneLedger) SeriesGroupMergeResult {
 	var res SeriesGroupMergeResult
 	keepID := keep.ID
-	record := func(c *database.OperationChange) {
-		if err := rec(c); err != nil {
-			res.Unrecorded = append(res.Unrecorded, err)
-		}
-	}
 	for _, ser := range away {
 		// Hydrate the full row via GetBookByID and mutate/write THAT. The
 		// tempting shortcut -- bookCore.ToBook() then UpdateBook -- would drop
@@ -282,16 +296,25 @@ func MergeSeriesGroup(store SeriesPruneWriter, keep database.Series, away []data
 			// ModifyBook writes SeriesID alone, on the row as it is under
 			// the write lock, so a column another writer committed between
 			// the hydrate above and this write is not reverted.
-			written, err := store.ModifyBook(full.ID, func(b *database.Book) error {
-				if b.SeriesID != nil && *b.SeriesID == keepID {
-					return database.ErrSkipBookWrite
+			err, recErr := ledger(&database.OperationChange{
+				BookID:     bookCore.ID,
+				ChangeType: "series_merge",
+				FieldName:  "series_id",
+				OldValue:   fmt.Sprintf("%d (%s)", oldSeriesID, ser.Name),
+				NewValue:   fmt.Sprintf("%d (%s)", keepID, keep.Name),
+			}, func() error {
+				written, err := store.ModifyBook(full.ID, func(b *database.Book) error {
+					if b.SeriesID != nil && *b.SeriesID == keepID {
+						return database.ErrSkipBookWrite
+					}
+					b.SeriesID = &keepID
+					return nil
+				})
+				if err == nil && written == nil {
+					err = fmt.Errorf("book vanished before its series could be reassigned")
 				}
-				b.SeriesID = &keepID
-				return nil
+				return err
 			})
-			if err == nil && written == nil {
-				err = fmt.Errorf("book vanished before its series could be reassigned")
-			}
 			if err != nil {
 				res.WriteErrs = append(res.WriteErrs, err)
 				res.Errors = append(res.Errors, fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
@@ -301,13 +324,9 @@ func MergeSeriesGroup(store SeriesPruneWriter, keep database.Series, away []data
 			res.Repointed++
 			moved++
 			members.Move(bookCore.ID, ser.ID, &keepID)
-			record(&database.OperationChange{
-				BookID:     bookCore.ID,
-				ChangeType: "series_merge",
-				FieldName:  "series_id",
-				OldValue:   fmt.Sprintf("%d (%s)", oldSeriesID, ser.Name),
-				NewValue:   fmt.Sprintf("%d (%s)", keepID, keep.Name),
-			})
+			if recErr != nil {
+				res.Unrecorded = append(res.Unrecorded, recErr)
+			}
 		}
 		if repointFailed > 0 {
 			res.Errors = append(res.Errors, fmt.Sprintf(
@@ -326,18 +345,21 @@ func MergeSeriesGroup(store SeriesPruneWriter, keep database.Series, away []data
 				ser.ID, ser.Name, stranded, moved, keepID))
 			continue
 		}
-		if err := store.DeleteSeries(ser.ID); err != nil {
+		err, recErr := ledger(&database.OperationChange{
+			ChangeType: "series_delete",
+			FieldName:  "series",
+			OldValue:   fmt.Sprintf("%d: %s", ser.ID, ser.Name),
+			NewValue:   fmt.Sprintf("merged into %d: %s", keepID, keep.Name),
+		}, func() error { return store.DeleteSeries(ser.ID) })
+		if err != nil {
 			res.WriteErrs = append(res.WriteErrs, err)
 			res.Errors = append(res.Errors, fmt.Sprintf("failed to delete series %d: %v", ser.ID, err))
 			continue
 		}
 		res.Merged++
-		record(&database.OperationChange{
-			ChangeType: "series_delete",
-			FieldName:  "series",
-			OldValue:   fmt.Sprintf("%d: %s", ser.ID, ser.Name),
-			NewValue:   fmt.Sprintf("merged into %d: %s", keepID, keep.Name),
-		})
+		if recErr != nil {
+			res.Unrecorded = append(res.Unrecorded, recErr)
+		}
 	}
 	return res
 }
@@ -355,7 +377,7 @@ type OrphanDeleteResult struct {
 	Err error
 	// WriteErr is DeleteSeries' own error, unwrapped.
 	WriteErr error
-	// Unrecorded is the recorder's error: the row was deleted but its
+	// Unrecorded is the ledger's record error: the row was deleted but its
 	// ledger row was not written.
 	Unrecorded error
 }
@@ -379,7 +401,7 @@ type OrphanDeleteResult struct {
 // A held row (database.SeriesHeld) is kept for an undo that links its books
 // back.
 func DeleteOrphanSeries(store interface{ DeleteSeries(id int) error }, ser database.Series, refCount int,
-	rec SeriesPruneRecorder) OrphanDeleteResult {
+	ledger SeriesPruneLedger) OrphanDeleteResult {
 	var res OrphanDeleteResult
 	if refCount != 0 {
 		res.Referenced = true
@@ -389,18 +411,19 @@ func DeleteOrphanSeries(store interface{ DeleteSeries(id int) error }, ser datab
 		res.Held = true
 		return res
 	}
-	if err := store.DeleteSeries(ser.ID); err != nil {
+	err, recErr := ledger(&database.OperationChange{
+		ChangeType: "series_delete",
+		FieldName:  "orphan_series",
+		OldValue:   fmt.Sprintf("%d: %s", ser.ID, ser.Name),
+		NewValue:   "deleted (0 book references, any state)",
+	}, func() error { return store.DeleteSeries(ser.ID) })
+	if err != nil {
 		res.WriteErr = err
 		res.Err = fmt.Errorf("failed to delete orphan series %d: %v", ser.ID, err)
 		return res
 	}
 	res.Deleted = true
-	res.Unrecorded = rec(&database.OperationChange{
-		ChangeType: "series_delete",
-		FieldName:  "orphan_series",
-		OldValue:   fmt.Sprintf("%d: %s", ser.ID, ser.Name),
-		NewValue:   "deleted (0 book references, any state)",
-	})
+	res.Unrecorded = recErr
 	return res
 }
 

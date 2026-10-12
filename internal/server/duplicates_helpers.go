@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-10-11
 //
@@ -215,6 +215,9 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		c.OperationID = operationID
 		return store.CreateOperationChange(c)
 	}
+	// The cores' rows land after the write each describes (RecordAfterWrite),
+	// as the inline loop always wrote them.
+	ledger := dedup.RecordAfterWrite(record)
 
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
@@ -306,7 +309,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 				away = append(away, ser)
 			}
 		}
-		merged := dedup.MergeSeriesGroup(store, keep, away, phase1RefCounts, phase1Members, record)
+		merged := dedup.MergeSeriesGroup(store, keep, away, phase1RefCounts, phase1Members, ledger)
 		totalMerged += merged.Merged
 		// Counted on the WRITE succeeding, whether or not the series delete
 		// that follows was refused: a repoint with no operation to attribute it
@@ -377,7 +380,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			}
 			// A referenced row and a held one (kept for an undo; counted with
 			// the merge pass's held rows) are both left alone.
-			orphan := dedup.DeleteOrphanSeries(store, ser, refCounts[ser.ID], record)
+			orphan := dedup.DeleteOrphanSeries(store, ser, refCounts[ser.ID], ledger)
 			if orphan.Err != nil {
 				mergeErrors = append(mergeErrors, orphan.Err.Error())
 			}
