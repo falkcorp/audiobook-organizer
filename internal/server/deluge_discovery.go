@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.7.0
+// version: 3.7.1
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -251,8 +251,10 @@ func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash
 	return "", "", false
 }
 
-// handleDiscoveryImport triggers importToLibrary for all book_files that
-// have a deluge_hash but have not yet been imported (imported_from_deluge_at IS NULL).
+// handleDiscoveryImport runs deluge.ImportToLibrary (internal/deluge/import.go)
+// for every book_file that has a deluge_hash but has not yet been imported
+// (imported_from_deluge_at IS NULL). A file already at its library
+// destination is marked imported in place, not copied.
 // This is the bulk-import trigger called from the Settings UI.
 // POST /api/v1/discovery/import
 // Optional body: { "dry_run": true, "max_books": 100 }

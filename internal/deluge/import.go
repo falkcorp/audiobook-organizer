@@ -380,4 +380,3 @@ func staticProtection(cfg *config.Config, protected tagger.PathChecker, path str
 func isProtected(protected tagger.PathChecker, path string) bool {
 	return protected != nil && protected.IsProtected(path)
 }
-
