@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-11
 //
@@ -213,8 +213,8 @@ func ImportToLibraryWith(
 	// protected source that means there is no library copy to write to, so
 	// refuse rather than hand the protected path back as the write target.
 	if src == dest {
-		if isProtected(opts.Protected, src) {
-			return "", fmt.Errorf("ImportToLibrary: %s is protected and is its own library destination (a protected directory under RootDir), so there is nowhere to copy it: %w", src, tagger.ErrProtectedPathWrite)
+		if why := InPlaceProtection(cfg, opts.Protected, src); why != "" {
+			return "", fmt.Errorf("ImportToLibrary: %s is under %s and is its own library destination (a protected directory under RootDir), so there is nowhere to copy it: %w", src, why, tagger.ErrProtectedPathWrite)
 		}
 		// Already in place: record that, or the discovery list offers this
 		// file again on every run (until 2026-09-14 it did).
@@ -372,6 +372,32 @@ func staticProtection(cfg *config.Config, protected tagger.PathChecker, path str
 		if dir := filepath.Dir(lib); pathutil.IsWithin(path, dir) {
 			return "the iTunes library " + dir
 		}
+	}
+	return ""
+}
+
+// InPlaceProtection names why a file at path, which is its own library
+// destination, may not be marked imported in place, or returns "" when it
+// may: path lies under a static protected prefix (staticProtection: the
+// checker's static list, config.ProtectedPaths, the iTunes library) or the
+// checker protects it some other way (a Deluge torrent's save_path under
+// RootDir). ImportToLibraryWith refuses such a file with
+// tagger.ErrProtectedPathWrite and MarkImportedInPlace returns
+// InPlaceProtected for it; both use this one rule, so every importer leaves
+// the row pending alike.
+//
+// A nil checker contributes nothing, but the cfg prefixes still apply. A
+// typed-nil *ProtectedPathCache (a caller's unset cache field) is the same
+// as nil rather than a nil-receiver call.
+func InPlaceProtection(cfg *config.Config, protected tagger.PathChecker, path string) string {
+	if pc, ok := protected.(*ProtectedPathCache); ok && pc == nil {
+		protected = nil
+	}
+	if why := staticProtection(cfg, protected, path); why != "" {
+		return why
+	}
+	if isProtected(protected, path) {
+		return "a protected path (a Deluge save path)"
 	}
 	return ""
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-11
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -96,7 +97,17 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		fmt.Sprintf("Centralizing %d files (%d remaining)...", total, len(resumeSlice)),
 	)
 
-	var successCount, skipCount, inPlaceCount, errCount atomic.Int64
+	var successCount, skipCount, inPlaceCount, protectedCount, errCount atomic.Int64
+
+	// The protected-path predicate for in-place marking: the plugin's cache
+	// (register.go builds it as NewProtectedPathCache(client,
+	// cfg.ProtectedPaths): active torrents' save_paths plus the configured
+	// prefixes), built once per process, not per item. Left an untyped nil
+	// when unset, so only cfg's static prefixes apply.
+	var protected tagger.PathChecker
+	if p.cache != nil {
+		protected = p.cache
+	}
 
 	// localCount tracks how many items RunItems has dispatched so far.
 	// Sequential (Concurrency=0 default), so plain increment is safe, but
@@ -125,8 +136,9 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			// Already at its library path: nothing to copy. Mark it imported
 			// (ImportedFromDelugeAt only, under the row's lock), or it stays
 			// on GetBookFilesNeedingDelugeImportCore and every run lists it
-			// again. A row deluge.link-backfill linked is this case.
-			outcome, markErr := delugeclient.MarkImportedInPlace(p.store, bf.BookID, bf.ID, srcPath, time.Now())
+			// again. A row deluge.link-backfill linked is this case. A
+			// protected path is left pending, as /discovery/import leaves it.
+			outcome, markErr := delugeclient.MarkImportedInPlace(p.store, cfg, protected, bf.BookID, bf.ID, srcPath, time.Now())
 			switch {
 			case markErr != nil:
 				errCount.Add(1)
@@ -135,6 +147,9 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			case outcome == delugeclient.InPlaceMarked:
 				inPlaceCount.Add(1)
 				reporter.Logger().Debug("file already in the library; marked imported", "path", srcPath)
+			case outcome == delugeclient.InPlaceProtected:
+				protectedCount.Add(1)
+				reporter.Logger().Info("file is its own library destination but protected; left pending", "id", bf.ID, "path", srcPath)
 			default:
 				// Moved, removed or marked by another writer meanwhile.
 				skipCount.Add(1)
@@ -203,11 +218,12 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 	reporter.Logger().Info("deluge centralization complete",
 		"succeeded", successCount.Load(),
 		"already_in_library", inPlaceCount.Load(),
+		"protected", protectedCount.Load(),
 		"skipped", skipCount.Load(),
 		"errors", errCount.Load())
 	sdk.NewProgress(reporter, total).Done(
-		fmt.Sprintf("Done: %d succeeded, %d already in library (marked imported), %d skipped, %d errors",
-			successCount.Load(), inPlaceCount.Load(), skipCount.Load(), errCount.Load()),
+		fmt.Sprintf("Done: %d succeeded, %d already in library (marked imported), %d protected (left pending), %d skipped, %d errors",
+			successCount.Load(), inPlaceCount.Load(), protectedCount.Load(), skipCount.Load(), errCount.Load()),
 	)
 	return runErr
 }

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
 // last-edited: 2026-10-11
 
@@ -14,6 +14,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -292,6 +294,97 @@ func TestBulkDelugeImportJob_LinkedRowMarkedInPlace(t *testing.T) {
 			store.results = nil
 			require.NoError(t, j.Run(ctx, store, reporter, false))
 			assert.Equal(t, 0, reporter.total, "a second run lists nothing")
+		})
+	}
+}
+
+// bdiSeedingDeluge is a Deluge JSON-RPC endpoint with one torrent seeding from
+// savePath: enough for deluge.ProtectedPathCache's refresh (auth.login, then
+// core.get_torrents_status).
+func bdiSeedingDeluge(t *testing.T, savePath string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			ID     int64  `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var result any
+		switch req.Method {
+		case "auth.login":
+			result = true
+		case "core.get_torrents_status":
+			result = map[string]any{"0123456789abcdef0123456789abcdef01234567": map[string]any{
+				"hash": "0123456789abcdef0123456789abcdef01234567", "save_path": savePath,
+			}}
+		default:
+			t.Errorf("unexpected Deluge call %q", req.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": result, "error": nil})
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestBulkDelugeImportJob_InPlaceProtectedLeftPending: a pending row that is
+// its own library destination but protected -- under config.ProtectedPaths,
+// or under the save_path of a torrent seeding from inside the library -- is
+// left pending with nothing written, as /discovery/import's
+// ImportToLibraryWith refuses it (tagger.ErrProtectedPathWrite). The preview
+// says "protected" with the same predicate, and the live run reports it
+// under that status, not already_in_library or an error.
+func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		seeding bool
+	}{{name: "config protected path"}, {name: "torrent seeding from the library", seeding: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "Example Author")
+			c := &config.AppConfig
+			origRoot, origMove, origProt, origURL := c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL
+			origHost := c.DownloadClient.Torrent.Deluge.Host
+			t.Cleanup(func() {
+				c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = origRoot, origMove, origProt, origURL
+				c.DownloadClient.Torrent.Deluge.Host = origHost
+			})
+			c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
+			c.DownloadClient.Torrent.Deluge.Host = ""
+			if tc.seeding {
+				c.DelugeWebURL = bdiSeedingDeluge(t, dir)
+			} else {
+				c.ProtectedPaths = []string{dir}
+			}
+
+			ps, err := database.NewPebbleStore(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ps.Close() })
+			store := &bdiPebbleStore{PebbleStore: ps}
+			book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: dir})
+			require.NoError(t, err)
+			row := &database.BookFile{BookID: book.ID, FilePath: filepath.Join(dir, "01.mp3"), DelugeHash: "0123456789abcdef0123456789abcdef01234567"}
+			require.NoError(t, ps.CreateBookFile(row))
+
+			ctx := maintenance.WithOperationID(context.Background(), bdiOpID)
+			j := &bulkDelugeImportJob{}
+
+			require.NoError(t, j.Run(ctx, store, &bdiReporter{}, true))
+			require.Len(t, store.results, 1)
+			assert.Contains(t, store.results[0].ResultJSON, `"action":"protected"`)
+
+			store.results = nil
+			require.NoError(t, j.Run(ctx, store, &bdiReporter{}, false))
+			require.Len(t, store.results, 1)
+			assert.Equal(t, bdiStatusProtected, store.results[0].Status)
+
+			got, err := ps.GetBookFileByID(book.ID, row.ID)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Nil(t, got.ImportedFromDelugeAt, "a protected row must not be marked imported")
+			assert.Equal(t, row.FilePath, got.FilePath)
+			pending, err := ps.GetBookFilesNeedingDelugeImportCore()
+			require.NoError(t, err)
+			assert.Len(t, pending, 1, "the protected row stays pending")
 		})
 	}
 }
