@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
 // last-edited: 2026-10-12
 
@@ -82,14 +82,15 @@ func TestCatalogList_UnfilteredUsesKeysOnlyIndex(t *testing.T) {
 }
 
 // TestHasAuthorKey_ExactOnly: HasAuthorKey answers for the exact fold only. A
-// substring of a stored fold, a longer fold, and the "name:"-prefixed form
-// (catalog.AuthorNameKey's output, which the store prepends "name:" to again)
-// all miss; EntryIDsByAuthorName's substring fallback is never walked.
+// substring of a stored fold, a longer fold, an unfolded spelling and a key of
+// another kind all miss; a co-author's key on a harvested entry hits (the
+// report's upper bound). EntryIDsByAuthorName's substring fallback is never
+// walked.
 func TestHasAuthorKey_ExactOnly(t *testing.T) {
 	st := openTestCatalogStore(t)
 	if _, err := st.UpsertEntries([]CatalogUpsert{
 		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P1", Title: "T1", AuthorKeys: []string{"name:author07"}}},
-		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P2", Title: "T2", AuthorKeys: []string{"name:author07", "asin:B000000001"}}},
+		{Entry: CatalogEntry{Provider: "audible", Marketplace: "us", ProviderID: "P2", Title: "T2", AuthorKeys: []string{"name:author07", "name:coauthor08", "asin:B000000001"}}},
 	}, "author07"); err != nil {
 		t.Fatal(err)
 	}
@@ -98,13 +99,15 @@ func TestHasAuthorKey_ExactOnly(t *testing.T) {
 	st.scanHook = func(p string) { mu.Lock(); scanned = append(scanned, p); mu.Unlock() }
 
 	for fold, want := range map[string]bool{
-		"author07":      true,
-		"thor07":        false, // substring of a stored fold
-		"author0":       false, // prefix of a stored fold
-		"author07x":     false, // longer than a stored fold
-		"name:author07": false, // the AuthorNameKey form, not a fold
-		"B000000001":    false, // an asin key is not a name key
-		"":              false,
+		"author07":        true,
+		"thor07":          false, // substring of a stored fold
+		"author0":         false, // prefix of a stored fold
+		"author07x":       false, // longer than a stored fold
+		"AUTHOR07":        false, // the store does not fold: callers pass authorjunk.FoldKey output
+		"author07 ":       false, // trailing space is not trimmed
+		"asin:B000000001": false, // a name lookup never reaches the asin keys
+		"coauthor08":      true,  // a co-author's key counts although nothing was harvested for them: why the coverage report is an upper bound
+		"":                false,
 	} {
 		got, err := st.HasAuthorKey(fold)
 		if err != nil {

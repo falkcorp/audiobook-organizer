@@ -1,5 +1,5 @@
 // file: internal/database/ident_state.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
 // last-edited: 2026-10-12
 
@@ -164,7 +164,7 @@ var identLog = logger.New("database")
 type identRow struct {
 	State  IdentState `json:"s"`
 	Reason string     `json:"r,omitempty"`
-	// Primary is the book's membership of the primary scope (identInScope).
+	// Primary is the book's membership of the primary scope (InLibraryDefaultView).
 	Primary bool `json:"p,omitempty"`
 }
 
@@ -175,14 +175,17 @@ func (r identRow) scopeByte() []byte {
 	return []byte{'0'}
 }
 
-// identInScope reports whether book belongs to the "primary" counter scope:
-// the books the Library lists by default. That is a primary version
+// InLibraryDefaultView reports whether book belongs to the "primary" counter
+// scope: the books the Library lists by default. It is the one definition of
+// that scope: the ident index's counters use it, and so does any caller (the
+// catalog.coverage-report op) that must select exactly the books those
+// counters count. The scope is a primary version
 // (EffectiveIsPrimaryVersion: a nil flag counts as primary, as every Library
 // filter reads it), not in the trash, and not quarantined -- the list
 // excludes quarantined books unless show_quarantined is set. The scope must
 // be exactly the default listing's, or the O(1) count of ident:missing would
 // disagree with the "Select all N" the same listing shows.
-func identInScope(b *Book) bool {
+func InLibraryDefaultView(b *Book) bool {
 	return b != nil && EffectiveIsPrimaryVersion(b.IsPrimaryVersion) && !bookIsSoftDeleted(b) && b.QuarantinedAt == nil
 }
 
@@ -240,7 +243,7 @@ func identBookInputsChanged(oldBook, newBook *Book) bool {
 	}
 	oldS, _ := deriveIdent(oldBook.MetadataReviewStatus, false, 0, false)
 	newS, _ := deriveIdent(newBook.MetadataReviewStatus, false, 0, false)
-	return oldS != newS || identInScope(oldBook) != identInScope(newBook)
+	return oldS != newS || InLibraryDefaultView(oldBook) != InLibraryDefaultView(newBook)
 }
 
 // identIndex is the in-process half of the index.
@@ -458,7 +461,7 @@ func (t *identTxn) stage(bookID string, book *Book, cache identCacheView) error 
 		return t.stageRow(bookID, identRow{}, false)
 	}
 	s, reason := deriveIdent(book.MetadataReviewStatus, cache.present, cache.candidates, cache.stale)
-	return t.stageRow(bookID, identRow{State: s, Reason: reason, Primary: identInScope(book)}, true)
+	return t.stageRow(bookID, identRow{State: s, Reason: reason, Primary: InLibraryDefaultView(book)}, true)
 }
 
 func (t *identTxn) stageRow(bookID string, want identRow, wantPresent bool) error {
@@ -1227,7 +1230,7 @@ func (p *PebbleStore) identRowMatches(id string, value []byte) (same, undecodabl
 		return false, false, err
 	}
 	s, reason := deriveIdent(book.MetadataReviewStatus, cache.present, cache.candidates, cache.stale)
-	want := identRow{State: s, Reason: reason, Primary: identInScope(book)}
+	want := identRow{State: s, Reason: reason, Primary: InLibraryDefaultView(book)}
 	if !haveOK || have != want {
 		return false, false, nil
 	}

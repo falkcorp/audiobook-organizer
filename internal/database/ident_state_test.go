@@ -1,5 +1,5 @@
 // file: internal/database/ident_state_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
 // last-edited: 2026-10-12
 
@@ -86,12 +86,12 @@ func TestDeriveIdent_Table(t *testing.T) {
 
 	// Scope: a nil primary flag counts as primary (EffectiveIsPrimaryVersion,
 	// the Library's own rule); trash and quarantine leave the scope.
-	require.True(t, identInScope(&Book{}), "nil IsPrimaryVersion is primary")
-	require.True(t, identInScope(&Book{IsPrimaryVersion: identBoolPtr(true)}))
-	require.False(t, identInScope(&Book{IsPrimaryVersion: identBoolPtr(false)}))
-	require.False(t, identInScope(&Book{MarkedForDeletion: identBoolPtr(true)}))
-	require.False(t, identInScope(&Book{QuarantinedAt: &now}))
-	require.False(t, identInScope(nil))
+	require.True(t, InLibraryDefaultView(&Book{}), "nil IsPrimaryVersion is primary")
+	require.True(t, InLibraryDefaultView(&Book{IsPrimaryVersion: identBoolPtr(true)}))
+	require.False(t, InLibraryDefaultView(&Book{IsPrimaryVersion: identBoolPtr(false)}))
+	require.False(t, InLibraryDefaultView(&Book{MarkedForDeletion: identBoolPtr(true)}))
+	require.False(t, InLibraryDefaultView(&Book{QuarantinedAt: &now}))
+	require.False(t, InLibraryDefaultView(nil))
 }
 
 // identOracle derives every book's state from scratch (book row + cache row)
@@ -110,7 +110,7 @@ func identOracle(t testing.TB, s *PebbleStore) (all, primary map[IdentState]int6
 		require.NoError(t, err)
 		st, _ := deriveIdent(b.MetadataReviewStatus, c.present, c.candidates, c.stale)
 		all[st]++
-		if identInScope(b) {
+		if InLibraryDefaultView(b) {
 			primary[st]++
 		}
 		return nil
