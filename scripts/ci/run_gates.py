@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/run_gates.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: a3c8e517-4b2d-4f90-8d16-7e5b9c0a2f43
 # last-edited: 2026-10-12
 """Run the CI gates listed in ci/gates.txt, or lower their baselines.
@@ -18,7 +18,6 @@ Exit codes: 0 all gates passed (or --lower finished), 1 a gate failed,
   run_gates.py --list          print gate names
   run_gates.py --only a,b      run just these gates
   run_gates.py --skip a,b      run all but these gates
-  run_gates.py --exclude-own-jobs   skip gates marked own-job in the manifest
   run_gates.py --lower         lower file baselines; hint at Go-constant ones
   run_gates.py --lower --report out.md   also write the PR-body notes
 """
@@ -35,7 +34,7 @@ from pathlib import Path
 
 KINDS = {"ratchet", "ratchet-set", "ratchet-const", "check"}
 GATE_TIMEOUT_S = 1800
-JOBS = {"own-job", "shared"}
+JOBS = {"own-job", "go-suite"}
 NOTE_RE = re.compile(r"NOTE \(not a failure\):.*")
 
 
@@ -54,7 +53,7 @@ class Gate:
     baseline: str
     kind: str
     lower: str
-    own_job: bool = False
+    job: str = "go-suite"
 
 
 def repo_root() -> Path:
@@ -82,15 +81,13 @@ def parse_manifest(text: str) -> list[Gate]:
                 f"line {n}: {kind} gate {name!r} needs a baseline file and a lower command"
             )
         seen.add(name)
-        gates.append(Gate(name, command, baseline, kind, lower, job == "own-job"))
+        gates.append(Gate(name, command, baseline, kind, lower, job))
     if not gates:
         raise ManifestError("no gates in manifest")
     return gates
 
 
-def select(
-    gates: list[Gate], only: str | None, skip: str | None, exclude_own_jobs: bool = False
-) -> list[Gate]:
+def select(gates: list[Gate], only: str | None, skip: str | None) -> list[Gate]:
     names = {g.name for g in gates}
     for opt in (only, skip):
         for n in (opt or "").split(","):
@@ -102,8 +99,6 @@ def select(
     if skip:
         drop = set(skip.split(","))
         gates = [g for g in gates if g.name not in drop]
-    if exclude_own_jobs:
-        gates = [g for g in gates if not g.own_job]
     return gates
 
 
@@ -243,7 +238,7 @@ def lower_all(root: Path, gates: list[Gate], report: Path | None) -> int:
                     )
                 for note in NOTE_RE.findall(res.stdout):
                     hints.append(f"`{g.baseline}` ({g.name}): {note}")
-        except MeasureError as e:
+        except (MeasureError, subprocess.TimeoutExpired) as e:
             print(f"::error::{e}", file=sys.stderr)
             errors.append(str(e))
     if report is not None:
@@ -269,11 +264,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--report", type=Path)
     ap.add_argument("--only")
     ap.add_argument("--skip")
-    ap.add_argument(
-        "--exclude-own-jobs",
-        action="store_true",
-        help="skip gates the manifest marks own-job (they run in their own CI job)",
-    )
     args = ap.parse_args(argv)
     root = repo_root()
     try:
@@ -281,7 +271,6 @@ def main(argv: list[str] | None = None) -> int:
             parse_manifest((root / args.manifest).read_text()),
             args.only,
             args.skip,
-            args.exclude_own_jobs,
         )
     except (ManifestError, OSError) as e:
         print(f"run_gates: manifest error: {e}", file=sys.stderr)

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_run_gates.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 5b9d2e74-c1a6-4380-9f2e-d4a7b6c30e18
 # last-edited: 2026-10-12
 """Tests for scripts/ci/run_gates.py and the one-way ratchet rule (07-G4)."""
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -43,17 +44,17 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(rg.ManifestError):
             rg.parse_manifest("a\tb\t-\tcheck\t-\n")  # 4 columns
         with self.assertRaises(rg.ManifestError):
-            rg.parse_manifest(f"a{T}b{T}-{T}weird{T}-{T}shared\n")
+            rg.parse_manifest(f"a{T}b{T}-{T}weird{T}-{T}go-suite\n")
         with self.assertRaises(rg.ManifestError):
-            rg.parse_manifest(f"a{T}b{T}-{T}ratchet{T}-{T}shared\n")  # ratchet needs baseline
+            rg.parse_manifest(f"a{T}b{T}-{T}ratchet{T}-{T}go-suite\n")  # ratchet needs baseline
         with self.assertRaises(rg.ManifestError):
             rg.parse_manifest(
-                f"a{T}b{T}-{T}check{T}-{T}shared\na{T}b{T}-{T}check{T}-{T}shared\n"
+                f"a{T}b{T}-{T}check{T}-{T}go-suite\na{T}b{T}-{T}check{T}-{T}go-suite\n"
             )  # dup
 
     def test_select(self):
         gates = rg.parse_manifest(
-            f"a{T}x{T}-{T}check{T}-{T}shared\nb{T}y{T}-{T}check{T}-{T}shared\n"
+            f"a{T}x{T}-{T}check{T}-{T}go-suite\nb{T}y{T}-{T}check{T}-{T}go-suite\n"
         )
         self.assertEqual([g.name for g in rg.select(gates, "a", None)], ["a"])
         self.assertEqual([g.name for g in rg.select(gates, None, "a")], ["b"])
@@ -125,37 +126,135 @@ class OneWayRuleTests(unittest.TestCase):
             self.assertNotIn("exit", blk.group(1), f"{g.name}: falling count must not exit")
         self.assertGreaterEqual(checked, 2)
 
-    def test_bot_never_edits_baseline_contents_in_repo(self):
-        # a rise written by hand would still pass here; this only pins that the
-        # ratchet scripts expose --measure for the bot
+    def test_ratchet_scripts_expose_measure(self):
         for script in ("check-errcheck-ratchet.sh", "check-interface-width.sh"):
-            self.assertIn("--measure", (ROOT / "scripts" / script).read_text())
+            self.assertIn('"--measure"', (ROOT / "scripts" / script).read_text())
 
 
-class OwnJobTests(unittest.TestCase):
-    def _ci(self) -> str:
-        return (ROOT / ".github/workflows/ci.yml").read_text()
+class LowerReportTests(unittest.TestCase):
+    def test_lower_touches_only_the_baseline_file(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "b").write_text("9\n")
+        (d / "other.go").write_text("const x = 9\n")
+        rg.lower_all(d, [rg.Gate("g", "true", "b", "ratchet", "echo 3", "own-job")], None)
+        self.assertEqual((d / "b").read_text(), "3\n")
+        self.assertEqual((d / "other.go").read_text(), "const x = 9\n")
 
-    def test_gates_invocation_runs_exactly_non_own_job_gates(self):
-        gates = rg.parse_manifest((ROOT / "ci/gates.txt").read_text())
-        m = re.search(r"python3 scripts/ci/run_gates\.py([^\n]*)", self._ci())
-        self.assertIsNotNone(m)
-        flags = m.group(1).split()
-        self.assertEqual(flags, ["--exclude-own-jobs"])
-        ran = {g.name for g in rg.select(gates, None, None, True)}
-        self.assertEqual(ran, {g.name for g in gates if not g.own_job})
-        self.assertEqual(
-            {g.name for g in gates if g.own_job},
-            {"errcheck", "interface-width", "deadcode-ratchet"},
-        )
+    def test_const_hint_reported_not_written(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "t.go").write_text("const base = 9\n")
+        note = "NOTE (not a failure): now 5; lower base"
+        gate = rg.Gate("c", f"echo '{note}'", "t.go", "ratchet-const", "-", "go-suite")
+        rep = d / "rep.md"
+        self.assertEqual(rg.lower_all(d, [gate], rep), 0)
+        self.assertEqual((d / "t.go").read_text(), "const base = 9\n")
+        self.assertIn(note, rep.read_text())
+
+    def test_failed_measurement_still_writes_report_and_keeps_other_lowerings(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "ok").write_text("9\n")
+        (d / "bad").write_text("9\n")
+        gates = [
+            rg.Gate("good", "true", "ok", "ratchet", "echo 4", "own-job"),
+            rg.Gate("broken", "true", "bad", "ratchet", "exit 3", "own-job"),
+        ]
+        rep = d / "rep.md"
+        self.assertEqual(rg.lower_all(d, gates, rep), 2)
+        self.assertEqual((d / "ok").read_text(), "4\n")
+        self.assertEqual((d / "bad").read_text(), "9\n")
+        text = rep.read_text()
+        self.assertIn("9 -> 4", text)
+        self.assertIn("broken", text)
+
+
+class CiCoverageTests(unittest.TestCase):
+    """Every manifest gate must be executed by CI, and ci.yml names no gates."""
+
+    def _gates(self):
+        return rg.parse_manifest((ROOT / "ci/gates.txt").read_text())
+
+    def _ci_lines(self) -> str:
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
 
     def test_ci_yml_names_no_gates(self):
-        names = {g.name for g in rg.parse_manifest((ROOT / "ci/gates.txt").read_text())}
-        m = re.search(r"python3 scripts/ci/run_gates\.py([^\n]*)", self._ci())
-        for tok in re.split(r"[\s,=]+", m.group(1)):
-            self.assertNotIn(tok, names, "ci.yml must not name gates; use the manifest")
-        self.assertNotIn("--skip", m.group(1))
-        self.assertNotIn("--only", m.group(1))
+        ci = self._ci_lines()
+        self.assertNotIn("run_gates.py", ci)
+        self.assertNotIn("ci/gates.txt", ci)
+
+    def test_own_job_gates_run_in_a_ci_job(self):
+        ci = self._ci_lines()
+        makefile = (ROOT / "Makefile").read_text()
+        for g in (g for g in self._gates() if g.job == "own-job"):
+            script = re.search(r"scripts/\S+", g.command).group(0)
+            via_make = any(
+                script in recipe and re.search(rf"make\b[^\n]*\b{re.escape(tgt)}\b", ci)
+                for tgt, recipe in re.findall(
+                    r"^([A-Za-z0-9_-]+):[^\n]*\n((?:\t[^\n]*\n?)+)", makefile, re.M
+                )
+            )
+            self.assertTrue(script in ci or via_make, f"{g.name}: no ci.yml step runs {script}")
+
+    def test_go_suite_gates_are_tests_that_run_under_short(self):
+        for g in (g for g in self._gates() if g.job == "go-suite"):
+            m = re.match(r"go test (\./\S+?)/?(?: -run (\w+))?(?: |$)", g.command)
+            self.assertIsNotNone(m, f"{g.name}: not a plain go test command")
+            pkg, run = m.group(1), m.group(2)
+            funcs = {}
+            for f in (ROOT / pkg).glob("*_test.go"):
+                src = f.read_text()
+                for fm in re.finditer(
+                    r"^func (Test\w+)\(t \*testing\.T\) \{\n(.*?)^\}", src, re.M | re.S
+                ):
+                    funcs[fm.group(1)] = fm.group(2)
+            wanted = {run} if run else set(funcs)
+            runnable = [n for n in wanted if n in funcs and "testing.Short()" not in funcs[n]]
+            self.assertTrue(runnable, f"{g.name}: no Test function that runs under -short in {pkg}")
+            if run:
+                self.assertIn(run, funcs, f"{g.name}: {run} does not exist")
+                self.assertEqual(runnable, [run], f"{g.name}: {run} skips under -short")
+
+
+class PushBotBranchTests(unittest.TestCase):
+    """scripts/ci/push_bot_branch.sh must update a bot branch that already exists."""
+
+    def _git(self, cwd, *args):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def _push(self, clone, remote):
+        return subprocess.run(
+            ["bash", str(ROOT / "scripts/ci/push_bot_branch.sh"), remote, "bot/x"],
+            cwd=clone,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_creates_then_replaces_existing_branch_by_url(self):
+        d = Path(tempfile.mkdtemp())
+        remote = str(d / "remote.git")
+        self._git(d, "init", "--bare", "-q", remote)
+        clones = []
+        for n in ("a", "b"):
+            c = d / n
+            self._git(d, "init", "-q", str(c))
+            (c / "f").write_text(n)
+            self._git(c, "add", "f")
+            self._git(c, "commit", "-q", "-m", n)
+            clones.append(c)
+        first = self._push(clones[0], remote)  # branch absent: empty lease
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = self._push(clones[1], remote)  # branch exists, unrelated history
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(
+            self._git(remote, "rev-parse", "refs/heads/bot/x"),
+            self._git(clones[1], "rev-parse", "HEAD"),
+        )
 
 
 if __name__ == "__main__":
