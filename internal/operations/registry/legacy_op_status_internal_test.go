@@ -1,5 +1,5 @@
 // file: internal/operations/registry/legacy_op_status_internal_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8e35b0d7-4a91-4c26-bf08-73d9a15c6e42
 // last-edited: 2026-10-11
 
@@ -105,7 +105,7 @@ func TestPropagateLegacyOpStatus(t *testing.T) {
 
 		require.Len(t, s.updates, 1)
 		assert.Equal(t, 1, s.updates[0].progress,
-			"trading 'stuck at pending' for 'finished at 0%%' would be no more honest")
+			"trading 'stuck at pending' for 'finished at 0%%' would be no more truthful")
 		assert.Equal(t, 1, s.updates[0].total)
 	})
 
@@ -268,7 +268,7 @@ func TestLegacyStatusFor_MapsEveryInterruptedVariantTheRegistryCanMint(t *testin
 
 	// ...and non-terminal statuses must still map to "", or an op would have its
 	// legacy row closed while it was still running. This is the half that keeps
-	// the prefix match honest: it is a prefix, not a catch-all.
+	// the prefix match accurate: it is a prefix, not a catch-all.
 	for _, s := range []string{"", "queued", "running", "pending", "paused", "interrupting"} {
 		assert.Empty(t, legacyStatusFor(s),
 			"%q is not terminal; mirroring it would close a live op's legacy row", s)
