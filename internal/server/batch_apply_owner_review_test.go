@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 //
 // An owner-reviewed apply: the review lane pins the candidate it showed, and
 // a matching pin lifts the certainty legs of the gate. A stale pin, no pin,
@@ -158,6 +158,9 @@ func TestOwnerReview_PreviewReportsWouldApply(t *testing.T) {
 	row := previewBulkApplyRow(svc, "b1", plan, false, false)
 	if row.Verdict != previewVerdictBlocked || !row.OwnerReviewedWouldApply {
 		t.Fatalf("preview row: verdict %q reason %q owner_reviewed_would_apply %v", row.Verdict, row.Reason, row.OwnerReviewedWouldApply)
+	}
+	if row.RowReviewOnly {
+		t.Fatalf("a gate-reviewable row is landed by a bulk button too: row_review_only must be false: %+v", row)
 	}
 
 	stale := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand), identityErr: metafetch.ErrStaleMetadataCache}}

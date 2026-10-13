@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-12
 
@@ -308,6 +308,15 @@ type cachedApplyPlan struct {
 // checked explicitly rather than trusted to Reason.
 func (p cachedApplyPlan) reviewOnly() bool {
 	return p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate != nil && (p.Gate.OwnerReviewOverridable() || p.FolderReviewable)
+}
+
+// rowReviewOnly reports whether the book can land only through the single-row
+// Apply: reviewOnly holds, but only because its candidate was found by the
+// book's work folder (FolderReviewable). A review-page bulk button's pin does
+// not lift that (planCachedApply lifts identity_stale for a row pin alone), so
+// a plan for which this is true must not be offered a bulk apply.
+func (p cachedApplyPlan) rowReviewOnly() bool {
+	return p.reviewOnly() && !p.Gate.OwnerReviewOverridable()
 }
 
 // reviewOnlyUnseen is reviewOnly under the hashless owner marker's rule
