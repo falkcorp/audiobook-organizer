@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
 // last-edited: 2026-10-13
 
@@ -41,6 +41,11 @@
 // message starts with state.TimeoutPrefix); dropped is a run whose row became
 // interrupted_dropped. The interrupted pauses (interrupted_quiesced,
 // interrupted_ask) are not an outcome: the resumed attempt reports its own.
+// Run ends are not paired with started: a run dropped before any attempt of
+// it executed (the boot sweep dropping a queued row, a force-drop at pickup, a
+// ResumeDrop scan quiesced before it started) has a dropped end and no
+// started, and a resumed run has one started per attempt and one end. Compare
+// rates of each outcome, not started against the sum of ends.
 //
 // items outcomes: processed, ok, failed, skipped. The v2 registry can only
 // count progress, so it records processed; the v3 runner (05-PR5) records ok,
@@ -108,12 +113,18 @@ var Unwired = []UnwiredInstrument{
 }
 
 // OutcomeFor maps a v2 run status and its error message to the run-end
-// outcome recorded for it, with the same reading state.FromV2 gives the v3
+// outcome recorded for it, with the reading state.FromV2 gives the v3
 // projection: a "canceled" row whose message starts with state.TimeoutPrefix
 // timed out, and interrupted_dropped is dropped. ok is false for every status
 // that records nothing: interrupted_quiesced and interrupted_ask are a pause,
 // not an end (the resumed attempt reports its own outcome), and non-terminal
 // statuses are not outcomes. "timeout" is not a status the registry writes.
+//
+// Two places where it differs from FromV2 on purpose, both requeues: an
+// interrupted_dropped row whose message is state.RequeuedMessage, and the
+// legacy interrupted_restart spelling, are v3 dropped (with a successor) to
+// FromV2 but no outcome here. A requeue is not a run end: the work continues
+// under the successor, whose own end is counted.
 func OutcomeFor(status, errMsg string) (outcome string, ok bool) {
 	switch status {
 	case string(state.Completed):
@@ -126,6 +137,9 @@ func OutcomeFor(status, errMsg string) (outcome string, ok bool) {
 		}
 		return OutcomeCanceled, true
 	case string(state.InterruptedDropped):
+		if errMsg == state.RequeuedMessage {
+			return "", false
+		}
 		return OutcomeDropped, true
 	}
 	return "", false
