@@ -4,7 +4,7 @@
 // last-edited: 2026-10-13
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
-// review queue, and library repairs.
+// review queue, author and series merges, and library repairs.
 //
 // WHICH LANE OPENS
 //
@@ -83,8 +83,8 @@ import { isAbortError } from '../../utils/apiFetch';
 /**
  * Where an unported lane's surface still lives, so the panel can point at it.
  *
- * Empty: all three lanes render here now. Kept rather than deleted because it is
- * the mechanism a FOURTH lane would use on the way in, and re-deriving it costs
+ * Empty: all five lanes render here now. Kept rather than deleted because it is
+ * the mechanism the NEXT lane would use on the way in, and re-deriving it costs
  * more than the four lines it occupies.
  */
 const UNPORTED: Partial<Record<ReviewLane, { where: string; href: string }>> = {};
@@ -189,7 +189,7 @@ export function ReviewWorkspace() {
   const [viewMode, setViewMode] = useState<SpineViewMode>('compact');
 
   const metadata = useMetadataLane(toast, lane === 'metadata');
-  // Both lanes fetch only while they are the visible one, so switching lanes
+  // Every lane fetches only while it is the visible one, so switching lanes
   // does not leave three requests in flight or a stray window key listener.
   // Read here, not in DupesPanel, so the hook has the URL-owned filters on its
   // FIRST render. Passing them down beats letting the panel sync them up: an

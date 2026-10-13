@@ -171,6 +171,16 @@ describe('loading, error, empty, needs-scan, populated', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('rows that arrive alongside needs_refresh are shown, never hidden behind the scan prompt', async () => {
+    // The server never sends both today (a cold cache is always empty), but the
+    // flag is the server's to set; a lane that put "not scanned yet" ahead of real
+    // rows would hide data the reviewer is entitled to see.
+    serve([GROUP_A()], true);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.groups).toHaveLength(1);
+  });
+
   it('a retry after an error recovers', async () => {
     vi.mocked(reads.fetchAuthorGroups).mockRejectedValueOnce(new Error('boom'));
     serve([GROUP_A()]);
