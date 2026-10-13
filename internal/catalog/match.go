@@ -1,5 +1,5 @@
 // file: internal/catalog/match.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b9e6c10-5d2a-4f87-9a41-c8e0d7b25f93
 // last-edited: 2026-10-12
 //
@@ -183,13 +183,20 @@ func creditFolds(credit string) []string {
 // MaxBlockEntries. Exact keys and one alias point read only: no scan.
 func blockFor(st *database.CatalogStore, credit string) (fold string, ids []string, oversize bool, err error) {
 	folds := creditFolds(credit)
+	// A fold whose block is over the cap is only reported when no other
+	// reading of the credit ("Last, First" as "First Last") has a block that
+	// can be scored: the junk block must not hide the good one.
+	oversizeFold := ""
 	for _, f := range folds {
 		ids, over, err := st.EntriesForAuthorKey(f, MaxBlockEntries)
 		if err != nil {
 			return "", nil, false, err
 		}
 		if over {
-			return f, nil, true, nil
+			if oversizeFold == "" {
+				oversizeFold = f
+			}
+			continue
 		}
 		if len(ids) > 0 {
 			return f, ids, false, nil
@@ -208,11 +215,17 @@ func blockFor(st *database.CatalogStore, credit string) (fold string, ids []stri
 			return "", nil, false, err
 		}
 		if over {
-			return target, nil, true, nil
+			if oversizeFold == "" {
+				oversizeFold = target
+			}
+			continue
 		}
 		if len(ids) > 0 {
 			return target, ids, false, nil
 		}
+	}
+	if oversizeFold != "" {
+		return oversizeFold, nil, true, nil
 	}
 	return "", nil, false, nil
 }

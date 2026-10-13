@@ -1,5 +1,5 @@
 // file: internal/catalog/match_title.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c4e7a3-6b08-4d52-b3f9-2a7d5e1c8046
 // last-edited: 2026-10-12
 
@@ -34,16 +34,21 @@ func newTitleKey(title string) (titleKey, bool) {
 	if len(k.runes) < 3 {
 		k.grams[f] = struct{}{}
 	}
+	// The digit runs, each closed by a separator, so "x 12" and "x 12 y" have
+	// the same signature for the same run and "1 2" differs from "12".
 	var digits []rune
-	prevDigit := false
+	inRun := false
 	for _, r := range k.runes {
 		if unicode.IsDigit(r) {
 			digits = append(digits, r)
-			prevDigit = true
-		} else if prevDigit {
+			inRun = true
+		} else if inRun {
 			digits = append(digits, ' ')
-			prevDigit = false
+			inRun = false
 		}
+	}
+	if inRun {
+		digits = append(digits, ' ')
 	}
 	k.digits = string(digits)
 	return k, true

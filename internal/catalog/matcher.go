@@ -1,5 +1,5 @@
 // file: internal/catalog/matcher.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a3e5c812-7b4d-4f09-9c26-d18f0e6b7a35
 // last-edited: 2026-10-12
 
@@ -60,16 +60,16 @@ func (m *Matcher) MatchBook(q metadata.CatalogQuestion) (metadata.CatalogMatch, 
 func (m *Matcher) authorASINs(credits []string) []string {
 	idx := authority.NewIndex(m.authorities)
 	out := make([]string, len(credits))
-	any := false
+	found := false
 	for i, c := range credits {
 		e, err := idx.Lookup(c)
 		if err != nil || e == nil || e.HomonymASINs || len(e.ASINs) != 1 {
 			continue
 		}
 		out[i] = strings.ToUpper(strings.TrimSpace(e.ASINs[0]))
-		any = any || out[i] != ""
+		found = found || out[i] != ""
 	}
-	if !any {
+	if !found {
 		return nil
 	}
 	return out
