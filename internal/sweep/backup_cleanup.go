@@ -1,5 +1,5 @@
 // file: internal/sweep/backup_cleanup.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7a1e92-6b35-4c08-9e1f-a2c8d5b03f76
 // last-edited: 2026-10-13
 
@@ -10,13 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
-// RemoveOldBackupFiles walks root and removes every regular file that match
-// recognises as a backup and whose backup time is more than maxAge ago. It
+// RemoveOldBackupFiles walks root and removes every non-directory entry (Lstat;
+// a symlink is removed, never its target) that match recognises as a backup and whose backup time is more than maxAge ago. It
 // returns how many files it removed.
 //
 // match decides both whether a file is a backup and how old it is. It gets the
@@ -35,7 +36,10 @@ import (
 // pathutil.AppDirs{} sweeps the whole tree.
 //
 // log is optional. It receives one Info line per removal, one Warn per failed
-// removal (the walk goes on and the file is not counted) and nothing else.
+// removal (the walk goes on and the file is not counted) and one Debug line,
+// with the full path, for a file whose name contains ".bak-" but that match
+// refuses (so a kept look-alike can be explained). Files without ".bak-" in the
+// name are not logged: that would be a line per library file.
 //
 // The walk returns ctx.Err() as soon as the context is done, so a canceled run
 // reports removed so far together with the error. Any other walk error on an
@@ -70,6 +74,9 @@ func RemoveOldBackupFiles(
 		}
 		taken, isBackup := match(info.Name())
 		if !isBackup {
+			if strings.Contains(info.Name(), ".bak-") {
+				log(slog.LevelDebug, "keeping .bak- file whose name is not a recognised backup name", "path", path)
+			}
 			return nil
 		}
 		age := time.Since(taken)

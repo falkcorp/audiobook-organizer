@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-13
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
@@ -478,20 +477,17 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 	// next run; fileops KeepBackup, AGE CONTRACT). Anything else that merely
 	// contains ".bak-" (a book called "x.bak-notes.m4b") is kept at any age.
 	removed, err := sweep.RemoveOldBackupFiles(ctx, rootDir, appdirs.Current(),
-		func(name string) (time.Time, bool) {
-			taken, isBackup := fileops.BackupNameTime(name)
-			if !isBackup && strings.Contains(name, ".bak-") {
-				logging.Debug(ctx, "keeping .bak- file whose name is not a recognised backup name", "name", name)
-			}
-			return taken, isBackup
-		},
+		fileops.BackupNameTime,
 		maxAge,
 		func(level slog.Level, msg string, kv ...any) {
-			if level >= slog.LevelWarn {
+			switch {
+			case level >= slog.LevelWarn:
 				logging.Warn(ctx, msg, kv...)
-				return
+			case level >= slog.LevelInfo:
+				logging.Info(ctx, msg, kv...)
+			default:
+				logging.Debug(ctx, msg, kv...)
 			}
-			logging.Info(ctx, msg, kv...)
 		})
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed))
 	return err

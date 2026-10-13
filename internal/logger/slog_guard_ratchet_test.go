@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-13
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 288
-	slogRatchetCallCeiling = 1617
+	slogRatchetFileCeiling = 287
+	slogRatchetCallCeiling = 1613
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -128,7 +128,6 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/backfill_sync_ids.go":             8,
 	"internal/maintenance/jobs/bulk_deluge_import.go":            6,
 	"internal/maintenance/jobs/bulk_fetch_metadata.go":           7,
-	"internal/maintenance/jobs/cleanup_backups.go":               3,
 	"internal/maintenance/jobs/cleanup_empty_folders.go":         7,
 	"internal/maintenance/jobs/cleanup_organize_mess.go":         4,
 	"internal/maintenance/jobs/cleanup_series.go":                4,

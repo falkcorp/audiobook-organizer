@@ -1,5 +1,5 @@
 // file: internal/sweep/backup_cleanup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3f6c04-1d97-4e25-a6b8-5c9e0d72f413
 // last-edited: 2026-10-13
 
@@ -228,5 +228,41 @@ func TestRemoveOldBackupFiles_LogsEachRemoval(t *testing.T) {
 	}
 	if removed != 1 || len(levels) != 1 || levels[0] != slog.LevelInfo {
 		t.Errorf("removed = %d, log levels = %v; want 1 removal and one Info line", removed, levels)
+	}
+}
+
+// TestRemoveOldBackupFiles_DebugLogsAKeptLookAlikeWithItsFullPath pins N3: a
+// refused ".bak-" name is explained with its full path, and an ordinary library
+// file produces no line at all.
+func TestRemoveOldBackupFiles_DebugLogsAKeptLookAlikeWithItsFullPath(t *testing.T) {
+	root := t.TempDir()
+	lookAlike := filepath.Join(root, "Author", "Book", "x.bak-notes.m4b")
+	writeAged(t, lookAlike, 400*day)
+	writeAged(t, filepath.Join(root, "Author", "Book", "plain.m4b"), 400*day)
+
+	var mu sync.Mutex
+	type line struct {
+		level slog.Level
+		path  any
+	}
+	var lines []line
+	log := func(level slog.Level, _ string, kv ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		var path any
+		for i := 0; i+1 < len(kv); i += 2 {
+			if kv[i] == "path" {
+				path = kv[i+1]
+			}
+		}
+		lines = append(lines, line{level, path})
+	}
+	removed, err := RemoveOldBackupFiles(context.Background(), root, pathutil.AppDirs{},
+		fileops.BackupNameTime, 30*day, log)
+	if err != nil || removed != 0 {
+		t.Fatalf("removed = %d, err = %v; want 0, nil", removed, err)
+	}
+	if len(lines) != 1 || lines[0].level != slog.LevelDebug || lines[0].path != lookAlike {
+		t.Errorf("log lines = %+v; want exactly one Debug line for %s", lines, lookAlike)
 	}
 }
