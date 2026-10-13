@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.14 -->
+<!-- version: 10.76.15 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -169,12 +169,14 @@ into one of the curated sections below, is a normal direct edit.
       Done in 62eb02ade: both loads go through `loadCandidates`, which keeps
       the `BookIDs` and `FolderPath` scope on the reload
       (`TestOrganizeFolderScope_FetchMetadataFirstKeepsBookIDsScope`).
-- [ ] **BACKUP-SWEEP-CONSOLIDATE** Two "delete old backups" implementations
-      exist: `maintenance.cleanup-old-backups` (ages by `fileops.BackupNameTime`;
+- [x] **BACKUP-SWEEP-CONSOLIDATE** Two "delete old backups" implementations
+      existed: `maintenance.cleanup-old-backups` (ages by `fileops.BackupNameTime`;
       `scheduler.cleanup-old-backups` was merged into it by 04-P4f) and the
-      manual `cleanup-backups` job, whose regex does not match the
-      `.bak-<unix>[-N]` names create_backups now writes. Consolidate on one
-      predicate.
+      manual `cleanup-backups` job, whose regex did not match the
+      `.bak-<unix>[-N]` names create_backups now writes. Done in 04-P3b: the
+      walk lives once in `sweep.RemoveOldBackupFiles`, the job is retired
+      (`retiredOpIDs`, no alias), and the dropped `.backup`/`.bak` suffix sweep
+      is the open question `BACKUP-SUFFIX-CLEANUP-OPTIN`.
 
 - [ ] **PATTERN-LAST-16KB** Also run end-anchored search patterns over the last
       16 KB of a long field. A regex or `*` pattern only sees the first 16 KB

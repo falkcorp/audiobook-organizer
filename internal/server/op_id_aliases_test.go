@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-13
 
@@ -74,6 +74,14 @@ var retiredOpIDs = map[string]string{
 	// params, so an old enqueue is not an asin-backfill request.
 	"scheduler.isbn-enrichment":   "stub since 2026-10-02; metafetch.asin-backfill replaces it, params differ",
 	"maintenance.isbn-enrichment": "stub since 2026-10-02; metafetch.asin-backfill replaces it, params differ",
+	// Retired 2026-10-13 (04-P3b). The manual job deleted every *.backup / *.bak
+	// file under the library root with no age test (dry_run default true); the
+	// surviving maintenance.cleanup-old-backups deletes only the .bak-<unix>[-N]
+	// names fileops writes, and only past the retention window. Not aliased: an
+	// old enqueue would run a different deleter with different params. The
+	// suffix cleanup is dropped; whether it returns as an opt-in, age-gated,
+	// preview-default param is an open owner question (todo.d).
+	"maintenance.cleanup-backups": "retired; maintenance.cleanup-old-backups is a different, age-gated deleter, so no alias",
 }
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir

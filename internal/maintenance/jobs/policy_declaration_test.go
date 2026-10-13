@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-10-07
+// last-edited: 2026-10-13
 
 package jobs_test
 
@@ -39,7 +39,12 @@ import (
 // 2026-10-07: 38 → 37. `generate-itl-tests` was deleted with iTunes write-back
 // (iTunes is import-only): it wrote synthetic .itl variants for testing the
 // removed writers.
-const wantJobCount = 37
+//
+// 2026-10-13: 37 → 36. `cleanup-backups` was deleted (04-P3b): it removed every
+// *.backup / *.bak file with no age test, and the nightly
+// maintenance.cleanup-old-backups is the one backup sweep. Its op ID is in
+// internal/server retiredOpIDs.
+const wantJobCount = 36
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.
