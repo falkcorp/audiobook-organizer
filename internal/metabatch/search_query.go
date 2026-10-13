@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-10-12
 //
@@ -31,6 +31,13 @@ const (
 	// book's files (metadata.ChapterTitleFromDirectory), used when neither
 	// the title nor any transcription names the book.
 	SearchQuerySourceFolderTitle = "folder_title"
+	// SearchQuerySourceFolderPersonTitle is the same folder name used by the
+	// folder-parse variant: the book's stored title is a person's name or its
+	// own author (folderStandInForPersonTitle), so the folder is asked instead.
+	// It is its own value, not folder_title, so the apply path can tell the
+	// variant (which an owner's review row may apply, and which a setting
+	// switches) from the stand-in for a title with nothing to search by.
+	SearchQuerySourceFolderPersonTitle = "folder_person_title"
 )
 
 // IsTranscribedSource reports whether source names a title heard in the
@@ -165,7 +172,7 @@ func ResolveCandidateSearchQueryMemo(files SearchQueryReader, book *database.Boo
 		// rarely the book's: the folder holding the files often names it.
 		// The folder is then the question, a new one (its own cache key).
 		if ft, ok := j.folderStandInForPersonTitle(t, book.FilePath); ok {
-			return CandidateSearchQuery{Title: ft, Source: SearchQuerySourceFolderTitle, Usable: true}
+			return CandidateSearchQuery{Title: ft, Source: SearchQuerySourceFolderPersonTitle, Usable: true}
 		}
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTitle, Usable: true}
 	}
