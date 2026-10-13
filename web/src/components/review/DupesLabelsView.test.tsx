@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesLabelsView.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d1e8b35-4a92-4c07-9f58-3b7a0c2e6d81
 // last-edited: 2026-10-13
 //
@@ -567,5 +567,21 @@ describe('DupesLabelsView: band debounce', () => {
     expect(listUrls().at(-1)).toContain('band=title_author');
     await screen.findByText('Book One');
     expect(listUrls()).toHaveLength(before + 1);
+  });
+});
+
+describe('DupesLabelsView: pager after a row left the page', () => {
+  it('Next continues from the end of the rows shown, not a fixed page ahead', async () => {
+    // A short page of 2 with 3 matching: one row was overridden out, so the
+    // unseen row has moved up to offset 2. Skipping to a full page would lose it.
+    respond.labels = () =>
+      json({ data: { labels: [sampleRow, { ...sampleRow, candidate_id: 43 }], total: 3 } });
+    renderView();
+    await screen.findAllByText('Book One');
+    expect(screen.getByText('1–2 of 3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(listUrls().at(-1)).toContain('offset=2'));
   });
 });
