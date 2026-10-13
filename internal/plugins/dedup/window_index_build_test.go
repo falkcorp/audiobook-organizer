@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c1a8f37-d29e-4b60-93a4-8e0f6b2d7c15
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package dedup
 
@@ -65,8 +65,15 @@ func seedWindowLibrary(t *testing.T, s *database.PebbleStore, files int) []strin
 		}
 		ids = append(ids, f.ID)
 	}
-	_, err := s.WipeByPrefixes([]string{"fpwinidx:", "fpwinidx_meta:"})
-	require.NoError(t, err)
+	for _, prefix := range []string{"fpwinidx:", "fpwinidx_meta:"} {
+		rows, err := s.ScanPrefix(prefix)
+		require.NoError(t, err)
+		keys := make([]string, 0, len(rows))
+		for _, kv := range rows {
+			keys = append(keys, kv.Key)
+		}
+		require.NoError(t, s.DeleteRawBatch(keys))
+	}
 	return ids
 }
 
