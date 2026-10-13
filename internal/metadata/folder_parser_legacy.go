@@ -19,7 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
-// LegacyFolderParse returns what ExtractMetadataFromFolderWith returned for
+// LegacyFolderParse returns what ExtractMetadataFromFolder (since deleted) returned for
 // dirPath before 2026-10-05.
 func LegacyFolderParse(dirPath string) *FolderMetadata {
 	fm, err := legacyExtractMetadataFromFolder(dirPath)
@@ -29,7 +29,8 @@ func LegacyFolderParse(dirPath string) *FolderMetadata {
 	return fm
 }
 
-// ExtractMetadataFromFolder parses a directory path hierarchy to extract book metadata.
+// legacyExtractMetadataFromFolder is the frozen pre-2026-10-05 copy of
+// ExtractMetadataFromFolder (since deleted). It parses a directory path hierarchy to extract book metadata.
 // dirPath should be the directory containing the audio files (or the audio file path itself;
 // the function will walk up the path components).
 //

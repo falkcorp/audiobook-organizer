@@ -1,7 +1,7 @@
 // file: internal/scanner/folder_parse_existing.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: cc77dad2-5d35-4407-8724-35eb66226c45
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 //
 // Keeps the folder parse from rewriting existing books on a rescan.
 
@@ -14,7 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
-// folderParsed is what AssembleBookMetadata took from the folder parse for
+// folderParsed is what AssembleBookMetadataWith took from the folder parse for
 // one book: the title, primary author and series it returned whose source is
 // "folder.*", "" for a field another source (a tag, the file name) supplied.
 type folderParsed struct {

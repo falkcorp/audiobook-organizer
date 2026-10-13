@@ -190,6 +190,12 @@ func TestLookup_SnapshotMatchesIndex(t *testing.T) {
 
 	require.Equal(t, []string{"B001JP7W9E"}, snap.AuthorASINs("Ann Leckie"))
 	require.Nil(t, snap.AuthorASINs("Nicholas Briggs"))
+	// The ref_asin:person: row itself, keyed by the normalised ASIN.
+	rawASIN, err := ps.GetRaw(authority.PersonASINKey("b001jp7w9e"))
+	require.NoError(t, err)
+	var ref authority.ASINRef
+	require.NoError(t, json.Unmarshal(rawASIN, &ref))
+	require.Equal(t, []string{"annleckie"}, ref.Folds)
 
 	toks := snap.ClassifyTokens([]string{"Ann Leckie", "Ancillary Justice", "Nicholas Briggs", "Podium Audio"})
 	require.Len(t, toks, 4)

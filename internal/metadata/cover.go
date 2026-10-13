@@ -38,7 +38,8 @@ var ErrSSRFBlocked = safehttp.ErrBlockedAddress
 // file without fetching, so applying a new cover to a book that already had
 // one kept the old image forever. The new image is written to a temp file in
 // the covers directory and renamed over the old cover only once it is
-// complete; on any failure the existing cover is left exactly as it was. Only
+// complete; on any failure the existing cover is left exactly as it was. An
+// existing cover is never a reason to skip the fetch. Only
 // accepts image/* content types. Rejects non-http(s) URLs and URLs that
 // resolve to private/reserved IPs.
 func ReplaceCoverArt(coverURL string, destDir string, bookID string) (string, error) {
@@ -69,10 +70,10 @@ func replaceCoverArtWithClient(client *http.Client, coverURL string, destDir str
 	if bookID == "" {
 		return "", fmt.Errorf("empty book ID")
 	}
-	// Sanitize once, here, so the paths below cannot disagree about which file they mean. This site previously used bookID raw
-	// while CoverPathForBook applied filepath.Base; CodeQL flagged the read as
-	// "uncontrolled data used in path expression" and the write one line down had
-	// the identical exposure, so both now go through the sanitized id.
+	// Sanitize once, here, so every path below uses the same id. This site
+	// previously used bookID raw while CoverPathForBook applied filepath.Base;
+	// CodeQL flagged "uncontrolled data used in path expression" on the write,
+	// so it now goes through the sanitized id.
 	safeID := safeCoverID(bookID)
 	if safeID == "" {
 		return "", fmt.Errorf("invalid book ID %q", bookID)
@@ -83,9 +84,6 @@ func replaceCoverArtWithClient(client *http.Client, coverURL string, destDir str
 	}
 
 	coversDir := filepath.Join(destDir, "covers")
-
-	// An existing cover is not a reason to skip the fetch: an explicitly
-	// applied new cover must always be downloaded.
 
 	// Create covers directory
 	if err := os.MkdirAll(coversDir, 0775); err != nil {

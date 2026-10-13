@@ -1,6 +1,7 @@
 // file: internal/metadata/folder_parser_test.go
 // version: 1.0.1
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
+// last-edited: 2026-10-12
 
 package metadata_test
 

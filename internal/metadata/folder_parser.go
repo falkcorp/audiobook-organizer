@@ -190,7 +190,7 @@ func splitPathSegments(path string) []string {
 		//
 		// This parser was missed when the same guard was added to the two
 		// parsers now in internal/authorname -- three copies, not two. Measured
-		// 2026-09-01 by driving ExtractMetadataFromFolderWith over organizer-layout
+		// 2026-09-01 by driving ExtractMetadataFromFolder (since deleted) over organizer-layout
 		// paths; see folder_parser_placeholder_test.go.
 		strings.ToLower(authorname.Placeholder): true,
 

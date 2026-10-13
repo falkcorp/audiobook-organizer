@@ -1,6 +1,7 @@
 // file: internal/openlibrary/downloader_test.go
 // version: 1.1.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
+// last-edited: 2026-10-12
 
 package openlibrary
 

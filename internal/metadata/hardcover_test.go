@@ -1,6 +1,7 @@
 // file: internal/metadata/hardcover_test.go
 // version: 1.0.1
 // guid: c8d9e0f1-a2b3-4567-890a-bcdef1234567
+// last-edited: 2026-10-12
 
 package metadata
 
