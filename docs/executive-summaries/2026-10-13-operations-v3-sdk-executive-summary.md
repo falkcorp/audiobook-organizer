@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-13-operations-v3-sdk-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9d0eaa44-fcb8-4058-bb16-c2e4a2c47636 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -35,7 +35,12 @@ Branch `task/05-pr5`. Task brief:
   gatekeeper refuses its writes. It notes each write before making it, so
   a crash in the middle leaves a record of what may be half-applied. It
   records history only after the write really happened. It has no way to
-  delete a book or a book file.
+  delete a book or a book file. A run whose writes start being refused
+  stops right there and is reported as failed, rather than finishing as if
+  nothing were wrong.
+- **A restart does not lose the list of what was applied.** A fixer
+  interrupted by a deploy still reports, and follows up on, every change it
+  made before and after the restart, and its follow-up step runs once.
 - **The existing Repairs tools use the same gatekeeper.** They behave as
   before. A test checks that none of the tools they call has disappeared
   or changed shape.

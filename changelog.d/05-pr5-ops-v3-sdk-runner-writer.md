@@ -13,7 +13,16 @@ the chunks the ledger does not record, so finished work is never redone and
 the progress count never goes backwards. Every write goes through a fenced
 `Writer` that refuses writes from a canceled or abandoned run, writes an
 intent before touching the store, records history only after the write
-committed, and has no delete method. Nothing in production uses the SDK yet:
+committed, and has no delete method. A run whose writes start being refused
+(it was canceled, or lost its hold on the library scan) stops with an error
+instead of counting the refused items as ordinary failures and ending
+"completed"; a crashing item is recorded as that item's failure instead of
+taking the server down; and a run stopped by a server shutdown leaves its
+final summary to the resumed run, so a fixer's follow-up step runs once,
+over every row applied before and after the restart. A writing run refuses
+to start when the store cannot record intents or history, instead of
+writing without them. Nothing in production
+uses the SDK yet:
 the adapter registers a v3 definition on the existing registry (one queue,
 one exclusive-key map; `library.scan` keeps its key) and holds unchanged v2
 definitions in the same catalog.
