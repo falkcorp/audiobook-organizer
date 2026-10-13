@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -447,4 +447,64 @@ func TestCatalogStage_AbortedSearchIsNotCounted(t *testing.T) {
 	assert.Zero(t, stats.CatalogMatched.Load())
 	assert.Zero(t, stats.OversizeBlocks.Load())
 	assert.Zero(t, stats.HomonymSkipped.Load())
+}
+
+func storedCandidates(t *testing.T, f *verdictFixture, bookID string) []MetadataCandidate {
+	t.Helper()
+	stored, err := f.store.GetMetadataCache(bookID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	out := make([]MetadataCandidate, 0, len(stored.Candidates))
+	for _, raw := range stored.Candidates {
+		var c MetadataCandidate
+		require.NoError(t, json.Unmarshal(raw, &c))
+		out = append(out, c)
+	}
+	return out
+}
+
+// Joining the catalog's candidates must not re-sort the providers' by score:
+// the search put its own-ASIN match first (a lower score than its sibling's),
+// and slot 0 is what the review lane shows and every bulk apply reads.
+func TestCatalogStage_JoinKeepsProviderOrderInSlotZero(t *testing.T) {
+	f := newVerdictFixture(t)
+	resp := &SearchMetadataResponse{Results: []MetadataCandidate{
+		{Source: "SrcA", Title: stageTitle, Author: stageAuthor, ASIN: "B0OWN00001", Score: 0.70},
+		{Source: "SrcA", Title: stageTitle + " Returns", Author: stageAuthor, ASIN: "B0SIB00002", Score: 0.90},
+		{Source: metadata.CatalogSourceName, Title: stageTitle + " Again", Author: stageAuthor, ASIN: "B0CAT00003", Score: 0.80, FromCatalog: true},
+	}}
+	f.mfs.cacheSearchResponse("bk1", stageTitle, stageAuthor, "", "", resp)
+
+	got := storedCandidates(t, f, "bk1")
+	require.Len(t, got, 3)
+	assert.Equal(t, "B0OWN00001", got[0].ASIN, "the own-ASIN candidate keeps slot 0 despite the sibling's higher score")
+	assert.Equal(t, "B0SIB00002", got[1].ASIN)
+	assert.Equal(t, "B0CAT00003", got[2].ASIN, "the catalog's candidate goes after the providers'")
+}
+
+// A stored catalog copy is an older reading: the fresh one replaces it, so a
+// ManualOnly tag the catalog now carries is not lost to the stale copy on a
+// Source|Title|ASIN collision -- and the old copy does not linger beside it.
+func TestCatalogStage_FreshCatalogRowReplacesStoredCopy(t *testing.T) {
+	f := newVerdictFixture(t)
+	cat := func(manualOnly bool, score float64) MetadataCandidate {
+		return MetadataCandidate{Source: metadata.CatalogSourceName, Title: stageTitle, Author: stageAuthor, ASIN: "B0CAT00003",
+			Score: score, ManualOnly: manualOnly, FromCatalog: true, Stage: metadata.CatalogStageAuthor}
+	}
+	first := &SearchMetadataResponse{Results: []MetadataCandidate{
+		{Source: "SrcA", Title: stageTitle, Author: stageAuthor, ASIN: "B0PROV0001", Score: 0.9},
+		cat(false, 0.95),
+	}}
+	f.mfs.cacheSearchResponse("bk2", stageTitle, stageAuthor, "", "", first)
+
+	// Providers have nothing now; the catalog says the entry is manual-only.
+	second := &SearchMetadataResponse{Results: []MetadataCandidate{cat(true, 0.6)}}
+	f.mfs.cacheSearchResponse("bk2", stageTitle, stageAuthor, "", "", second)
+
+	got := storedCandidates(t, f, "bk2")
+	require.Len(t, got, 2, "the provider's earlier candidate and exactly one catalog row")
+	assert.Equal(t, "B0PROV0001", got[0].ASIN)
+	assert.Equal(t, metadata.CatalogSourceName, got[1].Source)
+	assert.True(t, got[1].ManualOnly, "the fresh catalog row, not the stored copy")
+	assert.InDelta(t, 0.6, got[1].Score, 1e-9)
 }
