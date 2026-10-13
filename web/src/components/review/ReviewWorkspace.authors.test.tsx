@@ -49,6 +49,11 @@ beforeEach(() => {
         variants: [{ id: 101, name: 'Author A.', created_at: '' }],
         book_count: 2,
       },
+      {
+        canonical: { id: 2, name: 'Author B', created_at: '' },
+        variants: [{ id: 201, name: 'Author B.', created_at: '' }],
+        book_count: 4,
+      },
     ],
     needsRefresh: false,
   });
@@ -124,9 +129,10 @@ describe('Authors & series in the workspace', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=authors');
   });
 
-  it('?author= focuses that author\'s group', async () => {
-    renderWorkspace('/review?lane=authors&author=101');
-    const card = await screen.findByTestId('author-group-1');
+  it("?author= focuses that author's group, not just the first one", async () => {
+    renderWorkspace('/review?lane=authors&author=201');
+    const card = await screen.findByTestId('author-group-2');
     await waitFor(() => expect(card).toHaveAttribute('data-focused', 'true'));
+    expect(screen.getByTestId('author-group-1')).not.toHaveAttribute('data-focused');
   });
 });
