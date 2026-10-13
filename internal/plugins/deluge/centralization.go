@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-13
 
@@ -49,28 +49,26 @@ func (p *Plugin) centralizationDef() sdk.OperationDef {
 }
 
 // centralizeConcurrency is the worker-pool size for deluge.centralize. Each
-// item is a disk copy plus a store write and, when Deluge storage moves are
-// enabled, a Deluge RPC, so this is bounded by what the Deluge daemon and the
-// library disk tolerate rather than by core count. 4 matches
-// deluge.link-backfill's default pool.
+// item is one BOOK's pending files: disk copies, store writes and, when
+// Deluge storage moves are enabled, Deluge RPCs, so the pool is bounded by what
+// the Deluge daemon and the library disk tolerate rather than by core count.
+// A fixed 4 (deluge.link-backfill sizes its pool min(NumCPU, 8)).
 const centralizeConcurrency = 4
 
-// centralizationCheckpoint tracks state across restarts.
+// centralizationCheckpoint is the op's liveness record: counts only. It is NOT
+// a resume position. The pending query (GetBookFilesNeedingDelugeImportCore
+// filters ImportedFromDelugeAt == nil) is the resume state: a restarted run
+// lists exactly the rows still unimported, whatever order the previous run
+// finished them in. An index into that list would be wrong the moment a row
+// leaves it.
 type centralizationCheckpoint struct {
-	ProcessedFiles int    `json:"processed_files"`
-	TotalFiles     int    `json:"total_files"`
-	LastBookFileID string `json:"last_book_file_id"`
-	LastError      string `json:"last_error,omitempty"`
+	Completed int    `json:"completed"`
+	Total     int    `json:"total"`
+	LastError string `json:"last_error,omitempty"`
 }
 
-func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	cfg := &config.AppConfig
-
-	// Load checkpoint if resuming from a restart.
-	var checkpoint centralizationCheckpoint
-	if err := reporter.Checkpoint(nil); err == nil && params != nil {
-		_ = json.Unmarshal(params, &checkpoint)
-	}
 
 	sdk.NewProgress(reporter, 0).Start("Loading Deluge-imported files...")
 
@@ -90,17 +88,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		return nil
 	}
 
-	if checkpoint.ProcessedFiles == 0 {
-		checkpoint.TotalFiles = total
-	}
-
-	// Resume point: RunItemsOptions.ResumeFrom skips the first baseIdx items
-	// and shifts the progress offset, so labels show global position.
-	baseIdx := checkpoint.ProcessedFiles
-
-	sdk.NewProgress(reporter, total).Start(
-		fmt.Sprintf("Centralizing %d files (%d remaining)...", total, max(total-baseIdx, 0)),
-	)
+	sdk.NewProgress(reporter, total).Start(fmt.Sprintf("Centralizing %d files...", total))
 
 	var successCount, skipCount, inPlaceCount, protectedCount, notLoadedCount, errCount atomic.Int64
 
@@ -114,21 +102,52 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		protected = p.cache
 	}
 
-	// ckptMu guards checkpoint. The workers set LastError; the checkpoint
-	// callback (serialized by RunItems, but not against the workers) writes
-	// ProcessedFiles and hands the whole struct to the reporter.
-	var ckptMu sync.Mutex
+	// ckptMu guards lastErr and orders the liveness checkpoint writes. The
+	// workers set lastErr; the checkpoint is written from the group closure.
+	var (
+		ckptMu    sync.Mutex
+		lastErr   string
+		completed int
+	)
 	setLastError := func(msg string) {
 		ckptMu.Lock()
-		checkpoint.LastError = msg
+		lastErr = msg
 		ckptMu.Unlock()
 	}
+	// finishFile counts one handled file and writes the counts-only checkpoint.
+	finishFile := func() {
+		ckptMu.Lock()
+		defer ckptMu.Unlock()
+		completed++
+		_ = reporter.Checkpoint(centralizationCheckpoint{Completed: completed, Total: total, LastError: lastErr})
+	}
 
-	runErr := registry.RunItems(ctx, reporter, toImport, func(ctx context.Context, bf *database.BookFileCore) error {
+	// PARTITION: the pool's unit is a BOOK, not a file. A book's pending files
+	// are processed one after another by one worker, so no two workers ever
+	// touch the same book. Sibling files of one book share a Deluge torrent
+	// (DelugeHash), and ImportToLibraryWith can ask Deluge to move that
+	// torrent's storage per file, which would race a sibling's copy; and each
+	// file write recomputes the book's aggregates from its file rows outside
+	// ModifyBook, so two siblings committing together can leave a stale
+	// snapshot as the last write. Different books share neither.
+	byBook := make(map[string]int)
+	var groups [][]*database.BookFileCore
+	for _, bf := range toImport {
+		gi, ok := byBook[bf.BookID]
+		if !ok {
+			gi = len(groups)
+			byBook[bf.BookID] = gi
+			groups = append(groups, nil)
+		}
+		groups[gi] = append(groups[gi], bf)
+	}
+
+	centralizeOne := func(bf *database.BookFileCore) {
+		defer finishFile()
 		srcPath := bf.FilePath
 		if srcPath == "" {
 			skipCount.Add(1)
-			return nil
+			return
 		}
 
 		var destDir string
@@ -165,7 +184,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 				// Moved, removed or marked by another writer meanwhile.
 				skipCount.Add(1)
 			}
-			return nil
+			return
 		}
 
 		// Hydrate the full row first -- bf is the Core (memdb-slim)
@@ -179,7 +198,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			errCount.Add(1)
 			setLastError(fmt.Sprintf("hydrate book file %s: %v", bf.ID, hydrateErr))
 			reporter.Logger().Error("hydrate book file failed", "id", bf.ID, "error", hydrateErr)
-			return nil // non-fatal
+			return
 		}
 
 		// The importer /discovery/import and maintenance.bulk-deluge-import
@@ -198,11 +217,11 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			// Checked before ErrProtectedPathWrite, which it also wraps.
 			notLoadedCount.Add(1)
 			reporter.Logger().Info("file left pending: the Deluge protected list has not loaded", "id", bf.ID, "path", srcPath)
-			return nil
+			return
 		case errors.Is(importErr, tagger.ErrProtectedPathWrite):
 			protectedCount.Add(1)
 			reporter.Logger().Info("file is protected; left pending", "id", bf.ID, "path", srcPath, "reason", importErr)
-			return nil
+			return
 		case importErr != nil:
 			errCount.Add(1)
 			setLastError(fmt.Sprintf("import %s: %v", srcPath, importErr))
@@ -211,30 +230,28 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			} else {
 				reporter.Logger().Error("import failed", "id", bf.ID, "src", srcPath, "dest", dest, "error", importErr)
 			}
-			return nil // non-fatal
+			return
 		}
 		dest = newPath
 
 		n := successCount.Add(1)
-
 		reporter.Logger().Debug("centralized file",
 			"src", srcPath, "dest", dest, "progress", fmt.Sprintf("%d/%d", n, total))
+	}
+
+	runErr := registry.RunItems(ctx, reporter, groups, func(ctx context.Context, group []*database.BookFileCore) error {
+		for _, bf := range group {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			centralizeOne(bf)
+		}
 		return nil
 	}, registry.RunItemsOptions{
 		ErrMode:     registry.ErrModeCollect,
 		Concurrency: centralizeConcurrency,
-		ResumeFrom:  baseIdx,
-		// CheckpointStateFn, not a Checkpoint call in the closure: under a
-		// pool the closure's index is DISPATCH order, and items finish out of
-		// order, so "my index + 1" is not a resume point (index 5 done before
-		// index 3 would skip 3 on resume). The watermark is the unbroken
-		// completed prefix, absolute across ResumeFrom, which is exactly what
-		// ProcessedFiles must hold. Calls are serialized.
-		CheckpointStateFn: func(_ context.Context, watermark int) error {
-			ckptMu.Lock()
-			defer ckptMu.Unlock()
-			checkpoint.ProcessedFiles = watermark
-			return reporter.Checkpoint(checkpoint)
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Centralizing book %d/%d", i+1, t)
 		},
 	})
 
