@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-07
+// last-edited: 2026-10-13
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -136,6 +136,10 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 		store, err = database.NewPebbleStore(config.AppConfig.DatabasePath)
 	}
 	require.NoError(t, err)
+	// Wait for the async memdb warmup: the fail-closed reads (BookFilesAtPath,
+	// BookFilesWithHash, ...) refuse until it is serving, and a purge with
+	// delete_files=true would keep the file and fail the test under load.
+	store.WaitForWarmup()
 	database.SetGlobalStore(store)
 
 	// Run migrations to ensure schema is up to date
