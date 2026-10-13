@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_cancel_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3e91b7d2-6c04-4a58-9f13-8d27e5a06b41
-// last-edited: 2026-09-02
+// last-edited: 2026-10-12
 
 // Package database — regression suite for CANCELLATION of the activity query.
 //
@@ -229,8 +229,8 @@ func TestQueryByIndexPrefixAbortsWhenCallerGoesAway(t *testing.T) {
 }
 
 // TestWipeAllActivityAbortsMidWipe covers the third reachable-from-a-request
-// scan: WipeAllActivity is invoked from handleWipe, a live HTTP handler, and
-// an uncancellable wipe of a large activity log would reintroduce the same
+// scan: WipeAllActivity was invoked from the POST /maintenance/wipe handler (now
+// a 410 stub), a live HTTP handler, and an uncancellable wipe of a large activity log would reintroduce the same
 // abandoned-request-keeps-running defect as the unbounded Query/
 // GetDistinctSources scans this file otherwise covers.
 //

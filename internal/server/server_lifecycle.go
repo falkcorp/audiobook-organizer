@@ -1637,12 +1637,8 @@ func (s *Server) setupRoutes() {
 			//
 			// UOS-14: /operations/active and /operations/recent are removed — return 410 Gone.
 			// Use GET /operations/timeline instead.
-			protected.GET("/operations/active", s.perm(auth.PermLibraryView), func(c *gin.Context) {
-				c.JSON(http.StatusGone, gin.H{"error": "gone", "message": "this endpoint has been removed; use GET /api/v1/operations/timeline instead"})
-			})
-			protected.GET("/operations/recent", s.perm(auth.PermLibraryView), func(c *gin.Context) {
-				c.JSON(http.StatusGone, gin.H{"error": "gone", "message": "this endpoint has been removed; use GET /api/v1/operations/timeline instead"})
-			})
+			protected.GET("/operations/active", s.perm(auth.PermLibraryView), gone("GET /api/v1/operations/timeline"))
+			protected.GET("/operations/recent", s.perm(auth.PermLibraryView), gone("GET /api/v1/operations/timeline"))
 
 			// UOS-06 operations v2 routes (timeline, events, v2/:id, op-defs)
 			// are registered in wireHandlers via OperationsV2Handler.
@@ -1729,7 +1725,11 @@ func (s *Server) setupRoutes() {
 			adminOnly := protected.Group("")
 			adminOnly.Use(servermiddleware.RequireAdmin())
 			{
-				adminOnly.POST("/maintenance/wipe", s.handleWipe)
+				// The library wipe is retired. It stays registered as a 410 stub,
+				// behind RequireAdmin, so a stale client gets "gone" rather than a
+				// 404 and a non-admin still gets 403. The stub is removed one
+				// release later (01-P81 series, final follow-up).
+				adminOnly.POST("/maintenance/wipe", gone(""))
 			}
 
 			// Policy, system, config, dashboard, and backup routes migrated to the

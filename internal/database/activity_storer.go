@@ -1,13 +1,12 @@
 // file: internal/database/activity_storer.go
-// version: 1.10.1
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 
 package database
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -39,32 +38,6 @@ type ActivityCounter interface {
 	CountActivity(ctx context.Context, tier string, olderThan *time.Time) (int, error)
 }
 
-// CountAllActivity returns the exact number of rows store holds across every
-// tier, which is the number WipeAllActivity would delete. For the migrating
-// wrapper it counts the ACTIVE backend, the same backend whose count
-// WipeAllActivity returns. A backend that cannot count exactly is an error,
-// never an estimate: this feeds the wipe's dry-run preview, the number an
-// operator decides on, and until 2026-09-11 that preview used Query's total
-// and reported 2 on a 13-million-row store.
-func CountAllActivity(ctx context.Context, store ActivityStorer) (int64, error) {
-	if m, ok := store.(*MigratingActivityStore); ok {
-		store = m.active()
-	}
-	counter, ok := store.(ActivityCounter)
-	if !ok {
-		return 0, fmt.Errorf("activity backend %T cannot report an exact row count", store)
-	}
-	var total int64
-	for _, tier := range actTiers {
-		n, err := counter.CountActivity(ctx, tier, nil)
-		if err != nil {
-			return 0, fmt.Errorf("count activity rows (tier=%s): %w", tier, err)
-		}
-		total += int64(n)
-	}
-	return total, nil
-}
-
 // ActivityRetention covers pruning, compaction and migration.
 type ActivityRetention interface {
 	// Prune hard-deletes every entry of tier older than olderThan and returns
@@ -80,7 +53,8 @@ type ActivityRetention interface {
 	// WithMaintenanceProgress hook rides ctx.
 	Prune(ctx context.Context, olderThan time.Time, tier string) (int, error)
 	// WipeAllActivity deletes every activity entry. It takes a context because
-	// it is reachable from a live request (handleWipe): an abandoned wipe
+	// it was reachable from a live request (the POST /maintenance/wipe handler,
+	// now a 410 stub with no caller): an abandoned wipe
 	// request must stop scanning promptly instead of running every tier to
 	// completion server-side regardless of the client. On cancellation it
 	// returns the count of rows ACTUALLY deleted so far (never a fabricated
@@ -157,8 +131,11 @@ type ActivityLifecycle interface {
 // goroutines held 30.8 GB inside the scan with ZERO connected clients, and
 // only a restart freed it. A parallel non-context method would let the next
 // caller reintroduce that outage, so the cancellable path is the only path.
-// WipeAllActivity is included because it is reachable from handleWipe, a real
-// HTTP handler, not merely a scheduled maintenance job.
+// WipeAllActivity is included because it was reachable from the
+// POST /maintenance/wipe handler, a real HTTP handler, not merely a scheduled
+// maintenance job. That route is now a 410 stub, so WipeAllActivity has no live
+// HTTP caller; it keeps the context so the next caller cannot reintroduce the
+// uncancellable scan.
 //
 // Prune and MigrateSystemActivityLogs remain intentionally context-free per
 // scope: they share the same defect shape but are not reachable from a live

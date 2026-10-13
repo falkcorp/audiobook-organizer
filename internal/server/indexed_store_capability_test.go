@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 
 package server
 
@@ -95,9 +95,8 @@ func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
 }
 
 // TestIndexedStoreResolvesConcretePebbleStore covers the second half of the same
-// bug: the wipe fixups in maintenance_fixups.go assert on the CONCRETE
-// *database.PebbleStore rather than a narrow interface, and a bare assertion fails
-// through this decorator exactly the same way.
+// bug: a call site that asserts on the CONCRETE *database.PebbleStore rather than
+// a narrow interface fails through this decorator exactly the same way.
 //
 // Those sites are worse than the interface ones because each has a deliberate
 // "different backend" fallback written for SQLite and test doubles. A wrapped
@@ -122,38 +121,6 @@ func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
 	if _, ok := wrapped.(*database.PebbleStore); ok {
 		t.Error("bare *database.PebbleStore assertion unexpectedly saw through " +
 			"indexedStore; the AsPebbleStore call sites may no longer need it")
-	}
-}
-
-// TestWipeFixupsReachPebbleThroughDecorator exercises the repaired call sites
-// themselves rather than the helper in isolation, because the helper being correct
-// says nothing about whether these six functions actually call it.
-//
-// Only the two fixups that assert BEFORE their dry-run branch are exercised —
-// wipeSegments and wipeExternalIDs. Both run a counting query in dry-run mode, so
-// nothing is deleted. The other four (wipeBookFiles, wipeBooks, wipeAuthors,
-// wipeSeries) return from their dry-run branch before reaching the assertion, so a
-// dry-run call cannot distinguish fixed from broken and a non-dry-run call would
-// wipe the store; they are covered by AsPebbleStore's own tests instead.
-func TestWipeFixupsReachPebbleThroughDecorator(t *testing.T) {
-	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
-	if err != nil {
-		t.Fatalf("open pebble: %v", err)
-	}
-	t.Cleanup(func() { _ = inner.Close() })
-
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
-	ms, ok := wrapped.(maintenanceStore)
-	if !ok {
-		t.Fatal("indexedStore does not satisfy maintenanceStore")
-	}
-
-	// Before the fix these returned "unsupported store type *server.indexedStore".
-	if _, err := wipeSegments(ms, true); err != nil {
-		t.Errorf("wipeSegments(dryRun) through the decorator: %v", err)
-	}
-	if _, err := wipeExternalIDs(ms, true); err != nil {
-		t.Errorf("wipeExternalIDs(dryRun) through the decorator: %v", err)
 	}
 }
 
@@ -199,8 +166,7 @@ func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
 
 	// The PRODUCTION resolver, not database.AsCapability directly. Calling the
 	// helper here would prove only that the helper works, which says nothing
-	// about whether server_lifecycle.go uses it — the same distinction
-	// TestWipeFixupsReachPebbleThroughDecorator above is built around. Reverting
+	// about whether server_lifecycle.go uses it. Reverting
 	// resolveVGBackfiller to a bare assertion must turn this red.
 	b, ok := resolveVGBackfiller(wrapped)
 	if !ok {
