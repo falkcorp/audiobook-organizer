@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.50.0
+// version: 3.51.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-13
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -45,6 +46,10 @@ var ErrOpActive = errors.New("registry: operation is still active; cancel it fir
 type Registry struct {
 	mu   sync.RWMutex
 	defs map[string]OperationDef
+	// v3defs holds the ops.Definition of every def registered through the v3
+	// adapter (v3_adapter.go Register), under r.mu, so Catalog can return
+	// native defs as authored rather than re-wrapped.
+	v3defs map[string]ops.Definition
 	// aliases maps each former (renamed) def ID to its canonical ID. Written
 	// only by RegisterOp via copy-and-swap; read lock-free. See aliases.go.
 	aliases         atomic.Pointer[aliasTable]

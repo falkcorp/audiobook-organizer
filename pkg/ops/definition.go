@@ -1,5 +1,5 @@
 // file: pkg/ops/definition.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 29dda49d-c6fc-430a-ad07-1bfa986227a7
 // last-edited: 2026-10-13
 
@@ -174,12 +174,11 @@ type baseSpec struct {
 	// not panic: ValidateCatalog and the executor's Register report them.
 	problems []string
 
-	task     taskFunc
-	batch    batchFunc
-	conc     Concurrency
-	stages   []CompiledStage
-	origin   Origin
-	readOnly bool
+	task   taskFunc
+	batch  batchFunc
+	conc   Concurrency
+	stages []CompiledStage
+	origin Origin
 }
 
 func newSpec(id string, k Kind, c Common) *baseSpec {

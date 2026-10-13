@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
 // last-edited: 2026-10-13
 
@@ -561,10 +561,13 @@ func TestUnordered_RestartsFromZero_And_RefusesContinue(t *testing.T) {
 }
 
 // TestLedgerWriteRateBounded: 10,000 items of 1 ms commit the ledger at most
-// once per commitEvery (plus the opening and the final commit).
+// once per commitEvery (plus the opening and the final commit). The run takes
+// about 1.5 s on 8 workers, so the throttle under test is 500 ms rather than
+// the production 2 s (asserted separately): the same code path, a window the
+// run actually spans.
 func TestLedgerWriteRateBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("10k items of 1ms")
+	if defaultCommitEvery != 2*time.Second {
+		t.Fatalf("the production ledger throttle is %s, want 2s", defaultCommitEvery)
 	}
 	store := newMemLedgerStore(t)
 	job, rc, cancel := openJob(t, seq(10_000), batchOpts{size: 50, workers: 8}, func(*ops.ItemRC, int) error {
@@ -895,8 +898,6 @@ func TestResumeCountsGoneItems(t *testing.T) {
 type fakeDirty struct {
 	mu      sync.Mutex
 	entries map[string][]byte
-	// remark, when set, re-marks an id (new epoch) while its item runs.
-	remark string
 }
 
 func (f *fakeDirty) ScanPrefixPage(prefix, after string, limit int) ([]database.KVPair, string, error) {

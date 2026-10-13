@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-13
 
@@ -1059,5 +1059,36 @@ func TestPerRunWritersRefuseMissingOrTerminalRun(t *testing.T) {
 				t.Fatalf("running run: %v", err)
 			}
 		})
+	}
+}
+
+// TestV2WriteLeavesLedgerProgress: once the chunk ledger owns a run's
+// progress (CommitLedgerV3 set Chunks), a v2 write -- the reporter's lazy
+// flush, the terminal status write -- does not move Done, Total or Current
+// back to the v2 row's stale numbers.
+func TestV2WriteLeavesLedgerProgress(t *testing.T) {
+	p := newTimelineStore(t)
+	id := newRunID()
+	now := time.Now().UTC()
+	if err := p.InsertOperationV2(OperationV2Row{ID: id, DefID: "test.ledger-owned", Status: "queued", Priority: 1, QueuedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateOperationV2Status(id, "running", &now, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	total := int64(700)
+	if err := p.CommitLedgerV3(id, LedgerBatch{Ledger: Ledger{ChunkSize: 256, ChunkCount: 3, Done: []byte{7}},
+		Progress: ProgressSnapshot{Done: 700, Total: &total, Current: "last item", Chunks: &ChunkProgress{Done: 3, Total: 3, Size: 256}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateOpProgressV2(id, 0, 0, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateOperationV2Status(id, "completed", &now, &now, nil); err != nil {
+		t.Fatal(err)
+	}
+	r := mustRun(t, p, id)
+	if r.Progress.Done != 700 || r.Progress.Total == nil || *r.Progress.Total != 700 || r.Progress.Current != "last item" {
+		t.Fatalf("progress after v2 writes = %+v", r.Progress)
 	}
 }
