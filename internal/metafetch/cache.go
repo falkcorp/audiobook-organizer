@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-12
 //
@@ -879,9 +879,16 @@ func rankCandidateRows(rows []json.RawMessage, rank func(MetadataCandidate) int)
 }
 
 // rankCandidatesByTier is a copy of cands stably ordered by rank alone
-// (cacheSearchResponse's plain replace); nil rank returns cands as they are.
+// (cacheSearchResponse's plain replace). A nil rank is reviewOnlyLastRank, as
+// in the merge paths: a caller with no ranker (the search dialog, a
+// single-book fetch) must not store a review-only candidate -- Open Library,
+// Google Books, the local catalog -- in slot 0 ahead of a provider's, where
+// the review lane and every bulk apply read.
 func rankCandidatesByTier(cands []MetadataCandidate, rank func(MetadataCandidate) int) []MetadataCandidate {
-	if rank == nil || len(cands) < 2 {
+	if rank == nil {
+		rank = reviewOnlyLastRank
+	}
+	if len(cands) < 2 {
 		return cands
 	}
 	tiers := make([]int, len(cands))
