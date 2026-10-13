@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
 // last-edited: 2026-10-13
 
@@ -74,6 +74,9 @@ func NewBookHistory(rec HistoryRecorder, source, changeType, batchPrefix string,
 	}
 	return &BookHistory{rec: rec, source: source, changeType: changeType, batchPrefix: batchPrefix, log: log}
 }
+
+// recording reports whether h has a recorder to write rows to.
+func (h *BookHistory) recording() bool { return h != nil && h.rec != nil }
 
 // Rows is how many history rows were recorded.
 func (h *BookHistory) Rows() int { return int(h.rows.Load()) }

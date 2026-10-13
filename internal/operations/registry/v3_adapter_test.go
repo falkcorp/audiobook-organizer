@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
 // last-edited: 2026-10-13
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -627,8 +628,9 @@ func TestLeaseLossThroughWriterFailsRun(t *testing.T) {
 type v2SurfaceStore struct{ database.OpsV2Store }
 
 // S4a: a Live run of a writing def refuses to start on a store that cannot
-// back its Writer (no intents, no journal); a Preview run, which writes
-// nothing, still runs.
+// back its Writer (no intents, no journal, no metadata history); a Preview
+// run, which writes nothing, still runs. TestLiveWriterNeedsHistory covers a
+// store that has everything but the history recorder.
 func TestLiveWriterNeedsIntentsAndJournal(t *testing.T) {
 	inner := newPebbleV3(t)
 	store := v2SurfaceStore{inner}
@@ -695,5 +697,43 @@ func TestRegisterFailureLeavesNoNativeEntry(t *testing.T) {
 	}
 	if kinds["test.good"] != ops.KindTask || kinds["test.v2"] != ops.KindAdapted || len(kinds) != 2 {
 		t.Fatalf("catalog = %v", kinds)
+	}
+}
+
+// noHistoryStore is a v3-capable store without the metadata history
+// recorder: RecordMetadataChange is shadowed by a field of the same name, so
+// the method set no longer satisfies opswriter.HistoryRecorder.
+type noHistoryStore struct {
+	*database.PebbleStore
+	RecordMetadataChange struct{}
+}
+
+// S4 (re-review): a Live writing run refuses to start when the store has
+// intents and the journal but no metadata history recorder.
+func TestLiveWriterNeedsHistory(t *testing.T) {
+	inner := newPebbleV3(t)
+	store := noHistoryStore{PebbleStore: inner}
+	if _, ok := database.AsCapability[opswriter.HistoryRecorder](store); ok {
+		t.Fatal("the fixture still has a history recorder")
+	}
+	if _, ok := database.AsCapability[opswriter.IntentStore](store); !ok {
+		t.Fatal("the fixture lost its intents")
+	}
+	r := startV3Registry(t, store, Options{})
+	var ran atomic.Int32
+	def := ops.Task("test.writes", ops.TaskSpec[ops.NoParams, ops.NoResult]{
+		Common: ops.Common{Title: "w", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { ran.Add(1); return ops.NoResult{}, nil },
+	})
+	if err := Register(r, "test", def); err != nil {
+		t.Fatal(err)
+	}
+	live, err := r.EnqueueOp(context.Background(), "test.writes", map[string]bool{"dry_run": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := awaitTerminal(t, inner, live)
+	if row.Status != "failed" || row.ErrorMessage == nil || ran.Load() != 0 {
+		t.Fatalf("live run without a history recorder: %s ran=%d", row.Status, ran.Load())
 	}
 }
