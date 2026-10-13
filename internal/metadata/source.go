@@ -1,7 +1,7 @@
 // file: internal/metadata/source.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-13
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -17,6 +17,10 @@ import "context"
 func SourceProducesAudiobookReleaseYear(sourceName string) bool {
 	switch sourceName {
 	case (&AudibleClient{}).Name(), (&AudnexusClient{}).Name():
+		return true
+	case CatalogSourceName:
+		// The local catalog is Audible's own product records
+		// (EntryMetadata fills PublishYear from the product's release date).
 		return true
 	default:
 		return false

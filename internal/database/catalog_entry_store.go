@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-12
 
@@ -39,6 +39,8 @@ import (
 //	cat_raw:<id>                     provider JSON as received (never decoded on a read path)
 //	cat_pid:<provider>:<mkt>:<pid>   -> id  (idempotent upsert)
 //	cat_author:<author key>:<id>     ""    (author identity -> entries)
+//	cat_author:alias:<fold>          -> "name:<fold>"  (a spelling variant -> the author block it names;
+//	                                    "!" when two blocks claim the variant: it then resolves to nothing)
 //	cat_series:<series key>:<id>     ""    (series -> entries)
 //	cat_eg:<group id>:<id>           ""    (edition group -> entries)
 //	cat_egkey:<group key>            -> group id (stable assignment, R6)
@@ -242,6 +244,9 @@ type CatalogStore struct {
 	now     func() time.Time
 	// scanHook, when set (tests only), is told every prefix a list or count
 	// scan walks, so a test can prove the entry values are never iterated.
+	// The bounded exact-key reads the bulk matcher uses (EntriesForAuthorKey,
+	// ResolveAuthorAlias) never report here: they are not scans, and a test
+	// that asserts the hook stays silent is asserting exactly that.
 	scanHook func(prefix string)
 }
 
@@ -669,6 +674,133 @@ func (s *CatalogStore) CountAuthorNameBlocks() (int, error) {
 		n++
 	}
 	return n, iter.Error()
+}
+
+// EntriesForAuthorKey returns the ids of the entries filed under the EXACT
+// author name key "name:"+fold (fold is authorjunk.FoldKey of the credit),
+// for the bulk matcher. It never takes EntryIDsByAuthorName's substring
+// fallback, which walks every cat_author:name: key: "phelps" does not find a
+// block filed under "josephphelps".
+//
+// cap bounds the block: a block holding more than cap entries (a junk or
+// franchise row) is not returned, oversize is true and ids is nil, so the
+// caller counts and skips it instead of scoring it. cap <= 0 means no cap.
+// At most cap+1 keys are read, so an oversize block costs a bounded read, and
+// the walk is keys-only (never an entry value).
+func (s *CatalogStore) EntriesForAuthorKey(fold string, cap int) (ids []string, oversize bool, err error) {
+	if fold == "" || strings.Contains(fold, ":") {
+		return nil, false, nil
+	}
+	p := []byte(catAuthorPrefix + "name:" + fold + ":")
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixUpperBound(p)})
+	if err != nil {
+		return nil, false, err
+	}
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() {
+		if cap > 0 && len(ids) >= cap {
+			return nil, true, iter.Error()
+		}
+		ids = append(ids, string(bytes.TrimPrefix(iter.Key(), p)))
+	}
+	return ids, false, iter.Error()
+}
+
+// aliasAmbiguous is the value of an alias claimed by two different blocks.
+const aliasAmbiguous = "!"
+
+// catAliasPrefix is the key family of author aliases. It sits under
+// cat_author: (a registered family), so it needs no family of its own, and
+// no cat_author:<author key>:<id> reader can meet it: those keys start
+// "name:" or "asin:".
+const catAliasPrefix = catAuthorPrefix + "alias:"
+
+// CatalogAuthorAlias maps one spelling variant of an author name to the author block
+// it names. Both are authorjunk.FoldKey folds.
+type CatalogAuthorAlias struct {
+	Alias  string
+	Target string
+}
+
+// PutAuthorAliases files each alias as cat_author:alias:<alias> ->
+// "name:<target>", idempotently. An alias already filed for the SAME target is
+// left alone. An alias already filed for a DIFFERENT target (or claimed by two
+// pairs of this call) is marked ambiguous and then resolves to nothing:
+// "J Smith" must not pick between two Smiths. A pair with an empty side, a
+// side holding ':', or alias == target is skipped. It returns how many
+// pairs it wrote or demoted.
+func (s *CatalogStore) PutAuthorAliases(pairs []CatalogAuthorAlias) (int, error) {
+	if len(pairs) == 0 {
+		return 0, nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	pending := map[string]string{}
+	n := 0
+	for _, p := range pairs {
+		if p.Alias == "" || p.Target == "" || p.Alias == p.Target ||
+			strings.Contains(p.Alias, ":") || strings.Contains(p.Target, ":") {
+			continue
+		}
+		key := catAliasPrefix + p.Alias
+		want := "name:" + p.Target
+		cur, ok := pending[key]
+		if !ok {
+			raw, err := s.get(key)
+			if err != nil {
+				return 0, fmt.Errorf("catalog alias: read %s: %w", key, err)
+			}
+			cur = string(raw)
+		}
+		next := cur
+		switch cur {
+		case "":
+			next = want
+		case want, aliasAmbiguous:
+			continue
+		default:
+			next = aliasAmbiguous
+		}
+		if err := batch.Set([]byte(key), []byte(next), nil); err != nil {
+			return 0, err
+		}
+		pending[key] = next
+		n++
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return 0, fmt.Errorf("catalog alias: commit: %w", err)
+	}
+	return n, nil
+}
+
+// ResolveAuthorAlias returns the fold of the author block alias names. ok is
+// false when no alias is filed or two blocks claim it. It is one point read.
+func (s *CatalogStore) ResolveAuthorAlias(alias string) (target string, ok bool, err error) {
+	if alias == "" || strings.Contains(alias, ":") {
+		return "", false, nil
+	}
+	raw, err := s.get(catAliasPrefix + alias)
+	if err != nil || raw == nil {
+		return "", false, err
+	}
+	v := string(raw)
+	if v == aliasAmbiguous || !strings.HasPrefix(v, "name:") {
+		return "", false, nil
+	}
+	return strings.TrimPrefix(v, "name:"), true, nil
+}
+
+// AllEntryIDs returns the id of every entry, from the keys-only cat_id:
+// index. A caller that decodes the entries (GetEntry) should do so from a
+// bounded worker pool: the catalog is the size of every harvested author's
+// listing.
+func (s *CatalogStore) AllEntryIDs() ([]string, error) {
+	return s.idsUnder(catIDPrefix)
 }
 
 // GetEntryByProviderID resolves (provider, marketplace, pid) to an entry.
