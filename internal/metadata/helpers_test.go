@@ -1,7 +1,7 @@
 // file: internal/metadata/helpers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f2e3d4c-5b6a-7c8d-9e0f-1a2b3c4d5e6f
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -13,49 +13,6 @@ import (
 
 	"github.com/dhowden/tag"
 )
-
-func TestFirstNonEmpty(t *testing.T) {
-	tests := []struct {
-		name     string
-		values   []string
-		expected string
-	}{
-		{
-			name:     "FirstNonEmpty",
-			values:   []string{"", "", "first", "second"},
-			expected: "first",
-		},
-		{
-			name:     "AllEmpty",
-			values:   []string{"", "", ""},
-			expected: "",
-		},
-		{
-			name:     "WithWhitespace",
-			values:   []string{"  ", "", "value"},
-			expected: "value",
-		},
-		{
-			name:     "NoValues",
-			values:   []string{},
-			expected: "",
-		},
-		{
-			name:     "FirstIsValue",
-			values:   []string{"first", "second"},
-			expected: "first",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := firstNonEmpty(tt.values...)
-			if got != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, got)
-			}
-		})
-	}
-}
 
 func TestExtractSeriesFromComments(t *testing.T) {
 	tests := []struct {

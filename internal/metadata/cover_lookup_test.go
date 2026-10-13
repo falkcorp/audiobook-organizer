@@ -1,7 +1,7 @@
 // file: internal/metadata/cover_lookup_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b080c796-52a1-4a1e-a40d-232a50596515
-// last-edited: 2026-09-08
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -258,11 +258,11 @@ func TestSafeCoverID_NoCollision(t *testing.T) {
 	}
 }
 
-// TestDownloadCoverArt_RejectsTraversingBookID pins the write side: a traversing
+// TestReplaceCoverArt_RejectsTraversingBookID pins the write side: a traversing
 // bookID must be refused outright rather than writing through it.
-func TestDownloadCoverArt_RejectsTraversingBookID(t *testing.T) {
+func TestReplaceCoverArt_RejectsTraversingBookID(t *testing.T) {
 	for _, bad := range []string{"..", ".", "/", "../.."} {
-		_, err := downloadCoverArtWithClient(http.DefaultClient,
+		_, err := replaceCoverArtWithClient(http.DefaultClient,
 			"http://127.0.0.1:1/cover.jpg", t.TempDir(), bad)
 		if err == nil {
 			t.Fatalf("bookID %q was accepted; want rejection", bad)

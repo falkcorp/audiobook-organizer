@@ -1,5 +1,5 @@
 // file: internal/metadata/wikipedia_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 
 package metadata
@@ -46,7 +46,7 @@ func TestWikipediaClient_SearchByTitle(t *testing.T) {
 	}))
 	defer wd.Close()
 
-	client := NewWikipediaClientWithBaseURL(mw.URL, wd.URL)
+	client := newWikipediaTestClient(mw.URL, wd.URL)
 	results, err := client.SearchByTitle(context.Background(), "The Great Gatsby")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -76,7 +76,7 @@ func TestWikipediaClient_SearchByTitleAndAuthor(t *testing.T) {
 	}))
 	defer wd.Close()
 
-	client := NewWikipediaClientWithBaseURL(mw.URL, wd.URL)
+	client := newWikipediaTestClient(mw.URL, wd.URL)
 	results, err := client.SearchByTitleAndAuthor(context.Background(), "1984", "George Orwell")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -101,7 +101,7 @@ func TestWikipediaClient_APIError(t *testing.T) {
 	}))
 	defer wd.Close()
 
-	client := NewWikipediaClientWithBaseURL(mw.URL, wd.URL)
+	client := newWikipediaTestClient(mw.URL, wd.URL)
 	_, err := client.SearchByTitle(context.Background(), "test")
 	if err == nil {
 		t.Fatal("expected error for 500 response")
@@ -175,7 +175,7 @@ func TestWikipediaClient_WikidataEnrichment(t *testing.T) {
 	}))
 	defer wd.Close()
 
-	client := NewWikipediaClientWithBaseURL(mw.URL, wd.URL)
+	client := newWikipediaTestClient(mw.URL, wd.URL)
 	results, err := client.SearchByTitle(context.Background(), "Dune")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

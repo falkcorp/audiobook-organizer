@@ -1,7 +1,7 @@
 // file: internal/metadata/providerhttp/providerhttp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c81f4d0a-3b76-4e29-9152-6a0d7e4b8f35
-// last-edited: 2026-08-15
+// last-edited: 2026-10-12
 
 package providerhttp
 
@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // These run against a real httptest server rather than asserting on internal
@@ -30,7 +32,7 @@ func TestThrottled_PacesRequests(t *testing.T) {
 	// 10 rps, burst 1: the 3rd request cannot land before ~200ms.
 	c := &http.Client{Transport: &throttled{
 		base:     http.DefaultTransport,
-		limiter:  newTestLimiter(10, 1),
+		limiter:  rate.NewLimiter(rate.Limit(10), 1),
 		provider: "test",
 	}}
 
@@ -68,7 +70,7 @@ func TestThrottled_RetriesOn429AndHonorsRetryAfter(t *testing.T) {
 
 	c := &http.Client{Transport: &throttled{
 		base:       http.DefaultTransport,
-		limiter:    newTestLimiter(1000, 1000), // pacing out of the way
+		limiter:    rate.NewLimiter(rate.Limit(1000), 1000), // pacing out of the way
 		provider:   "test",
 		maxRetries: 3,
 	}}
@@ -103,7 +105,7 @@ func TestThrottled_GivesUpAfterMaxRetries(t *testing.T) {
 
 	c := &http.Client{Transport: &throttled{
 		base:       http.DefaultTransport,
-		limiter:    newTestLimiter(1000, 1000),
+		limiter:    rate.NewLimiter(rate.Limit(1000), 1000),
 		provider:   "test",
 		maxRetries: 2,
 	}}
@@ -138,7 +140,7 @@ func TestThrottled_ContextCancellationAborts(t *testing.T) {
 	// 1 rps burst 1: the second request must wait ~1s, which we cancel.
 	c := &http.Client{Transport: &throttled{
 		base:     http.DefaultTransport,
-		limiter:  newTestLimiter(1, 1),
+		limiter:  rate.NewLimiter(rate.Limit(1), 1),
 		provider: "test",
 	}}
 

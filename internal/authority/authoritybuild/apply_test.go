@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/apply_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 1174eeba-dc3c-4dc8-a8fe-ed7d13c8bb81
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 
 package authoritybuild
 
@@ -139,8 +139,9 @@ func TestApply_StaleRowsGoOverridesSurvive(t *testing.T) {
 	ok, err := x.IsKnownPerson("Dragon Born", authority.RoleAuthor)
 	require.NoError(t, err)
 	require.False(t, ok)
-	cn, ok, err := x.CanonicalPublisher("podium publishing")
+	snap, err := authority.LoadSnapshot(ctx, ps)
 	require.NoError(t, err)
+	cn, ok := snap.CanonicalPublisher("podium publishing")
 	require.True(t, ok)
 	require.Equal(t, "Podium Audio", cn)
 
@@ -200,9 +201,6 @@ func TestLookup_SnapshotMatchesIndex(t *testing.T) {
 	var empty authority.Lookup = authority.Empty()
 	require.False(t, empty.IsKnownPerson("Ann Leckie", authority.RoleAuthor))
 	require.Len(t, empty.ClassifyTokens([]string{"a", "b"}), 2)
-	ref, err := x.LookupASIN("b001jp7w9e")
-	require.NoError(t, err)
-	require.Equal(t, []string{"annleckie"}, ref.Folds)
 }
 
 // TestCatalogRaw_ReadableThroughRawKV proves the catalog store and the raw

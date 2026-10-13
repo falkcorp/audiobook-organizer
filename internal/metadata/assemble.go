@@ -1,7 +1,7 @@
 // file: internal/metadata/assemble.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -38,14 +38,10 @@ type AssembledMetadata struct {
 	NarratorSource string
 }
 
-// AssembleBookMetadata builds a BookMetadata from folder path hierarchy + first file tags.
-func AssembleBookMetadata(dirPath, firstFilePath string, fileCount int, totalDuration float64) (*AssembledMetadata, error) {
-	return AssembleBookMetadataWith(dirPath, firstFilePath, fileCount, totalDuration, NameEvidence{})
-}
-
-// AssembleBookMetadataWith is AssembleBookMetadata with the folder parse's
-// person and series evidence (ExtractMetadataFromFolderWith). The scanner and
-// the importer pass scanner.FolderNameEvidence.
+// AssembleBookMetadataWith builds a BookMetadata from the folder path
+// hierarchy plus the first file's tags. ev is the folder parse's person and
+// series evidence (ExtractMetadataFromFolderWith); the scanner and the
+// importer pass scanner.FolderNameEvidence.
 func AssembleBookMetadataWith(dirPath, firstFilePath string, fileCount int, totalDuration float64, ev NameEvidence) (*AssembledMetadata, error) {
 	assembleLog := logger.New("assemble")
 	bm := &AssembledMetadata{

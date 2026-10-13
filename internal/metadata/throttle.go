@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -63,9 +63,6 @@ var throttleDurations = map[ThrottleReason]time.Duration{
 	ThrottleUnavailable: 30 * time.Minute,
 	ThrottleTransport:   5 * time.Minute,
 }
-
-// DurationFor returns the hold for a reason, or 0 when unknown.
-func DurationFor(r ThrottleReason) time.Duration { return throttleDurations[r] }
 
 // dailyQuotaMarkers are the phrases providers use for an exhausted per-day
 // allowance, as opposed to a burst limit. Google Books sends

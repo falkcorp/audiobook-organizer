@@ -1,7 +1,7 @@
 // file: internal/openlibrary/types.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-12
 
 package openlibrary
 
@@ -65,21 +65,4 @@ type DumpStatus struct {
 	Editions DumpTypeStatus `json:"editions"`
 	Authors  DumpTypeStatus `json:"authors"`
 	Works    DumpTypeStatus `json:"works"`
-}
-
-// DescriptionText extracts a plain string from an OL description field,
-// which may be a string or a {"type": "/type/text", "value": "..."} object.
-func DescriptionText(desc any) string {
-	if desc == nil {
-		return ""
-	}
-	if s, ok := desc.(string); ok {
-		return s
-	}
-	if m, ok := desc.(map[string]any); ok {
-		if v, ok := m["value"].(string); ok {
-			return v
-		}
-	}
-	return ""
 }

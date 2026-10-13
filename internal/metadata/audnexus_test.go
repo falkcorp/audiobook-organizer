@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus_test.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-c5d6e7f8a9b0
-// last-edited: 2026-10-01
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -55,7 +55,7 @@ func TestAudnexusClient_LookupByASIN(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 	meta, err := client.LookupByASIN(context.Background(), "B003JVHRU0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -103,7 +103,7 @@ func TestAudnexusClient_SearchByTitleAndAuthor(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 	// Returns nil because we can't enumerate an author's books
 	results, err := client.SearchByTitleAndAuthor(context.Background(), "The Hobbit", "Tolkien")
 	if err != nil {
@@ -121,7 +121,7 @@ func TestAudnexusClient_LookupByASIN_NotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 	_, err := client.LookupByASIN(context.Background(), "BADASIN")
 	if err == nil {
 		t.Error("expected error on 404 response")
@@ -144,7 +144,7 @@ func TestAudnexusClient_LookupByASINInRegions_FailureOutranksNotFound(t *testing
 	}))
 	defer server.Close()
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 	_, err := client.LookupByASINInRegions(context.Background(), "B000000000", []string{"", "uk", "au"})
 	if err == nil || IsNotFound(err) {
 		t.Fatalf("err = %v, want the uk 502, not a not-found", err)
@@ -198,7 +198,7 @@ func TestAudnexusClient_LookupByASIN_CancelledContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 
 	// Cancel shortly after starting so the FIRST region request is in-flight.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -234,7 +234,7 @@ func TestAudnexusClient_LookupByASIN_AlreadyCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before the call
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 	start := time.Now()
 	_, err := client.LookupByASIN(ctx, "B0CANCELED")
 	if err == nil {
@@ -266,7 +266,7 @@ func TestAudnexusClient_SearchByContext_UsesASIN(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAudnexusClientWithBaseURL(server.URL)
+	client := newAudnexusTestClient(server.URL)
 
 	// With ASIN: should hit LookupByASIN and return one result.
 	results, err := client.SearchByContext(context.Background(), &SearchContext{

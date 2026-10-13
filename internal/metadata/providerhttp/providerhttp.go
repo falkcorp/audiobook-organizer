@@ -1,7 +1,7 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 // Package providerhttp hands out rate-limited HTTP clients for outbound
 // metadata-provider calls.
@@ -259,11 +259,6 @@ func ClientWithTransport(provider string, base http.RoundTripper) *http.Client {
 			maxRetries: l.MaxRetries,
 		},
 	}
-}
-
-// newTestLimiter builds a limiter for tests without touching the shared maps.
-func newTestLimiter(rps float64, burst int) *rate.Limiter {
-	return rate.NewLimiter(rate.Limit(rps), burst)
 }
 
 // resetForTest clears the shared caches so tests do not leak state into each

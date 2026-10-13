@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_title_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 0cc97d6f-e2ee-42d6-8233-ed4cec61f5ab
-// last-edited: 2026-09-29
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -224,7 +224,7 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 		"/lib/books/Dune Chronicles/Children of Dune/Disc 1",
 		"/lib/books/The City & The City/Part One/Disc 1",
 	} {
-		fm, err := ExtractMetadataFromFolder(dir)
+		fm, err := ExtractMetadataFromFolderWith(dir, NameEvidence{})
 		if err != nil {
 			t.Fatalf("%s: %v", dir, err)
 		}
@@ -250,7 +250,7 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 		// Stops after the one step: a genre folder past the author is not read.
 		{"/mnt/Science Fiction/Stephen King/The Dark Tower/The Gunslinger/Disc 1", "Stephen King", "The Dark Tower"},
 	} {
-		fm, err := ExtractMetadataFromFolder(tc.dir)
+		fm, err := ExtractMetadataFromFolderWith(tc.dir, NameEvidence{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,7 +263,7 @@ func TestExtractMetadataFromFolder_SeriesFolderIsNotAnAuthor(t *testing.T) {
 		}
 	}
 
-	fm, err := ExtractMetadataFromFolder("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1")
+	fm, err := ExtractMetadataFromFolderWith("/lib/books/Brandon Sanderson/The Way of Kings/Disc 1", NameEvidence{})
 	if err != nil {
 		t.Fatal(err)
 	}

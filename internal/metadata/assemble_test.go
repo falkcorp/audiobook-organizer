@@ -1,5 +1,5 @@
 // file: internal/metadata/assemble_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2c3d4e5f-6a7b-8c9d-0e1f-2a3b4c5d6e7f
 
 package metadata
@@ -15,7 +15,7 @@ import (
 
 // newAssembleExtractorStub returns an in-package mockery-generated
 // MetadataExtractor configured to return fixed metadata. Used by
-// tests that exercise AssembleBookMetadata and want to skip real
+// tests that exercise AssembleBookMetadataWith and want to skip real
 // tag extraction.
 func newAssembleExtractorStub(t *testing.T, meta Metadata, err error) *mockMetadataExtractorInternal {
 	t.Helper()
@@ -48,7 +48,7 @@ func TestResolveTitleSkipsGenericTag(t *testing.T) {
 // regression guard at the resolution seam. Multi-file groups detected by the
 // scanner's sequential-naming detector have generic-likely per-chapter tag
 // titles ("Chapter 1", "Part 1", bare numbers). Routing such a group through
-// AssembleBookMetadata must yield the FOLDER title, not the first chapter's tag —
+// AssembleBookMetadataWith must yield the FOLDER title, not the first chapter's tag —
 // otherwise the chapter name leaks into (and collides across) Book.Title.
 func TestAssembleBookMetadata_GenericChapterUsesFolder(t *testing.T) {
 	base := t.TempDir()
@@ -69,7 +69,7 @@ func TestAssembleBookMetadata_GenericChapterUsesFolder(t *testing.T) {
 	}, nil))
 	defer func() { SetMetadataExtractor(nil) }()
 
-	bm, err := AssembleBookMetadata(bookDir, firstChapter, 5, 0)
+	bm, err := AssembleBookMetadataWith(bookDir, firstChapter, 5, 0, NameEvidence{})
 	if err != nil {
 		t.Fatalf("AssembleBookMetadata error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestAssembleBookMetadata_DisagreeingChapterTagsUseFolder(t *testing.T) {
 	}))
 	defer func() { SetMetadataExtractor(nil) }()
 
-	bm, err := AssembleBookMetadata(bookDir, firstChapter, 2, 0)
+	bm, err := AssembleBookMetadataWith(bookDir, firstChapter, 2, 0, NameEvidence{})
 	if err != nil {
 		t.Fatalf("AssembleBookMetadata error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestAssembleBookMetadata_AgreeingChapterTagsWin(t *testing.T) {
 	}))
 	defer func() { SetMetadataExtractor(nil) }()
 
-	bm, err := AssembleBookMetadata(bookDir, firstChapter, 3, 0)
+	bm, err := AssembleBookMetadataWith(bookDir, firstChapter, 3, 0, NameEvidence{})
 	if err != nil {
 		t.Fatalf("AssembleBookMetadata error: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestAssembleBookMetadataIntegration(t *testing.T) {
 	}, nil))
 	defer func() { SetMetadataExtractor(nil) }()
 
-	bm, err := AssembleBookMetadata(bookDir, fakeFile, 3, 12345.0)
+	bm, err := AssembleBookMetadataWith(bookDir, fakeFile, 3, 12345.0, NameEvidence{})
 	if err != nil {
 		t.Fatalf("AssembleBookMetadata error: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestAssembleBookMetadataNoFile(t *testing.T) {
 	bookDir := filepath.Join(base, "Some Author", "Some Book")
 	os.MkdirAll(bookDir, 0755)
 
-	bm, err := AssembleBookMetadata(bookDir, "", 0, 0)
+	bm, err := AssembleBookMetadataWith(bookDir, "", 0, 0, NameEvidence{})
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}

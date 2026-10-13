@@ -1,7 +1,7 @@
 // file: internal/metadata/book_name.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 //
 // ParseBookName: the one reader of the title/author/series/number shapes that
 // file and folder names pack into a book's title. Scan-time folder parsing
@@ -118,15 +118,6 @@ func (b BookName) Has(shape string) bool {
 		}
 	}
 	return false
-}
-
-// SearchName is the book's own name: Name when a slot carried one, else
-// Title.
-func (b BookName) SearchName() string {
-	if b.Name != "" {
-		return b.Name
-	}
-	return b.Title
 }
 
 var (

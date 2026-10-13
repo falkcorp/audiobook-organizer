@@ -1,5 +1,5 @@
 // file: internal/metadata/hardcover_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c8d9e0f1-a2b3-4567-890a-bcdef1234567
 
 package metadata
@@ -73,7 +73,7 @@ func TestHardcoverClient_SearchByTitle_ParsesRichFields(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewHardcoverClientWithBaseURL(server.URL, "test-token")
+	client := newHardcoverTestClient(server.URL, "test-token")
 	results, err := client.SearchByTitle(context.Background(), "Foundation and Empire")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -133,7 +133,7 @@ func TestHardcoverClient_SearchByContext_PrefersISBN(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewHardcoverClientWithBaseURL(server.URL, "test-token")
+	client := newHardcoverTestClient(server.URL, "test-token")
 
 	// ISBN-13 path: query text must contain the ISBN, not the title.
 	_, _ = client.SearchByContext(context.Background(), &SearchContext{

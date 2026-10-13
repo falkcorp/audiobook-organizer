@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 
 package metadata_test
@@ -14,7 +14,7 @@ func TestExtractMetadataFromFolder_LongEarthExample(t *testing.T) {
 	// Real-world example from the user's library
 	path := "/mnt/bigdata/books/audiobook-organizer/Terry Pratchett & Stephen Baxter/(Long Earth 05) The Long Cosmos/(Long Earth 05) The Long Cosmos - Terry Pratchett & Stephen Baxter - read by Michael Fenton Stevens"
 
-	fm, err := metadata.ExtractMetadataFromFolder(path)
+	fm, err := metadata.ExtractMetadataFromFolderWith(path, metadata.NameEvidence{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestExtractMetadataFromFolder_LongEarthExample(t *testing.T) {
 func TestExtractMetadataFromFolder_SingleAuthorNoSeries(t *testing.T) {
 	path := "/media/audiobooks/Stephen King/The Shining - Stephen King - read by Campbell Scott"
 
-	fm, err := metadata.ExtractMetadataFromFolder(path)
+	fm, err := metadata.ExtractMetadataFromFolderWith(path, metadata.NameEvidence{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestExtractMetadataFromFolder_SingleAuthorNoSeries(t *testing.T) {
 func TestExtractMetadataFromFolder_SeriesNoNarrator(t *testing.T) {
 	path := "/audiobooks/Brandon Sanderson/(Stormlight 01) The Way of Kings"
 
-	fm, err := metadata.ExtractMetadataFromFolder(path)
+	fm, err := metadata.ExtractMetadataFromFolderWith(path, metadata.NameEvidence{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestExtractMetadataFromFolder_SeriesNoNarrator(t *testing.T) {
 func TestExtractMetadataFromFolder_NarratedByVariant(t *testing.T) {
 	path := "/books/Patrick Rothfuss/(Kingkiller 01) The Name of the Wind - narrated by Nick Podehl"
 
-	fm, err := metadata.ExtractMetadataFromFolder(path)
+	fm, err := metadata.ExtractMetadataFromFolderWith(path, metadata.NameEvidence{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestExtractMetadataFromFolder_NarratedByVariant(t *testing.T) {
 }
 
 func TestExtractMetadataFromFolder_EmptyPath(t *testing.T) {
-	fm, err := metadata.ExtractMetadataFromFolder("")
+	fm, err := metadata.ExtractMetadataFromFolderWith("", metadata.NameEvidence{})
 	if err != nil {
 		t.Fatalf("unexpected error on empty path: %v", err)
 	}
@@ -139,10 +139,10 @@ func TestIsGenericPartFilename(t *testing.T) {
 }
 
 func TestSplitMultipleAuthors(t *testing.T) {
-	// Indirect test via ExtractMetadataFromFolder
+	// Indirect test via ExtractMetadataFromFolderWith
 	path := "/books/Arthur C. Clarke & Gregory Benford/Shipstar/(Bowl of Heaven 02) Shipstar"
 
-	fm, err := metadata.ExtractMetadataFromFolder(path)
+	fm, err := metadata.ExtractMetadataFromFolderWith(path, metadata.NameEvidence{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

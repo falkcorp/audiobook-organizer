@@ -1,5 +1,5 @@
 // file: internal/openlibrary/downloader_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 
 package openlibrary
@@ -19,11 +19,6 @@ func TestDumpFilename(t *testing.T) {
 	assert.Equal(t, "ol_dump_editions_latest.txt.gz", DumpFilename("editions"))
 	assert.Equal(t, "ol_dump_authors_latest.txt.gz", DumpFilename("authors"))
 	assert.Equal(t, "ol_dump_works_latest.txt.gz", DumpFilename("works"))
-}
-
-func TestDumpURL(t *testing.T) {
-	url := DumpURL("editions")
-	assert.Equal(t, "https://openlibrary.org/data/ol_dump_editions_latest.txt.gz", url)
 }
 
 func TestDownloadFromHTTPServer(t *testing.T) {
@@ -81,14 +76,4 @@ func TestDumpSources(t *testing.T) {
 	assert.GreaterOrEqual(t, len(DumpSources), 2, "should have at least 2 download sources")
 	assert.Contains(t, DumpSources[0], "openlibrary.org")
 	assert.Contains(t, DumpSources[1], "archive.org")
-}
-
-func TestDescriptionText(t *testing.T) {
-	assert.Equal(t, "", DescriptionText(nil))
-	assert.Equal(t, "hello", DescriptionText("hello"))
-	assert.Equal(t, "world", DescriptionText(map[string]any{
-		"type":  "/type/text",
-		"value": "world",
-	}))
-	assert.Equal(t, "", DescriptionText(42))
 }
