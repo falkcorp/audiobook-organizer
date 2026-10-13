@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d03b9f2-a4e1-4875-b3c6-0f92d8e15a47
 // last-edited: 2026-10-13
 
@@ -59,13 +59,13 @@ import type { Book } from '../../services/api';
 import { isAbortError } from '../../utils/apiFetch';
 import { BulkConfirmDialog } from '../common/BulkConfirmDialog';
 import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
+import type { AuthorId } from './reviewActions';
 import { authorsLane } from './lanes/authors';
 import {
   AUTHOR_CANDIDATES_PAGE,
   AUTHOR_PAGE_SIZES,
   AUTHOR_SHORTCUTS,
   type AuthorKindFilter,
-  isMergeable,
   type AuthorsLane,
 } from './lanes/useAuthorsLane';
 import { fetchBooksByAuthor } from './lanes/authorsReads';
@@ -168,6 +168,16 @@ export function AuthorBooksPopover({
                 Retry
               </Button>
             </Box>
+          )}
+          {(answer.books.length > 0 || answer.failed === 0) && (
+            // The chip on the card sums each author record's credits, so a book
+            // credited to two of them is counted twice there; this is the
+            // distinct list below.
+            <Typography variant="caption" sx={{ color: 'text.secondary', px: 1 }} data-testid="author-books-header">
+              {answer.failed > 0 ? 'At least ' : ''}
+              {answer.books.length} book{answer.books.length === 1 ? '' : 's'} across {authorIds.length} author
+              record{authorIds.length === 1 ? '' : 's'}
+            </Typography>
           )}
           {answer.books.length === 0 ? (
             // Empty copy only when every fetch succeeded: a failure must never
@@ -348,7 +358,8 @@ export interface AuthorsPanelProps {
 }
 
 export function AuthorsPanel({ authors }: AuthorsPanelProps) {
-  const [confirmAll, setConfirmAll] = useState<number | null>(null);
+  // The groups the reviewer is confirming, captured when the dialog opened.
+  const [confirmAll, setConfirmAll] = useState<AuthorId[] | null>(null);
   const [confirmSelected, setConfirmSelected] = useState(false);
   const { selection } = authors;
   const mergeableCount = authors.mergeable.length;
@@ -403,10 +414,10 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
                 variant="contained"
                 color="warning"
                 startIcon={<MergeIcon />}
-                onClick={() => setConfirmAll(mergeableCount)}
+                onClick={() => setConfirmAll(authors.mergeable.map((g) => g.canonical.id))}
                 disabled={authors.busy || mergeableCount === 0}
               >
-                Merge All ({mergeableCount})
+                Merge all {mergeableCount} name-variant group{mergeableCount === 1 ? '' : 's'}
               </Button>
             </>
           )}
@@ -440,13 +451,29 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
         )}
       </Box>
 
+      {authors.stale && (
+        <Alert
+          severity="warning"
+          data-testid="authors-stale"
+          sx={{ mx: 2, mb: 1 }}
+          action={
+            <Button color="inherit" size="small" onClick={authors.refresh} disabled={authors.busy}>
+              Rescan
+            </Button>
+          }
+        >
+          These results are stale since your last change: the server cleared its list of duplicate authors, so
+          what is shown is the list as this screen edited it. Rescan to rebuild it from the library.
+        </Alert>
+      )}
+
       <CandidatesSection authors={authors} />
 
       {authors.bulk && (
         <Box sx={{ px: 2 }} data-testid="authors-bulk-progress">
           <LinearProgress variant="determinate" value={(authors.bulk.done / authors.bulk.total) * 100} />
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-            Merged {authors.bulk.done} of {authors.bulk.total} groups
+            Processed {authors.bulk.done} of {authors.bulk.total} groups
           </Typography>
         </Box>
       )}
@@ -524,7 +551,7 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
             <SelectAllMatchingBanner
               selection={selection}
               pageCount={authors.pageGroups.length}
-              totalMatching={authors.filtered.filter(isMergeable).length}
+              totalMatching={authors.selectableTotal}
               noun="groups"
               testIdPrefix="author-groups-select-all"
             />
@@ -554,7 +581,11 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
         <DialogTitle>Confirm Merge All</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This will merge {confirmAll} groups. This action cannot be undone. Are you sure?
+            This will merge {confirmAll?.length} name-variant groups (composite and production-company groups
+            are not included). This action cannot be undone. Are you sure?
+          </DialogContentText>
+          <DialogContentText sx={{ mt: 1 }} data-testid="authors-merge-all-warning">
+            Keep this lane open: leaving it stops the remaining merges.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -563,9 +594,9 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
             color="warning"
             variant="contained"
             onClick={() => {
-              const expectedTotal = confirmAll ?? 0;
+              const expectedIds = confirmAll ?? [];
               setConfirmAll(null);
-              authors.dispatch({ lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedTotal });
+              authors.dispatch({ lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedIds });
             }}
           >
             Confirm

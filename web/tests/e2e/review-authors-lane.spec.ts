@@ -183,8 +183,8 @@ test.describe('Author Dedup', () => {
 
   test('shows book count chips', async ({ page }) => {
     await openLane(page);
-    await expect(page.getByText('12 book(s)')).toBeVisible();
-    await expect(page.getByText('9 book(s)')).toBeVisible();
+    await expect(page.getByText('12 credit(s)')).toBeVisible();
+    await expect(page.getByText('9 credit(s)')).toBeVisible();
   });
 
   test('shows variant chips and the suggested name', async ({ page }) => {
@@ -300,7 +300,7 @@ test.describe('Author Dedup', () => {
 test.describe('Book Preview Popover', () => {
   test('clicking the book count chip opens a popover with the books', async ({ page }) => {
     await openLane(page);
-    await page.getByText('12 book(s)').click();
+    await page.getByText('12 credit(s)').click();
     await expect(page.getByText('Book One')).toBeVisible();
     await expect(page.getByText('Book Two')).toBeVisible();
     await expect(page.getByText('Book Three')).toBeVisible();
@@ -308,20 +308,20 @@ test.describe('Book Preview Popover', () => {
 
   test('shows cover thumbnails when available', async ({ page }) => {
     await openLane(page);
-    await page.getByText('12 book(s)').click();
+    await page.getByText('12 credit(s)').click();
     await expect(page.locator('img[src*="covers/local"]')).toBeVisible();
   });
 
   test('clicking a book navigates to its detail page', async ({ page }) => {
     await openLane(page);
-    await page.getByText('12 book(s)').click();
+    await page.getByText('12 credit(s)').click();
     await page.getByText('Book One').click();
     await expect(page).toHaveURL(/\/library\/b1/);
   });
 
   test('closes when clicking outside', async ({ page }) => {
     await openLane(page);
-    await page.getByText('12 book(s)').click();
+    await page.getByText('12 credit(s)').click();
     await expect(page.getByText('Book One')).toBeVisible();
     await page.mouse.click(10, 10);
     await expect(page.getByText('Book One')).not.toBeVisible();
@@ -329,7 +329,7 @@ test.describe('Book Preview Popover', () => {
 
   test('handles an author with no books', async ({ page }) => {
     await openLane(page, { books: [] });
-    await page.getByText('12 book(s)').click();
+    await page.getByText('12 credit(s)').click();
     await expect(page.getByText(/no books found/i)).toBeVisible();
   });
 
@@ -338,7 +338,7 @@ test.describe('Book Preview Popover', () => {
     await page.route('**/api/v1/audiobooks?author_id=*', async (route) => {
       await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'books down' }) });
     });
-    await page.getByText('12 book(s)').click();
+    await page.getByText('12 credit(s)').click();
     await expect(page.getByText(/could not load/i)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
     await expect(page.getByText(/no books found/i)).toHaveCount(0);
@@ -393,7 +393,7 @@ test.describe('Dedup Bulk Actions', () => {
     await openLane(page);
     // Two name-variant groups; the composite and the two production companies
     // have no variants to merge and are not counted.
-    await expect(page.getByRole('button', { name: 'Merge All (2)' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Merge all 2 name-variant groups' })).toBeVisible();
   });
 
   test('Merge All asks first, and Cancel merges nothing', async ({ page }) => {
@@ -412,7 +412,7 @@ test.describe('Dedup Bulk Actions', () => {
     const merges = await countRequests(page, '/api/v1/authors/merge', 'POST');
     await page.getByRole('button', { name: /merge all/i }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByText('Merged 2 of 2 all group(s)')).toBeVisible();
+    await expect(page.getByText('Merged 2 of 2 name-variant group(s).')).toBeVisible();
     expect(merges.n).toBe(2);
   });
 

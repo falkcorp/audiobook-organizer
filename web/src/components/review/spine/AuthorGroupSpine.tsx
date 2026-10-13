@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/AuthorGroupSpine.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8f6b04-d1a7-4c93-85e0-9b4c7a1f3d62
 // last-edited: 2026-10-13
 //
@@ -18,7 +18,7 @@
 // remove-from-merge, the book-count chip that opens the books popover, Validate,
 // and the one verb the group's kind calls for (Merge, Split, Find Real Author).
 
-import { memo, useMemo, useState, type KeyboardEvent } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   Box,
   Button,
@@ -44,7 +44,7 @@ import UndoIcon from '@mui/icons-material/Undo';
 import SearchIcon from '@mui/icons-material/Search';
 import type { AuthorsAction } from '../reviewActions';
 import type { AuthorGroup, AuthorsLane, ValidationState } from '../lanes/useAuthorsLane';
-import { isMergeable } from '../lanes/useAuthorsLane';
+import { hasMergeWork, isMergeable } from '../lanes/useAuthorsLane';
 
 const EMPTY_NUMBERS: ReadonlySet<number> = new Set<number>();
 const EMPTY_STRINGS: ReadonlySet<string> = new Set<string>();
@@ -195,6 +195,9 @@ const GroupCard = memo(function GroupCard({
   const dispatch = handlers.onAction;
   const base = { lane: 'authors', entity: 'author' } as const;
   const activeVariants = group.variants.filter((v) => !excluded.has(v.id));
+  // Nothing to merge once every variant is left out; the button says so by
+  // being disabled instead of sending a request that does nothing.
+  const canMerge = hasMergeWork(group, excluded);
   // Evidence from a different name than the card shows now would mislead.
   const shownValidation = validation && validation.forName === canonical.name ? validation : undefined;
 
@@ -262,15 +265,17 @@ const GroupCard = memo(function GroupCard({
               )}
             </>
           )}
-          <Chip
-            icon={<MenuBookIcon />}
-            label={`${group.bookCount} book(s)`}
-            size="small"
-            variant="outlined"
-            data-author-books-chip={key}
-            onClick={(e) => handlers.onOpenBooks(key, e.currentTarget)}
-            sx={{ cursor: 'pointer' }}
-          />
+          <Tooltip title="Book credits across all of this group's author records. A book credited to two of them counts twice. Click to list the books.">
+            <Chip
+              icon={<MenuBookIcon />}
+              label={`${group.bookCount} credit(s)`}
+              size="small"
+              variant="outlined"
+              data-author-books-chip={key}
+              onClick={(e) => handlers.onOpenBooks(key, e.currentTarget)}
+              sx={{ cursor: 'pointer' }}
+            />
+          </Tooltip>
           {group.isProductionCompany && <Chip label="Production Company" size="small" color="warning" />}
         </Box>
 
@@ -434,7 +439,7 @@ const GroupCard = memo(function GroupCard({
             startIcon={<MergeIcon />}
             variant="contained"
             size="small"
-            disabled={locked || !isMergeable(group)}
+            disabled={locked || !canMerge}
             onClick={() => dispatch({ ...base, type: 'mergeGroup', canonicalId: canonical.id })}
           >
             {`Merge into "${canonical.name}"`}
@@ -453,18 +458,28 @@ export function AuthorGroupSpine({ lane }: AuthorGroupSpineProps) {
   const { dispatch, openBooks, validate, startEdit, cancelEdit, selection } = lane;
   const { toggle } = selection;
 
-  // Stable across selection ticks: every member is a useCallback/setState in the
-  // lane, or `selection.toggle`, which the selection hook keeps stable by design.
+  // `selection.toggle` is rebuilt whenever the set of selectable keys changes,
+  // which an edit to ONE group's choices does (leaving its last variant out makes
+  // it unselectable). Handing it to the rows directly would give every card a new
+  // handler for that one card's change, so the rows get a stable forwarder.
+  const toggleRef = useRef(toggle);
+  useLayoutEffect(() => {
+    toggleRef.current = toggle;
+  }, [toggle]);
+  const onToggleSelect = useCallback((key: string, shiftKey: boolean) => toggleRef.current(key, shiftKey), []);
+
+  // Stable across selection ticks and choice edits: every member is a
+  // useCallback/setState in the lane, or the forwarder above.
   const handlers = useMemo<Handlers>(
     () => ({
-      onToggleSelect: toggle,
+      onToggleSelect,
       onAction: dispatch,
       onStartEdit: startEdit,
       onCancelEdit: cancelEdit,
       onOpenBooks: openBooks,
       onValidate: validate,
     }),
-    [toggle, dispatch, startEdit, cancelEdit, openBooks, validate]
+    [onToggleSelect, dispatch, startEdit, cancelEdit, openBooks, validate]
   );
 
   return (
@@ -474,7 +489,7 @@ export function AuthorGroupSpine({ lane }: AuthorGroupSpineProps) {
           key={group.key}
           group={group}
           selected={selection.isSelected(group.key)}
-          selectable={isMergeable(group)}
+          selectable={isMergeable(group, lane.choices)}
           focused={lane.focusedKey === group.key}
           excluded={lane.choices.excluded[group.key] ?? EMPTY_NUMBERS}
           narrators={lane.choices.narrators[group.key] ?? EMPTY_STRINGS}

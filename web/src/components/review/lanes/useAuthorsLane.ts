@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-10-13
 
@@ -47,7 +47,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../../../services/api';
 import type { AuthorDedupGroup, DedupCandidate, Operation, ValidationResult } from '../../../services/api';
-import { ApiTimeoutError, isAbortError } from '../../../utils/apiFetch';
+import { ApiTimeoutError, isAbortError, isAuthRedirectError } from '../../../utils/apiFetch';
+import { SESSION_EXPIRED_MESSAGE } from '../../../utils/apiResponse';
 import { useRowSelection, type RowSelection } from '../../../hooks/useRowSelection';
 import {
   asAuthorId,
@@ -121,6 +122,14 @@ function current<T>(keyed: Keyed<T> | null, key: string): Load<T> {
 interface GroupsValue {
   groups: AuthorGroup[];
   needsScan: boolean;
+  /**
+   * The server said its cached list is gone (needs_refresh) while this lane
+   * already held groups. Every author write clears that cache, so this is what a
+   * re-read looks like after the reviewer's own changes. The held groups are kept
+   * (they already reflect those changes); the panel says they are not backed by
+   * a fresh scan.
+   */
+  stale: boolean;
 }
 
 export type ValidationState =
@@ -193,9 +202,90 @@ export function planMerge(group: AuthorGroup, choices: Choices): MergePlan {
   };
 }
 
-/** A group a Merge button applies to: it has variants to fold in. */
-export function isMergeable(group: AuthorGroup): boolean {
-  return group.kind === 'variants' && group.variants.length > 0;
+/**
+ * Whether anything is left for a Merge to do: the group is a name-variants group
+ * and at least one of its variants is not left out. A group whose every variant
+ * is excluded has nothing to merge or reclassify, so it is neither selectable nor
+ * counted by Merge All.
+ */
+export function hasMergeWork(group: AuthorGroup, excluded: ReadonlySet<number>): boolean {
+  return group.kind === 'variants' && group.variants.some((v) => !excluded.has(v.id));
+}
+
+/** A group a Merge button applies to, given the reviewer's current choices. */
+export function isMergeable(group: AuthorGroup, choices: Choices): boolean {
+  return hasMergeWork(group, choices.excluded[group.key] ?? EMPTY_NUMBERS);
+}
+
+/** What one group's merge came to, for the toast and for a bulk run's totals. */
+interface MergeOutcome {
+  /**
+   * `session`: the login expired; `timeout`: a request got no answer in time (so
+   * the write may have run); `skipped`: nothing was sent.
+   */
+  result: 'merged' | 'reclassified' | 'skipped' | 'failed' | 'session' | 'timeout';
+  message: string;
+  name: string;
+  /** Narrator reclassifications that failed; a bulk run sums them. */
+  reclassifyFailures: number;
+}
+
+/** Removes `gone` variants from one group, and the group itself when none is left. */
+function dropVariants(gs: AuthorGroup[], key: string, gone: ReadonlySet<number>): AuthorGroup[] {
+  if (gone.size === 0) return gs;
+  return gs.flatMap((g) => {
+    if (g.key !== key) return [g];
+    const rest = g.variants.filter((v) => !gone.has(v.id));
+    return rest.length === 0 ? [] : [{ ...g, variants: rest }];
+  });
+}
+
+/**
+ * The ids a failed entities.author-merge run says it left behind. The server
+ * writes them in this exact form (AuthorMergeFailedIDsPrefix in
+ * internal/server/entities_ops.go); change both together. Null when the message
+ * does not carry the list (any other failure).
+ */
+export function parseLeftIds(message: string): Set<number> | null {
+  const m = /author merge left author ids \[([0-9 ]*)\]/.exec(message);
+  if (!m) return null;
+  return new Set(
+    m[1]
+      .split(' ')
+      .filter(Boolean)
+      .map(Number)
+  );
+}
+
+/**
+ * How long a write waits for its request to answer. The api.ts write wrappers
+ * set no timeout and apiFetch has no default, so one hung request would hold the
+ * lane's write queue (and its "busy" state) forever.
+ */
+export const WRITE_DEADLINE_MS = 60_000;
+
+class WriteTimeoutError extends Error {
+  constructor() {
+    super(`no answer after ${WRITE_DEADLINE_MS / 1000}s`);
+    this.name = 'WriteTimeoutError';
+  }
+}
+
+/** Rejects with WriteTimeoutError if `work` has not settled by the deadline. */
+function withDeadline<T>(work: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new WriteTimeoutError()), WRITE_DEADLINE_MS);
+    work.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +311,10 @@ export interface AuthorsLane {
 
   /** Groups a Merge button applies to, across the whole list (not the filter). */
   mergeable: AuthorGroup[];
+  /** Selectable (mergeable) groups matching the current kind filter. */
+  selectableTotal: number;
+  /** The list is the lane's own edit of an earlier read; the server's copy is gone. */
+  stale: boolean;
   selection: RowSelection<string>;
   /** Selected groups that still exist: the rows `selectedCount` counts. */
   selectedGroups: AuthorGroup[];
@@ -229,7 +323,7 @@ export interface AuthorsLane {
   choices: Choices;
   validation: Readonly<Record<string, ValidationState>>;
   pendingKeys: ReadonlySet<string>;
-  /** A bulk merge is running: `done` of `total` groups so far. */
+  /** A bulk merge is running: `done` of `total` groups processed so far. */
   bulk: { done: number; total: number } | null;
   scanning: boolean;
   /** Anything that writes is in flight: bulk buttons wait for it. */
@@ -277,9 +371,20 @@ export function useAuthorsLane(
   // a prop changes" pattern) so there is no committed frame in between.
   const [activation, setActivation] = useState(0);
   const [prevActive, setPrevActive] = useState(active);
+  // Declared ahead of the block below, which clears them on leaving.
+  const [editing, setEditing] = useState<{ key: string; initial: string } | null>(null);
+  const [booksFor, setBooksFor] = useState<BooksTarget | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   if (prevActive !== active) {
     setPrevActive(active);
     if (active) setActivation((a) => a + 1);
+    else {
+      // An open popover is anchored to a card that is about to unmount, and an
+      // open editor or help dialog belongs to a screen nobody is on.
+      setBooksFor(null);
+      setEditing(null);
+      setHelpOpen(false);
+    }
   }
   const [reloadToken, setReloadToken] = useState(0);
   const groupsKey = `${activation}:${reloadToken}`;
@@ -312,6 +417,13 @@ export function useAuthorsLane(
     [groupsLoad]
   );
   const needsScan = groupsLoad.state === 'ready' && groupsLoad.value.needsScan;
+  const stale = groupsLoad.state === 'ready' && groupsLoad.value.stale;
+  // A popover or editor on a group that has left the list (merged, split,
+  // resolved) would point at a card that is gone.
+  if (groupsLoad.state === 'ready') {
+    if (booksFor && !groups.some((g) => g.key === booksFor.key)) setBooksFor(null);
+    if (editing && !groups.some((g) => g.key === editing.key)) setEditing(null);
+  }
 
   // ---- choices (excluded variants, narrator flags) ---------------------------
   const [choices, setChoices] = useState<Choices>(NO_CHOICES);
@@ -328,9 +440,6 @@ export function useAuthorsLane(
   const [pageState, setPageState] = useState(0);
   const [pageSize, setPageSizeState] = useState<number>(AUTHORS_DEFAULT_PAGE_SIZE);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ key: string; initial: string } | null>(null);
-  const [booksFor, setBooksFor] = useState<BooksTarget | null>(null);
-  const [helpOpen, setHelpOpen] = useState(false);
 
   const kindCounts = useMemo(() => {
     const counts: Record<AuthorKindFilter, number> = {
@@ -363,13 +472,13 @@ export function useAuthorsLane(
   }, []);
 
   // ---- selection --------------------------------------------------------------
-  const mergeable = useMemo(() => groups.filter(isMergeable), [groups]);
+  const mergeable = useMemo(() => groups.filter((g) => isMergeable(g, choices)), [groups, choices]);
   const mergeableKeys = useMemo(() => new Set(mergeable.map((g) => g.key)), [mergeable]);
   const isUnselectable = useCallback((key: string) => !mergeableKeys.has(key), [mergeableKeys]);
   const pageKeys = useMemo(() => pageGroups.map((g) => g.key), [pageGroups]);
   const allSelectableKeys = useMemo(
-    () => filtered.filter(isMergeable).map((g) => g.key),
-    [filtered]
+    () => filtered.filter((g) => isMergeable(g, choices)).map((g) => g.key),
+    [filtered, choices]
   );
   const selection = useRowSelection<string>({
     pageKeys,
@@ -414,9 +523,24 @@ export function useAuthorsLane(
       .then((r) => {
         if (ctl.signal.aborted) return;
         const mapped = r.groups.map(toAuthorGroup);
+        // Read the latest, now: the lane may have edited its list since the
+        // request was sent.
+        const prev = groupsRef.current;
+        const held = prev && prev.load.state === 'ready' ? prev.load.value.groups : [];
+        if (r.needsRefresh && mapped.length === 0 && held.length > 0) {
+          // The server's list is gone -- every author write clears it, including
+          // this lane's own -- but the lane holds groups that already reflect
+          // those writes. Replacing them with "not scanned yet" would throw away
+          // real rows; keep them and say they are not backed by a fresh scan.
+          commitResult({
+            key: groupsKey,
+            load: { state: 'ready', value: { groups: held, needsScan: false, stale: true } },
+          });
+          return;
+        }
         commitResult({
           key: groupsKey,
-          load: { state: 'ready', value: { groups: mapped, needsScan: r.needsRefresh } },
+          load: { state: 'ready', value: { groups: mapped, needsScan: r.needsRefresh, stale: false } },
         });
         const seed = seedRef.current;
         if (seed !== null) {
@@ -488,22 +612,35 @@ export function useAuthorsLane(
     return m;
   }, [groups]);
   const candRows = candLoad.state === 'ready' ? candLoad.value.rows : null;
-  useEffect(() => {
-    if (!active || !candRows) return;
+  // The ids the rows name that no group knows, as one string: the effect below
+  // depends on THIS, not on `groupNames`, which changes whenever the list is
+  // edited and would otherwise restart every lookup on each merge.
+  const wantedKey = useMemo(() => {
+    if (!candRows) return '';
     const wanted = new Set<string>();
     for (const r of candRows) {
       for (const id of [r.entity_a_id, r.entity_b_id]) if (!groupNames.has(id)) wanted.add(id);
     }
-    if (wanted.size === 0) return;
+    return [...wanted].sort().join(',');
+  }, [candRows, groupNames]);
+  // Ids already looked up (or given up on) for this page of candidates.
+  const askedRef = useRef<{ key: string; ids: Set<string> }>({ key: '', ids: new Set() });
+  useEffect(() => {
+    if (!active || wantedKey === '') return;
+    if (askedRef.current.key !== candKey) askedRef.current = { key: candKey, ids: new Set() };
+    const asked = askedRef.current.ids;
+    const queue = wantedKey.split(',').filter((id) => !asked.has(id));
+    if (queue.length === 0) return;
     const ctl = new AbortController();
-    const queue = [...wanted];
     const lookups = Array.from({ length: Math.min(NAME_LOOKUP_CONCURRENCY, queue.length) }, async () => {
       for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
         const n = Number(id);
         if (!Number.isFinite(n)) continue;
         try {
           const name = await fetchAuthorName(n, ctl.signal);
-          if (ctl.signal.aborted || !name) continue;
+          if (ctl.signal.aborted) continue;
+          asked.add(id);
+          if (!name) continue;
           setLooked((prev) => ({
             key: candKey,
             load: {
@@ -514,14 +651,16 @@ export function useAuthorsLane(
               },
             },
           }));
-        } catch {
-          /* falls back to the id; the abort case is the only one that matters here */
+        } catch (e) {
+          // A failed lookup falls back to the id; an aborted one is retried
+          // by the next run, so it is not marked as asked.
+          if (!ctl.signal.aborted && !isAbortError(e)) asked.add(id);
         }
       }
     });
     void Promise.all(lookups);
     return () => ctl.abort();
-  }, [active, candRows, groupNames, candKey]);
+  }, [active, wantedKey, candKey]);
   const lookedNames = looked && looked.key === candKey && looked.load.state === 'ready' ? looked.load.value : null;
   const nameOf = useCallback(
     (authorId: string) => groupNames.get(authorId) ?? lookedNames?.[authorId] ?? `Author #${authorId}`,
@@ -544,16 +683,29 @@ export function useAuthorsLane(
   const scanningRef = useRef(false);
   const busy = pendingKeys.size > 0 || bulk !== null || scanning;
 
+  /**
+   * Merges that were SENT but whose outcome this lane never saw, because the
+   * lane was left while it waited. Outlives the activation on purpose: coming
+   * back, those groups stay locked and their operations are followed again
+   * (see the effect below) instead of being offered for a second merge.
+   */
+  const unconfirmedRef = useRef(new Map<string, { opId: string; name: string }>());
+
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   /**
    * Runs `task` after every earlier write has finished. `task` must not throw.
    *
    * It is handed the lane's lifetime signal AS IT WAS when the write was queued.
    * A write still waiting when the lane is left is not sent -- `onSkip` clears
-   * its pending marks instead -- because leaving the lane stops its requests, and
-   * a queued merge that fired a minute later would be a request from a screen
-   * nobody is looking at. (Re-entering the lane makes a new signal; it does not
-   * revive what was queued under the old one.)
+   * its pending marks and says so instead -- because leaving the lane stops its
+   * requests, and a queued merge that fired a minute later would be a request
+   * from a screen nobody is looking at. (Re-entering the lane makes a new
+   * signal; it does not revive what was queued under the old one.)
+   *
+   * This queue is the lane's own rather than the dupes lane's `runSequential`:
+   * that helper runs one ids-array to completion inside one action, while this
+   * lane has several kinds of write (merge, split, resolve, scan) that must also
+   * wait for each other, and accepts a second click while the first is running.
    */
   const enqueue = useCallback((task: (life: AbortSignal) => Promise<void>, onSkip: () => void) => {
     const life = lifeRef.current.signal;
@@ -590,32 +742,68 @@ export function useAuthorsLane(
   /** Tells the caller a thrown error was the lane being left, not a failure. */
   const abandoned = useCallback((e: unknown) => isAbortError(e) || !mountedRef.current, []);
 
+  /** A write that got no answer is not a failure: say it may have run, and re-read. */
+  const timedOut = useCallback(
+    (what: string) => {
+      if (!mountedRef.current) return;
+      toast(`No answer after ${WRITE_DEADLINE_MS / 1000}s — the ${what} may have run; re-reading.`, 'warning');
+      reload();
+    },
+    [reload, toast]
+  );
+
+  /** Queued merges that were never sent because the lane was left. */
+  const notSent = useCallback(
+    (n: number) => {
+      if (n <= 0 || !mountedRef.current) return;
+      toast(
+        `${n} queued merge${n === 1 ? ' was' : 's were'} not sent because you left the lane.`,
+        'warning'
+      );
+    },
+    [toast]
+  );
+
   // ---- actions ------------------------------------------------------------------------
 
   /**
    * One group's merge, run inside the queue. Returns what happened so a bulk run
-   * can total it; the caller owns the toast.
+   * can total it; the caller owns the toast. The list is edited here, from what
+   * the server confirmed: the whole group goes when the merge completed, only the
+   * variants that really left when it partly failed.
    */
   const mergeOne = useCallback(
-    async (
-      key: string,
-      life: AbortSignal
-    ): Promise<{ result: 'merged' | 'reclassified' | 'skipped' | 'failed'; message: string; name: string }> => {
+    async (key: string, life: AbortSignal): Promise<MergeOutcome> => {
       // Read NOW: the list and the choices as they are when this turn comes.
       const cur = groupsRef.current;
       const group =
         cur && cur.load.state === 'ready' ? cur.load.value.groups.find((g) => g.key === key) : undefined;
-      if (!group) return { result: 'skipped', message: 'the group is no longer in the list', name: key };
+      const outcome = (
+        result: MergeOutcome['result'],
+        message: string,
+        name: string,
+        reclassifyFailures = 0
+      ): MergeOutcome => ({ result, message, name, reclassifyFailures });
+      if (!group) return outcome('skipped', 'the group is no longer in the list', key);
       const { mergeIds, narratorIds } = planMerge(group, choicesRef.current);
       const name = group.canonical.name;
+      if (mergeIds.length === 0 && narratorIds.length === 0) {
+        // Every variant is left out: there is nothing to merge or reclassify, and
+        // saying "merged" would be a lie about a request that was never made.
+        return outcome('skipped', 'every variant is left out of this merge', name);
+      }
 
+      const reclassified: AuthorId[] = [];
       let reclassifyFailures = 0;
       for (const id of narratorIds) {
         throwIfLeft(life);
         try {
-          await api.reclassifyAuthorAsNarrator(id);
+          await withDeadline(api.reclassifyAuthorAsNarrator(id));
+          reclassified.push(id);
         } catch (e) {
           if (abandoned(e)) throw e;
+          if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name, reclassifyFailures);
+          if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name, reclassifyFailures);
           reclassifyFailures += 1;
         }
       }
@@ -624,23 +812,48 @@ export function useAuthorsLane(
           ? ` (${reclassifyFailures} narrator reclassification${reclassifyFailures === 1 ? '' : 's'} failed)`
           : '';
       if (mergeIds.length === 0) {
-        return {
-          result: 'reclassified',
-          message: `Reclassified ${narratorIds.length - reclassifyFailures} variant(s) as narrator${suffix}`,
+        // Narrator-only: the server's duplicate list is gone (every write
+        // invalidates it), so edit ours instead of re-reading it.
+        const gone = new Set<number>(reclassified);
+        commitGroups((gs) => dropVariants(gs, key, gone));
+        return outcome(
+          'reclassified',
+          `Reclassified ${reclassified.length} variant(s) as narrator${suffix}`,
           name,
-        };
+          reclassifyFailures
+        );
       }
       throwIfLeft(life);
       try {
-        const op = await api.mergeAuthors(group.canonical.id, mergeIds);
+        const op = await withDeadline(api.mergeAuthors(group.canonical.id, mergeIds));
+        unconfirmedRef.current.set(key, { opId: op.id, name });
         const done = await waitFor(op, life);
-        if (!done.ok) return { result: 'failed', message: `${done.message}${suffix}`, name };
+        unconfirmedRef.current.delete(key);
+        if (!done.ok) {
+          const left = parseLeftIds(done.message);
+          if (left) {
+            // A partial merge: keep the group, minus what really went.
+            const gone = new Set<number>([...reclassified, ...mergeIds.filter((id) => !left.has(id))]);
+            commitGroups((gs) => dropVariants(gs, key, gone));
+            return outcome(
+              'failed',
+              `${left.size} author record(s) were not merged (ids ${[...left].join(', ')}); the rest were${suffix}`,
+              name,
+              reclassifyFailures
+            );
+          }
+          return outcome('failed', `${done.message}${suffix}`, name, reclassifyFailures);
+        }
       } catch (e) {
+        // An abandon leaves the entry in `unconfirmedRef`: the merge was sent.
         if (abandoned(e)) throw e;
-        return { result: 'failed', message: `${errorMessage(e, 'merge request failed')}${suffix}`, name };
+        unconfirmedRef.current.delete(key);
+        if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name, reclassifyFailures);
+        if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name, reclassifyFailures);
+        return outcome('failed', `${errorMessage(e, 'merge request failed')}${suffix}`, name, reclassifyFailures);
       }
       commitGroups((gs) => gs.filter((g) => g.key !== key));
-      return { result: 'merged', message: `Merged author(s) into "${name}"${suffix}`, name };
+      return outcome('merged', `Merged author(s) into "${name}"${suffix}`, name, reclassifyFailures);
     },
     [abandoned, commitGroups, waitFor]
   );
@@ -649,28 +862,43 @@ export function useAuthorsLane(
     (key: string) => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
-      enqueue(async (life) => {
-        try {
-          const out = await mergeOne(key, life);
-          if (!mountedRef.current) return;
-          if (out.result === 'failed') toast(`"${out.name}": ${out.message}`, 'error');
-          else if (out.result === 'skipped') toast(`"${out.name}": ${out.message}`, 'warning');
-          else {
-            toast(out.message, 'success');
-            // Narrator-only: the group itself is unchanged server-side; re-read.
-            if (out.result === 'reclassified') reload();
+      enqueue(
+        async (life) => {
+          try {
+            const out = await mergeOne(key, life);
+            if (!mountedRef.current) return;
+            switch (out.result) {
+              case 'failed':
+                toast(`"${out.name}": ${out.message}`, 'error');
+                break;
+              case 'skipped':
+                toast(`"${out.name}": ${out.message}`, 'warning');
+                break;
+              case 'session':
+                toast(out.message, 'error');
+                break;
+              case 'timeout':
+                timedOut('merge');
+                break;
+              default:
+                toast(out.message, out.reclassifyFailures > 0 ? 'warning' : 'success');
+            }
+          } catch (e) {
+            // Only an abandon (the lane was left) reaches here; mergeOne reports
+            // every other failure as a result.
+            if (abandoned(e)) return;
+            toast(errorMessage(e, 'Merge failed'), 'error');
+          } finally {
+            markPending(key, false);
           }
-        } catch (e) {
-          // Only an abandon (the lane was left) reaches here; mergeOne reports
-          // every other failure as a result.
-          if (abandoned(e)) return;
-          toast(errorMessage(e, 'Merge failed'), 'error');
-        } finally {
+        },
+        () => {
           markPending(key, false);
+          notSent(1);
         }
-      }, () => markPending(key, false));
+      );
     },
-    [abandoned, enqueue, markPending, mergeOne, reload, toast]
+    [abandoned, enqueue, markPending, mergeOne, notSent, timedOut, toast]
   );
 
   /** Merges `keys` one after another and reports the totals in one toast. */
@@ -683,41 +911,87 @@ export function useAuthorsLane(
         for (const k of keys) markPending(k, false);
         if (mountedRef.current) setBulk(null);
       };
-      enqueue(async (life) => {
-        let merged = 0;
-        const failures: string[] = [];
-        let done = 0;
-        let left = false;
-        for (const key of keys) {
-          try {
-            const out = await mergeOne(key, life);
+      enqueue(
+        async (life) => {
+          let merged = 0;
+          let reclassifyFailures = 0;
+          const failures: string[] = [];
+          let done = 0;
+          let stop: { why: 'left' | 'session' | 'timeout'; at: number; name: string } | null = null;
+          for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            let out: MergeOutcome;
+            try {
+              out = await mergeOne(key, life);
+            } catch (e) {
+              if (abandoned(e)) {
+                stop = { why: 'left', at: i, name: key };
+                break;
+              }
+              failures.push(`"${key}": ${errorMessage(e, 'merge request failed')}`);
+              done += 1;
+              markPending(key, false);
+              continue;
+            }
+            reclassifyFailures += out.reclassifyFailures;
+            if (out.result === 'session' || out.result === 'timeout') {
+              stop = { why: out.result, at: i, name: out.name };
+              break;
+            }
             if (out.result === 'failed' || out.result === 'skipped') {
               failures.push(`"${out.name}": ${out.message}`);
             } else merged += 1;
-          } catch (e) {
-            if (abandoned(e)) {
-              left = true;
-              break;
-            }
-            failures.push(`"${key}": ${errorMessage(e, 'merge request failed')}`);
+            done += 1;
+            if (mountedRef.current) setBulk({ done, total: keys.length });
+            markPending(key, false);
           }
-          done += 1;
-          if (mountedRef.current) setBulk({ done, total: keys.length });
-          markPending(key, false);
+          clear();
+          if (!mountedRef.current) return;
+          if (stop) {
+            // Groups after the one that stopped the run were never sent. The one
+            // that stopped it was, unless the lane was left before its request.
+            const stoppedKey = keys[stop.at];
+            const unsent = keys.length - stop.at - 1 + (unconfirmedRef.current.has(stoppedKey) ? 0 : 1);
+            if (stop.why === 'left') {
+              notSent(unsent);
+            } else if (stop.why === 'session') {
+              toast(
+                `${SESSION_EXPIRED_MESSAGE} ${merged} group(s) were merged before it expired; the other ${keys.length - stop.at - 1} were not sent, and "${stop.name}" may or may not have gone through.`,
+                'error'
+              );
+            } else {
+              toast(
+                `No answer after ${WRITE_DEADLINE_MS / 1000}s — the merge of "${stop.name}" may have run. ${merged} group(s) were merged before it; the other ${keys.length - stop.at - 1} were not sent. Re-reading.`,
+                'warning'
+              );
+              reload();
+            }
+            return;
+          }
+          const attempted = merged + failures.length;
+          const narrator =
+            reclassifyFailures > 0
+              ? ` ${reclassifyFailures} narrator reclassification${reclassifyFailures === 1 ? '' : 's'} failed.`
+              : '';
+          if (failures.length === 0) {
+            toast(
+              `Merged ${merged} of ${attempted} ${noun} group(s).${narrator}`.trim(),
+              reclassifyFailures > 0 ? 'warning' : 'success'
+            );
+          } else {
+            toast(
+              `Merged ${merged} of ${attempted} ${noun} group(s); ${failures.length} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '; …' : ''}.${narrator}`,
+              'error'
+            );
+          }
+        },
+        () => {
+          clear();
+          notSent(keys.length);
         }
-        clear();
-        if (!mountedRef.current) return;
-        if (left) return;
-        const attempted = merged + failures.length;
-        if (failures.length === 0) toast(`Merged ${merged} of ${attempted} ${noun} group(s)`, 'success');
-        else
-          toast(
-            `Merged ${merged} of ${attempted} ${noun} group(s); ${failures.length} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '; …' : ''}`,
-            'error'
-          );
-      }, clear);
+      );
     },
-    [abandoned, enqueue, markPending, mergeOne, toast]
+    [abandoned, enqueue, markPending, mergeOne, notSent, reload, toast]
   );
 
   const rename = useCallback(
@@ -726,7 +1000,7 @@ export function useAuthorsLane(
       if (!name || pendingRef.current.has(key)) return;
       markPending(key, true);
       try {
-        await api.renameAuthor(canonicalId, name);
+        await withDeadline(api.renameAuthor(canonicalId, name));
         if (!mountedRef.current) return;
         commitGroups((gs) =>
           gs.map((g) =>
@@ -736,80 +1010,103 @@ export function useAuthorsLane(
         setEditing((cur) => (cur && cur.key === key ? null : cur));
       } catch (e) {
         if (abandoned(e)) return;
-        toast(errorMessage(e, 'Failed to rename author'), 'error');
+        if (e instanceof WriteTimeoutError) timedOut('rename');
+        else toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Failed to rename author'), 'error');
       } finally {
         markPending(key, false);
       }
     },
-    [abandoned, commitGroups, markPending, toast]
+    [abandoned, commitGroups, markPending, timedOut, toast]
   );
 
   const split = useCallback(
     (key: string, canonicalId: AuthorId) => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
-      enqueue(async (life) => {
-        try {
-          throwIfLeft(life);
-          const cur = groupsRef.current;
-          const group =
-            cur && cur.load.state === 'ready' ? cur.load.value.groups.find((g) => g.key === key) : undefined;
-          const narrators = choicesRef.current.narrators[key] ?? EMPTY_STRINGS;
-          const flagged = (group?.splitNames ?? []).filter((n) => narrators.has(splitRoleKey(n)));
-          const result = await api.splitCompositeAuthor(canonicalId);
-          let failed = 0;
-          for (const name of flagged) {
-            const match = result.authors.find((a) => a.name === name);
-            if (!match) continue;
-            try {
-              throwIfLeft(life);
-              await api.reclassifyAuthorAsNarrator(match.id);
-            } catch (e) {
-              if (abandoned(e)) throw e;
-              failed += 1;
+      enqueue(
+        async (life) => {
+          try {
+            throwIfLeft(life);
+            const cur = groupsRef.current;
+            const group =
+              cur && cur.load.state === 'ready' ? cur.load.value.groups.find((g) => g.key === key) : undefined;
+            const narrators = choicesRef.current.narrators[key] ?? EMPTY_STRINGS;
+            const flagged = (group?.splitNames ?? []).filter((n) => narrators.has(splitRoleKey(n)));
+            const result = await withDeadline(api.splitCompositeAuthor(canonicalId));
+            // The composite is gone server-side, and so is the server's cached
+            // list: edit ours rather than re-read it.
+            commitGroups((gs) => gs.filter((g) => g.key !== key));
+            let failed = 0;
+            const unmatched: string[] = [];
+            for (const name of flagged) {
+              const match = result.authors.find((a) => a.name === name);
+              if (!match) {
+                unmatched.push(name);
+                continue;
+              }
+              try {
+                throwIfLeft(life);
+                await withDeadline(api.reclassifyAuthorAsNarrator(match.id));
+              } catch (e) {
+                if (abandoned(e)) throw e;
+                failed += 1;
+              }
             }
+            if (!mountedRef.current) return;
+            const notes: string[] = [];
+            if (failed > 0) notes.push(`${failed} narrator reclassification${failed === 1 ? '' : 's'} failed`);
+            if (unmatched.length > 0)
+              notes.push(
+                `${unmatched.map((n) => `"${n}"`).join(', ')} matched no new author, so ${unmatched.length === 1 ? 'it was' : 'they were'} not reclassified as narrator`
+              );
+            toast(
+              `Split "${group?.canonical.name ?? key}" into ${result.authors.length} authors` +
+                (notes.length > 0 ? ` (${notes.join('; ')})` : ''),
+              notes.length > 0 ? 'warning' : 'success'
+            );
+          } catch (e) {
+            if (abandoned(e)) return;
+            if (e instanceof WriteTimeoutError) timedOut('split');
+            else toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Failed to split author'), 'error');
+          } finally {
+            markPending(key, false);
           }
-          if (!mountedRef.current) return;
-          toast(
-            `Split "${group?.canonical.name ?? key}" into ${result.authors.length} authors` +
-              (failed > 0 ? ` (${failed} narrator reclassification${failed === 1 ? '' : 's'} failed)` : ''),
-            failed > 0 ? 'warning' : 'success'
-          );
-          reload();
-        } catch (e) {
-          if (abandoned(e)) return;
-          toast(errorMessage(e, 'Failed to split author'), 'error');
-        } finally {
-          markPending(key, false);
-        }
-      }, () => markPending(key, false));
+        },
+        () => markPending(key, false)
+      );
     },
-    [abandoned, enqueue, markPending, reload, toast]
+    [abandoned, commitGroups, enqueue, markPending, timedOut, toast]
   );
 
   const resolveProduction = useCallback(
     (key: string, canonicalId: AuthorId) => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
-      enqueue(async (life) => {
-        try {
-          const op = await api.resolveProductionAuthor(canonicalId);
-          if (mountedRef.current) toast('Looking up the real author — watch the bell for progress.', 'info');
-          const done = await waitFor(op, life);
-          if (!mountedRef.current) return;
-          if (done.ok) {
-            toast('Found the real author(s).', 'success');
-            reload();
-          } else toast(`Could not resolve the production company: ${done.message}`, 'error');
-        } catch (e) {
-          if (abandoned(e)) return;
-          toast(errorMessage(e, 'Failed to resolve'), 'error');
-        } finally {
-          markPending(key, false);
-        }
-      }, () => markPending(key, false));
+      enqueue(
+        async (life) => {
+          try {
+            const op = await withDeadline(api.resolveProductionAuthor(canonicalId));
+            if (mountedRef.current) toast('Looking up the real author — watch the bell for progress.', 'info');
+            const done = await waitFor(op, life);
+            if (!mountedRef.current) return;
+            if (done.ok) {
+              // Resolved: the books moved off the production company, so its
+              // group is done. Edit the list; the server's cached copy is gone.
+              commitGroups((gs) => gs.filter((g) => g.key !== key));
+              toast('Found the real author(s).', 'success');
+            } else toast(`Could not resolve the production company: ${done.message}`, 'error');
+          } catch (e) {
+            if (abandoned(e)) return;
+            if (e instanceof WriteTimeoutError) timedOut('lookup');
+            else toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Failed to resolve'), 'error');
+          } finally {
+            markPending(key, false);
+          }
+        },
+        () => markPending(key, false)
+      );
     },
-    [abandoned, enqueue, markPending, reload, toast, waitFor]
+    [abandoned, commitGroups, enqueue, markPending, timedOut, toast, waitFor]
   );
 
   const dispatch = useCallback(
@@ -827,17 +1124,20 @@ export function useAuthorsLane(
         case 'mergeAllGroups': {
           const cur = groupsRef.current;
           const now =
-            cur && cur.load.state === 'ready' ? cur.load.value.groups.filter(isMergeable) : [];
-          if (now.length !== action.expectedTotal) {
-            // The list moved between the confirmation and the click through:
-            // what was confirmed is not what would run.
+            cur && cur.load.state === 'ready'
+              ? cur.load.value.groups.filter((g) => isMergeable(g, choicesRef.current))
+              : [];
+          // The SET, not just its size: one group leaving and another becoming
+          // mergeable keeps the count and changes what would run.
+          const expected = new Set(action.expectedIds.map(String));
+          if (now.length !== expected.size || now.some((g) => !expected.has(g.key))) {
             toast(
-              `The list changed while you were confirming (${action.expectedTotal} group(s) became ${now.length}). Nothing was merged; check the count and try again.`,
+              `The list changed while you were confirming (${expected.size} group(s) became ${now.length}). Nothing was merged; check the count and try again.`,
               'warning'
             );
             return;
           }
-          runBulk(now.map((g) => g.key), 'all');
+          runBulk(now.map((g) => g.key), 'name-variant');
           return;
         }
         case 'renameCanonical':
@@ -876,6 +1176,44 @@ export function useAuthorsLane(
     },
     [commitChoices, mergeGroup, rename, resolveProduction, runBulk, split, toast]
   );
+
+  // Merges that were sent before the lane was left: follow them again. The row
+  // stays locked until the operation settles, so a second Merge cannot be sent
+  // for a group whose first one may have gone through.
+  useEffect(() => {
+    if (!active) return;
+    const life = lifeRef.current.signal;
+    // The Map itself is never replaced, only mutated, so this is the live one.
+    const unconfirmed = unconfirmedRef.current;
+    for (const [key, { opId, name }] of unconfirmed) {
+      markPending(key, true);
+      api
+        .pollOperationV2(opId, undefined, AUTHORS_POLL_MS, {
+          signal: life,
+          requestTimeoutMs: POLL_REQUEST_TIMEOUT_MS,
+        })
+        .then((final) => {
+          unconfirmed.delete(key);
+          if (final.status === 'completed') {
+            commitGroups((gs) => gs.filter((g) => g.key !== key));
+            toast(`Merged author(s) into "${name}" (it finished after you left).`, 'success');
+          } else {
+            toast(`"${name}": ${final.error_message || final.status}`, 'error');
+          }
+        })
+        .catch((e: unknown) => {
+          if (life.aborted || isAbortError(e)) return;
+          unconfirmed.delete(key);
+          toast(`Could not confirm the merge into "${name}": ${errorMessage(e, 'no answer')}`, 'warning');
+        })
+        .finally(() => markPending(key, false));
+    }
+    return () => {
+      // markPending is a no-op once unmounted; while mounted this unlocks rows
+      // whose follow-up was cut short (they are followed again next time).
+      for (const key of unconfirmed.keys()) markPending(key, false);
+    };
+  }, [active, commitGroups, markPending, toast]);
 
   // ---- validate ------------------------------------------------------------------------
   const [validation, setValidation] = useState<Readonly<Record<string, ValidationState>>>({});
@@ -933,7 +1271,7 @@ export function useAuthorsLane(
     };
     enqueue(async (life) => {
       try {
-        const op = await api.refreshAuthorDuplicates();
+        const op = await withDeadline(api.refreshAuthorDuplicates());
         if (mountedRef.current) toast('Author scan started — watch the bell for progress.', 'info');
         const done = await waitFor(op, life);
         if (!mountedRef.current) return;
@@ -945,12 +1283,14 @@ export function useAuthorsLane(
         } else toast(`Author scan did not finish: ${done.message}`, 'error');
       } catch (e) {
         if (abandoned(e)) return;
-        toast(errorMessage(e, 'Failed to start the author scan'), 'error');
+        if (e instanceof WriteTimeoutError) timedOut('scan request');
+        else
+          toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Failed to start the author scan'), 'error');
       } finally {
         settle();
       }
     }, settle);
-  }, [abandoned, enqueue, toast, waitFor, reload, candidatesReload, clearSelection]);
+  }, [abandoned, enqueue, timedOut, toast, waitFor, reload, candidatesReload, clearSelection]);
 
   // ---- books popover / editing / focus ---------------------------------------------------
   const openBooks = useCallback((key: string, anchor: HTMLElement | null) => {
@@ -981,8 +1321,10 @@ export function useAuthorsLane(
         setHelpOpen(false);
         return;
       }
-      // Escape runs before the typing guard: the popover and dialogs are
-      // role=dialog and take focus, and closing them is the whole job.
+      // Escape runs before the typing guard so it can always close what is open.
+      // (The guard below only knows role=dialog; the books popover is MUI's
+      // role=presentation modal root, so it is covered by the explicit return
+      // further down, not by the guard.)
       if (event.key === 'Escape') {
         if (booksFor) setBooksFor(null);
         else if (helpOpen) setHelpOpen(false);
@@ -995,6 +1337,9 @@ export function useAuthorsLane(
         setHelpOpen(!helpOpen);
         return;
       }
+      // While the books popover or the help is open it is the foreground: j/k/m/
+      // Enter would act on a card behind it, and `m` would merge it unseen.
+      if (booksFor || helpOpen) return;
       if (pageGroups.length === 0) return;
       const at = Math.max(0, pageGroups.findIndex((g) => g.key === focusedKey));
       const focused = pageGroups[at];
@@ -1008,6 +1353,9 @@ export function useAuthorsLane(
           setFocusedKey(pageGroups[Math.max(at - 1, 0)].key);
           return;
         case 'Enter':
+          // Enter on a focused button, link or checkbox activates THAT control;
+          // taking it for "open the books" would fire both.
+          if (document.activeElement?.closest('button, a, [role="button"], [role="checkbox"], summary')) return;
           event.preventDefault();
           setBooksFor({
             key: focused.key,
@@ -1015,7 +1363,7 @@ export function useAuthorsLane(
           });
           return;
         case 'm':
-          if (!isMergeable(focused) || pendingRef.current.has(focused.key)) return;
+          if (!isMergeable(focused, choicesRef.current) || pendingRef.current.has(focused.key)) return;
           event.preventDefault();
           dispatch({ lane: 'authors', entity: 'author', type: 'mergeGroup', canonicalId: focused.canonical.id });
           return;
@@ -1051,6 +1399,8 @@ export function useAuthorsLane(
     pageSize,
     setPageSize,
     mergeable,
+    selectableTotal: allSelectableKeys.length,
+    stale,
     selection,
     selectedGroups,
     selectedCount: selectedGroups.length,
