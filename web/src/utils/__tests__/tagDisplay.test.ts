@@ -1,7 +1,7 @@
 // file: web/src/utils/__tests__/tagDisplay.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: dfcc4114-190c-4ee9-9383-8a5f614ef889
-// last-edited: 2026-07-13
+// last-edited: 2026-10-12
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -37,6 +37,10 @@ describe('sourceNameFor', () => {
 
   it('special-cases googlebooks', () => {
     expect(sourceNameFor('googlebooks')).toBe('Google Books');
+  });
+
+  it('names the local catalog source so it is not mistaken for live Audible', () => {
+    expect(sourceNameFor('audible_catalog')).toBe('Audible Catalog (local)');
   });
 
   it('title-cases an unmapped source with separators', () => {

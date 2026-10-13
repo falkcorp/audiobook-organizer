@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.30.0
+// version: 1.31.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-10-12
 //
@@ -228,20 +228,26 @@ describe('provider source filters', () => {
         makeResult('audible', {}, { source: 'Audible' }),
         makeResult('google', {}, { source: 'Google Books' }),
         makeResult('open-library', {}, { source: 'Open Library' }),
+        // The local catalog stage's review-only candidates: Audible data.
+        makeResult('catalog', {}, { source: 'Audible Catalog (local)' }),
       ])
     );
 
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(3));
+    await waitFor(() => expect(result.current.results).toHaveLength(4));
 
     expect(result.current.sourceCounts).toMatchObject({
-      audible: 1,
+      audible: 2,
       google_books: 1,
       openlibrary: 1,
     });
+    expect(result.current.sourceCounts).not.toHaveProperty('audible catalog (local)');
 
     act(() => result.current.setFilters({ sourceFilter: 'audible' }));
-    expect(result.current.filteredResults.map((row) => row.book.id)).toEqual(['audible']);
+    expect(result.current.filteredResults.map((row) => row.book.id)).toEqual([
+      'audible',
+      'catalog',
+    ]);
   });
 });
 

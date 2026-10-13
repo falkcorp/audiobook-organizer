@@ -1,7 +1,7 @@
 // file: web/src/utils/tagDisplay.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: d638b9b0-4403-4fe1-acdd-05cc951128d0
-// last-edited: 2026-07-13
+// last-edited: 2026-10-12
 
 // Display-only formatting for `metadata:*` system tags. Storage and the API
 // keep the raw namespaced tag strings (e.g. `metadata:language:en`,
@@ -59,6 +59,9 @@ const SOURCE_LABEL_OVERRIDES: Record<string, string> = {
   openlibrary: 'Open Library',
   googlebooks: 'Google Books',
   audnexus: 'Audnexus',
+  // The local catalog's source tag slug (metafetch.SourceSlugAudibleCatalog);
+  // title-casing would drop the "(local)" that tells it from live Audible.
+  audible_catalog: 'Audible Catalog (local)',
 };
 
 function titleCase(value: string): string {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package handlers
 
@@ -32,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
@@ -554,6 +555,8 @@ func TestReviewQuery_CandidateKeyAndProvider(t *testing.T) {
 		"Audible": "audible", "audnexus (audible)": "audible", " Google Books ": "google_books",
 		"google": "google_books", "Open Library": "openlibrary", "openlibrary": "openlibrary",
 		"Hardcover": "hardcover", "": "",
+		// The local catalog's review-only candidates sit under the Audible chip.
+		metadata.CatalogSourceName: "audible",
 	} {
 		require.Equal(t, want, reviewProviderID(in), in)
 	}
