@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7e9b2a-5c8d-4e1f-a0b3-6d9c2e5f8a1b
-// last-edited: 2026-09-28
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -123,7 +123,10 @@ type autoMatchDeps struct {
 	// candSeries is the series SearchTranscriptionCandidate reports for the
 	// candidate searchFn returns.
 	candSeries string
-	applyFn    func(ctx context.Context, bookID, candTitle, candAuthor string) error
+	// candManualOnly is the local catalog stage's manual-only tag on that
+	// candidate.
+	candManualOnly bool
+	applyFn        func(ctx context.Context, bookID, candTitle, candAuthor string) error
 	// call counters
 	searchCalled int
 	applyCalled  int
@@ -133,7 +136,7 @@ func (d *autoMatchDeps) SearchTranscriptionCandidate(ctx context.Context, bookID
 	d.searchCalled++
 	if d.searchFn != nil {
 		title, author, score, found, err := d.searchFn(ctx, bookID, transTitle, transAuthor)
-		return TranscriptionCandidate{Title: title, Author: author, Series: d.candSeries, Score: score}, found, err
+		return TranscriptionCandidate{Title: title, Author: author, Series: d.candSeries, ManualOnly: d.candManualOnly, Score: score}, found, err
 	}
 	return TranscriptionCandidate{}, false, nil
 }
@@ -338,12 +341,14 @@ func TestAutoMatchTranscribed_SeriesMarkersSkippedInDryRun(t *testing.T) {
 	const unknown = "/library/Unknown Author/Unknown Title/book.m4b"
 	seriesID := 11
 	cases := []struct {
-		name       string
-		seriesID   *int
-		candSeries string
+		name           string
+		seriesID       *int
+		candSeries     string
+		candManualOnly bool
 	}{
 		{name: "series row names Big Finish", seriesID: &seriesID},
 		{name: "candidate series names Big Finish", candSeries: "Big Finish Main Range"},
+		{name: "candidate tagged manual-only by the local catalog", candManualOnly: true},
 	}
 	for _, tc := range cases {
 		for _, dryRun := range []bool{true, false} {
@@ -353,7 +358,8 @@ func TestAutoMatchTranscribed_SeriesMarkersSkippedInDryRun(t *testing.T) {
 					searchFn: func(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
 						return chimes, "Robert Shearman", 1.8, true, nil
 					},
-					candSeries: tc.candSeries,
+					candSeries:     tc.candSeries,
+					candManualOnly: tc.candManualOnly,
 				}
 				p := newAutoMatchPlugin(books, deps)
 				seriesReads := 0

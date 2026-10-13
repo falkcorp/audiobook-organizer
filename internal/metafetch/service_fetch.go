@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.23.4
+// version: 1.24.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -34,7 +34,7 @@ var autoFetchLog = logger.New("metafetch.auto-fetch")
 // FetchMetadataForBook caches its answer in the per-provider fetch cache,
 // which the batch candidate fetch replays into the review list -- but its
 // candidate is never applied. Nothing was written to the book.
-var ErrReviewOnlyCandidatesNotApplied = errors.New("metadata: only review-only sources (Open Library, Google Books) matched; not applied, left for review")
+var ErrReviewOnlyCandidatesNotApplied = errors.New("metadata: only review-only sources (Open Library, Google Books, the local catalog) matched; not applied, left for review")
 
 // ReviewOnlyNotAppliedError is the ErrReviewOnlyCandidatesNotApplied a fetch
 // returns, naming the review-only sources that matched (errors.As).

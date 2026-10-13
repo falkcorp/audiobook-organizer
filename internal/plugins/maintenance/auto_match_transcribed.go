@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -225,7 +225,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		// changed since this read) is still counted below.
 		guard := applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: store, Series: seriesNames, Authors: store, Tags: p.deps.BookTagReader()}, b, transTitle)
 		if reason, detail := applygate.ManualOnlyDetail(b,
-			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor, Series: top.Series},
+			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor, Series: top.Series, ManualOnly: top.ManualOnly},
 			applygate.TranscribedSearch{Query: transTitle}, guard); reason != "" {
 			manualOnly++
 			log.Info("auto-match-transcribed: skipped, owner applies this book by hand",

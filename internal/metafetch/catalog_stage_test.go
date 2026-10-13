@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -379,4 +379,10 @@ func TestCatalogStage_ProvidersEmptyNoPriorRowStoresCatalogCandidates(t *testing
 	require.NotEmpty(t, entry.Candidates)
 	require.NotNil(t, entry.LastEmptyFetchAt)
 	assert.Contains(t, entry.EmptyAnswers, "SrcA")
+}
+
+// A review-only refusal can now be the local catalog's doing, so the
+// user-facing text names it instead of listing only the two web sources.
+func TestReviewOnlyRefusalMessageNamesTheCatalog(t *testing.T) {
+	assert.Contains(t, ErrReviewOnlyCandidatesNotApplied.Error(), "the local catalog")
 }

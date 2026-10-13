@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.86.1
+// version: 1.87.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-12
 
@@ -770,6 +770,10 @@ type TranscriptionCandidate struct {
 	// with a "Big Finish Main Range" record) is skipped in a dry run exactly
 	// as the apply's own check refuses it.
 	Series string
+	// ManualOnly is the local catalog stage's tag on an entry of the owner's
+	// manual-only libraries (metafetch.MetadataCandidate.ManualOnly); the op's
+	// pre-check passes it to the same guard the apply runs.
+	ManualOnly bool
 	// Score may exceed 1.0 (uncapped scale with transcription boosts applied).
 	Score float64
 }

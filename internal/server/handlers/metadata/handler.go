@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -1217,7 +1217,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		}
 		if pick < 0 {
 			result.Status = "review_only"
-			result.Message = "only review-only sources (Open Library, Google Books) matched; not applied, left for review"
+			result.Message = "only review-only sources (Open Library, Google Books, the local catalog) matched; not applied, left for review"
 			setResult(i, result)
 			return nil
 		}
