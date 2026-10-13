@@ -1,10 +1,10 @@
 // file: web/src/components/review/lanes/lanes.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: b6d29a04-8f35-4c71-90e2-3a5f7c1b8046
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 import { describe, expect, it } from 'vitest';
-import { LANES, LANE_ORDER, dupesLane, metadataLane, regroupLane, repairsLane } from './index';
+import { LANES, LANE_ORDER, authorsLane, dupesLane, metadataLane, regroupLane, repairsLane } from './index';
 import type { LaneDescriptor } from './types';
 import type { ActionForLane, ReviewAction, ReviewLane } from '../reviewActions';
 
@@ -13,11 +13,27 @@ describe('lane registry', () => {
     // LANES is typed as Record<ReviewLane, ...>, so a missing lane is a compile
     // error. This checks the runtime side of the same claim -- that the object
     // literal was not satisfied by a cast somewhere.
-    const lanes: ReviewLane[] = ['dupes', 'metadata', 'regroup', 'repairs'];
+    const lanes: ReviewLane[] = ['dupes', 'metadata', 'regroup', 'repairs', 'authors'];
     for (const lane of lanes) {
       expect(LANES[lane], `no descriptor for lane "${lane}"`).toBeDefined();
       expect(LANES[lane].lane).toBe(lane);
     }
+  });
+
+  it('authors is the fourth lane, before repairs', () => {
+    // Repairs stays last (its doc comment in index.ts says why); Authors & series
+    // is a decision lane and sits ahead of it. The switcher's labels come from
+    // the descriptors, so the order and the wording are asserted together.
+    expect(LANE_ORDER).toEqual(['dupes', 'metadata', 'regroup', 'authors', 'repairs']);
+    expect(LANE_ORDER.indexOf('authors')).toBe(3);
+    expect(LANES.authors.label).toBe('Authors & series');
+    expect(LANE_ORDER.map((id) => LANES[id].label)).toEqual([
+      'Duplicates',
+      'Metadata',
+      'Review queue',
+      'Authors & series',
+      'Repairs',
+    ]);
   });
 
   it('orders every lane exactly once', () => {
@@ -51,6 +67,19 @@ describe('action vocabulary is total', () => {
     },
     { lane: 'regroup', types: ['approve', 'reject', 'bulk'] },
     { lane: 'repairs', types: ['runTrial', 'applyRows', 'applyAllApplicable', 'ownerApplyRow'] },
+    {
+      lane: 'authors',
+      types: [
+        'mergeGroup',
+        'mergeSelected',
+        'mergeAllGroups',
+        'renameCanonical',
+        'splitComposite',
+        'resolveProduction',
+        'toggleRole',
+        'excludeVariant',
+      ],
+    },
   ];
 
   for (const { lane, types } of cases) {
@@ -108,6 +137,7 @@ describe('evidence kind matches the lane arithmetic', () => {
     expect(metadataLane.evidenceKind).toBe('waterfall'); // product + terms
     expect(regroupLane.evidenceKind).toBe('facts'); // no score at all
     expect(repairsLane.evidenceKind).toBe('facts'); // rules over stored state
+    expect(authorsLane.evidenceKind).toBe('facts'); // name comparison, no score
   });
 });
 

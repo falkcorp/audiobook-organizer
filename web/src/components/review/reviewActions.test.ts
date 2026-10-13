@@ -1,15 +1,18 @@
 // file: web/src/components/review/reviewActions.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d4a7e21-05c8-4b63-a19f-3e8b2c60d475
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 import { describe, expect, it } from 'vitest';
 import {
   affectedCount,
+  asAuthorId,
   inverseOf,
   isReversible,
   needsConfirmation,
+  type AuthorsAction,
   type ReviewAction,
+  type SeriesId,
 } from './reviewActions';
 
 describe('reversibility', () => {
@@ -188,5 +191,50 @@ describe('repairs lane actions', () => {
   it('is irreversible from this screen', () => {
     expect(inverseOf(rows)).toBeNull();
     expect(inverseOf(all)).toBeNull();
+  });
+});
+
+describe('authors lane actions', () => {
+  const mergeSel: ReviewAction = {
+    lane: 'authors',
+    entity: 'author',
+    type: 'mergeSelected',
+    ids: [asAuthorId(1), asAuthorId(2), asAuthorId(3)],
+  };
+  const mergeAll: ReviewAction = { lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedTotal: 7 };
+
+  it('knows its own counts: the selection, and the total the reviewer confirmed', () => {
+    expect(affectedCount(mergeSel)).toBe(3);
+    expect(affectedCount(mergeAll)).toBe(7);
+  });
+
+  it('confirms inside the lane dispatch, so nothing asks twice', () => {
+    // The dupes lane's mergeSelected goes through the ActionBar and confirms;
+    // the authors lane confirms a selection wider than the page (and Merge All)
+    // in its own dispatch, so the shared answer is lane-aware.
+    expect(needsConfirmation(mergeSel)).toBe(false);
+    expect(needsConfirmation(mergeAll)).toBe(false);
+    expect(needsConfirmation({ lane: 'dupes', type: 'mergeSelected', ids: [1, 2] })).toBe(true);
+  });
+
+  it('is irreversible from this screen', () => {
+    expect(inverseOf(mergeSel)).toBeNull();
+    expect(inverseOf(mergeAll)).toBeNull();
+  });
+
+  it('series id cannot be passed to mergeAuthors (type test)', () => {
+    // Both id spaces are plain numbers on the wire. The brand is what makes
+    // handing a series id to an author action a compile error; the directives
+    // below fail the build if the union ever stops rejecting them.
+    const seriesId = 12 as SeriesId;
+
+    // @ts-expect-error -- a SeriesId is not an AuthorId
+    const merge: AuthorsAction = { lane: 'authors', entity: 'author', type: 'mergeGroup', canonicalId: seriesId };
+    // @ts-expect-error -- a bare number is not an AuthorId either: it must be branded at the edge
+    const bare: AuthorsAction = { lane: 'authors', entity: 'author', type: 'mergeGroup', canonicalId: 12 };
+    // @ts-expect-error -- an author action cannot name the series entity
+    const wrongEntity: AuthorsAction = { lane: 'authors', entity: 'series', type: 'mergeGroup', canonicalId: asAuthorId(1) };
+
+    expect([merge, bare, wrongEntity]).toHaveLength(3);
   });
 });
