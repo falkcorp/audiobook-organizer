@@ -1,0 +1,235 @@
+// file: internal/metafetch/catalog_stage_test.go
+// version: 1.0.0
+// guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
+// last-edited: 2026-10-12
+
+package metafetch
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+)
+
+// Tests of the local catalog blocking stage's wiring into the search. The
+// matcher is a fake (the real one, internal/catalog.MatchBook, is a layer
+// above this package; its own tests and the end-to-end scenario live there).
+// Every fixture is synthetic.
+
+type fakeCatalogMatcher struct {
+	mu     sync.Mutex
+	asked  []metadata.CatalogQuestion
+	answer metadata.CatalogMatch
+	err    error
+	calls  atomic.Int64
+}
+
+func (f *fakeCatalogMatcher) MatchBook(q metadata.CatalogQuestion) (metadata.CatalogMatch, error) {
+	f.calls.Add(1)
+	f.mu.Lock()
+	f.asked = append(f.asked, q)
+	f.mu.Unlock()
+	return f.answer, f.err
+}
+
+// withCatalogStage sets metadata_fetch.catalog_stage for one test. Call it
+// AFTER building the harness: fanoutHarness resets metadata_fetch to its
+// defaults (stage off).
+func withCatalogStage(t *testing.T, on bool) {
+	t.Helper()
+	prev := config.AppConfig.MetadataFetch
+	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
+	config.AppConfig.MetadataFetch.CatalogStage = on
+}
+
+const (
+	stageTitle  = "The Synthetic Lantern Keeper"
+	stageAuthor = "Author 07"
+)
+
+func lanternAnswer(asin string) metadata.BookMetadata {
+	return metadata.BookMetadata{Title: stageTitle, Author: stageAuthor, ASIN: asin, CoverURL: "c", Narrator: "Narrator 03", DurationSec: 36000}
+}
+
+// stageHarness serves one book, titled stageTitle and credited to stageAuthor
+// (then a second credit), through a single Audible fake that answers with
+// providerAnswers.
+func stageHarness(t *testing.T, providerAnswers ...metadata.BookMetadata) (*Service, *fakeProvider) {
+	t.Helper()
+	audible := &fakeProvider{id: metadata.SourceIDAudible, name: "Audible", answer: func(string, string) []metadata.BookMetadata { return providerAnswers }}
+	id1, id2, id3 := 1, 2, 3
+	book := &database.Book{ID: "b1", Title: stageTitle, AuthorID: &id1}
+	svc := fanoutHarness(t, book, audible)
+	mock := svc.db.(*database.MockStore)
+	names := map[int]string{1: stageAuthor, 2: "Author 08", 3: "Unknown Author"}
+	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) { return &database.Author{ID: id, Name: names[id]}, nil }
+	mock.GetBookAuthorsFunc = func(string) ([]database.BookAuthor, error) {
+		// Out of position order on purpose: the live list sorts by position.
+		return []database.BookAuthor{{BookID: "b1", AuthorID: id3, Position: 2}, {BookID: "b1", AuthorID: id2, Position: 1}, {BookID: "b1", AuthorID: id1, Position: 0}}, nil
+	}
+	return svc, audible
+}
+
+func searchStage(t *testing.T, svc *Service, ctx context.Context, opts SearchOptions) *SearchMetadataResponse {
+	t.Helper()
+	resp, err := svc.searchMetadataForBook(ctx, nil, "b1", "", "", "", "", opts)
+	require.NoError(t, err)
+	return resp
+}
+
+// catalogAnswer is what the fake matcher returns: one candidate that is also
+// the provider's (same ASIN) and one only the catalog has.
+func catalogAnswer() metadata.CatalogMatch {
+	dup := lanternAnswer("B0PROV0001")
+	only := metadata.BookMetadata{Title: stageTitle + " Returns", Author: stageAuthor, ASIN: "B0CATA0002", CoverURL: "c", Narrator: "Narrator 03", DurationSec: 36000}
+	return metadata.CatalogMatch{
+		Candidates: []metadata.BookMetadata{dup, only},
+		Origins: []metadata.CatalogOrigin{
+			{Stage: metadata.CatalogStageAuthor, CreditPosition: 0},
+			{Stage: metadata.CatalogStageAuthor, CreditPosition: 1, ManualOnly: true},
+		},
+		Stage: metadata.CatalogStageAuthor, OversizeBlocks: 2, HomonymSkipped: 1,
+	}
+}
+
+// With the switch off the matcher is never asked and the response is the one
+// a service without a matcher gives, call for call.
+func TestCatalogStageOffMatchesToday(t *testing.T) {
+	plain, plainProv := stageHarness(t, lanternAnswer("B0PROV0001"))
+	want := searchStage(t, plain, context.Background(), SearchOptions{})
+
+	off, offProv := stageHarness(t, lanternAnswer("B0PROV0001"))
+	fm := &fakeCatalogMatcher{answer: catalogAnswer()}
+	off.SetCatalogMatcher(fm)
+	got := searchStage(t, off, context.Background(), SearchOptions{})
+
+	assert.Zero(t, fm.calls.Load(), "the stage is off: the matcher is not asked")
+	assert.Equal(t, plainProv.callCount(), offProv.callCount())
+	wantJSON, _ := json.Marshal(want)
+	gotJSON, _ := json.Marshal(got)
+	assert.JSONEq(t, string(wantJSON), string(gotJSON), "response identical to a service with no matcher")
+	for _, c := range got.Results {
+		assert.NotEqual(t, metadata.CatalogSourceName, c.Source)
+	}
+
+	// On, but no matcher installed: the same.
+	bare, bareProv := stageHarness(t, lanternAnswer("B0PROV0001"))
+	withCatalogStage(t, true)
+	got = searchStage(t, bare, context.Background(), SearchOptions{})
+	gotJSON, _ = json.Marshal(got)
+	assert.JSONEq(t, string(wantJSON), string(gotJSON))
+	assert.Equal(t, plainProv.callCount(), bareProv.callCount())
+}
+
+// With the switch on the catalog's candidates join the pool as review-only
+// candidates tagged with their stage, merged after the providers' (a
+// duplicate ASIN stays the provider's), and the provider fan-out makes the
+// same calls it made without the stage.
+func TestCatalogStageOn_AddsReviewOnlyCandidatesAfterProviders(t *testing.T) {
+	offSvc, offProv := stageHarness(t, lanternAnswer("B0PROV0001"))
+	_ = searchStage(t, offSvc, context.Background(), SearchOptions{})
+	baseline := offProv.callCount()
+
+	svc, prov := stageHarness(t, lanternAnswer("B0PROV0001"))
+	withCatalogStage(t, true)
+	fm := &fakeCatalogMatcher{answer: catalogAnswer()}
+	svc.SetCatalogMatcher(fm)
+	stats := &CatalogStageStats{}
+	resp := searchStage(t, svc, WithCatalogStageStats(context.Background(), stats), SearchOptions{})
+
+	require.EqualValues(t, 1, fm.calls.Load())
+	q := fm.asked[0]
+	assert.Equal(t, []string{stageAuthor, "Author 08"}, q.Credits, "the live credits in position order, the placeholder dropped")
+	assert.Contains(t, q.Titles, stageTitle)
+	assert.Equal(t, baseline, prov.callCount(), "the stage removes no provider call and adds none")
+
+	var catalog, providers []MetadataCandidate
+	for _, c := range resp.Results {
+		if c.Source == metadata.CatalogSourceName {
+			catalog = append(catalog, c)
+		} else {
+			providers = append(providers, c)
+		}
+	}
+	require.Len(t, catalog, 1, "the duplicate ASIN is the provider's, not the catalog's")
+	assert.Equal(t, "B0CATA0002", catalog[0].ASIN)
+	assert.Equal(t, metadata.CatalogStageAuthor, catalog[0].Stage)
+	assert.Equal(t, 1, catalog[0].StageCreditPosition)
+	assert.True(t, catalog[0].ManualOnly)
+	assert.True(t, catalog[0].FromCatalog)
+	assert.True(t, IsReviewOnlyCandidateSource(catalog[0].Source))
+	require.Len(t, providers, 1)
+	assert.Equal(t, "B0PROV0001", providers[0].ASIN)
+	assert.Empty(t, providers[0].Stage)
+
+	assert.NotContains(t, resp.SourcesTried, metadata.CatalogSourceName)
+	assert.NotContains(t, resp.SourcesAnswered, metadata.CatalogSourceName)
+	assert.NotContains(t, resp.SourcesAsked, metadata.CatalogSourceName)
+
+	assert.EqualValues(t, 1, stats.CatalogCandidates.Load())
+	assert.EqualValues(t, 1, stats.ProviderCandidates.Load())
+	assert.EqualValues(t, 1, stats.BooksWithCatalog.Load())
+	assert.EqualValues(t, 2, stats.OversizeBlocks.Load())
+	assert.EqualValues(t, 1, stats.HomonymSkipped.Load())
+}
+
+// A fallback provider's own search (OnlySources naming only Open Library /
+// Google Books) does not run the stage; a chain re-ask does.
+func TestCatalogStage_SkippedForFallbackOnlySearches(t *testing.T) {
+	ol := &fakeProvider{id: metadata.SourceIDOpenLibrary, name: "Open Library"}
+	audible := &fakeProvider{id: metadata.SourceIDAudible, name: "Audible"}
+	id1 := 1
+	book := &database.Book{ID: "b1", Title: stageTitle, AuthorID: &id1}
+	svc := fanoutHarness(t, book, audible, ol)
+	svc.db.(*database.MockStore).GetAuthorByIDFunc = func(id int) (*database.Author, error) { return &database.Author{ID: id, Name: stageAuthor}, nil }
+	withCatalogStage(t, true)
+	fm := &fakeCatalogMatcher{}
+	svc.SetCatalogMatcher(fm)
+
+	searchStage(t, svc, context.Background(), SearchOptions{OnlySources: []string{"Open Library"}})
+	assert.Zero(t, fm.calls.Load(), "a fallback-only search")
+	searchStage(t, svc, context.Background(), SearchOptions{OnlySources: []string{"Audible"}})
+	assert.EqualValues(t, 1, fm.calls.Load(), "a chain re-ask")
+	searchStage(t, svc, context.Background(), SearchOptions{})
+	assert.EqualValues(t, 2, fm.calls.Load(), "an unrestricted search")
+}
+
+// The stage only adds candidates: a matcher error is logged and the search is
+// the provider's alone.
+func TestCatalogStage_MatcherErrorIsNotFatal(t *testing.T) {
+	svc, _ := stageHarness(t, lanternAnswer("B0PROV0001"))
+	withCatalogStage(t, true)
+	svc.SetCatalogMatcher(&fakeCatalogMatcher{err: errors.New("catalog store unreadable")})
+	resp := searchStage(t, svc, context.Background(), SearchOptions{})
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "B0PROV0001", resp.Results[0].ASIN)
+}
+
+// A book with no ASIN and no credit has nothing to ask: the matcher is not.
+func TestCatalogStage_NoQuestionNoCall(t *testing.T) {
+	audible := &fakeProvider{id: metadata.SourceIDAudible, name: "Audible"}
+	svc := fanoutHarness(t, &database.Book{ID: "b1", Title: stageTitle}, audible)
+	withCatalogStage(t, true)
+	fm := &fakeCatalogMatcher{}
+	svc.SetCatalogMatcher(fm)
+	searchStage(t, svc, context.Background(), SearchOptions{})
+	assert.Zero(t, fm.calls.Load())
+
+	asin := "B0OWNASIN1"
+	svc = fanoutHarness(t, &database.Book{ID: "b1", Title: stageTitle, ASIN: &asin}, audible)
+	withCatalogStage(t, true) // the harness reset it
+	svc.SetCatalogMatcher(fm)
+	searchStage(t, svc, context.Background(), SearchOptions{})
+	require.EqualValues(t, 1, fm.calls.Load(), "the book's own ASIN is a question without a credit")
+	assert.Equal(t, asin, fm.asked[0].ASIN)
+}

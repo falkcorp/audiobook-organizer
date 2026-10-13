@@ -2736,6 +2736,7 @@ func InitConfig() {
 	viper.SetDefault("cache_size", 1000)
 	viper.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
 	viper.SetDefault("metadata_fetch.shared_cache", true)
+	viper.SetDefault("metadata_fetch.catalog_stage", false)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.audible", DefaultNegativeTTLDaysAudible)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.audnexus", DefaultNegativeTTLDaysAudnexus)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", DefaultNegativeTTLDaysOpenLibrary)
@@ -3299,7 +3300,8 @@ func InitConfig() {
 
 			// Shared provider-answer cache (metadata_fetch.*)
 			MetadataFetch: MetadataFetchConfig{
-				SharedCache: viper.GetBool("metadata_fetch.shared_cache"),
+				SharedCache:  viper.GetBool("metadata_fetch.shared_cache"),
+				CatalogStage: viper.GetBool("metadata_fetch.catalog_stage"),
 				NegativeTTLDays: MetadataFetchNegativeTTLDays{
 					Audible:     viper.GetInt("metadata_fetch.negative_ttl_days.audible"),
 					Audnexus:    viper.GetInt("metadata_fetch.negative_ttl_days.audnexus"),
@@ -4476,8 +4478,18 @@ const (
 // A non-empty answer uses metadata_fetch_cache_ttl_days. "Search again" on a
 // book deletes the shared answers its questions map to; nothing else busts a
 // negative entry before its TTL.
+//
+// catalog_stage (default false) turns on the local author-catalog blocking
+// stage (internal/catalog.MatchBook, spec 02 section 3.3 B1/B2): before the
+// provider fan-out a book is looked up in the harvested catalog with no
+// provider call, and what it finds joins the candidate pool as REVIEW-ONLY
+// candidates (owner decision D31). It adds candidates; it does not replace or
+// skip any provider call. Off, a search is exactly what it was; it stays off
+// until the owner has read the catalog coverage report
+// (catalog.coverage-report) and turns it on.
 type MetadataFetchConfig struct {
 	SharedCache     bool                         `json:"shared_cache" mapstructure:"shared_cache"`
+	CatalogStage    bool                         `json:"catalog_stage" mapstructure:"catalog_stage"`
 	NegativeTTLDays MetadataFetchNegativeTTLDays `json:"negative_ttl_days" mapstructure:"negative_ttl_days"`
 }
 
@@ -4493,6 +4505,8 @@ type MetadataFetchNegativeTTLDays struct {
 func DefaultMetadataFetchConfig() MetadataFetchConfig {
 	return MetadataFetchConfig{
 		SharedCache: true,
+		// Off until the owner has read the catalog coverage report.
+		CatalogStage: false,
 		NegativeTTLDays: MetadataFetchNegativeTTLDays{
 			Audible:     DefaultNegativeTTLDaysAudible,
 			Audnexus:    DefaultNegativeTTLDaysAudnexus,

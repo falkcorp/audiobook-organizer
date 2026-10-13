@@ -1,11 +1,15 @@
 // file: internal/metafetch/source_rank_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d6c2f85-47e1-4b39-9a70-3e8b5c1d2f94
-// last-edited: 2026-09-27
+// last-edited: 2026-10-12
 
 package metafetch
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+)
 
 // Every provider's real display name (metadata.MetadataSource.Name()) maps to
 // a ranked slug, and the tag writer uses the same slug.
@@ -81,5 +85,20 @@ func TestApplyOptions_RankUpgradeLabels(t *testing.T) {
 	}
 	if (ApplyOptions{FillOnly: true}).requiresHistory() {
 		t.Error("a fill-only apply does not require history")
+	}
+}
+
+// A book the owner fills from a local-catalog candidate is an Audible book:
+// its source tag and rank are Audible's, not an unranked slug the metadata
+// upgrade would never touch.
+func TestMetadataSourceSlug_LocalCatalogIsAudible(t *testing.T) {
+	if got := MetadataSourceSlug(metadata.CatalogSourceName); got != SourceSlugAudible {
+		t.Fatalf("MetadataSourceSlug(%q) = %q, want %q", metadata.CatalogSourceName, got, SourceSlugAudible)
+	}
+	if got := MetadataSourceTag(metadata.CatalogSourceName); got != "metadata:source:audible" {
+		t.Errorf("MetadataSourceTag = %q", got)
+	}
+	if r, ok := SourceRank(metadata.CatalogSourceName); !ok || r != 50 {
+		t.Errorf("SourceRank = %d, %v; want Audible's 50", r, ok)
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.40.7
+// version: 1.41.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -1230,6 +1230,12 @@ func (mfs *Service) searchMetadataForBook(
 	fp := fanoutParams{
 		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
 	}
+	// B1/B2: the local catalog, asked before any provider call. Its
+	// candidates join the pool AFTER every provider's (below): the dedupe is
+	// first-wins, so a review-only catalog row can never shadow the live
+	// answer for the same ASIN, and nothing here changes which provider
+	// calls the fan-out makes.
+	catalogMatch := mfs.runCatalogStage(ctx, book, in, searchTitle, rawTitle, searchSeries, asinToLookup, opts)
 	states := mfs.runSearchFanout(fp, sources, variants)
 	// One Audnexus lookup per book: the own-ASIN fallback below, when it may
 	// run, is reserved first; otherwise one runtime fill.
@@ -1302,26 +1308,10 @@ func (mfs *Service) searchMetadataForBook(
 	sourcesFailed := map[string]string{}
 	sourceErrs := map[string]error{}
 
-	// Merge in SOURCE ORDER: `sources` is priority-ordered and the dedupe is
-	// first-wins, so a parallel merge would make the winner of a duplicate
-	// nondeterministic between runs.
-	for srcIdx := range sources {
-		sf := fetched[srcIdx]
-		src := sources[srcIdx]
-		sourcesTried = append(sourcesTried, sf.name)
-		if sf.failedErr != "" {
-			sourcesFailed[sf.name] = sf.failedErr
-			sourceErrs[sf.name] = sf.err
-		}
-		if sf.answered {
-			sourcesAnswered = append(sourcesAnswered, sf.name)
-		}
-		if states[srcIdx].asked > 0 {
-			sourcesAsked = append(sourcesAsked, sf.name)
-		}
-		allResults := sf.results
-		baseScores, baseTier := sf.baseScores, sf.baseTier
-
+	// mergeResults scores one source's answers into the pool, in the order
+	// given; seen.add makes the first answer for a duplicate win. The provider
+	// sources run through it in source order, then the local catalog stage.
+	mergeResults := func(srcName string, allResults []metadata.BookMetadata, baseScores []float64, baseTier string) {
 		for i, r := range allResults {
 			if !seen.add(r) {
 				continue
@@ -1351,7 +1341,7 @@ func (mfs *Service) searchMetadataForBook(
 			}
 			if score <= minScore {
 				searchFanoutLog.Debug("search candidate below threshold: score=%.3f tier=%s title=%s source=%s",
-					score, baseTier, logger.SanitizeLogValue(r.Title), src.Name())
+					score, baseTier, logger.SanitizeLogValue(r.Title), srcName)
 				continue
 			}
 
@@ -1439,8 +1429,28 @@ func (mfs *Service) searchMetadataForBook(
 				durationStepDetail(bookDurationSec, r.DurationSec))
 			score = rec.score
 
-			candidates = append(candidates, newSearchCandidate(r, src.Name(), score, rec.breakdown(), bookDurationSec, transcriptionBoosted))
+			candidates = append(candidates, newSearchCandidate(r, srcName, score, rec.breakdown(), bookDurationSec, transcriptionBoosted))
 		}
+	}
+
+	// Merge in SOURCE ORDER: `sources` is priority-ordered and the dedupe is
+	// first-wins, so a parallel merge would make the winner of a duplicate
+	// nondeterministic between runs.
+	for srcIdx := range sources {
+		sf := fetched[srcIdx]
+		src := sources[srcIdx]
+		sourcesTried = append(sourcesTried, sf.name)
+		if sf.failedErr != "" {
+			sourcesFailed[sf.name] = sf.failedErr
+			sourceErrs[sf.name] = sf.err
+		}
+		if sf.answered {
+			sourcesAnswered = append(sourcesAnswered, sf.name)
+		}
+		if states[srcIdx].asked > 0 {
+			sourcesAsked = append(sourcesAsked, sf.name)
+		}
+		mergeResults(src.Name(), sf.results, sf.baseScores, sf.baseTier)
 	}
 
 	// The direct ASIN lookup: Audible first (more complete), Audnexus as the
@@ -1530,6 +1540,17 @@ func (mfs *Service) searchMetadataForBook(
 		}
 	}
 
+	// The catalog stage's candidates, scored by the same pipeline as every
+	// provider's and last in the merge order. They are not a source: no
+	// per-provider cache row is written for them and the catalog is not among
+	// the sources tried, answered or asked.
+	if catalogMatch != nil && len(catalogMatch.Candidates) > 0 {
+		baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, catalogMatch.Candidates, searchWords)
+		first := len(candidates)
+		mergeResults(metadata.CatalogSourceName, catalogMatch.Candidates, baseScores, baseTier)
+		tagCatalogCandidates(candidates[first:], catalogMatch)
+	}
+
 	// Filter out results without cover images — they're typically low-quality
 	// entries that clutter the results. Exempt strong-evidence candidates:
 	// direct ASIN-lookup, transcription-boosted, and the top-scored candidate.
@@ -1613,6 +1634,7 @@ func (mfs *Service) searchMetadataForBook(
 		candidates = mfs.RerankTopK(ctx, book, candidates)
 	}
 
+	recordCatalogStageStats(ctx, candidates)
 	searchFanoutLog.Debug("search returning %d candidates for %s (%d variants)", len(candidates),
 		logger.SanitizeLogValue(searchTitle), len(variants))
 

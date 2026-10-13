@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_rank.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c2618c2e-2a64-4761-bc76-c9bbd65b3792
-// last-edited: 2026-09-27
+// last-edited: 2026-10-12
 //
 // The one table that says which metadata provider is better than which.
 // Owner decision 2026-09-27: the nightly metadata upgrade REPLACES a book's
@@ -16,6 +16,8 @@ package metafetch
 import (
 	"sort"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 // Source slugs, as MetadataSourceSlug produces them from each provider's
@@ -72,6 +74,12 @@ func MetadataSourceSlug(name string) string {
 	// provider, not the upstream (Audible has its own slug).
 	if strings.HasPrefix(strings.ToLower(name), "audnexus") {
 		return SourceSlugAudnexus
+	}
+	// The local catalog holds Audible's own product records, so a book filled
+	// from one is an Audible book: ranked like one, not an unranked source
+	// the metadata upgrade would never touch.
+	if name == metadata.CatalogSourceName {
+		return SourceSlugAudible
 	}
 	slug := strings.ToLower(name)
 	slug = strings.ReplaceAll(slug, " ", "_")

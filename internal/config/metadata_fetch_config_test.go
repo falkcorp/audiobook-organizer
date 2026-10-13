@@ -1,7 +1,7 @@
 // file: internal/config/metadata_fetch_config_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 14574916-bcbe-4887-ba11-5520e206bed2
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package config
 
@@ -49,6 +49,42 @@ func TestUpdateConfig_SharedCacheRollbackSwitch(t *testing.T) {
 	}
 }
 
+// The local catalog stage ships off, is switched by
+// PUT /api/v1/config {"metadata_fetch":{"catalog_stage":true}}, persists, and
+// leaves the shared-cache switch it does not name alone.
+func TestUpdateConfig_CatalogStageSwitch(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.EnableAuth = false
+		c.MetadataFetch = DefaultMetadataFetchConfig()
+	})
+	if Snapshot().MetadataFetch.CatalogStage {
+		t.Fatal("catalog_stage must ship off")
+	}
+	ms, blobs := ladderTestStore(t)
+
+	status, resp := NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{
+		"metadata_fetch": map[string]any{"catalog_stage": true},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d; resp = %v", status, resp)
+	}
+	got := Snapshot().MetadataFetch
+	if !got.CatalogStage || !got.SharedCache {
+		t.Fatalf("after turning catalog_stage on: %+v (shared_cache must be untouched)", got)
+	}
+	if len(*blobs) == 0 || !strings.Contains((*blobs)[len(*blobs)-1], `"catalog_stage":true`) {
+		t.Errorf("the switch was not persisted; blobs = %v", *blobs)
+	}
+
+	status, resp = NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{
+		"metadata_fetch": map[string]any{"catalog_stage": false},
+	})
+	if status != http.StatusOK || Snapshot().MetadataFetch.CatalogStage {
+		t.Fatalf("turning it back off: status = %d, catalog_stage = %v; resp = %v", status, Snapshot().MetadataFetch.CatalogStage, resp)
+	}
+}
+
 // ResetToDefaults restores the fetch-cache TTL: 0 would mean "never expire"
 // and every cached answer would live forever after a reset.
 func TestResetToDefaults_MetadataFetchCacheTTL(t *testing.T) {
@@ -56,6 +92,7 @@ func TestResetToDefaults_MetadataFetchCacheTTL(t *testing.T) {
 	Mutate(func(c *Config) {
 		c.MetadataFetchCacheTTLDays = 3
 		c.MetadataFetch.SharedCache = false
+		c.MetadataFetch.CatalogStage = true
 	})
 	ResetToDefaults()
 	snap := Snapshot()
