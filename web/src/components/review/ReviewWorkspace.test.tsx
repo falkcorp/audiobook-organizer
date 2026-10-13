@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.20.0
+// version: 1.20.1
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-12
 
@@ -13,6 +13,19 @@ import { ToastProvider } from '../toast/ToastProvider';
 import { resetDedupPipelineForTests } from './useDedupPipeline';
 
 vi.mock('../../services/api');
+// A test can freeze the search debounce open (hold.on) so "typed but not applied
+// yet" is a state the test CONTROLS rather than a race against a 250ms timer.
+// Real typing + two menu clicks can outlast that timer on a loaded CI agent, at
+// which point the term IS applied and the assertion fails for the wrong reason.
+const debounceHold = vi.hoisted(() => ({ on: false }));
+vi.mock('../../hooks/useDebouncedSearch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../hooks/useDebouncedSearch')>();
+  return {
+    ...actual,
+    useDebouncedSearch: (value: string, delayMs: number) =>
+      actual.useDebouncedSearch(value, debounceHold.on ? 60 * 60 * 1000 : delayMs),
+  };
+});
 const actualApi = await vi.importActual<typeof api>('../../services/api');
 
 function makeResult(id: string, overrides: Partial<api.CandidateResult> = {}) {
@@ -1050,6 +1063,7 @@ describe('duplicate export', () => {
       .mockImplementation(function (this: HTMLAnchorElement) {
         hrefs.push(this.getAttribute('href') ?? '');
       });
+    debounceHold.on = true;
     try {
       renderWorkspace(['/review?lane=dupes']);
       await screen.findByTestId('dupes-rail');
@@ -1060,6 +1074,7 @@ describe('duplicate export', () => {
       await user.click(await screen.findByTestId('command-export-dupes-csv'));
     } finally {
       click.mockRestore();
+      debounceHold.on = false;
     }
     expect(hrefs).toHaveLength(1);
     expect(new URL(hrefs[0], 'http://localhost').searchParams.has('q')).toBe(false);
