@@ -1,5 +1,5 @@
 // file: internal/catalog/match_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 5e8a1c37-9d40-4b62-a7f3-0c2d9b6e4815
 // last-edited: 2026-10-12
 
@@ -197,24 +197,24 @@ func TestMatchBook_OversizeBlockSkippedAndCounted(t *testing.T) {
 }
 
 // Bulk matching reads exact keys only: a credit that is a substring of a
-// stored author fold ("phelps" in "josephphelps") finds nothing, where
+// stored author fold ("author" in "joanauthor") finds nothing, where
 // EntryIDsByAuthorName's fallback walk (which scans every author key) would.
 // The database package pins that the exact-key reads never report a scan;
 // here the observable consequence is pinned.
 func TestMatchBook_NeverUsesSubstringWalk(t *testing.T) {
 	st, _ := openCatalog(t)
-	seedProducts(t, st, "josephphelps", synthProduct("B0PHELPS01", "Title 000301", "Joseph Phelps", "AUTHJP"))
+	seedProducts(t, st, "joanauthor", synthProduct("B0JOAN0001", "Title 000301", "Joan Author", "AUTHJP"))
 
-	for _, credit := range []string{"Phelps", "Joseph", "Joseph Phelp", "Joseph Phelpss"} {
+	for _, credit := range []string{"Author", "Joan", "Joan Autho", "Joan Authorr"} {
 		res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{credit}})
 		require.NoError(t, err, credit)
 		assert.Empty(t, res.Candidates, credit)
 	}
-	ids, err := st.EntryIDsByAuthorName("phelps", 0)
+	ids, err := st.EntryIDsByAuthorName("author", 0)
 	require.NoError(t, err)
 	require.Len(t, ids, 1, "control: the substring walk does find the entry")
 
-	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{"Joseph Phelps"}})
+	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{"Joan Author"}})
 	require.NoError(t, err)
 	assert.Len(t, res.Candidates, 1, "control: the exact credit does")
 }
@@ -324,4 +324,37 @@ func TestAuthorAliasFolds(t *testing.T) {
 	assert.Contains(t, AuthorAliasFolds("Jane Doe Jr."), "janedoe", "a generational suffix is dropped")
 	assert.Nil(t, AuthorAliasFolds("Cher"), "one word has nothing to vary")
 	assert.Empty(t, AuthorAliasFolds("Al Li"), "variants under five letters are not filed")
+}
+
+// "Last, First" is read both ways: a junk block (over the cap) under the
+// literal fold must not hide the good block under the "First Last" fold, and
+// is counted only when nothing else answers.
+func TestMatchBook_OversizeFoldDoesNotHideTheOtherReading(t *testing.T) {
+	st, _ := openCatalog(t)
+	seedProducts(t, st, "authorjane", block("Author Jane", "AUTHAJ", MaxBlockEntries+1, 1)...)
+	seedProducts(t, st, "janeauthor", block("Jane Author", "AUTHJA", 3, 5001)...)
+
+	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 005002"}, Credits: []string{"Author, Jane"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Title 005002"}, titlesOf(res))
+	assert.Zero(t, res.OversizeBlocks, "a block was found: the junk one is not reported")
+
+	res, err = MatchBook(st, BookQuestion{Titles: []string{"Title 000007"}, Credits: []string{"Author Jane"}})
+	require.NoError(t, err)
+	assert.Empty(t, res.Candidates)
+	assert.Equal(t, 1, res.OversizeBlocks, "nothing else answers: the over-cap block is counted")
+}
+
+// The digit signature closes every run, so a run at the end of a title and the
+// same run in the middle compare equal, and two runs are not one.
+func TestTitleKey_DigitSignatureIsConsistent(t *testing.T) {
+	sig := func(s string) string {
+		k, ok := newTitleKey(s)
+		require.True(t, ok)
+		return k.digits
+	}
+	assert.Equal(t, sig("Title 12"), sig("Title 12 Extra"))
+	assert.Equal(t, sig("Title 12 Extra"), sig("12 Title"))
+	assert.NotEqual(t, sig("Title 1 Part 2"), sig("Title 12"), "separate runs stay separate")
+	assert.Equal(t, "", sig("Title Words"))
 }

@@ -1,11 +1,12 @@
 // file: internal/catalog/alias_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c27d8f40-1a6e-4b93-85d2-e9f0b3a7c514
 // last-edited: 2026-10-12
 
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,13 +55,19 @@ type AliasBackfill struct {
 //  1. Every entry is decoded from a bounded worker pool (one per CPU) and its
 //     author spellings collected; the pairs come from AuthorAliasFolds.
 //  2. kv (nil skips this step): a contributor ASIN the authority lists saw
-//     under two spellings names one person ("Jonathan Brazee" / "Jonathan P.
-//     Brazee"). When exactly ONE of the spellings has a block, each other
+//     under two spellings names one person ("Jane Author" / "Jane Q.
+//     Author"). When exactly ONE of the spellings has a block, each other
 //     spelling is aliased to it; with none, or with two, nothing is filed.
 //     Spellings are re-folded with authorjunk.FoldKey: the authority's own
 //     fold keeps accents, a catalog key does not.
 //
 // The pairs are written in batches, serialised by the store.
+//
+// It reads the whole catalog, so it is cheap only because it is bounded and
+// rare (the end of a harvest run, 30 days apart by default). It runs whether
+// or not metadata_fetch.catalog_stage is on, though only the stage reads the
+// aliases: the stage can be turned on between two harvests, and would then find
+// an empty alias table for every entry stored before this version.
 func BackfillAuthorAliases(ctx context.Context, st *database.CatalogStore, kv authority.Scanner) (AliasBackfill, error) {
 	var out AliasBackfill
 	if st == nil {
@@ -74,11 +81,12 @@ func BackfillAuthorAliases(ctx context.Context, st *database.CatalogStore, kv au
 
 	var mu sync.Mutex
 	names := map[string]struct{}{}
-	var g errgroup.Group
+	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for chunk := range slices.Chunk(ids, backfillChunk) {
 		g.Go(func() error {
-			if err := ctx.Err(); err != nil {
+			// A failed or cancelled sibling stops the rest of the pool.
+			if err := gctx.Err(); err != nil {
 				return err
 			}
 			local := map[string]struct{}{}
@@ -153,7 +161,11 @@ func putAliasBatches(ctx context.Context, st *database.CatalogStore, pairs []dat
 }
 
 // authorityAliasPairs reads the authority lists' contributor-ASIN rows once
-// (paged) and returns the aliases they justify.
+// (paged) and returns the aliases they justify. Each page's rows are judged
+// from a bounded worker pool (one per CPU): a row costs one exact-key seek
+// per spelling, and a library-scale authority list has tens of thousands of
+// rows. The result is sorted, so a run's output does not depend on which
+// worker finished first.
 func authorityAliasPairs(ctx context.Context, st *database.CatalogStore, kv authority.Scanner) ([]database.CatalogAuthorAlias, error) {
 	prefix := authority.ASINPrefix + "person:"
 	var out []database.CatalogAuthorAlias
@@ -166,42 +178,74 @@ func authorityAliasPairs(ctx context.Context, st *database.CatalogStore, kv auth
 		if err != nil {
 			return nil, fmt.Errorf("alias backfill: scan %s: %w", prefix, err)
 		}
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(runtime.NumCPU())
 		for _, p := range page {
-			var ref authority.ASINRef
-			if err := json.Unmarshal(p.Value, &ref); err != nil {
-				return nil, fmt.Errorf("alias backfill: decode %s: %w", p.Key, err)
-			}
-			if len(ref.Folds) < 2 {
-				continue
-			}
-			var folds []string
-			for _, f := range ref.Folds {
-				if k := authorjunk.FoldKey(f); k != "" && !slices.Contains(folds, k) {
-					folds = append(folds, k)
+			g.Go(func() error {
+				if err := gctx.Err(); err != nil {
+					return err
 				}
-			}
-			var withBlock []string
-			for _, f := range folds {
-				ok, err := st.HasAuthorKey(f)
+				var ref authority.ASINRef
+				if err := json.Unmarshal(p.Value, &ref); err != nil {
+					return fmt.Errorf("alias backfill: decode %s: %w", p.Key, err)
+				}
+				pairs, err := asinRefAliasPairs(st, ref)
 				if err != nil {
-					return nil, err
+					return err
 				}
-				if ok {
-					withBlock = append(withBlock, f)
+				if len(pairs) > 0 {
+					mu.Lock()
+					out = append(out, pairs...)
+					mu.Unlock()
 				}
-			}
-			if len(withBlock) != 1 {
-				continue
-			}
-			for _, f := range folds {
-				if f != withBlock[0] && len(f) >= minAliasFold {
-					out = append(out, database.CatalogAuthorAlias{Alias: f, Target: withBlock[0]})
-				}
-			}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, err
 		}
 		if next == "" {
+			slices.SortFunc(out, func(a, b database.CatalogAuthorAlias) int {
+				return cmp.Or(cmp.Compare(a.Alias, b.Alias), cmp.Compare(a.Target, b.Target))
+			})
 			return out, nil
 		}
 		after = next
 	}
+}
+
+// asinRefAliasPairs judges one contributor-ASIN row: when it names two or
+// more spellings and exactly ONE of them has a block, each other spelling is
+// aliased to it.
+func asinRefAliasPairs(st *database.CatalogStore, ref authority.ASINRef) ([]database.CatalogAuthorAlias, error) {
+	if len(ref.Folds) < 2 {
+		return nil, nil
+	}
+	var folds []string
+	for _, f := range ref.Folds {
+		if k := authorjunk.FoldKey(f); k != "" && !slices.Contains(folds, k) {
+			folds = append(folds, k)
+		}
+	}
+	var withBlock []string
+	for _, f := range folds {
+		ok, err := st.HasAuthorKey(f)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			withBlock = append(withBlock, f)
+		}
+	}
+	if len(withBlock) != 1 {
+		return nil, nil
+	}
+	var out []database.CatalogAuthorAlias
+	for _, f := range folds {
+		if f != withBlock[0] && len(f) >= minAliasFold {
+			out = append(out, database.CatalogAuthorAlias{Alias: f, Target: withBlock[0]})
+		}
+	}
+	return out, nil
 }
