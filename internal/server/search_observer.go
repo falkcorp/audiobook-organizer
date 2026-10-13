@@ -72,9 +72,10 @@ const renameFanOutWorkers = 2
 // while a store lock is held. enqueueIndex qualifies: a bounded non-blocking
 // channel send whose overflow branch is one lock-free Pebble Set into the
 // dirty set. A book written before Start has opened the index (indexQueue nil)
-// is not indexed, exactly as before the decorator was removed; the startup
-// reconcile seeds only documents MISSING from the index, so it does not repair
-// a stale title written in that gap.
+// is not indexed at once; enqueueIndex records it in the durable dirty set and
+// the reconciler Start launches repairs it once the index is open (the startup
+// coverage pass alone seeds only documents MISSING from the index, so it would
+// not repair a stale title written in that gap).
 type serverChangeObserver struct {
 	s *Server
 

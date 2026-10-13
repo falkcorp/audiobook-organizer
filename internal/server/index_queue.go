@@ -94,11 +94,24 @@ func (g *dropLogGate) allow(now time.Time) (bool, int) {
 // concurrently with Shutdown: the mutex + closed flag prevents sending on a
 // closed channel during teardown.
 //
-// Before Start has created the queue (indexQueue nil, not closed) the book is
-// recorded in the dirty set too, so a write made between NewServer and Start is
-// not lost: the reconciler started by startSearchIndexing drains the set once
-// the index has opened. If the index never opens, the set just holds one key per
-// book written since boot and is never drained.
+// The channel and indexPending are memory only, so every path that would leave a
+// write with no queued request behind it records the book in the durable dirty
+// set instead (the reconciler reads the latest row, so one mark covers every
+// write to the book):
+//   - before Start has created the queue (indexQueue nil, not closed): a write
+//     made between NewServer and Start is not lost, because the reconciler
+//     started by startSearchIndexing drains the set once the index has opened.
+//     If the index never opens, the set just holds one key per book written
+//     since boot and is never drained;
+//   - after the queue is closed (Shutdown): ops that outlive the registry's
+//     bounded shutdown keep writing books, and nothing will pop a request;
+//   - when the queue is full and the book is already pending: the worker is
+//     behind or wedged (production wedged for hours in September), the pending
+//     request may never be popped before a restart, and this write would
+//     otherwise coalesce into nothing durable;
+//   - when the queue is full and the send fails (the overflow branch).
+//
+// markPendingIndexDirty covers whatever is still pending at Shutdown.
 //
 // indexWorkerBusy is incremented before enqueueing so drainQueue can
 // reliably wait for completion: the window between dequeue and the
@@ -110,16 +123,16 @@ func (s *Server) enqueueIndex(bookID string) {
 	}
 	s.indexQueueMu.RLock()
 	defer s.indexQueueMu.RUnlock()
-	if s.indexQueueClosed {
-		return
-	}
-	if s.indexQueue == nil {
+	if s.indexQueueClosed || s.indexQueue == nil {
 		s.markIndexDirty(bookID)
 		return
 	}
 	s.indexPendingMu.Lock()
 	if _, queued := s.indexPending[bookID]; queued {
 		s.indexPendingMu.Unlock()
+		if len(s.indexQueue) == cap(s.indexQueue) {
+			s.markIndexDirty(bookID)
+		}
 		return
 	}
 	if s.indexPending == nil {
@@ -135,12 +148,12 @@ func (s *Server) enqueueIndex(bookID string) {
 		atomic.AddInt32(&s.indexWorkerBusy, -1)
 		searchIndexDropped.Add(1)
 		metrics.IncSearchIndexDropped()
-		// Record it durably before lifting the pending mark, so a crash
-		// between the two still leaves the book reconcilable, and a write that
-		// coalesced against the mark in the meantime is covered by the same
-		// dirty entry (the reconciler reads the latest row).
-		s.markIndexDirty(bookID)
+		// Lift the pending mark first: no request is queued for this book, so a
+		// write arriving now must queue itself (or find the queue full and be
+		// recorded) rather than coalesce against a mark that will never be
+		// popped. Then record the drop durably so the reconciler repairs it.
 		s.indexRequestPopped(bookID)
+		s.markIndexDirty(bookID)
 		if ok, swallowed := s.indexDropLog.allow(time.Now()); ok {
 			searchIndexLog.Warn("search index queue full: events are being dropped and marked for reconcile (latest: book %s; %d more dropped since the last report, %d in total)",
 				logger.SanitizeLogValue(bookID), swallowed, searchIndexDropped.Load())
@@ -154,6 +167,23 @@ func (s *Server) indexRequestPopped(bookID string) {
 	s.indexPendingMu.Lock()
 	delete(s.indexPending, bookID)
 	s.indexPendingMu.Unlock()
+}
+
+// markPendingIndexDirty records every request still waiting on the queue in
+// the durable dirty set. Shutdown calls it after the background goroutines have
+// been waited for: whatever the worker did not pop (it was wedged, or the wait
+// timed out) would otherwise be lost with the process, and startup only seeds
+// documents that are missing from the index, not stale ones.
+func (s *Server) markPendingIndexDirty() {
+	s.indexPendingMu.Lock()
+	ids := make([]string, 0, len(s.indexPending))
+	for id := range s.indexPending {
+		ids = append(ids, id)
+	}
+	s.indexPendingMu.Unlock()
+	for _, id := range ids {
+		s.markIndexDirty(id)
+	}
 }
 
 // closeIndexQueue takes the write lock, closes the channel, and
