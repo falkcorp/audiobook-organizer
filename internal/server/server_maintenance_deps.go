@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.65.1
+// version: 1.66.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-12
 
@@ -792,7 +792,7 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 	} else if why != "" {
 		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
-	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, Score: best.Score}, true, nil
+	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, ManualOnly: best.ManualOnly, Score: best.Score}, true, nil
 }
 
 // transcriptionApplyLog is the process log of ApplyTranscriptionCandidate's
@@ -805,7 +805,7 @@ var errTranscriptionASINConflict = errors.New("cached candidate ASIN conflicts w
 
 // errTranscriptionReviewOnly refuses a transcription apply whose top cached
 // candidate is review-only (applygate.ReviewOnlySource).
-var errTranscriptionReviewOnly = errors.New("cached candidate is review-only (Open Library / Google Books)")
+var errTranscriptionReviewOnly = errors.New("cached candidate is review-only (Open Library / Google Books / the local catalog)")
 
 // errTranscriptionOwnerRejected refuses a transcription apply whose top
 // cached candidate the owner rejected (applygate.ReasonOwnerRejected).

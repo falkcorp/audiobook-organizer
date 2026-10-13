@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback_round2_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 34fd4490-2dd6-4158-b2d2-a0064a8cabb6
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -232,5 +233,13 @@ func TestCandidateFallback_MergesIntoRowVouchedUnderRawCredit(t *testing.T) {
 	}
 	if srcs := candidateSources(t, entry); !slices.Contains(srcs, "Audible") || !slices.Contains(srcs, "Open Library") {
 		t.Fatalf("row candidates from %v; want Audible's kept and Open Library's merged in", srcs)
+	}
+}
+
+// The transcription auto-apply's review-only refusal can come from the local
+// catalog stage too, so the error names it.
+func TestErrTranscriptionReviewOnly_NamesTheCatalog(t *testing.T) {
+	if !strings.Contains(errTranscriptionReviewOnly.Error(), "the local catalog") {
+		t.Fatalf("errTranscriptionReviewOnly = %q, want it to name the local catalog", errTranscriptionReviewOnly)
 	}
 }
