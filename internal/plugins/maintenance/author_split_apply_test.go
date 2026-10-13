@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_split_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e8a1c73-b5d2-49f6-8a0e-d37c9f12b6a5
 // last-edited: 2026-10-13
 
@@ -368,7 +368,7 @@ func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.
 	moved, kept := books[0], books[1]
 
 	store := splitFaultStore{PebbleStore: st}
-	store.beforeModifyBook = func(id string) {
+	store.beforeModifyBookAuthors = func(id string) {
 		if id != moved {
 			return
 		}
@@ -398,4 +398,100 @@ func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.
 	gone, err := st.GetAuthorByID(composite.ID)
 	require.NoError(t, err)
 	require.Nil(t, gone, "nothing credits the composite any more, so it is deleted")
+}
+
+// A book that credits the composite only through Book.AuthorID (no junction row,
+// the default shape CreateBook leaves) or through both, with either of the two
+// per-book writes failing on the first pass. Nothing may be lost: the composite
+// survives the first pass because the book is still listed under it, and a
+// healthy rerun credits both parts exactly once, repoints the primary and only
+// then deletes the composite. The credits are written first on purpose: the
+// legacy AuthorID is the only evidence of the composite on a legacy-only book,
+// and repointing it before the credits were safe let the composite be deleted
+// with parts[1:] never credited.
+func TestAuthorSplitScan_NoCreditLostWhenEitherWriteFails(t *testing.T) {
+	for _, shape := range []string{"legacy-only", "junction-and-legacy"} {
+		for _, failing := range []string{"credits", "primary"} {
+			t.Run(shape+"/fail-"+failing, func(t *testing.T) {
+				st := newSplitRelinkStore(t)
+				composite, err := st.CreateAuthor("Gina Rowe & Hal Pike")
+				require.NoError(t, err)
+				b, err := st.CreateBook(&database.Book{
+					Title:            "split-crash-safe",
+					FilePath:         "/split-crash-safe/book.m4b",
+					AuthorID:         new(composite.ID),
+					IsPrimaryVersion: new(true),
+				})
+				require.NoError(t, err)
+				if shape == "junction-and-legacy" {
+					require.NoError(t, st.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: composite.ID, Role: "author"}}))
+				}
+
+				faulty := splitFaultStore{PebbleStore: st}
+				if failing == "credits" {
+					faulty.failCredits = b.ID
+				} else {
+					faulty.failPrimary = b.ID
+				}
+				rep, err := runSplit(t, newSplitDeps(faulty), `{"dry_run":false}`)
+				require.NoError(t, err)
+
+				kept, gerr := st.GetAuthorByID(composite.ID)
+				require.NoError(t, gerr)
+				require.NotNil(t, kept, "the composite was deleted while the book was only half split; logs: %v", rep.logs)
+				gina, gerr := st.GetAuthorByName("Gina Rowe")
+				require.NoError(t, gerr)
+				require.NotNil(t, gina)
+				hal, gerr := st.GetAuthorByName("Hal Pike")
+				require.NoError(t, gerr)
+				require.NotNil(t, hal)
+				mid, gerr := st.GetBookByID(b.ID)
+				require.NoError(t, gerr)
+				require.NotNil(t, mid.AuthorID)
+				if failing == "credits" {
+					require.Equal(t, composite.ID, *mid.AuthorID, "the primary moved although the credits write failed")
+				} else {
+					// The credits landed first, so both parts are already credited.
+					require.Equal(t, map[int]int{gina.ID: 1, hal.ID: 1}, creditCounts(t, st, b.ID))
+				}
+
+				_, err = runSplit(t, newSplitDeps(st), `{"dry_run":false}`)
+				require.NoError(t, err)
+
+				gone, gerr := st.GetAuthorByID(composite.ID)
+				require.NoError(t, gerr)
+				require.Nil(t, gone, "the rerun should finish the split")
+				require.Equal(t, map[int]int{gina.ID: 1, hal.ID: 1}, creditCounts(t, st, b.ID))
+				full, gerr := st.GetBookByID(b.ID)
+				require.NoError(t, gerr)
+				require.NotNil(t, full.AuthorID)
+				require.Equal(t, gina.ID, *full.AuthorID)
+			})
+		}
+	}
+}
+
+// Listing a composite's books can fall back to a Pebble scan, and the parts are
+// already created by then, so the lease is checked before each composite's
+// listing: a lease that lapsed after the first beat stops the apply there, names
+// the composite, and deletes nothing.
+func TestAuthorSplitScan_ApplyStopsBeforeListingWhenLeaseIsLost(t *testing.T) {
+	st := newSplitRelinkStore(t)
+	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	require.NoError(t, err)
+	books := mkSplitBooks(t, st, composite.ID, 2)
+	d := newSplitDeps(st)
+	d.renewOK = func(call int) bool { return call == 1 } // the part-creation beat only
+
+	_, err = runSplit(t, d, `{"dry_run":false}`)
+	require.ErrorIs(t, err, registry.ErrScanStandDownLost)
+	require.ErrorContains(t, err, `stopped before listing books of "Alice Smith & Bob Jones"`)
+
+	kept, gerr := st.GetAuthorByID(composite.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, kept)
+	require.Equal(t, map[int]int{composite.ID: 1}, creditCounts(t, st, books[0]), "a book was relinked after the lease was lost")
+	_, releases, inv := d.snapshot()
+	require.Equal(t, 1, releases)
+	require.Equal(t, 1, inv, "the parts were created before the stop; the cache must be dropped")
 }

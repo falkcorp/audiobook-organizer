@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.90.0
+// version: 2.91.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-13
 
@@ -367,7 +367,7 @@ type Server struct {
 	// if needed (rare — most access is via the typed fields above).
 	container *serviceregistry.Container
 
-	// extraOpsRegistrar holds the ExtraOpsRegistrar for 7 scheduler ops
+	// extraOpsRegistrar holds the ExtraOpsRegistrar for the 3 scheduler ops
 	// that were extracted from scheduler_extra_ops.go (SERVER-THIN-RESIDUAL).
 	// Constructed early (before opRegistrars loop) with empty deps; deps are
 	// filled in after all services are wired so closures see correct values
@@ -1034,14 +1034,14 @@ func NewServer(store database.Store) *Server {
 	// Activity-service fan-out into metafetch / audiobook / scanner now
 	// happens in those services' PostInit hooks.
 	// What's left in this block is genuinely server-internal: starting
-	// the writer, the global log.SetOutput, extraOpsRegistrar back-fill,
+	// the writer, the global log.SetOutput,
 	// scanner.SetScanHooks (process-global),
 	// and the startup-record entry.
 	if server.activityService != nil {
 		// activityWriter is started by Container.Start in Server.Start
 		// (SERVER-LIFECYCLE-FLIP). What stays inline here is the
-		// extraOpsRegistrar back-fill + log.SetOutput global, both of
-		// which need the writer reference but not its Start.
+		// log.SetOutput global, which needs the writer reference but not
+		// its Start.
 		if aw := server.activityWriter; aw != nil {
 			log.SetOutput(aw)
 			// Also route the slog default to a text handler writing to

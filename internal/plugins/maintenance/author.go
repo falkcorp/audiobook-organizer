@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-10-13
 
@@ -137,17 +137,21 @@ func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, repo
 // sequentially after the pool drains.
 //
 // ResumePolicy stays ResumeRequeue (the scheduler copy was ResumeDrop) because
-// the apply is idempotent, so a requeue after a restart cannot split an author
-// twice. A composite is deleted only after VerifyAuthorUnlinked passes, and
-// that check re-reads GetBooksByAuthorIDForRelinkCore, which lists a book by
-// its junction row OR its legacy AuthorID, in any state including the trash. A
-// book whose credits were relinked but whose primary-author write failed is
-// therefore still listed through the legacy AuthorID: the composite survives,
-// the rerun lists the book again, repoints its primary and deletes the
-// composite. A part that already exists is found by name rather than created
-// again, an already-linked part is not linked again, and both writes skip a
-// book that no longer names the composite
-// (TestAuthorSplitScan_RequeueAfterPartialApply).
+// the apply is idempotent and crash-safe, so a requeue after a restart cannot
+// split an author twice or lose a credit. A composite is deleted only after
+// VerifyAuthorUnlinked passes, and that check re-reads
+// GetBooksByAuthorIDForRelinkCore, which lists a book by its junction row OR its
+// legacy AuthorID, in any state including the trash. Each book takes its two
+// writes in an order that keeps that evidence until the credits are safe: the
+// parts are credited FIRST (the composite stays listed through the primary
+// AuthorID, or the junction row not yet removed), and only then is the primary
+// repointed. A failure or crash between the writes leaves the book still listed
+// under the composite, so the composite survives, and the rerun finds the parts
+// already credited, repoints the primary and deletes the composite. A part that
+// already exists is found by name rather than created again, an already-linked
+// part is not linked again, and both writes skip a book that no longer names the
+// composite (TestAuthorSplitScan_NoCreditLostWhenEitherWriteFails,
+// TestAuthorSplitScan_RequeueAfterPartialApply).
 func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
@@ -225,10 +229,26 @@ type authorSplitRun struct {
 	wrote atomic.Bool
 }
 
-// relinkBook applies every substitution of one book, in two writes.
+// relinkBook applies every substitution of one book, in two writes whose ORDER
+// is the crash-safety argument.
 //
-// First the primary author: if the listed row's AuthorID names a composite,
-// ModifyBook repoints it, deciding on the FRESH row. `book` is a BookCore (heavy
+// First the credits: the composite is replaced by its parts inside
+// ModifyBookAuthors, so a credit list another writer changes meanwhile is not
+// reverted and a book that no longer carries the composite is skipped. The
+// composite counts as credited if the junction names it OR the fresh row's
+// AuthorID does: a book credited only through its legacy AuthorID (the default
+// shape CreateBook leaves) has no junction row, and its parts must still be
+// credited. The fresh row is read inside the callback with GetBookByID, which
+// takes no lock on the Pebble store (the callback runs under the book_authors
+// stripe, and setBookAuthorsLocked already makes the same read there), so the
+// decision sees what a writer committed after the listing. Credits go first
+// because the legacy AuthorID is the only evidence of the composite on such a
+// book: while it is unchanged, GetBooksByAuthorIDForRelinkCore keeps listing the
+// book, VerifyAuthorUnlinked refuses to delete the composite, and a failure or
+// crash after this write loses nothing.
+//
+// Then the primary author, only if the credits write did not fail: ModifyBook
+// repoints AuthorID, deciding on the FRESH row. `book` is a BookCore (heavy
 // fields nil), so its ToBook() projection is never written: it carries nil
 // Author/Series AND, because this op changes AuthorID, the guard-preserved
 // Author would be STALE (it still names the composite). ModifyBook re-reads the
@@ -237,62 +257,13 @@ type authorSplitRun struct {
 // AuthorID), not preserved-stale (STOREFID W5d-1 / #1887), and a column another
 // writer commits meanwhile is not reverted (audit A1#15). A primary moved off
 // the composite meanwhile is left alone.
-//
-// Then the credits: the composite is replaced by its parts inside
-// ModifyBookAuthors, so a credit list another writer changes meanwhile is not
-// reverted, and a book that no longer carries the composite is skipped. The
-// primary goes first so that the only book listed solely through its legacy
-// AuthorID (no junction row naming the composite) is recognised from the fresh
-// row, not from the stale listing: a primary that really was repointed proves the
-// composite was credited, and its parts are added; one that was not, is not.
 func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	book := it.book
 
-	// The one plan, if any, whose composite the listed row names as primary.
-	var primaryPlan *authorSplitPlan
-	primaryMoved := false
-	if book.AuthorID != nil {
-		for _, cand := range it.plans {
-			if cand.composite.ID == *book.AuthorID {
-				primaryPlan = cand
-				break
-			}
-		}
-	}
-	if primaryPlan != nil {
-		composite := primaryPlan.composite
-		newPrimary := primaryPlan.newAuthors[0]
-		firstID := newPrimary.ID
-		applied := false
-		written, err := r.store.ModifyBook(book.ID, func(full *database.Book) error {
-			if full.AuthorID == nil || *full.AuthorID != composite.ID {
-				return database.ErrSkipBookWrite
-			}
-			applied = true
-			full.AuthorID = &firstID
-			full.Author = &newPrimary
-			return nil
-		})
-		switch {
-		case err != nil:
-			r.errCount.Add(1)
-			_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
-			authorSplitLog.Warn("author split: primary author write failed: book=%s author=%q err=%s",
-				logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(composite.Name), logger.SanitizeLogValue(err.Error()))
-		case written == nil:
-			r.errCount.Add(1)
-			_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
-		case !applied:
-			_ = r.reporter.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left author %q meanwhile, primary author not updated", book.ID, composite.Name))
-		default:
-			primaryMoved = true
-			r.booksUpdated.Add(1)
-			r.wrote.Store(true)
-		}
-	}
-
 	wroteCredits := false
 	_, err := r.store.ModifyBookAuthors(book.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		var fresh *database.Book
+		freshRead := false
 		updated := cur
 		changed := false
 		for _, pl := range it.plans {
@@ -304,10 +275,17 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 					break
 				}
 			}
-			// A book credited through its legacy AuthorID alone has no junction
-			// row for the composite; its repointed primary proves the credit.
-			if !credited && !(primaryMoved && pl == primaryPlan) {
-				continue // the composite left this book meanwhile
+			if !credited {
+				if !freshRead {
+					var gerr error
+					if fresh, gerr = r.store.GetBookByID(book.ID); gerr != nil {
+						return nil, fmt.Errorf("read book %s for its primary author: %w", book.ID, gerr)
+					}
+					freshRead = true
+				}
+				if fresh == nil || fresh.AuthorID == nil || *fresh.AuthorID != pl.composite.ID {
+					continue // the composite left this book meanwhile
+				}
 			}
 			var next []database.BookAuthor
 			for _, ba := range updated {
@@ -344,9 +322,51 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 		r.errCount.Add(1)
 		_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: credits of book %s not relinked: %v", book.ID, err))
 		authorSplitLog.Warn("author split: credits of book %s not relinked: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
-		return
+		return // the primary stays on the composite, which keeps the book listed under it
 	}
 	if wroteCredits {
+		r.wrote.Store(true)
+	}
+
+	// The one plan, if any, whose composite the listed row names as primary.
+	var primaryPlan *authorSplitPlan
+	if book.AuthorID != nil {
+		for _, cand := range it.plans {
+			if cand.composite.ID == *book.AuthorID {
+				primaryPlan = cand
+				break
+			}
+		}
+	}
+	if primaryPlan == nil {
+		return
+	}
+	composite := primaryPlan.composite
+	newPrimary := primaryPlan.newAuthors[0]
+	firstID := newPrimary.ID
+	applied := false
+	written, err := r.store.ModifyBook(book.ID, func(full *database.Book) error {
+		if full.AuthorID == nil || *full.AuthorID != composite.ID {
+			return database.ErrSkipBookWrite
+		}
+		applied = true
+		full.AuthorID = &firstID
+		full.Author = &newPrimary
+		return nil
+	})
+	switch {
+	case err != nil:
+		r.errCount.Add(1)
+		_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
+		authorSplitLog.Warn("author split: primary author write failed: book=%s author=%q err=%s",
+			logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(composite.Name), logger.SanitizeLogValue(err.Error()))
+	case written == nil:
+		r.errCount.Add(1)
+		_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
+	case !applied:
+		_ = r.reporter.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left author %q meanwhile, primary author not updated", book.ID, composite.Name))
+	default:
+		r.booksUpdated.Add(1)
 		r.wrote.Store(true)
 	}
 }
@@ -470,6 +490,12 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	var items []*authorSplitItem
 	byBook := make(map[string]*authorSplitItem)
 	for _, pl := range plans {
+		// Listing falls back to a Pebble scan when memdb is incomplete, and the
+		// parts are already created, so the lease is checked per composite here
+		// too.
+		if cerr := hold.Checkpoint(); cerr != nil {
+			return fmt.Errorf("author-split-scan stopped before listing books of %q: %w", pl.composite.Name, cerr)
+		}
 		books, lerr := store.GetBooksByAuthorIDForRelinkCore(pl.composite.ID)
 		if lerr != nil {
 			run.errCount.Add(1)
