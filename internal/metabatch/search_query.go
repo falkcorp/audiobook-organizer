@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-10-12
 //
@@ -438,8 +438,25 @@ func personShapedName(t string) (string, bool) {
 // No stand-in when the folder offers no title, is the title itself, or is
 // itself a person ("Last, First", a known person, a live author): then the
 // title stays the question. A part row never gets here (partRowRefused).
+//
+// Reads, cheapest first: none when the book's own path already names the
+// title (almost every book); the book's files when the path says something
+// else; its authors only when a folder title differs from the stored one. The
+// candidate pass runs this for every book, so a book it cannot change costs
+// nothing.
 func (j *titleJudge) folderStandInForPersonTitle(t, bookPath string) (string, bool) {
 	if j.files == nil || j.book == nil {
+		return "", false
+	}
+	// The usual case first, and with no store read: the folder of the book's
+	// own path already carries the title, so there is nothing to correct.
+	// Every read below (the book's files, then its authors) is made only for
+	// a book whose folder says something else.
+	if wf, ok := metadata.WorkFolderTitle(bookPath); ok && authorjunk.FoldKey(wf) == authorjunk.FoldKey(t) {
+		return "", false
+	}
+	ft, _ := j.folderTitle(bookPath)
+	if ft == "" || authorjunk.FoldKey(ft) == authorjunk.FoldKey(t) {
 		return "", false
 	}
 	live, err := database.LiveBookAuthorNames(j.files, j.book)
@@ -460,11 +477,9 @@ func (j *titleJudge) folderStandInForPersonTitle(t, bookPath string) (string, bo
 		}
 		return lastFirstRe.MatchString(strings.TrimSpace(name))
 	}
-	if !namesLive(t) && !isPerson(t) {
-		return "", false
-	}
-	ft, _ := j.folderTitle(bookPath)
-	if ft == "" || authorjunk.FoldKey(ft) == authorjunk.FoldKey(t) || namesLive(ft) || isPerson(ft) {
+	// The title must be a person (or the book's author), and the folder must
+	// not be.
+	if (!namesLive(t) && !isPerson(t)) || namesLive(ft) || isPerson(ft) {
 		return "", false
 	}
 	return ft, true
