@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupSeriesTab.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
@@ -280,15 +280,24 @@ export function SeriesDedupTab() {
       // only preview it.
       () => api.deduplicateSeries(false),
       setActiveOp,
-      (final) => {
+      async (final) => {
         if (final.status === 'failed') {
+          // A failed apply can have merged some groups before it stopped (it fails
+          // when it KEPT a series, and the groups it did merge stay merged), so
+          // the list on screen may hold groups whose series are already gone.
+          // Re-read FIRST: fetchDuplicates clears `error` as its first act.
+          await fetchDuplicates();
           setError(final.error_message || 'Series dedup failed');
         } else {
           setMergeSuccess(final.message || 'Series deduplication complete');
           fetchDuplicates();
         }
       },
-      setError
+      async (msg) => {
+        // A poll that errored may have been following a run that went ahead.
+        await fetchDuplicates();
+        setError(msg);
+      }
     );
   };
 

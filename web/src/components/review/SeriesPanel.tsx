@@ -1,5 +1,5 @@
 // file: web/src/components/review/SeriesPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e7b3a915-2c64-4d08-b1f7-90a5c8d3e426
 // last-edited: 2026-10-13
 
@@ -157,6 +157,12 @@ export function SeriesPanel({ authors }: { authors: AuthorsLane }) {
           </Stack>
         )}
       </Box>
+
+      {authors.bulk?.entity === 'author' && (
+        <Alert severity="info" data-testid="series-authors-running" sx={{ mx: 2, my: 1 }}>
+          An author merge is running ({authors.bulk.done} of {authors.bulk.total} groups). The buttons here wait for it.
+        </Alert>
+      )}
 
       {series.stale && (
         <Alert

@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d03b9f2-a4e1-4875-b3c6-0f92d8e15a47
 // last-edited: 2026-10-13
 
@@ -447,6 +447,14 @@ function AuthorsView({ authors }: AuthorsPanelProps) {
           </Stack>
         )}
       </Box>
+
+      {authors.bulk?.entity === 'series' && (
+        // Series and Authors share one write queue and one busy state, so a Series
+        // bulk run greys this sub-view's buttons too: say why.
+        <Alert severity="info" data-testid="authors-series-running" sx={{ mx: 2, mb: 1 }}>
+          A series merge is running ({authors.bulk.done} of {authors.bulk.total} groups). The buttons here wait for it.
+        </Alert>
+      )}
 
       {authors.stale && (
         <Alert
