@@ -1,7 +1,7 @@
 // file: internal/database/author_relink_guard.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d41c2e7-5b39-4f0a-a6e2-1c7b93f05d48
-// last-edited: 2026-09-12
+// last-edited: 2026-10-13
 
 package database
 
@@ -32,8 +32,8 @@ type AuthorRelinkLister interface {
 // turns every such case into "author kept, error reported".
 //
 // It is a POST-relink check rather than a pre-flight reference count on
-// purpose. The split paths (maintenance/author.go, scheduler/extra_ops.go)
-// iterate every author in the library, and a per-author full-library
+// purpose. The split path (maintenance/author.go)
+// iterates every author in the library, and a per-author full-library
 // reference scan inside that loop is the single-core hotspot shape CLAUDE.md
 // warns about. The re-read here is one indexed lookup.
 //

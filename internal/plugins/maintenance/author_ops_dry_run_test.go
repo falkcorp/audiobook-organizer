@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_ops_dry_run_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5c1e4571-8bcf-4190-ac2d-ae141026d139
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -70,6 +70,33 @@ func TestAuthorSplitScan_DefaultIsDryRun(t *testing.T) {
 			require.Len(t, credits, 1)
 			require.Equal(t, compositeID, credits[0].AuthorID, "dry run relinked the book")
 			require.Contains(t, strings.Join(rep.logs, "\n"), "DRY RUN: would split 1 composite authors, create 2 authors, relink 1 books")
+		})
+	}
+}
+
+// The bodies that reach the survivor on the scheduled path are previews: what
+// the author_split_scan task sends now ({}), and what a row queued under
+// scheduler.author-split-scan before 04-P4e carries after the alias resolves it
+// ({"legacy_op_id":""}, the old schedulerExtraOpParams{}). Nothing is written.
+func TestAuthorSplitScan_ScheduledAndLegacyBodiesArePreview(t *testing.T) {
+	for _, body := range []string{`{}`, `null`, `{"legacy_op_id":""}`} {
+		t.Run("body="+body, func(t *testing.T) {
+			st, compositeID, bookID := newDryRunSplitStore(t)
+			p := &Plugin{deps: &fakeDeps{store: st}}
+			rep := &fakeReporter{}
+			require.NoError(t, p.runAuthorSplitScan(context.Background(), json.RawMessage(body), rep))
+
+			still, err := st.GetAuthorByID(compositeID)
+			require.NoError(t, err)
+			require.NotNil(t, still, "scheduled preview deleted the composite")
+			alice, err := st.GetAuthorByName("Alice Smith")
+			require.NoError(t, err)
+			require.Nil(t, alice, "scheduled preview created a split author")
+			credits, err := st.GetBookAuthors(bookID)
+			require.NoError(t, err)
+			require.Len(t, credits, 1)
+			require.Equal(t, compositeID, credits[0].AuthorID)
+			require.Contains(t, strings.Join(rep.logs, "\n"), "DRY RUN: would split 1 composite authors")
 		})
 	}
 }

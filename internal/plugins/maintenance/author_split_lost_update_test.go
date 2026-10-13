@@ -1,9 +1,9 @@
-// file: internal/scheduler/author_split_lost_update_test.go
-// version: 1.0.0
+// file: internal/plugins/maintenance/author_split_lost_update_test.go
+// version: 1.1.0
 // guid: ce15c0ee-2b3c-4527-89e3-b2998eb307a7
-// last-edited: 2026-09-14
+// last-edited: 2026-10-13
 
-package scheduler
+package maintenance
 
 import (
 	"testing"
@@ -42,7 +42,8 @@ func (s splitLostUpdateStore) ModifyBook(id string, fn func(*database.Book) erro
 }
 
 // TestAuthorSplitScanOp_PrimaryAuthorWriteDoesNotRevertConcurrentColumns pins
-// the lost-update fix on the split's primary-author write (audit A1#15): it
+// (against a real store; it moved here from internal/scheduler with the op,
+// 04-P4e) the lost-update fix on the split's primary-author write (audit A1#15): it
 // must set only AuthorID/Author, so a Duration another writer commits between
 // its read and its write survives. Against the old GetBookByID ->
 // UpdateBook(whole row) it fails with "Duration reverted".

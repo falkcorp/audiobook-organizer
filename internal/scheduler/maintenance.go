@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package scheduler
 
@@ -172,7 +172,7 @@ var taskV2DefIDs = map[string]string{
 	"temp_file_cleanup":           "maintenance.temp-file-cleanup",
 	"trash_cleanup":               "maintenance.trash-cleanup",
 	"metadata_upgrade":            "scheduler.metadata-upgrade",
-	"author_split_scan":           "scheduler.author-split-scan",
+	"author_split_scan":           "maintenance.author-split-scan",
 	"db_optimize":                 "maintenance.db-optimize",
 	"acoustid_online_lookup":      "acoustid.lookup-online",
 	"cleanup_old_backups":         "scheduler.cleanup-old-backups",

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_update_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6c1f0b7e-2d94-4a58-9e3b-7f2a5c8d1b04
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -156,8 +156,8 @@ func TestStampVerifiedAt_DoesNotRevertConcurrentColumns(t *testing.T) {
 }
 
 // TestAuthorSplit_DoesNotRevertConcurrentColumns pins the same fix on the
-// author split's primary-author write (the "keep in sync" twin of
-// internal/scheduler/extra_ops.go): it must set only AuthorID and Author.
+// author split's primary-author write: it must set only AuthorID and Author.
+// (The scheduler copy of the op, retired in 04-P4e, had the same fix.)
 func TestAuthorSplit_DoesNotRevertConcurrentColumns(t *testing.T) {
 	const (
 		compositeID = 1

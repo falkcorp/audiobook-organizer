@@ -1,7 +1,7 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package server
 
@@ -49,6 +49,8 @@ var twinMergeRows = []struct {
 	{"scheduler.metadata-refresh", "maintenance.metadata-refresh", []auth.Permission{auth.PermSettingsManage}, 4 * time.Hour},
 	// 04-P4d: scheduler.resolve-production-authors merged into maintenance.resolve-production-authors.
 	{"scheduler.resolve-production-authors", "maintenance.resolve-production-authors", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
+	// 04-P4e: scheduler.author-split-scan merged into maintenance.author-split-scan.
+	{"scheduler.author-split-scan", "maintenance.author-split-scan", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
 }
 
 func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {
