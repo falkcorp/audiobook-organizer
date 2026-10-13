@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.36.1
+// version: 2.37.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-13
 
@@ -147,6 +147,16 @@ type runHandle struct {
 	// timeout stop's outcome. Cancel relies on it to leave the row to the
 	// goroutine's exit (cancelStoppingRun); markStopping is best effort.
 	stoppingRecorded atomic.Bool
+	// endCounted is set by whichever writer counts this run's end first
+	// (recordRunMetrics, recordRunEnd): the worker, the zombie monitor, or
+	// Shutdown for a row it stamped. Every per-handle count takes it with a
+	// compare-and-set, so a run whose end two of them see is counted once.
+	endCounted atomic.Bool
+	// deadlineHit is set when executeRun sees the run's context end with
+	// context.DeadlineExceeded (its def's Timeout). Shutdown reads it to stamp
+	// a run that timed out and did not drain as a timeout, not as an
+	// interrupted pause that the next boot would resume.
+	deadlineHit atomic.Bool
 }
 
 // zombieOutcome is a stopping run's decided final status. It carries no
@@ -471,7 +481,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// neither does a cancel settled here: a queued run canceled before
 		// it started is not counted anywhere else either.
 		if out.outcome == opsmetrics.OutcomeDropped {
-			r.recordRunEnd(qr.defID, out.outcome)
+			r.recordRunEnd(h, qr.defID, out.outcome)
 		}
 		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
 		// Without this the dropped scan was never recorded anywhere a release
@@ -568,6 +578,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// Subprocess path (Isolate=true): re-exec self.
 	if def.Isolate {
 		runErr := runSubprocess(runCtx, def, qr.opID, qr.params, reporter)
+		// A deadline hit is recorded in v3 (stopping{timeout}) while the
+		// handle still holds the run's key; see markTimedOutStopping.
+		r.markTimedOutStopping(runCtx, qr, h)
 		r.releaseRunHandle(qr.opID)
 		var finalStatus, outcome string
 		var errMsg *string
@@ -581,16 +594,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		} else {
 			finalStatus, outcome = "completed", opsmetrics.OutcomeCompleted
 		}
-		if outcome == opsmetrics.OutcomeTimedOut {
-			r.markStopping(qr, h, state.StopTimeout, false)
-		}
 		out := r.writeRunTerminalStatus(qr, h, finalStatus, outcome, &completedAt, errMsg)
 		finalStatus = out.status
 		// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 		if out.publish {
 			r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 		}
-		r.recordRunMetrics(qr.defID, out.outcome, runStartedAt)
+		r.recordRunMetrics(h, qr.defID, out, runStartedAt)
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
@@ -632,9 +642,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		if runCtx.Err() != nil {
 			ctxCanceled = true
 			fence.revoke()
+			h.deadlineHit.Store(errors.Is(runCtx.Err(), context.DeadlineExceeded))
 		}
 	case <-runCtx.Done():
 		ctxCanceled = true
+		h.deadlineHit.Store(errors.Is(runCtx.Err(), context.DeadlineExceeded))
 		// Revoke here for the stop paths no code of ours initiates: the def
 		// Timeout firing inside context.WithTimeout, or the parent context
 		// ending. Every other path (Cancel, watchdog, quiesce, shutdown) has
@@ -671,7 +683,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 					"op_id", qr.opID, "plugin", qr.plugin)
 				// Reported by Zombies(). The slot is NOT released here (the pool
 				// is going away) and no terminal status is written, so Shutdown's
-				// timeout loop still stamps this row interrupted_*.
+				// timeout loop still stamps this row: interrupted_*, or a
+				// timeout when the run hit its deadline (deadlineHit), and
+				// counts its end; the cleanup below counts nothing.
 				// v3: the run is stopping, a zombie (05-PR4), recorded before
 				// it is listed as one. Its row keeps reading "running";
 				// Shutdown's timeout loop stamps it.
@@ -781,7 +795,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// up to its goroutine's return. Until 05-PR2 this path counted
 				// nothing in either family, so a timed-out run that ignored its
 				// context was never a failure or a timed_out run.
-				r.recordRunMetrics(qr.defID, out.outcome, runStartedAt)
+				r.recordRunMetrics(h, qr.defID, out, runStartedAt)
 				r.notifyDepTerminal(out.status, qr)
 				// Release the key and write set now that the goroutine is gone.
 				// Handle first, abandoned counter second -- the shutdown branch's
@@ -816,7 +830,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		}
 	}
 
-	// We have a result. Release the handle and write terminal status.
+	// We have a result. Record a deadline hit in v3 while the handle still
+	// holds the run's key (markTimedOutStopping), then release the handle
+	// and write the terminal status.
+	if ctxCanceled {
+		r.markTimedOutStopping(runCtx, qr, h)
+	}
 	r.releaseRunHandle(qr.opID)
 
 	var finalStatus, outcome string
@@ -834,13 +853,6 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		finalStatus, outcome = "completed", opsmetrics.OutcomeCompleted
 	}
 
-	// A deadline hit is recorded natively in v3 first (stopping{timeout}),
-	// so the v2 write below projects stopping -> timed_out as the
-	// goroutine_returned event rather than an off-table v2_write. The row
-	// keeps reading "running" (stopping mirrors as running) until that write.
-	if outcome == opsmetrics.OutcomeTimedOut {
-		r.markStopping(qr, h, state.StopTimeout, false)
-	}
 	out := r.writeRunTerminalStatus(qr, h, finalStatus, outcome, &completedAt, errMsg)
 	finalStatus = out.status
 
@@ -848,7 +860,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if out.publish {
 		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 	}
-	r.recordRunMetrics(qr.defID, out.outcome, runStartedAt)
+	r.recordRunMetrics(h, qr.defID, out, runStartedAt)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
 	// for the same subject can be re-evaluated or failed as appropriate.
@@ -881,6 +893,13 @@ type terminalOutcome struct {
 	// over it. It is carried, not derived from status, because a timeout and
 	// a cancel share the status "canceled".
 	outcome string
+	// written is true when the row now holds a final status: this write
+	// applied, or the row already read "canceled" and was kept. False when the
+	// write failed or could not be confirmed, so the row may still read
+	// "running": its end is then not counted here (recordRunMetrics), because
+	// whoever finishes the row counts it -- the boot sweep for a running or
+	// v3 stopping row, which ends it by its stop reason or resumes it.
+	written bool
 }
 
 // keepsUserCancel reports whether a run whose own outcome is status should
@@ -949,7 +968,7 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, o
 			// canceled even when this run had decided timed_out, and a
 			// timed-out zombie's own status that Shutdown already stamped
 			// stays timed_out.
-			return terminalOutcome{status: "canceled", publish: true, outcome: rowOutcome(row)}
+			return terminalOutcome{status: "canceled", publish: true, outcome: rowOutcome(row), written: true}
 		}
 		if row.Status == "canceled" && errMsg == nil {
 			// The run completed: its row must not keep the cancel's message.
@@ -993,7 +1012,7 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, o
 // canceled here.
 func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status, outcome string, completedAt *time.Time) terminalOutcome {
 	if !strings.HasPrefix(status, "interrupted_") {
-		return terminalOutcome{status: status, publish: true, outcome: outcome}
+		return terminalOutcome{status: status, publish: true, outcome: outcome, written: true}
 	}
 	if h != nil && h.userCanceled.Load() {
 		msg := "canceled by user while the run was being interrupted"
@@ -1004,13 +1023,13 @@ func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status, outcom
 		} else if applied {
 			r.logger.Info("registry: user canceled the run while it was being interrupted; recorded canceled",
 				"op_id", qr.opID, "def_id", qr.defID, "interrupted_status", status)
-			return terminalOutcome{status: "canceled", publish: true, outcome: opsmetrics.OutcomeCanceled}
+			return terminalOutcome{status: "canceled", publish: true, outcome: opsmetrics.OutcomeCanceled, written: true}
 		}
 	}
 	if row, err := r.store.GetOperationV2(qr.opID); err == nil && row != nil && row.Status == "canceled" {
-		return terminalOutcome{status: "canceled", publish: false, outcome: rowOutcome(row)}
+		return terminalOutcome{status: "canceled", publish: false, outcome: rowOutcome(row), written: true}
 	}
-	return terminalOutcome{status: status, publish: true, outcome: outcome}
+	return terminalOutcome{status: status, publish: true, outcome: outcome, written: true}
 }
 
 // recordRunMetrics publishes one finished run attempt, keyed by def_id, to the
@@ -1020,8 +1039,9 @@ func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status, outcom
 // and the zombie monitor call it right after the terminal write, so every
 // attempt that executed is observed once, when it really ends.
 //
-// outcome is the run's ops.runs outcome (terminalOutcome.outcome), not its v2
-// status: a timeout and a cancel are both "canceled" in v2. The legacy
+// out is the terminal write's result. Its outcome is the run's ops.runs
+// outcome, not its v2 status: a timeout and a cancel are both "canceled" in
+// v2. The legacy
 // counters map it as completed -> operations_completed_total; failed and
 // timed_out -> operations_failed_total (a deadline hit is a failure of the
 // op, and until 05-PR2 it was counted as canceled); canceled ->
@@ -1031,23 +1051,66 @@ func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status, outcom
 // attempt, so a run canceled after three hours still shows up as three hours;
 // ops.run.duration is observed with each run-end outcome.
 //
+// The end is counted only when out.written: a terminal write that failed
+// leaves the row "running" (or v3 stopping), and the boot sweep that finds it
+// counts its end then, or resumes it so a later attempt does. Counting it here
+// as well counted one run twice. And it is counted at most once per handle
+// (h.endCounted), whichever of this worker, the zombie monitor and Shutdown's
+// stamp gets there first.
+//
 // Before 2026-10-03 the four Inc* helpers and ObserveOperationDuration were
 // defined in internal/metrics and called from nowhere: the deploy/prometheus
 // alert rules on operations_failed_total had never had a sample to fire on.
-func (r *Registry) recordRunMetrics(defID, outcome string, startedAt time.Time) {
-	incLegacyOutcome(defID, outcome)
+func (r *Registry) recordRunMetrics(h *runHandle, defID string, out terminalOutcome, startedAt time.Time) {
 	took := time.Since(startedAt)
 	metrics.ObserveOperationDuration(defID, took)
-	r.ops.Finished(defID, outcome, took)
+	if !out.written {
+		if out.outcome != "" {
+			r.logger.Info("registry: run end not counted; its final status was not written, so the boot sweep counts it",
+				"def_id", defID, "outcome", out.outcome)
+		}
+		return
+	}
+	if !claimEnd(h, out.outcome) {
+		return
+	}
+	incLegacyOutcome(defID, out.outcome)
+	r.ops.Finished(defID, out.outcome, took)
 }
 
-// recordRunEnd counts a run end that no attempt in this process timed: the
-// boot sweep finishing a stopped run or dropping one, a run force-dropped or
-// quiesced-and-dropped before it started. Same counters as recordRunMetrics,
-// no durations. "" records nothing.
-func (r *Registry) recordRunEnd(defID, outcome string) {
+// recordRunEnd counts a run end that no attempt in this process timed: a run
+// force-dropped or quiesced-and-dropped before it started, or a row Shutdown
+// stamped. Same counters as recordRunMetrics, no durations; at most once per
+// handle (h may be nil). "" records nothing.
+func (r *Registry) recordRunEnd(h *runHandle, defID, outcome string) {
+	if !claimEnd(h, outcome) {
+		return
+	}
 	incLegacyOutcome(defID, outcome)
 	r.ops.Ended(defID, outcome)
+}
+
+// claimEnd reports whether the caller is the one to count this run's end:
+// outcome is a run end, and h (when not nil) had not been counted yet.
+func claimEnd(h *runHandle, outcome string) bool {
+	if !opsmetrics.IsRunEnd(outcome) {
+		return false
+	}
+	return h == nil || h.endCounted.CompareAndSwap(false, true)
+}
+
+// markTimedOutStopping records a run whose context ended with its def's
+// deadline as v3 stopping{timeout} (markStopping, not a zombie), before its
+// handle is released and its terminal status written. The v2 write then
+// projects stopping -> timed_out as goroutine_returned rather than an
+// off-table v2_write, and while the record is stopping the row keeps reading
+// "running" with the handle still holding the run's key. If the terminal
+// write then fails, the boot sweep ends the run timed_out by its stop reason.
+// Any other end (a cancel, a normal return) records nothing here.
+func (r *Registry) markTimedOutStopping(runCtx context.Context, qr *queuedRun, h *runHandle) {
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		r.markStopping(qr, h, state.StopTimeout, false)
+	}
 }
 
 // rowOutcome is the ops.runs outcome of a stored "canceled" row: timed_out
@@ -1226,7 +1289,7 @@ func (r *Registry) checkInfiniteRestart(qr *queuedRun, def OperationDef) bool {
 			"op_id", qr.opID, "def_id", def.ID, "error", err)
 	} else {
 		// Counted only once the write lands, so a retried drop counts once.
-		r.recordRunEnd(def.ID, opsmetrics.OutcomeDropped)
+		r.recordRunEnd(nil, def.ID, opsmetrics.OutcomeDropped)
 	}
 	// R-1: fan out op.terminal for the force-drop transition.
 	r.publishOpTerminal(qr.opID, def.ID, "interrupted_dropped")

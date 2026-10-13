@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
 // last-edited: 2026-10-13
 
@@ -585,7 +585,23 @@ func (r *Registry) endStoppedRunAtBoot(row database.OperationV2Row, final state.
 	if final == state.V3TimedOut {
 		outcome = opsmetrics.OutcomeTimedOut
 	}
-	r.recordRunEnd(r.canonicalDefID(row.DefID), outcome)
+	r.recordBootRunEnd(row.DefID, outcome)
+}
+
+// recordBootRunEnd counts a run end the boot sweep made (no attempt of this
+// process timed it, and no handle exists, so it is counted unconditionally:
+// the boot sweep sees each row once). A row whose def is registered is counted
+// under the canonical id in both families. A row whose def is not (removed or
+// never registered in this binary) is counted in ops.runs only, where it folds
+// into def_id="other": the legacy counters label type with the raw id, and an
+// arbitrary stored string must not mint a legacy series.
+func (r *Registry) recordBootRunEnd(storedDefID, outcome string) {
+	def, ok := r.lookupDef(storedDefID)
+	if !ok {
+		r.ops.Ended(storedDefID, outcome)
+		return
+	}
+	r.recordRunEnd(nil, def.ID, outcome)
 }
 
 // retireForRequeue closes the original row of a requeue as dropped with its
@@ -684,7 +700,7 @@ func (r *Registry) resumeDrop(row database.OperationV2Row, reason string) {
 			"op_id", row.ID, "def_id", row.DefID, "reason", reason, "error", err)
 		return
 	}
-	r.recordRunEnd(r.canonicalDefID(row.DefID), opsmetrics.OutcomeDropped)
+	r.recordBootRunEnd(row.DefID, opsmetrics.OutcomeDropped)
 	r.logger.Info("registry: resumeAfterStartup: dropped op", "op_id", row.ID, "reason", reason)
 }
 

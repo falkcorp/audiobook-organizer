@@ -1,7 +1,7 @@
 // file: internal/operations/registry/aliases_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b4e2d71-3f6a-4c85-b1d0-6e8a5c3f2b97
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package registry_test
 
@@ -39,6 +39,31 @@ func deprecatedUses(t *testing.T, alias, entry string) float64 {
 			}
 			if labels["alias"] == alias && labels["entry"] == entry {
 				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+// legacyCounter reads the process-global legacy counter
+// audiobook_organizer_<name>{type=defID} through the default gatherer. Tests use a def id of their own, so
+// the value is theirs alone.
+func legacyCounter(t *testing.T, name, defID string) float64 {
+	t.Helper()
+	metrics.Register()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "audiobook_organizer_"+name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "type" && lp.GetValue() == defID {
+					return m.GetCounter().GetValue()
+				}
 			}
 		}
 	}
