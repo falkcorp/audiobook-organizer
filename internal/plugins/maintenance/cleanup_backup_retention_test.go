@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_backup_retention_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b8d6e41-0c97-4a52-b1f6-92e7a5c04d18
 // last-edited: 2026-10-13
 
@@ -168,4 +168,36 @@ func TestCleanupOldBackups_RequeueIsIdempotent(t *testing.T) {
 	for _, f := range append(fresh, keep) {
 		require.FileExists(t, f)
 	}
+}
+
+// TestRunCleanupOldBackups_FailedRemoveIsLoggedNotCounted pins what a remove
+// that fails does, which is also what a backup that vanishes after the walk saw
+// it does: the run carries on with the next file, returns no error, and does
+// not count the file it could not remove. The failure is a directory the
+// process cannot write to (a real vanished-after-lstat race has no seam).
+func TestRunCleanupOldBackups_FailedRemoveIsLoggedNotCounted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the remove cannot be made to fail")
+	}
+	root := t.TempDir()
+	withPluginAppDirs(t, root, false)
+
+	locked := filepath.Join(root, "A", "locked", "x.m4b"+bakSuffix(90))
+	removable := filepath.Join(root, "B", "ok", "y.m4b"+bakSuffix(90))
+	touchAged(t, locked, 90)
+	touchAged(t, removable, 90)
+	lockedDir := filepath.Dir(locked)
+	require.NoError(t, os.Chmod(lockedDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
+
+	rep := &fakeReporter{}
+	p := New(retentionDeps{rootDirDeps: rootDirDeps{root: root}, days: 30})
+	require.NoError(t, p.runCleanupOldBackups(context.Background(), nil, rep))
+
+	require.FileExists(t, locked, "a remove the OS refused leaves the file in place")
+	require.NoFileExists(t, removable, "one failed remove must not stop the sweep")
+	rep.mu.Lock()
+	defer rep.mu.Unlock()
+	require.Contains(t, rep.logs, "Backup cleanup complete: removed 1 file(s)",
+		"only the file that was actually removed is counted")
 }

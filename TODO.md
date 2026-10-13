@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.13 -->
+<!-- version: 10.76.14 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -174,10 +174,7 @@ into one of the curated sections below, is a normal direct edit.
       `scheduler.cleanup-old-backups` was merged into it by 04-P4f) and the
       manual `cleanup-backups` job, whose regex does not match the
       `.bak-<unix>[-N]` names create_backups now writes. Consolidate on one
-      predicate. (The hazard that the surviving sweep deleted any old file whose
-      name merely contained `.bak-`, e.g. `x.bak-notes.m4b`, is fixed in 04-P4f:
-      it now deletes only `.bak-<unix>[-N]` and the legacy
-      `.bak-YYYYMMDD-HHMMSS` names, with no mtime fallback.)
+      predicate.
 
 - [ ] **PATTERN-LAST-16KB** Also run end-anchored search patterns over the last
       16 KB of a long field. A regex or `*` pattern only sees the first 16 KB

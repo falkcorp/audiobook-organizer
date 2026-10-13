@@ -45,13 +45,13 @@ the context (`tagger.WithoutBackup`):
 Single-book edits keep a backup when the setting is on: a book edit's
 write-back and a per-book write-back, fetch or apply.
 
-The two backup sweeps (`maintenance.cleanup-old-backups` and the scheduler's
-`cleanup-old-backups`) remove `.bak-*` siblings older than
-`backup_retention_days`. They now decide age by the time in the backup's name
-(`<unix>`, `<unix>-N`, or the legacy `YYYYMMDD-HHMMSS` in local time) and use
-the file's mtime only for a name without one. A hardlinked backup keeps the
-original audio's mtime, which can be years old, so aging by mtime would delete
-a fresh backup on the next run. The sweeps walk `RootDir` only: a backup
+The backup sweep (`maintenance.cleanup-old-backups`, which keeps the old
+scheduler ID `scheduler.cleanup-old-backups` as an alias) removes `.bak-*`
+siblings older than `backup_retention_days`. It decides age by the time in the
+backup's name (`<unix>`, `<unix>-N`, or the legacy `YYYYMMDD-HHMMSS` in local
+time); a name without one is not a backup and is never removed. A hardlinked
+backup keeps the original audio's mtime, which can be years old, so aging by
+mtime would delete a fresh backup on the next run. The sweep walks `RootDir` only: a backup
 beside a file outside the library root (for example in an import path) is
 never removed automatically. The manual `cleanup-backups` maintenance job
 matches only `.backup`, `.bak` and legacy `.bak-YYYYMMDD-HHMMSS` names, so it
