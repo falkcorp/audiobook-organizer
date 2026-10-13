@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -294,4 +294,23 @@ func TestCatalogStage_ProviderOutageWithCatalogMatchIsNotCached(t *testing.T) {
 	require.True(t, stored.FetchedAt.Equal(old), "the outage dated the row (%v)", stored.FetchedAt)
 	require.Len(t, stored.Candidates, 1)
 	require.JSONEq(t, string(prior), string(stored.Candidates[0]), "the earlier provider candidate was replaced")
+}
+
+// A plain replace with no caller ranker stores a review-only candidate (the
+// local catalog's, Open Library's, Google Books') after a provider's, whatever
+// the search ordered, so slot 0 -- which the review lane and bulk apply read --
+// is the provider's.
+func TestRankCandidatesByTier_NilRankPutsReviewOnlyLast(t *testing.T) {
+	in := []MetadataCandidate{
+		{ASIN: "B0CATA0002", Source: metadata.CatalogSourceName, Score: 0.99},
+		{ASIN: "B0PROV0001", Source: "Audible", Score: 0.80},
+		{ASIN: "B0PROV0002", Source: "Audible", Score: 0.70},
+	}
+	got := rankCandidatesByTier(in, nil)
+	var order []string
+	for _, c := range got {
+		order = append(order, c.ASIN)
+	}
+	assert.Equal(t, []string{"B0PROV0001", "B0PROV0002", "B0CATA0002"}, order, "provider candidates first, in the search's own order")
+	assert.Equal(t, "B0CATA0002", in[0].ASIN, "the caller's slice is not reordered")
 }
