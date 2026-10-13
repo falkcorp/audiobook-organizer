@@ -1,5 +1,5 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
 // last-edited: 2026-10-12
 //
@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -226,10 +227,37 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 		Checkpoint: func() error { return reporter.Checkpoint(p) },
 	})
 	publishCatalogGauges(cat)
+	var scanner authority.Scanner
+	if sc, ok := database.AsCapability[authority.Scanner](store); ok {
+		scanner = sc
+	}
+	backfillCatalogAliases(ctx, reporter, cat, scanner)
 	summary := fmt.Sprintf("harvested %d/%d authors — %s", tally.Done.Load(), len(due), tally.Summary())
 	_ = reporter.Log(slog.LevelInfo, summary)
 	catalogHarvestLog.Info("%s", summary)
 	return runErr
+}
+
+// backfillCatalogAliases files the author alias rows (cat_author:alias:) the
+// bulk matcher resolves variant spellings through, for entries stored before
+// the harvest wrote them and for the spellings the authority lists add. The
+// harvest writes aliases for what it stores itself; this catches the rest. A
+// failure is logged and reported to the op log, never fails the run: aliases
+// only widen what the matcher can find.
+func backfillCatalogAliases(ctx context.Context, reporter opsregistry.Reporter, cat *database.CatalogStore, scanner authority.Scanner) {
+	if ctx.Err() != nil {
+		return // a cancelled run is not the place to start a pass over the catalog
+	}
+	res, err := catalog.BackfillAuthorAliases(ctx, cat, scanner)
+	if err != nil {
+		catalogHarvestLog.Warn("author alias backfill: %v", err)
+		_ = reporter.Log(slog.LevelWarn, "author alias backfill failed: "+logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	msg := fmt.Sprintf("author aliases: %d entries read, %d author spellings, %d spelling aliases and %d authority aliases considered, %d written",
+		res.Entries, res.Names, res.SpellingPairs, res.AuthorityPairs, res.Written)
+	_ = reporter.Log(slog.LevelInfo, msg)
+	catalogHarvestLog.Info("%s", msg)
 }
 
 // publishCatalogGauges sets the R12 gauges from the stored state, so they

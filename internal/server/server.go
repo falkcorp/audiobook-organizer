@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.91.0
+// version: 2.91.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-13
 
@@ -1155,6 +1155,11 @@ func NewServer(store database.Store) *Server {
 		// delugePlugin op-def registration is now done in its PostInit
 		// method (W7). Container.PostInit() runs it earlier in NewServer.
 	}
+
+	// The local author-catalog blocking stage's matcher (B1/B2). Installing it
+	// changes nothing: the search runs it only while
+	// metadata_fetch.catalog_stage is on, which ships off.
+	wireCatalogStage(server.metadataFetchService, resolvedStore)
 
 	server.setupRoutes()
 

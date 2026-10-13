@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.15.2
+// version: 3.16.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -231,7 +231,11 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	// Seeded below from this op's existing result rows, so a resumed run's
 	// "fetched N/M" and its counts describe the same books; counting only
 	// this attempt would read "fetched 900/1000 — matched 40" as 860 lost.
-	tally := &candidateFetchTally{}
+	// The local catalog stage's counters for this attempt: every search the
+	// workers run under ctx adds to it, and the tally reports it.
+	stageStats := &metafetch.CatalogStageStats{}
+	ctx = metafetch.WithCatalogStageStats(ctx, stageStats)
+	tally := &candidateFetchTally{stage: stageStats}
 
 	if existing, rerr := store.GetOperationResults(opID); rerr == nil && len(existing) > 0 {
 		for _, row := range existing {
