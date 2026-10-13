@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
@@ -48,6 +49,15 @@ type candidateFetchTally struct {
 	// without a provider call (see fetchCandidateForBook); they overlap the
 	// outcome counts above rather than adding to them.
 	fromCache, knownEmpty atomic.Int64
+	// stage is where this attempt's searched candidates came from: the local
+	// catalog (catalog_candidates, which cost no provider call) or the
+	// providers (provider_candidates), plus the catalog blocks the stage
+	// skipped (oversize_block, homonym_skipped). The run attaches it to its
+	// context (metafetch.WithCatalogStageStats), so it counts THIS attempt's
+	// searches only: unlike the outcome counts above it is not re-seeded from a
+	// resumed run's result rows, and a book answered from the candidate cache
+	// adds nothing. nil reads as zeros.
+	stage *metafetch.CatalogStageStats
 
 	mu  sync.Mutex
 	msg string
@@ -76,11 +86,18 @@ func (t *candidateFetchTally) record(r CandidateResult) {
 }
 
 // counts renders the outcome counts, e.g. "matched 820, no match 55, skipped
-// 2, errors 0, from cache 0, known empty 3".
+// 2, errors 0, from cache 0, known empty 3, catalog_candidates 12,
+// provider_candidates 2400, oversize_block 0, homonym_skipped 1".
 func (t *candidateFetchTally) counts() string {
-	return fmt.Sprintf("matched %d, no match %d, skipped %d, deferred %d, errors %d, from cache %d, known empty %d",
+	var catalogN, providerN, oversize, homonym int64
+	if t.stage != nil {
+		catalogN, providerN = t.stage.CatalogCandidates.Load(), t.stage.ProviderCandidates.Load()
+		oversize, homonym = t.stage.OversizeBlocks.Load(), t.stage.HomonymSkipped.Load()
+	}
+	return fmt.Sprintf("matched %d, no match %d, skipped %d, deferred %d, errors %d, from cache %d, known empty %d, "+
+		"catalog_candidates %d, provider_candidates %d, oversize_block %d, homonym_skipped %d",
 		t.matched.Load(), t.noMatch.Load(), t.skipped.Load(), t.deferred.Load(), t.errored.Load(),
-		t.fromCache.Load(), t.knownEmpty.Load())
+		t.fromCache.Load(), t.knownEmpty.Load(), catalogN, providerN, oversize, homonym)
 }
 
 // progressLine returns the progress message for finished of total books. The
