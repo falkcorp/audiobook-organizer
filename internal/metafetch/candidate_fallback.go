@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_fallback.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b452994-605f-4efc-9523-eccefaafce31
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -80,13 +80,15 @@ func IsTitleSearchingProvider(id string) bool { return sourcePolicyFor(id) != po
 
 // IsReviewOnlyCandidateSource reports whether a candidate with this Source
 // (a provider display name) is REVIEW-ONLY: Open Library and Google Books,
-// the candidate fetch's fallback providers. Owner decision 2026-10-06: such
-// a candidate is never applied unattended (bulk apply, the metadata
-// upgrade, the transcription auto-apply); the owner applies it by hand from
-// the review page. applygate.ReviewOnlySource is the gate's reader.
+// the candidate fetch's fallback providers, and the local author catalog
+// (metadata.CatalogSourceName, owner decision D31: catalog candidates start
+// review-only). Owner decision 2026-10-06: such a candidate is never applied
+// unattended (bulk apply, the metadata upgrade, the transcription
+// auto-apply); the owner applies it by hand from the review page.
+// applygate.ReviewOnlySource is the gate's reader.
 func IsReviewOnlyCandidateSource(source string) bool {
 	switch strings.TrimSpace(source) {
-	case (&metadata.OpenLibraryClient{}).Name(), (&metadata.GoogleBooksClient{}).Name():
+	case (&metadata.OpenLibraryClient{}).Name(), (&metadata.GoogleBooksClient{}).Name(), metadata.CatalogSourceName:
 		return true
 	}
 	return false

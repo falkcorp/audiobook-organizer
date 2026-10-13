@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.55.1
+// version: 5.56.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-12
 
@@ -195,6 +195,10 @@ type Service struct {
 	// reopened at runtime and the memoized source chain outlives any one store.
 	olStoreSource   atomic.Pointer[func() *openlibrary.OLStore]
 	overrideSources []metadata.MetadataSource // for testing
+	// catalogMatcher is the local catalog blocking stage's matcher, installed
+	// by SetCatalogMatcher (catalog_stage.go); nil = the stage has nothing to
+	// ask.
+	catalogMatcher atomic.Pointer[CatalogMatcher]
 	// asinLookupOverride replaces the live Audible/Audnexus ASIN clients in
 	// lookupASIN (tests only; nil in production).
 	asinLookupOverride func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)
@@ -310,7 +314,18 @@ type MetadataCandidate struct {
 	// FromCatalog marks a candidate read from the local author catalog
 	// (BrowseSearch) rather than asked of the provider live. Source stays the
 	// provider's name ("Audible"), which the apply path keys provenance on.
+	// A candidate of the B1/B2 blocking stage (Stage) is marked too, but its
+	// Source is metadata.CatalogSourceName, a review-only source.
 	FromCatalog bool `json:"from_catalog,omitempty"`
+	// Stage is the stage of origin of a candidate the local catalog blocking
+	// stage produced (metadata.CatalogStageIdentifier "B1" or
+	// CatalogStageAuthor "B2"); "" for a provider's candidate.
+	// StageCreditPosition is the index of the book's credit whose author
+	// block found a B2 candidate. ManualOnly marks an entry of the owner's
+	// manual-only libraries (Doctor Who / Big Finish / Torchwood).
+	Stage               string `json:"stage,omitempty"`
+	StageCreditPosition int    `json:"stage_credit_position,omitempty"`
+	ManualOnly          bool   `json:"manual_only,omitempty"`
 
 	// Content-matcher SIGNAL fields carried through the candidate so the review
 	// UI and the metadata_cache sidecar (which the Phase 4 matcher reads) retain
