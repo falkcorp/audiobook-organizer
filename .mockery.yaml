@@ -130,12 +130,6 @@ packages:
   # resolution tests deliberately use real structs embedding database.Store.
   github.com/falkcorp/audiobook-organizer/internal/server:
     interfaces:
-      prefixWiper:
-        config:
-          dir: internal/server
-          pkgname: server
-          filename: mock_prefix_wiper_test.go
-          structname: mockPrefixWiper
       # warmupWaiter pins ORDER, not resolution: the contributor cache must not
       # be built until WaitForWarmup returns, or it caches the author set of a
       # half-published memdb and serves it for the whole TTL. Testable only

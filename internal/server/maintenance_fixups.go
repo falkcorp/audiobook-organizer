@@ -1,47 +1,32 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.22.0
+// version: 2.23.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-14
+// last-edited: 2026-10-12
 
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/gin-gonic/gin"
 )
 
 // The maintenance fixups' database surface, grouped by what each part is for.
 // maintenanceStore was seven database.* embeds — 131 methods — until 2026-08-18.
-type libraryCounters interface {
-	CountAuthors() (int, error)
-	CountFiles() (int, error)
-	CountPrimaryBooks() (int, error)
-	CountSeries() (int, error)
-}
-
 type maintenanceBookStore interface {
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookByID(id string) (*database.Book, error)
 	// ModifyBook, not UpdateBook: the series merge and normalize passes write
 	// one column each and must not revert a concurrent writer's columns
 	// (database.BookMutator.ModifyBook).
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	DeleteBookFilesForBook(bookID string) error
 }
 
 type maintenanceSeriesStore interface {
@@ -60,44 +45,7 @@ type maintenanceSeriesStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// prefixWiper is the pair of raw key-space operations the /maintenance/wipe
-// handlers need. Both are *database.PebbleStore-only capabilities that
-// database.Store does NOT declare -- compile-probed 2026-08-19 with
-// `var _ interface{...} = (database.Store)(nil)`, built with -gcflags=-e --
-// so a bare `store.(*database.PebbleStore)` assertion fails against any
-// decorator and these handlers silently take their fallback branch.
-//
-// Both halves have the SAME reachability, so this composite carries no hidden
-// weak member; contrast dedup's lshCandidateStore, where one method is on
-// database.Store and one is not and the pair therefore inherits the worse of
-// the two.
-//
-// Named rather than resolved with database.AsPebbleStore so nothing in this
-// package depends on the concrete type by name. That is what a later split of
-// PebbleStore needs first -- see
-// docs/plans/2026-08-19-split-the-pebblestore-surface.md.
-type prefixWiper interface {
-	WipeByPrefixes(prefixes []string) (int, error)
-	CountByPrefix(prefix string) (int, error)
-}
-
-// resolvePrefixWiper walks the decorator chain for prefixWiper, returning nil
-// for a genuinely non-Pebble backend (SQLite, a test double) so each caller
-// keeps its existing fallback.
-//
-// A named function rather than an inline assertion for the same reason
-// resolveWarmupWaiter and resolveLSHCandidateStore are: a guard that cannot
-// reach the production call site does not guard it, and a test can only
-// exercise what it can name.
-func resolvePrefixWiper(s any) prefixWiper {
-	if c, ok := database.AsCapability[prefixWiper](s); ok {
-		return c
-	}
-	return nil
-}
-
 type maintenanceStore interface {
-	libraryCounters
 	maintenanceBookStore
 	maintenanceSeriesStore
 	// Needed by writeStrippedSeriesPositions: the series-normalize pass
@@ -105,363 +53,6 @@ type maintenanceStore interface {
 	// goes through database.ApplyRespectingLocks like every other metadata
 	// writer. That guard needs to read the field-lock state.
 	database.MetadataFieldStateReader
-}
-
-func (s *Server) handleWipe(c *gin.Context) {
-	var req struct {
-		Targets []string `json:"targets"`
-		Confirm string   `json:"confirm"`
-		DryRun  bool     `json:"dry_run"`
-	}
-	// Default dry_run to true before binding.
-	req.DryRun = true
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, "invalid request body")
-		return
-	}
-	if req.Confirm != "WIPE" {
-		httputil.RespondWithBadRequest(c, `must include "confirm": "WIPE" in the request body`)
-		return
-	}
-
-	store := s.storeForWiring()
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	// Expand "all" to every individual target.
-	targetSet := make(map[string]bool, len(req.Targets))
-	for _, t := range req.Targets {
-		targetSet[t] = true
-	}
-	if targetSet["all"] {
-		for _, t := range []string{
-			"books", "book_files", "segments", "files",
-			"organized_folders", "activity", "authors", "series", "external_ids",
-		} {
-			targetSet[t] = true
-		}
-	}
-
-	results := make(map[string]int64)
-	dryRun := req.DryRun
-
-	// ── organized_folders ──────────────────────────────────────────────────
-	if targetSet["organized_folders"] {
-		rootDir := config.AppConfig.RootDir
-		keep := map[string]bool{
-			".covers":           true,
-			".itunes-writeback": true,
-			"openlibrary-dumps": true,
-		}
-		entries, err := os.ReadDir(rootDir)
-		if err != nil {
-			slog.Warn("wipe can't read root dir", "path", rootDir, "error", err)
-		} else {
-			var count int64
-			for _, e := range entries {
-				// Skip hidden dirs (starting with ".") that are not in the keeplist,
-				// but only delete non-hidden dirs or explicitly non-kept hidden dirs.
-				if strings.HasPrefix(e.Name(), ".") && !keep[e.Name()] {
-					continue // skip unknown hidden dirs
-				}
-				if keep[e.Name()] {
-					continue
-				}
-				fullPath := filepath.Join(rootDir, e.Name())
-				slog.Info("wipe organized_folders", "action", dryRunLabel(dryRun), "path", fullPath)
-				if !dryRun {
-					if err := os.RemoveAll(fullPath); err != nil {
-						slog.Warn("wipe RemoveAll failed", "path", fullPath, "error", err)
-					}
-				}
-				count++
-			}
-			results["organized_folders"] = count
-		}
-	}
-
-	// ── files (disk + db rows) ─────────────────────────────────────────────
-	// "files" implies "book_files" as well — collect file paths first, then delete rows.
-	if targetSet["files"] {
-		rootDir := config.AppConfig.RootDir
-		var count int64
-		offset := 0
-		batchSize := 500
-		for {
-			books, err := store.GetAllBooksCore(batchSize, offset)
-			if err != nil {
-				slog.Warn("wipe files GetAllBooksCore failed", "error", err)
-				break
-			}
-			for _, book := range books {
-				files, ferr := store.GetBookFiles(book.ID)
-				if ferr != nil {
-					slog.Warn("wipe files GetBookFiles failed", "book_id", book.ID, "error", ferr)
-					continue
-				}
-				for _, bf := range files {
-					if bf.FilePath == "" {
-						continue
-					}
-					// Only remove files inside the organizer root dir — never iTunes paths.
-					// IsWithin matches on a separator boundary, so a sibling
-					// directory such as "<root>2" is not treated as inside root.
-					if !pathutil.IsWithin(filepath.Clean(bf.FilePath), filepath.Clean(rootDir)) {
-						continue
-					}
-					slog.Info("wipe files", "action", dryRunLabel(dryRun), "path", bf.FilePath)
-					if !dryRun {
-						if rerr := os.Remove(bf.FilePath); rerr != nil && !os.IsNotExist(rerr) {
-							slog.Warn("wipe os.Remove failed", "path", bf.FilePath, "error", rerr)
-						}
-					}
-					count++
-				}
-			}
-			if len(books) < batchSize {
-				break
-			}
-			offset += batchSize
-		}
-		results["files"] = count
-		// "files" also deletes the book_file rows — mark book_files as well.
-		targetSet["book_files"] = true
-	}
-
-	// Targets whose wipe returned an error. Every branch below records its
-	// count regardless, because a failed wipe still deletes whatever it got
-	// through before failing and the operator needs that number. But a count
-	// alone cannot distinguish "deleted 500 of 500" from "deleted 500 of 750
-	// and stopped" -- so the ones that did not finish are named explicitly.
-	//
-	// This became load-bearing when WipeAllActivity gained cancellation: before
-	// that, no target could return a partial count with an error, so reporting
-	// every result as complete was merely imprecise rather than wrong. It is now
-	// reachable on any abandoned request. The other six targets are given the
-	// same treatment because they have always had the same shape -- an errored
-	// wipe reported as a finished one -- and splitting the behaviour would leave
-	// the response meaning two different things depending on the target.
-	var incomplete []string
-
-	// ── book_files (db rows only) ──────────────────────────────────────────
-	if targetSet["book_files"] {
-		n, err := wipeBookFiles(store, dryRun)
-		if err != nil {
-			slog.Warn("wipe book_files failed", "error", err)
-			incomplete = append(incomplete, "book_files")
-		}
-		results["book_files"] = n
-	}
-
-	// ── segments ──────────────────────────────────────────────────────────
-	if targetSet["segments"] {
-		n, err := wipeSegments(store, dryRun)
-		if err != nil {
-			slog.Warn("wipe segments failed", "error", err)
-			incomplete = append(incomplete, "segments")
-		}
-		results["segments"] = n
-	}
-
-	// ── books ──────────────────────────────────────────────────────────────
-	if targetSet["books"] {
-		n, err := wipeBooks(store, dryRun)
-		if err != nil {
-			slog.Warn("wipe books failed", "error", err)
-			incomplete = append(incomplete, "books")
-		}
-		results["books"] = n
-	}
-
-	// ── authors ────────────────────────────────────────────────────────────
-	if targetSet["authors"] {
-		n, err := wipeAuthors(store, dryRun)
-		if err != nil {
-			slog.Warn("wipe authors failed", "error", err)
-			incomplete = append(incomplete, "authors")
-		}
-		results["authors"] = n
-	}
-
-	// ── series ─────────────────────────────────────────────────────────────
-	if targetSet["series"] {
-		n, err := wipeSeries(store, dryRun)
-		if err != nil {
-			slog.Warn("wipe series failed", "error", err)
-			incomplete = append(incomplete, "series")
-		}
-		results["series"] = n
-	}
-
-	// ── external_ids ───────────────────────────────────────────────────────
-	if targetSet["external_ids"] {
-		n, err := wipeExternalIDs(store, dryRun)
-		if err != nil {
-			slog.Warn("wipe external_ids failed", "error", err)
-			incomplete = append(incomplete, "external_ids")
-		}
-		results["external_ids"] = n
-	}
-
-	// ── activity ──────────────────────────────────────────────────────────
-	if targetSet["activity"] {
-		if s.activityService != nil {
-			n, err := wipeActivity(c.Request.Context(), s.activityService, dryRun)
-			if err != nil {
-				slog.Warn("wipe activity failed", "error", err)
-				incomplete = append(incomplete, "activity")
-			}
-			results["activity"] = n
-		} else {
-			slog.Info("wipe activity activityService not initialized, skipping")
-		}
-	}
-
-	if len(incomplete) > 0 {
-		slog.Warn("wipe stopped early", "dry_run", logger.SanitizeLogValue(fmt.Sprint(dryRun)), "targets", logger.SanitizeLogValue(fmt.Sprint(req.Targets)),
-			"results", results, "incomplete", incomplete)
-	} else {
-		slog.Info("wipe complete", "dry_run", logger.SanitizeLogValue(fmt.Sprint(dryRun)), "targets", logger.SanitizeLogValue(fmt.Sprint(req.Targets)), "results", results)
-	}
-	httputil.RespondWithOK(c, struct {
-		DryRun     bool             `json:"dry_run"`
-		Results    map[string]int64 `json:"results"`
-		Incomplete []string         `json:"incomplete,omitempty"`
-	}{DryRun: dryRun, Results: results, Incomplete: incomplete})
-}
-
-// dryRunLabel returns a label for logging.
-func dryRunLabel(dryRun bool) string {
-	if dryRun {
-		return "[dry-run] would delete"
-	}
-	return "deleting"
-}
-
-// wipeBookFiles deletes all book_file rows using the appropriate store backend.
-// The wipe* helpers below take their store from Server.Store() at REQUEST time,
-// which in production is the Bleve search-index decorator, not the bare
-// *PebbleStore. They must therefore resolve THROUGH the decorator chain, which
-// is what resolvePrefixWiper does — a bare `store.(*database.PebbleStore)`
-// assertion fails against the decorator and silently sends each of these down
-// its non-Pebble path: an "unsupported store type" error for
-// wipeSegments/wipeBooks/wipeAuthors/wipeSeries/wipeExternalIDs, and for
-// wipeBookFiles a slower interface loop that self-reports an approximate count
-// and misses the secondary-index prefixes.
-func wipeBookFiles(store maintenanceStore, dryRun bool) (int64, error) {
-	if dryRun {
-		// Count only.
-		n, err := store.CountFiles()
-		return int64(n), err
-	}
-	if s := resolvePrefixWiper(store); s != nil {
-		n, err := s.WipeByPrefixes([]string{"book_file:"})
-		return int64(n), err
-	}
-	// Fallback: iterate all books and delete via interface.
-	var count int64
-	offset := 0
-	for {
-		books, err := store.GetAllBooksCore(500, offset)
-		if err != nil {
-			return count, err
-		}
-		for _, book := range books {
-			if err := store.DeleteBookFilesForBook(book.ID); err != nil {
-				slog.Warn("wipeBookFiles DeleteBookFilesForBook failed", "book_id", book.ID, "error", err)
-			}
-			count++ // approximate
-		}
-		if len(books) < 500 {
-			break
-		}
-		offset += 500
-	}
-	return count, nil
-}
-
-// wipeSegments deletes all book_segment rows using the appropriate store backend.
-func wipeSegments(store maintenanceStore, dryRun bool) (int64, error) {
-	if s := resolvePrefixWiper(store); s != nil {
-		// Pebble segments use "bf:" (primary) and "bfs:" (secondary) prefixes.
-		if dryRun {
-			n, err := s.CountByPrefix("bf:")
-			return int64(n), err
-		}
-		n, err := s.WipeByPrefixes([]string{"bf:", "bfs:"})
-		return int64(n), err
-	}
-	return 0, fmt.Errorf("wipeSegments: unsupported store type %T", store)
-}
-
-// wipeBooks deletes all book rows using the appropriate store backend.
-func wipeBooks(store maintenanceStore, dryRun bool) (int64, error) {
-	if dryRun {
-		n, err := store.CountPrimaryBooks()
-		return int64(n), err
-	}
-	if s := resolvePrefixWiper(store); s != nil {
-		// Book keys: "book:" prefix. Include secondary indexes.
-		n, err := s.WipeByPrefixes([]string{"book:"})
-		return int64(n), err
-	}
-	return 0, fmt.Errorf("wipeBooks: unsupported store type %T", store)
-}
-
-// wipeAuthors deletes all author rows using the appropriate store backend.
-func wipeAuthors(store maintenanceStore, dryRun bool) (int64, error) {
-	if dryRun {
-		n, err := store.CountAuthors()
-		return int64(n), err
-	}
-	if s := resolvePrefixWiper(store); s != nil {
-		n, err := s.WipeByPrefixes([]string{"author:"})
-		return int64(n), err
-	}
-	return 0, fmt.Errorf("wipeAuthors: unsupported store type %T", store)
-}
-
-// wipeSeries deletes all series rows using the appropriate store backend.
-func wipeSeries(store maintenanceStore, dryRun bool) (int64, error) {
-	if dryRun {
-		n, err := store.CountSeries()
-		return int64(n), err
-	}
-	if s := resolvePrefixWiper(store); s != nil {
-		n, err := s.WipeByPrefixes([]string{"series:"})
-		return int64(n), err
-	}
-	return 0, fmt.Errorf("wipeSeries: unsupported store type %T", store)
-}
-
-// wipeExternalIDs deletes all external_id_map rows using the appropriate store backend.
-func wipeExternalIDs(store maintenanceStore, dryRun bool) (int64, error) {
-	if s := resolvePrefixWiper(store); s != nil {
-		if dryRun {
-			n, err := s.CountByPrefix("ext_id:")
-			return int64(n), err
-		}
-		// "ext_id:" covers both "ext_id:<source>:<id>" and "ext_id:book:<bookID>:<source>:<id>"
-		n, err := s.WipeByPrefixes([]string{"ext_id:"})
-		return int64(n), err
-	}
-	return 0, fmt.Errorf("wipeExternalIDs: unsupported store type %T", store)
-}
-
-// wipeActivity deletes all activity log entries.
-//
-// The dry-run count is an exact per-tier count (database.CountAllActivity).
-// It used to be Query's total with Limit:1, a pagination probe that the
-// bounded scan in 0adf6e97 made stop at offset+limit+1 == 2 matches, so the
-// preview reported "2" whatever the store held.
-func wipeActivity(ctx context.Context, svc *activity.Service, dryRun bool) (int64, error) {
-	if dryRun {
-		return database.CountAllActivity(ctx, svc.Store())
-	}
-	return svc.Store().WipeAllActivity(ctx)
 }
 
 // composerTagResult describes the COMPOSER field state for one audio file.

@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e03d07d-8575-4704-af45-0699789f2293
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 
 package opmode
 
@@ -121,7 +121,6 @@ var allowPlainBool = map[string]string{
 	"internal/maintenance/jobs/repoint_version_primary.go:repointVersionPrimaryParams": "job custom params; mode comes from the dispatcher-resolved Run argument",
 
 	// HTTP handlers (not ops). Open owner decision; see the inventory doc.
-	"internal/server/maintenance_fixups.go:func handleWipe":                     "HTTP handler; pre-filled true before bind, and requires confirm=WIPE",
 	"internal/server/deluge_discovery.go:func handleDiscoveryImport":            "HTTP handler; omitted dry_run is LIVE -- owner decision pending",
 	"internal/server/itl_pid.go:func pidRepairDryRun":                           "HTTP handler; ORed with ?dry_run, fails toward preview on true only -- owner decision pending",
 	"internal/server/handlers/metadata/handler.go:func handleBulkWriteBackImpl": "HTTP handler; omitted dry_run enqueues library.bulk-write-back -- owner decision pending",

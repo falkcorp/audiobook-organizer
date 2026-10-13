@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-08
+// last-edited: 2026-10-12
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -55,7 +55,7 @@ var exemptRoutes = map[string]string{
 	"PUT /api/v1/maintenance-window/config":             "a time window and switches; names no path",
 	"POST /api/v1/maintenance-window/run":               "runs the configured maintenance",
 	"POST /api/v1/maintenance/jobs/:job_id":             "runs a built-in job",
-	"POST /api/v1/maintenance/wipe":                     "admin-only library-data wipe with a typed confirm; users and keys untouched",
+	"POST /api/v1/maintenance/wipe":                     "retired: admin-only 410 Gone stub, touches nothing",
 	"POST /api/v1/filesystem/exclude":                   "narrows what a scan reads; opens nothing new",
 	"DELETE /api/v1/filesystem/exclude":                 "narrows what a scan reads; opens nothing new",
 	"DELETE /api/v1/import-paths/:id":                   "removes a scan root; opens nothing new",
