@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -918,7 +918,7 @@ func joinCatalogRows(existing, catalogRaw []json.RawMessage, rank func(MetadataC
 		rank    int
 		decoded bool
 	}
-	out := make([]row, 0, len(existing)+len(catalogRaw))
+	out := make([]row, 0, len(existing)) // append grows it for the catalog rows; no summed size to overflow
 	seen := map[string]bool{}
 	key := func(c MetadataCandidate) string {
 		return strings.ToLower(c.Source + "|" + c.Title + "|" + strings.TrimSpace(c.ASIN))
