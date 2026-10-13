@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.32.0
+// version: 1.33.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-10-12
 //
@@ -822,7 +822,11 @@ describe('dispatch', () => {
         vi.advanceTimersByTime(600);
       });
       vi.useRealTimers();
-      return vi.mocked(api.getCachedReviewResults).mock.calls.length - loadsBefore;
+      const loads = vi.mocked(api.getCachedReviewResults).mock.calls.length - loadsBefore;
+      // Unmounted so a later flush in the same test (the comparison run) is the
+      // only live hook: nothing of this one can add to its load count.
+      hook.unmount();
+      return loads;
     }
 
     it('reports the failures once and the queued books once, and follows only the ops that started', async () => {
