@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-13
 
@@ -7,6 +7,7 @@ package opswriter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -37,6 +38,7 @@ type recStore struct {
 	mutate      func(*database.Book)
 	failHistory bool
 	putFails    bool
+	onPut       func(database.Intent)
 }
 
 func newRecStore() *recStore {
@@ -142,6 +144,9 @@ func (s *recStore) PutIntentV3(_ string, in database.Intent) error {
 		return errors.New("intent store down")
 	}
 	s.intents[in.Seq] = in
+	if s.onPut != nil {
+		s.onPut(in)
+	}
 	s.note("intent+ %d %s", in.Seq, in.Subject)
 	return nil
 }
@@ -451,5 +456,84 @@ func TestIntentWriteFailureRefusesTheWrite(t *testing.T) {
 	}
 	if s.books["b1"].Title != "Old" {
 		t.Fatal("the store was written although the intent was not")
+	}
+}
+
+// S4 (05-PR5 review): the Writer fails closed.
+
+// A repoint with no operation journal would commit a write nothing records,
+// which the operation revert could never undo: refused before writing.
+func TestRepointWithoutJournalRefused(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"}
+	w := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Files: s, Authors: s, History: NewBookHistory(s, "t", "x", "p-", nil)})
+	err := w.RepointBookFile(context.Background(), "b1", "f1", undo.BookFileLocation{Path: "/lib/old.m4b"}, undo.BookFileLocation{Path: "/lib/new.m4b"})
+	if !errors.Is(err, ErrNotJournaled) {
+		t.Fatalf("err = %v, want ErrNotJournaled", err)
+	}
+	if s.files["f1"].FilePath != "/lib/old.m4b" || len(s.intents) != 0 {
+		t.Fatalf("a refused repoint wrote: %+v intents %d", s.files["f1"], len(s.intents))
+	}
+	for _, write := range []func() error{
+		func() error {
+			_, err := w.ModifyBookFile(context.Background(), "b1", "f1", func(*database.BookFile) error { return nil })
+			return err
+		},
+		func() error {
+			_, err := w.ModifyBookAuthors(context.Background(), "b1", func(a []database.BookAuthor) ([]database.BookAuthor, error) { return a, nil })
+			return err
+		},
+		func() error {
+			return w.Effect(context.Background(), ops.EffectSpec{Name: "x"}, func() ([]ops.HistoryRow, error) {
+				t.Error("an unjournaled effect ran")
+				return nil, nil
+			})
+		},
+	} {
+		if err := write(); !errors.Is(err, ErrNotJournaled) {
+			t.Errorf("unjournaled write: %v", err)
+		}
+	}
+}
+
+// The fence is checked before the repoint reads anything: a fenced run gets
+// ErrFenced, never ErrChangedSincePlan from a read it should not have made.
+func TestRepointChecksFenceFirst(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/moved.m4b"}
+	f, revoke := NewFence(1, nil)
+	w := newTestWriter(s, ops.Live)
+	w.SetFence(f.Check)
+	revoke()
+	err := w.RepointBookFile(context.Background(), "b1", "f1", undo.BookFileLocation{Path: "/lib/old.m4b"}, undo.BookFileLocation{Path: "/lib/new.m4b"})
+	if !errors.Is(err, ErrFenced) || errors.Is(err, ops.ErrChangedSincePlan) {
+		t.Fatalf("err = %v, want ErrFenced only", err)
+	}
+}
+
+// The repoint intent carries both locations, so a crash between the write
+// and the history row leaves what a revert needs.
+func TestRepointIntentCarriesLocations(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"}
+	w := newTestWriter(s, ops.Live)
+	var planned json.RawMessage
+	s.onPut = func(in database.Intent) { planned = in.Planned }
+	if err := w.RepointBookFile(context.Background(), "b1", "f1", undo.BookFileLocation{Path: "/lib/old.m4b"},
+		undo.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	var plan struct{ Op, Detail string }
+	if err := json.Unmarshal(planned, &plan); err != nil {
+		t.Fatalf("intent %s: %v", planned, err)
+	}
+	var d repointDetail
+	if err := json.Unmarshal([]byte(plan.Detail), &d); err != nil {
+		t.Fatalf("detail %q: %v", plan.Detail, err)
+	}
+	from, ferr := undo.DecodeBookFileLocation(d.From)
+	to, terr := undo.DecodeBookFileLocation(d.To)
+	if ferr != nil || terr != nil || from.Path != "/lib/old.m4b" || to.Path != "/lib/new.m4b" || d.BookID != "b1" {
+		t.Fatalf("intent detail = %+v (%v %v)", d, ferr, terr)
 	}
 }

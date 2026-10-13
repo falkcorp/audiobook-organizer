@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-13
 
@@ -79,7 +79,15 @@ func Register(r *Registry, plugin string, def ops.Definition) error {
 		if !ok {
 			return fmt.Errorf("registry: adapted def %s carries no v2 def", c.ID)
 		}
-		return r.RegisterOp(o.def)
+		if err := r.RegisterOp(o.def); err != nil {
+			return err
+		}
+		// A v2 def under this id is not a native one: no stale native entry
+		// may make Catalog report it as such.
+		r.mu.Lock()
+		delete(r.v3defs, c.ID)
+		r.mu.Unlock()
+		return nil
 	}
 	check := []ops.Definition{def}
 	for _, st := range c.Stages {
@@ -91,15 +99,28 @@ func Register(r *Registry, plugin string, def ops.Definition) error {
 		return fmt.Errorf("registry: v3 def %s: %w", c.ID, err)
 	}
 	od := buildV3Def(r, plugin, c)
-	if err := r.RegisterOp(od); err != nil {
-		return err
-	}
+	// The native entry goes in BEFORE the def is registered, so there is no
+	// moment at which Catalog sees the def and wraps it as a v2 one. Catalog
+	// lists r.defs, so an entry whose registration then fails is never seen,
+	// and it is taken out again below.
 	r.mu.Lock()
+	if _, taken := r.defs[c.ID]; taken {
+		r.mu.Unlock()
+		return fmt.Errorf("registry: OperationDef already registered (id=%s)", c.ID)
+	}
 	if r.v3defs == nil {
 		r.v3defs = map[string]ops.Definition{}
 	}
 	r.v3defs[c.ID] = def
 	r.mu.Unlock()
+	if err := r.RegisterOp(od); err != nil {
+		r.mu.Lock()
+		if r.v3defs[c.ID] == def {
+			delete(r.v3defs, c.ID)
+		}
+		r.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
@@ -226,7 +247,10 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 	}
 	var w *opswriter.Writer
 	if !c.Common.Effects.IsReadOnly() {
-		w = r.newV3Writer(ctx, opID, c.ID, mode)
+		var err error
+		if w, err = r.newV3Writer(ctx, opID, c.ID, mode); err != nil {
+			return err
+		}
 		env.Writer = w
 	}
 	host := &v3Host{r: r, ctx: ctx, opID: opID, defID: c.ID, rep: rep, params: params, writer: w}
@@ -246,7 +270,8 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 		bs, _ := database.AsCapability[batchStore](r.store)
 		ds, _ := database.AsCapability[dirtySetStore](r.store)
 		_, result, err = runBatch(ctx, batchConfig{opID: opID, job: job, rc: rc, store: bs, dirty: ds, rep: rep,
-			log: env.Log, stuckAfter: effectiveProgressTimeout(od)})
+			log: env.Log, stuckAfter: effectiveProgressTimeout(od),
+			resumable: od.ResumePolicy == ResumeRestart || od.ResumePolicy == ResumeAsk})
 	case c.RunTask != nil:
 		result, err = c.RunTask(rc, params)
 	default:
@@ -274,7 +299,12 @@ type v3WriterStores struct {
 // historyChangeTypeV3 is the metadata-history change type of v3 Writer rows.
 const historyChangeTypeV3 = "ops_v3"
 
-func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops.Mode) *opswriter.Writer {
+// ErrWriterUnavailable refuses a Live run of a writing def whose store lacks
+// the write-ahead intents or the operation journal: without them a write
+// could commit with no intent and no revertable history.
+var ErrWriterUnavailable = errors.New("registry: the store cannot back a v3 Writer (no intents or no operation journal)")
+
+func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops.Mode) (*opswriter.Writer, error) {
 	var s v3WriterStores
 	s.books, _ = database.AsCapability[opswriter.BookStore](r.store)
 	s.files, _ = database.AsCapability[opswriter.BookFileStore](r.store)
@@ -282,11 +312,14 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	s.history, _ = database.AsCapability[opswriter.HistoryRecorder](r.store)
 	s.journal, _ = database.AsCapability[opswriter.ChangeJournal](r.store)
 	s.intents, _ = database.AsCapability[opswriter.IntentStore](r.store)
+	if mode == ops.Live && (s.intents == nil || s.journal == nil) {
+		return nil, fmt.Errorf("%s: %w", defID, ErrWriterUnavailable)
+	}
 	return opswriter.New(opswriter.Config{
 		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check,
 		Intents: s.intents, Books: s.books, Files: s.files, Authors: s.authors, Journal: s.journal,
 		History: opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
-	})
+	}), nil
 }
 
 // awaitPollInterval is how often rc.Await reads a child's row.
