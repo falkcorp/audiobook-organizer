@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-13-operations-v3-sdk-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 9d0eaa44-fcb8-4058-bb16-c2e4a2c47636 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -49,8 +49,9 @@ Branch `task/05-pr5`. Task brief:
   changes it already made never runs.
 - **A crash inside an operation's code fails that run, not the server.**
 - **The existing Repairs tools use the same gatekeeper.** They behave as
-  before. A test checks that none of the tools they call has disappeared
-  or changed shape.
+  before, with one new refusal: a repair write with nowhere to record its
+  history is refused (every repair today has one). A test checks that none
+  of the tools they call has disappeared or changed shape.
 
 ## What it was
 

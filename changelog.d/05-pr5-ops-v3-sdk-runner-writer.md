@@ -40,8 +40,11 @@ definitions in the same catalog.
 The fence and stand-down gate every Repairs write passes, the book write that
 captures the previous value inside the store's lock, and the metadata-history
 recording now live in `internal/operations/opswriter`. `repairs.Writer` keeps
-its whole method set (a test pins every signature) and behaves as before. The
-run fence moved from the registry to `opswriter` with it.
+its whole method set (a test pins every signature). Two behaviors are new: a
+book write is refused when the Writer has no metadata history recorder
+(every Repairs caller passes one), and journaled writes report whether their
+history rows were recorded. The run fence moved from the registry to
+`opswriter` with it.
 
 ### Fixed
 
