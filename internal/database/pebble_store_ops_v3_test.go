@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-13
 
@@ -1026,10 +1026,11 @@ func TestMirrorOffSwitch(t *testing.T) {
 }
 
 // TestPerRunWritersRefuseMissingOrTerminalRun: the per-run writers 05-PR5
-// gives callers (snapshot pages, chunk offsets, intents, log lines) refuse a
-// run that does not exist or is terminal, and write nothing. A write that
-// landed after a terminal transition or a discard would re-create per-run keys
-// that no pass ever cleans up.
+// gives callers (snapshot pages, chunk offsets, intents) refuse a run that
+// does not exist or is terminal, and write nothing. A write that landed after
+// a terminal transition or a discard would re-create per-run keys that no
+// pass ever cleans up. Log lines are accepted on a terminal run
+// (TestLogAcceptedAfterTerminalRefusedAfterDiscard).
 func TestPerRunWritersRefuseMissingOrTerminalRun(t *testing.T) {
 	p := newTimelineStore(t)
 	done := insertV3(t, p, "test.closed", "")
@@ -1041,7 +1042,6 @@ func TestPerRunWritersRefuseMissingOrTerminalRun(t *testing.T) {
 		"PutSnapshotPageV3": func(id string) error { return p.PutSnapshotPageV3(id, 0, []string{"a"}) },
 		"PutChunkOffsetsV3": func(id string) error { return p.PutChunkOffsetsV3(id, []int32{0}) },
 		"PutIntentV3":       func(id string) error { return p.PutIntentV3(id, Intent{Seq: 1, Subject: "book:x"}) },
-		"AppendLogV3":       func(id string) error { return p.AppendLogV3(id, LogLine{Message: "m"}) },
 	}
 	for name, write := range writers {
 		t.Run(name, func(t *testing.T) {
@@ -1059,6 +1059,43 @@ func TestPerRunWritersRefuseMissingOrTerminalRun(t *testing.T) {
 				t.Fatalf("running run: %v", err)
 			}
 		})
+	}
+}
+
+// TestLogAcceptedAfterTerminalRefusedAfterDiscard: a run's log outlives its
+// terminal transition, so a line written as the run finishes is kept; a
+// discard deletes the log, and a line after it is refused and writes nothing,
+// so no log key is left that nothing deletes.
+func TestLogAcceptedAfterTerminalRefusedAfterDiscard(t *testing.T) {
+	p := newTimelineStore(t)
+	id := insertV3(t, p, "test.log-closed", "")
+	transition(t, p, id, state.EvDispatch, nil)
+	if err := p.AppendLogV3(id, LogLine{Message: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	transition(t, p, id, state.EvReturnNil, nil)
+	if err := p.AppendLogV3(id, LogLine{Message: "finished"}); err != nil {
+		t.Fatalf("terminal run: %v", err)
+	}
+	lines, err := p.ListLogV3(id, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[1].Message != "finished" {
+		t.Fatalf("log after terminal = %+v", lines)
+	}
+	if deleted, err := p.DeleteRunV3(id, reachableV3States()); err != nil || !deleted {
+		t.Fatalf("DeleteRunV3: %v %v", deleted, err)
+	}
+	if n := countPrefix(t, p, opv3LogPrefix+id+":", ""); n != 0 {
+		t.Fatalf("%d log keys left after discard", n)
+	}
+	before := v3Digest(t, p, "opv3:")
+	if err := p.AppendLogV3(id, LogLine{Message: "late"}); !errors.Is(err, ErrRunNotFoundV3) {
+		t.Fatalf("discarded run: err = %v, want ErrRunNotFoundV3", err)
+	}
+	if v3Digest(t, p, "opv3:") != before {
+		t.Fatal("a refused log line changed opv3:")
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-13
 
@@ -1483,8 +1483,9 @@ func (p *PebbleStore) getJSONFound(key []byte, dst any) (found bool, err error) 
 	return true, json.Unmarshal(val, dst)
 }
 
-// openRunV3 refuses a per-run write for a run that does not exist or is
-// terminal. The caller holds opsMu and keeps holding it through the write, so
+// openRunV3 refuses a per-run write (snapshot pages, chunk offsets, intents)
+// for a run that does not exist or is terminal. AppendLogV3 does not use it:
+// a log line is accepted on a terminal run. The caller holds opsMu and keeps holding it through the write, so
 // neither a terminal transition (which deletes the run's snapshot and ledger
 // in its batch, under opsMu) nor a discard (DeleteRunV3, which also deletes
 // its intents and log) can land between this check and the write and leave a
@@ -1786,9 +1787,15 @@ func (p *PebbleStore) ListItemOutcomesV3(id string, q ItemQuery) (page ItemPage,
 
 // ── log ─────────────────────────────────────────────────────────────────────
 
-// AppendLogV3 appends one log line to a run. Refused for a missing or
-// terminal run (openRunV3): a line landing after a discard would re-create a
-// log key nothing deletes.
+// AppendLogV3 appends one log line to a run. Refused for a missing run (one
+// never created, or discarded): a line landing after a discard would
+// re-create a log key nothing deletes. A terminal run is accepted, unlike the
+// other per-run writers (openRunV3): the terminal transition keeps the log
+// (it deletes only the snapshot, chunk offsets and ledger), a discard is what
+// deletes it, and a line written as a run finishes -- its last summary, a
+// flush that lands just after the transition, a migrated v2 run -- is part
+// of that run's record and must not be lost. opsMu is held through the write,
+// so a discard cannot land between the check and the write.
 func (p *PebbleStore) AppendLogV3(id string, line LogLine) (err error) {
 	defer recoverPebbleClosed("AppendLogV3", &err)
 	if line.At.IsZero() {
@@ -1797,8 +1804,12 @@ func (p *PebbleStore) AppendLogV3(id string, line LogLine) (err error) {
 	line.Key = ""
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
-	if err := p.openRunV3(id); err != nil {
+	cur, err := p.loadRunV3(id)
+	if err != nil {
 		return err
+	}
+	if cur == nil {
+		return fmt.Errorf("%w: %s", ErrRunNotFoundV3, id)
 	}
 	return p.pebbleSetJSON(opv3LogKey(id, line.At, p.opsLogSeq.Add(1)), &line)
 }
