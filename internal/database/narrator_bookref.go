@@ -1,7 +1,7 @@
 // file: internal/database/narrator_bookref.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 36c225c3-b235-4aac-b164-0273255164fd
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -76,7 +76,7 @@ type NarratorRefs struct {
 // NarratorRefStore is a narrow capability interface, kept OUT of
 // database.Store for the same reason as AuthorBookRefStore: widening Store
 // forces every implementation and generated mock to grow with it. Reach it
-// through AsNarratorRefStore, which looks through the indexedStore decorator.
+// through AsNarratorRefStore, which looks through any store decorator.
 type NarratorRefStore interface {
 	// GetAllNarratorRefs scans the whole book_narrators junction and every
 	// book row, unfiltered, from one snapshot.
@@ -96,9 +96,9 @@ type NarratorRefStore interface {
 // store cannot answer. Callers MUST nil-check and MUST refuse to delete rather
 // than fall back to any filtered count.
 //
-// It goes through AsCapability, not a bare type assertion, because in
-// production the store is wrapped in the Bleve indexedStore decorator and a
-// bare `s.(*PebbleStore)` returns nil exactly where the guard matters.
+// It goes through AsCapability, not a bare type assertion, because a
+// store can sit behind a decorator (the server's was the Bleve indexedStore until
+// 07-S3) and a bare `s.(*PebbleStore)` returns nil exactly where the guard matters.
 func AsNarratorRefStore(s any) NarratorRefStore {
 	if s == nil {
 		return nil

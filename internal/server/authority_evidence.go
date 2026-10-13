@@ -1,7 +1,7 @@
 // file: internal/server/authority_evidence.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3c15fa27-276b-44c2-a6e0-a9c9604af632
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package server
 
@@ -35,8 +35,8 @@ const authorityAwaitMax = 2 * time.Minute
 // without one is always logged, once, at Warn.
 const authorityAwaitLogAfter = time.Second
 
-// authorityEvidence hands authorcredit the authority lists (the
-// AuthoritySource store capability, offered by indexedStore). It holds one
+// authorityEvidence hands authorcredit the authority lists (registered through
+// authorcredit.SetAuthorityProvider, see authorityEvidenceProvider). It holds one
 // in-memory authority.Snapshot, loaded in the background: a credit resolve
 // never waits on, or triggers, a per-call store read. It answers
 // authority.Empty() while the flag is off, before the first load finishes,
@@ -229,21 +229,28 @@ func (a *authorityEvidence) load(done chan struct{}) {
 		snap.Persons(), snap.Publishers(), time.Since(start).Round(time.Millisecond))
 }
 
-// AuthorityLookup implements authorcredit.AuthoritySource for the server's
-// one store, so every credit resolve (importer, scanner, iTunes, metafetch,
-// metadata apply, the audiobooks service and the refetch job) sees the
-// authority lists once authority_evidence_enabled is on.
-func (s *indexedStore) AuthorityLookup() authority.Lookup {
-	return s.authority.Lookup()
+// authorityEvidenceProvider is the adapter the server registers with
+// authorcredit.SetAuthorityProvider, so every credit resolve (importer,
+// scanner, iTunes, metafetch, metadata apply, the audiobooks service and the
+// refetch job) sees the authority lists once authority_evidence_enabled is on.
+// It exists because authorityEvidence's own method names (Lookup, Await) are
+// not the capability's, and because the lists used to ride on a store
+// decorator that no longer exists: a store that offers the capability itself
+// still wins (authorcredit consults the store first).
+type authorityEvidenceProvider struct{ a *authorityEvidence }
+
+// AuthorityLookup implements authorcredit.AuthoritySource.
+func (p authorityEvidenceProvider) AuthorityLookup() authority.Lookup {
+	return p.a.Lookup()
 }
 
 // AwaitAuthorityLookup implements authorcredit.AuthorityWaiter: the lists for
 // a plan, waiting for a load in flight (authorityEvidence.Await).
-func (s *indexedStore) AwaitAuthorityLookup(ctx context.Context) (authority.Lookup, bool) {
-	return s.authority.Await(ctx)
+func (p authorityEvidenceProvider) AwaitAuthorityLookup(ctx context.Context) (authority.Lookup, bool) {
+	return p.a.Await(ctx)
 }
 
 var (
-	_ authorcredit.AuthoritySource = (*indexedStore)(nil)
-	_ authorcredit.AuthorityWaiter = (*indexedStore)(nil)
+	_ authorcredit.AuthoritySource = authorityEvidenceProvider{}
+	_ authorcredit.AuthorityWaiter = authorityEvidenceProvider{}
 )

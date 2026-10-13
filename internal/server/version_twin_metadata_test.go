@@ -1,7 +1,7 @@
 // file: internal/server/version_twin_metadata_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b7da4e2-27d6-48df-af29-a925a2f8338e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package server
 
@@ -15,10 +15,10 @@ import (
 )
 
 // BooksWithMetadataSourceHashInMemory reaches PebbleStore's memdb-only lookup
-// through the production decorator (indexedStore), answers from memdb once it
+// through a Store-embedding decorator, answers from memdb once it
 // is warm, and fails closed with ErrMemDBNotReady when memdb is off -- never
 // the full scan.
-func TestServer_BooksWithMetadataSourceHashInMemory_ThroughIndexedStore(t *testing.T) {
+func TestServer_BooksWithMetadataSourceHashInMemory_ThroughDecorator(t *testing.T) {
 	inner, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inner.Close() })
@@ -30,7 +30,7 @@ func TestServer_BooksWithMetadataSourceHashInMemory_ThroughIndexedStore(t *testi
 		MetadataSourceHash: &hash})
 	require.NoError(t, err)
 
-	s := &Server{store: &indexedStore{Store: inner}}
+	s := &Server{store: &embeddingDecorator{Store: inner}}
 	books, err := s.BooksWithMetadataSourceHashInMemory(hash)
 	require.NoError(t, err)
 	require.Len(t, books, 1)

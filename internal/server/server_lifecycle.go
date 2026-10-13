@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.35.0
+// version: 4.36.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package server
 
@@ -69,19 +69,20 @@ func (s *Server) opRegistrationGate() error {
 		len(s.opRegistrationErrs), errors.Join(s.opRegistrationErrs...))
 }
 
-// startSearchIndexing switches the indexedStore decorator live once the Bleve
-// index is open (s.searchIndex non-nil): it creates the queue enqueueIndex
-// feeds, starts the worker and the dirty-set reconciler, and installs the
-// server's store as the global store.
+// startSearchIndexing switches search indexing live once the Bleve index is
+// open (s.searchIndex non-nil): it creates the queue enqueueIndex feeds, starts
+// the worker and the dirty-set reconciler, and installs the server's store as
+// the global store.
 //
-// It does NOT wrap the store. NewServer installed the one indexedStore before
-// the service registry was built, so s.store, every registry service and the
-// global store installed here are all the same object; wrapping again would
-// enqueue every write twice.
+// It does NOT install anything on the store. NewServer installed the one
+// change observer (installSearchObserver) before the service registry was
+// built, so s.store, every registry service and the global store installed here
+// are all the same object and every write already reaches enqueueIndex, which
+// is a no-op until the queue exists.
 //
-// The queue is assigned under indexQueueMu because, unlike when the wrap lived
-// here, other goroutines can already be writing through the decorator (anything
-// NewServer spawned), and enqueueIndex reads s.indexQueue under the read lock.
+// The queue is assigned under indexQueueMu because other goroutines can already
+// be writing (anything NewServer spawned), and enqueueIndex reads s.indexQueue
+// under the read lock.
 func (s *Server) startSearchIndexing() {
 	s.indexQueueMu.Lock()
 	s.indexQueue = make(chan indexRequest, 1024)
@@ -255,8 +256,9 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 
 	// Pull the now-open Bleve index out of the searchindex service
-	// (opened above by Container.Start) and switch the indexedStore
-	// decorator live BEFORE any background goroutines or HTTP handlers
+	// (opened above by Container.Start) and switch indexing live (create the
+	// queue the store's change observer feeds) BEFORE any background
+	// goroutines or HTTP handlers
 	// start writing through s.store, so no write made after Start can
 	// miss the queue (pre-PR #903 this happened later and was
 	// timing-dependent).
@@ -596,6 +598,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// goroutine keeps iterating Pebble while CloseStore runs, and Pebble's
 	// FileCache.Unref panics with "element has outstanding references"
 	// during shutdown — which has been killing every restart mid-cycle.
+	// Stop offering this server's authority lists to credit resolution. Released
+	// by identity, so it never removes the provider a newer server registered.
+	if s.releaseAuthorityProvider != nil {
+		s.releaseAuthorityProvider()
+	}
 	if s.bgCancel != nil {
 		slog.Info("Canceling background goroutines...")
 		s.bgCancel()
@@ -1862,29 +1869,31 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 
 // resolveVGBackfiller finds the version-group backfill on the running store.
 //
-// It uses database.AsCapability, NOT a bare type assertion. s.Ops() is the
-// *server.indexedStore decorator whenever the Bleve index opened — i.e. always,
-// in production. That decorator embeds the database.Store INTERFACE, so it
-// promotes only that interface's method set and BackfillVersionGroupIndex is
-// invisible through it. AsCapability walks the Unwrap chain and finds it on the
-// inner store.
+// It uses database.AsCapability, NOT a bare type assertion. BackfillVersionGroupIndex
+// is a *PebbleStore method outside database.Store, so it is invisible through any
+// decorator that embeds the Store INTERFACE; AsCapability walks the Unwrap chain
+// and finds it on the inner store. The server's own store is the raw store since
+// 07-S3 (the indexedStore decorator was removed), but a decorator can sit on the
+// chain again (tests and other layers install them), and the lookup must not
+// depend on which.
 //
-// MEASURED IN PRODUCTION 2026-08-10 23:07:40, hours after the caller's warning
+// MEASURED IN PRODUCTION 2026-08-10 23:07:40, when the server's store was the
+// since-removed indexedStore decorator, hours after the caller's warning
 // shipped and minutes after it was first deployed:
 //
 //	versiongroup-backfill: store does not implement BackfillVersionGroupIndex,
 //	index will NOT be rebuilt   store_type=*server.indexedStore
 //
-// The bare assertion had been missing on every boot since the decorator was
+// The bare assertion had been missing on every boot since that decorator was
 // installed, so this "one-time production repair" had NEVER ONCE RUN, silently.
 // That is the likely origin of the under-reporting version-group index
 // reproduced in #2277: the index was never built, rather than built and then
 // corrupted.
 //
-// This is the THIRD capability lost to the same decorator (after the
+// This is the THIRD capability lost to that decorator (after the
 // sync-identity/bookmark set on 2026-07-30 and the maintenance wipe fixups), so
 // it is a function rather than an inline assertion purely so
-// TestIndexedStoreExposesVersionGroupBackfill can execute the real resolution
+// TestStoreExposesVersionGroupBackfill can execute the real resolution
 // path. A guard that cannot reach the production call site does not guard it.
 func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 	return database.AsCapability[vgBackfiller](s)
@@ -1898,8 +1907,8 @@ type bookAtPathBackfiller interface {
 }
 
 // resolveBookAtPathBackfiller finds the book_atpath: backfill through the
-// indexedStore decorator (see resolveVGBackfiller for why a bare assertion
-// misses). A named function so TestIndexedStoreExposesBookAtPathBackfill can
+// store's decorator chain (see resolveVGBackfiller for why a bare assertion
+// misses). A named function so TestStoreExposesBookAtPathBackfill can
 // exercise the production resolution path.
 func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
 	return database.AsCapability[bookAtPathBackfiller](s)
@@ -1922,7 +1931,7 @@ type opsV2TimelineReconciler interface {
 }
 
 // resolveOpsV2TimelineReconciler finds the timeline reconcile through the
-// indexedStore decorator (see resolveVGBackfiller for why a bare assertion
+// store's decorator chain (see resolveVGBackfiller for why a bare assertion
 // misses). A named function so a test can exercise the production
 // resolution path.
 func resolveOpsV2TimelineReconciler(s any) (opsV2TimelineReconciler, bool) {
@@ -1938,8 +1947,8 @@ type opChangeIndexBackfiller interface {
 }
 
 // resolveOpChangeIndexBackfiller finds the opchange_by_book: backfill through
-// the indexedStore decorator (see resolveVGBackfiller for why a bare assertion
-// misses). A named function so TestIndexedStoreExposesOpChangeIndexBackfill can
+// the store's decorator chain (see resolveVGBackfiller for why a bare assertion
+// misses). A named function so TestStoreExposesOpChangeIndexBackfill can
 // exercise the production resolution path.
 func resolveOpChangeIndexBackfiller(s any) (opChangeIndexBackfiller, bool) {
 	return database.AsCapability[opChangeIndexBackfiller](s)

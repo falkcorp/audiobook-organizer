@@ -1,7 +1,7 @@
 // file: internal/merge/repair_user_state.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6f3c1a92-8e5b-4d07-b4a1-3c9e7f2d5b18
-// last-edited: 2026-09-26
+// last-edited: 2026-10-13
 
 package merge
 
@@ -22,7 +22,7 @@ import (
 
 // UserStateRepairStore is what RepairMergedUserState needs: the follow's own
 // surface plus the reads that find stranded rows. Every method is on
-// database.Store, so the production indexedStore forwards all of them.
+// database.Store, so a Store-embedding decorator forwards all of them.
 type UserStateRepairStore interface {
 	UserProgressMerger
 	ScanPrefix(prefix string) ([]database.KVPair, error)

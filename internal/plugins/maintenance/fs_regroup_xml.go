@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-07
+// last-edited: 2026-10-13
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -168,7 +168,7 @@ type fsRepairStore interface {
 	// through ModifyBook (merge.BookWriter); regroupBookMutator carries it.
 }
 
-// OpsStore() is server.indexedStore in production, which embeds
+// OpsStore() can be a decorator such as server.indexedStore was (until 07-S3), which embeds
 // database.Store rather than *PebbleStore, so the op's type assertion must hold
 // for the interface too or fs-regroup-xml refuses to run in prod.
 var (

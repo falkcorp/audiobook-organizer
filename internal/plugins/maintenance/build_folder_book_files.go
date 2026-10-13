@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-09-26
+// last-edited: 2026-10-13
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -110,8 +110,8 @@ const (
 // folderBuildStore is what the op reads and writes. BookFilesAtPath,
 // LiveBookIDsAtPath and BookAtPathIndexBuilt are on database.Store but not on
 // OpsStore, so the run reaches them through a checked type assertion (the
-// orphan repoint planner does the same); the production indexedStore embeds
-// Store and forwards all three.
+// orphan repoint planner does the same); a Store-embedding decorator
+// forwards all three.
 type folderBuildStore interface {
 	bookByIDReader
 	bookFileLister

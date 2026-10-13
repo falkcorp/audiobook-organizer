@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-13
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -303,7 +303,7 @@ type rfITunesLink struct {
 func (l rfITunesLink) linked() bool { return l.Path != "" || l.PID != "" }
 
 // rfStore is the narrow store the op needs. Every method is on
-// database.Store, so the production indexedStore satisfies it.
+// database.Store, so a Store-embedding decorator satisfies it.
 type rfStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
@@ -1213,6 +1213,6 @@ func writeRFReport(path string, books []rfBookResult) error {
 	return os.WriteFile(path, []byte(b.String()), 0o664)
 }
 
-// Every method rfStore needs is on database.Store, so the production
-// indexedStore (which embeds it) satisfies the runtime assertion above.
+// Every method rfStore needs is on database.Store, so a
+// Store-embedding decorator satisfies the runtime assertion above.
 var _ rfStore = database.Store(nil)

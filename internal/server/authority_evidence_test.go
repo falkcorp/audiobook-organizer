@@ -1,7 +1,7 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package server
 
@@ -39,9 +39,10 @@ func waitAuthorityLoad(t *testing.T, a *authorityEvidence) {
 	}
 }
 
-// The production store (Server.store, the indexedStore decorator) offers
-// authorcredit.AuthoritySource. With authority_evidence_enabled off it
-// answers authority.Empty(); turned on (no restart) the first call starts a
+// The server hands credit resolution its authority lists through
+// authorcredit.SetAuthorityProvider (the store is the raw store; there is no
+// capability on it). With authority_evidence_enabled off it answers
+// authority.Empty(); turned on (no restart) the first call starts a
 // background load and answers Empty until it lands, then the snapshot. A
 // credit resolved through it then puts a tier-O author named
 // like a series first.
@@ -49,8 +50,13 @@ func TestServerStore_AuthorityEvidenceCapability(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 	store := server.store
-	src, ok := database.AsCapability[authorcredit.AuthoritySource](store)
-	require.True(t, ok, "the server store must offer authorcredit.AuthoritySource")
+	_, offered := database.AsCapability[authorcredit.AuthoritySource](store)
+	require.False(t, offered, "the raw server store carries no authority capability; the provider is the route")
+	// What credit resolution sees for the server's store.
+	lookup := func() authority.Lookup {
+		l, _ := authorcredit.CurrentAuthority(store)
+		return l
+	}
 
 	for _, n := range []string{"Michael Anderle", "Craig Martelle"} {
 		_, err := store.CreateAuthor(n)
@@ -65,10 +71,9 @@ func TestServerStore_AuthorityEvidenceCapability(t *testing.T) {
 	authorcredit.ResetTitleCache()
 	t.Cleanup(authorcredit.ResetTitleCache)
 
-	ae := store.(*indexedStore).authority
-	require.Same(t, server.authorityEvidence, ae)
+	ae := server.authorityEvidence
 	require.False(t, config.AuthorityEvidenceEnabled())
-	require.False(t, src.AuthorityLookup().IsKnownPerson("Michael Anderle", authority.RoleAuthor), "flag off: Empty")
+	require.False(t, lookup().IsKnownPerson("Michael Anderle", authority.RoleAuthor), "flag off: Empty")
 	got, err := authorcredit.Resolve(store, "Michael Anderle, Craig Martelle", authorcredit.PrepareGate)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -82,9 +87,14 @@ func TestServerStore_AuthorityEvidenceCapability(t *testing.T) {
 
 	config.Mutate(func(c *config.Config) { c.AuthorityEvidenceEnabled = true })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.AuthorityEvidenceEnabled = false }) })
-	_ = src.AuthorityLookup() // starts the background load
+	_ = lookup() // starts the background load
 	waitAuthorityLoad(t, ae)
-	require.True(t, src.AuthorityLookup().IsKnownPerson("Michael Anderle", authority.RoleAuthor), "flag on: the snapshot")
+	require.True(t, lookup().IsKnownPerson("Michael Anderle", authority.RoleAuthor), "flag on: the snapshot")
+	// The wiring credit plans use (maintenance.repair-combined-author-credits
+	// and friends): the server's store, awaited, reads the loaded snapshot.
+	awaited, ready := authorcredit.AwaitAuthority(context.Background(), store)
+	require.True(t, ready, "flag on and a snapshot loaded: AwaitAuthority on the server store is ready")
+	require.True(t, awaited.IsKnownPerson("Michael Anderle", authority.RoleAuthor))
 	got, err = authorcredit.Resolve(store, "Michael Anderle, Craig Martelle", authorcredit.PrepareGate)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -92,7 +102,7 @@ func TestServerStore_AuthorityEvidenceCapability(t *testing.T) {
 
 	// #3741 review N4: turning the flag off releases the snapshot.
 	config.Mutate(func(c *config.Config) { c.AuthorityEvidenceEnabled = false })
-	require.False(t, src.AuthorityLookup().IsKnownPerson("Michael Anderle", authority.RoleAuthor), "flag off again: Empty")
+	require.False(t, lookup().IsKnownPerson("Michael Anderle", authority.RoleAuthor), "flag off again: Empty")
 	ae.mu.Lock()
 	snap := ae.snap
 	ae.mu.Unlock()
@@ -295,4 +305,37 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 	require.Empty(t, info)
 	require.Len(t, warn, 1, "logs: %v", logs.Lines(""))
 	require.Contains(t, warn[0], "the caller's context ended first")
+}
+
+// The provider a server registers is released at Shutdown, and only if it is
+// still that server's: a newer server's registration survives an older
+// server's shutdown (many servers are built in one test binary).
+func TestServerAuthorityProvider_ReleasedByIdentity(t *testing.T) {
+	newPebble := func() *database.PebbleStore {
+		st, err := database.NewPebbleStoreInMemory(t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = st.Close() })
+		return st
+	}
+	config.Mutate(func(c *config.Config) { c.AuthorityEvidenceEnabled = true })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.AuthorityEvidenceEnabled = false }) })
+
+	older := newTestServer(t, newPebble())
+	newer := newTestServer(t, newPebble())
+	older.authorityEvidence.Prime()
+	newer.authorityEvidence.Prime()
+	waitAuthorityLoad(t, older.authorityEvidence)
+	waitAuthorityLoad(t, newer.authorityEvidence)
+
+	probe := newPebble()
+	_, ready := authorcredit.AwaitAuthority(context.Background(), probe)
+	require.True(t, ready, "a store without the capability reads the registered provider")
+
+	older.releaseAuthorityProvider()
+	_, ready = authorcredit.AwaitAuthority(context.Background(), probe)
+	require.True(t, ready, "an older server's release must not remove the newer server's provider")
+
+	newer.releaseAuthorityProvider()
+	_, ready = authorcredit.AwaitAuthority(context.Background(), probe)
+	require.False(t, ready, "released: no provider")
 }

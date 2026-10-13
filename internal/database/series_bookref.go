@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -45,7 +45,7 @@ import (
 // SeriesBookRefStore is a narrow capability interface, deliberately kept OUT of
 // database.Store — same rationale as BookSigMigrateStore: widening Store forces
 // every implementation and generated mock to grow with it. Reach it through
-// AsSeriesBookRefStore, which looks through the indexedStore decorator.
+// AsSeriesBookRefStore, which looks through any store decorator.
 type SeriesBookRefStore interface {
 	// GetAllSeriesBookRefCounts returns seriesID -> number of book rows that
 	// reference it, counting trashed and non-primary books. A series absent

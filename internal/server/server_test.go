@@ -69,6 +69,9 @@ const releaseForTestBGWait = 10 * time.Second
 // setupTestServerFS's cleanup and the t.Cleanup from newTestServer can both
 // run.
 func (s *Server) releaseForTest() {
+	if s.releaseAuthorityProvider != nil {
+		s.releaseAuthorityProvider()
+	}
 	if s.bgCancel != nil {
 		s.bgCancel()
 	}

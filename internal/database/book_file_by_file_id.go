@@ -1,7 +1,7 @@
 // file: internal/database/book_file_by_file_id.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d734fc6-325a-44cd-99e3-ac55ee626ce8
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package database
 
@@ -18,7 +18,7 @@ import (
 //
 // It is a capability interface, not part of Store: resolve it with
 // AsCapability[BookFileByFileIDReader](store) so it keeps working through the
-// indexedStore decorator (see store_capability.go). Its only caller today is
+// store decorator (see store_capability.go). Its only caller today is
 // the admin debug API's "which book owns this file?" route.
 type BookFileByFileIDReader interface {
 	// GetBookFileByFileID returns the row whose ID is fileID, or (nil, nil)

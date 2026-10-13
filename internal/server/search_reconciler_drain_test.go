@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_drain_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1e8d3c-7a2f-4e90-b6c4-9d0a2f7e1b38
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 //
 // Drain, restart and live-write tests for the batched search reconciler
 // (the 2026-09-25 wedge: a 100k dirty set that never drained and a live
@@ -148,9 +148,9 @@ func TestReconciler_MarksRebuiltOnlyAfterCoverageSeeded(t *testing.T) {
 }
 
 // The live-write half of the 2026-09-25 report: a book retitled through
-// ModifyBook on the decorated store must be searchable under its new title
+// ModifyBook on the store must be searchable under its new title
 // within seconds, via the running worker.
-func TestIndexedStore_ModifyBookReachesIndex(t *testing.T) {
+func TestObserver_ModifyBookReachesIndex(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -169,11 +169,10 @@ func TestIndexedStore_ModifyBookReachesIndex(t *testing.T) {
 	go func() { srv.runIndexWorker(); close(done) }()
 	t.Cleanup(func() { srv.closeIndexQueue(); <-done })
 
-	wrapped := &indexedStore{Store: store, server: srv}
-	if _, err := wrapped.CreateBook(&database.Book{ID: "m1", Title: "Old Name", FilePath: "/tmp/m1", Format: "m4b"}); err != nil {
+	if _, err := store.CreateBook(&database.Book{ID: "m1", Title: "Old Name", FilePath: "/tmp/m1", Format: "m4b"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := wrapped.ModifyBook("m1", func(b *database.Book) error {
+	if _, err := store.ModifyBook("m1", func(b *database.Book) error {
 		b.Title = "Arcane_Chef_2__A_LitRPG_Adventure"
 		return nil
 	}); err != nil {

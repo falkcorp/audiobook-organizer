@@ -1,6 +1,6 @@
-// file: internal/server/indexed_store_test.go
-// version: 1.6.0
-// last-edited: 2026-10-06
+// file: internal/server/index_queue_test.go
+// version: 2.0.0
+// last-edited: 2026-10-13
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -36,7 +36,7 @@ func drainQueue(t *testing.T, srv *Server) {
 	t.Fatalf("index queue did not drain within timeout")
 }
 
-func TestIndexedStore_CreateReindexes(t *testing.T) {
+func TestIndexQueue_CreateReindexes(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -58,9 +58,7 @@ func TestIndexedStore_CreateReindexes(t *testing.T) {
 		close(done)
 	}()
 
-	wrapped := &indexedStore{Store: store, server: srv}
-
-	created, err := wrapped.CreateBook(&database.Book{
+	created, err := store.CreateBook(&database.Book{
 		ID: "b1", Title: "Search Target", FilePath: "/tmp/b1", Format: "m4b",
 	})
 	if err != nil {
@@ -84,7 +82,7 @@ func TestIndexedStore_CreateReindexes(t *testing.T) {
 	<-done
 }
 
-func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
+func TestIndexQueue_DeleteRemovesFromIndex(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -106,14 +104,12 @@ func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
 		close(done)
 	}()
 
-	wrapped := &indexedStore{Store: store, server: srv}
-
-	_, _ = wrapped.CreateBook(&database.Book{
+	_, _ = store.CreateBook(&database.Book{
 		ID: "b1", Title: "Delete Me", FilePath: "/tmp/b1", Format: "m4b",
 	})
 	drainQueue(t, srv)
 
-	if err := wrapped.DeleteBook("b1"); err != nil {
+	if err := store.DeleteBook("b1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	drainQueue(t, srv)
@@ -127,8 +123,8 @@ func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
 	<-done
 }
 
-// TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile proves the
-// IMMEDIATE, synchronous-enqueue path — indexedStore.UpdateBook — removes a
+// TestIndexQueue_SoftDeleteIsUnsearchableWithoutReconcile proves the
+// IMMEDIATE, synchronous-enqueue path — the store observer's BooksChanged after UpdateBook — removes a
 // soft-deleted book from the search index by itself, with no
 // reconcileSearchIndexCoverage or reconcileOnce pass run in between. That is
 // a different surface than TestSearchCoverage_StaleDocsAreDeleted
@@ -138,7 +134,7 @@ func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
 //
 // Mirrors internal/merge/service.go's SoftDeleteBook: set
 // MarkedForDeletion=true and call store.UpdateBook — nothing else.
-func TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
+func TestIndexQueue_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -160,16 +156,14 @@ func TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
 		close(done)
 	}()
 
-	wrapped := &indexedStore{Store: store, server: srv}
-
-	_, _ = wrapped.CreateBook(&database.Book{
+	_, _ = store.CreateBook(&database.Book{
 		ID: "b1", Title: "Vanishing Treatise", FilePath: "/tmp/b1", Format: "m4b",
 	})
 	// Control book: never touched, must remain findable throughout. Without
 	// this, an assertion that the deleted book's title yields 0 hits would
 	// be vacuous — the query could return 0 hits for unrelated reasons (a
 	// broken index, an empty index, a typo in the query).
-	_, _ = wrapped.CreateBook(&database.Book{
+	_, _ = store.CreateBook(&database.Book{
 		ID: "b2", Title: "Control Survivor", FilePath: "/tmp/b2", Format: "m4b",
 	})
 	drainQueue(t, srv)
@@ -190,7 +184,7 @@ func TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
 		ID: "b1", Title: "Vanishing Treatise", FilePath: "/tmp/b1", Format: "m4b",
 		MarkedForDeletion: new(true),
 	}
-	if _, err := wrapped.UpdateBook("b1", deleted); err != nil {
+	if _, err := store.UpdateBook("b1", deleted); err != nil {
 		t.Fatalf("soft-delete update: %v", err)
 	}
 	drainQueue(t, srv)
@@ -212,14 +206,14 @@ func TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
 	<-done
 }
 
-// TestIndexedStoreUpdateBook_RestoreStillReindexes is the anti-over-
+// TestIndexQueue_UpdateBookRestoreStillReindexes is the anti-over-
 // suppression guard for the fix above: soft-delete then restore
 // (MarkedForDeletion true->false) via UpdateBook must still land the book
 // back in the search index. Without this test, a fix that always enqueues a
 // delete on ANY MarkedForDeletion field touch (rather than checking its
 // current value) would pass the delete-path test while silently breaking
 // restore.
-func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
+func TestIndexQueue_UpdateBookRestoreStillReindexes(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -241,15 +235,13 @@ func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
 		close(done)
 	}()
 
-	wrapped := &indexedStore{Store: store, server: srv}
-
-	_, _ = wrapped.CreateBook(&database.Book{
+	_, _ = store.CreateBook(&database.Book{
 		ID: "b1", Title: "Restorable Ledger", FilePath: "/tmp/b1", Format: "m4b",
 	})
 	drainQueue(t, srv)
 
 	// Soft-delete.
-	if _, err := wrapped.UpdateBook("b1", &database.Book{
+	if _, err := store.UpdateBook("b1", &database.Book{
 		ID: "b1", Title: "Restorable Ledger", FilePath: "/tmp/b1", Format: "m4b",
 		MarkedForDeletion: new(true),
 	}); err != nil {
@@ -263,7 +255,7 @@ func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
 	}
 
 	// Restore.
-	if _, err := wrapped.UpdateBook("b1", &database.Book{
+	if _, err := store.UpdateBook("b1", &database.Book{
 		ID: "b1", Title: "Restorable Ledger", FilePath: "/tmp/b1", Format: "m4b",
 		MarkedForDeletion: new(false),
 	}); err != nil {
@@ -280,7 +272,7 @@ func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
 	<-done
 }
 
-func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
+func TestIndexQueue_EnqueueSafeAfterClose(t *testing.T) {
 	// Regression: closing the queue then calling enqueueIndex must
 	// be safe (no panic on send-on-closed-channel).
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
@@ -311,15 +303,15 @@ func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Go(func() {
-			srv.enqueueIndex("b1", false)
-			srv.enqueueIndex("b2", true)
+			srv.enqueueIndex("b1")
+			srv.enqueueIndex("b2")
 		})
 	}
 	wg.Wait()
 	// If we got here without panicking, the test passes.
 }
 
-func TestIndexedStore_UpdateReindexes(t *testing.T) {
+func TestIndexQueue_UpdateReindexes(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -341,16 +333,14 @@ func TestIndexedStore_UpdateReindexes(t *testing.T) {
 		close(done)
 	}()
 
-	wrapped := &indexedStore{Store: store, server: srv}
-
-	_, _ = wrapped.CreateBook(&database.Book{
+	_, _ = store.CreateBook(&database.Book{
 		ID: "b1", Title: "Original Title", FilePath: "/tmp/b1", Format: "m4b",
 	})
 	drainQueue(t, srv)
 
 	// Update title.
 	updated := &database.Book{ID: "b1", Title: "New Title", FilePath: "/tmp/b1", Format: "m4b"}
-	if _, err := wrapped.UpdateBook("b1", updated); err != nil {
+	if _, err := store.UpdateBook("b1", updated); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	drainQueue(t, srv)
@@ -370,11 +360,11 @@ func TestIndexedStore_UpdateReindexes(t *testing.T) {
 	<-done
 }
 
-// TestIndexedStore_CreateRejectsColonBookID proves the decorator does not
+// TestIndexQueue_CreateRejectsColonBookID proves the observer does not
 // bypass the store's book-ID guard (PEBBLE-KEY-BOUND-CENSUS, #2896): the
 // inner CreateBook's ErrInvalidBookID reaches the caller unchanged and no
 // index refresh is queued for a row that was never written.
-func TestIndexedStore_CreateRejectsColonBookID(t *testing.T) {
+func TestIndexQueue_CreateRejectsColonBookID(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -383,9 +373,8 @@ func TestIndexedStore_CreateRejectsColonBookID(t *testing.T) {
 
 	srv := newTestServer(t, store)
 	srv.indexQueue = make(chan indexRequest, 4)
-	wrapped := &indexedStore{Store: store, server: srv}
 
-	created, err := wrapped.CreateBook(&database.Book{
+	created, err := store.CreateBook(&database.Book{
 		ID: "bad:id", Title: "Colon", FilePath: "/tmp/colon", Format: "m4b",
 	})
 	if !errors.Is(err, database.ErrInvalidBookID) {
@@ -400,21 +389,20 @@ func TestIndexedStore_CreateRejectsColonBookID(t *testing.T) {
 }
 
 // The atomic position replace (database.UserPositionReplacer) and the
-// timestamped position write resolve through this decorator via Unwrap, so
-// the merge undo's atomic replace is used in production, where the store is
-// always wrapped. User positions are not search-indexed, so no forwarding
-// method is needed.
-func TestIndexedStore_ResolvesPositionCapabilities(t *testing.T) {
+// timestamped position write resolve on the server's own store, so the merge
+// undo's atomic replace is used in production. User positions are not
+// search-indexed, so nothing about them touches the observer.
+func TestIndexQueue_ServerStoreResolvesPositionCapabilities(t *testing.T) {
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	wrapped := &indexedStore{Store: store}
-	if _, ok := database.AsCapability[database.UserPositionReplacer](wrapped); !ok {
-		t.Fatal("UserPositionReplacer does not resolve through indexedStore")
+	srv := newTestServer(t, store)
+	if _, ok := database.AsCapability[database.UserPositionReplacer](srv.store); !ok {
+		t.Fatal("UserPositionReplacer does not resolve on the server store")
 	}
-	if _, ok := database.AsCapability[database.UserPositionTimestampWriter](wrapped); !ok {
-		t.Fatal("UserPositionTimestampWriter does not resolve through indexedStore")
+	if _, ok := database.AsCapability[database.UserPositionTimestampWriter](srv.store); !ok {
+		t.Fatal("UserPositionTimestampWriter does not resolve on the server store")
 	}
 }

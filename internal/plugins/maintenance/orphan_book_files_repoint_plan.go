@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 458004fb-a5f3-4cb8-a25f-741cd3f75b74
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -82,7 +82,7 @@ const (
 )
 
 // orphanRepointPlanStore is what the planner reads beyond the orphan scan. All
-// of it is on database.Store, so the production indexedStore satisfies it.
+// of it is on database.Store, so a Store-embedding decorator satisfies it.
 type orphanRepointPlanStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	BookFilesAtPath(path string) ([]database.BookFile, error)

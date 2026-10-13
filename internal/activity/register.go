@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.10.2
-// last-edited: 2026-10-10
+// version: 1.11.0
+// last-edited: 2026-10-13
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -37,9 +37,10 @@ func init() {
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			// AsPebbleStore, not a bare assertion: the server decorates the
-			// store with indexedStore in NewServer, and a bare
-			// store.(*database.PebbleStore) fails through that decorator --
+			// AsPebbleStore, not a bare assertion: a store can be
+			// decorated (the server did so with indexedStore in NewServer until
+			// 07-S3), and a bare store.(*database.PebbleStore) fails through a
+			// decorator --
 			// silently taking the "non-Pebble backend" branch below, which
 			// looks like a supported configuration rather than a bug. The
 			// FromStore constructor does that unwrap inside internal/database,

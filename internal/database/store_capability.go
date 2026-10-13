@@ -1,7 +1,7 @@
 // file: internal/database/store_capability.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9a41c7e0-58b2-4c33-8f6d-1b0e9d2a7c45
-// last-edited: 2026-09-13
+// last-edited: 2026-10-13
 
 package database
 
@@ -13,22 +13,28 @@ package database
 // that nobody edits store.go, so each new capability lives in its own file with
 // its own interface, discovered at runtime by a type assertion.
 //
-// internal/server.indexedStore decorates the store in NewServer (before the
-// service registry is built; it was Server.Start() until 2026-09-13) by
-// EMBEDDING the Store interface:
+// A decorator that EMBEDS the Store interface hides every one of them:
 //
-//	type indexedStore struct { database.Store; server *Server }
+//	type decorator struct { database.Store }
 //
 // Embedding an interface promotes only THAT interface's method set. Every
 // capability method is therefore invisible through the decorator, so a plain
-// `s.(SyncIdentityStore)` returns nil once the wrap is installed — with no
+// `s.(SyncIdentityStore)` returns nil once the wrap is installed -- with no
 // compile error, because a failed type assertion is a legal runtime outcome.
 // The per-capability `var _ SyncIdentityStore = (*PebbleStore)(nil)` assertions
 // prove the INNER type conforms and say nothing about a decorator.
 //
-// The wrap only happens when the Bleve search index opened successfully, which
-// is true in production and false in most local runs — so the whole class of bug
-// reproduces nowhere except prod. It surfaced on 2026-07-30 as
+// The example that taught this was internal/server.indexedStore, which wrapped
+// the server's store so search indexing could intercept book writes. It was
+// removed in 07-S3: the store reports its writes to a ChangeObserver
+// (change_observer.go) and the server's store is now the raw store, so THAT
+// decorator no longer exists. The hazard class does not go away: other
+// decorators wrap stores (find them with
+// `grep -rn 'func (.*) Unwrap() database.Store'`), tests build their own, and a
+// future layer will embed Store again. This is how it presented in production:
+// the wrap only happened when the Bleve search index opened successfully, which
+// was true in production and false in most local runs, so the whole class of bug
+// reproduced nowhere except prod. It surfaced on 2026-07-30 as
 // "backfill-sync-ids: store does not implement the sync-identity capability
 // interfaces", and it silently disabled the merge-follow hook that keeps ABS
 // listening progress attached to a book across a dedup merge.
@@ -38,21 +44,14 @@ package database
 // (see StoreUnwrapper).
 //
 // The same hazard applies to CONCRETE-type assertions, not just interfaces:
-// `store.(*PebbleStore)` fails through the decorator too, and its failure mode is
+// `store.(*PebbleStore)` fails through a decorator too, and its failure mode is
 // worse because such sites usually have a "different backend, degrade gracefully"
 // fallback written for SQLite/mock. A wrapped Pebble store takes that fallback and
 // looks like a supported configuration. Two prod jobs were silently degraded this
-// way for weeks — see AsPebbleStore. Resolve concrete stores through this file
-// too, never with a bare assertion on a value obtained from Server.Store().
-//
-// Which values are affected: ALL of them. Since 2026-09-13 NewServer wraps the
-// store before anything captures it, so the service-registry container
-// (Override("store", ...)), plugin.Deps, every handler constructor and
-// Server.Store() all hold the SAME decorated value, whether or not the search
-// index opens. (Until then anything bound during NewServer held the bare store,
-// which is why several registry-built services type-asserted capabilities
-// directly and got away with it -- and why their book writes were never
-// re-indexed.) Resolve every capability outside database.Store through this file.
+// way for weeks -- see AsPebbleStore. Resolve concrete stores through this file
+// too, never with a bare assertion on a value obtained from Server.Store(): the
+// call sites hold the raw store today, and AsCapability keeps them correct if a
+// decorator is ever put back.
 
 // maxUnwrapDepth bounds the walk so a decorator that accidentally returns itself
 // — or a cycle built from two decorators pointing at each other — cannot hang a
@@ -66,9 +65,9 @@ const maxUnwrapDepth = 16
 // capabilities I do not implement myself." Do NOT implement it on a decorator
 // whose behaviour must not be bypassed — an access-control or read-only wrapper,
 // for instance — because a caller that resolves a capability from the inner
-// store writes through it directly. indexedStore implements it because the
-// capabilities in question (sync identity, sync files, bookmarks) touch
-// keyspaces it does not index, so reaching past it loses nothing.
+// store writes through it directly. The removed indexedStore implemented it
+// because the capabilities in question (sync identity, sync files, bookmarks)
+// touch keyspaces it did not index, so reaching past it lost nothing.
 type StoreUnwrapper interface {
 	Unwrap() Store
 }
@@ -86,7 +85,7 @@ type StoreUnwrapper interface {
 //
 // Exported because callers outside this package hit the same problem: package
 // server's maintenance fixups and package maintenance/jobs both need to reach the
-// concrete Pebble store through the search-index decorator.
+// concrete Pebble store through whatever decorators wrap it.
 func AsCapability[T any](s any) (T, bool) {
 	var zero T
 	for depth := 0; s != nil && depth < maxUnwrapDepth; depth++ {
@@ -115,7 +114,7 @@ func AsCapability[T any](s any) (T, bool) {
 //
 // Use this instead of `store.(*PebbleStore)` on any value that came from
 // Server.Store(). The bare assertion is what silently degraded these in prod,
-// where the Bleve decorator is always installed:
+// back when the Bleve indexedStore decorator was always installed:
 //
 //   - sweep-pebble-metrics-ttl logged "store is not a PebbleStore; skipping" and
 //     no-opped, so expired metrics snapshots were never swept and grew unbounded.

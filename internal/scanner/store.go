@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package scanner
 
@@ -114,8 +114,8 @@ type scanProgressStore interface {
 	// that keeps failing" bookkeeping as the scan fail count above. Raw KV
 	// rather than a Book column: the marker is keyed by PATH so a rename makes
 	// the file eligible again with no reset step, and it needs no schema
-	// change. Both are on database.Store (RawKVStore), so the production
-	// indexedStore satisfies this without a type assertion.
+	// change. Both are on database.Store (RawKVStore), so a Store-embedding
+	// decorator satisfies this without a type assertion.
 	GetRaw(key string) ([]byte, error)
 	SetRaw(key string, value []byte) error
 	// DeleteRaw clears a book's scan identity proposal once the file agrees

@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package database
 
@@ -71,7 +71,7 @@ import (
 // AuthorBookRefStore is a narrow capability interface, deliberately kept OUT of
 // database.Store — same rationale as SeriesBookRefStore: widening Store forces
 // every implementation and generated mock to grow with it. Reach it through
-// AsAuthorBookRefStore, which looks through the indexedStore decorator.
+// AsAuthorBookRefStore, which looks through any store decorator.
 type AuthorBookRefStore interface {
 	// GetAllAuthorBookRefCounts returns authorID -> number of distinct book
 	// rows that reference it, via the book_authors junction table or the legacy
@@ -85,9 +85,9 @@ type AuthorBookRefStore interface {
 // and MUST fail rather than falling back to the filtered counter — that
 // fallback is the bug this file exists to remove, and it would be silent.
 //
-// It goes through AsCapability, not a bare type assertion, because in
-// production the store is wrapped in the Bleve indexedStore decorator and a
-// bare `s.(*PebbleStore)` returns nil exactly where the guard matters.
+// It goes through AsCapability, not a bare type assertion, because a
+// store can sit behind a decorator (the server's was the Bleve indexedStore until
+// 07-S3) and a bare `s.(*PebbleStore)` returns nil exactly where the guard matters.
 func AsAuthorBookRefStore(s any) AuthorBookRefStore {
 	if s == nil {
 		return nil

@@ -1,7 +1,7 @@
 // file: internal/authority/lookup.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8214ae7d-59fb-46c8-9d73-9301ffdd21eb
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package authority
 
@@ -17,7 +17,7 @@ import (
 )
 
 // Reader is the read surface the lookups need. database.RawKVStore
-// satisfies it, and so does the production indexedStore.
+// satisfies it, and so does any Store-embedding decorator.
 type Reader interface {
 	GetRaw(key string) ([]byte, error)
 }

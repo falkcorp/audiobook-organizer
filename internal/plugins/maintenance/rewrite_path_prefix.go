@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-09-26
+// last-edited: 2026-10-13
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -79,7 +79,7 @@
 //	                               secondary indexes and writes new ones on a
 //	                               path change.
 //	memdb projection               UpsertBookToMemDB, in the same write path.
-//	Bleve search index             indexedStore.ModifyBook re-enqueues the doc.
+//	Bleve search index             the store observer (BooksChanged) re-enqueues the doc.
 //	scan cache                     has NO separate keyspace: GetScanCacheMap is
 //	                               built FROM book_file rows (its doc comment says
 //	                               so, and forbids reading Book.FilePath), so the
@@ -309,7 +309,7 @@ func (p rewritePathPrefixPlan) summary() string {
 
 // rewritePathPrefixStore is the narrow store this op needs. Every method is on
 // database.Store, so no AsCapability unwrap is needed and nothing silently
-// misses against production's indexedStore decorator.
+// misses against a Store-embedding decorator.
 type rewritePathPrefixStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)

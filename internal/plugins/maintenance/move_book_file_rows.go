@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-09-26
+// last-edited: 2026-10-13
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -143,7 +143,7 @@ func (r *mbfReport) summary() string {
 }
 
 // mbfStore is the narrow store the op needs. Every method is on
-// database.Store, so the production indexedStore satisfies it.
+// database.Store, so a Store-embedding decorator satisfies it.
 type mbfStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)

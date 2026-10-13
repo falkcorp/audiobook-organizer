@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package dedup
 
@@ -83,9 +83,9 @@ type dedupBookReader interface {
 	// (unified.SigChapterStructure). Embedded HERE rather than as its own
 	// entry on Store: chapters are a book read, and Store already declares
 	// eight entries, which is interfacebloat's limit. Its safety comes from
-	// the other side -- GetChaptersForBook is on database.Store, so the Bleve
-	// indexedStore decorator that wraps the store in production must carry it
-	// or fail to build.
+	// the other side -- GetChaptersForBook is on database.Store, so any
+	// Store-embedding decorator (the Bleve indexedStore was one, until 07-S3) must
+	// carry it or fail to build.
 	database.ChapterReader
 }
 
@@ -173,8 +173,8 @@ type Store interface {
 // WindowAcoustIDStore is what CollectWindowAcoustIDForBook reads (02-PR8): the
 // window-band index and the stored window prints, plus a by-file-ID row
 // lookup. It is a *database.PebbleStore capability, deliberately NOT embedded
-// in Store: the index methods are not on database.Store, so the indexedStore
-// decorator production wraps the store in does not carry them. The engine is
+// in Store: the index methods are not on database.Store, so a Store-embedding
+// decorator (the indexedStore the server wrapped the store in, until 07-S3) does not carry them. The engine is
 // handed one through SetWindowStore, resolved with
 // database.AsCapability[WindowAcoustIDStore] (internal/server/registry_wire.go).
 type WindowAcoustIDStore interface {

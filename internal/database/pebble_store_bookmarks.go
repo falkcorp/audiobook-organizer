@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookmarks.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 35844383-1823-4889-9735-b64bceb2ab17
-// last-edited: 2026-09-26
+// last-edited: 2026-10-13
 
 // Package database: named-bookmark keyspace.
 //
@@ -60,7 +60,7 @@ func AsBookmarkStore(s any) BookmarkStore {
 	if s == nil {
 		return nil
 	}
-	// Looks through the indexedStore decorator; see store_capability.go.
+	// Looks through any store decorator; see store_capability.go.
 	if bs, ok := AsCapability[BookmarkStore](s); ok {
 		return bs
 	}
@@ -242,8 +242,8 @@ type BookmarkCopier interface {
 	CopyBookmarkIfAbsent(b progress.Bookmark) (bool, error)
 }
 
-// AsBookmarkCopier returns s as a BookmarkCopier, looking through the
-// indexedStore decorator, or nil.
+// AsBookmarkCopier returns s as a BookmarkCopier, looking through any
+// store decorator, or nil.
 func AsBookmarkCopier(s any) BookmarkCopier {
 	if s == nil {
 		return nil

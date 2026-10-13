@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.66.1
+// version: 1.66.2
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -76,13 +76,13 @@ func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.sto
 //
 // Returned directly rather than through database.AsCapability because
 // ListActiveOperationsV2 IS part of database.Store (operationsStore ->
-// OpsV2Store), so the indexedStore decorator installed by NewServer forwards it
-// like every other Store method.
+// OpsV2Store), so a Store-embedding decorator forwards it like every other
+// Store method.
 func (s *Server) OperationQueueStore() maintenanceplugin.OpQueueReader { return s.store }
 
 // VersionPrimaryStore implements maintenance.StoreProvider. It serves
 // version-group-primary-repair: GetChaptersForBook and RecordMetadataChange
-// are both part of database.Store, so the indexedStore decorator forwards
+// are both part of database.Store, so a Store-embedding decorator forwards
 // them and no capability resolution is needed.
 func (s *Server) VersionPrimaryStore() maintenanceplugin.VersionPrimaryStore { return s.store }
 
@@ -94,11 +94,12 @@ func (s *Server) VersionPrimaryStore() maintenanceplugin.VersionPrimaryStore { r
 // callers are required to treat nil as "not initialized".
 //
 // 🔴 RESOLVED THROUGH database.AsCapability, NOT A BARE TYPE ASSERTION. These
-// accessors run at op-run time, after Start() has replaced s.store with the
-// Bleve indexedStore decorator, which embeds the Store INTERFACE and so exposes
-// none of the capability methods. A bare `s.store.(database.FileProvenanceStore)`
-// compiles, passes every test that hands in a *PebbleStore, and returns nil in
-// production — which is what this accessor did from 2026-08-21 until 2026-09-02,
+// accessors run at op-run time, when s.store can sit behind a decorator that
+// embeds the Store INTERFACE and so exposes none of the capability methods (until
+// 07-S3, Start() replaced s.store with the Bleve indexedStore decorator). A bare
+// `s.store.(database.FileProvenanceStore)` compiles, passes every test that hands
+// in a *PebbleStore, and returns nil behind one — which is what this accessor did
+// in production from 2026-08-21 until 2026-09-02,
 // so maintenance.file-provenance-capture reported "provenance store not
 // initialized" on every prod run. store_capability.go tells the story in full.
 func (s *Server) FileProvenanceStore() database.FileProvenanceStore {

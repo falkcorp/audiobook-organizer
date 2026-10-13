@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9a1e7c40-2b83-4f16-90ad-6c4b1f2e8d55
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 //
 // Tests for search-index reconciliation after a dropped index event.
 //
@@ -94,8 +94,9 @@ func TestNextBatchSize_NeverExceedsBacklog(t *testing.T) {
 func TestReconciler_RepairsDroppedUpsert(t *testing.T) {
 	srv, store, idx := newDropOnlyServer(t)
 
-	// Write straight to the store so the book exists in the DB but was
-	// never indexed — exactly the post-drop state.
+	// The queue drops everything, so the create's own index event is dropped
+	// (and recorded dirty) by the store observer: the book exists in the DB but
+	// was never indexed -- exactly the post-drop state.
 	if _, err := store.CreateBook(&database.Book{
 		ID: "dropped-1", Title: "Reconcile Me", FilePath: "/tmp/d1", Format: "m4b",
 	}); err != nil {
@@ -103,7 +104,7 @@ func TestReconciler_RepairsDroppedUpsert(t *testing.T) {
 	}
 
 	before := SearchIndexDroppedCount()
-	srv.enqueueIndex("dropped-1", false)
+	srv.enqueueIndex("dropped-1")
 
 	if got := SearchIndexDroppedCount() - before; got != 1 {
 		t.Fatalf("drop counter advanced by %d, want 1", got)
@@ -161,7 +162,7 @@ func TestReconciler_RemovesBookDeletedWhileDropped(t *testing.T) {
 	if err := store.DeleteBook("gone-1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	srv.enqueueIndex("gone-1", true)
+	srv.enqueueIndex("gone-1")
 
 	// Still in the index — stale, which after filter pushdown would mean a
 	// deleted book appearing in filtered results.
@@ -176,11 +177,10 @@ func TestReconciler_RemovesBookDeletedWhileDropped(t *testing.T) {
 	}
 }
 
-// The reconciler re-derives upsert-vs-delete from the DB instead of
-// replaying the recorded del flag. This proves it: the event is enqueued as
-// a DELETE, but the book still exists, so the correct repair is a re-index,
-// not a removal. Replaying the flag would wrongly evict a live book.
-func TestReconciler_ReDerivesIntentFromDB(t *testing.T) {
+// The reconciler decides upsert-versus-delete from the DB, never from the
+// event (an event carries only a book ID). A live book whose index event was
+// dropped is re-indexed, not removed.
+func TestReconciler_ReDerivesStateFromDB(t *testing.T) {
 	srv, store, idx := newDropOnlyServer(t)
 
 	if _, err := store.CreateBook(&database.Book{
@@ -189,8 +189,8 @@ func TestReconciler_ReDerivesIntentFromDB(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// del=true, but the row is present.
-	srv.enqueueIndex("alive-1", true)
+	// The row is present, and the create already dropped its own event.
+	srv.enqueueIndex("alive-1")
 	srv.reconcileOnce()
 
 	hits, _, err := idx.Search("title:still", 0, 10)
@@ -198,7 +198,7 @@ func TestReconciler_ReDerivesIntentFromDB(t *testing.T) {
 		t.Fatalf("search: %v", err)
 	}
 	if len(hits) != 1 || hits[0].BookID != "alive-1" {
-		t.Fatalf("a live book was evicted by replaying a stale delete flag; hits = %v", hits)
+		t.Fatalf("a live book was evicted by its dropped event; hits = %v", hits)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestReconciler_DrainsRepeatedDropsOfOneBookOnce(t *testing.T) {
 	// A book updated repeatedly during a bulk op drops many times; the set
 	// must coalesce so the backlog figure is not inflated.
 	for range 25 {
-		srv.enqueueIndex("hot-1", false)
+		srv.enqueueIndex("hot-1")
 	}
 
 	ds := database.AsSearchIndexDirtyStore(store)

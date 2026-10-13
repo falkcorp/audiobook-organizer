@@ -1,7 +1,7 @@
 // file: internal/database/library_generation.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9696c574-1445-4078-a549-20dc2b5f8095
-// last-edited: 2026-08-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -49,7 +49,7 @@ func (p *PebbleStore) LibraryGeneration() *cache.Generation { return &p.libGen }
 // that constructs a real store keeps passing.
 //
 // Resolution goes through AsCapability rather than a bare type assertion
-// because the production store is wrapped (indexedStore) and a naked assertion
+// because a store can be wrapped by a decorator and a naked assertion
 // against the wrapper fails.
 func LibraryGenerationOf(s any) (*cache.Generation, bool) {
 	if provider, ok := AsCapability[LibraryGenerationProvider](s); ok {

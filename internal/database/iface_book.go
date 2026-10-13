@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.26.0
+// version: 2.27.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package database
 
@@ -105,13 +105,12 @@ type BookPathSetReader interface {
 	// path can be vouched for until it is rewritten or removed.
 	//
 	// It is on Store (via BookLookupReader), not a narrower capability, so
-	// every decorator that embeds Store (server.indexedStore in production)
-	// forwards it.
+	// every decorator that embeds Store forwards it.
 	LiveBookIDsAtPath(path string) ([]string, error)
 }
 
 // BookDirLister lists live books beneath a folder. Its own interface,
-// embedded in BookStore (so still on Store and the prod indexedStore) rather
+// embedded in BookStore (so still on Store and forwarded by decorators) rather
 // than in BookReader: only the chapter merge calls it, and on the reader every
 // read-only test double would have to carry a method it never uses.
 type BookDirLister interface {
@@ -131,7 +130,7 @@ type BookDirLister interface {
 // repoint plan). BookReader is embedded by narrow consumer interfaces across
 // the tree (itunes.RebuildStore among them) whose code never asks, and every
 // one of their test doubles would have had to grow a method nothing calls.
-// It is still on Store, so the production indexedStore forwards it.
+// It is still on Store, so a Store-embedding decorator forwards it.
 type BookPathIndexStatus interface {
 	// BookAtPathIndexBuilt reports whether the book_atpath backfill sentinel
 	// exists. Until it does, LiveBookIDsAtPath answers from a scan of EVERY

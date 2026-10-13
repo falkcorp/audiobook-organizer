@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -269,7 +269,7 @@ func authorityProgress(reporter sdk.Reporter) func(phase string, done, total int
 }
 
 // buildAuthorityLists runs the build on any raw KV store. The production
-// store is OpsStore, which embeds database.RawKVStore, so the indexedStore
+// store is OpsStore, which embeds database.RawKVStore, so a Store-embedding
 // wrapper serves it directly. On an apply, expectDigest is the reviewed dry
 // run's plan digest: the apply refuses unless the recomputed plan matches it.
 func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params authorityBuildParams, dryRun bool,

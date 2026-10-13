@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 package database
 
@@ -183,7 +183,7 @@ type BookFileFingerprintStore interface {
 // call CarryOverFingerprintWindows before deleting the donor.
 //
 // Embedded in BookFileFingerprintStore, so it is part of database.Store and the
-// production indexedStore decorator promotes it through its embedded Store.
+// a Store-embedding decorator promotes it through its embedded Store.
 type FingerprintWindowStore interface {
 	// PutFingerprintWindow stores one window, replacing the same ref/kind/slot.
 	// An f: ref whose book_file row does not exist is refused.

@@ -1,7 +1,7 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package database
 
@@ -38,14 +38,14 @@ type SoftDeletedCountStore interface {
 // (AsCapability), like every other As*Store helper.
 //
 // It was a bare type assertion until 2026-10-06, and that assertion ALWAYS
-// missed in production: the audiobook service holds the server's indexedStore,
-// which embeds database.Store and so promotes only Store's methods, and
+// missed in production: the audiobook service held the server's indexedStore
+// decorator (removed in 07-S3), which embeds database.Store and so promotes only Store's methods, and
 // CountSoftDeletedBooks is not one of them. Every trash count therefore took
 // AudiobookService's paging fallback -- 49 calls of ListSoftDeletedBooks(1000,
 // offset) for a 48k-book trash, each copying and sorting the whole set -- and
 // GET /audiobooks/soft-deleted measured 30-58 s warm, 733 s cold. Going past
-// the decorator is safe here: this is a read, and indexedStore only overrides
-// writes (to reindex them).
+// a decorator is safe here: this is a read, and the one the server used to
+// install only overrode writes (to reindex them).
 func AsSoftDeletedCountStore(s any) SoftDeletedCountStore {
 	if cs, ok := AsCapability[SoftDeletedCountStore](s); ok {
 		return cs

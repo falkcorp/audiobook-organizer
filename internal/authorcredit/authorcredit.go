@@ -1,7 +1,7 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.4.4
+// version: 1.5.0
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 // Package authorcredit turns one author credit string ("J.N. Chaney, Jonathan
 // P. Brazee") into the author rows a book should be credited to, in order.
@@ -69,6 +69,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -718,13 +719,51 @@ type PersonEvidence interface {
 	PersonEvidence(q PersonQuery) (Evidence, error)
 }
 
-// AuthoritySource is the store capability that hands authorcredit the
-// authority lists (internal/authority). The server's store decorator offers
-// it and answers authority.Empty() while authority_evidence_enabled is off or
-// no snapshot is loaded, so production behaviour changes only with the flag
-// on. It must not read the store per call: it returns an in-memory Snapshot.
+// AuthoritySource hands authorcredit the authority lists (internal/authority).
+// A store may offer it as a capability (tests do), and the server registers one
+// process-wide with SetAuthorityProvider, which is how production reaches every
+// credit resolve now that the server's store is the raw store. It answers
+// authority.Empty() while authority_evidence_enabled is off or no snapshot is
+// loaded, so production behaviour changes only with the flag on. It must not
+// read the store per call: it returns an in-memory Snapshot.
 type AuthoritySource interface {
 	AuthorityLookup() authority.Lookup
+}
+
+// authorityProviderBox lets the process-wide provider live in an atomic pointer
+// and be released by identity: an interface value in the box may hold a
+// non-comparable dynamic type, so comparing providers directly could panic.
+type authorityProviderBox struct{ p AuthoritySource }
+
+var authorityProvider atomic.Pointer[authorityProviderBox]
+
+// SetAuthorityProvider registers p as the process-wide source of authority
+// lists for every store that does not offer the capability itself. The store
+// capability is always consulted first (AwaitAuthority, CurrentAuthority), so a
+// test store that implements AuthoritySource keeps working; the provider is
+// the fallback, which is what lets the server hand the lists to credit
+// resolution without wrapping its store in a decorator.
+//
+// If p also implements AuthorityWaiter, AwaitAuthority waits on it. A nil p
+// clears the registration. The returned release func clears it only if p is
+// still the registered provider, so a server shutting down never removes the
+// provider a newer server registered.
+func SetAuthorityProvider(p AuthoritySource) (release func()) {
+	if p == nil {
+		authorityProvider.Store(nil)
+		return func() {}
+	}
+	box := &authorityProviderBox{p: p}
+	authorityProvider.Store(box)
+	return func() { authorityProvider.CompareAndSwap(box, nil) }
+}
+
+// providerSource is the registered provider, or nil.
+func providerSource() AuthoritySource {
+	if box := authorityProvider.Load(); box != nil {
+		return box.p
+	}
+	return nil
 }
 
 // authorityEvidence is evidence from the authority lists. Strong when the
@@ -875,17 +914,30 @@ type AuthorityWaiter interface {
 // AwaitAuthority returns the authority lists a plan reads and whether a real
 // snapshot is in hand. A store offering AuthorityWaiter is waited on; one
 // offering only AuthoritySource is read as is (ready when it answers anything
-// but authority.Empty()); any other store answers authority.Empty(), false.
+// but authority.Empty()); a store offering neither falls back to the provider
+// registered with SetAuthorityProvider (waited on when it is an
+// AuthorityWaiter), and with no provider answers authority.Empty(), false.
 // A caller must not treat a name missing from a not-ready Lookup as evidence
 // of anything.
 func AwaitAuthority(ctx context.Context, store any) (authority.Lookup, bool) {
 	if w, ok := database.AsCapability[AuthorityWaiter](store); ok {
-		if l, ready := w.AwaitAuthorityLookup(ctx); !isNilLookup(l) {
-			return l, ready
-		}
-		return authority.Empty(), false
+		return awaitFrom(ctx, w)
+	}
+	if _, ok := database.AsCapability[AuthoritySource](store); ok {
+		return CurrentAuthority(store)
+	}
+	if w, ok := providerSource().(AuthorityWaiter); ok {
+		return awaitFrom(ctx, w)
 	}
 	return CurrentAuthority(store)
+}
+
+// awaitFrom waits on w and reads a nil or typed-nil answer as no lists.
+func awaitFrom(ctx context.Context, w AuthorityWaiter) (authority.Lookup, bool) {
+	if l, ready := w.AwaitAuthorityLookup(ctx); !isNilLookup(l) {
+		return l, ready
+	}
+	return authority.Empty(), false
 }
 
 // CurrentAuthority is AwaitAuthority without the wait, for a path that must
@@ -937,10 +989,16 @@ func AuthorityPersonEvidence(lookup authority.Lookup, name string) Evidence {
 	return gradeAuthorityAuthor(lookup, name)
 }
 
-// authorityOf returns the authority lists the store offers, or
-// authority.Empty() when it offers none (or a nil one).
+// authorityOf returns the authority lists the store offers, or, when the store
+// offers the capability not at all, the provider's; authority.Empty() when
+// neither has any (or answers a nil one). A store that offers the capability
+// and answers nothing is not second-guessed by the provider.
 func authorityOf(store any) authority.Lookup {
-	if as, ok := database.AsCapability[AuthoritySource](store); ok {
+	as, ok := database.AsCapability[AuthoritySource](store)
+	if !ok {
+		as = providerSource()
+	}
+	if as != nil {
 		if l := as.AuthorityLookup(); !isNilLookup(l) {
 			return l
 		}

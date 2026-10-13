@@ -1,7 +1,7 @@
 // file: internal/server/version_twin_metadata.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d3e1a57-6c2b-4f90-b4e8-71a9c05d2f36
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package server
 
@@ -38,7 +38,7 @@ func (s *Server) BooksWithMetadataSourceHash(hash string) ([]database.Book, erro
 
 // metadataHashInMemory is PebbleStore's memdb-only hash lookup. It is not on
 // database.Store (398 methods), so it is resolved through the decorator chain
-// (database.AsCapability); it is a read, so bypassing indexedStore's write
+// (database.AsCapability); it is a read, so bypassing a decorator's write
 // overrides costs nothing.
 type metadataHashInMemory interface {
 	GetBooksByMetadataSourceHashInMemory(hash string) ([]database.Book, error)
@@ -62,7 +62,7 @@ func (s *Server) BooksWithMetadataSourceHashInMemory(hash string) ([]database.Bo
 // isbnIndexFlag is the completion flag of the isbn-index-build op. It is not
 // on database.Store, so it is resolved through the decorator chain
 // (database.AsCapability), as the op itself does; it is a read of one
-// setting, so bypassing indexedStore's write overrides costs nothing.
+// setting, so bypassing a decorator's write overrides costs nothing.
 type isbnIndexFlag interface{ IsISBNIndexBuilt() bool }
 
 // BookIDsWithIdentifiers implements maintenanceplugin.VersionTwinMetadata:

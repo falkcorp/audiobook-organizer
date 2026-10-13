@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -210,8 +210,8 @@ var probeChaptersFn = audioutil.ProbeChapters
 // instead of a nil-pointer panic.
 //
 // 🔴 RESOLVE IT WITH database.AsCapability, NEVER A BARE ASSERTION. deps.OpsStore()
-// returns Server.store, which is REPLACED by the *server.indexedStore decorator
-// at server_lifecycle.go:290 once the search index opens. indexedStore embeds
+// returned Server.store, which was REPLACED by the *server.indexedStore decorator
+// (removed in 07-S3) once the search index opened. That decorator embedded
 // database.Store, so only methods on THAT interface are promoted — and the
 // chapter methods are not on it. A bare `store.(chapterPersister)` therefore
 // fails in production while passing every test that hands the op a raw

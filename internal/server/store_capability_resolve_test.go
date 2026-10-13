@@ -1,7 +1,7 @@
-// file: internal/server/indexed_store_capability_test.go
-// version: 1.10.0
+// file: internal/server/store_capability_resolve_test.go
+// version: 2.0.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package server
 
@@ -14,65 +14,74 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
-// TestIndexedStorePreservesCapabilityLookups pins the production regression at
-// its real site.
+// embeddingDecorator is a store decorator shaped like the one NewServer used to
+// install for search indexing (indexedStore, removed in 07-S3): it embeds the
+// database.Store INTERFACE, so only that interface's method set is promoted and
+// every narrow capability interface that deliberately lives outside it is
+// unreachable by a bare type assertion; Unwrap is what makes them discoverable
+// again. The server's own store is the raw store now, but other layers wrap
+// stores the same way, and the resolvers below must keep seeing through them.
+type embeddingDecorator struct{ database.Store }
+
+func (d *embeddingDecorator) Unwrap() database.Store { return d.Store }
+
+// TestDecoratedStorePreservesCapabilityLookups pins the production regression
+// at its real site.
 //
-// Server.Start() replaces s.store with &indexedStore{Store: inner} whenever the
-// Bleve index opened successfully — true on the production host, false in most
-// local runs, which is why this class of bug reproduced nowhere else. Because
-// indexedStore embeds the database.Store INTERFACE, every narrow capability
-// interface that deliberately lives outside database.Store became unreachable
-// through it, and every database.As*Store lookup started returning nil.
+// Until 07-S3, Server.Start() replaced s.store with &indexedStore{Store: inner}
+// whenever the Bleve index opened successfully -- true on the production host,
+// false in most local runs, which is why this class of bug reproduced nowhere
+// else. Because indexedStore embedded the database.Store INTERFACE, every
+// narrow capability interface that deliberately lives outside database.Store
+// became unreachable through it, and every database.As*Store lookup started
+// returning nil.
 //
 // Observed fallout on 2026-07-30: the backfill-sync-ids maintenance job failed
 // with "store does not implement the sync-identity capability interfaces", and
-// internal/merge's sync-follow hook — the thing that keeps a listener's position
-// attached to a book across a dedup merge — silently degraded to a no-op.
-func TestIndexedStorePreservesCapabilityLookups(t *testing.T) {
+// internal/merge's sync-follow hook -- the thing that keeps a listener's position
+// attached to a book across a dedup merge -- silently degraded to a no-op.
+func TestDecoratedStorePreservesCapabilityLookups(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { _ = inner.Close() })
 
-	// The real decorator, constructed exactly as server_lifecycle.go does.
-	// server is nil: no test here triggers a book mutation, so the index-enqueue
-	// path is never reached.
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	if database.AsSyncIdentityStore(wrapped) == nil {
-		t.Error("AsSyncIdentityStore through indexedStore == nil; " +
+		t.Error("AsSyncIdentityStore through a decorator == nil; " +
 			"the ABS sync-identity backfill and merge-follow hook both break")
 	}
 	if database.AsSyncFileStore(wrapped) == nil {
-		t.Error("AsSyncFileStore through indexedStore == nil; " +
+		t.Error("AsSyncFileStore through a decorator == nil; " +
 			"per-file ABS ids stop resolving")
 	}
 	if database.AsBookmarkStore(wrapped) == nil {
-		t.Error("AsBookmarkStore through indexedStore == nil; " +
+		t.Error("AsBookmarkStore through a decorator == nil; " +
 			"/api/me would report an empty bookmark list")
 	}
 	if database.AsSyncAliasUseStore(wrapped) == nil {
-		t.Error("AsSyncAliasUseStore through indexedStore == nil; " +
+		t.Error("AsSyncAliasUseStore through a decorator == nil; " +
 			"the ABS surface refuses to start")
 	}
 }
 
-// TestIndexedStoreCapabilityRoundTrip proves the resolved capability actually
+// TestDecoratedStoreCapabilityRoundTrip proves the resolved capability actually
 // writes through to the inner store, rather than merely satisfying the type
 // assertion.
-func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
+func TestDecoratedStoreCapabilityRoundTrip(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { _ = inner.Close() })
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	ids := database.AsSyncIdentityStore(wrapped)
 	if ids == nil {
-		t.Fatal("AsSyncIdentityStore through indexedStore == nil")
+		t.Fatal("AsSyncIdentityStore through a decorator == nil")
 	}
 
 	minted, err := ids.MintOrGetSyncID("book-capability-roundtrip")
@@ -94,7 +103,7 @@ func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
 	}
 }
 
-// TestIndexedStoreResolvesConcretePebbleStore covers the second half of the same
+// TestDecoratedStoreResolvesConcretePebbleStore covers the second half of the same
 // bug: a call site that asserts on the CONCRETE *database.PebbleStore rather than
 // a narrow interface fails through this decorator exactly the same way.
 //
@@ -102,17 +111,17 @@ func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
 // "different backend" fallback written for SQLite and test doubles. A wrapped
 // Pebble store is indistinguishable from an unsupported backend at a bare
 // assertion, so the fallback fires and the configuration looks supported.
-func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
+func TestDecoratedStoreResolvesConcretePebbleStore(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { _ = inner.Close() })
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	if got := database.AsPebbleStore(wrapped); got != inner {
-		t.Fatalf("AsPebbleStore through indexedStore = %p, want the inner store %p",
+		t.Fatalf("AsPebbleStore through a decorator = %p, want the inner store %p",
 			got, inner)
 	}
 
@@ -120,11 +129,11 @@ func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
 	// to be used at those call sites.
 	if _, ok := wrapped.(*database.PebbleStore); ok {
 		t.Error("bare *database.PebbleStore assertion unexpectedly saw through " +
-			"indexedStore; the AsPebbleStore call sites may no longer need it")
+			"a decorator; the AsPebbleStore call sites may no longer need it")
 	}
 }
 
-// TestIndexedStoreExposesVersionGroupBackfill is the THIRD instance of the bug
+// TestStoreExposesVersionGroupBackfill is the THIRD instance of the bug
 // this file exists to prevent, and the first one caught in production by its own
 // log line rather than by a failing job.
 //
@@ -135,7 +144,7 @@ func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
 // always, in production. MEASURED 2026-08-10 23:07:40 on the prod host:
 //
 //	versiongroup-backfill: store does not implement BackfillVersionGroupIndex,
-//	index will NOT be rebuilt   store_type=*server.indexedStore
+//	index will NOT be rebuilt   store_type=*server.indexedStore  (the since-removed decorator)
 //
 // So the "one-time production repair" for the under-reporting version-group
 // index had never run once. The fix is database.AsCapability, which walks the
@@ -146,7 +155,7 @@ func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
 // chunk boundaries, row contents and idempotency are covered by
 // pebble_store_versiongroup_backfill_test.go in package database, which can
 // reach the raw keys.
-func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
+func TestStoreExposesVersionGroupBackfill(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -154,7 +163,7 @@ func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
 	t.Cleanup(func() { _ = inner.Close() })
 	inner.WaitForWarmup()
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	// The shape of the original bug: a bare assertion cannot see it. If this
 	// ever starts succeeding, the decorator has changed and the guard below
@@ -170,14 +179,12 @@ func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
 	// resolveVGBackfiller to a bare assertion must turn this red.
 	b, ok := resolveVGBackfiller(wrapped)
 	if !ok {
-		t.Fatal("resolveVGBackfiller through indexedStore failed; the " +
+		t.Fatal("resolveVGBackfiller through a decorator failed; the " +
 			"version-group index backfill would silently never run")
 	}
 
-	// Seed through the INNER store. Going through the decorator would call
-	// s.server.enqueueIndex on a nil *Server and panic — the same reason every
-	// other test in this file stays read-only. The read below still goes through
-	// the decorator, which is the direction that matters here.
+	// Seed through the INNER store; the read below goes through the decorator,
+	// which is the direction that matters here.
 	gid := "vg-decorator-writethrough"
 	created, err := inner.CreateBook(&database.Book{
 		Title:          "Decorator Backfill Book",
@@ -204,9 +211,9 @@ func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
 //
 // wire_abs_routes.go used a bare `s.Ops().(*database.PebbleStore)` to reach
 // WaitForWarmup before building the ABS contributor cache. WaitForWarmup is a
-// *PebbleStore method, so the assertion misses whenever the Bleve indexedStore
-// decorator is installed — and the fallback is to skip the wait entirely and
-// warm anyway.
+// *PebbleStore method, so the assertion misses whenever a store decorator is
+// installed (until 07-S3 that was the Bleve indexedStore) -- and the fallback is
+// to skip the wait entirely and warm anyway.
 //
 // That fallback is not a degraded mode, it is a wrong answer with a long life:
 // the cache stores the set of authors of VISIBLE books, so building it against a
@@ -224,7 +231,7 @@ func TestWarmupWaiterResolvesThroughDecorator(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = inner.Close() })
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	// The shape of the original bug: a bare assertion cannot see through the
 	// decorator. Assert it rather than imply it — if this ever starts
@@ -241,22 +248,22 @@ func TestWarmupWaiterResolvesThroughDecorator(t *testing.T) {
 	// a bare assertion must turn this red.
 	w, ok := resolveWarmupWaiter(wrapped)
 	if !ok {
-		t.Fatal("resolveWarmupWaiter through indexedStore failed; the ABS " +
+		t.Fatal("resolveWarmupWaiter through a decorator failed; the ABS " +
 			"contributor cache would be warmed against a half-published memdb")
 	}
 	w.WaitForWarmup()
 }
 
-// TestIndexedStoreExposesBookAtPathBackfill pins both halves of the
-// book_atpath: wiring through the production decorator:
+// TestStoreExposesBookAtPathBackfill pins both halves of the
+// book_atpath: wiring through a store decorator:
 //
-//   - LiveBookIDsAtPath is on database.Store, so indexedStore forwards it with
+//   - LiveBookIDsAtPath is on database.Store, so a decorator forwards it with
 //     no capability lookup. #3335's fs-regroup-xml apply asserts a narrow
 //     interface containing it against OpsStore(); if the method ever leaves
 //     database.Store, that assertion misses and the op refuses to run.
 //   - The startup backfill (a *PebbleStore method outside Store) resolves
 //     through resolveBookAtPathBackfiller and actually builds the index.
-func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
+func TestStoreExposesBookAtPathBackfill(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -264,7 +271,7 @@ func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
 	t.Cleanup(func() { _ = inner.Close() })
 	inner.WaitForWarmup()
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	if _, ok := wrapped.(bookAtPathBackfiller); ok {
 		t.Fatal("a bare assertion now resolves bookAtPathBackfiller through the " +
@@ -272,11 +279,11 @@ func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
 	}
 	b, ok := resolveBookAtPathBackfiller(wrapped)
 	if !ok {
-		t.Fatal("resolveBookAtPathBackfiller through indexedStore failed; the " +
+		t.Fatal("resolveBookAtPathBackfiller through a decorator failed; the " +
 			"book_atpath index would never be built")
 	}
 
-	// Seed through the inner store (the decorator's writers need a *Server).
+	// Seed through the inner store.
 	created, err := inner.CreateBook(&database.Book{Title: "At Path", FilePath: "/lib/a"})
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
@@ -299,12 +306,12 @@ func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
 	}
 }
 
-// TestIndexedStoreExposesOpChangeIndexBackfill pins the opchange_by_book:
-// startup wiring through the production decorator: the ensure (a
+// TestStoreExposesOpChangeIndexBackfill pins the opchange_by_book:
+// startup wiring through a store decorator: the ensure (a
 // *PebbleStore method outside Store) resolves through
 // resolveOpChangeIndexBackfiller, builds and verifies the index, trusts it,
 // and GetBookChanges through the decorator returns the indexed rows.
-func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
+func TestStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -312,7 +319,7 @@ func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	t.Cleanup(func() { _ = inner.Close() })
 	inner.WaitForWarmup()
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	if _, ok := wrapped.(opChangeIndexBackfiller); ok {
 		t.Fatal("a bare assertion now resolves opChangeIndexBackfiller through the " +
@@ -320,7 +327,7 @@ func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	}
 	b, ok := resolveOpChangeIndexBackfiller(wrapped)
 	if !ok {
-		t.Fatal("resolveOpChangeIndexBackfiller through indexedStore failed; the " +
+		t.Fatal("resolveOpChangeIndexBackfiller through a decorator failed; the " +
 			"opchange_by_book index would never be built")
 	}
 
@@ -348,13 +355,13 @@ func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	}
 }
 
-// TestIndexedStoreResolvesStrictUserLister pins the fail-closed user listing
+// TestDecoratedStoreResolvesStrictUserLister pins the fail-closed user listing
 // the hard deletes rely on (#3769 review NIT c). merge.NewUserStateProbe
 // resolves database.StrictUserLister with AsCapability; through this
 // decorator that only works because of Unwrap. Without it the probe falls
 // back to ListUsers, which skips an undecodable user row, and a delete would
 // go ahead on a "no state" that never looked at that user's rows.
-func TestIndexedStoreResolvesStrictUserLister(t *testing.T) {
+func TestDecoratedStoreResolvesStrictUserLister(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -364,16 +371,16 @@ func TestIndexedStoreResolvesStrictUserLister(t *testing.T) {
 		t.Fatalf("seed undecodable user row: %v", err)
 	}
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
 	strict, ok := database.AsCapability[database.StrictUserLister](wrapped)
 	if !ok {
-		t.Fatal("AsCapability[StrictUserLister] through indexedStore failed")
+		t.Fatal("AsCapability[StrictUserLister] through a decorator failed")
 	}
 	if _, err := strict.ListUsersStrict(); !errors.Is(err, database.ErrUndecodableUserRows) {
-		t.Fatalf("ListUsersStrict through indexedStore = %v, want ErrUndecodableUserRows", err)
+		t.Fatalf("ListUsersStrict through a decorator = %v, want ErrUndecodableUserRows", err)
 	}
 	if _, err := merge.NewUserStateProbe(wrapped); !errors.Is(err, database.ErrUndecodableUserRows) {
-		t.Fatalf("NewUserStateProbe through indexedStore = %v, want ErrUndecodableUserRows (fail closed)", err)
+		t.Fatalf("NewUserStateProbe through a decorator = %v, want ErrUndecodableUserRows (fail closed)", err)
 	}
 }

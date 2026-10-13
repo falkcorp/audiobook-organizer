@@ -1,7 +1,7 @@
 // file: internal/server/opsv2_timeline_reconcile_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1aadeb25-3ece-4be2-88a9-5f21fd2900ac
-// last-edited: 2026-10-04
+// last-edited: 2026-10-13
 
 package server
 
@@ -15,12 +15,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// TestIndexedStoreExposesOpsV2TimelineReconcile runs the production
-// resolution path through the indexedStore decorator: a bare assertion misses
+// TestStoreExposesOpsV2TimelineReconcile runs the production
+// resolution path through a Store-embedding decorator: a bare assertion misses
 // the *PebbleStore behind it, and then the timeline index would never be
 // trusted (only a warning would say so). Before the reconcile the store is
 // untrusted (scan); after it, trusted (index).
-func TestIndexedStoreExposesOpsV2TimelineReconcile(t *testing.T) {
+func TestStoreExposesOpsV2TimelineReconcile(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -28,14 +28,14 @@ func TestIndexedStoreExposesOpsV2TimelineReconcile(t *testing.T) {
 	t.Cleanup(func() { _ = inner.Close() })
 	inner.WaitForWarmup()
 
-	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
 	if _, ok := wrapped.(opsV2TimelineReconciler); ok {
 		t.Fatal("a bare assertion now resolves opsV2TimelineReconciler through the " +
 			"decorator; this test no longer reproduces the production shape")
 	}
 	r, ok := resolveOpsV2TimelineReconciler(wrapped)
 	if !ok {
-		t.Fatal("resolveOpsV2TimelineReconciler through indexedStore failed; the " +
+		t.Fatal("resolveOpsV2TimelineReconciler through a decorator failed; the " +
 			"timeline index would never be used")
 	}
 

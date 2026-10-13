@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.91.1
+// version: 2.92.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-13
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -358,9 +359,11 @@ type Server struct {
 	shutdownArmed chan struct{}
 	armShutdown   sync.Once
 	bgWG          namedWaitGroup
-	// authorityEvidence serves indexedStore's authorcredit.AuthoritySource
-	// (authority_evidence.go); Start primes its first load.
-	authorityEvidence *authorityEvidence
+	// authorityEvidence holds the authority lists authorcredit reads, offered
+	// to it through authorcredit.SetAuthorityProvider (authority_evidence.go);
+	// Start primes its first load. releaseAuthorityProvider unregisters it.
+	authorityEvidence        *authorityEvidence
+	releaseAuthorityProvider func()
 
 	// container is the SERVER-PLUGIN-REG service registry built during
 	// NewServer. Stashed so handlers/tests can pull services dynamically
@@ -459,8 +462,7 @@ const listTTL = 10 * time.Minute
 // every library-list cache key.
 //
 // Resolved from s.Ops() on each call rather than snapshotted at
-// construction: the store is wrapped by indexedStore once the search index
-// opens (after NewServer), and integration tests swap it post-wire. Resolving
+// construction: integration tests swap the store post-wire. Resolving
 // live means this and the audiobooks handler always agree, because both walk
 // to the same underlying PebbleStore and get a pointer to the same counter.
 // They must agree — a warmer writing keys the request path cannot read is a
@@ -616,40 +618,23 @@ func NewServer(store database.Store) *Server {
 		slog.Error("NewServer called with nil store — this is a programming error; callers must provide a concrete database.Store")
 		os.Exit(1)
 	}
-	// Wrap the store in the search-indexing decorator HERE, before anything
-	// captures it, and hand the wrapped value to everything below: the service
-	// registry (Override("store", ...)), the services constructed inline, the
-	// scanner, the file-I/O pool, the extra-ops registrar and the Deluge
-	// importer adapter. There is exactly one store object for the life of the
-	// server, so no component can hold a copy that skips the re-index.
-	//
-	// Until 2026-09-13 the wrap was built in Start, after the registry had
-	// already been Built and PostInit'd inside this function. Every registry
-	// service therefore captured the BARE store: the audiobooks service's
-	// UpdateBook, metafetch's applies, merge, and every plugin op wrote books
-	// that were never re-indexed, so search kept serving the old titles until
-	// the periodic coverage reconcile happened to notice.
-	//
-	// The decorator does not need the search index to exist yet. It only needs
-	// the *Server, and enqueueIndex is a no-op while s.indexQueue is nil. Start
-	// creates the queue and the worker once the Bleve index has opened; until
-	// then (and forever, on a server whose index failed to open) the decorator
-	// forwards writes untouched. A book write between NewServer and Start is
-	// therefore still not re-indexed, exactly as before this change. Note the
-	// startup reconcileSearchIndexCoverage pass does NOT repair that: it seeds
-	// only books MISSING from the index, not documents whose title went stale.
-	indexed := &indexedStore{Store: store}
-	resolvedStore := database.Store(indexed)
+	// The store is handed to everything below as it is: the service registry
+	// (Override("store", ...)), the services constructed inline, the scanner,
+	// the file-I/O pool, the extra-ops registrar and the Deluge importer
+	// adapter. There is exactly one store object for the life of the server.
+	// Search indexing does not wrap it: installSearchObserver (below) installs
+	// the server's database.ChangeObserver on it, which sees every write the
+	// store commits, whoever made it.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	server := &Server{
-		store:                  resolvedStore,
+		store:                  store,
 		bgCtx:                  bgCtx,
 		bgCancel:               bgCancel,
 		shutdownArmed:          make(chan struct{}),
 		router:                 router,
-		audiobookUpdateService: NewAudiobookUpdateService(resolvedStore),
-		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(resolvedStore),
-		importService:          importer.NewImportService(resolvedStore),
+		audiobookUpdateService: NewAudiobookUpdateService(store),
+		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
+		importService:          importer.NewImportService(store),
 		// MAYDEPLOY-I4: caches were bounded only by 24h TTL and could grow
 		// to hundreds of thousands of entries (estimated 0.5–1.5 GB) on heavy
 		// use. Cap entry count via LRU; defaults are conservative starting
@@ -663,24 +648,38 @@ func NewServer(store database.Store) *Server {
 		seriesCache:  cache.NewWithLimit[*audiobookspkg.SeriesWithCountsResponse]("series", 24*time.Hour, 1),
 		// olService, updater, updateScheduler are container-built;
 		// wireServerFromContainer populates the fields.
-		diagnosticsService: diagnostics.NewService(resolvedStore, nil, config.AppConfig.ITunes.LibraryReadPath),
-		changelogService:   activity.NewChangelogService(resolvedStore),
+		diagnosticsService: diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath),
+		changelogService:   activity.NewChangelogService(store),
 	}
-	// Bind the decorator to its server before anything can write through it.
-	indexed.server = server
+	// Observe the store's writes BEFORE anything can write: the observer feeds
+	// the search result cache and, once Start opens the index and creates the
+	// queue, search indexing. Until then enqueueIndex is a no-op, so a book
+	// written between NewServer and Start is not indexed -- and the startup
+	// reconcileSearchIndexCoverage pass does NOT repair that: it seeds only
+	// books MISSING from the index, not documents whose title went stale.
+	//
+	// Until 2026-09-13 indexing was a store decorator built in Start, after the
+	// registry had already captured the bare store, so every registry service
+	// (audiobooks, metafetch, merge, every plugin op) wrote books that were
+	// never re-indexed. The decorator was later moved here, and then removed
+	// (07-S3): an observer on the store cannot be bypassed by holding the
+	// wrong reference to it.
+	server.installSearchObserver()
 	// The authority lists as person evidence for authorcredit, behind
 	// authority_evidence_enabled (read per resolve under the config read
 	// lock; off answers authority.Empty()). Snapshots load from the bare
 	// store in the background, enrolled in bgWG and cancelled with the
-	// server, so Shutdown waits for a load before Pebble closes.
+	// server, so Shutdown waits for a load before Pebble closes. Credit
+	// resolution reaches them through authorcredit.SetAuthorityProvider
+	// (released in Shutdown), not through a capability on the store.
 	server.authorityEvidence = newAuthorityEvidence(bgCtx, store, config.AuthorityEvidenceEnabled, server.bgWG.Go)
-	indexed.authority = server.authorityEvidence
+	server.releaseAuthorityProvider = authorcredit.SetAuthorityProvider(authorityEvidenceProvider{server.authorityEvidence})
 	// Wire the scanner package's local store so its free helpers
 	// (createBookFilesForBookWithAudio, saveBookToDatabase, ProcessBooksParallel
 	// inline DB calls) no longer reach for database.GetGlobalStore
 	// (SERVER-GLOBAL-STORE-AUDIT phase 7). The indexing store, so books a scan
 	// creates or updates reach search.
-	scanner.SetStore(resolvedStore)
+	scanner.SetStore(store)
 
 	// SERVER-PLUGIN-REG: build the service registry container.
 	// Production wires services by named group (REGISTRY-NAMED-GROUPS,
@@ -690,7 +689,7 @@ func NewServer(store database.Store) *Server {
 	//   grep -rn 'Groups.*"<groupname>"' internal/ --include="*.go"
 	regCtx := context.Background()
 	regContainer := serviceregistry.NewContainer().
-		Override("store", resolvedStore).
+		Override("store", store).
 		Override("config", &config.AppConfig).
 		Override("appversion", appVersion).
 		IncludeGroup("core", "ai", "scheduler", "plugins").
@@ -752,7 +751,7 @@ func NewServer(store database.Store) *Server {
 	}
 	wireServerFromContainer(server, regContainer)
 	// The operations registry resolves its ops v3 run state from the store it
-	// was built with, through the search-index decorator's Unwrap. If that
+	// was built with, through any decorator's Unwrap chain. If that
 	// lookup misses on a Pebble-backed server, every v3 path (stopping runs,
 	// the boot sweep, requeue successors) silently degrades to "no record".
 	// Refuse to construct such a server instead. NewServer has no error
@@ -773,7 +772,7 @@ func NewServer(store database.Store) *Server {
 	}
 
 	// Propagate rootDir into the store so LibraryStats can split organized vs unorganized.
-	resolvedStore.SetRootDir(config.AppConfig.RootDir)
+	store.SetRootDir(config.AppConfig.RootDir)
 
 	// server.eventBus and server.quarantineSvc are now populated by
 	// wireServerFromContainer above (W2). Only the global plugin registry
@@ -790,7 +789,7 @@ func NewServer(store database.Store) *Server {
 	// to it. Fields available from wireServerFromContainer are set now;
 	// dedupEngine is back-filled below after its lazy
 	// initialisation. Closures see the updated values at op run time.
-	server.extraOpsRegistrar = scheduler.NewExtraOpsRegistrar(resolvedStore, scheduler.ExtraOpsDeps{
+	server.extraOpsRegistrar = scheduler.NewExtraOpsRegistrar(store, scheduler.ExtraOpsDeps{
 		MetadataFetchService: server.metadataFetchService,
 		ScanStandDown:        server,
 	})
@@ -1000,7 +999,7 @@ func NewServer(store database.Store) *Server {
 	})
 
 	server.fileIOPool = NewFileIOPool(4)
-	server.fileIOPool.SetStore(resolvedStore)
+	server.fileIOPool.SetStore(store)
 
 	// ScanEnqueuer stays inline: OrganizeService lives in this package and
 	// ScanEnqueuer captures server.opRegistry — not yet a clean container
@@ -1120,7 +1119,7 @@ func NewServer(store database.Store) *Server {
 		// Every package-level tag write (the book PATCH write-back, tag
 		// reverts, the organizer's rename, single-tag fixes) records the file's
 		// new hashes on its book_file row, looked up by path.
-		metadata.SetBookFileHashStore(resolvedStore)
+		metadata.SetBookFileHashStore(store)
 		slog.Info("metadata.SetSafeWriteDeps wired (Deluge pre-flight guard active)")
 
 		// Also wire into the metafetch service so cover-art embeds use the guard.
@@ -1159,7 +1158,7 @@ func NewServer(store database.Store) *Server {
 	// The local author-catalog blocking stage's matcher (B1/B2). Installing it
 	// changes nothing: the search runs it only while
 	// metadata_fetch.catalog_stage is on, which ships off.
-	wireCatalogStage(server.metadataFetchService, resolvedStore)
+	wireCatalogStage(server.metadataFetchService, store)
 
 	server.setupRoutes()
 

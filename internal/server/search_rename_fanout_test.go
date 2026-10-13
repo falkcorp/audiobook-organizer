@@ -1,7 +1,7 @@
 // file: internal/server/search_rename_fanout_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8603d299-d62c-4c75-ac8c-71c03c01de5c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package server
 
@@ -19,9 +19,9 @@ import (
 // scan, and UpdateAuthor has no synchronous scan to throttle the caller.
 // Before the fix every rename started its own goroutine, so N renames ran N
 // loads at once. Repeated renames of the same queued author also coalesce.
-func TestSearchChangeObserver_RenameFanOutIsBounded(t *testing.T) {
+func TestServerChangeObserver_RenameFanOutIsBounded(t *testing.T) {
 	srv := &Server{searchChanges: searchcache.NewChangeLog(64)}
-	o := &searchChangeObserver{s: srv}
+	o := &serverChangeObserver{s: srv}
 
 	const renames = 20
 	var running, peak, loads atomic.Int64

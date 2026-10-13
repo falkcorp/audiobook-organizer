@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_hydrate.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5d7c2f1e-8a43-4b6e-9d1f-2c7a0e4b8f63
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package database
 
@@ -23,7 +23,7 @@ var searchHydrateLog = logger.New("database.search")
 
 // SearchResultStore is what the shared search result cache needs from the
 // store beyond database.Store. It is a capability (reached through
-// AsSearchResultStore, which looks through the indexedStore decorator), not a
+// AsSearchResultStore, which looks through any store decorator), not a
 // database.Store method, for the reason SearchIndexDirtyStore gives: only
 // PebbleStore implements it and every mock would otherwise have to grow.
 type SearchResultStore interface {

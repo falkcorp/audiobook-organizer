@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -36,9 +36,9 @@ import (
 // keys-and-small-rows pass (about 0.2 s per 5,000 books in testing), far
 // inside the default progress timeout.
 //
-// It resolves the store method through database.AsCapability: OpsStore() is
-// server.indexedStore in production, which hides every *PebbleStore method
-// outside database.Store.
+// It resolves the store method through database.AsCapability: OpsStore() can be
+// a Store-embedding decorator (server.indexedStore, until 07-S3), which hides every
+// *PebbleStore method outside database.Store.
 
 type identIndexRebuilder interface {
 	VerifyIdentIndex(ctx context.Context) (database.IdentIndexReport, error)
