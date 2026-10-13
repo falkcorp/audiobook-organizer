@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.36.0
+// version: 2.36.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-13
 
@@ -467,8 +467,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.publishOpTerminal(qr.opID, qr.defID, status)
 		}
 		// A ResumeDrop scan quiesced before it started is dropped: a run end
-		// with no attempt to time. interrupted_quiesced records nothing.
-		r.recordRunEnd(qr.defID, out.outcome)
+		// with no attempt to time. interrupted_quiesced records nothing, and
+		// neither does a cancel settled here: a queued run canceled before
+		// it started is not counted anywhere else either.
+		if out.outcome == opsmetrics.OutcomeDropped {
+			r.recordRunEnd(qr.defID, out.outcome)
+		}
 		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
 		// Without this the dropped scan was never recorded anywhere a release
 		// reads, so it sat interrupted_quiesced until the next startup sweep.
@@ -940,9 +944,12 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, o
 				"op_id", qr.opID, "def_id", qr.defID, "run_status", status)
 			// Published even though Cancel may already have: Shutdown's
 			// timeout stamp also writes "canceled" and publishes nothing.
-			// The row's cancel is what the run ended as, so it is counted
-			// as canceled even when this run had decided timed_out.
-			return terminalOutcome{status: "canceled", publish: true, outcome: opsmetrics.OutcomeCanceled}
+			// The kept row is what the run ended as, so its outcome is read
+			// off it, as the v3 projection reads it: a user's cancel is
+			// canceled even when this run had decided timed_out, and a
+			// timed-out zombie's own status that Shutdown already stamped
+			// stays timed_out.
+			return terminalOutcome{status: "canceled", publish: true, outcome: rowOutcome(row)}
 		}
 		if row.Status == "canceled" && errMsg == nil {
 			// The run completed: its row must not keep the cancel's message.
@@ -1001,7 +1008,7 @@ func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status, outcom
 		}
 	}
 	if row, err := r.store.GetOperationV2(qr.opID); err == nil && row != nil && row.Status == "canceled" {
-		return terminalOutcome{status: "canceled", publish: false, outcome: opsmetrics.OutcomeCanceled}
+		return terminalOutcome{status: "canceled", publish: false, outcome: rowOutcome(row)}
 	}
 	return terminalOutcome{status: status, publish: true, outcome: outcome}
 }
@@ -1041,6 +1048,20 @@ func (r *Registry) recordRunMetrics(defID, outcome string, startedAt time.Time) 
 func (r *Registry) recordRunEnd(defID, outcome string) {
 	incLegacyOutcome(defID, outcome)
 	r.ops.Ended(defID, outcome)
+}
+
+// rowOutcome is the ops.runs outcome of a stored "canceled" row: timed_out
+// when its message carries state.TimeoutPrefix, canceled otherwise (the same
+// reading state.FromV2 gives the v3 projection).
+func rowOutcome(row *database.OperationV2Row) string {
+	msg := ""
+	if row.ErrorMessage != nil {
+		msg = *row.ErrorMessage
+	}
+	if o, ok := opsmetrics.OutcomeFor(row.Status, msg); ok {
+		return o
+	}
+	return opsmetrics.OutcomeCanceled
 }
 
 // incLegacyOutcome is recordRunMetrics' legacy counter mapping.
