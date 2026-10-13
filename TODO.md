@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.16 -->
+<!-- version: 10.76.17 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -3124,8 +3124,10 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
     ~~`itunes/backfill.go:97` (the `TODO(PERF-5)` N+1)~~ resolved: the marker
     is gone from main, fixed by b20acff12 and 1eb4a141e,
     ~~`acoustid/lsh_backfill.go:115` (~275K rows), `acoustid/reset_all.go:144`~~
-    resolved 2026-10-13 (04-P11: `Concurrency: runtime.NumCPU()` on both reset-all
-    passes and lsh-backfill; `TestRunItemsCallsDeclareConcurrency` guards new ones),
+    resolved 2026-10-13 (04-P11: `Concurrency: runtime.NumCPU()` on lsh-backfill and
+    the reset-all clearing pass; the reset-all candidate pass is batched through
+    `EmbeddingStore.DeleteCandidates` because single deletes serialize on the store
+    lock; `TestRunItemsCallsDeclareConcurrency` guards new ones),
     `maintenance/{fs_regroup_xml,itunes_regroup,booksig_recovery_audit,title_backfill,cleanup_merged,rebuild}.go`,
     `dedup/{reembed_embeddings,build_isbn_index}.go`.
   - [ ] `maintenance/merge_same_path_dupes.go:366-372` — safe today only because
