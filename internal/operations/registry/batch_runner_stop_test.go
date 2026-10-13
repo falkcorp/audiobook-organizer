@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -467,5 +467,47 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 		}
 		t.Fatalf("applied %d rows, AfterApply got %d; want all 30 across the resume; missing %v",
 			len(res.Applied), len(afterApply), missing)
+	}
+}
+
+// Marks are written once, each in the commit that records its chunk, and
+// Finish gets every one: there is no cap to drop past. (They used to ride,
+// all of them, in every ledger value, capped at 50,000.)
+func TestMarksWrittenOnceAndAllReachFinish(t *testing.T) {
+	const n = 300
+	store := newMemLedgerStore(t)
+	var sum atomic.Pointer[ops.Summary]
+	job, rc, cancel := openJob(t, seq(n), batchOpts{size: 7, workers: 3,
+		finish: func(_ *ops.RC, s ops.Summary) { sum.Store(&s) }},
+		func(irc *ops.ItemRC, i int) error {
+			irc.Mark("seen")
+			if i%2 == 0 {
+				irc.Mark("even")
+			}
+			return nil
+		})
+	defer cancel()
+	if _, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1}); err != nil {
+		t.Fatal(err)
+	}
+	s := sum.Load()
+	if s == nil || len(s.Marked("seen")) != n || len(s.Marked("even")) != n/2 {
+		t.Fatalf("Finish marks: %v", s)
+	}
+	written := map[string]int{}
+	for _, c := range store.commitCopy() {
+		for name, keys := range c.Marks {
+			for _, k := range keys {
+				written[name+"/"+k]++
+			}
+		}
+	}
+	if len(written) != n+n/2 {
+		t.Fatalf("%d distinct marks written, want %d", len(written), n+n/2)
+	}
+	for k, times := range written {
+		if times != 1 {
+			t.Fatalf("mark %s written %d times, want once", k, times)
+		}
 	}
 }

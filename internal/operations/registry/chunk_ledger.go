@@ -1,5 +1,5 @@
 // file: internal/operations/registry/chunk_ledger.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d4e18b1-a85c-41de-bd02-4a39b90f180a
 // last-edited: 2026-10-13
 
@@ -112,23 +112,25 @@ type chunkLedger struct {
 	// Ledger.ChunksDone because merged AppendOnly ranges cannot be counted
 	// back into chunks.
 	chunksDone int
+	// marks is every key items recorded with rc.Mark in completed chunks,
+	// across every attempt (Summary.Marks). pending is the part of it folded
+	// since the last successful commit: each mark is written once, as its
+	// own opv3:mark: key in the commit that records its chunk, never
+	// rewritten, so there is no cap to drop past.
+	marks, pending map[string][]string
 }
-
-// maxMarkedKeys caps the keys a run records with rc.Mark across all names.
-// Marks ride in every ledger commit, so they are for small sets (a Fixer's
-// applied rows); a key past the cap is counted under "marks_dropped".
-const maxMarkedKeys = 50_000
 
 func newChunkLedger(size, count int) *chunkLedger {
 	return &chunkLedger{
 		l: database.Ledger{SchemaVersion: 1, ChunkSize: size, ChunkCount: count,
-			Done: make([]byte, (count+7)/8), Counters: map[string]int64{}, Marks: map[string][]string{}},
+			Done: make([]byte, (count+7)/8), Counters: map[string]int64{}},
 		after: map[string]string{},
+		marks: map[string][]string{}, pending: map[string][]string{},
 	}
 }
 
-// loadChunkLedger resumes from a stored ledger.
-func loadChunkLedger(stored *database.Ledger) *chunkLedger {
+// loadChunkLedger resumes from a stored ledger and the marks stored with it.
+func loadChunkLedger(stored *database.Ledger, marks map[string][]string) *chunkLedger {
 	l := *stored
 	l.Done = slices.Clone(stored.Done)
 	l.Ranges = slices.Clone(stored.Ranges)
@@ -136,11 +138,10 @@ func loadChunkLedger(stored *database.Ledger) *chunkLedger {
 	if l.Counters == nil {
 		l.Counters = map[string]int64{}
 	}
-	l.Marks = map[string][]string{}
-	for k, v := range stored.Marks {
-		l.Marks[k] = slices.Clone(v)
+	cl := &chunkLedger{l: l, after: map[string]string{}, marks: map[string][]string{}, pending: map[string][]string{}}
+	for k, v := range marks {
+		cl.marks[k] = slices.Clone(v)
 	}
-	cl := &chunkLedger{l: l, after: map[string]string{}}
 	if want := (l.ChunkCount + 7) / 8; len(cl.l.Done) < want {
 		cl.l.Done = append(cl.l.Done, make([]byte, want-len(cl.l.Done))...)
 	}
@@ -221,22 +222,29 @@ func (c *chunkLedger) fold(b *chunkTally) {
 		c.l.Counters[k] += v
 	}
 	for name, keys := range b.marks {
-		for _, k := range keys {
-			if c.markedKeys() >= maxMarkedKeys {
-				c.l.Counters["marks_dropped"]++
-				continue
-			}
-			c.l.Marks[name] = append(c.l.Marks[name], k)
-		}
+		c.marks[name] = append(c.marks[name], keys...)
+		c.pending[name] = append(c.pending[name], keys...)
 	}
 }
 
-func (c *chunkLedger) markedKeys() int {
-	n := 0
-	for _, ks := range c.l.Marks {
-		n += len(ks)
+// pendingMarks is the marks folded since the last successful commit; the
+// commit that stores them calls clearPending.
+func (c *chunkLedger) pendingMarks() map[string][]string {
+	if len(c.pending) == 0 {
+		return nil
 	}
-	return n
+	return c.pending
+}
+
+func (c *chunkLedger) clearPending() { c.pending = map[string][]string{} }
+
+// allMarks is a copy of every mark, for the Summary.
+func (c *chunkLedger) allMarks() map[string][]string {
+	out := make(map[string][]string, len(c.marks))
+	for k, v := range c.marks {
+		out[k] = slices.Clone(v)
+	}
+	return out
 }
 
 // snapshot returns a copy safe to hand to the store.
@@ -245,10 +253,6 @@ func (c *chunkLedger) snapshot() database.Ledger {
 	l.Done = slices.Clone(c.l.Done)
 	l.Ranges = slices.Clone(c.l.Ranges)
 	l.Counters = maps.Clone(c.l.Counters)
-	l.Marks = make(map[string][]string, len(c.l.Marks))
-	for k, v := range c.l.Marks {
-		l.Marks[k] = slices.Clone(v)
-	}
 	l.ChunksDone = c.chunksDone
 	return l
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-13
 
@@ -92,6 +92,7 @@ const (
 	opv3IntentPrefix   = "opv3:intent:"
 	opv3ItemPrefix     = "opv3:item:"
 	opv3LogPrefix      = "opv3:log:"
+	opv3MarkPrefix     = "opv3:mark:"
 	opv3SchedPrefix    = "opv3:sched:"
 	opv3DefPrefix      = "opv3:def:"
 	opv3MetaCountsKey  = "opv3:meta:counts"
@@ -154,6 +155,14 @@ func opv3ItemKey(id, outcome, key string) []byte {
 	return []byte(opv3ItemPrefix + id + ":" + outcome + ":" + key)
 }
 
+// opv3MarkRunPrefix is a run's opv3:mark: family. A mark is
+// opv3:mark:{id}:{name}\x00{key}: names never hold a NUL, item keys may hold
+// anything else, so the key splits on its first NUL.
+func opv3MarkRunPrefix(id string) []byte { return []byte(opv3MarkPrefix + id + ":") }
+func opv3MarkKey(id, name, key string) []byte {
+	return []byte(opv3MarkPrefix + id + ":" + name + "\x00" + key)
+}
+
 func opv3LogKey(id string, ts time.Time, seq int64) []byte {
 	return []byte(fmt.Sprintf("%s%s:%020d:%010d", opv3LogPrefix, id, completedNanos(ts), seq))
 }
@@ -166,6 +175,7 @@ func opv3RunScopedPrefixes(id string) [][]byte {
 		[]byte(opv3IntentPrefix + id + ":"),
 		[]byte(opv3ItemPrefix + id + ":"),
 		[]byte(opv3LogPrefix + id + ":"),
+		opv3MarkRunPrefix(id),
 	}
 }
 
@@ -236,9 +246,9 @@ func (s *opsV3Stage) count(r *RunRecord, d int64) {
 
 // put stages next (and its index keys against prev's) and, when tr is not
 // nil, one opv3:evt: row. prev is the stored record (nil: none). On a move
-// into a terminal state the run's snapshot pages, chunk offsets and ledger
-// are deleted in the same batch (the final counters live on in
-// RunRecord.Progress).
+// into a terminal state the run's snapshot pages, chunk offsets, ledger and
+// marks are deleted in the same batch (the final counters live on in
+// RunRecord.Progress; the marks were handed to Finish before the run ended).
 func (s *opsV3Stage) put(prev, next *RunRecord, tr *Transition) error {
 	if next.ID == "" {
 		return errors.New("opv3: run record has no id")
@@ -275,6 +285,10 @@ func (s *opsV3Stage) put(prev, next *RunRecord, tr *Transition) error {
 			return err
 		}
 		if err := s.b.Delete(opv3LedgerKey(next.ID), nil); err != nil {
+			return err
+		}
+		marks := opv3MarkRunPrefix(next.ID)
+		if err := s.b.DeleteRange(marks, prefixEnd(marks), nil); err != nil {
 			return err
 		}
 	}
@@ -1551,6 +1565,26 @@ func (p *PebbleStore) GetChunkOffsetsV3(id string) ([]int32, bool, error) {
 	return offsets, found, err
 }
 
+// ListMarksV3 returns the run's opv3:mark: keys by name, in key order.
+func (p *PebbleStore) ListMarksV3(id string) (marks map[string][]string, err error) {
+	defer recoverPebbleClosed("ListMarksV3", &err)
+	pfx := opv3MarkRunPrefix(id)
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: pfx, UpperBound: prefixEnd(pfx)})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	marks = map[string][]string{}
+	for iter.First(); iter.Valid(); iter.Next() {
+		name, key, ok := strings.Cut(string(iter.Key()[len(pfx):]), "\x00")
+		if !ok {
+			return nil, fmt.Errorf("opv3: malformed mark key %q", iter.Key())
+		}
+		marks[name] = append(marks[name], key)
+	}
+	return marks, iter.Error()
+}
+
 // GetLedgerV3 returns a run's ledger, or nil.
 func (p *PebbleStore) GetLedgerV3(id string) (*Ledger, error) {
 	var l Ledger
@@ -1568,6 +1602,20 @@ func (p *PebbleStore) GetLedgerV3(id string) (*Ledger, error) {
 func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 	defer recoverPebbleClosed("CommitLedgerV3", &err)
 	now := time.Now().UTC()
+	// Encode before taking opsMu: the ledger is the caller's own copy, and
+	// every other opv3 writer waits on the lock.
+	if lb.Ledger.UpdatedAt.IsZero() {
+		lb.Ledger.UpdatedAt = now
+	}
+	ledger, err := json.Marshal(&lb.Ledger)
+	if err != nil {
+		return err
+	}
+	for name := range lb.Marks {
+		if name == "" || strings.ContainsRune(name, 0) {
+			return fmt.Errorf("opv3: mark name %q is empty or holds a NUL", name)
+		}
+	}
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 	cur, err := p.loadRunV3(id)
@@ -1579,13 +1627,6 @@ func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 	}
 	if state.ClassifyV3(cur.State).Terminal {
 		return fmt.Errorf("%w: run %s is %s; its ledger is closed", ErrStaleTransition, id, cur.State)
-	}
-	if lb.Ledger.UpdatedAt.IsZero() {
-		lb.Ledger.UpdatedAt = now
-	}
-	ledger, err := json.Marshal(&lb.Ledger)
-	if err != nil {
-		return err
 	}
 	var ck Checkpoint
 	if _, err := p.getJSONFound(opv3CkptKey(id), &ck); err != nil {
@@ -1604,6 +1645,13 @@ func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 	}
 	if err := b.Set(opv3CkptKey(id), ckData, nil); err != nil {
 		return err
+	}
+	for name, keys := range lb.Marks {
+		for _, k := range keys {
+			if err := b.Set(opv3MarkKey(id, name, k), nil, nil); err != nil {
+				return err
+			}
+		}
 	}
 	next := *cur
 	// The runner owns the numbers; the phase is the run's (rc.Phase writes
