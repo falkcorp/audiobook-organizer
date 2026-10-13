@@ -1,5 +1,5 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
 // last-edited: 2026-10-13
 
@@ -20,10 +20,14 @@
 //     Retry, never an empty list;
 //   - fixtures are synthetic names ("Author A"), not real library rows.
 //
-// The Series block at the end is the port of dedup.spec.ts "Series Dedup", which
+// The Series block is the port of dedup.spec.ts "Series Dedup", which
 // only asserted that a tab was selected; this one drives the sub-view. Its API is
 // mocked in this file (openSeries) rather than in test-helpers, whose series
 // fixture has no author ids, no match types and no merge or rename routes.
+//
+// The AI scans block at the end is the port of dedup.spec.ts "Dedup AI Review",
+// which only asserted that a tab was visible; this one drives the sub-view and the
+// lane menu's Start / Cancel commands. Its API is mocked in this file (openAI).
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi, generateTestBooks, type MockAuthorDedupGroup } from './utils/test-helpers';
@@ -621,10 +625,10 @@ test.describe('Series Dedup', () => {
     await expect(page.getByTestId('series-panel')).toHaveCount(0);
   });
 
-  test('the sub-view control lists Authors then Series, and the Series choice is not written to the URL', async ({ page }) => {
+  test('the sub-view control lists Authors, Series then AI scans, and the Series choice is not written to the URL', async ({ page }) => {
     await openSeries(page, { url: seriesPath('') });
     await expect(page.getByTestId('authors-panel')).toBeVisible();
-    await expect(page.getByRole('group', { name: 'Authors & series sub-view' }).getByRole('button')).toHaveText(['Authors', 'Series']);
+    await expect(page.getByRole('group', { name: 'Authors & series sub-view' }).getByRole('button')).toHaveText(['Authors', 'Series', 'AI scans']);
     await page.getByTestId('authors-subview-series').click();
     await expect(page.getByTestId('series-panel')).toBeVisible();
     expect(new URL(page.url()).search).toBe('?lane=authors');
@@ -909,5 +913,214 @@ test.describe('Series Dedup', () => {
     const merged = page.waitForRequest((req) => req.url().endsWith('/api/v1/series/merge'));
     await page.keyboard.press('m');
     expect((await merged).postDataJSON()).toEqual({ keep_id: 12, merge_ids: [11] });
+  });
+});
+
+// ── AI scans ──
+
+interface AIScanFixture {
+  id: number;
+  status: string;
+  mode: 'realtime' | 'batch';
+  superseded_by?: number;
+  author_count: number;
+  created_at: string;
+  models: { groups: string; full: string };
+}
+
+const aiScan = (id: number, over: Partial<AIScanFixture> = {}): AIScanFixture => ({
+  id,
+  status: 'complete',
+  mode: 'realtime',
+  author_count: 3,
+  created_at: '2026-10-01T09:00:00Z',
+  models: { groups: 'model-g', full: 'model-f' },
+  ...over,
+});
+
+const aiResult = (id: number, agreement: string, canonical: string, applied = false) => ({
+  id,
+  scan_id: 5,
+  agreement,
+  applied,
+  suggestion: { action: 'merge', canonical_name: canonical, reason: 'same person', confidence: 'high', author_ids: [id], source: 'full_scan' },
+});
+
+const aiResults = [
+  aiResult(1, 'agreed', 'Author A'),
+  aiResult(2, 'agreed', 'Author B', true),
+  aiResult(3, 'groups_only', 'Author C'),
+  aiResult(4, 'disagreed', 'Author D'),
+  aiResult(5, 'disagreed', 'Author E'),
+];
+
+/** Mocks the AI scan endpoints this sub-view calls. A route registered here beats setupMockApi's. */
+async function openAI(
+  page: Page,
+  opts: { scans?: AIScanFixture[]; results?: unknown[]; url?: string; historyFails?: () => boolean } = {}
+) {
+  const scans = opts.scans ?? [aiScan(6, { status: 'superseded', superseded_by: 12, mode: 'batch' }), aiScan(5)];
+  await setupMockApi(page, {
+    books: generateTestBooks(5),
+    authorDedup: { groups: authorGroups },
+    operations: { active: [], history: [], logs: {} },
+  });
+  const json = (body: unknown, status = 202) => ({ status, contentType: 'application/json', body: JSON.stringify({ data: body }) });
+  await page.route('**/api/v1/ai/scans', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill(json(aiScan(7, { status: 'pending' }), 202));
+      return;
+    }
+    if (opts.historyFails?.()) {
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) });
+      return;
+    }
+    await route.fulfill(json({ scans }, 200));
+  });
+  await page.route('**/api/v1/ai/scans/*/results', async (route) => {
+    await route.fulfill(json({ results: opts.results ?? aiResults }, 200));
+  });
+  await page.route('**/api/v1/ai/scans/*/apply', async (route) => {
+    await route.fulfill(json({ applied: 1, errors: [] }, 200));
+  });
+  await page.route('**/api/v1/ai/scans/*/cancel', async (route) => {
+    await route.fulfill(json({ status: 'canceled' }, 200));
+  });
+  await page.goto(opts.url ?? '/review?lane=authors&view=ai');
+  await expect(page.getByTestId('ai-scans-panel')).toBeVisible();
+}
+
+test.describe('Dedup AI Review', () => {
+  test('?view=ai opens AI scans, selected; the control reads Authors, Series, AI scans; there is no Books tab', async ({ page }) => {
+    await openAI(page);
+    await expect(page.getByRole('tab', { name: 'Authors & series' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('authors-subview-ai')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('group', { name: 'Authors & series sub-view' }).getByRole('button')).toHaveText(['Authors', 'Series', 'AI scans']);
+    await expect(page.getByText('Books', { exact: true })).toHaveCount(0);
+    expect(new URL(page.url()).search).toBe('?lane=authors&view=ai');
+  });
+
+  test('the history lists every scan, the nightly superseded one marked, and it is not a drawer', async ({ page }) => {
+    await openAI(page);
+    const list = page.getByTestId('ai-history-list');
+    await expect(list.getByTestId(/^ai-scan-\d+$/)).toHaveCount(2);
+    await expect(list.getByTestId('ai-scan-superseded-6')).toHaveText('superseded');
+    await expect(list.getByTestId('ai-scan-5')).toContainText('realtime');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('agreement chips show counts, and clicking one shows exactly that many rows', async ({ page }) => {
+    await openAI(page);
+    await page.getByTestId('ai-scan-5').click();
+    await expect(page.getByTestId('ai-result-1')).toBeVisible();
+    await expect(page.getByTestId('ai-agreement-all')).toHaveText('All (5)');
+    await expect(page.getByTestId('ai-agreement-agreed')).toHaveText('Agreed (2)');
+    await expect(page.getByTestId('ai-agreement-groups_only')).toHaveText('Groups Only (1)');
+    await expect(page.getByTestId('ai-agreement-full_only')).toHaveText('Full Only (0)');
+    await expect(page.getByTestId('ai-agreement-disagreed')).toHaveText('Disagreed (2)');
+
+    await page.getByTestId('ai-agreement-disagreed').click();
+    await expect(page.getByTestId(/^ai-result-\d+$/)).toHaveCount(2);
+    await page.getByTestId('ai-agreement-full_only').click();
+    await expect(page.getByTestId('ai-results-filter-empty')).toBeVisible();
+    await expect(page.getByTestId(/^ai-result-\d+$/)).toHaveCount(0);
+  });
+
+  test('selecting results and clicking Apply selected (N) sends exactly those ids', async ({ page }) => {
+    await openAI(page);
+    await page.getByTestId('ai-scan-5').click();
+    await expect(page.getByTestId('ai-result-1')).toBeVisible();
+    // The applied result (2) cannot be ticked.
+    await expect(page.getByRole('checkbox', { name: 'Select result 2' })).toBeDisabled();
+    await page.getByRole('checkbox', { name: 'Select result 1' }).check();
+    await page.getByRole('checkbox', { name: 'Select result 4' }).check();
+    const applied = page.waitForRequest((req) => /\/ai\/scans\/5\/apply$/.test(req.url()) && req.method() === 'POST');
+    await page.getByRole('button', { name: 'Apply selected (2)' }).click();
+    expect((await applied).postDataJSON()).toEqual({ result_ids: [1, 4] });
+    await expect(page.getByTestId('ai-scans-notice')).toContainText('Applied 1 of 2 selected results.');
+  });
+
+  test('a superseded scan\'s results are read-only, and an apply the server refuses shows its message', async ({ page }) => {
+    await openAI(page);
+    // Opened already superseded: readable, nothing to tick.
+    await page.getByTestId('ai-scan-6').click();
+    await expect(page.getByTestId('ai-scan-superseded')).toContainText('superseded by scan #12');
+    await expect(page.getByRole('checkbox', { name: 'Select result 1' })).toBeDisabled();
+
+    // Opened while complete, superseded before Apply is clicked.
+    await page.getByTestId('ai-scan-5').click();
+    await page.getByRole('checkbox', { name: 'Select result 1' }).check();
+    const message = 'scan 5 was superseded by scan 12; apply from scan 12 instead';
+    await page.route('**/api/v1/ai/scans/5/apply', async (route) => {
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: message, code: 'CONFLICT', status: 409 }) });
+    });
+    await page.getByRole('button', { name: 'Apply selected (1)' }).click();
+    await expect(page.getByTestId('ai-scans-notice')).toContainText(message);
+    await expect(page.getByRole('button', { name: /apply selected/i })).toHaveCount(0);
+  });
+
+  test('a failed history read is an error with Retry, not an empty list', async ({ page }) => {
+    let fail = true;
+    await openAI(page, { historyFails: () => fail });
+    const alert = page.getByTestId('ai-history-error');
+    await expect(alert).toContainText('Internal server error');
+    await expect(page.getByTestId('ai-history-empty')).toHaveCount(0);
+    fail = false;
+    await alert.getByRole('button', { name: 'Retry' }).click();
+    await expect(page.getByTestId('ai-history-list')).toBeVisible();
+    await expect(page.getByTestId('ai-history-error')).toHaveCount(0);
+  });
+
+  test('Start AI author scan in the lane menu starts the scan, reports it, and the bell shows it', async ({ page }) => {
+    await openAI(page);
+    let started = false;
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().endsWith('/api/v1/ai/scans')) started = true;
+    });
+    await page.route('**/api/v1/operations/timeline*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { operations: started ? [bellRow('ai-scan-op-1', 'ai.author-scan', 'AI author scan')] : [] } }),
+      });
+    });
+
+    const posted = page.waitForRequest((req) => req.url().endsWith('/api/v1/ai/scans') && req.method() === 'POST');
+    await page.getByTestId('command-menu-authors').click();
+    await page.getByTestId('command-ai-author-scan-start').click();
+    expect((await posted).postDataJSON()).toEqual({ mode: 'realtime' });
+    await expect(page.getByText('AI author scan started — watch the bell for progress.')).toBeVisible();
+
+    // The page did not freeze, and nothing polls: reload makes the bell read the timeline.
+    await page.reload();
+    await expect(page.getByTestId('ai-scans-panel')).toBeVisible();
+    await page.getByTestId('operations-bell').click();
+    await expect(page.getByText('AI author scan').first()).toBeVisible();
+  });
+
+  test('Start runs in Batch mode when the switch is on, and is unavailable outside AI scans', async ({ page }) => {
+    await openAI(page);
+    await page.getByRole('switch', { name: 'Scan mode' }).check();
+    await expect(page.getByText('Batch (cheaper, hours)')).toBeVisible();
+    const posted = page.waitForRequest((req) => req.url().endsWith('/api/v1/ai/scans') && req.method() === 'POST');
+    await page.getByTestId('command-menu-authors').click();
+    await page.getByTestId('command-ai-author-scan-start').click();
+    expect((await posted).postDataJSON()).toEqual({ mode: 'batch' });
+
+    await page.getByTestId('authors-subview-authors').click();
+    await page.getByTestId('command-menu-authors').click();
+    await expect(page.getByTestId('command-ai-author-scan-start')).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('Cancel scan in the lane menu cancels the running scan', async ({ page }) => {
+    await openAI(page, { scans: [aiScan(7, { status: 'scanning' }), aiScan(5)] });
+    await expect(page.getByTestId('ai-scan-7')).toContainText('scanning');
+    await page.getByTestId('command-menu-authors').click();
+    // A scan is running, so Start waits and Cancel is live.
+    await expect(page.getByTestId('command-ai-author-scan-start')).toHaveAttribute('aria-disabled', 'true');
+    const canceled = page.waitForRequest((req) => /\/ai\/scans\/7\/cancel$/.test(req.url()) && req.method() === 'POST');
+    await page.getByTestId('command-ai-author-scan-cancel').click();
+    await canceled;
+    await expect(page.getByText('Scan #7 canceled.')).toBeVisible();
   });
 });
