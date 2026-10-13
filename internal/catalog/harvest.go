@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
-// last-edited: 2026-10-02
+// last-edited: 2026-10-12
 
 package catalog
 
@@ -476,6 +476,18 @@ func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 		}
 		for _, id := range ur.IDs {
 			seen[id] = true
+		}
+		// Spelling variants of every credited author, filed beside the block
+		// so the bulk matcher (MatchBook) finds it from a library credit
+		// written differently. Recall only: a failed write is logged, not
+		// fatal, and BackfillAuthorAliases (end of a run) files what it missed.
+		entries := make([]database.CatalogEntry, len(items))
+		for i := range items {
+			entries[i] = items[i].Entry
+		}
+		if _, aerr := h.Store.PutAuthorAliases(entryAliasPairs(entries...)); aerr != nil {
+			harvestLog.Warn("author %q: alias write failed (the end-of-run backfill retries it): %v",
+				logger.SanitizeLogValue(a.Name), aerr)
 		}
 	}
 
