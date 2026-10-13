@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-13
 
@@ -336,5 +336,36 @@ func TestEffects(t *testing.T) {
 	}
 	if e.Ready() != ReadyStore || ReadOnly().NeedsReady(ReadyNone).Ready() != ReadyNone {
 		t.Fatal("readiness default is ReadyStore and NeedsReady overrides it")
+	}
+}
+
+// TestAlreadyApplied: a re-run row counts as applied only when the plan
+// proposed a real change and the fresh state holds every proposed value.
+func TestAlreadyApplied(t *testing.T) {
+	m := func(kv ...string) map[string]string {
+		out := map[string]string{}
+		for i := 0; i < len(kv); i += 2 {
+			out[kv[i]] = kv[i+1]
+		}
+		return out
+	}
+	planned := Row{Current: m("title", "old", "year", "1999"), Proposed: m("title", "new", "year", "1999")}
+	cases := []struct {
+		name    string
+		planned Row
+		fresh   Row
+		want    bool
+	}{
+		{"applied", planned, Row{Current: m("title", "new", "year", "1999")}, true},
+		{"not yet applied", planned, Row{Current: m("title", "old", "year", "1999")}, false},
+		{"partly different", planned, Row{Current: m("title", "new", "year", "2000")}, false},
+		{"proposed field missing", planned, Row{Current: m("year", "1999")}, false},
+		{"nothing proposed", Row{Current: m("title", "x")}, Row{Current: m("title", "x")}, false},
+		{"no-op plan", Row{Current: m("title", "x"), Proposed: m("title", "x")}, Row{Current: m("title", "x")}, false},
+	}
+	for _, c := range cases {
+		if got := alreadyApplied(c.planned, c.fresh); got != c.want {
+			t.Errorf("%s: alreadyApplied = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
