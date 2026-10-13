@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.38.0
+// version: 2.39.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-13
 
@@ -22,11 +22,35 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 )
 
 var operationTracer = otel.Tracer("audiobook-organizer/operations")
+
+// runFence is an attempt's write permit together with the function that
+// withdraws it. opswriter.NewFence hands the revoke function only to its
+// creator, so the registry is the only package that can fence a run. The
+// zero runFence (a dispatcher stub's) is never revoked and revoke is a no-op.
+type runFence struct {
+	opswriter.Fence
+	revokeFn func()
+}
+
+// newFence creates the permit for one attempt, bound to done (the run
+// context's Done channel; nil binds nothing).
+func newFence(epoch uint64, done <-chan struct{}) runFence {
+	f, revoke := opswriter.NewFence(epoch, done)
+	return runFence{Fence: f, revokeFn: revoke}
+}
+
+// revoke withdraws the permit. Idempotent.
+func (f runFence) revoke() {
+	if f.revokeFn != nil {
+		f.revokeFn()
+	}
+}
 
 // ErrSubprocessNotImplemented is returned when a Run with Isolate=true is
 // dispatched. Subprocess execution lands in UOS-03.
@@ -117,12 +141,13 @@ type runHandle struct {
 	// "abandoned but still writing". A full handle always has a non-nil parked;
 	// dispatcher STUB handles do not (no goroutine to wait on).
 	parked chan struct{}
-	// fence is this attempt's write permit (fence.go). Every stop path revokes
-	// it BEFORE canceling the context: cancelIfActive / cancelWithCause (user
-	// cancel, watchdog kill, stand-down quiesce, shutdown), the timeout branch
-	// of executeRun's select, and RenewScanStandDown on a lost lease. The zero
-	// Fence on a dispatcher stub is a no-op to revoke.
-	fence Fence
+	// fence is this attempt's write permit (opswriter/fence.go). Every stop
+	// path revokes it BEFORE canceling the context: cancelIfActive /
+	// cancelWithCause (user cancel, watchdog kill, stand-down quiesce,
+	// shutdown), the timeout branch of executeRun's select, and
+	// RenewScanStandDown on a lost lease. The zero runFence on a dispatcher
+	// stub is a no-op to revoke.
+	fence runFence
 	// zombie is set when the run goroutine outlived the abandon grace (both the
 	// genuine-abandonment and the shutdown branches of executeRun). The handle
 	// then stays in r.running, holding its ConcurrencyKey and declared write
@@ -330,13 +355,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if r.runContextDecorator != nil {
 		runCtx = r.runContextDecorator(runCtx, qr.opID)
 	}
-	// The attempt's write permit (fence.go). Fenced writers (repairs.Writer)
+	// The attempt's write permit (opswriter/fence.go). Fenced writers (repairs.Writer)
 	// read it from the run context and refuse every write once it is revoked
 	// or runCtx is done (the fence is bound to runCtx.Done(), so a timeout or
 	// parent cancel fences the run at the instant the context ends, before
 	// any revoke below runs).
 	fence := newFence(1, runCtx.Done())
-	runCtx = WithFence(runCtx, fence)
+	runCtx = opswriter.WithFence(runCtx, fence.Fence)
 	// reporterForJoin is assigned once the reporter is built below. The deferred
 	// join must be registered HERE, above every early return between this point
 	// and the reporter's construction, so no exit path can skip it.

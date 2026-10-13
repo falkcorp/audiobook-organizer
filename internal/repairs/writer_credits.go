@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2d552bb6-33a3-4168-9c64-c78bec530ec4
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package repairs
 
@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-
-	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -142,27 +140,15 @@ func (w *Writer) SetPrimaryAuthor(bookID string, from int, to *database.Author) 
 		return fmt.Errorf("%w: book %s vanished", ErrChangedSincePlan, bookID)
 	}
 	w.writes.Add(1)
-	batchID := w.batchPrefix + ulid.Make().String()
+	hist := w.core.History()
+	batchID := hist.NewBatchID()
 	now := time.Now()
-	oldJSON, newJSON := jsonString(intString(before)), jsonString(intString(after))
-	if herr := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID: bookID, Field: "author_id", PreviousValue: &oldJSON, NewValue: &newJSON,
-		ChangeType: w.changeType, Source: w.source, ChangedAt: now, BatchID: batchID,
-	}); herr != nil {
-		w.historyFailed.Add(1)
-		w.log.Warn("%s: history row not recorded (the write itself committed): book_id=%s field=author_id err=%s",
-			w.source, logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(herr.Error()))
-	} else {
-		w.historyRows.Add(1)
-	}
+	hist.RecordField(bookID, "author_id", jsonString(intString(before)), jsonString(intString(after)), batchID, now)
 	marker := ChangeTypeApplyIncomplete
 	if w.journaledBook(bookID) {
 		marker = ChangeTypeApplyOpJournaled
 	}
-	if merr := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID: bookID, Field: "apply", ChangeType: marker,
-		Source: w.source, ChangedAt: now, BatchID: batchID,
-	}); merr != nil {
+	if merr := hist.RecordMarker(bookID, marker, batchID, now); merr != nil {
 		w.log.Error("%s: undo-last-apply marker not recorded: book_id=%s batch_id=%s err=%s",
 			w.source, logger.SanitizeLogValue(bookID), batchID, logger.SanitizeLogValue(merr.Error()))
 	}

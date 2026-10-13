@@ -1,7 +1,7 @@
 // file: internal/operations/registry/fence_binding_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2a4c1e-9b63-4f08-a5d1-3e6c8b0f2a97
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package registry_test
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -47,7 +48,7 @@ func TestFence_ExecuteRunBindsTheFenceToTheRunContext(t *testing.T) {
 			def := makeValidDef("test.fence.binding")
 			def.Timeout = tc.timeout
 			def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
-				f := registry.FenceFromContext(ctx)
+				f := opswriter.FenceFromContext(ctx)
 				got <- probe{
 					bound:    f.BoundToForTest(ctx.Done()),
 					hasFence: f.Epoch() != 0,

@@ -1,7 +1,7 @@
 // file: internal/repairs/engine_cancel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e2567da4-edf5-4121-ae72-9a5d4d295154
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package repairs
 
@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -130,13 +131,13 @@ func TestWriter_FencedRefusesModify(t *testing.T) {
 	s := newMemStore()
 	s.add("b1", "One", "/lib/A/One/one.m4b", nil)
 	w := NewWriter(s, s, "t", "bulk_update", "rp-")
-	w.setFence(func() error { return registry.ErrFenced })
+	w.setFence(func() error { return opswriter.ErrFenced })
 	called := false
 	_, err := w.Modify("b1", func(*database.Book) error {
 		called = true
 		return nil
 	})
-	require.ErrorIs(t, err, registry.ErrFenced)
+	require.ErrorIs(t, err, opswriter.ErrFenced)
 	require.False(t, called, "ModifyBook ran for a fenced write")
 	require.Equal(t, "One", s.title("b1"))
 	require.Zero(t, w.Writes())
@@ -163,12 +164,12 @@ func TestApply_InstallsAndClearsTheRunFence(t *testing.T) {
 	plan := planFor(t, s, f)
 	d := deps(s, nil) // no stand-down: no lease, the fence still applies
 	var sawFence atomic.Bool
-	f.onWrite = func(int32) { sawFence.Store(d.Writer.fence != nil) }
+	f.onWrite = func(int32) { sawFence.Store(d.Writer.core.HasFence()) }
 	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"r00"}, false, d, nopReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Applied, "%+v", res.Rows)
 	require.True(t, sawFence.Load(), "the fence was not installed during the apply")
-	require.Nil(t, d.Writer.fence, "the fence was not cleared after the apply")
+	require.False(t, d.Writer.core.HasFence(), "the fence was not cleared after the apply")
 }
 
 // fencedFixer's Apply writes one book, then reports the fence refusing its
@@ -182,7 +183,7 @@ func (f *fencedFixer) Apply(_ context.Context, w *Writer, fresh Row) error {
 	}); err != nil {
 		return err
 	}
-	return fmt.Errorf("%w: after 1 step: book b%s not written: %w", ErrPartiallyApplied, fresh.RowID, registry.ErrFenced)
+	return fmt.Errorf("%w: after 1 step: book b%s not written: %w", ErrPartiallyApplied, fresh.RowID, opswriter.ErrFenced)
 }
 
 // A row whose write the fence refused mid-row is canceled_skipped, not
@@ -219,10 +220,10 @@ func TestWriter_FenceAfterLostLeaseKeepsStandDownLost(t *testing.T) {
 	renewals := 0
 	w.setLease(func() bool { renewals++; return false })
 	w.setLeaseValid(func() bool { return false })
-	w.setFence(func() error { return registry.ErrFenced })
+	w.setFence(func() error { return opswriter.ErrFenced })
 	_, err := w.Modify("b1", func(*database.Book) error { return nil })
 	require.ErrorIs(t, err, ErrStandDownLost)
-	require.ErrorIs(t, err, registry.ErrFenced)
+	require.ErrorIs(t, err, opswriter.ErrFenced)
 	require.Zero(t, renewals, "a fenced write renewed the lease")
 
 	// A fence revoked by a plain cancel, with the lease still held, is
@@ -230,9 +231,9 @@ func TestWriter_FenceAfterLostLeaseKeepsStandDownLost(t *testing.T) {
 	w2 := NewWriter(s, s, "t", "bulk_update", "rp-")
 	w2.setLease(func() bool { renewals++; return true })
 	w2.setLeaseValid(func() bool { return true })
-	w2.setFence(func() error { return registry.ErrFenced })
+	w2.setFence(func() error { return opswriter.ErrFenced })
 	_, err = w2.Modify("b1", func(*database.Book) error { return nil })
-	require.ErrorIs(t, err, registry.ErrFenced)
+	require.ErrorIs(t, err, opswriter.ErrFenced)
 	require.NotErrorIs(t, err, ErrStandDownLost)
 	require.Equal(t, "One", s.title("b1"))
 	require.Zero(t, renewals, "a fenced write renewed the lease")
@@ -267,9 +268,9 @@ func (f *retryingFixer) Apply(_ context.Context, w *Writer, fresh Row) error {
 	}
 	f.written++
 	// The registry revokes the run's fence (user cancel). Installed directly:
-	// a revocable registry.Fence cannot be built outside the registry, and
+	// a revocable opswriter.Fence cannot be built outside the registry, and
 	// the registry's own tests cover the revoke; this pins the Writer side.
-	w.setFence(func() error { return registry.ErrFenced })
+	w.setFence(func() error { return opswriter.ErrFenced })
 	if f.onFence != nil {
 		f.onFence()
 	}

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package registry_test
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -85,7 +86,7 @@ func (s *stubbornRun) run(ctx context.Context, _ json.RawMessage, _ registry.Rep
 	}
 	defer close(s.finished)
 	close(s.started)
-	fence := registry.FenceFromContext(ctx)
+	fence := opswriter.FenceFromContext(ctx)
 	for {
 		select {
 		case <-s.release:
@@ -716,7 +717,7 @@ func TestZombie_ExitDuringShutdownLeavesQuiescedScan(t *testing.T) {
 // fenceProbeRun hands its fence to the test, then blocks until ctx ends and
 // reports the fence as the run saw it at that moment.
 type fenceProbeRun struct {
-	fence     chan registry.Fence
+	fence     chan opswriter.Fence
 	atDone    chan fenceAtDone
 	waitFence bool // return once the fence is revoked, not on ctx.Done
 }
@@ -728,11 +729,11 @@ type fenceAtDone struct {
 }
 
 func newFenceProbe() *fenceProbeRun {
-	return &fenceProbeRun{fence: make(chan registry.Fence, 1), atDone: make(chan fenceAtDone, 1)}
+	return &fenceProbeRun{fence: make(chan opswriter.Fence, 1), atDone: make(chan fenceAtDone, 1)}
 }
 
 func (p *fenceProbeRun) run(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
-	f := registry.FenceFromContext(ctx)
+	f := opswriter.FenceFromContext(ctx)
 	p.fence <- f
 	if p.waitFence {
 		for !f.Revoked() {
@@ -828,7 +829,7 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var fence registry.Fence
+			var fence opswriter.Fence
 			select {
 			case fence = <-p.fence:
 			case <-time.After(5 * time.Second):
@@ -844,7 +845,7 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("run never saw the stop")
 			}
-			if !errors.Is(at.check, registry.ErrFenced) {
+			if !errors.Is(at.check, opswriter.ErrFenced) {
 				t.Fatalf("Check() when the run saw the stop = %v, want ErrFenced", at.check)
 			}
 			if tc.ordered && !at.revoked {
@@ -857,7 +858,7 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 			if !fence.Revoked() {
 				t.Fatal("fence not revoked after the stop")
 			}
-			if !errors.Is(fence.Check(), registry.ErrFenced) {
+			if !errors.Is(fence.Check(), opswriter.ErrFenced) {
 				t.Fatalf("Check() = %v, want ErrFenced", fence.Check())
 			}
 		})
@@ -865,7 +866,7 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 }
 
 func TestFence_ZeroValueIsNeverRevoked(t *testing.T) {
-	f := registry.FenceFromContext(context.Background())
+	f := opswriter.FenceFromContext(context.Background())
 	if f.Revoked() || f.Check() != nil || f.Epoch() != 0 {
 		t.Fatalf("zero fence: revoked=%v check=%v epoch=%d", f.Revoked(), f.Check(), f.Epoch())
 	}

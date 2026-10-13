@@ -1,5 +1,5 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
 // last-edited: 2026-10-13
 
@@ -29,6 +29,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
@@ -142,9 +143,9 @@ func TestTimeoutIsTimedOut(t *testing.T) {
 	g, store := newV3OtelRig(t, registry.Options{})
 	def := makeValidDef("test.timedout-v3")
 	def.Timeout = 10 * time.Millisecond
-	var fence atomic.Pointer[registry.Fence]
+	var fence atomic.Pointer[opswriter.Fence]
 	def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
-		f := registry.FenceFromContext(ctx)
+		f := opswriter.FenceFromContext(ctx)
 		fence.Store(&f)
 		<-ctx.Done()
 		return ctx.Err()

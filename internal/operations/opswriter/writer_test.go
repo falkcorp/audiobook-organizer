@@ -1,0 +1,455 @@
+// file: internal/operations/opswriter/writer_test.go
+// version: 1.0.0
+// guid: 1ec011de-862f-44e4-b916-1cdd06721d91
+// last-edited: 2026-10-13
+
+package opswriter
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+)
+
+// recStore is every store surface the Writer uses, recording the order of
+// calls in log.
+type recStore struct {
+	mu      sync.Mutex
+	log     []string
+	books   map[string]*database.Book
+	files   map[string]*database.BookFile
+	authors map[string][]database.BookAuthor
+	intents map[uint64]database.Intent
+	changes []database.OperationChange
+	history []database.MetadataChangeRecord
+	// mutate runs inside ModifyBook's critical section, after the read and
+	// before fn: a concurrent writer that got there first.
+	mutate      func(*database.Book)
+	failHistory bool
+	putFails    bool
+}
+
+func newRecStore() *recStore {
+	return &recStore{books: map[string]*database.Book{}, files: map[string]*database.BookFile{},
+		authors: map[string][]database.BookAuthor{}, intents: map[uint64]database.Intent{}}
+}
+
+func (s *recStore) note(format string, a ...any) { s.log = append(s.log, fmt.Sprintf(format, a...)) }
+
+func (s *recStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, ok := s.books[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *cur
+	if s.mutate != nil {
+		s.mutate(&cp)
+	}
+	if err := fn(&cp); err != nil {
+		return nil, err
+	}
+	s.books[id] = &cp
+	s.note("write book:%s", id)
+	return &cp, nil
+}
+
+func (s *recStore) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.files[fileID]
+	if !ok || f.BookID != bookID {
+		return nil, nil
+	}
+	cp := *f
+	return &cp, nil
+}
+
+func (s *recStore) GetBookFileByPath(path string) (*database.BookFile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.files {
+		if f.FilePath == path {
+			cp := *f
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *recStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.files[fileID]
+	if !ok || f.BookID != bookID {
+		return nil, nil
+	}
+	cp := *f
+	if err := fn(&cp); err != nil {
+		return nil, err
+	}
+	s.files[fileID] = &cp
+	s.note("write book_file:%s", fileID)
+	return &cp, nil
+}
+
+func (s *recStore) ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := fn(slices.Clone(s.authors[bookID]))
+	if err != nil {
+		return nil, err
+	}
+	s.authors[bookID] = next
+	s.note("write authors:%s", bookID)
+	return next, nil
+}
+
+func (s *recStore) RecordMetadataChange(r *database.MetadataChangeRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failHistory {
+		return errors.New("history down")
+	}
+	s.history = append(s.history, *r)
+	s.note("history %s:%s", r.BookID, r.Field)
+	return nil
+}
+
+func (s *recStore) CreateOperationChange(c *database.OperationChange) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.changes = append(s.changes, *c)
+	s.note("history %s:%s", c.ChangeType, c.FieldName)
+	return nil
+}
+
+func (s *recStore) PutIntentV3(_ string, in database.Intent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.putFails {
+		return errors.New("intent store down")
+	}
+	s.intents[in.Seq] = in
+	s.note("intent+ %d %s", in.Seq, in.Subject)
+	return nil
+}
+
+func (s *recStore) ClearIntentV3(_ string, seq uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.intents, seq)
+	s.note("intent- %d", seq)
+	return nil
+}
+
+func (s *recStore) ListIntentsV3(string) ([]database.Intent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []database.Intent
+	for _, in := range s.intents {
+		out = append(out, in)
+	}
+	return out, nil
+}
+
+func (s *recStore) logCopy() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.log)
+}
+
+func newTestWriter(s *recStore, mode ops.Mode) *Writer {
+	return New(Config{OpID: "op1", Mode: mode, Intents: s, Books: s, Files: s, Authors: s, Journal: s,
+		History: NewBookHistory(s, "test", "bulk_update", "rp-", nil)})
+}
+
+func TestOrderIntentWriteHistory(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/a.m4b", TrackNumber: 1}
+	w := newTestWriter(s, ops.Live)
+	ctx := context.Background()
+	ch, err := w.ModifyBook(ctx, "b1", func(b *database.Book) error { b.Title = "New"; return nil })
+	if err != nil || !reflect.DeepEqual(ch.Fields, []string{"title"}) {
+		t.Fatalf("ModifyBook = %v, %v", ch, err)
+	}
+	if _, err := w.ModifyBookFile(ctx, "b1", "f1", func(f *database.BookFile) error { f.TrackNumber = 2; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ModifyBookAuthors(ctx, "b1", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+		return []database.BookAuthor{{BookID: "b1", AuthorID: 7, Role: "author"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"intent+ 1 book:b1", "write book:b1", "history b1:title", "intent- 1",
+		"intent+ 2 book_file:f1", "write book_file:f1", "history book_file_modify:file.track_number:f1", "intent- 2",
+		"intent+ 3 book:b1", "write authors:b1", "history book_authors_modify:authors", "intent- 3",
+	}
+	if got := s.logCopy(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("call order:\n got  %q\n want %q", got, want)
+	}
+	if len(s.intents) != 0 || w.Writes() != 3 || w.History().Rows() != 3 {
+		t.Fatalf("intents left %d, writes %d, history rows %d", len(s.intents), w.Writes(), w.History().Rows())
+	}
+}
+
+func TestNoHistoryRowWhenNothingChanged(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/a.m4b"}
+	w := newTestWriter(s, ops.Live)
+	ch, err := w.ModifyBookFile(context.Background(), "b1", "f1", func(*database.BookFile) error { return nil })
+	if err != nil || ch.Any() {
+		t.Fatalf("no-op re-save = %v, %v", ch, err)
+	}
+	want := []string{"intent+ 1 book_file:f1", "write book_file:f1", "intent- 1"}
+	if got := s.logCopy(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a no-op re-save writes the row and the intent but no history: %q", got)
+	}
+}
+
+func TestPreviewRefusesAndRecords(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/a.m4b"}
+	w := newTestWriter(s, ops.Preview)
+	ctx := context.Background()
+	called := false
+	if _, err := w.ModifyBook(ctx, "b1", func(*database.Book) error { called = true; return nil }); !errors.Is(err, ops.ErrPreview) {
+		t.Fatalf("ModifyBook in Preview = %v, want ErrPreview", err)
+	}
+	err := w.RepointBookFile(ctx, "b1", "f1", undo.BookFileLocation{Path: "/lib/a.m4b"}, undo.BookFileLocation{Path: "/lib/b.m4b"})
+	if !errors.Is(err, ops.ErrPreview) {
+		t.Fatalf("RepointBookFile in Preview = %v", err)
+	}
+	if err := w.Effect(ctx, ops.EffectSpec{Name: "reflink", Subject: ops.Subject{Type: ops.SubjectBook, ID: "b1"}},
+		func() ([]ops.HistoryRow, error) { called = true; return nil, nil }); !errors.Is(err, ops.ErrPreview) {
+		t.Fatalf("Effect in Preview = %v", err)
+	}
+	if called || len(s.logCopy()) != 0 || s.books["b1"].Title != "Old" {
+		t.Fatalf("Preview touched the store: called=%v log=%q", called, s.logCopy())
+	}
+	planned, dropped := w.Planned()
+	if len(planned) != 3 || dropped != 0 || planned[0].Subject != "book:b1" || planned[1].Kind != "repoint" {
+		t.Fatalf("plan lines = %+v (dropped %d)", planned, dropped)
+	}
+}
+
+// The previous value must come from inside the critical section: a write
+// that landed between the caller's read and this one is reported against the
+// value it actually replaced.
+func TestPreviousCapturedInCallback(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Caller saw this"}
+	s.mutate = func(b *database.Book) { b.Title = "Another writer's title" }
+	w := newTestWriter(s, ops.Live)
+	if _, err := w.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "Mine"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.history) != 1 || *s.history[0].PreviousValue != `"Another writer's title"` || *s.history[0].NewValue != `"Mine"` {
+		t.Fatalf("history = %+v", s.history)
+	}
+}
+
+func TestFencedRefuses(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+	f, revoke := NewFence(1, nil)
+	w := newTestWriter(s, ops.Live)
+	w.SetFence(f.Check)
+	revoke()
+	_, err := w.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "x"; return nil })
+	if !errors.Is(err, ErrFenced) || !errors.Is(err, ops.ErrFenced) {
+		t.Fatalf("err = %v, want ErrFenced", err)
+	}
+	if len(s.logCopy()) != 0 {
+		t.Fatalf("a fenced write touched the store: %q", s.logCopy())
+	}
+	// A lost lease behind the fence is reported as the loss, without renewing.
+	renewed := 0
+	w.SetLease(func() bool { renewed++; return true })
+	w.SetLeaseValid(func() bool { return false })
+	if _, err := w.ModifyBook(context.Background(), "b1", func(*database.Book) error { return nil }); !errors.Is(err, ErrStandDownLost) || !errors.Is(err, ErrFenced) {
+		t.Fatalf("lost lease behind the fence = %v", err)
+	}
+	if renewed != 0 {
+		t.Fatal("a fenced write renewed the lease")
+	}
+	// A canceled item context refuses too.
+	w2 := newTestWriter(s, ops.Live)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := w2.ModifyBook(ctx, "b1", func(*database.Book) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ctx = %v", err)
+	}
+}
+
+// Under -race: writers hammer the Writer while the fence is revoked mid-run.
+// Every write that passes the gate after the revoke would be a zombie write.
+func TestFenceRevokedWhileWritingRefusesEveryLaterWrite(t *testing.T) {
+	s := newRecStore()
+	for i := range 64 {
+		s.books[fmt.Sprint(i)] = &database.Book{ID: fmt.Sprint(i)}
+	}
+	f, revoke := NewFence(1, nil)
+	w := newTestWriter(s, ops.Live)
+	w.SetFence(f.Check)
+	var revoked atomic.Bool
+	var lateWrites atomic.Int64
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Go(func() {
+			for i := range 200 {
+				id := fmt.Sprint((g*200 + i) % 64)
+				_, err := w.ModifyBook(context.Background(), id, func(b *database.Book) error {
+					if revoked.Load() {
+						lateWrites.Add(1)
+					}
+					b.Title = "t"
+					return nil
+				})
+				if err != nil && !errors.Is(err, ErrFenced) {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if g == 0 && i == 50 {
+					revoked.Store(true)
+					revoke()
+				}
+			}
+		})
+	}
+	wg.Wait()
+	// A write whose gate passed before the revoke may still commit; one that
+	// reached the gate after it may not. The flag is set just before the
+	// revoke, and each goroutine writes sequentially, so a goroutine can have
+	// at most one write that passed the gate in time and runs its callback
+	// after the flag: 8 in all. Without the fence check every later write of
+	// every goroutine would count, well over a thousand.
+	if n := lateWrites.Load(); n > 8 {
+		t.Fatalf("%d writes committed after the revoke (more than the 8 in flight)", n)
+	}
+	before := w.Writes()
+	if _, err := w.ModifyBook(context.Background(), "0", func(*database.Book) error { return nil }); !errors.Is(err, ErrFenced) {
+		t.Fatalf("after revoke: %v", err)
+	}
+	if w.Writes() != before {
+		t.Fatal("a write committed after the revoke")
+	}
+}
+
+func TestNoDeleteMethod(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeOf((*ops.Writer)(nil)).Elem(), reflect.TypeOf(&Writer{})} {
+		for i := range typ.NumMethod() {
+			n := strings.ToLower(typ.Method(i).Name)
+			if strings.Contains(n, "delete") || strings.Contains(n, "remove") || strings.Contains(n, "purge") {
+				t.Errorf("%s exposes %s", typ, typ.Method(i).Name)
+			}
+		}
+	}
+}
+
+// A crash between the intent and its clear leaves the intent; the next
+// attempt numbers its intents after it, so it never overwrites (and then
+// clears) the evidence.
+func TestCrashLeavesIntent(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1"}
+	// The crashed attempt wrote intent 5 and died before the write or the
+	// clear: the intent is all that is left of it.
+	if err := s.PutIntentV3("op1", database.Intent{Seq: 5, Subject: "book:b1", Kind: "modify"}); err != nil {
+		t.Fatal(err)
+	}
+	resumed := newTestWriter(s, ops.Live)
+	if _, err := resumed.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "x"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := s.ListIntentsV3("op1")
+	if len(left) != 1 || left[0].Seq != 5 {
+		t.Fatalf("the crashed attempt's intent must survive the resume: %+v", left)
+	}
+	if !slices.Contains(s.logCopy(), "intent+ 6 book:b1") {
+		t.Fatalf("the resumed attempt must number after seq 5: %q", s.logCopy())
+	}
+}
+
+func TestEffectFailureKeepsIntentAndRecordsRows(t *testing.T) {
+	s := newRecStore()
+	w := newTestWriter(s, ops.Live)
+	spec := ops.EffectSpec{Name: "reflink", Subject: ops.Subject{Type: ops.SubjectBook, ID: "b1"}, Resource: ops.ResFiles}
+	err := w.Effect(context.Background(), spec, func() ([]ops.HistoryRow, error) {
+		return []ops.HistoryRow{{BookID: "b1", Field: "copy:1", Old: "", New: "/lib/x"}}, errors.New("disk full")
+	})
+	if err == nil || len(s.intents) != 1 {
+		t.Fatalf("err %v, intents %d: a failed effect may be partially applied", err, len(s.intents))
+	}
+	if len(s.changes) != 1 || s.changes[0].ChangeType != "effect:reflink" {
+		t.Fatalf("changes = %+v", s.changes)
+	}
+	if err := w.Effect(context.Background(), spec, func() ([]ops.HistoryRow, error) { return nil, nil }); err != nil || len(s.intents) != 1 {
+		t.Fatalf("a successful effect clears its own intent only: %v %d", err, len(s.intents))
+	}
+}
+
+func TestRepointBookFile(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b", Missing: true}
+	s.files["f2"] = &database.BookFile{ID: "f2", BookID: "b2", FilePath: "/lib/new.m4b"}
+	w := newTestWriter(s, ops.Live)
+	ctx := context.Background()
+	stale := undo.BookFileLocation{Path: "/lib/elsewhere.m4b"}
+	if err := w.RepointBookFile(ctx, "b1", "f1", stale, undo.BookFileLocation{Path: "/lib/new.m4b"}); !errors.Is(err, ops.ErrChangedSincePlan) {
+		t.Fatalf("stale expect = %v", err)
+	}
+	expect := undo.BookFileLocation{Path: "/lib/old.m4b", Missing: true}
+	if err := w.RepointBookFile(ctx, "b1", "f1", expect, undo.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.files["f1"].FilePath != "/lib/new.m4b" || len(s.files) != 2 {
+		t.Fatalf("files = %+v", s.files)
+	}
+	if len(s.changes) != 1 || s.changes[0].ChangeType != undo.ChangeTypeBookFileRepoint || s.changes[0].FieldName != "book_file:f1" {
+		t.Fatalf("history = %+v", s.changes)
+	}
+	to, err := undo.DecodeBookFileLocation(s.changes[0].NewValue)
+	if err != nil || to.KeyOwnerRow != "f2" || to.KeyOwnerBook != "b2" {
+		t.Fatalf("the repoint must name the key owner it took the path from: %+v %v", to, err)
+	}
+}
+
+func TestHistoryFailureMarksBatchIncomplete(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+	s.failHistory = true
+	w := newTestWriter(s, ops.Live)
+	if _, err := w.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "New"; return nil }); err != nil {
+		t.Fatalf("a history failure does not undo a committed write: %v", err)
+	}
+	if w.History().Failed() != 1 || w.History().Rows() != 0 {
+		t.Fatalf("rows %d failed %d", w.History().Rows(), w.History().Failed())
+	}
+}
+
+func TestIntentWriteFailureRefusesTheWrite(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+	s.putFails = true
+	w := newTestWriter(s, ops.Live)
+	if _, err := w.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "New"; return nil }); err == nil {
+		t.Fatal("a write without its intent was made")
+	}
+	if s.books["b1"].Title != "Old" {
+		t.Fatal("the store was written although the intent was not")
+	}
+}

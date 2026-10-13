@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e2b9d51-0c46-4f83-a1d7-5b8e3c9f6a20
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package dedup
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -159,7 +160,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		}
 		// 05-PR3: a stopped run's permit is revoked before its context is
 		// canceled; check it right before the write.
-		if err := registry.FenceFromContext(ctx).Check(); err != nil {
+		if err := opswriter.FenceFromContext(ctx).Check(); err != nil {
 			return err
 		}
 		n, err := store.PutWindowIndex(fileID)
