@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.39.1
+// version: 1.40.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 package server
 
@@ -294,6 +294,11 @@ type cachedApplyPlan struct {
 	// (planCachedApply). The op-results path (planOpResultApply) takes none,
 	// so its dry run must never claim an owner review would apply a book.
 	Pinnable bool
+	// FolderReviewable: the plan is refused only because the candidate was
+	// found by the book's work folder (identity_stale on the stand-in query),
+	// which an owner's single review row lifts. Set on a plan without a row
+	// pin, so the dry-run preview reports the book as review-only.
+	FolderReviewable bool
 }
 
 // reviewOnly reports whether a pinless plan refused the book on legs a
@@ -301,7 +306,7 @@ type cachedApplyPlan struct {
 // only as a review-page apply. Gate is nil on the early skip plans, so it is
 // checked explicitly rather than trusted to Reason.
 func (p cachedApplyPlan) reviewOnly() bool {
-	return p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate != nil && p.Gate.OwnerReviewOverridable()
+	return p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate != nil && (p.Gate.OwnerReviewOverridable() || p.FolderReviewable)
 }
 
 // reviewOnlyUnseen is reviewOnly under the hashless owner marker's rule
@@ -440,6 +445,13 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	}
 	idErr := svc.ValidateCachedIdentityForBook(entry, book, authors)
 	ts := cachedTranscribedSearch(svc, books, entry, book, authors, idErr)
+	// A row fetched by the book's work folder (the folder-parse variant, or a
+	// stand-in for an unsearchable title) hashes the folder's name, not the
+	// book's title, so it reads as a stale query. When the book still resolves
+	// to exactly that folder query and the row was fetched for the current
+	// author, ONLY an owner's single review row may apply it (below);
+	// unattended and bulk paths keep identity_stale.
+	folderExplains := cachedFolderSearchExplains(svc, books, entry, book, authors, idErr)
 	// The row is marked stale (the book was retitled or re-credited after the
 	// fetch), or the book's ASIN was replaced or cleared after this row was
 	// fetched and the candidate does not carry the new one
@@ -451,6 +463,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// book now identified by another record.
 	if idStaleErr := metafetch.CandidateIdentityStale(entry, book, &cand); idStaleErr != nil {
 		ts.ExplainsStaleIdentity = false
+		folderExplains = false
 		if idErr == nil {
 			idErr = idStaleErr
 		} else {
@@ -471,9 +484,18 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// rejected candidate is refused as owner_rejected, and no pin lifts that
 	// (applygate.OwnerReviewOverridable) -- the lane sends a pin for whatever
 	// it showed, so a pin is no proof the owner meant to undo a rejection.
-	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
-		applygate.LoadRejections(books, book.ID), ts,
-		bulkManualOnlyGuard(books, book, pin != nil && pin.IsRowReview(), metabatch.ResolveCandidateSearchQuery(books, book).Title))
+	rowReview := pin != nil && pin.IsRowReview()
+	guard := bulkManualOnlyGuard(books, book, rowReview, metabatch.ResolveCandidateSearchQuery(books, book).Title)
+	rejections := applygate.LoadRejections(books, book.ID)
+	evaluate := func(idErr error) applygate.Verdict {
+		return applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, rejections, ts, guard)
+	}
+	gateErr := idErr
+	if folderExplains && rowReview {
+		gateErr = nil // the owner saw this candidate on its row: the folder query is explained
+	}
+	v := evaluate(gateErr)
+
 	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
 	// certainty gate -- the marker short of review_only_source (below). A single-row pin is an approval that overwrites
 	// (ReviewApproved); a bulk button stays fill-only unless the request asks
@@ -481,6 +503,13 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// here (stale_candidate above, nothing written).
 	ownerReview := pin != nil && pin.IsOwnerReview()
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: pin != nil && pin.IsRowReview()}
+	if !v.Allowed && folderExplains && !rowReview {
+		// Without a row pin the folder query stays identity_stale. Say whether
+		// a row pin would lift it, so the preview and the lane agree with the
+		// apply (reviewOnly).
+		lifted := evaluate(nil)
+		plan.FolderReviewable = lifted.Allowed || lifted.OwnerReviewOverridable()
+	}
 	if !v.Allowed {
 		// Only an owner-review pin earns the override. A pin of any other
 		// origin was still checked for staleness above, and gets the hard gate.
@@ -591,6 +620,24 @@ func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *me
 	}
 	return applygate.TranscribedSearch{Query: cur.Title, Author: cur.Author, Source: cur.Source, ExplainsStaleIdentity: true,
 		FirstFilePath: transcribedFirstFile(books, book)}
+}
+
+// cachedFolderSearchExplains reports whether a cached row's stale identity is
+// explained by the book's work folder: the book still resolves to a
+// folder_title query (metabatch.ResolveCandidateSearchQuery) and the row was
+// fetched for exactly that query and the book's current author
+// (svc.CachedQueryMatchesIdentity). It is the folder analogue of
+// cachedTranscribedSearch's proof, but it lifts nothing by itself: the
+// caller lets only an owner's single review row past identity_stale on it.
+func cachedFolderSearchExplains(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) bool {
+	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) {
+		return false
+	}
+	cur := metabatch.ResolveCandidateSearchQuery(books, book)
+	if !cur.Usable || cur.Source != metabatch.SearchQuerySourceFolderTitle {
+		return false
+	}
+	return svc.CachedQueryMatchesIdentity(entry, book, authors, cur.Title)
 }
 
 // transcribedFirstFile is the book's first present file path for
