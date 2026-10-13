@@ -1,5 +1,5 @@
 // file: internal/catalog/scenario_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d8b0e26-9c71-4f35-a2b8-6e1f3a05d947
 // last-edited: 2026-10-12
 
@@ -221,7 +221,7 @@ func TestScenario_LocalCatalogStage_5000Books_800Blocks(t *testing.T) {
 		return out
 	}
 
-	matcher := NewMatcher(st, func() string { return "us" }, nil)
+	matcher := NewMatcher(func() *database.CatalogStore { return st }, func() string { return "us" }, nil)
 	none := run(nil, false)
 	off := run(matcher, false)
 	on := run(matcher, true)
