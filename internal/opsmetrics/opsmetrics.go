@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 // Package opsmetrics holds the OTel instruments for operation runs (spec 11
 // §3.5 and §3.7). One meter, telemetry.Meter("operations"); every instrument
@@ -15,6 +15,7 @@
 //	audiobook_organizer.ops.inflight      obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_inflight
 //	audiobook_organizer.ops.progress_age  obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_progress_age_seconds
 //	audiobook_organizer.ops.progress_timeout obs. gauge {def_id, plugin} -> audiobook_organizer_ops_progress_timeout_seconds
+//	audiobook_organizer.ops.zombies       obs. gauge (no attributes)  -> audiobook_organizer_ops_zombies
 //
 // ops.inflight counts runs holding a worker slot. That includes a run the
 // dispatcher has claimed (its stub handle is in the registry's running map)
@@ -29,11 +30,17 @@
 // def allowed 2h of silence) does not page inside it. All three gauges come
 // from one collection callback (RegisterInflight).
 //
-// runs outcomes: started, completed, failed, canceled, timed_out, dropped. The
-// registry records started, completed, failed and canceled today. timed_out
-// and dropped are declared values nothing can reach yet: a deadline hit is
-// finalized as canceled and interrupted_dropped never reaches the metrics hook
-// (05-PR2 changes both).
+// ops.zombies is the number of runs whose goroutine outlived the abandon
+// grace and has not returned (the registry's ZombieCount), summed over every
+// source registered with RegisterZombies.
+//
+// runs outcomes: started, completed, failed, canceled, timed_out, dropped.
+// started is counted when an attempt begins executing (Started); the other
+// five are run ends (Finished, or Ended for an end with no timed attempt).
+// timed_out is a run stopped by its def's Timeout (a v2 "canceled" row whose
+// message starts with state.TimeoutPrefix); dropped is a run whose row became
+// interrupted_dropped. The interrupted pauses (interrupted_quiesced,
+// interrupted_ask) are not an outcome: the resumed attempt reports its own.
 //
 // items outcomes: processed, ok, failed, skipped. The v2 registry can only
 // count progress, so it records processed; the v3 runner (05-PR5) records ok,
@@ -42,11 +49,13 @@
 //
 // Declared but not wired here: see Unwired. They have no recorder yet because
 // an OTel instrument created without a golden row and a seed fails the series
-// contract test (internal/telemetry/contract); 05-PR5 adds each with its row.
+// contract test (internal/telemetry/contract); 05-PR5 adds each with its row
+// (05-PR2 added ops.zombies that way).
 package opsmetrics
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,27 +102,43 @@ type UnwiredInstrument struct {
 var Unwired = []UnwiredInstrument{
 	{"audiobook_organizer.ops.queue_depth", "gauge", "{run}", "05-PR5"},
 	{"audiobook_organizer.ops.fenced_writes", "counter", "{write}", "05-PR5"},
-	{"audiobook_organizer.ops.zombies", "gauge", "{run}", "05-PR5"},
 	{"audiobook_organizer.ops.checkpoint_age", "gauge", "s", "05-PR5"},
 	{"audiobook_organizer.ops.schedule_lag", "histogram", "s", "05-PR5"},
 	{"audiobook_organizer.ops.schedule_missed", "counter", "{run}", "05-PR5"},
 }
 
-// OutcomeFor maps a run status to the outcome recorded for it. ok is false for
-// every status that records nothing: the interrupted_* family is a pause, not
-// an end (the resumed attempt reports its own outcome), non-terminal statuses
-// are not outcomes, and "timeout" is not produced at HEAD (a deadline hit is
-// finalized as canceled).
-func OutcomeFor(status string) (outcome string, ok bool) {
+// OutcomeFor maps a v2 run status and its error message to the run-end
+// outcome recorded for it, with the same reading state.FromV2 gives the v3
+// projection: a "canceled" row whose message starts with state.TimeoutPrefix
+// timed out, and interrupted_dropped is dropped. ok is false for every status
+// that records nothing: interrupted_quiesced and interrupted_ask are a pause,
+// not an end (the resumed attempt reports its own outcome), and non-terminal
+// statuses are not outcomes. "timeout" is not a status the registry writes.
+func OutcomeFor(status, errMsg string) (outcome string, ok bool) {
 	switch status {
 	case string(state.Completed):
 		return OutcomeCompleted, true
 	case string(state.Failed):
 		return OutcomeFailed, true
 	case string(state.Canceled):
+		if strings.HasPrefix(errMsg, state.TimeoutPrefix) {
+			return OutcomeTimedOut, true
+		}
 		return OutcomeCanceled, true
+	case string(state.InterruptedDropped):
+		return OutcomeDropped, true
 	}
 	return "", false
+}
+
+// IsRunEnd reports whether outcome is one of the five run-end outcomes
+// Finished and Ended record (started is counted by Started).
+func IsRunEnd(outcome string) bool {
+	switch outcome {
+	case OutcomeCompleted, OutcomeFailed, OutcomeCanceled, OutcomeTimedOut, OutcomeDropped:
+		return true
+	}
+	return false
 }
 
 // InflightKey groups in-flight runs.
@@ -143,6 +168,14 @@ type Recorder struct {
 	inflight metric.Int64ObservableGauge
 	progAge  metric.Float64ObservableGauge
 	progTO   metric.Float64ObservableGauge
+	zombies  metric.Int64ObservableGauge
+
+	// zombieMu guards zombieSrc, the RegisterZombies sources the one
+	// ops.zombies callback sums. The callback copies them out and releases
+	// zombieMu before calling any (a source takes its registry's lock).
+	zombieMu   sync.Mutex
+	zombieSrc  map[uint64]func() int64
+	zombieNext uint64
 }
 
 // New creates the instruments on mp. The metric API returns a no-op instrument
@@ -168,7 +201,32 @@ func New(mp metric.MeterProvider) *Recorder {
 	r.progTO, _ = m.Float64ObservableGauge("audiobook_organizer.ops.progress_timeout",
 		metric.WithUnit("s"),
 		metric.WithDescription("Effective watchdog ProgressTimeout in seconds of a def_id with a run in flight (the default when the def sets none); the silence budget ops.progress_age is judged against. 0 when none is in flight."))
+	r.zombies, _ = m.Int64ObservableGauge("audiobook_organizer.ops.zombies",
+		metric.WithUnit("{run}"),
+		metric.WithDescription("Operation runs whose goroutine outlived the abandon grace after being stopped and has not returned yet. They hold their concurrency key and write set until it does."))
+	r.zombieSrc = map[uint64]func() int64{}
+	// One callback for the recorder's lifetime, summing the registered
+	// sources: several registries on one provider (tests create many) then
+	// add up instead of racing for the single attribute-less point. The
+	// error is dropped like the instruments': no callback, no series.
+	_, _ = m.RegisterCallback(r.observeZombies, r.zombies)
 	return r
+}
+
+// observeZombies reports the sum of the registered zombie sources.
+func (r *Recorder) observeZombies(_ context.Context, o metric.Observer) error {
+	r.zombieMu.Lock()
+	srcs := make([]func() int64, 0, len(r.zombieSrc))
+	for _, f := range r.zombieSrc {
+		srcs = append(srcs, f)
+	}
+	r.zombieMu.Unlock()
+	var n int64
+	for _, f := range srcs {
+		n += f()
+	}
+	o.ObserveInt64(r.zombies, n)
+	return nil
 }
 
 var (
@@ -188,18 +246,30 @@ func (r *Recorder) Started(defID string) {
 		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(OutcomeStarted)))
 }
 
-// Finished records the end of a run attempt: one ops.runs point and one
-// ops.run.duration observation. A status OutcomeFor rejects records nothing and
-// Finished reports false.
-func (r *Recorder) Finished(defID, status string, took time.Duration) bool {
-	outcome, ok := OutcomeFor(status)
-	if !ok {
+// Finished records the end of a run attempt this process timed: one ops.runs
+// point and one ops.run.duration observation. An outcome IsRunEnd rejects
+// (started, "", anything else) records nothing and Finished reports false.
+func (r *Recorder) Finished(defID, outcome string, took time.Duration) bool {
+	if !IsRunEnd(outcome) {
 		return false
 	}
 	set := metric.WithAttributes(telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome))
 	ctx := context.Background()
 	r.runs.Add(ctx, 1, set)
 	r.duration.Record(ctx, took.Seconds(), set)
+	return true
+}
+
+// Ended records a run end that no attempt in this process timed (the boot
+// sweep finishing or dropping a run the previous process left, a run dropped
+// before it started): one ops.runs point and no duration, since a made-up
+// duration would distort ops.run.duration. Same outcome rule as Finished.
+func (r *Recorder) Ended(defID, outcome string) bool {
+	if !IsRunEnd(outcome) {
+		return false
+	}
+	r.runs.Add(context.Background(), 1, metric.WithAttributes(
+		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome)))
 	return true
 }
 
@@ -212,7 +282,39 @@ func (r *Recorder) Items(defID, outcome string, n int64) {
 		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome)))
 }
 
-var activeCallbacks atomic.Int64
+var (
+	activeCallbacks     atomic.Int64
+	activeZombieSources atomic.Int64
+)
+
+// ActiveZombieSources is the number of RegisterZombies sources registered and
+// not yet unregistered, process-wide. A leak check for tests.
+func ActiveZombieSources() int64 { return activeZombieSources.Load() }
+
+// RegisterZombies adds source to the ops.zombies gauge and returns the
+// function that removes it (idempotent). The gauge reports the sum of every
+// registered source at each collection, so several registries on one meter
+// provider never collide, and 0 when none is registered. source is called at
+// scrape time, outside the recorder's own lock, so it must be cheap and take
+// its own locks. Registering never calls into the SDK, so the caller may hold
+// any lock that source does not take.
+func (r *Recorder) RegisterZombies(source func() int64) (unregister func()) {
+	r.zombieMu.Lock()
+	r.zombieNext++
+	id := r.zombieNext
+	r.zombieSrc[id] = source
+	r.zombieMu.Unlock()
+	activeZombieSources.Add(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.zombieMu.Lock()
+			delete(r.zombieSrc, id)
+			r.zombieMu.Unlock()
+			activeZombieSources.Add(-1)
+		})
+	}
+}
 
 // ActiveInflightCallbacks is the number of in-flight callbacks registered and
 // not yet unregistered, process-wide. A leak check for tests.

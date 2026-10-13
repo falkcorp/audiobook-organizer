@@ -1,7 +1,7 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.5.0
+# version: 1.5.1
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
-# last-edited: 2026-10-10
+# last-edited: 2026-10-13
 #
 # TEMPLATE / SNIPPET — Prometheus alerting rules for audiobook-organizer
 # (OPS-4/OPS-5). This is NOT installed or evaluated by this repo; it must be
@@ -27,6 +27,9 @@ groups:
       # real regression (e.g. a bad importer run, a wedged op type) rather
       # than isolated noise. Tune down as real-world false-positive/negative
       # rates are observed.
+      # Since 05-PR2 operations_failed_total also counts runs stopped by
+      # their def's Timeout (they were counted as canceled before), so this
+      # rule now fires on timeouts too, as the V2 rule below does.
       # Soak until 2026-11-09; then delete in a follow-up PR (the V2 rule
       # below reads the OTel family audiobook_organizer_ops_runs_total).
       - alert: AudiobookOrganizerOpFailuresHigh
@@ -43,10 +46,10 @@ groups:
             type(s).
 
       # OTel twin of AudiobookOrganizerOpFailuresHigh (11-PR4). Counts runs in
-      # audiobook_organizer_ops_runs_total (plural "ops"). outcome=timed_out is
-      # listed so the rule stays correct once 05-PR2 produces it; until then a
-      # deadline hit is recorded as outcome=canceled, which this rule does not
-      # count (the old operations_failed_total did not count timeouts either).
+      # audiobook_organizer_ops_runs_total (plural "ops"). A run stopped by its
+      # def's Timeout is outcome=timed_out (05-PR2; it was outcome=canceled
+      # before) and counts as a failure here, as it now does in the old
+      # operations_failed_total.
       # Summed by def_id so it keeps the old rule's per-operation threshold
       # (the old rule fires per op_type series) and def_id lands on the alert.
       # Soak until 2026-11-09 beside the old rule, then keep only this one.

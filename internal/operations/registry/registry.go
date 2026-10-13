@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.47.0
+// version: 3.48.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package registry
 
@@ -99,13 +99,14 @@ type Registry struct {
 	// ops records the OTel run metrics (internal/opsmetrics). Never nil.
 	ops *opsmetrics.Recorder
 	// inflightUnreg unregisters this registry's ops.inflight / ops.progress_age
-	// callback; set by Start and cleared by Shutdown. Guarded by inflightMu,
-	// NOT mu: registering calls into the OTel SDK, which takes its pipeline
-	// lock, and the SDK runs the callback (which takes mu.RLock) under that
-	// same pipeline lock. Holding mu across the registration would be the
-	// inverse lock order.
+	// callback, and zombieUnreg its ops.zombies source; both set by Start and
+	// cleared by Shutdown. Guarded by inflightMu, NOT mu: registering calls
+	// into the OTel SDK, which takes its pipeline lock, and the SDK runs the
+	// callback (which takes mu.RLock) under that same pipeline lock. Holding
+	// mu across the registration would be the inverse lock order.
 	inflightMu    sync.Mutex
 	inflightUnreg func()
+	zombieUnreg   func()
 
 	// shuttingDown is flipped at the top of Shutdown so the abandoned-run
 	// watchdog in executeRun stops spawning replacement workers. Without
@@ -592,7 +593,7 @@ func (r *Registry) SetPluginMaxConcurrent(plugin string, max int) {
 func (r *Registry) Start(ctx context.Context) {
 	r.logger.Info("registry: starting", "workers", r.workers)
 	trackLiveRegistry(r)
-	r.registerInflightGauge()
+	r.registerOpsGauges()
 	// Clear the notify gate in case this Registry is being restarted after a
 	// prior Shutdown (Shutdown sets notifyStopped to reject late enrollments).
 	r.mu.Lock()
@@ -1525,7 +1526,7 @@ func (r *Registry) cancelStoppingRun(opID string, h *runHandle) bool {
 			return true
 		}
 		msg := "canceled by user while the run was stopping (its goroutine had not exited yet)"
-		if h.zombieFinal.CompareAndSwap(cur, &zombieOutcome{status: "canceled", msg: &msg}) {
+		if h.zombieFinal.CompareAndSwap(cur, &zombieOutcome{status: "canceled", msg: &msg, outcome: opsmetrics.OutcomeCanceled}) {
 			return false
 		}
 	}
@@ -1744,9 +1745,10 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// Deregister from the live-registry tracker on return: once Shutdown has
 	// run, ShutdownAllForStore must not re-drain this registry.
 	defer untrackLiveRegistry(r)
-	// Unregister the ops.inflight callback on every return path so a registry
-	// created per test cannot leak a callback into the next one.
-	defer r.unregisterInflightGauge()
+	// Unregister the ops.inflight callback and the ops.zombies source on every
+	// return path so a registry created per test cannot leak either into the
+	// next one.
+	defer r.unregisterOpsGauges()
 	// Flip the shutdown flag before canceling handles so the abandoned-run
 	// watchdog (in worker.go executeRun) refuses to spawn replacement
 	// workers. Without this, a replacement worker is born just as the
@@ -2075,8 +2077,8 @@ func (r *Registry) Zombies() []ZombieInfo {
 	return out
 }
 
-// ZombieCount is len(Zombies()) without building the list (the ops.zombies
-// gauge in 05-PR2 reads it).
+// ZombieCount is len(Zombies()) without building the list. It is the
+// registry's ops.zombies source (registerOpsGauges).
 func (r *Registry) ZombieCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -2169,30 +2171,39 @@ func phaseNames(phases []Phase) []string {
 	return names
 }
 
-// registerInflightGauge registers the ops.inflight / ops.progress_age /
-// ops.progress_timeout callback over r.running, the authoritative set of runs holding a slot. The
-// callback reads the map at collection time under r.mu, so there is no counter
-// pair whose missed decrement could leave a permanent false in-flight run (and
-// a false OpStalledV2 alert). Idempotent until unregisterInflightGauge.
+// registerOpsGauges registers the ops.inflight / ops.progress_age /
+// ops.progress_timeout callback over r.running, the authoritative set of runs
+// holding a slot, and ZombieCount as an ops.zombies source (05-PR2). Both are
+// read at collection time under r.mu, so there is no counter pair whose missed
+// decrement could leave a permanent false in-flight run (and a false
+// OpStalledV2 alert) or a zombie that never clears. Idempotent until
+// unregisterOpsGauges. Each Registry registers its own; the recorder sums the
+// zombie sources, so several registries on one provider (tests) add up.
 //
 // Lock order: only inflightMu is held here, never r.mu (see the inflightMu
 // field comment).
-func (r *Registry) registerInflightGauge() {
+func (r *Registry) registerOpsGauges() {
 	r.inflightMu.Lock()
 	defer r.inflightMu.Unlock()
-	if r.inflightUnreg != nil {
-		return
+	if r.inflightUnreg == nil {
+		r.inflightUnreg = r.ops.RegisterInflight(r.inflightByDef)
 	}
-	r.inflightUnreg = r.ops.RegisterInflight(r.inflightByDef)
+	if r.zombieUnreg == nil {
+		r.zombieUnreg = r.ops.RegisterZombies(func() int64 { return int64(r.ZombieCount()) })
+	}
 }
 
-// unregisterInflightGauge removes the callback registered by Start.
-func (r *Registry) unregisterInflightGauge() {
+// unregisterOpsGauges removes what registerOpsGauges registered.
+func (r *Registry) unregisterOpsGauges() {
 	r.inflightMu.Lock()
 	defer r.inflightMu.Unlock()
 	if r.inflightUnreg != nil {
 		r.inflightUnreg()
 		r.inflightUnreg = nil
+	}
+	if r.zombieUnreg != nil {
+		r.zombieUnreg()
+		r.zombieUnreg = nil
 	}
 }
 
@@ -2221,7 +2232,7 @@ func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]opsmetrics.Infligh
 		// but it gave its slot back and its row is terminal: it is not in
 		// flight, and its ever-growing progress age would fire OpStalledV2 on
 		// a run already stopped. Zombies are counted by ZombieCount (the
-		// ops.zombies gauge, 05-PR2).
+		// ops.zombies gauge, registerOpsGauges).
 		if h.slotReleased {
 			continue
 		}

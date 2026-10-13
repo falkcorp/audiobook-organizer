@@ -1,7 +1,7 @@
 <!-- file: deploy/prometheus/README.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.3.2 -->
 <!-- guid: e3f4a5b6-c7d8-4e9f-0a1b-2c3d4e5f6a7b -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-13 -->
 
 # Prometheus scrape config + alert rules (OPS-4, OPS-5)
 
@@ -37,12 +37,20 @@ something to plug into their own Prometheus + Alertmanager install.
 **Dual-rule soak (11-PR4).** Operation metrics now exist as OTel instruments
 (`audiobook_organizer_ops_runs_total`, `..._ops_run_duration_seconds`,
 `..._ops_items_total`, `..._ops_inflight`, `..._ops_progress_age_seconds`,
-`..._ops_progress_timeout_seconds`; note
+`..._ops_progress_timeout_seconds`, `..._ops_zombies`; note
 the plural `ops`, which is not the legacy per-run gauge `op_items_total`).
 `alert-rules.yml` carries `AudiobookOrganizerOpFailuresHighV2` and
 `AudiobookOrganizerOpStalledV2` beside the two original rules, and the legacy
 series are still emitted. Both sets run until 2026-11-09; then the old rules
 and the legacy gauges are deleted in a follow-up (see `todo.d/`).
+
+Since 05-PR2 a run stopped by its def's `Timeout` is
+`ops_runs_total{outcome="timed_out"}` and also increments the legacy
+`operations_failed_total`. Before 05-PR2 it was counted as canceled in both
+families, so both failure rules now fire on timeouts. `..._ops_zombies` is the
+number of stopped runs whose goroutine outlived the abandon grace and has not
+returned. Each such run still holds its concurrency key, so no alert reads the
+gauge yet.
 
 When comparing the two stall rules during the soak, note that they measure
 different things. The old rule fires on zero item throughput per run. V2

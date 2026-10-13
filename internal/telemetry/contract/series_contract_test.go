@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -219,6 +219,7 @@ func buildSeedingTable() []seedRow {
 		{"audiobook_organizer_ops_inflight", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_progress_age_seconds", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_progress_timeout_seconds", "opsmetrics RegisterInflight", opsSeed},
+		{"audiobook_organizer_ops_zombies", "opsmetrics RegisterZombies", opsSeed},
 
 		{"ai_dispatch_requests_total", "aidispatch.Call with failover", failover},
 		{"ai_dispatch_inflight", "aidispatch.Call with failover", failover},
@@ -377,7 +378,7 @@ func seedOpsMetrics() error {
 	opsmetrics.RegisterDefID("contract")
 	r := opsmetrics.Default()
 	r.Started("contract")
-	if !r.Finished("contract", "completed", time.Second) {
+	if !r.Finished("contract", opsmetrics.OutcomeCompleted, time.Second) {
 		return fmt.Errorf("ops seed: Finished(completed) recorded nothing")
 	}
 	r.Items("contract", opsmetrics.ItemsProcessed, 1)
@@ -386,6 +387,7 @@ func seedOpsMetrics() error {
 			{DefID: "contract", Plugin: "contract"}: {Runs: 1, ProgressAge: time.Second, ProgressTimeout: time.Minute},
 		}
 	})
+	r.RegisterZombies(func() int64 { return 1 })
 	return nil
 }
 
@@ -879,6 +881,7 @@ var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.ops.inflight", kind: kindGauge, unit: "{run}", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.progress_age", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.progress_timeout", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
+	{name: "audiobook_organizer.ops.zombies", kind: kindGauge, unit: "{run}"},
 	{name: "ai_dispatch.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Outcome}},
 	{name: "ai_dispatch.inflight", kind: kindUpDownCounter, unit: "{request}", keys: []attribute.Key{telemetry.Endpoint}},
 	{name: "ai_dispatch.failover", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Class}},

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package registry
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -70,7 +71,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 
 	rows, superseded := supersedeStaleQuiesced(rows, r.defDeclaresMergeQueuedParams, r.canonicalDefID)
 	for _, sup := range superseded {
-		r.resumeDrop(sup.ID, "superseded: a newer run of this op exists")
+		r.resumeDrop(sup, "superseded: a newer run of this op exists")
 	}
 	if len(superseded) > 0 {
 		r.logger.Info("registry: resumeAfterStartup: dropped superseded quiesced ops",
@@ -91,7 +92,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 
 		// Always drop reconcile_scan.
 		if r.canonicalDefID(row.DefID) == reconcileScanDefID {
-			r.resumeDrop(row.ID, "reconcile_scan always dropped on restart")
+			r.resumeDrop(row, "reconcile_scan always dropped on restart")
 			continue
 		}
 
@@ -104,7 +105,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 			// Unknown def — treat as drop.
 			r.logger.Warn("registry: resumeAfterStartup: unknown def, dropping",
 				"op_id", row.ID, "def_id", row.DefID)
-			r.resumeDrop(row.ID, "unknown def at startup")
+			r.resumeDrop(row, "unknown def at startup")
 			continue
 		}
 
@@ -114,7 +115,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 		case ResumeRequeue:
 			r.resumeRequeue(ctx, row, def)
 		case ResumeDrop:
-			r.resumeDrop(row.ID, "ResumePolicy=drop")
+			r.resumeDrop(row, "ResumePolicy=drop")
 		case ResumeAsk:
 			r.resumeAsk(row.ID)
 		default:
@@ -122,7 +123,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 			// the DB if a def was deregistered. Treat as drop.
 			r.logger.Warn("registry: resumeAfterStartup: unspecified resume policy, dropping",
 				"op_id", row.ID, "def_id", row.DefID)
-			r.resumeDrop(row.ID, "ResumePolicy=unspecified")
+			r.resumeDrop(row, "ResumePolicy=unspecified")
 		}
 	}
 }
@@ -545,7 +546,7 @@ func (r *Registry) bootSweepV3(rows []database.OperationV2Row) []database.Operat
 		if finished {
 			r.logger.Info("registry: resumeAfterStartup: a run stopped before the restart keeps its stop outcome",
 				"op_id", row.ID, "def_id", row.DefID, "stop_reason", rec.StopReason, "v3_state", final)
-			r.endStoppedRunAtBoot(row)
+			r.endStoppedRunAtBoot(row, final)
 			continue
 		}
 		out = append(out, row)
@@ -567,16 +568,24 @@ func (r *Registry) finishStoppedRunV2(row database.OperationV2Row, final state.V
 	}
 	r.logger.Info("registry: resumeAfterStartup: recorded a stopped run's outcome with the v2 write",
 		"op_id", row.ID, "def_id", row.DefID, "status", status)
-	r.endStoppedRunAtBoot(row)
+	r.endStoppedRunAtBoot(row, final)
 	return true
 }
 
-// endStoppedRunAtBoot announces a run the boot sweep finished (canceled or
-// timed_out, both v2 "canceled"): op.terminal for the UI, and the dependency
-// scheduler, exactly as the run's exit would have.
-func (r *Registry) endStoppedRunAtBoot(row database.OperationV2Row) {
+// endStoppedRunAtBoot announces a run the boot sweep finished (final is
+// canceled or timed_out, both v2 "canceled"): op.terminal for the UI, the
+// dependency scheduler, and the run-end counters, exactly as the run's exit
+// would have. The previous process stopped the run but exited before its
+// goroutine returned, so nothing counted its end; it is counted here, with no
+// duration (no attempt of this process timed it).
+func (r *Registry) endStoppedRunAtBoot(row database.OperationV2Row, final state.V3) {
 	r.publishOpTerminal(row.ID, row.DefID, "canceled")
 	r.notifyDepTerminal("canceled", &queuedRun{opID: row.ID, defID: row.DefID, params: json.RawMessage(row.Params)})
+	outcome := opsmetrics.OutcomeCanceled
+	if final == state.V3TimedOut {
+		outcome = opsmetrics.OutcomeTimedOut
+	}
+	r.recordRunEnd(r.canonicalDefID(row.DefID), outcome)
 }
 
 // retireForRequeue closes the original row of a requeue as dropped with its
@@ -664,11 +673,19 @@ func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Ro
 	r.pingDispatch()
 }
 
-// resumeDrop sets status=interrupted_dropped.
-func (r *Registry) resumeDrop(opID, reason string) {
+// resumeDrop sets status=interrupted_dropped and, once that write lands,
+// counts the run as dropped (ops.runs{outcome="dropped"}; no duration, the run
+// was not timed by this process). A failed write leaves the row resumable, so
+// the next boot drops and counts it then.
+func (r *Registry) resumeDrop(row database.OperationV2Row, reason string) {
 	now := time.Now().UTC()
-	_ = r.store.UpdateOperationV2Status(opID, "interrupted_dropped", nil, &now, &reason)
-	r.logger.Info("registry: resumeAfterStartup: dropped op", "op_id", opID, "reason", reason)
+	if err := r.store.UpdateOperationV2Status(row.ID, "interrupted_dropped", nil, &now, &reason); err != nil {
+		r.logger.Warn("registry: resumeAfterStartup: could not drop op; the next boot retries",
+			"op_id", row.ID, "def_id", row.DefID, "reason", reason, "error", err)
+		return
+	}
+	r.recordRunEnd(r.canonicalDefID(row.DefID), opsmetrics.OutcomeDropped)
+	r.logger.Info("registry: resumeAfterStartup: dropped op", "op_id", row.ID, "reason", reason)
 }
 
 // resumeAsk sets status=interrupted_ask.
