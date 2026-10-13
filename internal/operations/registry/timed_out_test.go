@@ -1,5 +1,5 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
 // last-edited: 2026-10-13
 
@@ -480,9 +480,21 @@ func TestShutdownStampedTimedOutZombieCountsTimedOutOnce(t *testing.T) {
 	}
 	recv(t, s.started, "run to start")
 	awaitZombieCount(t, g.reg, 1)
-	// Release inside Shutdown's goroutine wait: after its 100ms stamp, well
-	// before the 2s escape, so the monitor writes and counts first.
-	time.AfterFunc(400*time.Millisecond, s.releaseRun)
+	// Release inside Shutdown's goroutine wait: once its stamp has landed
+	// (the row reads canceled), well before the 2s escape, so the monitor's
+	// write always finds the stamp and counts first. A fixed delay let a slow
+	// runner release before the stamp, and the kept-cancel branch went
+	// unexercised.
+	go func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if row, err := store.GetOperationV2(opID); err == nil && row != nil && row.Status == "canceled" {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		s.releaseRun()
+	}()
 	sctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_ = g.reg.Shutdown(sctx)
@@ -695,15 +707,16 @@ func TestScanQuiescedBeforeStartWithResumeDropCountsDropped(t *testing.T) {
 	}
 }
 
-// finalWriteFailingStore fails the worker's terminal write of a timeout
-// (running -> canceled) while armed.
+// finalWriteFailingStore fails the worker's terminal write running ->
+// failStatus while armed.
 type finalWriteFailingStore struct {
 	*database.PebbleStore
-	armed atomic.Bool
+	failStatus string
+	armed      atomic.Bool
 }
 
 func (s *finalWriteFailingStore) UpdateOperationV2StatusIf(id, from, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
-	if s.armed.Load() && from == "running" && status == "canceled" {
+	if s.armed.Load() && from == "running" && status == s.failStatus {
 		return false, errors.New("injected terminal write failure")
 	}
 	return s.PebbleStore.UpdateOperationV2StatusIf(id, from, status, startedAt, completedAt, errMsg)
@@ -718,7 +731,7 @@ func TestUnwrittenTimeoutIsCountedOnceByTheBootSweep(t *testing.T) {
 	store := newV3Store(t)
 	rec, g := privateMeter()
 	const id = "test.timedout-unwritten"
-	failing := &finalWriteFailingStore{PebbleStore: store}
+	failing := &finalWriteFailingStore{PebbleStore: store, failStatus: "canceled"}
 	failing.armed.Store(true)
 	newReg := func(st database.OpsV2Store) *registry.Registry {
 		reg := registry.NewWithOptions(st, slog.Default(), 2, registry.Options{
@@ -769,5 +782,62 @@ func TestUnwrittenTimeoutIsCountedOnceByTheBootSweep(t *testing.T) {
 	wantOutcomes(t, g, id, map[string]int64{"started": 1, "timed_out": 1})
 	if d := legacyCounter(t, "operations_failed_total", id) - failedBefore; d != 1 {
 		t.Errorf("operations_failed_total{type=%s} moved by %v, want 1", id, d)
+	}
+}
+
+// TestUnwrittenCompletionIsCountedOnceByTheBootSweep: the !written rule is
+// not limited to runs recorded v3 stopping. A ResumeDrop run that completes
+// but whose terminal write fails leaves its row "running"; the next start's
+// boot sweep drops it and counts it dropped. Counting it completed here too
+// counted one run twice, with two different outcomes. Mutation check: gate
+// the !out.written skip on h.stoppingRecorded as well.
+func TestUnwrittenCompletionIsCountedOnceByTheBootSweep(t *testing.T) {
+	store := newV3Store(t)
+	rec, g := privateMeter()
+	const id = "test.timedout-unwritten-completion"
+	failing := &finalWriteFailingStore{PebbleStore: store, failStatus: "completed"}
+	failing.armed.Store(true)
+	newReg := func(st database.OpsV2Store) *registry.Registry {
+		reg := registry.NewWithOptions(st, slog.Default(), 2, registry.Options{
+			OpsMetrics: rec, AbandonGrace: 50 * time.Millisecond, WatchdogInterval: time.Hour, SweepInterval: time.Hour,
+		})
+		def := makeValidDef(id) // ResumeDrop
+		def.Run = func(context.Context, json.RawMessage, registry.Reporter) error { return nil }
+		if err := reg.RegisterOp(def); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = reg.Shutdown(sctx)
+		})
+		return reg
+	}
+	completedBefore := legacyCounter(t, "operations_completed_total", id)
+
+	first := newReg(failing)
+	g.reg = first
+	first.Start(t.Context())
+	opID, err := first.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOtel(t, "runs{started}", func() bool { return g.runOutcomes(t, id)["started"] == 1 })
+	awaitNotRunning(t, first, opID)
+	if got := v2Status(t, store, opID); got != "running" {
+		t.Fatalf("row after the failed terminal write = %q, want running", got)
+	}
+	wantOutcomes(t, g, id, map[string]int64{"started": 1})
+	if err := first.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newReg(store)
+	second.Start(t.Context())
+	awaitV2(t, store, opID, "interrupted_dropped")
+	waitForOtel(t, "runs{dropped}", func() bool { return g.runOutcomes(t, id)["dropped"] == 1 })
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "dropped": 1})
+	if d := legacyCounter(t, "operations_completed_total", id) - completedBefore; d != 0 {
+		t.Errorf("operations_completed_total{type=%s} moved by %v, want 0", id, d)
 	}
 }
