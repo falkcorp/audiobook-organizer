@@ -1,7 +1,7 @@
 // file: internal/dedup/series_membership_hoist_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b2d8f47-1e93-4a05-b7c8-0f5e3a9d2c71
-// last-edited: 2026-09-13
+// last-edited: 2026-10-13
 
 package dedup
 
@@ -68,7 +68,7 @@ func TestMergeSeries_ReadsMembershipOnceNotPerSeries(t *testing.T) {
 	var deleted []int
 	store.DeleteSeriesFunc = func(id int) error { deleted = append(deleted, id); return nil }
 
-	res, err := MergeSeries(context.Background(), store, testDedupOpID, 1, []int{2, 3}, "", nil)
+	res, err := MergeSeries(context.Background(), store, testDedupOpID, 1, []int{2, 3}, "", nil, MergeSeriesOptions{})
 	if err != nil {
 		t.Fatalf("MergeSeries: %v", err)
 	}

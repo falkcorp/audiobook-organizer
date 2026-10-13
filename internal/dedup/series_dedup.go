@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-10-13
 
@@ -800,39 +800,8 @@ type SeriesMergeResult struct {
 	Errors  []string
 }
 
-// MergeSeries reassigns all books from each series in mergeIDs to keepID,
-// optionally renames the kept series to customName, and relinks authors.
-// It does NOT invalidate the server cache — the caller must do that.
-//
-// FIELD LOCKS -- NOT consulted by MergeSeries itself, which is the USER's own
-// action: explicit keep/merge IDs, and a user lock exists to stop fetches, scans
-// and unattended maintenance from overwriting what the user chose, not to stop
-// the user from choosing again. The unattended twin, DedupSeries, does honour the
-// lock, and so does MergeSeriesWithOptions with HonorLocks: the Authors & series
-// lane merges many groups from one click (Merge All), where a book the owner
-// pinned to a series must not be moved by a click that never looked at it.
-//
-// Each merged-from series row is deleted only when the UNFILTERED reference
-// count agrees that nothing still points at it; a refusal is recorded in
-// SeriesMergeResult.Errors and leaves MergedCount unincremented. It therefore
-// returns a partial result with a non-empty Errors slice where it used to
-// return a clean one and a stranded book.
-//
-// opID is written into OperationChange records for audit.
-func MergeSeries(
-	ctx context.Context,
-	store Store,
-	opID string,
-	keepID int,
-	mergeIDs []int,
-	customName string,
-	progress ProgressReporter,
-) (SeriesMergeResult, error) {
-	return MergeSeriesWithOptions(ctx, store, opID, keepID, mergeIDs, customName, progress, MergeSeriesOptions{})
-}
-
 // MergeSeriesOptions are the two protections a merge can opt into. The zero value
-// is the original MergeSeries: no stand-down, locks ignored.
+// is a plain merge: no stand-down, locks ignored.
 type MergeSeriesOptions struct {
 	// HonorLocks leaves a book whose series_name is user-locked on the series it
 	// is on when the merge would move it to a differently-named series (the
@@ -848,8 +817,26 @@ type MergeSeriesOptions struct {
 	Scan ScanStandDownController
 }
 
-// MergeSeriesWithOptions is MergeSeries with MergeSeriesOptions.
-func MergeSeriesWithOptions(
+// MergeSeries reassigns all books from each series in mergeIDs to keepID,
+// optionally renames the kept series to customName, and relinks authors.
+// It does NOT invalidate the server cache — the caller must do that.
+//
+// FIELD LOCKS -- NOT consulted with the zero MergeSeriesOptions, a merge being
+// the USER's own action: explicit keep/merge IDs, and a user lock exists to stop fetches, scans
+// and unattended maintenance from overwriting what the user chose, not to stop
+// the user from choosing again. The unattended twin, DedupSeries, does honour the
+// lock, and so does MergeSeries with opts.HonorLocks: the Authors & series
+// lane merges many groups from one click (Merge All), where a book the owner
+// pinned to a series must not be moved by a click that never looked at it.
+//
+// Each merged-from series row is deleted only when the UNFILTERED reference
+// count agrees that nothing still points at it; a refusal is recorded in
+// SeriesMergeResult.Errors and leaves MergedCount unincremented. It therefore
+// returns a partial result with a non-empty Errors slice where it used to
+// return a clean one and a stranded book.
+//
+// opID is written into OperationChange records for audit.
+func MergeSeries(
 	ctx context.Context,
 	store Store,
 	opID string,

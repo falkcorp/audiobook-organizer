@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-09-12
+// last-edited: 2026-10-13
 
 package dedup
 
@@ -432,7 +432,7 @@ func TestMergeSeries_BasicMerge(t *testing.T) {
 		return nil
 	}
 
-	result, err := MergeSeries(context.Background(), mock, "op1", keepID, []int{mergeID}, "", nil)
+	result, err := MergeSeries(context.Background(), mock, "op1", keepID, []int{mergeID}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.MergedCount)
 	assert.Empty(t, result.Errors)
@@ -460,7 +460,7 @@ func TestMergeSeries_CustomRename(t *testing.T) {
 	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) { return nil, nil }
 	mock.DeleteSeriesFunc = func(id int) error { return nil }
 
-	result, err := MergeSeries(context.Background(), mock, "op2", keepID, []int{}, "New Name", nil)
+	result, err := MergeSeries(context.Background(), mock, "op2", keepID, []int{}, "New Name", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.MergedCount, "no series to merge, just rename")
 	assert.Equal(t, "New Name", renamedTo)
@@ -842,7 +842,7 @@ func newMergeSeriesFixture(
 func TestMergeSeries_RefusesDeleteWhenEveryReferencingBookIsTrashed(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, nil, map[int]int{20: 2})
 
-	result, err := MergeSeries(context.Background(), store, "op-trashed", 10, []int{20}, "", nil)
+	result, err := MergeSeries(context.Background(), store, "op-trashed", 10, []int{20}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 
 	assert.NotContains(t, *deleted, 20,
@@ -870,7 +870,7 @@ func TestMergeSeries_StillDeletesWhenNothingHiddenReferencesIt(t *testing.T) {
 		return nil
 	}
 
-	result, err := MergeSeries(context.Background(), store, "op-normal", 10, []int{20}, "", nil)
+	result, err := MergeSeries(context.Background(), store, "op-normal", 10, []int{20}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 
 	assert.Contains(t, *deleted, 20,
@@ -906,7 +906,7 @@ func TestMergeSeries_RefusesDeleteWhenAReassignmentFailed(t *testing.T) {
 		return b, nil
 	}
 
-	result, err := MergeSeries(context.Background(), store, "op-failwrite", 10, []int{20}, "", nil)
+	result, err := MergeSeries(context.Background(), store, "op-failwrite", 10, []int{20}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 
 	assert.NotContains(t, *deleted, 20,
@@ -928,7 +928,7 @@ func TestMergeSeries_RefusesDeleteWhenABookCannotBeHydrated(t *testing.T) {
 		[]database.BookCore{{ID: "GHOST"}}, map[int]int{20: 1})
 	store.MockStore.GetBookByIDFunc = func(string) (*database.Book, error) { return nil, nil }
 
-	result, err := MergeSeries(context.Background(), store, "op-ghost", 10, []int{20}, "", nil)
+	result, err := MergeSeries(context.Background(), store, "op-ghost", 10, []int{20}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 
 	assert.NotContains(t, *deleted, 20,
@@ -953,7 +953,7 @@ func TestMergeSeries_RefusesToRunWithoutTheUnfilteredCount(t *testing.T) {
 	}
 	store := noRefCountStore{Store: mock}
 
-	_, err := MergeSeries(context.Background(), store, "op-noref", 10, []int{20}, "", nil)
+	_, err := MergeSeries(context.Background(), store, "op-noref", 10, []int{20}, "", nil, MergeSeriesOptions{})
 	require.Error(t, err, "a store that cannot count unfiltered references must abort the merge")
 	assert.Contains(t, err.Error(), "unfiltered reference counts")
 }
@@ -975,7 +975,7 @@ func TestMergeSeries_DeduplicatesRepeatedMergeIDs(t *testing.T) {
 	// The same ID three times, plus keepID itself, which must also be dropped:
 	// deleting the series being merged INTO is the worst possible outcome.
 	result, err := MergeSeries(context.Background(), store, "op-dupe", 10,
-		[]int{20, 20, 10, 20}, "", nil)
+		[]int{20, 20, 10, 20}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, []int{20}, *deleted, "series 20 must be deleted exactly once, and never series 10")

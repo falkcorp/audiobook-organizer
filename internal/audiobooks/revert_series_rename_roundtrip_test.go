@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_rename_roundtrip_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f41c6ab-2d78-4e03-b5c9-6e1a7d84f3b2
-// last-edited: 2026-09-12
+// last-edited: 2026-10-13
 
 package audiobooks_test
 
@@ -29,7 +29,7 @@ func mergeRenamed(t *testing.T) (*database.PebbleStore, int) {
 	if err != nil {
 		t.Fatalf("create series: %v", err)
 	}
-	if _, err := dedup.MergeSeries(context.Background(), store, "op1", keep.ID, nil, "New Name", nil); err != nil {
+	if _, err := dedup.MergeSeries(context.Background(), store, "op1", keep.ID, nil, "New Name", nil, dedup.MergeSeriesOptions{}); err != nil {
 		t.Fatalf("MergeSeries: %v", err)
 	}
 	return store, keep.ID

@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.28.0
+// version: 2.28.1
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-13
 
@@ -780,7 +780,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			// & series lane sends neither field and runs many of these per click --
 			// Merge All used to be one dedup.series-dedup op, which had both
 			// protections -- so they cannot be opt-in.
-			result, err := dedup.MergeSeriesWithOptions(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress,
+			result, err := dedup.MergeSeries(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress,
 				dedup.MergeSeriesOptions{HonorLocks: p.HonorLocks == nil || *p.HonorLocks, Scan: s})
 			if err != nil {
 				// A cancel or a lost lease returns here after deleting some of the
