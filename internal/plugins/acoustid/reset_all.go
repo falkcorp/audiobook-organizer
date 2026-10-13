@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
 // last-edited: 2026-10-13
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -61,7 +63,9 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Clearing fingerprints (batched)…")
 
-	var cleared int
+	// cleared and deleted are atomics: both RunItems passes below run fn and
+	// the Label closure on a worker pool.
+	var cleared atomic.Int64
 
 	// Fast path: PebbleStore exposes a batched bulk-clear that fsyncs once
 	// per ~2000 records instead of once per UpdateBookFile call — ~100×
@@ -91,7 +95,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		if clearErr != nil {
 			return fmt.Errorf("bulk clear fingerprints: %w", clearErr)
 		}
-		cleared = c
+		cleared.Store(int64(c))
 		log.Info("acoustid reset-all: bulk clear done", "cleared", c, "total", t, "elapsed", time.Since(startedAt).Round(time.Second))
 	} else {
 		// Per-row fallback (mock/sqlite tests). AcoustIDSeg0..6 are stripped
@@ -142,11 +146,15 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 				log.Warn("acoustid reset-all: update file failed", "id", f.ID, "err", err)
 				return nil
 			}
-			cleared++
+			cleared.Add(1)
 			return nil
 		}, registry.RunItemsOptions{
+			// Each item hydrates and rewrites its own book_file row (per-row
+			// lock in PebbleStore), so items are disjoint and the pool is
+			// sized to the cores. Only the mock/sqlite fallback reaches here.
+			Concurrency: runtime.NumCPU(),
 			Label: func(i, t int) string {
-				return fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", i+1, t, cleared)
+				return fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", i+1, t, cleared.Load())
 			},
 		})
 		if err != nil {
@@ -157,7 +165,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// Drop acoustid-layer pending candidates so the dedup review doesn't
 	// keep showing the 14K+ poisoned rows after the rescan starts.
 	prog.Finalize("Dropping acoustid dedup candidates…")
-	deleted := 0
+	var deleted atomic.Int64
 	if p.embeddingStore != nil {
 		var allCands []database.DedupCandidate
 		offset := 0
@@ -190,11 +198,15 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 					log.Warn("acoustid reset-all: delete candidate failed", "id", c.ID, "err", err)
 					return nil
 				}
-				deleted++
+				deleted.Add(1)
 				return nil
 			}, registry.RunItemsOptions{
+				// One candidate row per item; DeleteCandidate touches only
+				// that row, and the list was read in full above, so no two
+				// items name the same candidate.
+				Concurrency: runtime.NumCPU(),
 				Label: func(i, t int) string {
-					return fmt.Sprintf("Dropping acoustid dedup candidates %d/%d (deleted=%d)", i+1, t, deleted)
+					return fmt.Sprintf("Dropping acoustid dedup candidates %d/%d (deleted=%d)", i+1, t, deleted.Load())
 				},
 			}); derr != nil {
 				return derr
@@ -203,12 +215,12 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	}
 
 	log.Info("acoustid reset-all: complete",
-		"cleared", cleared,
-		"candidates_deleted", deleted,
+		"cleared", cleared.Load(),
+		"candidates_deleted", deleted.Load(),
 		"elapsed", time.Since(startedAt).Round(time.Second))
 
 	prog.Done(fmt.Sprintf("Reset complete: %d files cleared, %d candidates dropped, LSH index wiped (elapsed %s). Now enqueue acoustid.fingerprint-rescan with scope=all force=true.",
-		cleared, deleted, time.Since(startedAt).Round(time.Second)))
+		cleared.Load(), deleted.Load(), time.Since(startedAt).Round(time.Second)))
 	return nil
 }
 
