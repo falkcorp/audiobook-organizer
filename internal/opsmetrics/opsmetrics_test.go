@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
 // last-edited: 2026-10-13
 
@@ -66,6 +66,8 @@ func TestOutcomeFor(t *testing.T) {
 		{"canceled", "canceled by user", "canceled"},
 		{"canceled", "timeout: run exceeded 10ms", "timed_out"},
 		{"interrupted_dropped", "ResumePolicy=drop", "dropped"},
+		{"interrupted_dropped", "requeued: original op replaced", ""},
+		{"interrupted_restart", "", ""},
 		{"timeout", "", ""},
 		{"interrupted_quiesced", "", ""},
 		{"interrupted_ask", "", ""},
