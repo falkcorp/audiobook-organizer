@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -525,6 +525,7 @@ func (b *batchRun) loadSnapshot(stored *database.Ledger) (*chunkTable, bool, err
 // a completed range is skipped without calling Item.
 func (b *batchRun) produce() {
 	defer close(b.chunks)
+	defer b.recoverCallback("producer")
 	if b.job.Dirty != nil {
 		b.produceDirty()
 		return
@@ -649,6 +650,7 @@ func (b *batchRun) produceDirty() {
 // ── workers ────────────────────────────────────────────────────────────────
 
 func (b *batchRun) worker(w int) {
+	defer b.recoverCallback("worker")
 	for {
 		select {
 		case <-b.workCtx.Done():
@@ -782,6 +784,20 @@ func (b *batchRun) writeStopped(itemErr error) error {
 		return itemErr
 	}
 	return nil
+}
+
+// recoverCallback is deferred at the top of every runner goroutine that calls
+// op code outside runItem: the source's Pages and Key (producer), an item's
+// Label and Key (worker), a DirtySet's Load. Those goroutines are the
+// runner's own, not the registry's, so an unrecovered panic there would take
+// the server down. A panic fails the run with the stack logged; the chunk in
+// hand is not delivered, so it stays unfinished for a resume.
+func (b *batchRun) recoverCallback(where string) {
+	if p := recover(); p != nil {
+		b.cfg.log.Error("batch runner: op callback panicked", "op_id", b.cfg.opID, "goroutine", where,
+			"panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+		b.fail(fmt.Errorf("%s: %s: op callback panicked: %v", b.cfg.opID, where, p))
+	}
 }
 
 // runItem runs item j of the chunk with its own deadline (started after the pause gate)
