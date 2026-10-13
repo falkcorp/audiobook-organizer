@@ -1,5 +1,5 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
 // last-edited: 2026-10-13
 
@@ -69,8 +69,8 @@ func newV3OtelRig(t *testing.T, opts registry.Options, release ...func()) (*otel
 	return &otelRig{reader: reader, reg: reg}, store
 }
 
-// legacyCounter reads the process-global client_golang counter
-// audiobook_organizer_<name>{type=defID}. Tests use a def id of their own, so
+// legacyCounter reads the process-global legacy counter
+// audiobook_organizer_<name>{type=defID} through the default gatherer. Tests use a def id of their own, so
 // the value is theirs alone.
 func legacyCounter(t *testing.T, name, defID string) float64 {
 	t.Helper()
