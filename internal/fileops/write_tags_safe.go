@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.13.3
+// version: 1.14.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package fileops
 
@@ -72,11 +72,11 @@ type WriteTagsSafeOptions struct {
 	// write and leaves the original untouched; a failed rename removes the
 	// backup again (the original is intact, so the backup adds nothing).
 	//
-	// AGE CONTRACT. The backup-cleanup sweeps (maintenance.cleanup-old-backups
-	// and scheduler.cleanup-old-backups) age a .bak-* file by the time in its
-	// NAME (BackupTime), not by its mtime: a hardlinked backup keeps the
-	// original's mtime, which can be years old. Changing the name format here
-	// means changing BackupTime with it. Both sweeps walk RootDir only, so a
+	// AGE CONTRACT. The backup-cleanup sweep (maintenance.cleanup-old-backups,
+	// which scheduler.cleanup-old-backups resolves to) ages a .bak-* file by the
+	// time in its NAME (BackupTime), not by its mtime: a hardlinked backup keeps
+	// the original's mtime, which can be years old. Changing the name format here
+	// means changing BackupTime with it. The sweep walks RootDir only, so a
 	// backup beside a file outside the library root is never collected.
 	KeepBackup bool
 }

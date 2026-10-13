@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -405,21 +405,52 @@ func (p *Plugin) runPurgeOldLogs(ctx context.Context, _ json.RawMessage, reporte
 
 // --- cleanup-old-backups ---
 
+// cleanupOldBackupsDef is the only registration of the .bak-* retention sweep.
+// scheduler.cleanup-old-backups ran the same walk under its own ID and
+// ConcurrencyKey until 2026-10-13; it resolves here as a FormerID, and the
+// cleanup_old_backups scheduler task enqueues this def.
+//
+// Permissions and the 1h budgets are the scheduler copy's (it gated on
+// settings.manage and carried 1h, this def 30m and no gate), so the alias
+// neither widens who can run a deleting op nor shortens the budget prod runs
+// were sized against.
+//
+// Writes is empty on purpose. It names the logical DB tables an op mutates for
+// the dispatcher's write-set gate (registry.OperationDef.Writes), and this op
+// touches no row: it removes files. It also takes no scan stand-down, which
+// exists to keep a metadata apply from interleaving with a scan's row writes.
+// The scanner reads only audio files, and a .bak-* sibling is not one, so the
+// two never meet on a file either.
+//
+// What keeps the sweep off a backup another op is writing or reading is the age
+// test, not a lock. A backup is named <path>.bak-<unix>[-N] at the moment
+// fileops.WriteTagsSafe or KeepBackupCopy makes it, so it is seconds old by its
+// own name however old the audio's mtime is, and retention is at least one day
+// (config.EffectiveBackupRetentionDays never returns less; the run also floors
+// a non-positive value at 30). Nothing in the tree restores from a .bak-* file.
+//
+// ResumePolicy is ResumeRequeue (both copies were ResumeDrop) because the sweep
+// is idempotent: it keeps no cursor, a file removed by an interrupted run is
+// simply absent from the rerun's walk, a file that vanishes between the walk and
+// the remove only logs a warning, and the age test gives the same answer on the
+// rerun (TestCleanupOldBackups_RequeueIsIdempotent).
 func (p *Plugin) cleanupOldBackupsDef() sdk.OperationDef {
 	sched := "0 5 * * *" // 05:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.cleanup-old-backups",
+		FormerIDs:       []string{"scheduler.cleanup-old-backups"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean old backup files",
 		Description:     "Removes .bak-* backup files past the configured retention period.",
-		ResumePolicy:    sdk.ResumeDrop,
+		ResumePolicy:    sdk.ResumeRequeue,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-old-backups",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         30 * time.Minute,
+		Timeout:         1 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapFilesRead, sdk.CapFilesWrite},
 		Run:             p.runCleanupOldBackups,
@@ -440,11 +471,12 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 	removed := 0
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays))
 
-	// Identical predicate, identical hazard as scheduler.cleanup-old-backups
-	// (internal/scheduler/extra_ops.go) -- see the note in the PR: this rule
-	// exists in three places with two different predicates. The library root
-	// holds a multi-GB backup directory and an OpenLibrary dump directory,
-	// both operator-settable to dot-free names, and this op DELETES.
+	// The library root holds a multi-GB backup directory and an OpenLibrary
+	// dump directory, both operator-settable to dot-free names, and this op
+	// DELETES by filename. This rule exists in two places with two different
+	// predicates (the other is internal/maintenance/jobs/cleanup_backups.go,
+	// which uses a different regex and no retention age); consolidating them is
+	// a separate change (TODO BACKUP-SWEEP-CONSOLIDATE).
 	app := appdirs.Current()
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if ctx.Err() != nil {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
-// last-edited: 2026-09-09
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -65,10 +65,10 @@ func withPluginAppDirs(t *testing.T, root string, enabled bool) {
 // TestRunCleanupOldBackups_SkipsAppDirs pins maintenance.cleanup-old-backups,
 // which DELETES any file whose name contains ".bak-" past the retention window.
 //
-// This is the THIRD implementation of "delete old backup files" in the tree
-// (see also internal/scheduler/extra_ops.go and
-// internal/maintenance/jobs/cleanup_backups.go, which uses a different regex).
-// Consolidating them is out of scope here; guarding all three is not.
+// This is one of TWO implementations of "delete old backup files" in the tree
+// (the other is internal/maintenance/jobs/cleanup_backups.go, which uses a
+// different regex). scheduler.cleanup-old-backups was merged into this one; its
+// app-dir guard test is this test.
 func TestRunCleanupOldBackups_SkipsAppDirs(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

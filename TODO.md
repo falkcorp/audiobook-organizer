@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.11 -->
+<!-- version: 10.76.12 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -169,11 +169,15 @@ into one of the curated sections below, is a normal direct edit.
       Done in 62eb02ade: both loads go through `loadCandidates`, which keeps
       the `BookIDs` and `FolderPath` scope on the reload
       (`TestOrganizeFolderScope_FetchMetadataFirstKeepsBookIDsScope`).
-- [ ] **BACKUP-SWEEP-CONSOLIDATE** Three "delete old backups" implementations
-      exist: `maintenance.cleanup-old-backups`, `scheduler.cleanup-old-backups`
-      (both age by `fileops.BackupTime`) and the manual `cleanup-backups` job,
-      whose regex does not match the `.bak-<unix>[-N]` names create_backups
-      now writes. Consolidate on one predicate.
+- [ ] **BACKUP-SWEEP-CONSOLIDATE** Two "delete old backups" implementations
+      exist: `maintenance.cleanup-old-backups` (ages by `fileops.BackupTime`;
+      `scheduler.cleanup-old-backups` was merged into it by 04-P4f) and the
+      manual `cleanup-backups` job, whose regex does not match the
+      `.bak-<unix>[-N]` names create_backups now writes. Consolidate on one
+      predicate. The surviving sweep still matches any file whose name merely
+      contains `.bak-` and ages one with no parsable time by mtime, so an old
+      non-backup named like `x.bak-notes.m4b` is deleted; tighten the match to
+      `.bak-<unix>[-N]` / legacy names when consolidating.
 
 - [ ] **PATTERN-LAST-16KB** Also run end-anchored search patterns over the last
       16 KB of a long field. A regex or `*` pattern only sees the first 16 KB

@@ -1,5 +1,5 @@
 // file: internal/server/scheduler_extra_ops.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: f1e2d3c4-b5a6-7890-fedc-ba9876543210
 // last-edited: 2026-10-13
 
@@ -21,7 +21,7 @@ import opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/
 // named type, which is unrelated and still in use.
 
 func init() {
-	// All 3 Register* methods have moved to internal/scheduler.ExtraOpsRegistrar
+	// All 2 Register* methods have moved to internal/scheduler.ExtraOpsRegistrar
 	// (SERVER-THIN-RESIDUAL). These shims keep the addOpRegistrar contract intact
 	// while delegating to s.extraOpsRegistrar which is constructed in NewServer.
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
@@ -29,8 +29,5 @@ func init() {
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterMetadataUpgradeOp(reg)
-	})
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
-		return s.extraOpsRegistrar.RegisterCleanupOldBackupsOp(reg)
 	})
 }
