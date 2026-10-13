@@ -1031,11 +1031,11 @@ export function useAuthorsLane(
       ? 'loading'
       : groupsLoad.state === 'error'
         ? 'error'
-        : needsScan
-          ? 'needs-scan'
-          : groups.length === 0
-            ? 'empty'
-            : 'populated';
+        : groups.length > 0
+          ? 'populated'
+          : needsScan
+            ? 'needs-scan'
+            : 'empty';
 
   return {
     status,

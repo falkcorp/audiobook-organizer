@@ -3,7 +3,7 @@
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
 // last-edited: 2026-10-13
 //
-// Every action a reviewer can take, across all three lanes, as one discriminated
+// Every action a reviewer can take, across every lane, as one discriminated
 // union.
 //
 // The alternative -- each lane owning its own handler signatures, as they do

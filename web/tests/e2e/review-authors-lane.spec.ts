@@ -70,15 +70,13 @@ async function openLane(
   opts: {
     groups?: MockAuthorDedupGroup[];
     books?: unknown[];
-    /** OperationV2 rows served by GET /operations/timeline: what the notification bell lists. */
-    timeline?: Array<Record<string, unknown>>;
     needsRefresh?: boolean;
   } = {}
 ) {
   await setupMockApi(page, {
     books: generateTestBooks(5),
     authorDedup: { groups: opts.groups ?? authorGroups, needs_refresh: opts.needsRefresh },
-    operations: { active: [], history: [], logs: {}, timeline: opts.timeline ?? [] },
+    operations: { active: [], history: [], logs: {} },
   });
   await page.route('**/api/v1/audiobooks?author_id=*', async (route) => {
     await route.fulfill({
@@ -100,6 +98,66 @@ async function countRequests(page: Page, pattern: string | RegExp, method: strin
     }
   });
   return seen;
+}
+
+
+/** An OperationV2 row, as GET /operations/timeline serves it to the notification bell. */
+function bellRow(id: string, defId: string, displayName: string): Record<string, unknown> {
+  return {
+    id,
+    def_id: defId,
+    plugin: 'dedup',
+    display_name: displayName,
+    status: 'running',
+    priority: 0,
+    notify_level: 0,
+    progress_current: 10,
+    progress_total: 100,
+    progress_message: displayName,
+    current_phase: null,
+    current_item: null,
+    actor_user_id: null,
+    parent_id: null,
+    queued_at: '2026-10-13T10:00:00Z',
+    started_at: '2026-10-13T10:00:01Z',
+    completed_at: null,
+    error_message: null,
+    resume_count: 0,
+    trace_id: null,
+    span_id: null,
+  };
+}
+
+/**
+ * Makes the notification bell list `row`, but only AFTER a POST to `trigger` has
+ * been requested. The bell reads GET /operations/timeline; seeding the row up
+ * front would show it whether or not the click did anything, so an assertion on
+ * the bell would prove nothing about the action under test.
+ *
+ * The bell learns about a running operation from the server's event stream and
+ * from the timeline it loads when the app starts. The mock has no event stream,
+ * so a test reloads the page after the action to make the bell read the timeline
+ * again (`showBell` below).
+ */
+async function bellListsAfter(page: Page, trigger: string, row: Record<string, unknown>) {
+  let started = false;
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && req.url().includes(trigger)) started = true;
+  });
+  await page.route('**/api/v1/operations/timeline*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { operations: started ? [row] : [] } }),
+    });
+  });
+}
+
+/** Reloads (so the bell re-reads the timeline) and opens the bell. */
+async function showBell(page: Page) {
+  await page.reload();
+  await expect(page.getByTestId('authors-panel')).toBeVisible();
+  await page.getByTestId('operations-bell').click();
 }
 
 // ── The lane ──
@@ -291,41 +349,18 @@ test.describe('Book Preview Popover', () => {
 
 test.describe('Dedup Refresh Operations', () => {
   test('the Refresh button starts the author scan and the bell shows it', async ({ page }) => {
-    await openLane(page, {
-      timeline: [
-        {
-          id: 'dedup-refresh-1',
-          def_id: 'dedup.author-scan',
-          plugin: 'dedup',
-          display_name: 'Author duplicate scan',
-          status: 'running',
-          priority: 0,
-          notify_level: 0,
-          progress_current: 10,
-          progress_total: 100,
-          progress_message: 'Scanning authors',
-          current_phase: null,
-          current_item: null,
-          actor_user_id: null,
-          parent_id: null,
-          queued_at: '2026-10-13T10:00:00Z',
-          started_at: '2026-10-13T10:00:01Z',
-          completed_at: null,
-          error_message: null,
-          resume_count: 0,
-          trace_id: null,
-          span_id: null,
-        },
-      ],
-    });
+    await openLane(page);
+    await bellListsAfter(page, '/authors/duplicates/refresh', bellRow('dedup-refresh-1', 'dedup.author-scan', 'Author duplicate scan'));
+    // Nothing listed before the click.
+    await page.getByTestId('operations-bell').click();
+    await expect(page.getByTestId('operations-empty')).toBeVisible();
+    await page.keyboard.press('Escape');
+
     const scan = page.waitForRequest((req) => req.url().endsWith('/authors/duplicates/refresh') && req.method() === 'POST');
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await scan;
     await expect(page.getByText('Author scan started — watch the bell for progress.')).toBeVisible();
-    // The page keeps no progress bar of its own beyond a thin one; the bell
-    // owns the operation.
-    await expect(page.getByTestId('operations-bell')).toBeVisible();
-    await page.getByTestId('operations-bell').click();
+    await showBell(page);
     await expect(page.getByText('Author duplicate scan').first()).toBeVisible();
   });
 });
@@ -408,12 +443,17 @@ test.describe('Production Company Resolution', () => {
 // ── Operation progress ──
 
 test.describe('Dedup Operation Progress', () => {
-  test('a merge reports through a toast', async ({ page }) => {
+  test('a merge reports through a toast and the bell lists the operation', async ({ page }) => {
     await openLane(page);
+    await bellListsAfter(page, '/api/v1/authors/merge', bellRow('merge-op-1', 'dedup.author-merge', 'Merge authors'));
     await page.getByRole('button', { name: 'Merge into "Author A"', exact: true }).click();
     await expect(page.getByText('Merged author(s) into "Author A"')).toBeVisible();
+    await showBell(page);
+    await expect(page.getByText('Merge authors').first()).toBeVisible();
   });
 
+  // A split is one synchronous request that answers with the new authors; it
+  // starts no operation, so there is no bell entry to assert, only the toast.
   test('a split reports through a toast', async ({ page }) => {
     await openLane(page);
     await page.getByRole('button', { name: /split into 2 authors/i }).click();
