@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.43.0
+// version: 1.44.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-12
 //
@@ -2239,6 +2239,52 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [toast, refresh, releaseInFlight]
   );
 
+  // Follows already-dispatched apply ops to the end and re-reads the list once,
+  // however many ops there were: a flush that sent several requests arms ONE
+  // bound and ONE refresh, not one per request.
+  const followApplyOps = useCallback(
+    (opIds: string[], requestedIds: string[]): void => {
+      // pollOperationV2 loops forever with no timeout, so an op that never
+      // reaches a terminal status (a crashed worker, an unrecognised status)
+      // would leave these ids retained permanently -- freezing their optimistic
+      // `applied` and reproducing the exact permanent-stale-state bug this
+      // reconcile exists to fix, just gated on op completion instead of on an
+      // add-only merge. So the protection is bounded.
+      //
+      // The bound is deliberately generous. Releasing early on a genuinely
+      // long apply lets the reconcile revert rows the worker is still
+      // processing, which is the flicker ActionBar.tsx disclaims. Between the
+      // two failure modes, a visible flicker on a very long op beats rows that
+      // are silently hidden forever, so it is bounded rather than left open.
+      // Measured reference: 250 books took 2m0s in production.
+      let boundTimeout: ReturnType<typeof setTimeout> | undefined;
+      void Promise.race([
+        Promise.all(opIds.map((opId) => api.pollOperationV2(opId).catch(() => undefined))),
+        new Promise((resolve) => {
+          boundTimeout = setTimeout(resolve, APPLY_INFLIGHT_MAX_MS);
+          boundTimeoutsRef.current.add(boundTimeout);
+        }),
+      ]).finally(() => {
+        // Cancelled on the ordinary path. The race settles as soon as the poll
+        // returns, but an uncancelled timer still holds its closure for the
+        // full hour, and each per-row apply arms its own. The unmount cleanup
+        // clears any that are still armed when the hook goes away.
+        if (boundTimeout !== undefined) {
+          clearTimeout(boundTimeout);
+          boundTimeoutsRef.current.delete(boundTimeout);
+        }
+        // Released BEFORE the refresh, so the refresh it triggers is the one
+        // that gets to correct these rows. Releasing after would let the
+        // reconcile skip them and the stale `applied` would survive the very
+        // refresh that exists to fix it.
+        releaseInFlight(requestedIds);
+        if (!aliveRef.current) return;
+        refresh();
+      });
+    },
+    [refresh, releaseInFlight]
+  );
+
   // Dispatches the background apply and returns; the bell owns progress.
   // Re-reads the list when the op finishes rather than diffing a client guess.
   const runApplyOp = useCallback(
@@ -2263,45 +2309,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           'success'
         );
       }
-      // pollOperationV2 loops forever with no timeout, so an op that never
-      // reaches a terminal status (a crashed worker, an unrecognised status)
-      // would leave these ids retained permanently -- freezing their optimistic
-      // `applied` and reproducing the exact permanent-stale-state bug this
-      // reconcile exists to fix, just gated on op completion instead of on an
-      // add-only merge. So the protection is bounded.
-      //
-      // The bound is deliberately generous. Releasing early on a genuinely
-      // long apply lets the reconcile revert rows the worker is still
-      // processing, which is the flicker ActionBar.tsx disclaims. Between the
-      // two failure modes, a visible flicker on a very long op beats rows that
-      // are silently hidden forever, so it is bounded rather than left open.
-      // Measured reference: 250 books took 2m0s in production.
-      let boundTimeout: ReturnType<typeof setTimeout> | undefined;
-      void Promise.race([
-        api.pollOperationV2(dispatched.op_id).catch(() => undefined),
-        new Promise((resolve) => {
-          boundTimeout = setTimeout(resolve, APPLY_INFLIGHT_MAX_MS);
-          boundTimeoutsRef.current.add(boundTimeout);
-        }),
-      ]).finally(() => {
-        // Cancelled on the ordinary path. The race settles as soon as the poll
-        // returns, but an uncancelled timer still holds its closure for the
-        // full hour, and each per-row apply arms its own. The unmount cleanup
-        // clears any that are still armed when the hook goes away.
-        if (boundTimeout !== undefined) {
-          clearTimeout(boundTimeout);
-          boundTimeoutsRef.current.delete(boundTimeout);
-        }
-        // Released BEFORE the refresh, so the refresh it triggers is the one
-        // that gets to correct these rows. Releasing after would let the
-        // reconcile skip them and the stale `applied` would survive the very
-        // refresh that exists to fix it.
-        releaseInFlight(requestedIds);
-        if (!aliveRef.current) return;
-        refresh();
-      });
+      followApplyOps([dispatched.op_id], requestedIds);
     },
-    [toast, refresh, releaseInFlight]
+    [toast, followApplyOps]
   );
 
   const flushApplyQueue = useCallback(async () => {
@@ -2326,22 +2336,39 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       ([id, pin]) => ({ ids: [id], pins: { [id]: pin } })
     );
     if (rest.length > 0) groups.push({ ids: rest, pins: {} });
-    let queued = 0;
-    for (const g of groups) {
+    // Dispatch every group, then report ONCE: one follow (one bound, one
+    // refresh when the ops end) for what went out, and one failure report for
+    // what did not. An auth bounce ends the loop -- every later request would
+    // be bounced too -- and the books not yet sent are released with the
+    // failed one, so their optimistic mark is corrected by the refresh.
+    const opIds: string[] = [];
+    const queuedIds: string[] = [];
+    const failedIds: string[] = [];
+    let failure: unknown;
+    for (let i = 0; i < groups.length; i++) {
       try {
-        await runApplyOp(g.ids, g.pins, undefined, undefined, false);
-        queued += g.ids.length;
+        const dispatched = await api.batchApplyFromCache(groups[i].ids, undefined, groups[i].pins);
+        opIds.push(dispatched.op_id);
+        queuedIds.push(...groups[i].ids);
       } catch (err) {
-        handleApplyError(err, g.ids);
+        failedIds.push(...groups[i].ids);
+        if (isAuthRedirectError(err)) {
+          failure = err;
+          for (const rest of groups.slice(i + 1)) failedIds.push(...rest.ids);
+          break;
+        }
+        failure ??= err;
       }
     }
-    if (queued > 0) {
+    if (queuedIds.length > 0) {
       toast(
-        `Metadata apply queued for ${queued.toLocaleString()} book(s) — watch the bell for progress.`,
+        `Metadata apply queued for ${queuedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
         'success'
       );
+      followApplyOps(opIds, queuedIds);
     }
-  }, [runApplyOp, handleApplyError, toast]);
+    if (failedIds.length > 0) handleApplyError(failure, failedIds);
+  }, [followApplyOps, handleApplyError, toast]);
 
   const applyOne = useCallback(
     (bookId: string) => {
@@ -2367,8 +2394,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       retainInFlight([bookId]);
       clearServerDerived([bookId]);
       setRowStates((prev) => new Map(prev).set(bookId, 'applied'));
-      // Several quick clicks share one debounced request, which is fine
-      // because pins are per book.
+      // Several quick clicks share one debounce timer. The flush sends each
+      // row-pinned book as its own request (a row pin is one reviewer's look
+      // at one book, and the server refuses it beside other books).
       if (pin) applyPinsRef.current.set(bookId, pin);
       applyQueueRef.current.push(bookId);
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);

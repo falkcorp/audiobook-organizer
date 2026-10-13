@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.31.0
+// version: 1.32.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-10-12
 //
@@ -9,7 +9,7 @@
 // which is exactly the kind a port quietly drops because nothing goes red.
 
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../../services/api';
 import {
   loadBulkApplyMode,
@@ -784,6 +784,83 @@ describe('dispatch', () => {
     expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
     expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {});
     vi.useRealTimers();
+  });
+
+  describe('flush with some requests failing', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // Applies the given rows (each a row-pinned click) inside one debounce
+    // window, dispatch results in order, and returns how many list loads the
+    // flush caused.
+    async function flushRows(
+      ids: string[],
+      dispatchResults: Array<{ op_id: string } | Error>
+    ): Promise<number> {
+      vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+        reviewPayload(ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
+      );
+      const batch = vi.mocked(api.batchApplyFromCache);
+      for (const r of dispatchResults) {
+        if (r instanceof Error) batch.mockRejectedValueOnce(r);
+        else batch.mockResolvedValueOnce(r as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+      }
+      vi.mocked(api.pollOperationV2).mockReturnValue(
+        new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+      );
+      const hook = renderHook(() => useMetadataLane(toast));
+      await waitFor(() => expect(hook.result.current.results).toHaveLength(ids.length));
+      const loadsBefore = vi.mocked(api.getCachedReviewResults).mock.calls.length;
+      vi.useFakeTimers();
+      act(() => {
+        for (const id of ids) {
+          hook.result.current.dispatch({ lane: 'metadata', type: 'apply', id });
+        }
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+      vi.useRealTimers();
+      return vi.mocked(api.getCachedReviewResults).mock.calls.length - loadsBefore;
+    }
+
+    it('reports the failures once and the queued books once, and follows only the ops that started', async () => {
+      const loads = await flushRows(
+        ['a', 'b', 'c'],
+        [{ op_id: 'opA' }, new Error('boom: 500'), new Error('boom: 502')]
+      );
+
+      // Every row-pinned book is its own request, and the failure of one does
+      // not stop the others.
+      expect(api.batchApplyFromCache).toHaveBeenCalledTimes(3);
+      const messages = toast.mock.calls.map((c) => String(c[0]));
+      expect(messages.filter((m) => m.includes('apply queued'))).toHaveLength(1);
+      expect(messages.find((m) => m.includes('apply queued'))).toContain('1 book(s)');
+      expect(messages.filter((m) => m.startsWith('Failed to start applying'))).toEqual([
+        'Failed to start applying 2 book(s)',
+      ]);
+      // Only the ops that started are followed, together.
+      expect(vi.mocked(api.pollOperationV2).mock.calls.map((c) => c[0])).toEqual(['opA']);
+      // One failure, one re-read: the same number of loads one failed request
+      // causes by itself, not one per request.
+      vi.mocked(api.batchApplyFromCache).mockClear();
+      const single = await flushRows(['d'], [new Error('boom: 500')]);
+      expect(loads).toBe(single);
+    });
+
+    it('stops at an auth bounce and reports it once', async () => {
+      const bounce = Object.assign(new Error('login page'), { name: 'ApiAuthRedirectError' });
+      await flushRows(['a', 'b', 'c'], [{ op_id: 'opA' }, bounce]);
+
+      // a went out, b bounced, c was never sent.
+      expect(api.batchApplyFromCache).toHaveBeenCalledTimes(2);
+      const messages = toast.mock.calls.map((c) => String(c[0]));
+      expect(messages.filter((m) => m.startsWith('Session expired'))).toHaveLength(1);
+      expect(messages.some((m) => m.startsWith('Failed to start applying'))).toBe(false);
+      expect(messages.find((m) => m.includes('apply queued'))).toContain('1 book(s)');
+      expect(vi.mocked(api.pollOperationV2).mock.calls.map((c) => c[0])).toEqual(['opA']);
+    });
   });
 
   it('pins the candidate the row showed when Apply was clicked, not the one after a refresh', async () => {
