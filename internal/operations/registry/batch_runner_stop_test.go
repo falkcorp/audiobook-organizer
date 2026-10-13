@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -76,6 +77,40 @@ func TestFenceRevokedBetweenItemsStopsRun(t *testing.T) {
 	led, _ := store.GetLedgerV3("op")
 	if !slices.Equal(bitsSet(*led), []int{0}) {
 		t.Fatalf("ledger %v, want [0]", bitsSet(*led))
+	}
+}
+
+// The window between the registry's revoke and its cancel: the last item of
+// chunk 0 sees its write refused, swallows it and returns nil, and the cancel
+// lands a moment later. The chunk is not recorded (the fence is checked after
+// every item, not only after a failed one), and the Summary Finish gets says
+// Canceled (it is built after the runner waits for the cancel to land).
+func TestRevokeBeforeCancelWindow(t *testing.T) {
+	store := newMemLedgerStore(t)
+	fence, revoke := opswriter.NewFence(1, nil)
+	var sum atomic.Pointer[ops.Summary]
+	var stopRun context.CancelFunc
+	job, rc, cancel := openJob(t, seq(20), batchOpts{size: 10, workers: 1,
+		finish: func(_ *ops.RC, s ops.Summary) { sum.Store(&s) }},
+		func(_ *ops.ItemRC, i int) error {
+			if i == 9 {
+				revoke()
+				go func() { time.Sleep(30 * time.Millisecond); stopRun() }()
+			}
+			return nil // a refused write swallowed by the item
+		})
+	stopRun = cancel
+	defer cancel()
+	ctx := opswriter.WithFence(rc.Context(), fence)
+	_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
+	if err == nil {
+		t.Fatal("a fenced run returned nil")
+	}
+	if led, _ := store.GetLedgerV3("op"); led != nil && len(bitsSet(*led)) != 0 {
+		t.Fatalf("ledger %v: the chunk whose last item ran fenced was recorded", bitsSet(*led))
+	}
+	if s := sum.Load(); s == nil || !s.Canceled {
+		t.Fatalf("Finish summary %+v: want Canceled", s)
 	}
 }
 
@@ -214,7 +249,8 @@ func TestShutdownSkipsFinishOnlyWhenResumable(t *testing.T) {
 					return nil
 				})
 			defer cancel()
-			_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, commitEvery: -1, resumable: tc.resumable})
+			resumes := func() bool { return tc.resumable && errors.Is(context.Cause(ctx), ErrShutdown) }
+			_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, commitEvery: -1, resumes: resumes})
 			if err == nil {
 				t.Fatal("a stopped run returned nil")
 			}
