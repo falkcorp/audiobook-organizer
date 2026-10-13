@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
 // last-edited: 2026-10-13
 //
@@ -15,6 +15,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { DupesPanel } from '../DupesPanel';
+import { useDupesLabels } from './useDupesLabels';
 import {
   filterChangedMessage,
   MERGE_ALL_BLOCKED_REASON,
@@ -199,6 +200,7 @@ describe('useDupesLane selection', () => {
 
 function Harness({ layer = null }: { layer?: DedupLayer | null }) {
   const dupes = useDupesLane(toast, true, { band: null, entityId: null, layer });
+  const labels = useDupesLabels('queue');
   return (
     <DupesPanel
       dupes={dupes}
@@ -207,6 +209,7 @@ function Harness({ layer = null }: { layer?: DedupLayer | null }) {
       onToggleExpand={() => {}}
       subView="queue"
       onSubViewChange={() => {}}
+      labels={labels}
     />
   );
 }

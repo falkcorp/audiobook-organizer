@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-10-13
 //
@@ -57,7 +57,7 @@ import type { DedupSeriesSummary } from '../../services/api';
 import { useSeriesPairs } from './lanes/useDupesClusterData';
 import { buildClusters } from './lanes/dupesClusters';
 import { DupesLabelsView } from './DupesLabelsView';
-import { useDupesLabels, type DupesSubView } from './lanes/useDupesLabels';
+import type { DupesLabels, DupesSubView } from './lanes/useDupesLabels';
 
 const BANDS: DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
 const STATUSES: { value: DedupStatusFilter; label: string }[] = [
@@ -320,6 +320,12 @@ export interface DupesPanelProps {
    */
   subView: DupesSubView;
   onSubViewChange: (view: DupesSubView) => void;
+  /**
+   * The Labels / Suspicious data. Owned by the workspace, not by this panel, so
+   * the filters, page and any override in flight survive a switch to another
+   * lane and back (this panel unmounts when its lane is not showing).
+   */
+  labels: DupesLabels;
 }
 
 const SUB_VIEW_OPTIONS: { value: DupesSubView; label: string }[] = [
@@ -335,11 +341,10 @@ export function DupesPanel({
   onToggleExpand,
   subView,
   onSubViewChange,
+  labels,
 }: DupesPanelProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const bookParam = searchParams.get('book');
-  // Fetches only while Labels or Suspicious is showing.
-  const labels = useDupesLabels(subView);
 
   // The URL is the source of truth for `book` and `band`, so a deep link from
   // FingerprintVisualsColumn lands on the right filter and a copied address bar

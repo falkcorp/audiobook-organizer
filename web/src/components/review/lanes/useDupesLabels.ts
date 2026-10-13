@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLabels.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b2d9e47-3c18-4f60-a7d5-0e9c4b1a8f32
 // last-edited: 2026-10-13
 //
@@ -33,6 +33,8 @@ const API_BASE = '/api/v1';
 
 /** Rows per page of the label list and the suspicious queue. */
 export const LABELS_PAGE = 50;
+/** A read that has not answered by now is an error, not a spinner forever. */
+export const LABELS_TIMEOUT_MS = 30_000;
 /** How long a typed band waits before it becomes a request. */
 export const BAND_DEBOUNCE_MS = 300;
 
@@ -110,6 +112,12 @@ function current<T>(keyed: Keyed<T> | null, key: string): Load<T> {
   return keyed && keyed.key === key ? keyed.load : { state: 'loading' };
 }
 
+interface SuspiciousPage {
+  rows: SuspiciousExample[];
+  /** The server's count of the whole queue; `rows` is at most one page of it. */
+  total: number;
+}
+
 interface LabelPage {
   rows: LabeledExample[];
   total: number;
@@ -126,9 +134,33 @@ function errorMessage(e: unknown, fallback: string): string {
 }
 
 async function getData<T>(url: string, signal: AbortSignal): Promise<T> {
-  const r = await apiFetch(url, { signal });
+  const r = await apiFetch(url, { signal, timeoutMs: LABELS_TIMEOUT_MS });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return (await r.json()).data as T;
+}
+
+/**
+ * Whether a row carrying `label` / `source` still belongs in a list filtered by
+ * `filters`. Mirrors the server: "unlabeled" selects every row without one of
+ * the three decisions (LabelFilterUnlabeled in internal/database).
+ */
+export function rowMatchesFilters(
+  row: { label: string; label_source: string },
+  filters: Pick<LabelFilters, 'label' | 'source'>
+): boolean {
+  if (filters.label === 'unlabeled') {
+    if (row.label === 'true_dup' || row.label === 'not_dup' || row.label === 'unsure') return false;
+  } else if (filters.label && row.label !== filters.label) {
+    return false;
+  }
+  return !filters.source || row.label_source === filters.source;
+}
+
+function postOverride(candidateId: number, label: string): Promise<Response> {
+  return apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
+    method: 'POST',
+    body: JSON.stringify({ label, reason: 'ui_override' }),
+  });
 }
 
 export interface DupesLabels {
@@ -145,6 +177,7 @@ export interface DupesLabels {
   showOnly: (patch: Partial<Pick<LabelFilters, 'label' | 'source'>>) => void;
 
   stats: Load<LabelStats>;
+  reloadStats: () => void;
 
   status: ListStatus;
   error: string | null;
@@ -157,10 +190,14 @@ export interface DupesLabels {
   suspiciousStatus: ListStatus;
   suspiciousError: string | null;
   suspiciousRows: SuspiciousExample[];
+  /** The whole queue's size; `suspiciousRows` is one page of it. */
+  suspiciousTotal: number;
   reloadSuspicious: () => void;
 
-  /** The last failed override, or null. Cleared when the next one starts. */
+  /** The last failed override on THIS sub-view, or null. */
   actionError: string | null;
+  /** Candidates with an override POST in flight (their controls are disabled). */
+  pending: ReadonlySet<number>;
   override: (candidateId: number, label: string) => Promise<void>;
   overrideSuspicious: (candidateId: number, label: string) => Promise<void>;
 }
@@ -173,7 +210,11 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
   const [labelFilter, setLabelFilterState] = useState('');
   const [sourceFilter, setSourceFilterState] = useState('');
   const [bandInput, setBandInput] = useState('');
-  const band = useDebouncedSearch(bandInput, BAND_DEBOUNCE_MS);
+  const debouncedBand = useDebouncedSearch(bandInput, BAND_DEBOUNCE_MS);
+  // An emptied box means no band NOW: the debounced twin follows a render later,
+  // and using it here would send one request with the old band that the next
+  // render cancels (clicking a count while a band is typed).
+  const band = bandInput === '' ? '' : debouncedBand;
 
   // The page offset is only valid for the filters it was set under; a different
   // filter set means page one. Deriving that (instead of resetting in an effect)
@@ -186,20 +227,26 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
 
   const [statsLoad, setStatsLoad] = useState<Load<LabelStats>>({ state: 'loading' });
   const [listResult, setListResult] = useState<Keyed<LabelPage> | null>(null);
-  const [suspResult, setSuspResult] = useState<Keyed<SuspiciousExample[]> | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [suspResult, setSuspResult] = useState<Keyed<SuspiciousPage> | null>(null);
+  const [actionErr, setActionErr] = useState<{ view: DupesSubView; message: string } | null>(null);
+  const [pending, setPending] = useState<ReadonlySet<number>>(() => new Set());
   const [statsToken, setStatsToken] = useState(0);
   const [listToken, setListToken] = useState(0);
   const [suspToken, setSuspToken] = useState(0);
 
-  // Aborts an override still in flight when the lane is left. Recreated on every
-  // mount so a strict-mode remount does not inherit an already-aborted signal.
-  const unmountCtl = useRef<AbortController | null>(null);
+  // Everything that selects WHICH page is wanted, plus the retry token.
+  const listKey = `${labelFilter}|${sourceFilter}|${band}|${offset}|${listToken}`;
+  const listLoad = current(listResult, listKey);
+  const suspKey = String(suspToken);
+  const suspLoad = current(suspResult, suspKey);
+
+  // What an override that finishes later needs to know about the screen it
+  // finishes on. Synced in an effect, not during render.
+  const latest = useRef({ labelFilter, sourceFilter, listLoad, suspLoad });
   useEffect(() => {
-    const ctl = new AbortController();
-    unmountCtl.current = ctl;
-    return () => ctl.abort();
-  }, []);
+    latest.current = { labelFilter, sourceFilter, listLoad, suspLoad };
+  });
+  const inFlight = useRef(new Set<number>());
 
   useEffect(() => {
     if (!showStats) return;
@@ -212,12 +259,6 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
       });
     return () => ctl.abort();
   }, [showStats, statsToken]);
-
-  // Everything that selects WHICH page is wanted, plus the retry token.
-  const listKey = `${labelFilter}|${sourceFilter}|${band}|${offset}|${listToken}`;
-  const listLoad = current(listResult, listKey);
-  const suspKey = String(suspToken);
-  const suspLoad = current(suspResult, suspKey);
 
   useEffect(() => {
     if (!showLabels) return;
@@ -249,11 +290,19 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
   useEffect(() => {
     if (!showSuspicious) return;
     const ctl = new AbortController();
-    getData<{ labels?: SuspiciousExample[] }>(
+    getData<{ labels?: SuspiciousExample[]; total?: number }>(
       `${API_BASE}/dedup/labels/suspicious?limit=${LABELS_PAGE}`,
       ctl.signal
     )
-      .then((d) => setSuspResult({ key: suspKey, load: { state: 'ready', value: d.labels ?? [] } }))
+      .then((d) =>
+        setSuspResult({
+          key: suspKey,
+          load: {
+            state: 'ready',
+            value: { rows: d.labels ?? [], total: d.total ?? d.labels?.length ?? 0 },
+          },
+        })
+      )
       .catch((e: unknown) => {
         if (isAbortError(e)) return;
         setSuspResult({
@@ -267,75 +316,90 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
   // POSTs the EXISTING override route (stamping label_source=human). Resolves
   // with the server's stamped label, or throws; the callers decide what the row
   // does next.
-  const postOverride = useCallback(async (candidateId: number, label: string) => {
-    setActionError(null);
-    const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
-      method: 'POST',
-      body: JSON.stringify({ label, reason: 'ui_override' }),
-      signal: unmountCtl.current?.signal,
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return ((await r.json()).data ?? {}) as { label?: string; label_source?: string };
-  }, []);
-
-  const override = useCallback(
-    async (candidateId: number, label: string) => {
+  //
+  // Deliberately NOT tied to an AbortController: it is a write, and abandoning
+  // the response of a write that has already been sent would leave the screen
+  // not knowing whether it landed. It finishes even if the lane is left, and the
+  // hook lives in the workspace so the result still has somewhere to land.
+  const runOverride = useCallback(
+    async (
+      candidateId: number,
+      failView: DupesSubView,
+      post: () => Promise<Response>,
+      apply: (d: { label?: string; label_source?: string }) => void
+    ) => {
+      if (inFlight.current.has(candidateId)) return;
+      inFlight.current.add(candidateId);
+      setPending(new Set(inFlight.current));
+      setActionErr(null);
       try {
-        const d = await postOverride(candidateId, label);
-        setListResult((cur) =>
-          cur?.load.state !== 'ready'
-            ? cur
-            : {
-                key: cur.key,
-                load: {
-                  state: 'ready',
-                  value: {
-                    ...cur.load.value,
-                    rows: cur.load.value.rows.map((row) =>
-                      row.candidate_id === candidateId
-                        ? {
-                            ...row,
-                            label: d.label || label,
-                            label_source: d.label_source || 'human',
-                            label_reason: 'ui_override',
-                          }
-                        : row
-                    ),
-                  },
-                },
-              }
-        );
+        const r = await post();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        apply(((await r.json()).data ?? {}) as { label?: string; label_source?: string });
         setStatsToken((t) => t + 1);
       } catch (e) {
-        if (isAbortError(e)) return;
-        setActionError(errorMessage(e, 'Override failed'));
+        setActionErr({ view: failView, message: errorMessage(e, 'Override failed') });
+      } finally {
+        inFlight.current.delete(candidateId);
+        setPending(new Set(inFlight.current));
       }
     },
-    [postOverride]
+    []
+  );
+
+  const override = useCallback(
+    (candidateId: number, label: string) =>
+      runOverride(
+        candidateId,
+        'labels',
+        () => postOverride(candidateId, label),
+        (d) => {
+          const { labelFilter: lf, sourceFilter: sf, listLoad: cur } = latest.current;
+          if (cur.state !== 'ready') return;
+          const stamped = { label: d.label || label, label_source: d.label_source || 'human' };
+          const stays = rowMatchesFilters(stamped, { label: lf, source: sf });
+          const rows = stays
+            ? cur.value.rows.map((row) =>
+                row.candidate_id === candidateId
+                  ? { ...row, ...stamped, label_reason: 'ui_override' }
+                  : row
+              )
+            : cur.value.rows.filter((row) => row.candidate_id !== candidateId);
+          const total = stays ? cur.value.total : Math.max(0, cur.value.total - 1);
+          setListResult((prev) =>
+            prev?.load.state !== 'ready'
+              ? prev
+              : { key: prev.key, load: { state: 'ready', value: { rows, total } } }
+          );
+          // The page emptied but the filter still has rows behind it: fetch them.
+          if (rows.length === 0 && total > 0) setListToken((t) => t + 1);
+        }
+      ),
+    [runOverride]
   );
 
   const overrideSuspicious = useCallback(
-    async (candidateId: number, label: string) => {
-      try {
-        await postOverride(candidateId, label);
-        setSuspResult((cur) =>
-          cur?.load.state !== 'ready'
-            ? cur
-            : {
-                key: cur.key,
-                load: {
-                  state: 'ready',
-                  value: cur.load.value.filter((row) => row.candidate_id !== candidateId),
-                },
-              }
-        );
-        setStatsToken((t) => t + 1);
-      } catch (e) {
-        if (isAbortError(e)) return;
-        setActionError(errorMessage(e, 'Override failed'));
-      }
-    },
-    [postOverride]
+    (candidateId: number, label: string) =>
+      runOverride(
+        candidateId,
+        'suspicious',
+        () => postOverride(candidateId, label),
+        () => {
+          const cur = latest.current.suspLoad;
+          if (cur.state !== 'ready') return;
+          const rows = cur.value.rows.filter((row) => row.candidate_id !== candidateId);
+          const total = Math.max(0, cur.value.total - 1);
+          setSuspResult((prev) =>
+            prev?.load.state !== 'ready'
+              ? prev
+              : { key: prev.key, load: { state: 'ready', value: { rows, total } } }
+          );
+          // The queue shows one page of a longer one: refill it instead of
+          // announcing "nothing suspicious" over rows that are still there.
+          if (rows.length === 0 && total > 0) setSuspToken((t) => t + 1);
+        }
+      ),
+    [runOverride]
   );
 
   const showOnly = useCallback((patch: Partial<Pick<LabelFilters, 'label' | 'source'>>) => {
@@ -352,6 +416,7 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
     setSourceFilter: setSourceFilterState,
     showOnly,
     stats: statsLoad,
+    reloadStats: () => setStatsToken((t) => t + 1),
     status: statusOf(listLoad, (v) => v.rows.length),
     error: listLoad.state === 'error' ? listLoad.message : null,
     rows: listLoad.state === 'ready' ? listLoad.value.rows : [],
@@ -359,11 +424,13 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
     offset,
     setOffset,
     reload: () => setListToken((t) => t + 1),
-    suspiciousStatus: statusOf(suspLoad, (v) => v.length),
+    suspiciousStatus: statusOf(suspLoad, (v) => v.rows.length),
     suspiciousError: suspLoad.state === 'error' ? suspLoad.message : null,
-    suspiciousRows: suspLoad.state === 'ready' ? suspLoad.value : [],
+    suspiciousRows: suspLoad.state === 'ready' ? suspLoad.value.rows : [],
+    suspiciousTotal: suspLoad.state === 'ready' ? suspLoad.value.total : 0,
     reloadSuspicious: () => setSuspToken((t) => t + 1),
-    actionError,
+    actionError: actionErr && actionErr.view === view ? actionErr.message : null,
+    pending,
     override,
     overrideSuspicious,
   };
