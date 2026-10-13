@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -236,9 +236,22 @@ func (w *Writer) intent(what, subject, kind, op, detail string, journaled bool) 
 	return seq, nil
 }
 
-// finish clears the intent (step 5). A clear failure is logged, not returned:
-// the write committed, and the leftover intent only makes recovery cautious.
-func (w *Writer) finish(seq uint64) {
+// finish is step 5: it clears the intent, and only when the write committed
+// and every history row describing it was recorded (recorded). Every other
+// outcome -- a refused or failed write, a panic in the store or the callback,
+// a write whose durability is unknown, a history row that could not be
+// recorded -- leaves the intent, so recovery lists the subject as "may be
+// partially applied" instead of trusting a record that is not there. A
+// refused write that changed nothing is reported the same cautious way; the
+// Writer cannot tell it from a partial one at this level. A clear failure is
+// logged, not returned: the write committed, and the leftover intent only
+// makes recovery cautious.
+func (w *Writer) finish(seq uint64, recorded bool) {
+	if !recorded {
+		pkgLog.Warn("intent %d of op %s left in place: the write's history is incomplete",
+			seq, logger.SanitizeLogValue(w.cfg.OpID))
+		return
+	}
 	if err := w.intents.clear(seq); err != nil {
 		pkgLog.Warn("intent %d of op %s not cleared (the write committed): %s",
 			seq, logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(err.Error()))
@@ -258,7 +271,6 @@ func (w *Writer) ModifyBook(ctx context.Context, bookID string, fn func(*databas
 	if err != nil {
 		return ops.Changed{}, err
 	}
-	defer w.finish(seq)
 	var before, after *database.Book
 	written, err := w.cfg.Books.ModifyBook(bookID, func(row *database.Book) error {
 		snap, serr := database.SnapshotBook(row)
@@ -283,7 +295,9 @@ func (w *Writer) ModifyBook(ctx context.Context, bookID string, fn func(*databas
 	}
 	w.writes.Add(1)
 	journaled := w.cfg.JournaledBook != nil && w.cfg.JournaledBook(bookID)
-	return ops.Changed{Fields: w.cfg.History.RecordDiff(bookID, before, after, journaled)}, nil
+	fields, recorded := w.cfg.History.RecordDiff(bookID, before, after, journaled)
+	w.finish(seq, recorded)
+	return ops.Changed{Fields: fields}, nil
 }
 
 // ModifyBookFile runs fn on one book_file row inside the store's
@@ -297,7 +311,6 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 	if err != nil {
 		return ops.Changed{}, err
 	}
-	defer w.finish(seq)
 	var before, after map[string]json.RawMessage
 	written, err := w.cfg.Files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
 		b, berr := fieldMap(f)
@@ -331,7 +344,7 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 		rows = append(rows, ops.HistoryRow{BookID: bookID, Field: "file." + k + ":" + fileID,
 			Old: string(before[k]), New: string(after[k])})
 	}
-	w.journalRows(ChangeTypeBookFileModify, rows)
+	w.finish(seq, w.journalRows(ChangeTypeBookFileModify, rows))
 	return ops.Changed{Fields: fields}, nil
 }
 
@@ -375,11 +388,10 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 	if err != nil {
 		return fmt.Errorf("%s not written: %w", what, err)
 	}
-	seq, err := w.intent(what, "book_file:"+fileID, "repoint", "repoint_book_file", string(detail), true)
+	seq, err := w.begin(ctx, what, "book_file:"+fileID, "repoint", "repoint_book_file", string(detail), true)
 	if err != nil {
 		return err
 	}
-	defer w.finish(seq)
 	written, err := w.cfg.Files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
 		if database.BookFileLocationOf(f) != was {
 			return ops.ErrChangedSincePlan
@@ -394,8 +406,8 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 		return fmt.Errorf("%w: book_file %s vanished", ops.ErrChangedSincePlan, fileID)
 	}
 	w.writes.Add(1)
-	w.journalRows(database.ChangeTypeBookFileRepoint, []ops.HistoryRow{{BookID: bookID,
-		Field: "book_file:" + fileID, Old: was.Encode(), New: to.Encode()}})
+	w.finish(seq, w.journalRows(database.ChangeTypeBookFileRepoint, []ops.HistoryRow{{BookID: bookID,
+		Field: "book_file:" + fileID, Old: was.Encode(), New: to.Encode()}}))
 	return nil
 }
 
@@ -409,7 +421,6 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 	if err != nil {
 		return ops.Changed{}, err
 	}
-	defer w.finish(seq)
 	var before, after []database.BookAuthor
 	if _, err := w.cfg.Authors.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
 		b := slices.Clone(cur)
@@ -424,6 +435,7 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 	}
 	w.writes.Add(1)
 	if slices.Equal(before, after) {
+		w.finish(seq, true)
 		return ops.Changed{}, nil
 	}
 	oldJSON, oerr := json.Marshal(before)
@@ -431,8 +443,8 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 	if oerr != nil || nerr != nil {
 		return ops.Changed{Fields: []string{"authors"}}, errors.Join(oerr, nerr)
 	}
-	w.journalRows(ChangeTypeBookAuthorsModify, []ops.HistoryRow{{BookID: bookID, Field: "authors",
-		Old: string(oldJSON), New: string(newJSON)}})
+	w.finish(seq, w.journalRows(ChangeTypeBookAuthorsModify, []ops.HistoryRow{{BookID: bookID, Field: "authors",
+		Old: string(oldJSON), New: string(newJSON)}}))
 	return ops.Changed{Fields: []string{"authors"}}, nil
 }
 
@@ -447,30 +459,32 @@ func (w *Writer) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.
 		return err
 	}
 	rows, ferr := fn()
-	w.journalRows(ChangeTypeEffectPrefix+e.Name, rows)
+	recorded := w.journalRows(ChangeTypeEffectPrefix+e.Name, rows)
 	if ferr != nil {
 		return ferr
 	}
 	w.writes.Add(1)
-	w.finish(seq)
+	w.finish(seq, recorded)
 	return nil
 }
 
 // journalRows records history rows as operation changes under the run's op
 // id (step 4, after the write). A row that cannot be recorded is logged and
-// counted failed; the write it describes already committed.
-func (w *Writer) journalRows(changeType string, rows []ops.HistoryRow) {
+// counted failed; the write it describes already committed. It reports
+// whether every row was recorded.
+func (w *Writer) journalRows(changeType string, rows []ops.HistoryRow) bool {
 	if len(rows) == 0 {
-		return
+		return true
 	}
 	h := w.cfg.History
 	if w.cfg.Journal == nil {
 		h.failed.Add(int64(len(rows)))
 		pkgLog.Warn("op %s: %d %s history rows not recorded: no change journal wired",
 			logger.SanitizeLogValue(w.cfg.OpID), len(rows), changeType)
-		return
+		return false
 	}
 	now := time.Now().UTC()
+	all := true
 	for _, r := range rows {
 		err := w.cfg.Journal.CreateOperationChange(&database.OperationChange{
 			OperationID: w.cfg.OpID, BookID: r.BookID, ChangeType: changeType, FieldName: r.Field,
@@ -481,10 +495,12 @@ func (w *Writer) journalRows(changeType string, rows []ops.HistoryRow) {
 			pkgLog.Warn("op %s: history row not recorded (the write committed): book_id=%s field=%s err=%s",
 				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(r.BookID),
 				logger.SanitizeLogValue(r.Field), logger.SanitizeLogValue(err.Error()))
+			all = false
 			continue
 		}
 		h.rows.Add(1)
 	}
+	return all
 }
 
 // fieldMap is a row's fields by JSON name, for a field-level diff.

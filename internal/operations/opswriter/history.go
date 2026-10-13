@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
 // last-edited: 2026-10-13
 
@@ -89,11 +89,12 @@ func (h *BookHistory) NewBatchID() string { return h.batchPrefix + ulid.Make().S
 // order. journaled marks a book that also has operation change rows (its
 // batch gets the apply_op_journaled marker). A row that cannot be recorded
 // makes the batch apply_incomplete. With no recorder it records nothing but
-// still reports the changes.
-func (h *BookHistory) RecordDiff(bookID string, before, after *database.Book, journaled bool) []string {
+// still reports the changes. complete is false when a changed field (or the
+// journaled marker) was not recorded, including when there is no recorder:
+// the Writer then leaves the write's intent in place.
+func (h *BookHistory) RecordDiff(bookID string, before, after *database.Book, journaled bool) (changed []string, complete bool) {
 	batchID := h.NewBatchID()
 	now := time.Now()
-	var changed []string
 	failed := 0
 	for _, field := range database.TrackedBookFields() {
 		oldV, oerr := database.RenderBookField(before, field)
@@ -130,7 +131,7 @@ func (h *BookHistory) RecordDiff(bookID string, before, after *database.Book, jo
 		h.rows.Add(1)
 	}
 	if h.rec == nil {
-		return changed
+		return changed, len(changed) == 0
 	}
 	if len(changed) > 0 && journaled {
 		if err := h.RecordMarker(bookID, ChangeTypeApplyOpJournaled, batchID, now); err != nil {
@@ -149,7 +150,7 @@ func (h *BookHistory) RecordDiff(bookID string, before, after *database.Book, jo
 				h.source, logger.SanitizeLogValue(bookID), batchID, logger.SanitizeLogValue(err.Error()))
 		}
 	}
-	return changed
+	return changed, failed == 0
 }
 
 // RecordField records one already-rendered field change (values are JSON

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-13
 
@@ -1646,12 +1646,14 @@ func (p *PebbleStore) PutIntentV3(id string, in Intent) (err error) {
 	return p.pebbleSetJSON(opv3IntentKey(id, in.Seq), &in)
 }
 
-// ClearIntentV3 deletes a committed intent. It does not sync: by the time
-// it runs the write and its history row are already synced, so a crash that
-// loses the delete only leaves an intent behind, and a leftover intent makes
-// recovery report the subject as "may be partially applied" -- cautious,
-// never wrong in the direction that loses data. Skipping the fsync halves the
-// synced writes of every Writer call.
+// ClearIntentV3 deletes a committed intent. It does not sync. The Writer
+// (internal/operations/opswriter) calls it only after the write committed and
+// every history row describing it was recorded; any other outcome leaves the
+// intent. Those writes are synced, and Pebble's WAL is ordered, so a crash
+// that loses this delete only leaves an intent behind, and a leftover intent
+// makes recovery report the subject as "may be partially applied" --
+// cautious, never wrong in the direction that loses data. Skipping the fsync
+// halves the synced writes of every Writer call.
 func (p *PebbleStore) ClearIntentV3(id string, seq uint64) (err error) {
 	defer recoverPebbleClosed("ClearIntentV3", &err)
 	return p.db.Delete(opv3IntentKey(id, seq), pebble.NoSync)

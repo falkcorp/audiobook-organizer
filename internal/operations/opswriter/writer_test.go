@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-13
 
@@ -36,6 +36,7 @@ type recStore struct {
 	// before fn: a concurrent writer that got there first.
 	mutate      func(*database.Book)
 	failHistory bool
+	failJournal bool
 	putFails    bool
 	onPut       func(database.Intent)
 }
@@ -131,6 +132,9 @@ func (s *recStore) RecordMetadataChange(r *database.MetadataChangeRecord) error 
 func (s *recStore) CreateOperationChange(c *database.OperationChange) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failJournal {
+		return errors.New("journal down")
+	}
 	s.changes = append(s.changes, *c)
 	s.note("history %s:%s", c.ChangeType, c.FieldName)
 	return nil
@@ -458,6 +462,68 @@ func TestIntentWriteFailureRefusesTheWrite(t *testing.T) {
 	}
 }
 
+// TestIntentClearedOnlyAfterRecordedWrite: a write's intent is cleared only
+// once the write committed and its history was recorded. A failed write, a
+// panic, or a history row that could not be recorded leaves the intent, so
+// recovery reports the subject as "may be partially applied".
+func TestIntentClearedOnlyAfterRecordedWrite(t *testing.T) {
+	setup := func() (*recStore, *Writer) {
+		s := newRecStore()
+		s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+		s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/a/1.m4b"}
+		return s, newTestWriter(s, ops.Live)
+	}
+	ctx := context.Background()
+	retitle := func(b *database.Book) error { b.Title = "New"; return nil }
+	cases := []struct {
+		name string
+		run  func(*recStore, *Writer)
+		left int
+	}{
+		{"book written and recorded", func(_ *recStore, w *Writer) { _, _ = w.ModifyBook(ctx, "b1", retitle) }, 0},
+		{"book history not recorded", func(s *recStore, w *Writer) {
+			s.failHistory = true
+			_, _ = w.ModifyBook(ctx, "b1", retitle)
+		}, 1},
+		{"book callback panics", func(_ *recStore, w *Writer) {
+			defer func() { _ = recover() }()
+			_, _ = w.ModifyBook(ctx, "b1", func(*database.Book) error { panic("boom") })
+		}, 1},
+		{"book callback fails", func(_ *recStore, w *Writer) {
+			_, _ = w.ModifyBook(ctx, "b1", func(*database.Book) error { return errors.New("no") })
+		}, 1},
+		{"file written and journaled", func(_ *recStore, w *Writer) {
+			_, _ = w.ModifyBookFile(ctx, "b1", "f1", func(f *database.BookFile) error { f.Format = "m4b"; return nil })
+		}, 0},
+		{"file journal row not recorded", func(s *recStore, w *Writer) {
+			s.failJournal = true
+			_, _ = w.ModifyBookFile(ctx, "b1", "f1", func(f *database.BookFile) error { f.Format = "m4b"; return nil })
+		}, 1},
+		{"repoint journal row not recorded", func(s *recStore, w *Writer) {
+			s.failJournal = true
+			_ = w.RepointBookFile(ctx, "b1", "f1", database.BookFileLocation{Path: "/a/1.m4b"}, database.BookFileLocation{Path: "/b/1.m4b"})
+		}, 1},
+		{"authors journal row not recorded", func(s *recStore, w *Writer) {
+			s.failJournal = true
+			_, _ = w.ModifyBookAuthors(ctx, "b1", func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+				return append(cur, database.BookAuthor{BookID: "b1", AuthorID: 7}), nil
+			})
+		}, 1},
+		{"authors unchanged", func(_ *recStore, w *Writer) {
+			_, _ = w.ModifyBookAuthors(ctx, "b1", func(cur []database.BookAuthor) ([]database.BookAuthor, error) { return cur, nil })
+		}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, w := setup()
+			c.run(s, w)
+			if left, _ := s.ListIntentsV3("op1"); len(left) != c.left {
+				t.Fatalf("intents left = %d, want %d (log %q)", len(left), c.left, s.logCopy())
+			}
+		})
+	}
+}
+
 // S4 (05-PR5 review): the Writer fails closed.
 
 // A repoint with no operation journal would commit a write nothing records,
@@ -507,6 +573,30 @@ func TestRepointChecksFenceFirst(t *testing.T) {
 	err := w.RepointBookFile(context.Background(), "b1", "f1", database.BookFileLocation{Path: "/lib/old.m4b"}, database.BookFileLocation{Path: "/lib/new.m4b"})
 	if !errors.Is(err, ErrFenced) || errors.Is(err, ops.ErrChangedSincePlan) {
 		t.Fatalf("err = %v, want ErrFenced only", err)
+	}
+}
+
+// A fence revoked while RepointBookFile reads (after its first check, before
+// its intent) still refuses the write: the fence is checked again right
+// before the intent.
+func TestRepointRechecksFenceBeforeIntent(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"}
+	w := newTestWriter(s, ops.Live)
+	checks := 0
+	w.SetFence(func() error {
+		checks++
+		if checks > 1 {
+			return ErrFenced
+		}
+		return nil
+	})
+	err := w.RepointBookFile(context.Background(), "b1", "f1", database.BookFileLocation{Path: "/lib/old.m4b"}, database.BookFileLocation{Path: "/lib/new.m4b"})
+	if !errors.Is(err, ErrFenced) {
+		t.Fatalf("err = %v, want ErrFenced", err)
+	}
+	if len(s.intents) != 0 || s.files["f1"].FilePath != "/lib/old.m4b" {
+		t.Fatalf("a fenced repoint wrote: intents %d path %q", len(s.intents), s.files["f1"].FilePath)
 	}
 }
 
