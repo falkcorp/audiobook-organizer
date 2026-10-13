@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6d03b9f2-a4e1-4875-b3c6-0f92d8e15a47
 // last-edited: 2026-10-13
 
@@ -7,10 +7,10 @@
  * The Authors & series lane's surface: a rail, the group spine, and the lane's
  * action bar.
  *
- * The segmented control at the top picks the lane's sub-view (Authors | Series;
- * AI scans joins it in a later change). `AuthorsPanel` is the switch between
- * them: it renders the Authors sub-view below or the Series sub-view
- * (SeriesPanel.tsx), which carry the same control.
+ * The segmented control at the top picks the lane's sub-view (Authors | Series |
+ * AI scans). `AuthorsPanel` is the switch between them: it renders the Authors
+ * sub-view below, the Series sub-view (SeriesPanel.tsx) or the AI scans sub-view
+ * (AIScansPanel.tsx), which carry the same control.
  *
  * THE FOUR STATES (plus one). Loading, error, empty and populated each render
  * differently, and so does a cold cache (`needs-scan`): the server answered, but
@@ -71,6 +71,8 @@ import { fetchBooksByAuthor } from './lanes/authorsReads';
 import { AuthorGroupSpine } from './spine/AuthorGroupSpine';
 import { AuthorsSubViewSwitch } from './AuthorsSubViewSwitch';
 import { SeriesPanel } from './SeriesPanel';
+import { AIScansPanel } from './AIScansPanel';
+import type { AIScansLane } from './lanes/useAIScans';
 
 const KIND_CHIPS: ReadonlyArray<{ value: AuthorKindFilter; label: string }> = [
   { value: 'all', label: 'All groups' },
@@ -353,14 +355,18 @@ function CandidatesSection({ authors }: { authors: AuthorsLane }) {
 
 export interface AuthorsPanelProps {
   authors: AuthorsLane;
+  /** The AI scans sub-view's state. Owned by the workspace (the lane menu's commands read it). */
+  aiScans: AIScansLane;
 }
 
 /** The lane's body: whichever sub-view is showing. */
-export function AuthorsPanel({ authors }: AuthorsPanelProps) {
-  return authors.view === 'series' ? <SeriesPanel authors={authors} /> : <AuthorsView authors={authors} />;
+export function AuthorsPanel({ authors, aiScans }: AuthorsPanelProps) {
+  if (authors.view === 'series') return <SeriesPanel authors={authors} />;
+  if (authors.view === 'ai') return <AIScansPanel authors={authors} ai={aiScans} />;
+  return <AuthorsView authors={authors} />;
 }
 
-function AuthorsView({ authors }: AuthorsPanelProps) {
+function AuthorsView({ authors }: { authors: AuthorsLane }) {
   // The groups the reviewer is confirming, captured when the dialog opened.
   const [confirmAll, setConfirmAll] = useState<AuthorId[] | null>(null);
   const [confirmSelected, setConfirmSelected] = useState(false);

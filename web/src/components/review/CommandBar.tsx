@@ -1,9 +1,9 @@
 // file: web/src/components/review/CommandBar.tsx
-// version: 2.0.1
+// version: 2.1.0
 // guid: 9d3a7f21-5e64-4c08-b73f-2a915c8d0e47
-// last-edited: 2026-09-27
+// last-edited: 2026-10-13
 //
-// The three command menus: Dedup, Metadata, Queue.
+// The command menus: Dedup, Metadata, Authors & series, Queue.
 //
 // WHY COMMANDS ARE NOT `ReviewAction`s
 //
