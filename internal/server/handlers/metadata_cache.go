@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.38.2
+// version: 1.39.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-12
 
@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -1267,6 +1268,21 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 			},
 		})
 		return
+	}
+
+	// A "row" pin is the single-row Apply: one reviewer, one book, one
+	// candidate they were looking at. The apply lifts gates for such a pin (a
+	// folder-derived search's identity_stale, among them) on the strength of
+	// that one look, so a request that carries one alongside other books is a
+	// bulk apply wearing a row pin. Refuse it rather than let the lift reach
+	// books nobody reviewed individually. The dry run above never reads pins.
+	if len(body.BookIDs) > 1 {
+		for id, pin := range body.Pins {
+			if pin.IsRowReview() {
+				httputil.RespondWithBadRequest(c, fmt.Sprintf("a row-origin pin (book %s) is only valid for a single-book apply; got %d books", id, len(body.BookIDs)))
+				return
+			}
+		}
 	}
 
 	// Fail-safe cap (internal/applycap): refuse before enqueueing so the caller
