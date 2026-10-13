@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c0f3b95-2e8a-4d71-b4a9-9f1d5a7e0c28
 // last-edited: 2026-10-12
 //
@@ -148,37 +148,33 @@ func catalogTitles(book *database.Book, in searchInputs, searchTitle, rawTitle s
 	return out
 }
 
-// catalogCredits are the book's author credits in order: its live credit list
-// (database.LiveBookAuthorNames, never the flat Book.Author), a placeholder
-// credit dropped. The author this search was asked by is put in front only
-// when it names someone the live list does not (an author typed into the
-// search dialog, or a book with no live credit at all).
+// catalogCredits are the book's author credits in order, one per live credit
+// (database.LiveBookAuthorNames, never the flat Book.Author). A placeholder
+// credit ("Unknown Author") stays in its place as "", which names no block, so
+// a credit's index here is its index in the live list and the position a
+// candidate reports. The author this search was asked by stands in only when
+// the book has no usable live credit at all (a book whose author row is
+// missing); it never goes in front of, or between, real credits.
 func (mfs *Service) catalogCredits(book *database.Book, searchAuthor string) []string {
 	live, err := database.LiveBookAuthorNames(mfs.db, book)
 	if err != nil {
 		searchFanoutLog.Warn("catalog stage: author credits of book %s unreadable, matching by ASIN only: %v",
 			logger.SanitizeLogValue(book.ID), err)
-		live = nil
+		return nil
 	}
-	var credits []string
-	for _, name := range live {
-		if h := SearchAuthorHint(name); h != "" {
-			credits = append(credits, h)
-		}
+	credits := make([]string, len(live))
+	usable := false
+	for i, name := range live {
+		credits[i] = SearchAuthorHint(name)
+		usable = usable || credits[i] != ""
+	}
+	if usable {
+		return credits
 	}
 	if h := SearchAuthorHint(searchAuthor); h != "" {
-		named := false
-		for _, c := range credits {
-			if authorjunk.SamePersonName(c, h) {
-				named = true
-				break
-			}
-		}
-		if !named {
-			credits = append([]string{h}, credits...)
-		}
+		return []string{h}
 	}
-	return credits
+	return nil
 }
 
 // runCatalogStage runs the stage for one book. It returns nil when the stage

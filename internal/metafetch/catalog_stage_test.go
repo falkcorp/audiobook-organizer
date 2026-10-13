@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -149,7 +149,7 @@ func TestCatalogStageOn_AddsReviewOnlyCandidatesAfterProviders(t *testing.T) {
 
 	require.EqualValues(t, 1, fm.calls.Load())
 	q := fm.asked[0]
-	assert.Equal(t, []string{stageAuthor, "Author 08"}, q.Credits, "the live credits in position order, the placeholder dropped")
+	assert.Equal(t, []string{stageAuthor, "Author 08", ""}, q.Credits, "the live credits in position order; the placeholder keeps its place, as a credit naming no block")
 	assert.Contains(t, q.Titles, stageTitle)
 	assert.Equal(t, baseline, prov.callCount(), "the stage removes no provider call and adds none")
 
@@ -232,4 +232,22 @@ func TestCatalogStage_NoQuestionNoCall(t *testing.T) {
 	searchStage(t, svc, context.Background(), SearchOptions{})
 	require.EqualValues(t, 1, fm.calls.Load(), "the book's own ASIN is a question without a credit")
 	assert.Equal(t, asin, fm.asked[0].ASIN)
+}
+
+// The search author stands in only when the book has no usable live credit,
+// and never goes in front of real ones: it would change which block is tried
+// first and every reported credit position.
+func TestCatalogCredits_SearchAuthorOnlyWhenNoLiveCredit(t *testing.T) {
+	svc, _ := stageHarness(t)
+	book := &database.Book{ID: "b1", Title: stageTitle}
+	id1 := 1
+	book.AuthorID = &id1
+	got := svc.catalogCredits(book, "Typed Author")
+	assert.Equal(t, []string{stageAuthor, "Author 08", ""}, got, "live credits win over the search author")
+
+	mock := svc.db.(*database.MockStore)
+	mock.GetBookAuthorsFunc = func(string) ([]database.BookAuthor, error) { return nil, nil }
+	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) { return &database.Author{ID: id, Name: "Unknown Author"}, nil }
+	assert.Equal(t, []string{"Typed Author"}, svc.catalogCredits(book, "Typed Author"), "a placeholder-only list is no credit")
+	assert.Nil(t, svc.catalogCredits(&database.Book{ID: "b2"}, ""), "no credit, no search author")
 }
