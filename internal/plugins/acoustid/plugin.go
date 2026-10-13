@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-10-13
 
@@ -118,6 +118,11 @@ type pluginBookReader interface {
 // pluginFileStore reads and writes the book_file rows that carry prints.
 type pluginFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFileByID hydrates ONE full row. The whole-library ops that
+	// rewrite a row they listed as a Core use it instead of GetBookFiles
+	// plus a search: GetBookFiles loads every sibling's fingerprint blobs
+	// too, and a worker pool multiplies that by its width.
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetFilesWithZeroDurationFingerprint(limit, offset int) ([]database.BookFile, int64, error)
 	UpdateBookFile(id string, file *database.BookFile) error

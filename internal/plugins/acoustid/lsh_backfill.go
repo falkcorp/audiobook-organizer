@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
 // last-edited: 2026-10-13
 
@@ -124,18 +124,11 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 			// Hydrate the full row and re-save THAT so
 			// PebbleStore.writeBookFileSecondaryIndexes writes the fpidx +
 			// fpidx_meta entries with the real fingerprint bytes intact.
-			full, herr := p.store.GetBookFiles(f.BookID)
+			target, herr := p.store.GetBookFileByID(f.BookID, f.ID)
 			if herr != nil {
 				log.Warn("acoustid lsh-backfill: hydrate failed", "id", f.ID, "err", herr)
 				failed.Add(1)
 				return nil
-			}
-			var target *database.BookFile
-			for j := range full {
-				if full[j].ID == f.ID {
-					target = &full[j]
-					break
-				}
 			}
 			if target == nil {
 				log.Warn("acoustid lsh-backfill: hydrate: row not found", "id", f.ID)
@@ -154,10 +147,13 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 		// One row per item and the work is a DB read plus a DB write (CPU
 		// for the index hook), so size the pool to the cores. Rows are
 		// disjoint: each item writes only its own book_file row, and
-		// PebbleStore serializes writers to one row on a per-file lock, so
-		// two files of one book running together do not touch the same row.
-		// No aggregate recompute fires: the re-save leaves Duration and
-		// FileSize alone.
+		// PebbleStore serializes writers to one row on a per-file lock.
+		// Two files of one book can run together. UpdateBookFile does
+		// recompute that book's aggregates after each write, and the
+		// recompute reads sibling rows outside any per-book lock, but this
+		// re-save changes no path, Duration or FileSize, so every snapshot
+		// sums to the same totals and whichever recompute commits last
+		// writes the same value.
 		Concurrency: runtime.NumCPU(),
 		Label: func(i, t int) string {
 			return fmt.Sprintf("LSH backfill %d/%d (indexed=%d skip-no-fp=%d skip-existing=%d fail=%d)",
