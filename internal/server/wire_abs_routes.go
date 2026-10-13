@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package server
 
@@ -38,17 +38,16 @@ var (
 	_ abshandler.ProgressStore = (*database.PebbleStore)(nil)
 	_ abshandler.BookmarkStore = (*database.PebbleStore)(nil)
 	// LibraryStore is resolved at boot with database.AsCapability, which looks
-	// through the indexedStore decorator to the PebbleStore. Its methods beyond
+	// through any decorator to the PebbleStore. Its methods beyond
 	// database.Store (SearchBooksFiltered, GetBookFilesForIDsCore, GetBooksByTag)
 	// would otherwise surface only as an os.Exit(1) there; this makes a missing
 	// or drifted method a build failure instead.
 	//
-	// Resolution lands on the bare *PebbleStore, never the indexedStore
-	// decorator (it carries none of those three methods). Verified harmless on
-	// 2026-09-19: indexedStore overrides only WRITE methods (CreateBook,
-	// UpdateBook, ModifyBook, FillBookMediaInfo, DeleteBook — indexed_store.go),
-	// and LibraryStore is read-only, so every read the ABS surface makes is the
-	// same call either way.
+	// Resolution lands on the bare *PebbleStore, never a Store-embedding
+	// decorator (it would carry none of those three methods). Verified harmless
+	// on 2026-09-19 against the then-installed indexedStore, which overrode only
+	// WRITE methods; LibraryStore is read-only, so every read the ABS surface
+	// makes is the same call either way.
 	_ abshandler.LibraryStore = (*database.PebbleStore)(nil)
 )
 
@@ -440,8 +439,8 @@ func (s *Server) wireABSRoutes() {
 	}
 
 	// Every capability below is resolved through database.AsCapability, never a
-	// bare assertion: s.store is the indexedStore decorator from NewServer on,
-	// and it embeds database.Store, so it carries none of these ABS keyspace
+	// bare assertion: a decorator on s.store (the indexedStore, from NewServer on,
+	// until 07-S3) embeds database.Store, so it carries none of these ABS keyspace
 	// methods itself. A bare assertion here is an os.Exit on a healthy server.
 	absStore, ok := database.AsCapability[abshandler.Store](s.Ops())
 	if !ok {
@@ -816,11 +815,11 @@ func asCollectionStore(s any) abshandler.CollectionStore {
 //
 // The store is a PARAMETER, and that is the entire reason this function exists.
 //
-// s.store is a plain field that Server.Start later overwrites with the Bleve
-// indexedStore wrapper (server_lifecycle.go). This goroutine is spawned at
+// s.store is a plain field, and until 07-S3 Server.Start overwrote it with the
+// Bleve indexedStore wrapper (server_lifecycle.go). This goroutine is spawned at
 // route-wiring time, from NewServer, BEFORE Start runs. So reading s.Ops()
-// from the goroutine body is an unsynchronized read racing that write, and the
-// two outcomes used to disagree: the old bare store.(*database.PebbleStore)
+// from the goroutine body is an unsynchronized read racing any such write, and
+// the two outcomes used to disagree: the old bare store.(*database.PebbleStore)
 // assertion succeeded against the bare store and failed against the wrapper, so
 // whether the warm waited at all was decided by scheduling. Losing that race
 // means building the cache against a half-published memdb and serving a view of
@@ -856,8 +855,8 @@ type warmupWaiter interface {
 	WaitForWarmup()
 }
 
-// resolveWarmupWaiter finds the memdb warmup gate through the Bleve indexedStore
-// decorator that Server.Start installs.
+// resolveWarmupWaiter finds the memdb warmup gate through any store decorator
+// (until 07-S3 that was the Bleve indexedStore that Server.Start installed).
 //
 // This is a named function rather than an inline assertion for the same reason
 // resolveVGBackfiller is: a guard that cannot reach the production call site does

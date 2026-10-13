@@ -1,7 +1,7 @@
 // file: internal/server/scan_cache_backfill.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3b7f21c4-6a58-4e19-9d02-8c4f5e1a77b3
-// last-edited: 2026-09-13
+// last-edited: 2026-10-13
 
 package server
 
@@ -54,8 +54,8 @@ type ScanCacheBackfiller interface {
 // to the request context -- so a disconnect means "result unseen", never "write
 // abandoned half way".
 func (s *Server) backfillScanCacheHandler(c *gin.Context) {
-	// AsCapability, not a bare assertion: s.store is the indexedStore decorator,
-	// which embeds database.Store and so does not carry this method.
+	// AsCapability, not a bare assertion: this method is outside database.Store,
+	// so a Store-embedding decorator on s.store would not carry it.
 	backfiller, ok := database.AsCapability[ScanCacheBackfiller](s.storeForWiring())
 	if !ok {
 		// Not an error the caller can fix, and not a 500 either: this store simply

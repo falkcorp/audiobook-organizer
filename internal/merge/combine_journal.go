@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package merge
 
@@ -43,7 +43,7 @@ var mlog = logger.New("merge")
 // package cannot reach.
 //
 // WHERE IT LIVES. Raw keys on the main store (database.RawKVStore, which is on
-// database.Store itself), so the production indexedStore decorator forwards it
+// database.Store itself), so a Store-embedding decorator forwards it
 // without any capability assertion:
 //
 //	merge:combine-journal:<ULID> -> CombineJournal JSON
@@ -246,7 +246,7 @@ func (e *CombineUndoRefusedError) Error() string {
 func combineJournalKey(id string) string { return combineJournalPrefix + id }
 
 // CombineJournalWriter is the raw-key write a journal needs. database.Store
-// carries it (RawKVStore), so the production indexedStore forwards it.
+// carries it (RawKVStore), so a Store-embedding decorator forwards it.
 type CombineJournalWriter interface {
 	SetRaw(key string, value []byte) error
 }
@@ -468,7 +468,7 @@ func writeProgress(db userPositionStore, userID, bookID string, st *database.Use
 }
 
 // syncMergeClearer is the reverse of SyncFollower.RecordSyncMerge. Resolved
-// with database.AsCapability, which looks through the indexedStore decorator
+// with database.AsCapability, which looks through any store decorator
 // (the same resolution AsSyncIdentityStore uses for RecordSyncMerge itself).
 type syncMergeClearer interface {
 	ClearSyncMerge(loserBookID, winnerBookID string) error

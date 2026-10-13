@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_store_accessors_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3e9a15-2d48-4b6f-9e01-5a8c7d3b2f64
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package server
 
@@ -11,18 +11,18 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// The maintenance plugin's capability accessors run at OP-RUN time, i.e. after
-// Start() has replaced s.store with the indexedStore decorator. indexedStore
-// embeds the Store interface and so exposes none of the capability methods; a
-// bare `s.store.(database.X)` therefore returns nil in production while passing
-// every test that hands the accessor a bare *PebbleStore.
+// The maintenance plugin's capability accessors run at OP-RUN time, when
+// s.store can sit behind a decorator (until 07-S3 Start() replaced it with the
+// indexedStore decorator). A decorator embedding the Store interface exposes none
+// of the capability methods; a bare `s.store.(database.X)` therefore returns nil
+// while passing every test that hands the accessor a bare *PebbleStore.
 //
 // FileProvenanceStore shipped that way on 2026-08-21 and ReviewStatusIndexStore
 // copied it on 2026-09-02; the ops behind them ("provenance store not
 // initialized", "store does not support a status-index rebuild") were inert in
-// prod. This test wraps the store exactly the way Start() does and holds both
+// prod. This test wraps the store in a Store-embedding decorator and holds both
 // accessors to resolving through it.
-func TestMaintenanceStoreAccessorsResolveThroughIndexedStore(t *testing.T) {
+func TestMaintenanceStoreAccessorsResolveThroughDecorator(t *testing.T) {
 	store, err := database.NewPebbleStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
@@ -39,14 +39,15 @@ func TestMaintenanceStoreAccessorsResolveThroughIndexedStore(t *testing.T) {
 		t.Fatalf("BARE store: ReviewStatusIndexStore() = nil; *PebbleStore must implement it")
 	}
 
-	// What Start() installs when the Bleve index opens -- always, in production.
-	srv.store = &indexedStore{Store: store, server: srv}
+	// A Store-embedding decorator, the shape Start() installed in production
+	// until 07-S3.
+	srv.store = &embeddingDecorator{Store: store}
 
 	if srv.FileProvenanceStore() == nil {
-		t.Errorf("WRAPPED store: FileProvenanceStore() = nil -> maintenance.file-provenance-capture reports 'not initialized' in prod")
+		t.Errorf("DECORATED store: FileProvenanceStore() = nil -> maintenance.file-provenance-capture reports 'not initialized' in prod")
 	}
 	if srv.ReviewStatusIndexStore() == nil {
-		t.Errorf("WRAPPED store: ReviewStatusIndexStore() = nil -> maintenance.review-status-index-repair reports 'not supported' in prod")
+		t.Errorf("DECORATED store: ReviewStatusIndexStore() = nil -> maintenance.review-status-index-repair reports 'not supported' in prod")
 	}
 }
 
@@ -61,7 +62,7 @@ func TestMaintenanceStoreAccessorsNilWhenNoLayerImplements(t *testing.T) {
 		t.Errorf("ReviewStatusIndexStore() on MockStore = %T, want nil", got)
 	}
 	// And wrapping that store does not conjure one either.
-	srv.store = &indexedStore{Store: &database.MockStore{}, server: srv}
+	srv.store = &embeddingDecorator{Store: &database.MockStore{}}
 	if got := srv.ReviewStatusIndexStore(); got != nil {
 		t.Errorf("ReviewStatusIndexStore() on wrapped MockStore = %T, want nil", got)
 	}

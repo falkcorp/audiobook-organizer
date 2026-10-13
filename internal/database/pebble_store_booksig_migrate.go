@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_migrate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a4e2f18-7d05-4b93-8c61-9f2a0e75d3b8
-// last-edited: 2026-09-12
+// last-edited: 2026-10-13
 
 package database
 
@@ -94,8 +94,8 @@ func (o BookSigMigrateOutcome) String() string {
 // BookSigMigrateStore is a narrow capability interface, deliberately kept OUT
 // of database.Store — same rationale as SearchIndexDirtyStore: adding methods
 // to database.Store forces every implementation and generated mock to grow with
-// it. Reach it through AsBookSigMigrateStore, which looks through the
-// indexedStore decorator.
+// it. Reach it through AsBookSigMigrateStore, which looks through any
+// store decorator.
 type BookSigMigrateStore interface {
 	// MigrateBookSigToSidecar moves one book's inline signature into its
 	// `book_sig:` sidecar. Safe to call on an already-migrated book (returns
@@ -105,9 +105,9 @@ type BookSigMigrateStore interface {
 
 // AsBookSigMigrateStore returns s as a BookSigMigrateStore if the underlying
 // store supports it (true for *PebbleStore), or nil otherwise. Callers MUST
-// nil-check the result. Use this instead of `store.(*PebbleStore)`: prod always
-// installs the Bleve indexedStore decorator, and a bare assertion against a
-// wrapped store is indistinguishable from an unsupported backend — which is how
+// nil-check the result. Use this instead of `store.(*PebbleStore)`: the server
+// used to install the Bleve indexedStore decorator (removed in 07-S3), and a
+// bare assertion against a wrapped store is indistinguishable from an unsupported backend — which is how
 // several ops silently no-opped in prod (see AsPebbleStore's comment).
 func AsBookSigMigrateStore(s any) BookSigMigrateStore {
 	if s == nil {

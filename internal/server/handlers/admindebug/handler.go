@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -11,8 +11,9 @@
 // It deliberately does NOT reuse the book PUT route: that route writes tags
 // into the audio file and enqueues an iTunes write-back. Everything here goes
 // through the same database.Store methods the app uses (ModifyBook,
-// ModifyBookFile), so memdb, the search index and the book aggregates follow
-// the edit, and nothing touches a file on disk.
+// ModifyBookFile), so memdb, the search index (through the store's change
+// observer, including the aggregate recompute a book_file edit triggers) and
+// the book aggregates follow the edit, and nothing touches a file on disk.
 package admindebug
 
 import (
@@ -477,8 +478,7 @@ func (h *Handler) patch(c *gin.Context, entity, id, bookID string) {
 	apply := c.Query("apply") == "true"
 
 	if !apply {
-		// Preview: a plain read, no Modify* call (a skipped ModifyBook still
-		// schedules a search re-index through the prod decorator).
+		// Preview: a plain read, no Modify* call.
 		rec, err := h.readRecord(entity, id, bookID)
 		if err != nil {
 			httputil.InternalError(c, "read record", err)
@@ -592,7 +592,6 @@ func (h *Handler) patch(c *gin.Context, entity, id, bookID string) {
 		resp["not_applied"] = missed
 	}
 	if entity == entityBookFile {
-		h.reindexBook(bookID)
 		if after, err := h.store.GetBookByID(bookID); err == nil && after != nil {
 			resp["book_aggregates"] = gin.H{"before": aggregatesOf(bookBefore), "after": aggregatesOf(after)}
 		}
@@ -644,15 +643,6 @@ func aggregatesOf(b *database.Book) gin.H {
 		return nil
 	}
 	return gin.H{"duration": b.Duration, "file_size": b.FileSize}
-}
-
-// reindexBook schedules a search re-index of the book after a file edit. The
-// aggregate recompute inside the Pebble store writes the book through the
-// INNER store, which the prod search decorator never sees; a skipped
-// ModifyBook through the decorated store schedules the re-index and writes
-// nothing (see indexedStore.ModifyBook).
-func (h *Handler) reindexBook(bookID string) {
-	_, _ = h.store.ModifyBook(bookID, func(*database.Book) error { return database.ErrSkipBookWrite })
 }
 
 func (h *Handler) audit(c *gin.Context, typ string, rec *editRecord, changes []diffEntry, extra map[string]any) error {
@@ -828,10 +818,6 @@ func (h *Handler) UndoEdit(c *gin.Context) {
 			}
 		}
 	}
-	if rec.EntityType == entityBookFile {
-		h.reindexBook(rec.BookID)
-	}
-
 	undoneAt := h.now().UTC()
 	rec.UndoneAt = &undoneAt
 	rec.UndoneBy = actorOf(c)

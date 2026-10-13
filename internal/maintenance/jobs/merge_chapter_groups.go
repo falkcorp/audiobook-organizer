@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package jobs
 
@@ -348,8 +348,8 @@ func chapterFolderSiblings(lister chapterDirLister, dirs map[string]bool) ([]str
 }
 
 // chapterDirLister re-lists a folder from the book_atpath index. It is on
-// database.Store (BookDirLister via BookStore), so the prod indexedStore
-// forwards it.
+// database.Store (BookDirLister via BookStore), so a Store-embedding
+// decorator forwards it.
 type chapterDirLister interface {
 	LiveBookPathsUnderDir(dir string) (map[string]string, error)
 }
@@ -650,7 +650,7 @@ func (j *mergeChapterGroupsJob) Policy() maintenance.ExecutionPolicy {
 const chapterLibraryScanKey = "library.scan"
 
 // chapterActiveOpsStore is what the scan guard reads. database.Store (and so
-// the prod indexedStore) has it.
+// any Store-embedding decorator) has it.
 type chapterActiveOpsStore interface {
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }

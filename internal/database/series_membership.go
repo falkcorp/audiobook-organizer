@@ -1,7 +1,7 @@
 // file: internal/database/series_membership.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5d0f3b8e-2a71-4c96-b4e3-8f1a6c29d7b0
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package database
 
@@ -39,8 +39,8 @@ import (
 
 // SeriesMembershipStore is a narrow capability interface, kept OUT of
 // database.Store for the same reason as SeriesBookRefStore. Reach it through
-// AsSeriesMembershipStore / SeriesMembershipAllVersions, which look through the
-// indexedStore decorator (AsCapability) -- a bare type assertion misses in prod.
+// AsSeriesMembershipStore / SeriesMembershipAllVersions, which look through any
+// store decorator (AsCapability) -- a bare type assertion misses behind one.
 type SeriesMembershipStore interface {
 	// GetBooksBySeriesIDsAllVersions returns seriesID -> the books
 	// GetBooksBySeriesIDAllVersions(seriesID) would return, for every ID in

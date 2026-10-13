@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -760,9 +760,9 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	// writes are unflushed), so this path is not free, just bounded.
 	//
 	// The capability is resolved through the decorator chain with
-	// database.AsCapability, never a bare assertion: NewServer wraps the store
-	// (indexedStore) before anything captures it, so a bare assertion fails
-	// here, and the failure is invisible -- a nil census just drops resp.Pebble
+	// database.AsCapability, never a bare assertion: the server's store was wrapped
+	// (indexedStore, until 07-S3) and could be again, so a bare assertion fails
+	// behind a decorator, and the failure is invisible -- a nil census just drops resp.Pebble
 	// from the payload.
 	census := h.healthCensus(c.Request.Context())
 	if census != nil {

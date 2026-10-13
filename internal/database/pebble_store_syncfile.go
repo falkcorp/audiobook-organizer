@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncfile.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 92ebd115-9f89-4400-ac26-bf9a065b6153
-// last-edited: 2026-09-08
+// last-edited: 2026-10-13
 
 package database
 
@@ -68,7 +68,7 @@ func AsSyncFileStore(s any) SyncFileStore {
 	if s == nil {
 		return nil
 	}
-	// Looks through the indexedStore decorator; see store_capability.go.
+	// Looks through any store decorator; see store_capability.go.
 	if sf, ok := AsCapability[SyncFileStore](s); ok {
 		return sf
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package acoustid
 
@@ -66,10 +66,11 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// Fast path: PebbleStore exposes a batched bulk-clear that fsyncs once
 	// per ~2000 records instead of once per UpdateBookFile call — ~100×
 	// faster than the per-row fallback below.
-	// resolveFingerprintResetter, which walks the decorator chain: the server
-	// installs the indexedStore decorator in NewServer, and p.store therefore
-	// holds the WRAPPER in production. A bare p.store.(*database.PebbleStore)
-	// fails against it and
+	// resolveFingerprintResetter, which walks the decorator chain: a store
+	// can arrive wrapped in a decorator (the server installed the indexedStore
+	// decorator in NewServer until 07-S3, and p.store then held the WRAPPER in
+	// production). A bare p.store.(*database.PebbleStore)
+	// fails against a wrapper and
 	// silently takes the per-row fallback below -- ~100x slower, with no error
 	// and nothing in the logs to say the fast path was skipped. See
 	// database/store_capability.go, which documents two prod jobs degraded this
@@ -214,7 +215,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 // fingerprintResetter is the batched whole-library AcoustID fingerprint wipe.
 //
 // Not on database.Store (compile-probed 2026-08-19), so a bare assertion fails
-// through the Bleve indexedStore decorator -- which is exactly how this op
+// through a store decorator (the Bleve indexedStore, until 07-S3) -- which is exactly how this op
 // degraded to the one-row-at-a-time fallback in production. Named rather than
 // resolved with database.AsPebbleStore so this package does not depend on the
 // concrete type by name -- see

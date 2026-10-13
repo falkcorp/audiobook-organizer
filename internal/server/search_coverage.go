@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: ee9cc3d9-3925-4f72-af8a-e9f25a943fb9
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 //
 // Boot-time repair for a PARTIALLY built Bleve search index.
 //
@@ -157,7 +157,7 @@ func (s *Server) reconcileSearchIndexCoverage() {
 	// a no-op, so a doc raced away by a concurrent delete is fine. A book
 	// restored from soft-delete later is re-indexed by the restore path
 	// itself: RestoreAudiobook goes through store.UpdateBook, and the
-	// indexedStore decorator enqueues a reindex on every UpdateBook.
+	// store's change observer enqueues a reindex on every UpdateBook.
 	//
 	// One batch per chunk rather than one Delete per doc: each scorch write
 	// is its own segment and its own wait for persistence.

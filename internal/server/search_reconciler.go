@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -166,8 +166,8 @@ type indexChunkStore interface {
 	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
 }
 
-// Compile-time proof that the production store (the indexedStore decorator,
-// which embeds database.Store) satisfies indexChunkStore. Without it a method
+// Compile-time proof that the production store (database.Store, which any
+// Store-embedding decorator also carries) satisfies indexChunkStore. Without it a method
 // missing from database.Store would silently disable the reconciler and send
 // every worker event to the dirty set.
 var _ indexChunkStore = database.Store(nil)

@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package server
 
@@ -514,26 +514,38 @@ func TestSearchResultCache_Timing(t *testing.T) {
 	}
 }
 
+// recordOnlyObserver reports a store write to the change log only, as the
+// server's observer does minus the index enqueue. It lets a test hold a book's
+// document stale in Bleve while the result cache already knows the book changed.
+type recordOnlyObserver struct{ s *Server }
+
+func (o recordOnlyObserver) BooksChanged(ids ...string)     { o.s.searchChanges.Record(ids...) }
+func (o recordOnlyObserver) BooksNeedReindex(ids ...string) { o.s.searchChanges.Record(ids...) }
+func (o recordOnlyObserver) AuthorRenamed(int)              {}
+func (o recordOnlyObserver) SeriesRenamed(int)              {}
+
 // TestSearchResultCache_IndexLagIsRepatched: a read that lands between a book
 // write and its Bleve commit re-evaluates against the old document and is
 // stamped current. The commit must record the book again so the next read
-// re-patches it. Simulated by writing through the inner store (recorded at
-// write time, not re-indexed) and re-indexing afterwards.
+// re-patches it. Simulated by swapping in an observer that records the write
+// but does not enqueue it (the window before the worker runs), then
+// re-indexing afterwards.
 func TestSearchResultCache_IndexLagIsRepatched(t *testing.T) {
 	fx := newSearchCacheServer(t, 60, 0, searchcache.Config{})
 	id, _, _ := setupRenameTarget(t, fx)
 	if !containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
 		t.Fatal("target missing before the rename")
 	}
-	inner := fx.srv.store.(*indexedStore).Store
-	if _, err := inner.ModifyBook(id, func(b *database.Book) error { b.Title = "Yankeetitle Story"; return nil }); err != nil {
+	fx.pebble.SetChangeObserver(recordOnlyObserver{s: fx.srv})
+	if _, err := fx.pebble.ModifyBook(id, func(b *database.Book) error { b.Title = "Yankeetitle Story"; return nil }); err != nil {
 		t.Fatal(err)
 	}
+	fx.pebble.SetChangeObserver(&serverChangeObserver{s: fx.srv})
 	// Bleve still holds the old title: the patch keeps the target.
 	if !containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
 		t.Fatal("index was updated before the simulated commit")
 	}
-	fx.srv.enqueueIndex(id, false)
+	fx.srv.enqueueIndex(id)
 	drainQueue(t, fx.srv)
 	if containsID(fx.ids(t, "zulutitle", primaryOnly()), id) {
 		t.Fatal("the index commit did not re-patch an entry read during the lag")

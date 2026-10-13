@@ -1,7 +1,7 @@
 // file: internal/authority/authority.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5baf3d40-9887-4365-8743-452d7a73c619
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 // Package authority keeps the authority lists: a rebuildable reference index
 // of known people (authors, narrators, cast members) and publishers, with
@@ -35,7 +35,7 @@
 //   - Owner overrides (ref_ovr:) are never touched by a rebuild.
 //
 // Keyspace (raw keys on the main store, through database.RawKVStore, which
-// the production indexedStore forwards; no capability assertion involved):
+// Store-embedding decorators forward; no capability assertion involved):
 //
 //	ref_person:<fold>          Person JSON           (rebuilt)
 //	ref_pub:<fold>             Publisher JSON        (rebuilt)

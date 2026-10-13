@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -120,8 +120,8 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 		return fmt.Errorf("database not initialized")
 	}
 
-	// Resolve through the capability helper, never a bare type assertion: prod
-	// always installs the Bleve indexedStore decorator, and `store.(*PebbleStore)`
+	// Resolve through the capability helper, never a bare type assertion: the server
+	// used to install the Bleve indexedStore decorator (removed in 07-S3), and `store.(*PebbleStore)`
 	// against a wrapped store is indistinguishable from a genuinely unsupported
 	// backend. Several ops silently no-opped in production exactly that way. A
 	// hard error here is deliberate — "unsupported store, 0 books migrated" must

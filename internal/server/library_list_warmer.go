@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-10-02
+// last-edited: 2026-10-13
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -168,8 +168,8 @@ func (s *Server) warmAudiobookListCache() {
 	if s.audiobookService == nil {
 		return
 	}
-	// The Server's store is wrapped by indexedStore (and possibly other
-	// decorators), so IsMemReady has to be resolved through the chain.
+	// The Server's store may be wrapped by decorators, so IsMemReady has to be
+	// resolved through the chain.
 	// AsCapability does that -- this file used to hand-roll the same walk with
 	// its own storeUnwrapper type and a bound of 8, half the shared
 	// maxUnwrapDepth of 16.

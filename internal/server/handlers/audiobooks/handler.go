@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -196,8 +196,8 @@ func hasPreference(c *gin.Context, token string) bool {
 //
 // Resolved at request time from h.store (the un-stripped store) rather than
 // snapshotted, for the same reason the inline Unwrap assertions above are:
-// production runs behind the indexedStore decorator, and a bare assertion
-// against the wrapper misses. Resolution is two type assertions, which is
+// a store can run behind a decorator (the server's was indexedStore until
+// 07-S3), and a bare assertion against the wrapper misses. Resolution is two type assertions, which is
 // nothing against building a list response.
 //
 // The library-list cache warmer resolves the same counter from the same

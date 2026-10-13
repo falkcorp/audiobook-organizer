@@ -1,7 +1,7 @@
-// file: internal/server/registry_indexed_store_test.go
-// version: 1.1.0
+// file: internal/server/registry_search_observer_test.go
+// version: 2.0.0
 // guid: c4e1f0a2-7d3b-4f58-9a61-2b8e5d7c3f90
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package server
 
@@ -15,32 +15,39 @@ import (
 )
 
 // Regression for search serving stale titles: NewServer handed the service
-// registry the BARE store (Override("store", resolvedStore)) and only wrapped
-// s.store in indexedStore later, in Start. Every registry-built service --
-// audiobooks, metafetch, merge, every plugin op -- captured the bare store at
-// Build time, so their UpdateBook calls never re-indexed.
+// registry the BARE store (Override("store", ...)) and only installed the
+// search-indexing decorator on s.store later, in Start. Every registry-built
+// service -- audiobooks, metafetch, merge, every plugin op -- captured the bare
+// store at Build time, so their UpdateBook calls never re-indexed.
+//
+// Indexing is now an observer installed on the store itself (NewServer,
+// installSearchObserver), so there is no wrapper to hold the wrong side of: the
+// registry, the server and the global store are one raw store, and every write
+// through any of them reaches the index.
 //
 // These tests build the server through NewServer and switch indexing live
 // through startSearchIndexing, the same method Start calls, then write through
 // the store the REGISTRY hands its services.
 
-// indexedLayers counts indexedStore layers on the decorator chain of s. The
-// correct answer is exactly 1: 0 means writes skip the index, 2 means every
-// write is enqueued twice.
-func indexedLayers(t *testing.T, s database.Store) int {
-	t.Helper()
-	n := 0
-	for depth := 0; s != nil && depth < 16; depth++ {
-		if _, ok := s.(*indexedStore); ok {
-			n++
+// isRawStore reports whether s is not a decorator: it exposes no Unwrap, so a
+// plain type assertion sees everything the store implements.
+func isRawStore(s database.Store) bool {
+	_, wrapped := s.(database.StoreUnwrapper)
+	return !wrapped
+}
+
+// queuedIDs drains the recording queue (no worker runs in the tests that use
+// it) and returns the book IDs that were enqueued, in order.
+func queuedIDs(srv *Server) []string {
+	var ids []string
+	for {
+		select {
+		case r := <-srv.indexQueue:
+			ids = append(ids, r.bookID)
+		default:
+			return ids
 		}
-		u, ok := s.(database.StoreUnwrapper)
-		if !ok {
-			break
-		}
-		s = u.Unwrap()
 	}
-	return n
 }
 
 func newRegistryIndexTestServer(t *testing.T) (*Server, *search.BleveIndex) {
@@ -98,8 +105,8 @@ func TestRegistryStore_UpdateBookReindexesTitle(t *testing.T) {
 	if regStore != srv.store {
 		t.Fatalf("registry store %T is not the server's store %T", regStore, srv.store)
 	}
-	if n := indexedLayers(t, regStore); n != 1 {
-		t.Fatalf("registry store has %d indexedStore layers, want exactly 1", n)
+	if !isRawStore(regStore) {
+		t.Fatalf("registry store %T is a decorator; the server's store must be the raw store", regStore)
 	}
 
 	srv.setSearchIndex(idx)
@@ -113,8 +120,8 @@ func TestRegistryStore_UpdateBookReindexesTitle(t *testing.T) {
 	if got := database.GetGlobalStore(); got != srv.store {
 		t.Fatalf("global store %T is not the server's store after startSearchIndexing", got)
 	}
-	if n := indexedLayers(t, srv.store); n != 1 {
-		t.Fatalf("after startSearchIndexing the store has %d indexedStore layers, want exactly 1", n)
+	if !isRawStore(srv.store) {
+		t.Fatalf("after startSearchIndexing the store %T is a decorator", srv.store)
 	}
 
 	if _, err := regStore.CreateBook(&database.Book{
@@ -145,9 +152,12 @@ func TestRegistryStore_UpdateBookReindexesTitle(t *testing.T) {
 	}
 }
 
-// Each write through the registry store must enqueue exactly one index event.
-// No worker runs here, so the queue length is the number of enqueues.
-func TestRegistryStore_IndexesExactlyOncePerWrite(t *testing.T) {
+// Each write through the registry store must enqueue an index event for that
+// book, and for no other. No worker runs here, so the queue holds every
+// enqueue. A write can enqueue more than once (a book-row write and a junction
+// write each report it); the worker de-duplicates a batch by book ID, so the
+// assertion is "at least one, only for this book", not an exact count.
+func TestRegistryStore_EveryWriteReachesTheQueue(t *testing.T) {
 	srv, idx := newRegistryIndexTestServer(t)
 	regStore := registryStore(t, srv)
 
@@ -155,14 +165,25 @@ func TestRegistryStore_IndexesExactlyOncePerWrite(t *testing.T) {
 	srv.indexQueue = make(chan indexRequest, 16)
 	t.Cleanup(srv.closeIndexQueue)
 
+	onlyB1 := func(step string) {
+		t.Helper()
+		ids := queuedIDs(srv)
+		if len(ids) == 0 {
+			t.Fatalf("%s: nothing was enqueued", step)
+		}
+		for _, id := range ids {
+			if id != "b1" {
+				t.Fatalf("%s: enqueued %q, want only b1 (all: %v)", step, id, ids)
+			}
+		}
+	}
+
 	if _, err := regStore.CreateBook(&database.Book{
 		ID: "b1", Title: "Once", FilePath: "/library/once.m4b", Format: "m4b",
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if got := len(srv.indexQueue); got != 1 {
-		t.Fatalf("after one CreateBook the queue holds %d events, want 1", got)
-	}
+	onlyB1("CreateBook")
 
 	book, err := regStore.GetBookByID("b1")
 	if err != nil || book == nil {
@@ -172,23 +193,19 @@ func TestRegistryStore_IndexesExactlyOncePerWrite(t *testing.T) {
 	if _, err := regStore.UpdateBook("b1", book); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if got := len(srv.indexQueue); got != 2 {
-		t.Fatalf("after CreateBook+UpdateBook the queue holds %d events, want 2", got)
-	}
+	onlyB1("UpdateBook")
 
 	// The same holds for the server's own store and the store Start installs
-	// globally: all three are the one decorated object.
+	// globally: all three are the one object.
 	if _, err := srv.store.UpdateBook("b1", book); err != nil {
 		t.Fatalf("update via server store: %v", err)
 	}
-	if got := len(srv.indexQueue); got != 3 {
-		t.Fatalf("after a third write the queue holds %d events, want 3", got)
-	}
+	onlyB1("UpdateBook via the server store")
 }
 
-// Before Start creates the queue the decorator must forward writes untouched
-// and enqueue nothing -- it is installed in NewServer, long before the Bleve
-// index exists.
+// Before Start creates the queue the observer must enqueue nothing -- it is
+// installed in NewServer, long before the Bleve index exists -- and the store
+// must still take the write.
 func TestRegistryStore_InertBeforeStart(t *testing.T) {
 	srv, _ := newRegistryIndexTestServer(t)
 	regStore := registryStore(t, srv)

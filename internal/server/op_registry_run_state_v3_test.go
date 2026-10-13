@@ -1,7 +1,7 @@
 // file: internal/server/op_registry_run_state_v3_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7be5d482-a71c-4572-86c3-af4eaa876d95
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package server
 
@@ -62,9 +62,9 @@ func TestOpRegistryRunStateGate(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = pebble.Close() })
 
-	withV3 := opsregistry.New(&indexedStore{Store: pebble}, slog.Default(), 1, nil)
+	withV3 := opsregistry.New(&embeddingDecorator{Store: pebble}, slog.Default(), 1, nil)
 	if !withV3.HasRunStateV3() {
-		t.Fatal("setup: a registry over indexedStore{Pebble} did not resolve the v3 run state")
+		t.Fatal("setup: a registry over a Store-embedding decorator of Pebble did not resolve the v3 run state")
 	}
 	// Negative control: the opaque decorator hides the run state, so this
 	// registry is what a Pebble server with a broken wrapper would get.

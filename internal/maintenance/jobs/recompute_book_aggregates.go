@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-08-29
+// last-edited: 2026-10-13
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -315,7 +315,7 @@ func (j *recomputeBookAggregatesJob) Policy() maintenance.ExecutionPolicy {
 // short-circuit a completed 40k-book backfill instead of redoing it.
 //
 // Neither method is on database.Store (compile-probed 2026-08-19), so a bare
-// assertion fails through the Bleve indexedStore decorator and the job silently
+// assertion fails through a store decorator (the Bleve indexedStore, until 07-S3) and the job silently
 // loses its short-circuit. Named rather than resolved with
 // database.AsPebbleStore so this package does not depend on the concrete type
 // by name -- see docs/plans/2026-08-19-split-the-pebblestore-surface.md.

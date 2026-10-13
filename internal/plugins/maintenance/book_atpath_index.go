@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-10-02
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -27,10 +27,10 @@ import (
 //     rollback runbook (a pre-index binary ran and moved books without keys).
 //
 // Both resolve their store method through database.AsCapability, not a bare
-// assertion: OpsStore() is server.indexedStore in production, which embeds the
-// database.Store interface and so hides every *PebbleStore method outside it.
-// Neither method writes book rows, so unwrapping past indexedStore's
-// CreateBook/UpdateBook/DeleteBook overrides bypasses nothing.
+// assertion: OpsStore() can be a Store-embedding decorator (server.indexedStore, until
+// 07-S3), which hides every *PebbleStore method outside database.Store.
+// Neither method writes book rows, so unwrapping past a decorator's book-write
+// overrides bypasses nothing.
 //
 // The rebuild fans out inside the store: backfillBookAtPath runs one iterator
 // feeding a runtime.NumCPU() worker pool, each worker with its own batch. The

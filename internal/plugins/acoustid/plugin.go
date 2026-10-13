@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 // Package acoustid is the UOS plugin for AcoustID fingerprinting operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -135,7 +135,7 @@ type pluginBookSigWriter interface {
 
 // windowSidecarStore is the part of database.FingerprintWindowStore the
 // window backfill uses. It is on database.Store (via BookFileFingerprintStore),
-// so the production indexedStore satisfies it through its embedded Store at
+// so a Store-embedding decorator satisfies it through its embedded Store at
 // compile time; nothing is type-asserted at run time.
 type windowSidecarStore interface {
 	GetFingerprintWindows(ref database.FingerprintWindowRef) ([]database.FingerprintWindow, error)

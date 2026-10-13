@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_dirty.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8508267e-71d5-4292-877d-1c3a803cedae
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 //
 // Durable dirty-set for search-index reconciliation.
 //
@@ -42,7 +42,7 @@ const searchDirtyPrefix = "idx:sidx:dirty:"
 // OUT of database.Store. Adding methods to database.Store forces every
 // implementation and every generated mock to grow with it; capabilities that
 // only PebbleStore can satisfy live here instead and are reached through
-// AsSearchIndexDirtyStore, which looks through the indexedStore decorator.
+// AsSearchIndexDirtyStore, which looks through any store decorator.
 type SearchIndexDirtyStore interface {
 	// MarkSearchIndexDirty records that a book's index entry may be stale.
 	// Idempotent: marking an already-marked book is a no-op overwrite.
@@ -65,7 +65,7 @@ func AsSearchIndexDirtyStore(s any) SearchIndexDirtyStore {
 	if s == nil {
 		return nil
 	}
-	// Looks through the indexedStore decorator; see store_capability.go.
+	// Looks through any store decorator; see store_capability.go.
 	if ds, ok := AsCapability[SearchIndexDirtyStore](s); ok {
 		return ds
 	}

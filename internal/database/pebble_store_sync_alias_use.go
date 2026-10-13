@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_sync_alias_use.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d69a8939-cf20-4007-a46e-2e439f5957e1
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 // Package database: sync_alias_use keyspace. It records which merge-loser
 // libraryItemIds (aliases) each user's ABS client has actually addressed.
@@ -59,8 +59,8 @@ type SyncAliasUseStore interface {
 	SyncAliasUseSeedCutoff(now time.Time) (time.Time, error)
 }
 
-// AsSyncAliasUseStore returns s as a SyncAliasUseStore, looking through the
-// indexedStore decorator (store_capability.go), or nil.
+// AsSyncAliasUseStore returns s as a SyncAliasUseStore, looking through any
+// store decorator (store_capability.go), or nil.
 func AsSyncAliasUseStore(s any) SyncAliasUseStore {
 	if s == nil {
 		return nil

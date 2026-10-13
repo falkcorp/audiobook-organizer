@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -237,8 +237,8 @@ type icRunner struct {
 	library *icLibraryIndex
 	// chapters copies the source's chapter table onto a version clone and
 	// removes it on undo. Resolved with database.AsCapability: the chapter
-	// methods are not on database.Store, so a bare assertion fails on the
-	// production indexedStore decorator (see chapters_backfill.go).
+	// methods are not on database.Store, so a bare assertion fails behind a
+	// Store-embedding decorator (see chapters_backfill.go).
 	chapters chapterPersister
 	// tags reads the source's franchise: tags for the owner-manual check
 	// (OpsStore does not carry tags). It is required: applygate.BookManualOnly

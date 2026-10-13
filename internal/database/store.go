@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.112.1
+// version: 2.113.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package database
 
@@ -81,9 +81,9 @@ type mediaStore interface {
 // READ ONLY, and on Store deliberately. The table is written by the scanner and
 // the chapters backfill, which hold the concrete store; the reason this is on
 // the Store interface at all is that dedup now scores chapter structure
-// (SigChapterStructure), and production wraps the store in the Bleve
-// indexedStore decorator. A capability assertion for a method that is NOT on
-// this interface silently misses through that decorator -- the shape that hid
+// (SigChapterStructure), and production wrapped the store in the Bleve
+// indexedStore decorator (removed in 07-S3). A capability assertion for a method
+// that is NOT on this interface silently misses through any such decorator -- the shape that hid
 // LiveBookIDsAtPath in #3335 -- and a dedup signal that never fires is
 // indistinguishable from one that found nothing. Declaring it here makes a
 // decorator that forgets to forward it fail the BUILD instead.

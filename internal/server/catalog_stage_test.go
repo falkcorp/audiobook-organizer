@@ -1,7 +1,7 @@
 // file: internal/server/catalog_stage_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e9c34a70-5b18-4d2f-86a1-3d0f7b92c584
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package server
 
@@ -79,8 +79,9 @@ func TestCatalogStage_EndToEnd_CountersAndSummaryLine(t *testing.T) {
 		aud := &silentAudible{}
 		svc := metafetch.NewService(ps)
 		svc.SetOverrideSources([]metadata.MetadataSource{aud})
-		// The production wiring: the indexed decorator NewServer holds, not the bare Pebble store.
-		wireCatalogStage(svc, &indexedStore{Store: ps})
+		// The production wiring: NewServer passes the raw observed Pebble store
+		// (07-S3 removed the indexed decorator).
+		wireCatalogStage(svc, ps)
 		stats := &metafetch.CatalogStageStats{}
 		ctx := metafetch.WithCatalogStageStats(context.Background(), stats)
 		lim := rate.NewLimiter(rate.Inf, 1)

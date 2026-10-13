@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package merge
 
@@ -124,7 +124,7 @@ type mergeVersionGroupStore interface {
 // syncCapabilityStore is deliberately `any`: FollowFileMove and
 // followSyncFilesForBookChange never call a method on the store themselves.
 // They hand it to database.AsSyncFileStore / AsSyncIdentityStore, which take
-// `any` precisely because the indexedStore decorator embeds the Store interface
+// `any` precisely because a decorator that embeds the Store interface
 // and so hides every capability method from a static type. Naming a wider
 // interface here would state a requirement that does not exist.
 type syncCapabilityStore = any
@@ -134,7 +134,7 @@ type syncCapabilityStore = any
 // combine_journal.go for why it is not the dedup auto-merge journal), point
 // reads/writes of single file rows (the refuse-if-changed checks and the
 // disc/track restore), and the reverse of each mapping the combine rewrote.
-// Every method here is on database.Store, so the indexedStore decorator
+// Every method here is on database.Store, so a Store-embedding decorator
 // forwards it without a capability assertion. Composed from three focused
 // pieces so no single declaration is wide.
 type combineUndoStore interface {

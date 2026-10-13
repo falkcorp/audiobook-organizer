@@ -1,7 +1,7 @@
 // file: internal/database/author_file_refs.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c6e57d72-7048-499d-85aa-1714156d9481
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package database
 
@@ -78,7 +78,7 @@ import (
 // AuthorFileRefStore is a narrow capability interface, deliberately kept OUT of
 // database.Store for the same reason as AuthorBookRefStore: widening Store
 // forces every implementation and every generated mock to grow with it. Reach
-// it through AsAuthorFileRefStore, which looks through the indexedStore
+// it through AsAuthorFileRefStore, which looks through any store
 // decorator.
 type AuthorFileRefStore interface {
 	// GetAllAuthorFileRefCounts returns authorID -> number of non-missing
@@ -93,9 +93,9 @@ type AuthorFileRefStore interface {
 // and MUST fail rather than falling back to GetAllAuthorFileCounts — that
 // fallback is the defect this file exists to remove, and it is silent.
 //
-// It goes through AsCapability, not a bare type assertion, because in
-// production the store is wrapped in the Bleve indexedStore decorator and a
-// bare `s.(*PebbleStore)` returns nil exactly where the guard matters.
+// It goes through AsCapability, not a bare type assertion, because a
+// store can sit behind a decorator (the server's was the Bleve indexedStore until
+// 07-S3) and a bare `s.(*PebbleStore)` returns nil exactly where the guard matters.
 func AsAuthorFileRefStore(s any) AuthorFileRefStore {
 	if s == nil {
 		return nil

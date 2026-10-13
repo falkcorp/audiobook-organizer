@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-19
+// last-edited: 2026-10-13
 
 // Package dedup — op dedup.build-isbn-index.
 //
@@ -272,7 +272,7 @@ type ISBNIndexStore interface {
 // registry -- so `p.store.(ISBNIndexStore)` succeeds as things currently
 // stand, and this change fixes no live failure. It stops the op from being one
 // decorator away from breaking: any wrapper that embeds the database.Store
-// interface (internal/server's indexedStore is one) satisfies pluginStore
+// interface (internal/server's indexedStore was one, until 07-S3) satisfies pluginStore
 // while hiding the concrete type, and the assertion would then fail.
 //
 // All THREE methods are absent from database.Store -- compile-probed

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_blockers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ef5d7b19-e54c-4787-ba5b-cbc96add5858
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 package jobs
 
@@ -73,8 +73,8 @@ func newChapterCarryContext(store chapterBlockerStore) (*chapterCarryContext, er
 func (cc *chapterCarryContext) chapterGroupBlockers(primary *database.Book, sources []*database.Book) ([]string, []string) {
 	var out []string
 	add := func(format string, a ...any) { out = append(out, fmt.Sprintf(format, a...)) }
-	// database.AsBookmarkStore unwraps the server's store decorators (a bare
-	// type assertion misses on the prod indexedStore). A store without it
+	// database.AsBookmarkStore unwraps store decorators (a bare
+	// type assertion misses behind one, as it did on the old indexedStore). A store without it
 	// fails the check closed: bookmarks it cannot see it cannot protect.
 	bm := database.AsBookmarkStore(cc.store)
 	canListBookmarks := bm != nil

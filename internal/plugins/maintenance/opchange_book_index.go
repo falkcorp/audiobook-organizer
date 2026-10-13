@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-10-03
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -38,8 +38,8 @@ import (
 // UpdateProgress. The wait for that slot gives up when ctx ends.
 //
 // It resolves the store method through database.AsCapability, not a bare
-// assertion: OpsStore() is server.indexedStore in production, which hides
-// every *PebbleStore method outside database.Store. The rebuild writes index
+// assertion: OpsStore() can be a Store-embedding decorator (server.indexedStore,
+// until 07-S3), which hides every *PebbleStore method outside database.Store. The rebuild writes index
 // entries only, never journal rows.
 //
 // Preview by default (owner rule 2026-09-25): `{}` runs the read-only verify

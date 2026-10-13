@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -191,7 +191,7 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		return nil
 	}
 	// Duration and file size are in the search document, and this write went
-	// through the inner store, which the indexedStore decorator never sees.
+	// through the store itself, not through a book-write method the caller made.
 	p.notifyBooksNeedReindex(bookID)
 
 	// "caller" names the subsystem that drove this write. This is the line the

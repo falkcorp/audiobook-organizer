@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -255,9 +255,9 @@ func PersistChaptersForBook(ctx context.Context, bookFilePath string, scanLog lo
 	}
 
 	// AsPebbleStore, not a bare assertion. Traced 2026-08-19: this store is
-	// the BARE one -- server.NewServer calls scanner.SetStore(resolvedStore)
-	// before Start installs the Bleve indexedStore decorator, and nothing sets
-	// it again afterwards -- so the bare form was NOT failing here today. This
+	// the BARE one -- server.NewServer calls scanner.SetStore(store)
+	// with the server's own store, and nothing sets it again afterwards -- so
+	// the bare form was NOT failing here (it would behind a decorator). This
 	// is hardening, not a bug fix: the failure mode if that wiring ever changes
 	// is silent (a sampled warning that reads like an unsupported backend
 	// rather than a bug), and the cost of being right by construction is one
@@ -401,7 +401,7 @@ func logChapterWarn(scanLog logger.Logger, format string, args ...any) {
 // chapterStore is the read/write pair chapter persistence needs.
 //
 // Neither method is on database.Store (compile-probed 2026-08-19), so a bare
-// assertion fails through the Bleve indexedStore decorator. Named rather than
+// assertion fails through a store decorator (the Bleve indexedStore, until 07-S3). Named rather than
 // resolved with database.AsPebbleStore so this package does not depend on the
 // concrete type by name -- see
 // docs/plans/2026-08-19-split-the-pebblestore-surface.md.
