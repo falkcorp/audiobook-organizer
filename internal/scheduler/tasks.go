@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -985,9 +985,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			// EMPTY ON PURPOSE (2026-09-25): with no dry_run key the op
 			// defaults to a dry run, so a scheduled run previews and writes
 			// nothing. The schedule was disabled in prod when this changed.
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.author-split-scan", schedulerExtraOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.author-split-scan", struct{}{})
 			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.author-split-scan: %w", enqErr)
+				return nil, fmt.Errorf("failed to enqueue maintenance.author-split-scan: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "author-split-scan"), nil
 		},

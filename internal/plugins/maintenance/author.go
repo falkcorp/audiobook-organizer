@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -104,10 +104,36 @@ func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, repo
 
 // --- author-split-scan ---
 
+// authorSplitScanDef is the only registration of this op.
+// scheduler.author-split-scan ran a second copy under its own ID and
+// ConcurrencyKey until 2026-10-13 (04-P4e); it resolves here as a FormerID and
+// the author_split_scan scheduler task enqueues this def with an empty body, so
+// a scheduled run is a preview.
+//
+// The two bodies were the same algorithm, but this one carried every later fix
+// and the scheduler copy lacked them: the primary-author write here skips a
+// book whose primary moved off the composite meanwhile (ErrSkipBookWrite); a
+// GetBookAuthors failure is counted and logged here instead of silently
+// skipping the book; and "books updated" here counts only primary-author
+// writes that landed, where the scheduler copy counted every relinked book.
+// The survivor's behaviour is kept in all three, so nothing was ported.
+//
+// Permissions and Timeout are the scheduler copy's (it gated on settings.manage
+// and carried 2h), so the alias neither widens who can run a deleting op nor
+// shortens the budget prod runs were sized against. ResumePolicy stays
+// ResumeRequeue (the scheduler copy was ResumeDrop) because the apply is
+// idempotent, so a requeue after a restart cannot split an author twice: a
+// composite is deleted only after VerifyAuthorUnlinked passes, a part that
+// already exists is found by name rather than created again, an already-linked
+// part is not linked again, and the primary-author write skips a book that no
+// longer names the composite. A pass that died halfway leaves the composite in
+// place, and the rerun finishes it (TestAuthorSplitScan_RequeueAfterPartialApply).
 func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
 		ID:          "maintenance.author-split-scan",
+		FormerIDs:   []string{"scheduler.author-split-scan"},
+		Permissions: []auth.Permission{auth.PermSettingsManage},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Author split scan",
@@ -119,7 +145,7 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.author-split-scan",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         60 * time.Minute,
+		Timeout:         2 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runAuthorSplitScan,
@@ -303,8 +329,8 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 				// not preserved-stale (STOREFID W5d-1 / #1887), and a column
 				// another writer commits meanwhile is not reverted (audit
 				// A1#15). The fresh row decides: a primary moved off the
-				// composite meanwhile is left alone. Sibling of
-				// internal/scheduler/extra_ops.go — keep in sync.
+				// composite meanwhile is left alone. The scheduler copy of
+				// this op lacked that check and is gone (04-P4e).
 				newPrimary := newAuthors[0]
 				applied := false
 				written, err := store.ModifyBook(book.ID, func(full *database.Book) error {

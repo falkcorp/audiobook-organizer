@@ -1,44 +1,30 @@
-// file: internal/scheduler/author_split_relink_trashed_test.go
-// version: 1.0.1
+// file: internal/plugins/maintenance/author_split_relink_trashed_test.go
+// version: 1.1.0
 // guid: 3b8d5e72-0c4f-4a91-9e26-d71f84a3c6b0
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
-package scheduler
+package maintenance
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// scheduler.author-split-scan relinks a composite author's books to the split
+// maintenance.author-split-scan (which absorbed scheduler.author-split-scan,
+// 04-P4e) relinks a composite author's books to the split
 // authors and then DeleteAuthor's the composite. DeleteAuthor sweeps the author
 // out of EVERY book_authors row, trashed books included, so a relink list that
 // skipped the trash erased a trashed book's credit. Real store throughout.
-
-type splitRelinkReporter struct {
-	opsregistry.Reporter // nil: any method not overridden below panics
-	logs                 []string
-}
-
-func (r *splitRelinkReporter) UpdateProgress(_, _ int, _ string) error { return nil }
-func (r *splitRelinkReporter) IsCanceled() bool                        { return false }
-func (r *splitRelinkReporter) SetCurrentItem(string)                   {}
-func (r *splitRelinkReporter) Logger() *slog.Logger                    { return slog.New(slog.DiscardHandler) }
-func (r *splitRelinkReporter) Log(_ slog.Level, message string, _ ...slog.Attr) error {
-	r.logs = append(r.logs, message)
-	return nil
-}
 
 type failSplitSetBookAuthorsStore struct {
 	*database.PebbleStore
@@ -76,16 +62,14 @@ func mkSplitTrashedBook(t *testing.T, st *database.PebbleStore, authorID int) st
 	return b.ID
 }
 
-func runSplitScanOp(t *testing.T, store ExtraOpsStore) *splitRelinkReporter {
+// runSplitScanOp applies the split through the survivor's own Run, with the
+// store handed over as the plugin's OpsStore. The reporter is returned so a
+// test can read what the op said.
+func runSplitScanOp(t *testing.T, store database.Store) *fakeReporter {
 	t.Helper()
-	m := dbmocks.NewMockStore(t)
-	m.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
-	reg := opsregistry.New(m, slog.New(slog.DiscardHandler), 1, nil)
-	require.NoError(t, NewExtraOpsRegistrar(store, ExtraOpsDeps{}).RegisterAuthorSplitScanOp(reg))
-	def, ok := reg.Def("scheduler.author-split-scan")
-	require.True(t, ok)
-	rep := &splitRelinkReporter{}
-	require.NoError(t, def.Run(context.Background(), json.RawMessage(`{"dry_run":false}`), rep))
+	p := &Plugin{deps: &fakeDeps{store: store}}
+	rep := &fakeReporter{}
+	require.NoError(t, p.authorSplitScanDef().Run(context.Background(), json.RawMessage(`{"dry_run":false}`), rep))
 	return rep
 }
 
@@ -148,4 +132,63 @@ func TestAuthorSplitScanOp_KeepsCompositeWhileTrashedBookStillCredits(t *testing
 		}
 	}
 	require.True(t, refused, "refusal not reported; logs: %v", rep.logs)
+}
+
+// ResumeRequeue is safe because an interrupted apply can be run again: the pass
+// that died on one book leaves the composite in place (see the test above), and
+// the rerun finishes it without crediting anyone twice. The first pass here
+// fails SetBookAuthors for one of two books; the second, healthy pass is the
+// requeue.
+func TestAuthorSplitScan_RequeueAfterPartialApply(t *testing.T) {
+	st := newSplitRelinkStore(t)
+	composite, err := st.CreateAuthor("Erin Gray & Finn Green")
+	require.NoError(t, err)
+	done := mkSplitTrashedBook(t, st, composite.ID)
+	stuck := mkSplitTrashedBook(t, st, composite.ID)
+
+	runSplitScanOp(t, failSplitSetBookAuthorsStore{PebbleStore: st, failBook: stuck})
+	kept, err := st.GetAuthorByID(composite.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kept, "the interrupted pass must leave the composite for the rerun")
+
+	rep := runSplitScanOp(t, st)
+
+	gone, err := st.GetAuthorByID(composite.ID)
+	require.NoError(t, err)
+	require.Nil(t, gone, "the rerun should finish the split")
+	erin, err := st.GetAuthorByName("Erin Gray")
+	require.NoError(t, err)
+	require.NotNil(t, erin)
+	finn, err := st.GetAuthorByName("Finn Green")
+	require.NoError(t, err)
+	require.NotNil(t, finn)
+	for _, id := range []string{done, stuck} {
+		credits, err := st.GetBookAuthors(id)
+		require.NoError(t, err)
+		ids := map[int]int{}
+		for _, c := range credits {
+			ids[c.AuthorID]++
+		}
+		require.Equal(t, map[int]int{erin.ID: 1, finn.ID: 1}, ids, "book %s credits after the rerun", id)
+		full, err := st.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, full.AuthorID)
+		require.Equal(t, erin.ID, *full.AuthorID)
+	}
+	require.NotContains(t, strings.Join(rep.logs, "\n"), "NOT deleted")
+
+	// A further pass has nothing left to split.
+	require.Contains(t, strings.Join(runSplitScanOp(t, st).logs, "\n"), "Split 0 composite authors")
+}
+
+// The def carries the merged contract (04-P4e): the loser ID as a FormerID, the
+// loser's gate and timeout, and the survivor's own concurrency key and resume
+// policy.
+func TestAuthorSplitScanDef_MergeContract(t *testing.T) {
+	def := New(fakeDeps{}).authorSplitScanDef()
+	require.Equal(t, []string{"scheduler.author-split-scan"}, def.FormerIDs)
+	require.Equal(t, []auth.Permission{auth.PermSettingsManage}, def.Permissions)
+	require.GreaterOrEqual(t, def.Timeout, 2*time.Hour)
+	require.Equal(t, sdk.ResumeRequeue, def.ResumePolicy)
+	require.Equal(t, "maintenance.author-split-scan", def.ConcurrencyKey)
 }
