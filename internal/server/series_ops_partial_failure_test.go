@@ -1,5 +1,5 @@
 // file: internal/server/series_ops_partial_failure_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d8a2f37-c1e9-4b64-a0f3-7e29b6d41c85
 // last-edited: 2026-10-13
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // These pin what the two series write ops REPORT when they leave series behind.
@@ -159,12 +161,17 @@ func (r *seriesDedupOpReporter) OpID() string { return "op-series-dedup-test" }
 
 func runSeriesDedupOp(t *testing.T, s *Server, params string) (*seriesDedupOpReporter, error) {
 	t.Helper()
+	rep := &seriesDedupOpReporter{}
+	return rep, runSeriesDedupOpWith(t, s, params, rep)
+}
+
+func runSeriesDedupOpWith(t *testing.T, s *Server, params string, rep *seriesDedupOpReporter) error {
+	t.Helper()
 	reg := seriesMergeOpTestReg(t)
 	require.NoError(t, s.RegisterSeriesDedupOp(reg))
 	def, ok := reg.Def("dedup.series-dedup")
 	require.True(t, ok)
-	rep := &seriesDedupOpReporter{}
-	return rep, def.Run(context.Background(), []byte(params), rep)
+	return def.Run(context.Background(), []byte(params), rep)
 }
 
 func TestSeriesDedupOp_ApplyThatKeepsASeriesFailsAndNamesIt(t *testing.T) {
@@ -217,6 +224,173 @@ func TestSeriesDedupActivityMessage(t *testing.T) {
 	assert.Contains(t, seriesDedupActivityMessage(merged, true), "PREVIEW")
 	incomplete := seriesDedupActivityMessage(kept, false)
 	assert.Contains(t, incomplete, "INCOMPLETE")
-	assert.Contains(t, incomplete, "kept 1 series with 2 error(s)")
+	assert.Contains(t, incomplete, "kept 1 series, 2 error(s)")
 	assert.NotContains(t, incomplete, "completed", "a failed apply must not write a 'completed' activity row")
+
+	// An apply with errors but nothing kept (an undo-ledger row that could not be
+	// written) is incomplete too: the same condition that fails the op.
+	ledger := dedup.SeriesDedupResult{TotalMerged: 3, TotalBooksReassigned: 7, Errors: []string{"ledger"}}
+	got := seriesDedupActivityMessage(ledger, false)
+	assert.Contains(t, got, "INCOMPLETE")
+	assert.Contains(t, got, "kept 0 series, 1 error(s)")
+	// A preview that predicts errors is still a preview.
+	assert.Contains(t, seriesDedupActivityMessage(ledger, true), "PREVIEW")
+}
+
+// DedupSeries records two failures that leave NO series behind: a reassigned
+// book whose undo-ledger row could not be written, and a deleted series whose
+// ledger row could not be written (an un-undoable delete). Neither adds to
+// LeftIDs, so a check on LeftIDs alone reported both runs as completed. The op
+// fails on any error from an apply, with an empty id list -- the series-merge
+// contract.
+func TestSeriesDedupOp_FailsWhenAnUndoLedgerRowCouldNotBeWritten(t *testing.T) {
+	for _, changeType := range []string{"metadata_update", "series_delete"} {
+		t.Run(changeType, func(t *testing.T) {
+			store, deleted := newSeriesPartialStore([]seriesPartialSeries{
+				{id: 3, name: "Beta", visible: []database.BookCore{book("BOOK_B")}, refCount: 1},
+				{id: 4, name: "beta", visible: []database.BookCore{book("BOOK_C")}, refCount: 1},
+			})
+			store.MockStore.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+				if c.ChangeType == changeType {
+					return errors.New("ledger down")
+				}
+				return nil
+			}
+			s := newSeriesMergeOpServer(t, store)
+			s.dedupCache.Set("series-duplicates", map[string]any{"groups": []any{}})
+
+			rep, err := runSeriesDedupOp(t, s, `{"dry_run":false}`)
+
+			require.Error(t, err, "a run that cannot be undone must not report success")
+			assert.Contains(t, err.Error(), SeriesDedupFailedIDsPrefix+"]", "nothing was kept, so the list is empty")
+			assert.Contains(t, err.Error(), "undo-ledger")
+			assert.Equal(t, []int{4}, *deleted, "the merge itself went ahead")
+			assert.NotEmpty(t, rep.errorLevelLogs())
+			_, cached := s.dedupCache.Get("series-duplicates")
+			assert.False(t, cached)
+		})
+	}
+}
+
+// A cancel (or a lost stand-down lease) returns an error after the groups
+// already processed were merged. The cached duplicate list must not keep
+// offering them.
+func TestSeriesDedupOp_CancelAfterSomeGroupsStillInvalidatesTheCache(t *testing.T) {
+	store, deleted := newSeriesPartialStore([]seriesPartialSeries{
+		{id: 1, name: "Alpha", visible: []database.BookCore{book("BOOK_A")}, refCount: 1},
+		{id: 2, name: "alpha", visible: []database.BookCore{book("BOOK_A2")}, refCount: 1},
+		{id: 3, name: "Beta", visible: []database.BookCore{book("BOOK_B")}, refCount: 1},
+		{id: 4, name: "beta", visible: []database.BookCore{book("BOOK_C")}, refCount: 1},
+	})
+	s := newSeriesMergeOpServer(t, store)
+	s.dedupCache.Set("series-duplicates", map[string]any{"groups": []any{}})
+	rep := &seriesDedupOpReporter{}
+	rep.cancelAfter = 1 // the first group goes, the second check is a cancel
+
+	err := runSeriesDedupOpWith(t, s, `{"dry_run":false}`, rep)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cancelled")
+	assert.Len(t, *deleted, 1, "one group merged before the cancel")
+	_, cached := s.dedupCache.Get("series-duplicates")
+	assert.False(t, cached, "the merged group's series are gone, so the cached list is stale")
+}
+
+func TestSeriesDedupOp_PreviewCancelLeavesTheCacheAlone(t *testing.T) {
+	store, _ := newSeriesPartialStore([]seriesPartialSeries{
+		{id: 1, name: "Alpha", visible: []database.BookCore{book("BOOK_A")}, refCount: 1},
+		{id: 2, name: "alpha", visible: []database.BookCore{book("BOOK_A2")}, refCount: 1},
+		{id: 3, name: "Beta", visible: []database.BookCore{book("BOOK_B")}, refCount: 1},
+		{id: 4, name: "beta", visible: []database.BookCore{book("BOOK_C")}, refCount: 1},
+	})
+	s := newSeriesMergeOpServer(t, store)
+	s.dedupCache.Set("series-duplicates", map[string]any{"groups": []any{}})
+	rep := &seriesDedupOpReporter{}
+	rep.cancelAfter = 1
+
+	require.Error(t, runSeriesDedupOpWith(t, s, `{}`, rep))
+	_, cached := s.dedupCache.Get("series-duplicates")
+	assert.True(t, cached, "a preview wrote nothing, so there is nothing to invalidate")
+}
+
+func TestSeriesMergeOp_CancelAfterSomeSeriesStillInvalidatesTheCache(t *testing.T) {
+	store, deleted := newSeriesPartialStore([]seriesPartialSeries{
+		{id: 10, name: "Series Keep"},
+		{id: 20, name: "Series Good", visible: []database.BookCore{book("BOOK_A")}, refCount: 1},
+		{id: 30, name: "Series Next", visible: []database.BookCore{book("BOOK_B")}, refCount: 1},
+	})
+	s := newSeriesMergeOpServer(t, store)
+	s.dedupCache.Set("series-duplicates", map[string]any{"groups": []any{}})
+	reg := seriesMergeOpTestReg(t)
+	require.NoError(t, s.RegisterSeriesMergeOp(reg))
+	def, ok := reg.Def("dedup.series-merge")
+	require.True(t, ok)
+	rep := &seriesMergeOpReporter{cancelAfter: 1}
+
+	err := def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20,30]}`), rep)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cancelled")
+	assert.Equal(t, []int{20}, *deleted)
+	_, cached := s.dedupCache.Get("series-duplicates")
+	assert.False(t, cached)
+}
+
+// ---- the lane's merges carry the protections Merge All used to have --------------
+
+func lockedBookStore() seriesRefCountingStore {
+	store := newSeriesMergeOpStore([]database.BookCore{{ID: "BOOK_LOCKED"}}, 1)
+	store.MockStore.GetMetadataFieldStatesFunc = func(bookID string) ([]database.MetadataFieldState, error) {
+		return []database.MetadataFieldState{{BookID: bookID, Field: database.FieldKeySeriesName, OverrideLocked: true}}, nil
+	}
+	return store
+}
+
+func runSeriesMergeOp(t *testing.T, s *Server, params string, rep opsregistry.Reporter) error {
+	t.Helper()
+	reg := seriesMergeOpTestReg(t)
+	require.NoError(t, s.RegisterSeriesMergeOp(reg))
+	def, ok := reg.Def("dedup.series-merge")
+	require.True(t, ok)
+	return def.Run(context.Background(), []byte(params), rep)
+}
+
+func TestSeriesMergeOp_HonoursASeriesNameLockByDefault(t *testing.T) {
+	store := lockedBookStore()
+	err := runSeriesMergeOp(t, newSeriesMergeOpServer(t, store), `{"keep_id":10,"merge_ids":[20]}`, &seriesMergeOpReporter{})
+
+	require.Error(t, err, "the lane's request carries no honor_locks field and must still be protected")
+	assert.Contains(t, err.Error(), SeriesMergeFailedIDsPrefix+"20]", "the series is reported as left, by id")
+	assert.Contains(t, err.Error(), "user-locked", "with the reason")
+}
+
+func TestSeriesMergeOp_HonorLocksFalseRestoresTheOldBehaviour(t *testing.T) {
+	store := lockedBookStore()
+	require.NoError(t, runSeriesMergeOp(t, newSeriesMergeOpServer(t, store),
+		`{"keep_id":10,"merge_ids":[20],"honor_locks":false}`, &seriesMergeOpReporter{}))
+}
+
+func TestSeriesMergeOp_HonorLocksTrueMatchesTheDefault(t *testing.T) {
+	err := runSeriesMergeOp(t, newSeriesMergeOpServer(t, lockedBookStore()),
+		`{"keep_id":10,"merge_ids":[20],"honor_locks":true}`, &seriesMergeOpReporter{})
+	require.Error(t, err)
+}
+
+// noOpIDReporter has no run id, as a reporter that does not know its operation.
+type noOpIDReporter struct{ seriesMergeOpReporter }
+
+func (r *noOpIDReporter) OpID() string { return "" }
+
+// The scan stand-down gate is keyed by the op id; the op passes the server as the
+// controller, so a run with no id is refused rather than written ungated.
+func TestSeriesMergeOp_RefusesToApplyWithoutAnOperationID(t *testing.T) {
+	store, deleted := newSeriesPartialStore([]seriesPartialSeries{
+		{id: 10, name: "Series Keep"},
+		{id: 20, name: "Series Good", visible: []database.BookCore{book("BOOK_A")}, refCount: 1},
+	})
+	err := runSeriesMergeOp(t, newSeriesMergeOpServer(t, store), `{"keep_id":10,"merge_ids":[20]}`, &noOpIDReporter{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "without an operation id")
+	assert.Empty(t, *deleted)
 }

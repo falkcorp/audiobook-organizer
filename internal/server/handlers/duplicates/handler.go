@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.16.3
+// version: 1.17.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -755,6 +755,8 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 		KeepID     int    `json:"keep_id" binding:"required"`
 		MergeIDs   []int  `json:"merge_ids" binding:"required"`
 		CustomName string `json:"custom_name"`
+		// HonorLocks is optional; absent means true (see dedup.SeriesMergeParams).
+		HonorLocks *bool `json:"honor_locks"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
@@ -775,5 +777,5 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 
 	detail := fmt.Sprintf("merge-series:keep=%d,merge=%v", req.KeepID, req.MergeIDs)
 	h.launchOp(c, "dedup.series-merge", "series-merge", detail,
-		seriesMergeOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, CustomName: req.CustomName, Detail: detail})
+		seriesMergeOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, CustomName: req.CustomName, HonorLocks: req.HonorLocks, Detail: detail})
 }

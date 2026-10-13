@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-10-13
 
@@ -804,12 +804,13 @@ type SeriesMergeResult struct {
 // optionally renames the kept series to customName, and relinks authors.
 // It does NOT invalidate the server cache — the caller must do that.
 //
-// FIELD LOCKS -- deliberately NOT consulted here. MergeSeries is the USER's
-// own action: the series UI hands it explicit keep/merge IDs and, optionally,
-// the name to keep. A user lock exists to stop fetches, scans and unattended
-// maintenance from overwriting what the user chose; it does not exist to stop
-// the user from choosing again. The unattended twin, DedupSeries, does honour
-// the lock.
+// FIELD LOCKS -- NOT consulted by MergeSeries itself, which is the USER's own
+// action: explicit keep/merge IDs, and a user lock exists to stop fetches, scans
+// and unattended maintenance from overwriting what the user chose, not to stop
+// the user from choosing again. The unattended twin, DedupSeries, does honour the
+// lock, and so does MergeSeriesWithOptions with HonorLocks: the Authors & series
+// lane merges many groups from one click (Merge All), where a book the owner
+// pinned to a series must not be moved by a click that never looked at it.
 //
 // Each merged-from series row is deleted only when the UNFILTERED reference
 // count agrees that nothing still points at it; a refusal is recorded in
@@ -819,13 +820,44 @@ type SeriesMergeResult struct {
 //
 // opID is written into OperationChange records for audit.
 func MergeSeries(
-	_ context.Context,
+	ctx context.Context,
 	store Store,
 	opID string,
 	keepID int,
 	mergeIDs []int,
 	customName string,
 	progress ProgressReporter,
+) (SeriesMergeResult, error) {
+	return MergeSeriesWithOptions(ctx, store, opID, keepID, mergeIDs, customName, progress, MergeSeriesOptions{})
+}
+
+// MergeSeriesOptions are the two protections a merge can opt into. The zero value
+// is the original MergeSeries: no stand-down, locks ignored.
+type MergeSeriesOptions struct {
+	// HonorLocks leaves a book whose series_name is user-locked on the series it
+	// is on when the merge would move it to a differently-named series (the
+	// DedupSeries rule). The merged-from series is then not deleted, because
+	// that book still references it: it lands in LeftIDs, and Errors names the
+	// book and the lock. Merging into a series with the same name moves nothing
+	// the lock protects, so it is not consulted.
+	HonorLocks bool
+	// Scan, when set, stands the library scanner down for the merge and renews the
+	// lease per merged series, aborting if it is lost (the DedupSeries contract:
+	// a concurrent library.scan rewrites the same book rows this loop repoints).
+	// It also makes an empty opID a refusal, since the gate is keyed by it.
+	Scan ScanStandDownController
+}
+
+// MergeSeriesWithOptions is MergeSeries with MergeSeriesOptions.
+func MergeSeriesWithOptions(
+	ctx context.Context,
+	store Store,
+	opID string,
+	keepID int,
+	mergeIDs []int,
+	customName string,
+	progress ProgressReporter,
+	opts MergeSeriesOptions,
 ) (SeriesMergeResult, error) {
 	customName = strings.TrimSpace(customName)
 
@@ -837,6 +869,24 @@ func MergeSeries(
 	keepName := keepSeries.Name
 	if customName != "" {
 		keepName = customName
+	}
+
+	// The gate, before the first write (the rename below is one). Fails CLOSED
+	// like DedupSeries: without an op id its undo-ledger rows would be
+	// unattributable and the gate has no holder key.
+	if opts.Scan != nil {
+		if opID == "" {
+			return SeriesMergeResult{}, fmt.Errorf(
+				"series merge refusing to apply without an operation id: its undo-ledger rows would be unattributable")
+		}
+		release, aerr := opts.Scan.AcquireScanStandDown(ctx, opID, "series-merge apply")
+		if aerr != nil {
+			return SeriesMergeResult{}, fmt.Errorf(
+				"series merge refusing to apply while a library.scan is running or queued: %w", aerr)
+		}
+		if release != nil {
+			defer release()
+		}
 	}
 
 	// Rename the kept series if requested.
@@ -974,6 +1024,17 @@ func MergeSeries(
 		// repoints, and it is left holding a series that no longer exists.
 		books := members[mergeID]
 
+		mergeSeries, _ := store.GetSeriesByID(mergeID)
+		mergeSeriesName := ""
+		if mergeSeries != nil {
+			mergeSeriesName = mergeSeries.Name
+		}
+		// A lock protects the NAME the owner chose; moving a book onto a series
+		// spelled the same keeps it, so only a differently-named keep series is a
+		// move the lock forbids. mergeSeriesName is empty when the read failed,
+		// which compares as different: the safe direction.
+		checkLocks := opts.HonorLocks && mergeSeriesName != keepName
+
 		// moved counts reassignments that actually SUCCEEDED, and is the
 		// subtrahend of the reference guard below. It is deliberately NOT
 		// len(books): that is what was ATTEMPTED, and every continue path in
@@ -998,6 +1059,20 @@ func MergeSeries(
 					fmt.Sprintf("book %s vanished between the series scan and hydration; "+
 						"series %d kept, it may still reference it", bookCore.ID, mergeID))
 				continue
+			}
+			if checkLocks {
+				locks, lerr := database.LoadFieldLocks(store, full.ID)
+				if lerr != nil {
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("book %s: not moved off series %d, %v", full.ID, mergeID, lerr))
+					continue
+				}
+				if locks.Locked(database.FieldKeySeriesName) {
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("book %s: series name is user-locked as %q; not moved to %q (series %d kept)",
+							full.ID, mergeSeriesName, keepName, mergeID))
+					continue
+				}
 			}
 			// The before-image comes from the row ModifyBook hands back -- the
 			// row the write actually replaces -- not from bookCore (the index
@@ -1048,11 +1123,6 @@ func MergeSeries(
 		}
 
 		// Record the series deletion.
-		mergeSeries, _ := store.GetSeriesByID(mergeID)
-		mergeSeriesName := ""
-		if mergeSeries != nil {
-			mergeSeriesName = mergeSeries.Name
-		}
 		// Refuse to delete a series that something we could not reassign still
 		// points at. The unfiltered count minus what we actually MOVED is the
 		// number of rows left holding mergeID.
@@ -1118,6 +1188,20 @@ func MergeSeries(
 			_ = progress.UpdateProgress(i+1, total,
 				fmt.Sprintf("Processed %d/%d series (%d merged, %.2f%%)",
 					i+1, total, result.MergedCount, pct))
+		}
+
+		// Heartbeat the lease on the per-series boundary and treat a lost lease as
+		// a HARD ABORT (see DedupSeries): a lapsed lease resumes the scanner, so
+		// writing past it means two writers on the same rows with no gate.
+		if opts.Scan != nil && !opts.Scan.RenewScanStandDown(opID) {
+			msg := fmt.Sprintf(
+				"scan stand-down lease lost after %d/%d series; aborting the remaining merges before the library scanner resumes",
+				i+1, total)
+			result.Errors = append(result.Errors, msg)
+			if progress != nil {
+				_ = progress.Log("error", msg, nil)
+			}
+			return result, fmt.Errorf("series merge aborted: %s", msg)
 		}
 	}
 

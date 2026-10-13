@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.27.1
+// version: 2.28.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-13
 
@@ -557,17 +557,18 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			// those rows while it did. s is the ScanStandDownController — the
 			// *Server methods in server_maintenance_deps.go satisfy it.
 			result, err := dedup.DedupSeries(ctx, store, opID, s, progress, dryRun)
+			// A dry run wrote nothing, so there is nothing to invalidate. An apply
+			// invalidates on EVERY exit that can follow a write -- including a
+			// cancel or a lost stand-down lease, which return an error after
+			// merging some groups -- or the cached duplicate list keeps offering
+			// series that are already gone.
+			if !dryRun {
+				s.dedupCache.InvalidateAll()
+			}
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "series deduplication failed", "dry_run", dryRun, "err", err)
 				return err
-			}
-
-			// A dry run wrote nothing, so there is nothing to invalidate. An apply
-			// invalidates even when it kept some series (below): the ones it did
-			// merge are gone.
-			if !dryRun {
-				s.dedupCache.InvalidateAll()
 			}
 			// An apply that kept a duplicate series is not a finished dedup. It
 			// used to return nil here -- the refusal sat in result.Errors, the op
@@ -575,9 +576,17 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			// taking `completed` at its word treated the library as deduplicated
 			// while the series was still there. The merged ones stay merged (no
 			// rollback) and the cache is already invalidated; the failure names
-			// what was kept. A preview deletes nothing, so it has nothing left
-			// behind (LeftIDs is empty) and keeps reporting success.
-			kept := len(result.LeftIDs) > 0
+			// what was kept.
+			//
+			// The condition is ANY error on an apply, not only a kept series:
+			// DedupSeries also records, as errors, a book reassigned whose
+			// undo-ledger row could not be written and a series deleted whose
+			// ledger row could not be written (an un-undoable delete). Neither
+			// leaves a series behind, so the id list is empty -- the same
+			// contract as series-merge -- but "completed" would hide that the
+			// run cannot be undone. A preview deletes nothing and keeps
+			// reporting success: its errors are predictions.
+			kept := !dryRun && len(result.Errors) > 0
 			if kept {
 				op.SetStatus("failed")
 				logging.Error(ctx, "series deduplication incomplete",
@@ -597,7 +606,7 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			}
 			if kept {
 				detail := strings.Join(result.Errors[:min(len(result.Errors), 3)], "; ")
-				return fmt.Errorf("%s%s]: merged %d series, kept %d with %d error(s): %s",
+				return fmt.Errorf("%s%s]: merged %d series, kept %d, %d error(s): %s",
 					SeriesDedupFailedIDsPrefix, joinInts(result.LeftIDs),
 					result.TotalMerged, len(result.LeftIDs), len(result.Errors), detail)
 			}
@@ -618,10 +627,10 @@ func seriesDedupActivityMessage(result dedup.SeriesDedupResult, dryRun bool) str
 			"Series deduplication PREVIEW (dry_run=true, nothing written): "+
 				"would merge %d series and reassign %d books",
 			result.TotalMerged, result.TotalBooksReassigned)
-	case len(result.LeftIDs) > 0:
+	case len(result.Errors) > 0:
 		return fmt.Sprintf(
 			"Series deduplication INCOMPLETE: merged %d series, reassigned %d books, "+
-				"kept %d series with %d error(s) -- see the operation's errors",
+				"kept %d series, %d error(s) -- see the operation's errors",
 			result.TotalMerged, result.TotalBooksReassigned, len(result.LeftIDs), len(result.Errors))
 	default:
 		return fmt.Sprintf(
@@ -766,8 +775,17 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			}
 			logging.Info(ctx, "series merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
-			result, err := dedup.MergeSeries(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress)
+			// Locks are honoured unless the caller says otherwise, and the scanner is
+			// stood down for the merge (s is the ScanStandDownController). The Authors
+			// & series lane sends neither field and runs many of these per click --
+			// Merge All used to be one dedup.series-dedup op, which had both
+			// protections -- so they cannot be opt-in.
+			result, err := dedup.MergeSeriesWithOptions(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress,
+				dedup.MergeSeriesOptions{HonorLocks: p.HonorLocks == nil || *p.HonorLocks, Scan: s})
 			if err != nil {
+				// A cancel or a lost lease returns here after deleting some of the
+				// series; the cached list must not keep offering them.
+				s.dedupCache.InvalidateAll()
 				op.SetStatus("failed")
 				logging.Error(ctx, "series merge failed", "err", err)
 				return err

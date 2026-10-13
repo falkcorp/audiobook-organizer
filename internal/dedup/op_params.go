@@ -1,7 +1,7 @@
 // file: internal/dedup/op_params.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-23
+// last-edited: 2026-10-13
 
 // Package dedup: op_params.go defines the JSON-unmarshal parameter structs for
 // each of the 8 async dedup OperationDef Run functions. They are kept here so
@@ -60,6 +60,12 @@ type SeriesMergeParams struct {
 	MergeIDs   []int  `json:"merge_ids"`
 	CustomName string `json:"custom_name"`
 	Detail     string `json:"detail"`
+	// HonorLocks: leave a book with a user-locked series_name on its series (the
+	// series is then kept and reported). Absent means TRUE, like dry_run's safe
+	// default: the Authors & series lane merges many groups from one click and its
+	// request carries no such field. An explicit false restores the old
+	// "the user chose these ids" behaviour.
+	HonorLocks *bool `json:"honor_locks,omitempty"`
 }
 
 // SeriesNormalizeParams are the parameters for the "dedup.series-normalize" operation.

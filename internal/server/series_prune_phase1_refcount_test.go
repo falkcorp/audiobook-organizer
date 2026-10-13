@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_phase1_refcount_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f8c1d64-7a52-4be0-9c31-64d0f2a8ab17
-// last-edited: 2026-09-14
+// last-edited: 2026-10-13
 
 package server
 
@@ -339,7 +339,15 @@ func seriesMergeOpTestReg(t *testing.T) *opsregistry.Registry {
 type seriesMergeOpReporter struct {
 	opsregistry.Reporter
 	logs []seriesMergeOpLogLine
+	// cancelAfter, when > 0, makes IsCanceled start returning true after that many
+	// checks: a cancel that lands part-way through a run.
+	cancelAfter  int
+	cancelChecks int
 }
+
+// OpID is the run's id. The merge op stands the scanner down keyed by it and
+// refuses to apply without one, as DedupSeries does.
+func (r *seriesMergeOpReporter) OpID() string { return "op-series-merge-test" }
 
 // seriesMergeOpLogLine keeps the LEVEL, not just the text. dbReporter copies an
 // entry into op_errors_v2 only at error level or above, so a digest emitted at
@@ -351,7 +359,10 @@ type seriesMergeOpLogLine struct {
 }
 
 func (r *seriesMergeOpReporter) UpdateProgress(_, _ int, _ string) error { return nil }
-func (r *seriesMergeOpReporter) IsCanceled() bool                        { return false }
+func (r *seriesMergeOpReporter) IsCanceled() bool {
+	r.cancelChecks++
+	return r.cancelAfter > 0 && r.cancelChecks > r.cancelAfter
+}
 func (r *seriesMergeOpReporter) Log(level slog.Level, message string, _ ...slog.Attr) error {
 	r.logs = append(r.logs, seriesMergeOpLogLine{level: level, message: message})
 	return nil
