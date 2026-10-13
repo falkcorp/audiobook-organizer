@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/app_dir_guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b0e47c9-a2d3-4816-9f74-0c63e8b1a5de
-// last-edited: 2026-09-09
+// last-edited: 2026-10-13
 
 // Shared test helpers (noopReporter, blank jobs import) live in testhelpers_test.go.
 package jobs_test
@@ -67,50 +67,6 @@ func mkfile(t *testing.T, path string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
-}
-
-// TestCleanupBackupsJob_SkipsAppDirs — this job DELETES by filename regex.
-//
-// A database archive is named audiobooks_<type>_<timestamp>.tar.{gz,zst}, which
-// the regex does not match, so today nothing in the backup tree is destroyed.
-// That is a NAMING COINCIDENCE, not a control: a `.backup`/`.bak` file parked
-// there by an operator, or a future archive format, is deleted with no warning.
-// The fixture uses a name that DOES match, to test the guard rather than the
-// coincidence.
-func TestCleanupBackupsJob_SkipsAppDirs(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		appDirs     bool
-		wantAppGone bool
-	}{
-		{"app dirs configured: files inside them survive", true, false},
-		{"empty AppDirs: unchanged pre-existing behaviour", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			withLibraryRoot(t, root, tc.appDirs)
-
-			libraryFile := filepath.Join(root, "Author", "Book", "stale.bak")
-			backupFile := filepath.Join(root, "backups", "operator-notes.bak")
-			dumpFile := filepath.Join(root, "openlibrary-dumps", "db", "index.backup")
-			mkfile(t, libraryFile)
-			mkfile(t, backupFile)
-			mkfile(t, dumpFile)
-
-			job, err := maintenance.Get("cleanup-backups")
-			require.NoError(t, err)
-			require.NoError(t, job.Run(context.Background(), nil, &noopReporter{}, false))
-
-			require.NoFileExists(t, libraryFile, "a library .bak must still be cleaned")
-			for _, p := range []string{backupFile, dumpFile} {
-				if tc.wantAppGone {
-					require.NoFileExists(t, p, "with no app dirs configured, behaviour is unchanged")
-				} else {
-					require.FileExists(t, p, "DATA LOSS: a file inside an app dir was deleted")
-				}
-			}
-		})
-	}
 }
 
 // TestCleanupEmptyFoldersJob_SkipsAppDirs — the highest-risk walker in the set.

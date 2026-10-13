@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-13
 
@@ -96,6 +96,57 @@ func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {
 				assert.Contains(t, w.Body.String(), string(row.perms[0]),
 					"403 on %q must come from the survivor's gate", id)
 			}
+		})
+	}
+}
+
+// retiredMerges lists ops that were retired with NO alias because the survivor
+// is a different deleter: routing an old enqueue to it would run something the
+// caller did not ask for, so the old ID resolves to nothing and fails loudly.
+// The survivor must still carry its own gate.
+var retiredMerges = []struct {
+	old, survivor string
+	perms         []auth.Permission
+}{
+	// 04-P3b: the manual cleanup-backups job deleted *.backup / *.bak files with
+	// no age test; the survivor deletes only fileops-written .bak-<unix>[-N]
+	// names past retention.
+	{"maintenance.cleanup-backups", "maintenance.cleanup-old-backups", []auth.Permission{auth.PermSettingsManage}},
+}
+
+func TestTwinMerge_RetiredIDsAndSurvivorPermissions(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+
+	for _, row := range retiredMerges {
+		t.Run(row.old, func(t *testing.T) {
+			// The old ID resolves to nothing, and canonicalisation leaves it as
+			// itself so a timeline filter on it still finds its old rows.
+			_, ok := srv.opRegistry.Def(row.old)
+			assert.False(t, ok, "Def(%q) must not resolve: it is retired, not aliased", row.old)
+			assert.Equal(t, row.old, srv.opRegistry.CanonicalDefID(row.old))
+
+			surv, ok := srv.opRegistry.Def(row.survivor)
+			require.True(t, ok, "survivor %q must be registered", row.survivor)
+			assert.Equal(t, row.perms, surv.Permissions)
+
+			// A caller holding only scan.trigger is refused on the survivor and
+			// EnqueueOp is never reached (the mock sets no EnqueueOp expectation).
+			reg := handlersmocks.NewMockOperationsRegistry(t)
+			reg.EXPECT().Def(row.survivor).RunAndReturn(srv.opRegistry.Def)
+			h := handlers.NewOperationsV2Handler(nil, reg, nil, true)
+
+			gin.SetMode(gin.TestMode)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/operations/v2",
+				strings.NewReader(`{"def_id":"`+row.survivor+`"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request = c.Request.WithContext(auth.WithPermissions(c.Request.Context(),
+				[]auth.Permission{auth.PermScanTrigger}))
+			h.TriggerOperationV2(c)
+
+			assert.Equal(t, http.StatusForbidden, w.Code)
+			assert.Contains(t, w.Body.String(), string(row.perms[0]))
 		})
 	}
 }
