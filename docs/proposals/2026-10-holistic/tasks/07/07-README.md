@@ -1,11 +1,11 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/07/07-README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: f1ed0a96-1c52-4ef9-8d4f-1a8e87cbcc76 -->
 <!-- last-edited: 2026-10-13 -->
 
 # Task briefs from doc 07 (design decisions and modularity) and X2/X3 from the coordinator
 
-Twenty briefs: eighteen in this directory, `08-X2.md` and `08-X3.md` in `tasks/08/`. Each follows `tasks/00-TEMPLATE.md`. Source: `07-design-decisions-and-modularity.md` §3-§4 with its appendices `A-measurements.md`, `B-decisions.md`, `C-server-state-library.md`; owner decisions in `09-owner-decisions.md`.
+Twenty-one briefs: nineteen in this directory, `08-X2.md` and `08-X3.md` in `tasks/08/`. Each follows `tasks/00-TEMPLATE.md`. Source: `07-design-decisions-and-modularity.md` §3-§4 with its appendices `A-measurements.md`, `B-decisions.md`, `C-server-state-library.md`; owner decisions in `09-owner-decisions.md`.
 
 ## Briefs in merge order
 | # | ID | Title | Wave | Model | Size | Depends on |
@@ -29,9 +29,10 @@ Twenty briefs: eighteen in this directory, `08-X2.md` and `08-X3.md` in `tasks/0
 | 17 | [F3](07-F3.md) | TanStack Query v5 pilot on the Repairs lane (revert on a miss) | 2 | opus | M | C1 |
 | 18 | [F1](07-F1.md) | tygo-generated TypeScript types | 3 | sonnet | M | C3, G4, T2 |
 | 19 | [F4](07-F4.md) | Delete `docs/api/openapi.json` | 4 | sonnet | S | F1 |
-| 20 | [F5](07-F5.md) | Collections page in the web UI (static and dynamic), visible in ABS | 3 | sonnet | L | 01-P81c |
+| 20 | [F5a](07-F5a.md) | Collections backend: owner-evaluated dynamic collections, relative dates, atomic add/remove books, permissions on auth | 3 | sonnet | L | 01-P81c |
+| 21 | [F5b](07-F5b.md) | Collections page in the web UI (static and dynamic), visible in ABS | 4 | sonnet | M | F5a |
 
-Model split: opus 5 (C3, R3, R4, S3, F3), sonnet 15. R4 raised to opus by the verifier advisory (TLS/HTTP3 listener rework).
+Model split: opus 5 (C3, R3, R4, S3, F3), sonnet 16. R4 raised to opus by the verifier advisory (TLS/HTTP3 listener rework).
 
 ### Merge-order constraints worth knowing
 - `ci.yml`: C2 -> C3 -> 06 P2 -> 01 P9 -> G4 -> F1 -> U1.
