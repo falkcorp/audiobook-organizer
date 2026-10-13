@@ -1,5 +1,5 @@
 // file: internal/applygate/review_only_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c09f46a0-0fa5-4191-b572-ea43cc5ace8b
 // last-edited: 2026-10-12
 
@@ -90,16 +90,29 @@ func TestCatalogCandidate_IsReviewOnly(t *testing.T) {
 	}
 }
 
-// A catalog entry of the owner's manual-only libraries (here by publisher) is
-// held by the bulk guard as any manual-only record is, on the candidate's own
-// fields; the stage's ManualOnly tag is informational.
-func TestCatalogCandidate_ManualOnlyEntryIsHeldByTheBulkGuard(t *testing.T) {
+// A catalog entry of the owner's manual-only libraries is held by the bulk
+// guard on the stage's ManualOnly tag alone: catalog.IsManualOnly also reads
+// the subtitle and every series membership, which the candidate's own fields
+// (title, first series, publisher, author) can leave neutral. An owner review
+// pin lifts review_only_source (review_bulk) but never this.
+func TestCatalogCandidate_ManualOnlyTagIsHeldByTheBulkGuard(t *testing.T) {
 	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: intp(36000)}
 	rt := database.ComputeBookRuntime(book, nil)
-	c := metafetch.MetadataCandidate{Source: metadata.CatalogSourceName, Title: "Synthetic Field Notes 1", Publisher: "Big Finish Productions",
-		SeriesPosition: "1", Score: 1.0, DurationSec: 36000, Stage: metadata.CatalogStageAuthor, ManualOnly: true}
-	v := EvaluateTranscribed(book, snap(book), rt, &c, nil, nil, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true})
+	c := metafetch.MetadataCandidate{Source: metadata.CatalogSourceName, Title: "Synthetic Field Notes 1", Publisher: "Synthetic Press",
+		Series: "Synthetic Series", SeriesPosition: "1", Score: 1.0, DurationSec: 36000, Stage: metadata.CatalogStageAuthor}
+	bulk := ManualOnlyGuard{Bulk: true}
+
+	untagged := EvaluateTranscribed(book, snap(book), rt, &c, nil, nil, nil, TranscribedSearch{}, bulk)
+	if untagged.Reason == ReasonOwnerManualOnly {
+		t.Fatalf("fixture: neutral fields already trip the guard: %+v", untagged)
+	}
+	c.ManualOnly = true
+	v := EvaluateTranscribed(book, snap(book), rt, &c, nil, nil, nil, TranscribedSearch{}, bulk)
 	if v.Allowed || v.Reason != ReasonOwnerManualOnly || v.OwnerReviewOverridable() {
 		t.Fatalf("allowed=%v reason=%q overridable=%v; want refused owner_manual_only, which no review lifts", v.Allowed, v.Reason, v.OwnerReviewOverridable())
+	}
+	// A single-book (non-bulk) caller is the owner at the keyboard: not held.
+	if one := EvaluateTranscribed(book, snap(book), rt, &c, nil, nil, nil, TranscribedSearch{}, ManualOnlyGuard{}); one.Reason == ReasonOwnerManualOnly {
+		t.Fatalf("the single-book path was held: %+v", one)
 	}
 }
