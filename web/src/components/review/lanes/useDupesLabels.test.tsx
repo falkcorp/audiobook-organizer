@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLabels.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f7c4a19-8e53-4d60-b1a8-6c0e9d3b5f47
 // last-edited: 2026-10-13
 //
@@ -526,8 +526,171 @@ describe('useDupesLabels', () => {
     });
 
     const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/1/override'));
-    expect((call![1] as RequestInit).signal).toBeFalsy();
+    expect((call![1] as RequestInit).signal?.aborted ?? false).toBe(false);
     expect(result.current.pending.size).toBe(0);
     expect(result.current.actionError).toBeNull();
+  });
+
+  // Two overrides whose responses arrive together. Each must build on the
+  // other's result; rebuilding from the page as it was before either landed
+  // brings the first row back.
+  function heldOverrides() {
+    const releases: Array<() => void> = [];
+    server.override = () =>
+      new Promise<Response>((resolve) =>
+        releases.push(() =>
+          resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ data: { label: 'not_dup', label_source: 'human' } }),
+          } as Response)
+        )
+      );
+    return releases;
+  }
+
+  it('two overrides resolving together both leave a filtered list', async () => {
+    server.labels = () => json({ data: { labels: [row(1), row(2), row(3)], total: 3 } });
+    const { result } = mount('labels');
+    act(() => result.current.setLabelFilter('unsure'));
+    await waitFor(() => expect(listUrls().at(-1)).toContain('label=unsure'));
+    await waitFor(() => expect(result.current.rows).toHaveLength(3));
+    const releases = heldOverrides();
+
+    let both!: Promise<unknown>;
+    act(() => {
+      both = Promise.all([
+        result.current.override(1, 'not_dup'),
+        result.current.override(2, 'not_dup'),
+      ]);
+    });
+    await waitFor(() => expect(releases).toHaveLength(2));
+    await act(async () => {
+      releases.forEach((r) => r());
+      await both;
+    });
+
+    expect(result.current.rows.map((r) => r.candidate_id)).toEqual([3]);
+    expect(result.current.total).toBe(1);
+  });
+
+  it('two overrides resolving together both keep their new label in an unfiltered list', async () => {
+    server.labels = () => json({ data: { labels: [row(1), row(2), row(3)], total: 3 } });
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.rows).toHaveLength(3));
+    const releases = heldOverrides();
+
+    let both!: Promise<unknown>;
+    act(() => {
+      both = Promise.all([
+        result.current.override(1, 'not_dup'),
+        result.current.override(2, 'not_dup'),
+      ]);
+    });
+    await waitFor(() => expect(releases).toHaveLength(2));
+    await act(async () => {
+      releases.forEach((r) => r());
+      await both;
+    });
+
+    const labels = Object.fromEntries(result.current.rows.map((r) => [r.candidate_id, r.label]));
+    expect(labels).toEqual({ 1: 'not_dup', 2: 'not_dup', 3: 'unsure' });
+    expect(result.current.total).toBe(3);
+  });
+
+  it('two suspicious overrides resolving together both leave the queue', async () => {
+    server.suspicious = () =>
+      json({ data: { labels: [suspicious(7), suspicious(8), suspicious(9)], total: 5 } });
+    const { result } = mount('suspicious');
+    await waitFor(() => expect(result.current.suspiciousRows).toHaveLength(3));
+    const releases = heldOverrides();
+
+    let both!: Promise<unknown>;
+    act(() => {
+      both = Promise.all([
+        result.current.overrideSuspicious(7, 'true_dup'),
+        result.current.overrideSuspicious(8, 'true_dup'),
+      ]);
+    });
+    await waitFor(() => expect(releases).toHaveLength(2));
+    await act(async () => {
+      releases.forEach((r) => r());
+      await both;
+    });
+
+    expect(result.current.suspiciousRows.map((r) => r.candidate_id)).toEqual([9]);
+    expect(result.current.suspiciousTotal).toBe(3);
+  });
+
+  it('steps back a page, not past the end, when the last row of the last page leaves', async () => {
+    server.labels = vi.fn(() => json({ data: { labels: [], total: 0 } })) as never;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/override')) return server.override(url, init?.body);
+      if (url.includes('/dedup/labels/stats')) return server.stats();
+      if (url.includes('/dedup/labels?')) {
+        const offset = new URL(url, 'http://x').searchParams.get('offset');
+        return offset === '0'
+          ? json({ data: { labels: [row(1), row(2)], total: 50 } })
+          : json({ data: { labels: [row(51)], total: 51 } });
+      }
+      return json({ data: {} });
+    });
+    const { result } = mount('labels');
+    act(() => result.current.setLabelFilter('unsure'));
+    await waitFor(() => expect(listUrls().at(-1)).toContain('label=unsure'));
+    act(() => result.current.setOffset(LABELS_PAGE));
+    await waitFor(() => expect(result.current.rows.map((r) => r.candidate_id)).toEqual([51]));
+
+    await act(async () => {
+      await result.current.override(51, 'not_dup');
+    });
+
+    await waitFor(() => expect(result.current.offset).toBe(0));
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.total).toBe(50);
+    // No request was ever made for a page past the end.
+    expect(listUrls().filter((u) => u.includes(`offset=${LABELS_PAGE}`))).toHaveLength(1);
+  });
+
+  it('gives an override that never answers a way out: timeout, the row is released, and the wording says it may have saved', async () => {
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    vi.mocked(apiFetch).mockClear();
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiTimeoutError('/api/v1/dedup/labels/1/override', LABELS_TIMEOUT_MS)
+    );
+
+    await act(async () => {
+      await result.current.override(1, 'not_dup');
+    });
+
+    expect(result.current.actionError).toMatch(/may have been saved/i);
+    expect(result.current.pending.size).toBe(0);
+    expect(result.current.rows.find((r) => r.candidate_id === 1)!.label).toBe('unsure');
+  });
+
+  it('sends the override POST with the lane timeout', async () => {
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    vi.mocked(apiFetch).mockClear();
+
+    await act(async () => {
+      await result.current.override(1, 'not_dup');
+    });
+
+    const post = vi.mocked(apiFetch).mock.calls.find(([, o]) => o?.method === 'POST');
+    expect(post?.[1]?.timeoutMs).toBe(LABELS_TIMEOUT_MS);
+  });
+
+  it('shows the counts as loading again as soon as they are retried', async () => {
+    server.stats = () => json({}, 503);
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.stats.state).toBe('error'));
+
+    server.stats = () => new Promise<Response>(() => {});
+    act(() => result.current.reloadStats());
+
+    expect(result.current.stats.state).toBe('loading');
   });
 });

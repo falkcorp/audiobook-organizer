@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesLabelsView.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4e1c83-6d27-4b05-b3f8-2c7d0e5a6914
 // last-edited: 2026-10-13
 //
@@ -695,12 +695,17 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
               Prev
             </Button>
             <Typography variant="body2">
-              {total === 0 ? '0' : `${offset + 1}–${Math.min(offset + LABELS_PAGE, total)}`} of{' '}
-              {total}
+              {total === 0 || labels.rows.length === 0
+                ? '0'
+                : `${offset + 1}–${offset + labels.rows.length}`}{' '}
+              of {total}
             </Typography>
             <Button
-              disabled={offset + LABELS_PAGE >= total}
-              onClick={() => labels.setOffset(offset + LABELS_PAGE)}
+              disabled={labels.rows.length === 0 || offset + labels.rows.length >= total}
+              // From the end of what is shown, not a fixed page ahead: after a
+              // row was overridden out of a short page, the next unseen row has
+              // moved up into the gap.
+              onClick={() => labels.setOffset(offset + labels.rows.length)}
             >
               Next
             </Button>

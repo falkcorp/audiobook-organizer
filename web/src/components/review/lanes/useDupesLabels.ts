@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLabels.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2d9e47-3c18-4f60-a7d5-0e9c4b1a8f32
 // last-edited: 2026-10-13
 //
@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DedupScoreBreakdown } from '../../../services/api';
-import { apiFetch, isAbortError } from '../../../utils/apiFetch';
+import { ApiTimeoutError, apiFetch, isAbortError } from '../../../utils/apiFetch';
 import { useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
 
 const API_BASE = '/api/v1';
@@ -160,6 +160,9 @@ function postOverride(candidateId: number, label: string): Promise<Response> {
   return apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
     method: 'POST',
     body: JSON.stringify({ label, reason: 'ui_override' }),
+    // A POST that never answers would hold the row in `pending` (its controls
+    // disabled) forever.
+    timeoutMs: LABELS_TIMEOUT_MS,
   });
 }
 
@@ -228,6 +231,22 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
   const [statsLoad, setStatsLoad] = useState<Load<LabelStats>>({ state: 'loading' });
   const [listResult, setListResult] = useState<Keyed<LabelPage> | null>(null);
   const [suspResult, setSuspResult] = useState<Keyed<SuspiciousPage> | null>(null);
+  // The same two results, held where an override that resolves later can read the
+  // LATEST value synchronously. Two overrides resolving in the same tick must
+  // each build on the other's result; a snapshot synced in a passive effect (or a
+  // render-time value) would hand the second one the page as it was before the
+  // first, and the first row would come back. Every write goes through
+  // commitList / commitSusp so the ref and the state cannot diverge.
+  const listRef = useRef<Keyed<LabelPage> | null>(null);
+  const suspRef = useRef<Keyed<SuspiciousPage> | null>(null);
+  const commitList = useCallback((next: Keyed<LabelPage>) => {
+    listRef.current = next;
+    setListResult(next);
+  }, []);
+  const commitSusp = useCallback((next: Keyed<SuspiciousPage>) => {
+    suspRef.current = next;
+    setSuspResult(next);
+  }, []);
   const [actionErr, setActionErr] = useState<{ view: DupesSubView; message: string } | null>(null);
   const [pending, setPending] = useState<ReadonlySet<number>>(() => new Set());
   const [statsToken, setStatsToken] = useState(0);
@@ -241,10 +260,11 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
   const suspLoad = current(suspResult, suspKey);
 
   // What an override that finishes later needs to know about the screen it
-  // finishes on. Synced in an effect, not during render.
-  const latest = useRef({ labelFilter, sourceFilter, listLoad, suspLoad });
+  // finishes on: which page it is (these only change by user events, never
+  // between two overrides resolving). Synced in an effect, not during render.
+  const latest = useRef({ labelFilter, sourceFilter, listKey, suspKey, filterKey, offset });
   useEffect(() => {
-    latest.current = { labelFilter, sourceFilter, listLoad, suspLoad };
+    latest.current = { labelFilter, sourceFilter, listKey, suspKey, filterKey, offset };
   });
   const inFlight = useRef(new Set<number>());
 
@@ -272,20 +292,20 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
       ctl.signal
     )
       .then((d) =>
-        setListResult({
+        commitList({
           key: listKey,
           load: { state: 'ready', value: { rows: d.labels ?? [], total: d.total ?? 0 } },
         })
       )
       .catch((e: unknown) => {
         if (isAbortError(e)) return;
-        setListResult({
+        commitList({
           key: listKey,
           load: { state: 'error', message: errorMessage(e, 'Failed to load labels') },
         });
       });
     return () => ctl.abort();
-  }, [showLabels, labelFilter, sourceFilter, band, offset, listKey]);
+  }, [showLabels, labelFilter, sourceFilter, band, offset, listKey, commitList]);
 
   useEffect(() => {
     if (!showSuspicious) return;
@@ -295,7 +315,7 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
       ctl.signal
     )
       .then((d) =>
-        setSuspResult({
+        commitSusp({
           key: suspKey,
           load: {
             state: 'ready',
@@ -305,13 +325,13 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
       )
       .catch((e: unknown) => {
         if (isAbortError(e)) return;
-        setSuspResult({
+        commitSusp({
           key: suspKey,
           load: { state: 'error', message: errorMessage(e, 'Failed to load suspicious labels') },
         });
       });
     return () => ctl.abort();
-  }, [showSuspicious, suspKey]);
+  }, [showSuspicious, suspKey, commitSusp]);
 
   // POSTs the EXISTING override route (stamping label_source=human). Resolves
   // with the server's stamped label, or throws; the callers decide what the row
@@ -338,7 +358,13 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
         apply(((await r.json()).data ?? {}) as { label?: string; label_source?: string });
         setStatsToken((t) => t + 1);
       } catch (e) {
-        setActionErr({ view: failView, message: errorMessage(e, 'Override failed') });
+        setActionErr({
+          view: failView,
+          message:
+            e instanceof ApiTimeoutError
+              ? 'The override did not answer in time. It may have been saved; reload to check.'
+              : errorMessage(e, 'Override failed'),
+        });
       } finally {
         inFlight.current.delete(candidateId);
         setPending(new Set(inFlight.current));
@@ -354,28 +380,42 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
         'labels',
         () => postOverride(candidateId, label),
         (d) => {
-          const { labelFilter: lf, sourceFilter: sf, listLoad: cur } = latest.current;
-          if (cur.state !== 'ready') return;
+          const {
+            labelFilter: lf,
+            sourceFilter: sf,
+            listKey: key,
+            filterKey: fk,
+            offset: at,
+          } = latest.current;
+          const prev = listRef.current;
+          // Only the page on screen, and only if the row is on it: a result for
+          // another page is refetched anyway, and its total is not ours to edit.
+          if (!prev || prev.key !== key || prev.load.state !== 'ready') return;
+          if (!prev.load.value.rows.some((row) => row.candidate_id === candidateId)) return;
           const stamped = { label: d.label || label, label_source: d.label_source || 'human' };
           const stays = rowMatchesFilters(stamped, { label: lf, source: sf });
           const rows = stays
-            ? cur.value.rows.map((row) =>
+            ? prev.load.value.rows.map((row) =>
                 row.candidate_id === candidateId
                   ? { ...row, ...stamped, label_reason: 'ui_override' }
                   : row
               )
-            : cur.value.rows.filter((row) => row.candidate_id !== candidateId);
-          const total = stays ? cur.value.total : Math.max(0, cur.value.total - 1);
-          setListResult((prev) =>
-            prev?.load.state !== 'ready'
-              ? prev
-              : { key: prev.key, load: { state: 'ready', value: { rows, total } } }
-          );
-          // The page emptied but the filter still has rows behind it: fetch them.
-          if (rows.length === 0 && total > 0) setListToken((t) => t + 1);
+            : prev.load.value.rows.filter((row) => row.candidate_id !== candidateId);
+          const total = stays ? prev.load.value.total : Math.max(0, prev.load.value.total - 1);
+          commitList({ key: prev.key, load: { state: 'ready', value: { rows, total } } });
+          if (rows.length === 0 && total > 0) {
+            if (at > 0 && at >= total) {
+              // That was the last row of the last page: step back to the new
+              // last page instead of fetching one that is past the end.
+              setPage({ key: fk, offset: Math.floor((total - 1) / LABELS_PAGE) * LABELS_PAGE });
+            } else {
+              // The page emptied but the filter still has rows behind it.
+              setListToken((t) => t + 1);
+            }
+          }
         }
       ),
-    [runOverride]
+    [runOverride, commitList]
   );
 
   const overrideSuspicious = useCallback(
@@ -385,21 +425,18 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
         'suspicious',
         () => postOverride(candidateId, label),
         () => {
-          const cur = latest.current.suspLoad;
-          if (cur.state !== 'ready') return;
-          const rows = cur.value.rows.filter((row) => row.candidate_id !== candidateId);
-          const total = Math.max(0, cur.value.total - 1);
-          setSuspResult((prev) =>
-            prev?.load.state !== 'ready'
-              ? prev
-              : { key: prev.key, load: { state: 'ready', value: { rows, total } } }
-          );
+          const prev = suspRef.current;
+          if (!prev || prev.key !== latest.current.suspKey || prev.load.state !== 'ready') return;
+          if (!prev.load.value.rows.some((row) => row.candidate_id === candidateId)) return;
+          const rows = prev.load.value.rows.filter((row) => row.candidate_id !== candidateId);
+          const total = Math.max(0, prev.load.value.total - 1);
+          commitSusp({ key: prev.key, load: { state: 'ready', value: { rows, total } } });
           // The queue shows one page of a longer one: refill it instead of
           // announcing "nothing suspicious" over rows that are still there.
           if (rows.length === 0 && total > 0) setSuspToken((t) => t + 1);
         }
       ),
-    [runOverride]
+    [runOverride, commitSusp]
   );
 
   const showOnly = useCallback((patch: Partial<Pick<LabelFilters, 'label' | 'source'>>) => {
@@ -416,7 +453,10 @@ export function useDupesLabels(view: DupesSubView): DupesLabels {
     setSourceFilter: setSourceFilterState,
     showOnly,
     stats: statsLoad,
-    reloadStats: () => setStatsToken((t) => t + 1),
+    reloadStats: () => {
+      setStatsLoad({ state: 'loading' });
+      setStatsToken((t) => t + 1);
+    },
     status: statusOf(listLoad, (v) => v.rows.length),
     error: listLoad.state === 'error' ? listLoad.message : null,
     rows: listLoad.state === 'ready' ? listLoad.value.rows : [],
