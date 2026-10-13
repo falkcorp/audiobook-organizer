@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -507,4 +508,113 @@ func TestCatalogStage_FreshCatalogRowReplacesStoredCopy(t *testing.T) {
 	assert.Equal(t, metadata.CatalogSourceName, got[1].Source)
 	assert.True(t, got[1].ManualOnly, "the fresh catalog row, not the stored copy")
 	assert.InDelta(t, 0.6, got[1].Score, 1e-9)
+}
+
+func asinsOf(cs []MetadataCandidate) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.ASIN
+	}
+	return out
+}
+
+func catRow(asin string) MetadataCandidate {
+	return MetadataCandidate{Source: metadata.CatalogSourceName, Title: stageTitle + " " + asin, Author: stageAuthor, ASIN: asin, Score: 0.7, FromCatalog: true}
+}
+
+// The stage ASKED and the catalog has nothing now: the stored catalog rows are
+// gone with it. A stage that was not asked (or failed) says nothing about them,
+// so they stay.
+func TestCatalogStage_AnsweredEmptyDropsStoredCatalogRows(t *testing.T) {
+	seed := func(t *testing.T, id string) *verdictFixture {
+		f := newVerdictFixture(t)
+		f.mfs.cacheSearchResponse(id, stageTitle, stageAuthor, "", "", &SearchMetadataResponse{Results: []MetadataCandidate{
+			{Source: "SrcA", Title: stageTitle, Author: stageAuthor, ASIN: "B0PROV0001", Score: 0.9},
+			catRow("B0CAT00001"),
+		}, catalogAnswered: true})
+		require.Equal(t, []string{"B0PROV0001", "B0CAT00001"}, asinsOf(storedCandidates(t, f, id)), "fixture")
+		return f
+	}
+
+	t.Run("asked, nothing found: rows dropped", func(t *testing.T) {
+		f := seed(t, "bk3")
+		f.mfs.cacheSearchResponse("bk3", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{catalogAnswered: true})
+		assert.Equal(t, []string{"B0PROV0001"}, asinsOf(storedCandidates(t, f, "bk3")))
+	})
+	t.Run("asked, nothing found, providers merged: rows dropped", func(t *testing.T) {
+		f := seed(t, "bk4")
+		f.mfs.cacheSearchResponse("bk4", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{
+			Results:         []MetadataCandidate{{Source: "SrcB", Title: stageTitle, Author: stageAuthor, ASIN: "B0PROV0002", Score: 0.8}},
+			catalogAnswered: true, mergeCached: true,
+		})
+		got := asinsOf(storedCandidates(t, f, "bk4"))
+		assert.ElementsMatch(t, []string{"B0PROV0001", "B0PROV0002"}, got)
+	})
+	t.Run("not asked: rows kept", func(t *testing.T) {
+		f := seed(t, "bk5")
+		f.mfs.cacheSearchResponse("bk5", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{})
+		assert.Equal(t, []string{"B0PROV0001", "B0CAT00001"}, asinsOf(storedCandidates(t, f, "bk5")))
+	})
+}
+
+// The stored order is whatever the writer's ranker gave it; a catalog answer
+// only adds rows behind it. Here the row was ranked by a ranker that puts the
+// Google row first, and the re-search has no ranker (review-only rows last): a
+// sort would pull the other row to slot 0.
+func TestCatalogStage_JoinNeverReordersExistingRows(t *testing.T) {
+	f := newVerdictFixture(t)
+	googleFirst := func(c MetadataCandidate) int {
+		if c.Source == "Google Books" {
+			return 0
+		}
+		return 1
+	}
+	f.mfs.cacheSearchResponse("bk6", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{
+		Results: []MetadataCandidate{
+			{Source: "Audible", Title: stageTitle, Author: stageAuthor, ASIN: "B0REF00001", Score: 0.9},
+			{Source: "Google Books", Title: stageTitle, Author: stageAuthor, ASIN: "B0GBK00002", Score: 0.5},
+		},
+		mergeRank: googleFirst,
+	})
+	require.Equal(t, []string{"B0GBK00002", "B0REF00001"}, asinsOf(storedCandidates(t, f, "bk6")), "fixture")
+
+	f.mfs.cacheSearchResponse("bk6", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{
+		Results:         []MetadataCandidate{catRow("B0CAT00003")},
+		catalogAnswered: true,
+	})
+	assert.Equal(t, []string{"B0GBK00002", "B0REF00001", "B0CAT00003"}, asinsOf(storedCandidates(t, f, "bk6")),
+		"slot 0 unchanged; the catalog row goes behind every row ranked at or below it")
+}
+
+// Stored catalog rows do not take part in a merge's top-N when the stage has
+// answered: with a ranker that puts one provider tier after review-only rows,
+// they would evict that provider's row.
+func TestCatalogStage_MergeCachedStoredCatalogRowsDoNotEvictProviders(t *testing.T) {
+	f := newVerdictFixture(t)
+	rank := func(c MetadataCandidate) int {
+		switch {
+		case c.ASIN == "B0REJ00000":
+			return 2
+		case c.Source == metadata.CatalogSourceName:
+			return 1
+		}
+		return 0
+	}
+	f.mfs.cacheSearchResponse("bk7", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{
+		Results:         []MetadataCandidate{catRow("B0CAT00001"), catRow("B0CAT00002")},
+		catalogAnswered: true, mergeRank: rank,
+	})
+
+	fresh := []MetadataCandidate{{Source: "SrcA", Title: stageTitle, Author: stageAuthor, ASIN: "B0REJ00000", Score: 0.9}}
+	for i := 1; i < metadataCacheTopN; i++ {
+		fresh = append(fresh, MetadataCandidate{Source: "SrcA", Title: stageTitle, Author: stageAuthor, ASIN: fmt.Sprintf("B0PRV%05d", i), Score: 0.8})
+	}
+	f.mfs.cacheSearchResponse("bk7", stageTitle, stageAuthor, "", "", &SearchMetadataResponse{
+		Results: fresh, mergeCached: true, mergeRank: rank, catalogAnswered: true,
+	})
+	got := asinsOf(storedCandidates(t, f, "bk7"))
+	assert.Len(t, got, metadataCacheTopN)
+	assert.Contains(t, got, "B0REJ00000", "the provider row survives the stale catalog rows")
+	assert.NotContains(t, got, "B0CAT00001")
+	assert.NotContains(t, got, "B0CAT00002")
 }

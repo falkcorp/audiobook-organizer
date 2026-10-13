@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.56.1
+// version: 5.57.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-12
 
@@ -456,6 +456,11 @@ type SearchMetadataResponse struct {
 	mergeCached bool
 	// mergeRank is SearchOptions.MergeRank, for cacheSearchResponse.
 	mergeRank func(MetadataCandidate) int
+	// catalogAnswered: the local catalog stage ran and answered (with
+	// candidates or with none). False when it was not asked or failed, which
+	// says nothing about the catalog rows a stored row holds.
+	// cacheSearchResponse drops those rows only when it is true.
+	catalogAnswered bool
 	// carryFromHash and carryFromRow are SearchOptions.CarryFromSourceHash
 	// and CarryFromRow, for cacheSearchResponse.
 	carryFromHash string
