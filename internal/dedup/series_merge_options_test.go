@@ -1,5 +1,5 @@
 // file: internal/dedup/series_merge_options_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d27a4e90-6b13-4c85-9f0e-a31c58b72d64
 // last-edited: 2026-10-13
 
@@ -30,11 +30,11 @@ func lockSeriesName(s seriesRefStore) {
 	}
 }
 
-func TestMergeSeriesWithOptions_HonorLocksLeavesALockedBookAndKeepsItsSeries(t *testing.T) {
+func TestMergeSeries_HonorLocksLeavesALockedBookAndKeepsItsSeries(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_LOCKED"}}, map[int]int{20: 1})
 	lockSeriesName(store)
 
-	result, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
+	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
 		MergeSeriesOptions{HonorLocks: true})
 	require.NoError(t, err)
 
@@ -47,10 +47,10 @@ func TestMergeSeriesWithOptions_HonorLocksLeavesALockedBookAndKeepsItsSeries(t *
 	assert.Contains(t, result.Errors[0], "user-locked", "the reason is the lock, not a generic refusal")
 }
 
-func TestMergeSeriesWithOptions_HonorLocksStillMergesAnUnlockedBook(t *testing.T) {
+func TestMergeSeries_HonorLocksStillMergesAnUnlockedBook(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_FREE"}}, map[int]int{20: 1})
 
-	result, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
+	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
 		MergeSeriesOptions{HonorLocks: true})
 	require.NoError(t, err)
 
@@ -67,7 +67,7 @@ func TestMergeSeries_IgnoresLocksWithoutTheOption(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_LOCKED"}}, map[int]int{20: 1})
 	lockSeriesName(store)
 
-	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil)
+	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil, MergeSeriesOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, map[string]int{"BOOK_LOCKED": 10}, *repointed)
@@ -77,12 +77,12 @@ func TestMergeSeries_IgnoresLocksWithoutTheOption(t *testing.T) {
 
 // A lock protects the name the owner chose. Moving a book onto a series spelled
 // the same changes nothing the lock guards, so the lock is not consulted.
-func TestMergeSeriesWithOptions_HonorLocksIgnoresALockWhenTheNamesMatch(t *testing.T) {
+func TestMergeSeries_HonorLocksIgnoresALockWhenTheNamesMatch(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_LOCKED"}}, map[int]int{20: 1})
 	lockSeriesName(store)
 
 	// The kept series is renamed to the merged-from series' own name.
-	result, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "Duplicate", nil,
+	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "Duplicate", nil,
 		MergeSeriesOptions{HonorLocks: true})
 	require.NoError(t, err)
 
@@ -91,13 +91,13 @@ func TestMergeSeriesWithOptions_HonorLocksIgnoresALockWhenTheNamesMatch(t *testi
 	assert.Equal(t, 1, result.MergedCount)
 }
 
-func TestMergeSeriesWithOptions_AnUnreadableLockMovesNothing(t *testing.T) {
+func TestMergeSeries_AnUnreadableLockMovesNothing(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_X"}}, map[int]int{20: 1})
 	store.MockStore.GetMetadataFieldStatesFunc = func(string) ([]database.MetadataFieldState, error) {
 		return nil, errors.New("store unavailable")
 	}
 
-	result, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
+	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
 		MergeSeriesOptions{HonorLocks: true})
 	require.NoError(t, err)
 
@@ -106,11 +106,11 @@ func TestMergeSeriesWithOptions_AnUnreadableLockMovesNothing(t *testing.T) {
 	assert.Equal(t, []int{20}, result.LeftIDs)
 }
 
-func TestMergeSeriesWithOptions_StandsTheScannerDownForTheMerge(t *testing.T) {
+func TestMergeSeries_StandsTheScannerDownForTheMerge(t *testing.T) {
 	store, deleted, _ := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_FREE"}}, map[int]int{20: 1})
 	scan := newFakeScanController()
 
-	_, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
+	_, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
 		MergeSeriesOptions{Scan: scan})
 	require.NoError(t, err)
 
@@ -120,12 +120,12 @@ func TestMergeSeriesWithOptions_StandsTheScannerDownForTheMerge(t *testing.T) {
 	assert.Equal(t, []int{20}, *deleted)
 }
 
-func TestMergeSeriesWithOptions_RefusesWhenTheScannerCannotBeStoodDown(t *testing.T) {
+func TestMergeSeries_RefusesWhenTheScannerCannotBeStoodDown(t *testing.T) {
 	store, deleted, repointed := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_FREE"}}, map[int]int{20: 1})
 	scan := newFakeScanController()
 	scan.acquireErr = errors.New("library.scan will not park")
 
-	_, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "New Name", nil,
+	_, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "New Name", nil,
 		MergeSeriesOptions{Scan: scan})
 
 	require.Error(t, err)
@@ -134,10 +134,10 @@ func TestMergeSeriesWithOptions_RefusesWhenTheScannerCannotBeStoodDown(t *testin
 	assert.Empty(t, *repointed)
 }
 
-func TestMergeSeriesWithOptions_RefusesWithoutAnOperationIDWhenGated(t *testing.T) {
+func TestMergeSeries_RefusesWithoutAnOperationIDWhenGated(t *testing.T) {
 	store, deleted, _ := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_FREE"}}, map[int]int{20: 1})
 
-	_, err := MergeSeriesWithOptions(context.Background(), store, "", 10, []int{20}, "", nil,
+	_, err := MergeSeries(context.Background(), store, "", 10, []int{20}, "", nil,
 		MergeSeriesOptions{Scan: newFakeScanController()})
 
 	require.Error(t, err)
@@ -145,12 +145,12 @@ func TestMergeSeriesWithOptions_RefusesWithoutAnOperationIDWhenGated(t *testing.
 	assert.Empty(t, *deleted)
 }
 
-func TestMergeSeriesWithOptions_ALostLeaseAbortsAndReportsIt(t *testing.T) {
+func TestMergeSeries_ALostLeaseAbortsAndReportsIt(t *testing.T) {
 	store, deleted, _ := newMergeSeriesFixture(t, []database.BookCore{{ID: "BOOK_FREE"}}, map[int]int{20: 1})
 	scan := newFakeScanController()
 	scan.renewOK = false
 
-	result, err := MergeSeriesWithOptions(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
+	result, err := MergeSeries(context.Background(), store, lockOpID, 10, []int{20}, "", nil,
 		MergeSeriesOptions{Scan: scan})
 
 	require.Error(t, err)

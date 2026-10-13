@@ -1,7 +1,7 @@
 // file: internal/dedup/series_merge_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5cdf8fef-1d80-433f-81c5-b44a8916ae81
-// last-edited: 2026-09-14
+// last-edited: 2026-10-13
 
 package dedup
 
@@ -116,7 +116,7 @@ func TestMergeSeries_RepointDoesNotRevertConcurrentColumns(t *testing.T) {
 	var deleted []int
 	store.DeleteSeriesFunc = func(id int) error { deleted = append(deleted, id); return nil }
 
-	res, err := MergeSeries(context.Background(), store, testDedupOpID, 1, []int{2}, "", nil)
+	res, err := MergeSeries(context.Background(), store, testDedupOpID, 1, []int{2}, "", nil, MergeSeriesOptions{})
 	if err != nil {
 		t.Fatalf("MergeSeries: %v", err)
 	}
