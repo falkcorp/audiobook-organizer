@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
 // last-edited: 2026-10-13
 
@@ -70,6 +70,33 @@ type unwrappingStore struct {
 
 func (u *unwrappingStore) Unwrap() database.Store { return u.inner }
 
+// hydrateFromMap adapts a bookID -> rows table to GetBookFileByID. It returns a
+// copy, as a store does: the op clears or rewrites the row it is handed.
+func hydrateFromMap(rows map[string][]database.BookFile) func(bookID, fileID string) (*database.BookFile, error) {
+	return func(bookID, fileID string) (*database.BookFile, error) {
+		for i := range rows[bookID] {
+			if rows[bookID][i].ID == fileID {
+				cp := rows[bookID][i]
+				return &cp, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
+// hydrateFromSlice is hydrateFromMap for tests whose rows set no BookID.
+func hydrateFromSlice(rows []database.BookFile) func(bookID, fileID string) (*database.BookFile, error) {
+	return func(_, fileID string) (*database.BookFile, error) {
+		for i := range rows {
+			if rows[i].ID == fileID {
+				cp := rows[i]
+				return &cp, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
 // --- tests ---------------------------------------------------------------
 
 // TestLSHBackfill_FiltersAndUpdates verifies that the op processes only the
@@ -84,7 +111,7 @@ func TestLSHBackfill_FiltersAndUpdates(t *testing.T) {
 		{ID: "f4", BookID: "b4"}, // no fp
 		{ID: "f5", BookID: "b5", AcoustIDFingerprintDurationSec: 1800},
 	}
-	// hydrateFiles simulates GetBookFiles(bookID) — the full-row read the op
+	// hydrateFiles simulates GetBookFileByID — the full-row read the op
 	// now hydrates from before writing back (see the writeback-wipe audit
 	// doc). Keyed by BookID.
 	hydrateFiles := map[string][]database.BookFile{
@@ -101,9 +128,7 @@ func TestLSHBackfill_FiltersAndUpdates(t *testing.T) {
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
-			return hydrateFiles[bookID], nil
-		},
+		GetBookFileByIDFunc: hydrateFromMap(hydrateFiles),
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			mu.Lock()
 			defer mu.Unlock()
@@ -199,7 +224,7 @@ func TestLSHBackfill_PartialIndex(t *testing.T) {
 		{ID: "f3", AcoustIDFingerprintDurationSec: 1800},
 		{ID: "f4"}, // no fp at all
 	}
-	// hydrateFiles simulates GetBookFiles(bookID="") — none of the files set
+	// hydrateFiles simulates GetBookFileByID with bookID="" — none of the files set
 	// BookID, so they all share the empty-string bucket; the op matches by
 	// file ID within the returned slice.
 	hydrateFiles := map[string][]database.BookFile{
@@ -214,9 +239,7 @@ func TestLSHBackfill_PartialIndex(t *testing.T) {
 	)
 	mock := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
-			return hydrateFiles[bookID], nil
-		},
+		GetBookFileByIDFunc:     hydrateFromMap(hydrateFiles),
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			updMu.Lock()
 			defer updMu.Unlock()
@@ -266,7 +289,7 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		// None of the files set BookID, so every hydrate call shares the
 		// same full slice; the op matches by file ID within it.
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) { return hydrateFiles, nil },
+		GetBookFileByIDFunc: hydrateFromSlice(hydrateFiles),
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			if updates.Add(1) == 5 {
 				cancel()
@@ -298,7 +321,7 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 // always true — so this op silently skipped every fingerprinted file in
 // prod. This test supplies exactly that shape (DurationSec>0, no blob to
 // even check) and asserts UpdateBookFile still fires against the row
-// hydrated via GetBookFiles.
+// hydrated via GetBookFileByID.
 func TestLSHBackfill_MemdbSlimRowStillTriggersUpdate(t *testing.T) {
 	files := []database.BookFileCore{
 		// Memdb-slim shape: duration proxy survives.
@@ -313,9 +336,7 @@ func TestLSHBackfill_MemdbSlimRowStillTriggersUpdate(t *testing.T) {
 	var updates []string
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
-			return hydrateFiles[bookID], nil
-		},
+		GetBookFileByIDFunc:     hydrateFromMap(hydrateFiles),
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
 			updates = append(updates, id)
 			return nil
@@ -401,7 +422,7 @@ func TestLSHBackfill_RegistersWithPlugin(t *testing.T) {
 // the fast-skip (and re-writes every row) the moment p.store is wrapped.
 func TestLSHBackfill_HasLSHIndexThroughDecorator(t *testing.T) {
 	// runDecorated wires two eligible rows behind a decorator and reports how
-	// many of them got re-saved. GetBookFiles must be stubbed: the op hydrates
+	// many of them got re-saved. GetBookFileByID must be stubbed: the op hydrates
 	// the full row before updating, and without it every row dies at
 	// "hydrate: row not found" and the update count is 0 no matter what the
 	// fast-skip did.
@@ -416,10 +437,10 @@ func TestLSHBackfill_HasLSHIndexThroughDecorator(t *testing.T) {
 			GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 				return files, nil
 			},
-			GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			GetBookFileByIDFunc: func(bookID, fileID string) (*database.BookFile, error) {
 				for _, f := range files {
-					if f.BookID == bookID {
-						return []database.BookFile{{ID: f.ID, BookID: f.BookID}}, nil
+					if f.BookID == bookID && f.ID == fileID {
+						return &database.BookFile{ID: f.ID, BookID: f.BookID}, nil
 					}
 				}
 				return nil, nil

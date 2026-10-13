@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.28.0
-// last-edited: 2026-10-12
+// version: 2.29.0
+// last-edited: 2026-10-13
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -1883,6 +1883,66 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 	defer b.Close()
 	deleteCandidateKeys(b, id, rec)
 	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
+}
+
+// DeleteCandidates removes the candidates named by ids in ONE lock acquisition
+// and ONE Pebble batch, and returns how many it deleted.
+//
+// WHY it exists: DeleteCandidate holds s.mu for the whole call, so a worker
+// pool calling it per row is serialized end to end and buys nothing. A
+// whole-library sweep (acoustid.reset-all drops every acoustid-layer row)
+// pays the lock and the commit once per chunk instead of once per row.
+//
+// Unlike DeleteCandidate, a manual candidate or an ID that no longer exists is
+// skipped rather than reported: a sweep that names a thousand rows should not
+// abort on, or lose track of, the one a human pinned meanwhile. The manual
+// check is the same backstop DeleteCandidate applies, read under the lock, so
+// a pin landing after the caller listed the rows is still honoured. Callers
+// that need the per-row error use DeleteCandidate.
+func (s *EmbeddingStore) DeleteCandidates(ids []int64) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	deleted := 0
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		val, closer, err := s.db.Get(dedupRecKey(id))
+		if err == pebble.ErrNotFound {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("delete candidates read %d: %w", id, err)
+		}
+		var rec candRec
+		uerr := json.Unmarshal(val, &rec)
+		closer.Close()
+		if uerr != nil {
+			return 0, fmt.Errorf("delete candidates unmarshal %d: %w", id, uerr)
+		}
+		if rec.Source == CandidateSourceManual {
+			continue
+		}
+		deleteCandidateKeys(b, id, rec)
+		deleted++
+	}
+	if deleted == 0 {
+		return 0, nil
+	}
+	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync, as DeleteCandidate (#19)
+		return 0, fmt.Errorf("delete candidates commit: %w", err)
+	}
+	return deleted, nil
 }
 
 // deleteCandidateKeys stages the removal of every key that represents candidate

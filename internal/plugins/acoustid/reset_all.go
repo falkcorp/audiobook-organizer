@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
 // last-edited: 2026-10-13
 
@@ -63,8 +63,8 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Clearing fingerprints (batched)…")
 
-	// cleared and deleted are atomics: both RunItems passes below run fn and
-	// the Label closure on a worker pool.
+	// cleared is an atomic: the slow-path RunItems pass below runs fn and the
+	// Label closure on a worker pool.
 	var cleared atomic.Int64
 
 	// Fast path: PebbleStore exposes a batched bulk-clear that fsyncs once
@@ -101,7 +101,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		// Per-row fallback (mock/sqlite tests). AcoustIDSeg0..6 are stripped
 		// from BookFileCore entirely (heavy fingerprint-diagnostic fields),
 		// so this path must hydrate each candidate's full row via
-		// GetBookFiles just to read them, then clear + write back THAT full
+		// GetBookFileByID just to read them, then clear + write back THAT full
 		// row — never a hand-built BookFile{} from Core fields. Only reached
 		// in mock/sqlite tests (prod uses the bulk-clear fast path above),
 		// so the extra per-row hydrate read is not a perf concern.
@@ -114,17 +114,10 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		prog = sdk.NewProgress(reporter, total)
 		prog.Start("Clearing fingerprints (slow path)…")
 		err = registry.RunItems(ctx, reporter, files, func(_ context.Context, f database.BookFileCore) error {
-			full, herr := p.store.GetBookFiles(f.BookID)
+			target, herr := p.store.GetBookFileByID(f.BookID, f.ID)
 			if herr != nil {
 				log.Warn("acoustid reset-all: hydrate failed", "id", f.ID, "err", herr)
 				return nil
-			}
-			var target *database.BookFile
-			for j := range full {
-				if full[j].ID == f.ID {
-					target = &full[j]
-					break
-				}
 			}
 			if target == nil {
 				log.Warn("acoustid reset-all: hydrate: row not found", "id", f.ID)
@@ -165,7 +158,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// Drop acoustid-layer pending candidates so the dedup review doesn't
 	// keep showing the 14K+ poisoned rows after the rescan starts.
 	prog.Finalize("Dropping acoustid dedup candidates…")
-	var deleted atomic.Int64
+	deleted := 0 // sequential: the batches below run one at a time
 	if p.embeddingStore != nil {
 		var allCands []database.DedupCandidate
 		offset := 0
@@ -187,26 +180,37 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 			offset += len(cands)
 		}
 
-		if len(allCands) > 0 {
-			if derr := registry.RunItems(ctx, reporter, allCands, func(_ context.Context, c database.DedupCandidate) error {
-				// A pinned manual candidate keeps its acoustid layer. Resetting
-				// fingerprints does not withdraw a human's review request.
-				if database.IsManualCandidate(c) {
+		// Drop in batches: EmbeddingStore.DeleteCandidate holds the store lock
+		// for the whole call, so fanning single deletes across a pool only
+		// queues them on that lock. DeleteCandidates takes the lock and
+		// commits once per chunk, which is the actual saving.
+		// A pinned manual candidate keeps its acoustid layer: resetting
+		// fingerprints does not withdraw a human's review request. It is
+		// filtered here and again, under the lock, inside DeleteCandidates.
+		var ids []int64
+		for _, c := range allCands {
+			if !database.IsManualCandidate(c) {
+				ids = append(ids, c.ID)
+			}
+		}
+		const deleteChunk = 500
+		var chunks [][]int64
+		for start := 0; start < len(ids); start += deleteChunk {
+			chunks = append(chunks, ids[start:min(start+deleteChunk, len(ids))])
+		}
+		if len(chunks) > 0 {
+			// runitems:sequential each chunk is one batch under the store-wide candidate lock; a pool would only queue on it
+			if derr := registry.RunItems(ctx, reporter, chunks, func(_ context.Context, chunk []int64) error {
+				n, err := p.embeddingStore.DeleteCandidates(chunk)
+				if err != nil {
+					log.Warn("acoustid reset-all: delete candidates failed", "chunk_size", len(chunk), "err", err)
 					return nil
 				}
-				if err := p.embeddingStore.DeleteCandidate(c.ID); err != nil {
-					log.Warn("acoustid reset-all: delete candidate failed", "id", c.ID, "err", err)
-					return nil
-				}
-				deleted.Add(1)
+				deleted += n
 				return nil
 			}, registry.RunItemsOptions{
-				// One candidate row per item; DeleteCandidate touches only
-				// that row, and the list was read in full above, so no two
-				// items name the same candidate.
-				Concurrency: runtime.NumCPU(),
 				Label: func(i, t int) string {
-					return fmt.Sprintf("Dropping acoustid dedup candidates %d/%d (deleted=%d)", i+1, t, deleted.Load())
+					return fmt.Sprintf("Dropping acoustid dedup candidates batch %d/%d (deleted=%d)", i+1, t, deleted)
 				},
 			}); derr != nil {
 				return derr
@@ -216,11 +220,11 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 
 	log.Info("acoustid reset-all: complete",
 		"cleared", cleared.Load(),
-		"candidates_deleted", deleted.Load(),
+		"candidates_deleted", deleted,
 		"elapsed", time.Since(startedAt).Round(time.Second))
 
 	prog.Done(fmt.Sprintf("Reset complete: %d files cleared, %d candidates dropped, LSH index wiped (elapsed %s). Now enqueue acoustid.fingerprint-rescan with scope=all force=true.",
-		cleared.Load(), deleted.Load(), time.Since(startedAt).Round(time.Second)))
+		cleared.Load(), deleted, time.Since(startedAt).Round(time.Second)))
 	return nil
 }
 

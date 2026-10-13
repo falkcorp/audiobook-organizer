@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b2f4a6c-1d3e-4f5a-9c7b-0e1a2b3c4d5f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package acoustid
 
@@ -67,7 +67,7 @@ func newTestResetAllEmbeddingStore(t *testing.T) *database.EmbeddingStore {
 func TestResetAll_SlowPathClearsFingerprints(t *testing.T) {
 	// AcoustIDSeg0..6 are stripped from BookFileCore entirely, so the
 	// candidate list carries only IDs and the real segment values live in
-	// the hydrated full row returned by GetBookFiles.
+	// the hydrated full row returned by GetBookFileByID.
 	files := []database.BookFileCore{
 		{ID: "f1"},
 		{ID: "f2"}, // already clear
@@ -85,9 +85,7 @@ func TestResetAll_SlowPathClearsFingerprints(t *testing.T) {
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
-			return hydrateFiles, nil
-		},
+		GetBookFileByIDFunc: hydrateFromSlice(hydrateFiles),
 		UpdateBookFileFunc: func(id string, updated *database.BookFile) error {
 			mu.Lock()
 			defer mu.Unlock()

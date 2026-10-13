@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/runitems_concurrency_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e8c4a72-5b1d-4f39-9a6e-c2d7b3f81a45
 // last-edited: 2026-10-13
 
@@ -48,7 +48,7 @@ func (o *overlapProbe) enter() (leave func()) {
 	}
 	select {
 	case <-o.ready:
-	case <-time.After(3 * time.Second):
+	case <-time.After(250 * time.Millisecond):
 	}
 	return func() { o.in.Add(-1) }
 }
@@ -90,7 +90,7 @@ func TestLSHBackfill_RunsItemsConcurrently(t *testing.T) {
 	var updates atomic.Int64
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetBookFilesFunc:        func(bookID string) ([]database.BookFile, error) { return hydrate[bookID], nil },
+		GetBookFileByIDFunc:     hydrateFromMap(hydrate),
 		UpdateBookFileFunc: func(string, *database.BookFile) error {
 			defer probe.enter()()
 			updates.Add(1)
@@ -131,9 +131,9 @@ func TestResetAll_SlowPathRunsItemsConcurrently(t *testing.T) {
 	var updates atomic.Int64
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+		GetBookFileByIDFunc: func(bookID, fileID string) (*database.BookFile, error) {
 			// A fresh row per call: the op clears the copy it is handed.
-			return []database.BookFile{{ID: "f" + strings.TrimPrefix(bookID, "b"), BookID: bookID, AcoustIDSeg2: "AQADsynthetic"}}, nil
+			return &database.BookFile{ID: fileID, BookID: bookID, AcoustIDSeg2: "AQADsynthetic"}, nil
 		},
 		UpdateBookFileFunc: func(_ string, updated *database.BookFile) error {
 			defer probe.enter()()
@@ -163,23 +163,35 @@ func TestResetAll_SlowPathRunsItemsConcurrently(t *testing.T) {
 	}
 }
 
-// TestResetAll_CandidatePassRunsOnPool drops many candidates through the pool
-// (a real EmbeddingStore, whose DeleteCandidate takes the store lock, so this
-// proves correctness and the exact tally under the race detector rather than
-// overlap), and leaves a pinned manual candidate alone.
-func TestResetAll_CandidatePassRunsOnPool(t *testing.T) {
+// TestResetAll_CandidatePassDropsInBatches drops more candidates than one
+// batch holds through the real EmbeddingStore, and leaves a pinned manual
+// candidate alone. The pass is deliberately NOT a worker pool: DeleteCandidate
+// holds the store-wide candidate lock for its whole call, so a pool only
+// queued on it. The saving is DeleteCandidates, one lock and one commit per
+// chunk (see TestEmbeddingStore_DeleteCandidates in the database package).
+func TestResetAll_CandidatePassDropsInBatches(t *testing.T) {
 	emb := newTestResetAllEmbeddingStore(t)
-	const n = 64
+	const n = 1100 // three chunks of 500
 	for i := range n {
 		if err := emb.UpsertCandidate(database.DedupCandidate{
 			EntityType: "book",
-			EntityAID:  fmt.Sprintf("a%03d", i),
-			EntityBID:  fmt.Sprintf("b%03d", i),
+			EntityAID:  fmt.Sprintf("a%04d", i),
+			EntityBID:  fmt.Sprintf("b%04d", i),
 			Layer:      "acoustid",
 			Status:     "pending",
 		}); err != nil {
 			t.Fatalf("seed candidate %d: %v", i, err)
 		}
+	}
+	// A human pins an existing acoustid-layer pair: the row keeps its layer
+	// and becomes a manual candidate.
+	if err := emb.UpsertCandidate(database.DedupCandidate{
+		EntityType: "book", EntityAID: "pin-a", EntityBID: "pin-b", Layer: "acoustid", Status: "pending",
+	}); err != nil {
+		t.Fatalf("seed pinned pair: %v", err)
+	}
+	if _, err := emb.EnqueueManualCandidate("book", "pin-a", "pin-b", "synthetic pin"); err != nil {
+		t.Fatalf("pin candidate: %v", err)
 	}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return nil, nil },
@@ -190,12 +202,12 @@ func TestResetAll_CandidatePassRunsOnPool(t *testing.T) {
 	if err := p.runResetAll(context.Background(), nil, r); err != nil {
 		t.Fatalf("runResetAll: %v", err)
 	}
-	remaining, _, err := emb.ListCandidates(database.CandidateFilter{Layer: "acoustid", Limit: 200})
+	remaining, _, err := emb.ListCandidates(database.CandidateFilter{Layer: "acoustid", Limit: 50})
 	if err != nil {
 		t.Fatalf("list remaining: %v", err)
 	}
-	if len(remaining) != 0 {
-		t.Fatalf("%d acoustid candidates remain, want 0", len(remaining))
+	if len(remaining) != 1 || !database.IsManualCandidate(remaining[0]) {
+		t.Fatalf("remaining acoustid candidates = %+v, want only the pinned manual one", remaining)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
