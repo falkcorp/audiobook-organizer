@@ -486,3 +486,9 @@ internal/operations/registry.v3Host.Restore
 internal/operations/registry.v3Host.StandDown
 internal/operations/registry.v3Host.Touch
 internal/operations/registry.v3Host.releaseHolds
+internal/operations/registry.Registry.stopResumes
+internal/operations/registry.batchRun.recoverCallback
+internal/operations/registry.batchRun.settleStop
+internal/operations/registry.chunkLedger.allMarks
+internal/operations/registry.chunkLedger.clearPending
+internal/operations/registry.chunkLedger.pendingMarks

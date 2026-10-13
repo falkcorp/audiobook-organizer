@@ -2,7 +2,7 @@
       adapter and Writer-host identifiers to `scripts/deadcode-baseline.txt`
       in a one-time addition the owner approved on 2026-10-13, because
       nothing registers a v3 definition in production until 05-PR7 wires the
-      catalog. The 63 names are every `internal/operations/registry.` line in
+      catalog. The added names are every `internal/operations/registry.` line in
       the baseline except the three that predate 05-PR5
       (`ShutdownAllForStore`, `WithRequires`, `dbReporter.droppedLogCount`);
       the block's "05-PR5 one-time addition" comment does not survive a
