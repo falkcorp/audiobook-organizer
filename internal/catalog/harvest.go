@@ -1,5 +1,5 @@
 // file: internal/catalog/harvest.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
 // last-edited: 2026-10-13
 
@@ -746,7 +746,7 @@ func (z *zeroLedger) judge() (v zeroVerdict, zeros, pop int, scope string) {
 // changed since its hold (another OpID or a newer LastAttemptAt). Within one
 // op that cannot happen: ConcurrencyKey "catalog.harvest" lets one harvest
 // run at a time and a run gives each author to one worker. It guards against
-// a direct harvestAuthor call, or a future change to that key, landing a
+// a direct harvestAuthor call (tests) or a future change to that key, landing a
 // newer result that a stale settle would overwrite.
 func (h *Harvester) settleZero(reporter registry.Reporter, z *zeroLedger, tally *Tally) error {
 	z.mu.Lock()

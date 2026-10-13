@@ -1,5 +1,5 @@
 // file: internal/matcher/fuzzy_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-13
 
@@ -122,9 +122,9 @@ func TestScoreMatch_Ranking(t *testing.T) {
 // TestScoreMatchRanksExactFirst: the exact title outscores near-misses and
 // unrelated text, and only the exact match clears a 90 floor.
 func TestScoreMatchRanksExactFirst(t *testing.T) {
-	query := "Lord of the Rings"
-	exact := ScoreMatch(query, "The Lord of the Rings")
-	for _, other := range []string{"Lord of the Flies", "Lard of the Rings", "Something Completely Different"} {
+	query := "Lamp of the Rivers"
+	exact := ScoreMatch(query, "The Lamp of the Rivers")
+	for _, other := range []string{"Lamp of the Fires", "Lump of the Rivers", "Something Completely Different"} {
 		if got := ScoreMatch(query, other); got > exact {
 			t.Errorf("ScoreMatch(%q, %q)=%d outranks the exact match (%d)", query, other, got, exact)
 		}

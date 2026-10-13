@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 package server
 
@@ -56,10 +56,8 @@ type bulkMetadataFetchByIDStore interface {
 	metabatch.SearchQueryReader
 }
 
-// candidateFetchStore: fetchCandidateForBook. Note the helpers it forwards into
-// are metabatch's, not metafetch's -- both packages export a
-// BuildCandidateBookInfo and a LoadRejectedCandidateKeys with different
-// signatures, and only the compiler distinguishes them.
+// candidateFetchStore: fetchCandidateForBook (metabatch's BuildCandidateBookInfo
+// / LoadRejectedCandidateKeys).
 type candidateFetchStore interface {
 	metabatch.BookFilesGetter
 	database.RawKVStore

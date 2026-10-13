@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-10-13
 
@@ -258,13 +258,13 @@ func TestTranscriptionConfirms_Basics(t *testing.T) {
 		candTitle, candAuthor   string
 		want                    bool
 	}{
-		{"title and author match", strp("Project Hail Mary"), strp("Andy Weir"), "Project Hail Mary", "Andy Weir", true},
-		{"title match, no heard author", strp("Dune"), nil, "Dune", "Frank Herbert", true},
-		{"title match, heard author too short", strp("Dune"), strp("F"), "Dune", "Frank Herbert", true},
-		{"heard author is a surname substring", strp("The Way of Kings"), strp("Sanderson"), "The Way of Kings", "Brandon Sanderson", true},
-		{"title mismatch", strp("The Martian"), strp("Andy Weir"), "Project Hail Mary", "Andy Weir", false},
-		{"author mismatch", strp("Project Hail Mary"), strp("Brandon Sanderson"), "Project Hail Mary", "Andy Weir", false},
-		{"nothing transcribed", nil, nil, "Dune", "Frank Herbert", false},
+		{"title and author match", strp("Silver Harbor Lights"), strp("Ann Author"), "Silver Harbor Lights", "Ann Author", true},
+		{"title match, no heard author", strp("Big Cats"), nil, "Big Cats", "Bob Writer", true},
+		{"title match, heard author too short", strp("Big Cats"), strp("F"), "Big Cats", "Bob Writer", true},
+		{"heard author is a surname substring", strp("The Glass Road"), strp("Penwright"), "The Glass Road", "Carl Penwright", true},
+		{"title mismatch", strp("Small Boats"), strp("Ann Author"), "Silver Harbor Lights", "Ann Author", false},
+		{"author mismatch", strp("Silver Harbor Lights"), strp("Dana Other"), "Silver Harbor Lights", "Ann Author", false},
+		{"nothing transcribed", nil, nil, "Big Cats", "Bob Writer", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -274,6 +274,73 @@ func TestTranscriptionConfirms_Basics(t *testing.T) {
 				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestTranscriptionConfirms_InitialsFold: initials spacing and punctuation are
+// equal (owner decision 2026-09-14), so "R.A." and "RA" confirm against
+// "R. A."; different initials, a different surname, a misspelled surname that
+// is not a prefix of the real one, and a real short first name all refuse.
+func TestTranscriptionConfirms_InitialsFold(t *testing.T) {
+	cases := []struct {
+		heardAuthor string
+		want        bool
+	}{
+		{"R.A. Harrowgat", true},
+		{"RA Harrowgate", true},
+		{"J.R. Harrowgat", false},
+		{"R.A. Brook", false},
+		// A misspelled surname that is not a prefix of the real one.
+		{"R.A. Harrowdale", false},
+		// A real short first name is not initials.
+		{"Ra Harrowgate", false},
+	}
+	for _, tc := range cases {
+		book := &database.Book{TranscribedTitle: strp("Big Cats"), TranscribedAuthor: strp(tc.heardAuthor)}
+		c := &metafetch.MetadataCandidate{Title: "Big Cats", Author: "R. A. Harrowgate", SeriesPosition: "2"}
+		if got := TranscriptionConfirms(book, c); got != tc.want {
+			t.Errorf("TranscriptionConfirms on heard %q = %v, want %v", tc.heardAuthor, got, tc.want)
+		}
+	}
+}
+
+// TestTranscriptionConfirms_RefusesEveryPairMainRefused: the unreviewed rule
+// refuses every pair util.MainTranscriptionConfirms refuses -- the real review
+// shapes (a credit after the author, a spoken series trailer, a silent
+// letter, a heard volume) and the short-first-name-versus-initials pairs. The
+// fixture guard fails any pair main itself would confirm, since it would test
+// nothing.
+func TestTranscriptionConfirms_RefusesEveryPairMainRefused(t *testing.T) {
+	pairs := []struct{ candTitle, candAuthor, pos, heardTitle, heardAuthor string }{
+		{"River of Glass", "Anton Kowalczyk", "", "River of Glass", "Anton Kowalczyk Translated from the Polish"},
+		{"A Song of Tides (Book #4 in the Tidal Crown)", "Mara Quill", "4", "A Song of Tides", "Mara Quill"},
+		{"Witness to a Storm", "Jon Marsh", "", "Witness to a Storm A short story prequel to The Lantern", "Jon Marsh"},
+		{"Knights Over Pawns", "Gary R. R. Stone", "", "Nights Over Pawns", "Gary R. R. Stone, assisted"},
+		{"This Copper Vale", "Rhea Thornfield", "1", "This Copper Vale, book one of the Copper Vale trilogy", "Rhea Thornfield"},
+		{"Big Cats", "Ann Author", "1", "Big Cats", "Ann Author For Beth Author, who's"},
+		{"Sand Wells", "Bob Writer", "2", "Sand Wells, book two of the Sand Wells Chronicles", "Bob Writer"},
+		{"Sam Archer", "J. K. Rowden", "2", "Sam Archer book 2", "J. K. Rowden"},
+		{"The Reach", "James S. A. Coren", "3", "The Reach, volume 3", "James S. A. Coren"},
+		{"Ready Pilot One", "Ernest Kline", "", "Ready Pilot 1", "Ernest Kline"},
+		// A real short first name folds nothing: these are different
+		// people from the initialled author (2026-09-14 review).
+		{"Big Cats", "R. A. Harrowgate", "2", "Big Cats", "Ra Harrowgate"},
+		{"Big Cats", "Ra Harrowgate", "2", "Big Cats", "R.A. Harrowgate"},
+		{"Big Cats", "E. D. Mcrae", "2", "Big Cats", "Ed Mcrae"},
+		{"Big Cats", "J. O. Nelmo", "2", "Big Cats", "Jo Nelmo"},
+		{"Big Cats", "Kim Stanford", "2", "Big Cats", "K. I. M. Stanford"},
+		{"Big Cats", "A. L. Frankel", "2", "Big Cats", "Al Frankel"},
+		{"Big Cats", "R. A. Harrowgate", "2", "Big Cats", "R.A. Harrowdale"},
+	}
+	for _, p := range pairs {
+		if util.MainTranscriptionConfirms(p.candTitle, p.candAuthor, p.heardTitle, p.heardAuthor) {
+			t.Fatalf("fixture %q ~ %q: origin/main confirms it, so it tests nothing", p.candTitle, p.heardTitle)
+		}
+		book := &database.Book{TranscribedTitle: strp(p.heardTitle), TranscribedAuthor: strp(p.heardAuthor)}
+		c := &metafetch.MetadataCandidate{Title: p.candTitle, Author: p.candAuthor, SeriesPosition: p.pos}
+		if TranscriptionConfirms(book, c) {
+			t.Errorf("TranscriptionConfirms confirmed %q ~ heard %q/%q, which origin/main refused", p.candTitle, p.heardTitle, p.heardAuthor)
+		}
 	}
 }
 
