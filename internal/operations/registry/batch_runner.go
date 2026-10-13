@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -91,6 +93,10 @@ type batchConfig struct {
 	dirty dirtySetStore // required for a DirtySet source
 	rep   Reporter      // nil in unit tests
 	log   *slog.Logger
+	// resumable: a Shutdown resumes this run (ResumeRestart or ResumeAsk),
+	// so a shutdown-stopped attempt skips Finish; the resumed attempt runs it
+	// once, over every attempt's ledger.
+	resumable bool
 	// stuckAfter is the heartbeat age at which a worker is reported stuck
 	// when the job has no ItemTimeout (the def Timeout/6).
 	stuckAfter  time.Duration
@@ -101,7 +107,10 @@ type batchConfig struct {
 	// stops the world right there, like a process kill: no further commit,
 	// no Finish. onLease sees every chunk a worker leases.
 	afterCommit func(database.Ledger, database.ProgressSnapshot) bool
-	onLease     func(chunk int)
+	// afterFold sees every folded completion before any commit of it;
+	// returning true stops the world in the folded-but-not-committed state.
+	afterFold func() bool
+	onLease   func(chunk int)
 }
 
 // errWorldStopped is what runBatch returns when afterCommit stopped it.
@@ -171,7 +180,11 @@ type batchRun struct {
 	chunks   chan *leasedChunk
 	done     chan completion
 	cutCount atomic.Int64 // stream chunks cut so far (AppendOnly/Unordered)
-	total    *int64
+	// priorChunks is the stream chunks earlier attempts completed (their
+	// items are skipped, not cut again).
+	priorChunks int
+	total       *int64
+	fence       opswriter.Fence
 }
 
 func (b *batchRun) fail(err error) {
@@ -209,6 +222,7 @@ func runBatch(ctx context.Context, cfg batchConfig) (ops.Summary, json.RawMessag
 		leases: &leaseTable{rows: make([]workerRow, workers)}, done: make(chan completion, workers)}
 	b.workCtx, b.stop = context.WithCancel(ctx)
 	defer b.stop()
+	b.fence = opswriter.FenceFromContext(ctx)
 	for i := range b.leases.rows {
 		b.leases.rows[i].chunk = -1
 	}
@@ -242,12 +256,36 @@ func runBatch(ctx context.Context, cfg batchConfig) (ops.Summary, json.RawMessag
 		return b.summary(), nil, errWorldStopped
 	}
 	sum := b.summary()
-	result, ferr := b.finish(sum)
 	runErr := b.err()
+	if b.stoppedForResume() {
+		// Shutdown: the run resumes under the same op id and its Finish runs
+		// then, once, over every attempt's chunks. Running it here as well
+		// would run a Fixer's AfterApply twice and report a partial result.
+		return sum, nil, errors.Join(context.Cause(ctx), runErr)
+	}
+	result, ferr := b.finish(sum)
 	if runErr == nil && ctx.Err() != nil {
 		runErr = context.Cause(ctx)
 	}
 	return sum, result, errors.Join(runErr, ferr)
+}
+
+// stoppedForResume reports a resumable def stopped by Shutdown. Every
+// registry stop path revokes the fence and then cancels the context, so a
+// worker that saw the revoke can return before the cancel lands; give the
+// cancel a moment to say which stop this was. (A lost stand-down lease
+// revokes without canceling: that wait times out and the run fails.)
+func (b *batchRun) stoppedForResume() bool {
+	if !b.cfg.resumable {
+		return false
+	}
+	if b.ctx.Err() == nil && b.fence.Revoked() {
+		select {
+		case <-b.ctx.Done():
+		case <-time.After(time.Second):
+		}
+	}
+	return errors.Is(context.Cause(b.ctx), ErrShutdown)
 }
 
 // finish runs the job's Finish, after a cancel too (rc.Canceled() is then true).
@@ -259,9 +297,9 @@ func (b *batchRun) finish(sum ops.Summary) (json.RawMessage, error) {
 }
 
 func (b *batchRun) summary() ops.Summary {
-	l := b.ledger.l
+	l := b.ledger.snapshot()
 	s := ops.Summary{Done: l.Items.Done, Failed: l.Items.Failed, Skipped: l.Items.Skipped,
-		Counters: maps.Clone(l.Counters), ChunksDone: b.ledger.chunksDone, ChunksTotal: b.chunkTotal(),
+		Counters: l.Counters, Marks: l.Marks, ChunksDone: b.ledger.chunksDone, ChunksTotal: b.chunkTotal(),
 		Canceled: b.ctx.Err() != nil}
 	if b.total != nil {
 		s.Total = *b.total
@@ -275,7 +313,7 @@ func (b *batchRun) chunkTotal() int {
 	if b.table != nil {
 		return b.table.count()
 	}
-	return max(int(b.cutCount.Load()), b.ledger.chunksDone)
+	return b.priorChunks + int(b.cutCount.Load())
 }
 
 // ── plan ───────────────────────────────────────────────────────────────────
@@ -297,6 +335,7 @@ func (b *batchRun) plan() error {
 			b.ledger = loadChunkLedger(stored)
 			b.size = max(stored.ChunkSize, 1)
 			b.skip = slices.Clone(b.ledger.l.Ranges)
+			b.priorChunks = b.ledger.chunksDone
 		} else {
 			b.ledger = newChunkLedger(b.size, 0)
 		}
@@ -401,9 +440,10 @@ func (b *batchRun) snapshotItems() (ops.ItemSet, error) {
 }
 
 // freeze stores the frozen keys (10,000 per page, then an empty page so a
-// reader stops even when the last real page is full), the partition-adjusted
-// chunk offsets, and an empty ledger, so a crash before the first completion
-// still resumes over the same chunk table.
+// reader stops even when the last real page is full) and the
+// partition-adjusted chunk offsets. The empty ledger is the ledger
+// goroutine's opening commit (ledgerLoop), so a crash before the first
+// completion still finds a ledger and resumes over the same chunk table.
 func (b *batchRun) freeze() error {
 	st := b.cfg.store
 	if st == nil {
@@ -649,6 +689,14 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		if b.workCtx.Err() != nil {
 			return // incomplete: the ledger never hears of this chunk
 		}
+		// The run's write permit. A revoked fence (cancel, timeout, abandon,
+		// shutdown, a lost stand-down lease) stops the run: the next item
+		// could not write anyway, and counting it as an ordinary failure
+		// would record its chunk done.
+		if err := b.fence.Check(); err != nil {
+			b.fail(fmt.Errorf("%s: %w", b.cfg.opID, err))
+			return
+		}
 		if i < 0 {
 			tally.skipped++
 			tally.add("skipped:gone", 1)
@@ -661,12 +709,6 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 				return
 			}
 		}
-		if h := holdFromContext(b.ctx); h != nil {
-			if err := h.Checkpoint(); err != nil {
-				b.fail(err)
-				return
-			}
-		}
 		b.leases.set(w, func(r *workerRow) { r.itemIndex, r.item, r.heartbeat = j, label, b.now() })
 		b.leases.mu.Lock()
 		b.leases.current = label
@@ -674,8 +716,25 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		if b.cfg.rep != nil {
 			b.cfg.rep.SetCurrentItem(label)
 		}
-		err := b.runItem(ch, i, itemTally, touch)
+		err := b.runItem(ch, j, itemTally, touch)
 		touch()
+		if err != nil && !errors.Is(err, ops.ErrPreview) {
+			if b.workCtx.Err() != nil {
+				return // the item was cut short by the stop; it did not settle
+			}
+			if stop := b.writeStopped(err); stop != nil {
+				// Fenced or lease lost: the item did not settle, and neither
+				// does its chunk. The run ends with this error.
+				b.fail(fmt.Errorf("%s: item %s: %w", b.cfg.opID, ch.keys[j], stop))
+				return
+			}
+		}
+		for _, m := range itemTally.Marks() {
+			if tally.marks == nil {
+				tally.marks = map[string][]string{}
+			}
+			tally.marks[m] = append(tally.marks[m], ch.keys[j])
+		}
 		switch {
 		case err == nil || errors.Is(err, ops.ErrPreview):
 			if errors.Is(err, ops.ErrPreview) {
@@ -695,8 +754,6 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 			if ch.vals != nil && !b.clearDirty(ch.keys[j], ch.vals[j]) {
 				return
 			}
-		case b.workCtx.Err() != nil:
-			return // the item was cut short by the stop; it did not settle
 		default:
 			tally.failed++
 			tally.add("failed", 1)
@@ -707,15 +764,40 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 			}
 		}
 	}
-	select {
-	case b.done <- completion{chunk: ch, tally: tally}:
-	case <-b.workCtx.Done():
-	}
+	// Every item settled, so the chunk is complete even if the run is
+	// stopping now: deliver it. A plain send cannot block forever, because
+	// ledgerLoop drains b.done until it is closed, after every worker returned.
+	b.done <- completion{chunk: ch, tally: tally}
 }
 
-// runItem runs one item with its own deadline (started after the pause gate)
+// writeStopped reports why an item error stops the run rather than counting
+// as one failed item: the run's fence is revoked, or the error says a write
+// was refused for that reason.
+func (b *batchRun) writeStopped(itemErr error) error {
+	if err := b.fence.Check(); err != nil {
+		return errors.Join(err, itemErr)
+	}
+	if errors.Is(itemErr, ops.ErrFenced) || errors.Is(itemErr, opswriter.ErrStandDownLost) ||
+		errors.Is(itemErr, ErrScanStandDownLost) {
+		return itemErr
+	}
+	return nil
+}
+
+// runItem runs item j of the chunk with its own deadline (started after the pause gate)
 // and a fresh tally.
-func (b *batchRun) runItem(ch *leasedChunk, i int, t *ops.Tally, touch func()) error {
+//
+// A panic in Item is recovered here and returned as the item's error, with
+// the stack logged: a worker is a bare pool goroutine, and an unrecovered
+// panic there would take the whole server down.
+func (b *batchRun) runItem(ch *leasedChunk, j int, t *ops.Tally, touch func()) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			b.cfg.log.Error("batch runner: item panicked", "op_id", b.cfg.opID, "item", ch.keys[j],
+				"panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+			err = fmt.Errorf("item panicked: %v", p)
+		}
+	}()
 	itemCtx := b.workCtx
 	if b.job.ItemTimeout > 0 {
 		var cancel context.CancelFunc
@@ -723,7 +805,7 @@ func (b *batchRun) runItem(ch *leasedChunk, i int, t *ops.Tally, touch func()) e
 		defer cancel()
 	}
 	t.Reset()
-	return ch.set.Run(ops.NewItemRC(b.cfg.rc, itemCtx, t, touch), i)
+	return ch.set.Run(ops.NewItemRC(b.cfg.rc, itemCtx, t, touch), ch.items[j])
 }
 
 func (b *batchRun) addRow(t *chunkTally, row database.ItemOutcome) {
@@ -825,6 +907,11 @@ func (b *batchRun) ledgerLoop() {
 			b.ledger.fold(c.tally)
 			rows = append(rows, c.tally.rows...)
 			dirty = true
+			if b.cfg.afterFold != nil && b.cfg.afterFold() {
+				b.crashed.Store(true)
+				b.stop()
+				continue
+			}
 			if b.cfg.commitEvery < 0 || b.now().Sub(lastCommit) >= b.cfg.commitEvery {
 				commit(false)
 			}

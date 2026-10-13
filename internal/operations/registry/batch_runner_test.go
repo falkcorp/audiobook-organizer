@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
 // last-edited: 2026-10-13
 
@@ -309,66 +309,97 @@ func TestChunkLeasing_ResumeLeasesExactlyUnfinished(t *testing.T) {
 	}
 }
 
-// TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice crashes runs at
-// random commits with random worker counts and chunk sizes, resumes until
-// done, and checks the D28a invariant: every item ran at least once, and no
-// item of a chunk the ledger recorded ever ran again.
+// TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice disrupts runs at
+// random points, resumes until done, and checks the D28a invariant: every
+// item ran at least once, no item of a chunk (Snapshot) or key range
+// (AppendOnly) the stored ledger recorded ever ran again, and the final
+// Summary.Done is exactly n. Each seed picks the source order, the ledger
+// throttle (every completion, or a real throttle that leaves completions
+// folded but not committed), and up to three disruptions of three kinds: a
+// crash right after a commit, a crash right after a fold (before its
+// commit), and a fence revoked mid-run. Some items fail (OnItemError
+// Continue): they settle like any other.
 func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
-	const seeds = 24
+	const seeds = 32
 	for seed := range seeds {
 		t.Run(fmt.Sprint("seed=", seed), func(t *testing.T) {
 			rng := rand.New(rand.NewPCG(uint64(seed), 7))
 			n := 50 + rng.IntN(250)
 			size := []int{1, 3, 7, 256}[rng.IntN(4)]
 			workers := 4 + rng.IntN(5)
+			order := []ops.SourceOrder{ops.Snapshot, ops.AppendOnly}[rng.IntN(2)]
+			commitEvery := []time.Duration{-1, 15 * time.Millisecond}[rng.IntN(2)]
 			items := seq(n)
 			store := newMemLedgerStore(t)
 			total := map[int]int{}
-			recorded := map[int]bool{} // chunks the ledger recorded at some crash
+			recorded := map[int]bool{} // items whose chunk/range a stored ledger recorded
+			var final ops.Summary
 			for attempt := 0; ; attempt++ {
 				c := newCounts()
-				crashAfter := -1
+				mode := 3 // clean
 				if attempt < 3 {
-					crashAfter = 1 + rng.IntN((n+size-1)/size+1)
+					mode = rng.IntN(3)
 				}
-				job, rc, cancel := openJob(t, items, batchOpts{size: size, workers: workers}, func(_ *ops.ItemRC, i int) error {
-					c.add(i)
-					runtime.Gosched()
-					return nil
-				})
-				store.newAttempt()
-				commits := 0
-				var crashBits []int
-				_, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1,
-					afterCommit: func(l database.Ledger, _ database.ProgressSnapshot) bool {
-						commits++
-						if commits == crashAfter {
-							crashBits = bitsSet(l)
-							return true
+				disruptAt := 1 + rng.IntN(max(n/size, 1)+1)
+				fenceFrom := rng.IntN(n)
+				job, rc, cancel := openJob(t, items, batchOpts{order: order, size: size, workers: workers},
+					func(_ *ops.ItemRC, i int) error {
+						c.add(i)
+						runtime.Gosched()
+						if mode == 2 && i >= fenceFrom {
+							return fmt.Errorf("item %d: %w", i, ops.ErrFenced)
 						}
-						return false
+						if i%11 == 0 {
+							return errors.New("a failing item settles too")
+						}
+						return nil
+					})
+				store.newAttempt()
+				commits, folds := 0, 0
+				sum, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: commitEvery,
+					afterCommit: func(database.Ledger, database.ProgressSnapshot) bool {
+						commits++
+						return mode == 0 && commits == disruptAt
+					},
+					afterFold: func() bool {
+						folds++
+						return mode == 1 && folds == disruptAt
 					}})
 				cancel()
 				for i := range items {
-					if recorded[i/size] && c.get(i) > 0 {
-						t.Fatalf("attempt %d re-ran item %d of recorded chunk %d", attempt, i, i/size)
+					if recorded[i] && c.get(i) > 0 {
+						t.Fatalf("attempt %d (mode %d) re-ran item %d, which the ledger had recorded", attempt, mode, i)
 					}
 					total[i] += c.get(i)
 				}
 				if err == nil {
+					final = sum
 					break
 				}
-				if !errors.Is(err, errWorldStopped) {
+				if !errors.Is(err, errWorldStopped) && !errors.Is(err, ops.ErrFenced) {
 					t.Fatalf("attempt %d: %v", attempt, err)
 				}
-				for _, b := range crashBits {
-					recorded[b] = true
+				led, _ := store.GetLedgerV3("op")
+				if led == nil {
+					continue
+				}
+				for i := range items {
+					if order == ops.Snapshot {
+						if c := i / led.ChunkSize; c < led.ChunkCount && led.Done[c/8]&(1<<(c%8)) != 0 {
+							recorded[i] = true
+						}
+					} else if inRanges(led.Ranges, itemKey(i)) {
+						recorded[i] = true
+					}
 				}
 			}
 			for i := range items {
 				if total[i] < 1 {
 					t.Fatalf("item %d never ran", i)
 				}
+			}
+			if final.Done != int64(n) {
+				t.Fatalf("final Done = %d, want %d", final.Done, n)
 			}
 		})
 	}

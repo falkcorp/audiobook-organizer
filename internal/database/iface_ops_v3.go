@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package database
 
@@ -178,7 +178,15 @@ type Ledger struct {
 	Ranges        []KeyRange       `json:"ranges,omitempty"` // AppendOnly: completed {first,last} key ranges, merged
 	Items         LedgerItems      `json:"items"`
 	Counters      map[string]int64 `json:"counters"`
-	UpdatedAt     time.Time        `json:"updated_at"`
+	// ChunksDone counts completed chunks across every attempt. A Snapshot
+	// run can count its bitmap, but merged AppendOnly ranges cannot be
+	// counted back into chunks, so the runner persists the number (05-PR5).
+	ChunksDone int `json:"chunks_done,omitempty"`
+	// Marks are the keys items recorded with rc.Mark, by name, from
+	// completed chunks only (a Fixer's applied rows), so they survive a
+	// resume exactly as the counters do.
+	Marks     map[string][]string `json:"marks,omitempty"`
+	UpdatedAt time.Time           `json:"updated_at"`
 }
 
 // Lease is one chunk a worker holds. Leases live in the runner's memory and

@@ -1,5 +1,5 @@
 // file: pkg/ops/fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
 // last-edited: 2026-10-13
 
@@ -108,6 +108,9 @@ type FixerResult struct {
 	Applied []string `json:"applied"`
 }
 
+// MarkApplied is the rc.Mark name a Fixer apply records each written row under.
+const MarkApplied = "applied"
+
 // Skip reasons a Fixer apply records under skipped:<reason>.
 const (
 	SkipGone             = "gone"
@@ -191,8 +194,6 @@ func fixerApplyJob[P any, C any](id string, s FixerSpec[P, C], rc *RC, params js
 	if part == nil {
 		part = func(r Row) string { return r.ID }
 	}
-	var mu sync.Mutex
-	var applied []string
 	src := Source[Row]{Items: env.Rows, Key: func(r Row) string { return r.ID }, Order: Snapshot,
 		Total: Known(int64(len(env.Rows)))}
 	job, err := buildJob(jobConfig[P, Row]{
@@ -206,9 +207,10 @@ func fixerApplyJob[P any, C any](id string, s FixerSpec[P, C], rc *RC, params js
 		run: func(irc *ItemRC, p P, planned Row) error {
 			ok, err := applyRow(irc, s, p, planned)
 			if ok {
-				mu.Lock()
-				applied = append(applied, planned.ID)
-				mu.Unlock()
+				// Recorded through the chunk ledger, not in memory, so rows a
+				// run applied before a deploy are still listed (and handed to
+				// AfterApply) when the resumed run finishes.
+				irc.Mark(MarkApplied)
 			}
 			return err
 		},
@@ -216,17 +218,17 @@ func fixerApplyJob[P any, C any](id string, s FixerSpec[P, C], rc *RC, params js
 	if err != nil {
 		return nil, err
 	}
-	job.Finish = func(rc *RC, _ Summary) (json.RawMessage, error) {
-		mu.Lock()
-		out := slices.Clone(applied)
-		mu.Unlock()
-		sort.Strings(out)
-		if s.AfterApply != nil && len(out) > 0 {
-			if err := s.AfterApply(rc.WithContext(context.WithoutCancel(rc.Context())), out); err != nil {
+	job.Finish = func(rc *RC, sum Summary) (json.RawMessage, error) {
+		applied := sum.Marked(MarkApplied)
+		if applied == nil {
+			applied = []string{}
+		}
+		if s.AfterApply != nil && len(applied) > 0 {
+			if err := s.AfterApply(rc.WithContext(context.WithoutCancel(rc.Context())), applied); err != nil {
 				return nil, fmt.Errorf("%s: after apply: %w", id, err)
 			}
 		}
-		return json.Marshal(FixerResult{Applied: out})
+		return json.Marshal(FixerResult{Applied: applied})
 	}
 	return job, nil
 }

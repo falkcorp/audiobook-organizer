@@ -1,5 +1,5 @@
 // file: pkg/ops/kinds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d3536389-9d87-4f21-b694-6ce022e230a8
 // last-edited: 2026-10-13
 
@@ -145,7 +145,7 @@ func TestFixerPlanThenApply(t *testing.T) {
 	if !job.Partitioned || job.Items.Partition(0) != job.Items.Key(0) {
 		t.Fatal("a Fixer apply partitions by Row.ID by default")
 	}
-	skips, errs := runSet(t, live, job.Items)
+	skips, errs, marks := runSetMarks(t, live, job.Items)
 	for _, e := range errs {
 		if e != nil {
 			t.Fatalf("apply error: %v", e)
@@ -162,7 +162,7 @@ func TestFixerPlanThenApply(t *testing.T) {
 	if titles["b1"] != "1 Volume" || titles["b3"] != "l Book" {
 		t.Fatalf("titles after apply = %v", titles)
 	}
-	raw, err = job.Finish(live, Summary{})
+	raw, err = job.Finish(live, Summary{Marks: marks})
 	var res FixerResult
 	if err != nil || json.Unmarshal(raw, &res) != nil || !reflect.DeepEqual(res.Applied, []string{"b1"}) {
 		t.Fatalf("apply result %s %v", raw, err)
