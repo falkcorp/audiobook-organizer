@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.33.3
+// version: 4.34.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-12
 
@@ -1721,7 +1721,7 @@ func (s *Server) setupRoutes() {
 			// future job that forgets to implement PermissionAware.
 			protected.POST("/maintenance/jobs/:job_id", s.perm(auth.PermSettingsManage), s.runMaintenanceJob)
 
-			// Admin-only destructive endpoints
+			// Admin-only (retired wipe stub)
 			adminOnly := protected.Group("")
 			adminOnly.Use(servermiddleware.RequireAdmin())
 			{

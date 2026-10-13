@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -153,8 +153,7 @@ func (p *PebbleStore) commitMetadataCacheWrite(bookID string, data []byte, entry
 // current in the same batch, under the book's cache stripe: Put and Delete
 // through commitMetadataCacheWrite, UpdateBook/CreateBook/DeleteBook through
 // their identTxn, the raw writers through stageIdentForRawCacheWrites, and
-// Reset by stamping an empty built index. WipeByPrefixes over the prefix
-// rebuilds the index.
+// Reset by stamping an empty built index.
 //
 // A reader holding something derived from the cache -- the review listing's
 // snapshot -- compares it to the value it read when it began building, to

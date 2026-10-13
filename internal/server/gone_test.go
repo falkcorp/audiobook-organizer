@@ -98,5 +98,17 @@ func TestWipeRoute_IsA410StubBehindAdminOnly(t *testing.T) {
 	t.Run("non-admin gets 403 before the 410", func(t *testing.T) {
 		w := f.do(t, viewerSess.ID, http.MethodPost, "/api/v1/maintenance/wipe", body)
 		assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+		// It is RequireAdmin that refused, not some earlier layer.
+		assert.Contains(t, w.Body.String(), "admin role required")
+		assert.NotContains(t, w.Body.String(), `"error":"gone"`)
+	})
+
+	// Positive control: the viewer session is valid and authorized for
+	// library.view, so a route that is not admin-only (the UOS-14 stub) answers
+	// it with 410. Without this the 403 above could mean the viewer
+	// session itself is rejected everywhere.
+	t.Run("viewer session reaches a non-admin gone stub", func(t *testing.T) {
+		w := f.do(t, viewerSess.ID, http.MethodGet, "/api/v1/operations/active", nil)
+		assert.Equal(t, http.StatusGone, w.Code, w.Body.String())
 	})
 }

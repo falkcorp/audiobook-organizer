@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_reclaim_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c8f31d92-4a67-4b05-8e13-2d90a5c76f48
-// last-edited: 2026-09-08
+// last-edited: 2026-10-12
 
 package database
 
@@ -24,7 +24,7 @@ import (
 //     dual-writes forever and a delete with no lower bound would race it.
 //
 // A test that only checked "does it delete" would pass against a plain
-// WipeAllActivity, which is the implementation this one exists to rule out.
+// total wipe of the primary, which is the behaviour this one exists to rule out.
 
 // seedActivity writes one row into a store at a chosen age.
 func seedActivity(t *testing.T, s ActivityStorer, tier string, age time.Duration, summary string) {

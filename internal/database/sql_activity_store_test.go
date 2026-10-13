@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9f1c4b70-3d21-4a58-b0e6-1c8a2f5d6e30
-// last-edited: 2026-10-03
+// last-edited: 2026-10-12
 
 package database
 
@@ -205,37 +205,6 @@ func TestSQLActivity_CompactByDay_Bounded(t *testing.T) {
 	_, total, _ := s.Query(context.Background(), ActivityFilter{Search: "keep me"})
 	if total != 1 {
 		t.Errorf("newer row survived count = %d, want 1", total)
-	}
-}
-
-func TestSQLActivity_WipeCancel(t *testing.T) {
-	s := newTestSQLStore(t)
-	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	for i := range 3 {
-		mustRecord(t, s, ActivityEntry{Timestamp: base.Add(time.Duration(i) * time.Minute), Tier: "info", Type: "t", Level: "info", Source: "s", Summary: fmt.Sprintf("r%d", i)})
-	}
-	// Cancelled context: returns ctx.Err and a count that is a lower bound (0..3).
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	n, err := s.WipeAllActivity(ctx)
-	if err == nil {
-		t.Errorf("expected ctx error on cancelled wipe")
-	}
-	if n < 0 || n > 3 {
-		t.Errorf("cancelled wipe count = %d, out of range", n)
-	}
-
-	// A full wipe with a live context clears everything.
-	n2, err := s.WipeAllActivity(context.Background())
-	if err != nil {
-		t.Fatalf("wipe: %v", err)
-	}
-	if n2 < 0 {
-		t.Errorf("wipe count negative")
-	}
-	_, total, _ := s.Query(context.Background(), ActivityFilter{})
-	if total != 0 {
-		t.Errorf("after wipe total = %d, want 0", total)
 	}
 }
 

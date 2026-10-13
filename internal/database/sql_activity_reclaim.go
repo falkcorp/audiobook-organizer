@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_reclaim.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8c1a56-90d4-4e27-b6a1-7c05e2d84b93
-// last-edited: 2026-09-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -30,7 +30,7 @@ import (
 // must leave in Pebble, however small a retain the caller asks for.
 //
 // It is the anti-race guard, and it is why this prunes behind a cutoff instead
-// of calling WipeAllActivity on the primary. Record fans out to BOTH backends
+// of wiping the primary outright. Record fans out to BOTH backends
 // on every write and there is no post-cutover stop, so the Pebble store is a
 // LIVE store, not a frozen one: a total wipe would range-delete rows that
 // landed between the parity check and the delete. Rows older than the cutoff

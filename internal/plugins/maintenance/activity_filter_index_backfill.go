@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-09-29
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -80,8 +80,9 @@ type ActivityFilterIndexBackfillResult struct {
 // maintenance.cleanup-activity-log's ConcurrencyKey with every OP that deletes
 // activity rows: cleanup, compact, nightly compact, recompact and
 // maintenance.activity-reclaim (moved onto this key for that reason). The one
-// deleter that is not an op, the wipe fixup (WipeAllActivity), is not
-// serialized; a wipe during a backfill can leave ghost keys, handled as above.
+// deleter that was not an op, the HTTP library wipe, was removed with its
+// route (01-P81a); any ghost keys from a deleter outside the ops are handled
+// as above.
 // Within the op, windows are disjoint timestamp ranges, so the RunItems
 // workers never write the same key.
 //

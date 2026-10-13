@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 package database
 
@@ -22,7 +22,7 @@ const worksIterCtxEvery = 1024
 
 // WorksGeneration returns a counter that changes whenever any work: row
 // changes. Every writer of a work: key (CreateWork, UpdateWork, DeleteWork,
-// Reset, WipeByPrefixes) bumps it AFTER its commit, so a reader that records
+// Reset) bumps it AFTER its commit, so a reader that records
 // the value BEFORE loading the works table and later sees the same value knows
 // no write landed in between. The scanner's works lookup cache uses it to
 // survive a scan restart without reloading every work (2026-09-13: each

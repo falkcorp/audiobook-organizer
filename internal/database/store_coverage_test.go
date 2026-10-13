@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -1237,31 +1237,6 @@ func createBookWithDuration(t *testing.T, store Store, title, filePath string, a
 	created, err := store.CreateBook(book)
 	require.NoError(t, err)
 	return created.ID
-}
-
-// --- Activity Store: WipeAllActivity ---
-
-func TestCoverage_WipeAllActivity(t *testing.T) {
-	as := newTestPebbleActivityStore(t)
-
-	// Record some activity
-	_, err := as.Record(ActivityEntry{
-		Source:  "test_source",
-		Type:    "test_action",
-		Summary: "test summary",
-		Level:   "info",
-		Tier:    "system",
-	})
-	require.NoError(t, err)
-
-	// Wipe
-	_, err = as.WipeAllActivity(context.Background())
-	require.NoError(t, err)
-
-	// Verify empty
-	events, _, err := as.Query(context.Background(), ActivityFilter{Limit: 10})
-	require.NoError(t, err)
-	assert.Len(t, events, 0)
 }
 
 // --- AI Scan Store: 0% coverage functions ---

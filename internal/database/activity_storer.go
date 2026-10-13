@@ -1,5 +1,5 @@
 // file: internal/database/activity_storer.go
-// version: 1.12.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
 // last-edited: 2026-10-12
 
@@ -41,36 +41,16 @@ type ActivityCounter interface {
 // ActivityRetention covers pruning, compaction and migration.
 type ActivityRetention interface {
 	// Prune hard-deletes every entry of tier older than olderThan and returns
-	// the count actually deleted. It takes a context for the same reason
-	// WipeAllActivity does: since 2026-09-10 the migrating wrapper runs it on
-	// BOTH backends, so a cancelled nightly cleanup (or one past its op
-	// budget) must stop at its next batch rather than prune both stores to
-	// completion. On cancellation it returns the rows deleted so far — a
+	// the count actually deleted. It takes a context because, since 2026-09-10,
+	// the migrating wrapper runs it on BOTH backends: a cancelled nightly
+	// cleanup (or one past its op budget) must stop at its next batch rather
+	// than prune both stores to completion. On cancellation it returns the rows deleted so far — a
 	// lower bound, never a projection — alongside ctx.Err(); rows not yet
 	// reached are left untouched and a plain retry finishes them.
 	// Implementations report each committed batch through
 	// ReportMaintenanceProgress (MaintenancePhasePrune) when a
 	// WithMaintenanceProgress hook rides ctx.
 	Prune(ctx context.Context, olderThan time.Time, tier string) (int, error)
-	// WipeAllActivity deletes every activity entry. It takes a context because
-	// it was reachable from a live request (the POST /maintenance/wipe handler,
-	// now a 410 stub with no caller): an abandoned wipe
-	// request must stop scanning promptly instead of running every tier to
-	// completion server-side regardless of the client. On cancellation it
-	// returns the count of rows ACTUALLY deleted so far (never a fabricated
-	// full or zero count) alongside ctx.Err(); rows not yet reached are left
-	// untouched, so the store is left in a state a plain retry can finish —
-	// there is no partial-tier bookkeeping to resume, the retry just rescans
-	// and deletes whatever remains.
-	//
-	// The count is a LOWER BOUND on keys removed, not an exact one: a backend
-	// may additionally sweep rows it could not enumerate individually (the
-	// Pebble implementation range-deletes the whole activity prefix on a
-	// completed run, which also removes rows whose stored JSON will not decode
-	// and index entries whose row was already gone). Under-reporting is the
-	// deliberate direction — a caller may rely on the number never claiming
-	// more than it can name.
-	WipeAllActivity(ctx context.Context) (int64, error)
 	CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error)
 	RecompactDigests(ctx context.Context) (RecompactResult, error)
 	// RepairActivityIndexes deletes secondary index entries (act:op:, act:bk:)
@@ -124,19 +104,12 @@ type ActivityLifecycle interface {
 // ActivityStorer is the minimal interface required by activity.Service and
 // activity.Writer. PebbleActivityStore is the production implementation.
 //
-// Query, GetDistinctSources and WipeAllActivity take a context and there is
-// deliberately NO context-free variant of any of them. All three walk the
-// activity log, and on production an abandoned request whose scan could not
+// Query and GetDistinctSources take a context and there is deliberately NO
+// context-free variant of either. Both walk the activity log, and on production an abandoned request whose scan could not
 // be cancelled kept decoding entries after the client had disconnected: 30
 // goroutines held 30.8 GB inside the scan with ZERO connected clients, and
 // only a restart freed it. A parallel non-context method would let the next
 // caller reintroduce that outage, so the cancellable path is the only path.
-// WipeAllActivity is included because it was reachable from the
-// POST /maintenance/wipe handler, a real HTTP handler, not merely a scheduled
-// maintenance job. That route is now a 410 stub, so WipeAllActivity has no live
-// HTTP caller; it keeps the context so the next caller cannot reintroduce the
-// uncancellable scan.
-//
 // Prune and MigrateSystemActivityLogs remain intentionally context-free per
 // scope: they share the same defect shape but are not reachable from a live
 // request path today, so widening them is left as a follow-up. (Summarize and

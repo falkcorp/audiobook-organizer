@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.131.3
+// version: 1.132.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-12
 
@@ -352,7 +352,7 @@ func AcquireScanCache(cache map[string]database.ScanCacheEntry) func() {
 // and reused by the next run when it is still current. "Current" is decided
 // by the store's works generation (database.WorkStore.WorksGeneration), which
 // every writer of a work row bumps after its commit — CreateWork, UpdateWork,
-// DeleteWork, Reset and WipeByPrefixes are the complete set of writers of
+// DeleteWork and Reset are the complete set of writers of
 // work: keys in internal/database. The map records the generation read BEFORE
 // its load plus the number of works this package created and added to the
 // map since (worksLookupOwnWrites). Reuse requires

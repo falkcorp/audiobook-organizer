@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 
 // Package database — backend-migration wrapper for the activity log.
 //
@@ -51,10 +51,6 @@
 //     would make a rollback land on a backend that has never been analyzed.
 //     That is exactly the state production's SQLite database was found in on
 //     2026-09-09 (no sqlite_stat1 at all across 13.2M rows).
-//
-//   - WipeAllActivity: BOTH. It is an explicit destructive user action; leaving a
-//     full mirror behind would be surprising, so it clears both and returns the
-//     active backend's count.
 //
 // THE FLIP is a single atomic.Bool the backfill op sets once history has been
 // copied AND per-tier parity verified. Flipping is race-safe against concurrent
@@ -148,22 +144,6 @@ func (m *MigratingActivityStore) Record(e ActivityEntry) (int64, error) {
 		return sID, sErr
 	}
 	return pID, pErr
-}
-
-// WipeAllActivity clears both backends and returns the active one's count/err.
-func (m *MigratingActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
-	pN, pErr := m.primary.WipeAllActivity(ctx)
-	sN, sErr := m.secondary.WipeAllActivity(ctx)
-	if pErr != nil {
-		slog.Warn("[activity-migrate] primary WipeAllActivity failed", "err", pErr)
-	}
-	if sErr != nil {
-		slog.Warn("[activity-migrate] secondary WipeAllActivity failed", "err", sErr)
-	}
-	if m.readSecondary.Load() {
-		return sN, sErr
-	}
-	return pN, pErr
 }
 
 // ── reads: active only ──────────────────────────────────────────────────────

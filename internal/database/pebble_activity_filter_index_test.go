@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -348,11 +348,6 @@ func TestFilterIndex_ConsistentThroughWriteDeleteCompactPrune(t *testing.T) {
 	got, err := s.QueryWithPartial(ctx, ActivityFilter{Source: "compaction", Type: "daily_digest", Limit: 100})
 	require.NoError(t, err)
 	assert.NotEmpty(t, got.Entries, "digests are reachable through the index")
-
-	_, err = s.WipeAllActivity(ctx)
-	require.NoError(t, err)
-	assertFilterIndexConsistent(t, s)
-	assert.True(t, s.FilterIndexBackfillDone(), "the sentinel lives outside act: and survives a wipe")
 }
 
 // TestFilterIndex_RepairRemovesFilterOrphans: an orphaned filter key (a row

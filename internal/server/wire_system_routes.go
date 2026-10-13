@@ -1,7 +1,7 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-10-07
+// last-edited: 2026-10-12
 
 package server
 
@@ -31,11 +31,11 @@ func (s *Server) wireSystemRoutes(
 	protected.GET("/system/storage", s.perm(auth.PermSettingsManage), systemH.GetSystemStorage)
 	protected.GET("/system/logs", s.perm(auth.PermSettingsManage), systemH.GetSystemLogs)
 	protected.GET("/system/activity-log", s.perm(auth.PermSettingsManage), systemH.GetSystemActivityLog)
-	// Destructive full-wipe endpoints: gate on RequireAdmin() to match the
-	// sibling /maintenance/wipe (server_lifecycle.go) rather than the weaker
-	// PermSettingsManage — a custom non-admin role granted settings.manage must
-	// not be able to wipe the whole library via reset. Same admin-only subgroup
-	// pattern used in server_lifecycle.go and wire_library_routes.go.
+	// Destructive full-wipe endpoints: gate on RequireAdmin() rather than the
+	// weaker PermSettingsManage — a custom non-admin role granted
+	// settings.manage must not be able to reset the whole store. Same
+	// admin-only subgroup pattern used in server_lifecycle.go and
+	// wire_library_routes.go.
 	adminOnly := protected.Group("")
 	adminOnly.Use(servermiddleware.RequireAdmin())
 	{

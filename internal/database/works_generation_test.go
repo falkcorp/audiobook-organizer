@@ -1,7 +1,7 @@
 // file: internal/database/works_generation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4a7e25-1f6b-4d83-b0e2-5a8d3c61f794
-// last-edited: 2026-09-13
+// last-edited: 2026-10-12
 
 package database
 
@@ -17,8 +17,8 @@ import (
 
 // TestWorksGeneration_BumpedByEveryWorkWriter pins the invalidation contract
 // the scanner's retained works map depends on: every writer of a work: key
-// changes WorksGeneration. The writers are CreateWork, UpdateWork, DeleteWork,
-// WipeByPrefixes and Reset — the complete set of work: key writers in this
+// changes WorksGeneration. The writers are CreateWork, UpdateWork, DeleteWork
+// and Reset — the complete set of work: key writers in this
 // package (grep "work:" internal/database).
 func TestWorksGeneration_BumpedByEveryWorkWriter(t *testing.T) {
 	s, cleanup := setupPebbleTestDB(t)
@@ -52,13 +52,6 @@ func TestWorksGeneration_BumpedByEveryWorkWriter(t *testing.T) {
 		return err
 	})
 	expectBump("DeleteWork", func() error { return p.DeleteWork(id) })
-	if _, err := p.CreateWork(&Work{Title: "Children of Dune"}); err != nil {
-		t.Fatal(err)
-	}
-	expectBump("WipeByPrefixes", func() error {
-		_, err := p.WipeByPrefixes([]string{"work:"})
-		return err
-	})
 	if _, err := p.CreateWork(&Work{Title: "God Emperor"}); err != nil {
 		t.Fatal(err)
 	}
