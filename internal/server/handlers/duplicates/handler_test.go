@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -29,9 +29,11 @@ import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	metadatamocks "github.com/falkcorp/audiobook-organizer/internal/metadata/mocks"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates"
 	duplicatesmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates/mocks"
 )
@@ -525,6 +527,41 @@ func TestMergeSeriesGroup_Enqueues202(t *testing.T) {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
 	assertReturnsV2OpID(t, w)
+}
+
+// honor_locks is optional on the wire and forwarded as given: absent stays nil
+// (the op reads nil as true), an explicit false reaches the op.
+func TestMergeSeriesGroup_ForwardsHonorLocks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want *bool
+	}{
+		{"absent", map[string]any{"keep_id": 7, "merge_ids": []int{8}}, nil},
+		{"false", map[string]any{"keep_id": 7, "merge_ids": []int{8}, "honor_locks": false}, new(false)},
+		{"true", map[string]any{"keep_id": 7, "merge_ids": []int{8}, "honor_locks": true}, new(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.store.EXPECT().GetSeriesByID(7).Return(&database.Series{ID: 7}, nil)
+			var got dedup.SeriesMergeParams
+			d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-merge", mock.Anything).
+				RunAndReturn(func(_ context.Context, _ string, params any, _ ...opsregistry.EnqueueOption) (string, error) {
+					got = params.(dedup.SeriesMergeParams)
+					return "rid", nil
+				})
+			w := doReq(t, h.MergeSeriesGroup, http.MethodPost, "/series/merge", tc.body)
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+			}
+			switch {
+			case tc.want == nil && got.HonorLocks != nil:
+				t.Fatalf("absent honor_locks must stay nil, got %v", *got.HonorLocks)
+			case tc.want != nil && (got.HonorLocks == nil || *got.HonorLocks != *tc.want):
+				t.Fatalf("honor_locks not forwarded: want %v got %v", *tc.want, got.HonorLocks)
+			}
+		})
+	}
 }
 
 func TestMergeSeriesGroup_KeepNotFound(t *testing.T) {
