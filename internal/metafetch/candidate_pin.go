@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -117,6 +117,21 @@ func PinOf(c MetadataCandidate) CandidatePin {
 // the gate (IsOwnerReview) and stay fill-only (A3#3) unless the request asks
 // for BulkApplyModeReplace (owner ruling 2026-09-27).
 func (p CandidatePin) IsRowReview() bool { return p.Origin == PinOriginRow }
+
+// RowPinnedBook returns the lowest book id in pins whose pin is a single-row
+// review (IsRowReview), if any. A row pin is one reviewer's approval of one
+// book's candidate, so a request that carries one alongside other books is a
+// bulk apply wearing a row pin: the HTTP route (BatchApplyFromCache), the
+// queued-run merge and the op's Run all refuse it, and all ask this.
+func RowPinnedBook(pins map[string]CandidatePin) (string, bool) {
+	best, found := "", false
+	for id, pin := range pins {
+		if pin.IsRowReview() && (!found || id < best) {
+			best, found = id, true
+		}
+	}
+	return best, found
+}
 
 // IsOwnerReview reports whether p comes from an apply button on the review
 // page (any origin above), and so makes the apply owner-reviewed.

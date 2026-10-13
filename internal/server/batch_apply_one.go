@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-12
 
@@ -455,12 +455,13 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	}
 	idErr := svc.ValidateCachedIdentityForBook(entry, book, authors)
 	ts := cachedTranscribedSearch(svc, books, entry, book, authors, idErr)
-	// A row fetched by the book's work folder (the folder-parse variant, or a
-	// stand-in for an unsearchable title) hashes the folder's name, not the
-	// book's title, so it reads as a stale query. When the book still resolves
-	// to exactly that folder query and the row was fetched for the current
-	// author, ONLY an owner's single review row may apply it (below);
-	// unattended and bulk paths keep identity_stale.
+	// A row fetched by the book's work folder hashes the folder's name, not
+	// the book's title, so it reads as a stale query. Two searches do that: the
+	// folder-parse variant (source folder_person_title) and the stand-in for an
+	// unsearchable title (folder_title). Only the first may be lifted, and only
+	// by an owner's single review row (cachedFolderSearchExplains), when the
+	// book still resolves to exactly that folder query and the row was fetched
+	// for the current author; unattended and bulk paths keep identity_stale.
 	folderExplains := cachedFolderSearchExplains(svc, books, entry, book, authors, idErr)
 	// The row is marked stale (the book was retitled or re-credited after the
 	// fetch), or the book's ASIN was replaced or cleared after this row was
@@ -480,14 +481,15 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 			idErr = fmt.Errorf("%w; %w", idStaleErr, idErr)
 		}
 	}
-	// The owner-manual-only bypass keys on the PIN, not on the request size.
-	// Each row pin is an explicit owner approval of this one book's candidate:
-	// the owner clicked Apply on that row, which is how the owner rule says
-	// Doctor Who / Big Finish books are applied. It deliberately does NOT
-	// require len(book_ids)==1: the review page batches per-row Apply clicks
-	// made inside its 500ms debounce window into one request
-	// (web/src/components/review/lanes/useMetadataLane.ts), so several row
-	// approvals arrive together. A bulk button's pin (origin "review_bulk") and the
+	// The owner-manual-only bypass keys on the PIN. Each row pin is an
+	// explicit owner approval of this one book's candidate: the owner clicked
+	// Apply on that row, which is how the owner rule says Doctor Who / Big
+	// Finish books are applied. A row pin only ever arrives on a one-book
+	// request: the HTTP route answers 400 to one beside other books, the
+	// queued-run merge never combines one, and the op's Run refuses it (the
+	// review page sends each row-pinned click as its own request, even ones
+	// inside its 500ms debounce window). So the bypass cannot reach a book the
+	// owner did not look at. A bulk button's pin (origin "review_bulk") and the
 	// hashless marker are not row pins and get the guard.
 	//
 	// The owner's rejections are read for every caller, pinned or not: a

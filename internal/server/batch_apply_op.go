@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -218,6 +218,17 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	if current.WriteBack != next.WriteBack {
 		return nil, false, nil
 	}
+	// A row-origin pin is one reviewer's approval of one book, and it lifts
+	// gates (a folder-found candidate's identity_stale) that a run of several
+	// books must not. Merging would put it beside other books -- Run refuses
+	// that shape -- so a request carrying one is never merged, either way
+	// round; declining queues it to run on its own, like the cap below.
+	if _, row := metafetch.RowPinnedBook(current.Pins); row {
+		return nil, false, nil
+	}
+	if _, row := metafetch.RowPinnedBook(next.Pins); row {
+		return nil, false, nil
+	}
 	// A different bulk mode is a different request: merging a replace into a
 	// queued fill run (or the reverse) would change what the earlier click
 	// asked for. Declining is safe for the same reason as the cap below: the
@@ -345,6 +356,15 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				return fmt.Errorf("batch-apply-cached: unknown mode %q (want %q or %q)", p.Mode, metafetch.BulkApplyModeFill, metafetch.BulkApplyModeReplace)
 			}
 			p.Mode = mode
+			// A row-origin pin is one reviewer's look at one book. The HTTP
+			// route refuses it beside other books; this op can also be
+			// dispatched directly (/operations/v2), so Run holds the same
+			// line before any write.
+			if len(p.BookIDs) > 1 {
+				if id, bad := metafetch.RowPinnedBook(p.Pins); bad {
+					return fmt.Errorf("batch-apply-cached: a row-origin pin (book %s) is only valid for a single-book apply; got %d books", id, len(p.BookIDs))
+				}
+			}
 
 			// Metadata is never applied during a library scan: hold the scan stand-down
 			// before the first write (fails the op if the scan does not park).

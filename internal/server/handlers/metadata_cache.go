@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-12
 
@@ -1276,12 +1276,12 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	// that one look, so a request that carries one alongside other books is a
 	// bulk apply wearing a row pin. Refuse it rather than let the lift reach
 	// books nobody reviewed individually. The dry run above never reads pins.
+	// The op refuses and never merges the same shape (batch_apply_op.go), so a
+	// caller that skips this route (POST /operations/v2) is held too.
 	if len(body.BookIDs) > 1 {
-		for id, pin := range body.Pins {
-			if pin.IsRowReview() {
-				httputil.RespondWithBadRequest(c, fmt.Sprintf("a row-origin pin (book %s) is only valid for a single-book apply; got %d books", id, len(body.BookIDs)))
-				return
-			}
+		if id, bad := metafetch.RowPinnedBook(body.Pins); bad {
+			httputil.RespondWithBadRequest(c, fmt.Sprintf("a row-origin pin (book %s) is only valid for a single-book apply; got %d books", id, len(body.BookIDs)))
+			return
 		}
 	}
 
