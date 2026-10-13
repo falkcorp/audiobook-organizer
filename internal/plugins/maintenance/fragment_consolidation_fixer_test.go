@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-08
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -4025,7 +4025,7 @@ func TestFragTitleKey(t *testing.T) {
 		{"Harry Potter, Book 1", "Harry Potter Bk. 01"},
 	} {
 		require.NotEmpty(t, id(tc[0]).key, tc[0])
-		require.True(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are one work", tc[0], tc[1])
+		require.Equal(t, fragTitleSame, id(tc[0]).relate(id(tc[1])), "%q and %q are one work", tc[0], tc[1])
 	}
 	for _, tc := range [][2]string{
 		{"Dragon Born 3", "Dragon Born"},
@@ -4039,7 +4039,7 @@ func TestFragTitleKey(t *testing.T) {
 		{"Prelude to Foundation", "Foundation"},
 		{"Doctor Who - Loose", "Loose"},
 	} {
-		require.False(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are different works", tc[0], tc[1])
+		require.NotEqual(t, fragTitleSame, id(tc[0]).relate(id(tc[1])), "%q and %q are different works", tc[0], tc[1])
 	}
 	for _, title := range []string{"", "c5", "ab", "Part 3", "Chapter 12", "01", "New Folder"} {
 		require.Empty(t, id(title).key, "%q names no work", title)
@@ -4617,14 +4617,14 @@ func TestFragTitleKeyGenericSubtitle(t *testing.T) {
 		{"Gone Girl: A Thriller", "Gone Girl (Unabridged)"},
 	} {
 		require.NotEmpty(t, id(tc[0]).key, tc[0])
-		require.True(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are one work", tc[0], tc[1])
+		require.Equal(t, fragTitleSame, id(tc[0]).relate(id(tc[1])), "%q and %q are one work", tc[0], tc[1])
 	}
 	for _, tc := range [][2]string{
 		{"Fahrenheit 451: A Novel", "1984: A Novel"},
 		{"Ready Player One: A Novel", "Ready Player Two: A Novel"},
 		{"Gone Girl: A Thriller", "Sharp Objects: A Thriller"},
 	} {
-		require.False(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are different works", tc[0], tc[1])
+		require.NotEqual(t, fragTitleSame, id(tc[0]).relate(id(tc[1])), "%q and %q are different works", tc[0], tc[1])
 	}
 	require.NotEqual(t, "anovel", id("Fahrenheit 451: A Novel").key)
 	require.NotEqual(t, "anovel", id("1984: A Novel").key)

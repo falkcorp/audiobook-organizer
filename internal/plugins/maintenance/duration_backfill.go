@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.0
+// version: 2.10.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -297,8 +297,8 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 }
 
 // bookProcessResult holds the outcome of processing one book. Returned by
-// processBookForReextract and consumed by the collector goroutine, which owns
-// all counter mutations and DB writes.
+// processBookForReextractMode and consumed by the collector goroutine, which
+// owns all counter mutations and DB writes.
 type bookProcessResult struct {
 	// noOwnFolder: zero-rows mode, some rows lie outside the book's own
 	// folder and none of the rows is a present row in it, so Book.FilePath
@@ -350,17 +350,14 @@ type bookProcessResult struct {
 	example          string
 }
 
-// processBookForReextract evaluates one book: computes the real duration from
-// stored fingerprint values (fast) or ffprobe (slow), and returns what should
-// be written. It never writes to the store. skipBefore is the age threshold:
-// books verified after skipBefore are returned with recentlyVerified=true.
-func processBookForReextract(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time) bookProcessResult {
-	return processBookForReextractMode(ctx, store, book, skipBefore, false, &readWarnLimiter{})
-}
-
-// processBookForReextractMode is processBookForReextract with the ZeroRowsOnly
-// scope: only rows stored as <= 0 become writes, the total alone never does,
-// and a book is filled in its counted rows only: copies are left alone (see
+// processBookForReextractMode evaluates one book: computes the real duration
+// from stored fingerprint values (fast) or ffprobe (slow), and returns what
+// should be written. It never writes to the store. skipBefore is the age
+// threshold: books verified after skipBefore are returned with
+// recentlyVerified=true.
+//
+// zeroRows is the ZeroRowsOnly scope: only rows stored as <= 0 become
+// writes, the total alone never does, and a book is filled in its counted rows only: copies are left alone (see
 // durationReextractParams.ZeroRowsOnly).
 //
 // warns caps per-file read-error warnings across the run; one limiter is

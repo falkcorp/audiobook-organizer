@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.51.1
+// version: 1.51.2
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -4627,8 +4627,6 @@ func (a fragTitleID) relate(b fragTitleID) int {
 	}
 	return fragTitleSame
 }
-
-func (a fragTitleID) sameWork(b fragTitleID) bool { return a.relate(b) == fragTitleSame }
 
 // fragIDsRelate relates a book's title id to the work a group goes by. The
 // group's ids of the book's key are taken together, each position from the

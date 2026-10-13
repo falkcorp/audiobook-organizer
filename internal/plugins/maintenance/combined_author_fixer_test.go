@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -364,7 +364,7 @@ func TestCombinedAuthorFixer_StaleEmbeddedSeriesIsHeld(t *testing.T) {
 	require.True(t, rows["keep-primary"].Applicable())
 }
 
-func TestCombinedNextCredits(t *testing.T) {
+func TestCombinedProposal_Rewrite(t *testing.T) {
 	ba := func(id int, role string, pos int) database.BookAuthor {
 		return database.BookAuthor{BookID: "b", AuthorID: id, Role: role, Position: pos}
 	}
@@ -375,24 +375,28 @@ func TestCombinedNextCredits(t *testing.T) {
 		}
 		return out
 	}
+	next := func(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
+		out, _ := combinedProposal(cur, bookID, recIDs, targets, 0, nil)
+		return out
+	}
 	// Mission Creep, parts stored in the other order at one position: the
 	// combined string's order breaks the tie.
-	got := combinedNextCredits([]database.BookAuthor{ba(2, "author", 0), ba(1, "author", 0), ba(9, "author", 1)}, "b", []int{9}, [][]int{{1, 2}})
+	got := next([]database.BookAuthor{ba(2, "author", 0), ba(1, "author", 0), ba(9, "author", 1)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{1, "author", 0}, {2, "author", 1}}, ids(got))
 	// Distinct positions are the real order and win over the combined string.
-	got = combinedNextCredits([]database.BookAuthor{ba(2, "author", 0), ba(1, "author", 1), ba(9, "author", 2)}, "b", []int{9}, [][]int{{1, 2}})
+	got = next([]database.BookAuthor{ba(2, "author", 0), ba(1, "author", 1), ba(9, "author", 2)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{2, "author", 0}, {1, "author", 1}}, ids(got))
 	// A part credited after the combined credit moves up into its slot.
-	got = combinedNextCredits([]database.BookAuthor{ba(9, "author", 0), ba(2, "co-author", 1)}, "b", []int{9}, [][]int{{1, 2}})
+	got = next([]database.BookAuthor{ba(9, "author", 0), ba(2, "co-author", 1)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{1, "author", 0}, {2, "co-author", 1}}, ids(got))
 	// Combined-only, with an unrelated co-author after it and a narrator.
-	got = combinedNextCredits([]database.BookAuthor{ba(9, "", 0), ba(5, "co-author", 1), ba(7, "narrator", 2)}, "b", []int{9}, [][]int{{1, 2}})
+	got = next([]database.BookAuthor{ba(9, "", 0), ba(5, "co-author", 1), ba(7, "narrator", 2)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{1, "author", 0}, {2, "author", 1}, {5, "co-author", 2}, {7, "narrator", 3}}, ids(got))
 	// Primary-only (no junction row for the combined record): parts first.
-	got = combinedNextCredits([]database.BookAuthor{ba(5, "author", 0)}, "b", []int{9}, [][]int{{1, 2}})
+	got = next([]database.BookAuthor{ba(5, "author", 0)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{1, "author", 0}, {2, "author", 1}, {5, "author", 2}}, ids(got))
 	// Two combined records sharing a part: it is credited once.
-	got = combinedNextCredits([]database.BookAuthor{ba(9, "author", 0), ba(8, "author", 1)}, "b", []int{9, 8}, [][]int{{1, 2}, {2, 3}})
+	got = next([]database.BookAuthor{ba(9, "author", 0), ba(8, "author", 1)}, "b", []int{9, 8}, [][]int{{1, 2}, {2, 3}})
 	require.Equal(t, [][3]any{{1, "author", 0}, {2, "author", 1}, {3, "author", 2}}, ids(got))
 }
 

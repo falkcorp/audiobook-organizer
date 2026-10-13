@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_guards.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b0f3e7a-9c41-4d2e-8f6a-2d7c1e4b9a63
-// last-edited: 2026-09-29
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -39,7 +39,7 @@ const (
 // part of what the group shows. Paths come from every book_file row, missing
 // ones included; Book.FilePath is checked as well because it is what older
 // rows carry, and a false positive here only skips a group. The per-book
-// check is repairs.GuardBookPaths, the same one the Repairs framework runs on
+// check is repairs.GuardBookPathsWith, the same one the Repairs framework runs on
 // every row, so the two can never disagree about a book. res memoizes symlink
 // resolution per folder across the run's groups (nil: fresh per book).
 func vgGroupGuard(store OpsStore, seriesNames map[int]string, res *repairs.PathResolver, members []database.Book) (kind, reason string, err error) {

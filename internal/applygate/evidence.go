@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package applygate
 
@@ -90,19 +90,16 @@ var titleStop = map[string]bool{
 	"audiobook": true, "novel": true, "series": true, "edition": true,
 }
 
-// CheckEvidence runs every evidence check. audioConfirmed is the score leg's
-// transcription result, counted as one agreement.
+// CheckEvidenceInBatch runs every evidence check. audioConfirmed is the score
+// leg's transcription result, counted as one agreement.
 //
 // rt is the book's canonical runtime (database.LoadBookRuntime); the runtime
 // check compares only a Complete one and reads anything else as unknown.
 //
 // authors is the book's live author credit (see Authors).
-func CheckEvidence(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool) EvidenceVerdict {
-	return CheckEvidenceInBatch(book, authors, rt, c, audioConfirmed, nil)
-}
-
-// CheckEvidenceInBatch is CheckEvidence with the batch's ClaimIndex, which
-// the partial_book check reads to see sibling parts. nil skips that test.
+//
+// claims is the batch's ClaimIndex, which the partial_book check reads to see
+// sibling parts. nil (the single-book case) skips that test.
 func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool, claims *ClaimIndex) EvidenceVerdict {
 	var v EvidenceVerdict
 	if book == nil || c == nil {

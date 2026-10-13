@@ -1,7 +1,7 @@
 // file: internal/applycap/applycap.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1e8f2a-9b7d-4e63-a5c0-2f8d6b1e9a37
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 //
 // Package applycap is the fail-safe ceiling on how many books one bulk APPLY
 // may touch. It exists because several apply surfaces (metadata review, review
@@ -107,7 +107,7 @@ func NewCounter(op string, configured int) *Counter {
 }
 
 // Admit records one more apply and refuses it when it would be the (cap+1)th.
-// On refusal the count is not advanced, so Admitted stays equal to the number
+// On refusal the count is not advanced, so the count stays equal to the number
 // of applies that were actually allowed.
 func (c *Counter) Admit() error {
 	n := c.admitted.Add(1)
@@ -117,9 +117,6 @@ func (c *Counter) Admit() error {
 	}
 	return nil
 }
-
-// Admitted returns how many applies have been allowed so far.
-func (c *Counter) Admitted() int { return int(c.admitted.Load()) }
 
 // Cap returns the ceiling this counter enforces.
 func (c *Counter) Cap() int { return c.limit }

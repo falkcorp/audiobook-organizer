@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package applygate
 
@@ -21,11 +21,6 @@ import (
 // decided in ONE place, internal/franchise (the original pattern plus the
 // 2026-10-04 census range terms); this file only decides which fields of a
 // book the bulk-apply guard reads.
-
-// FoldUnderscores turns every "_" into a space so a \b pattern sees a word
-// boundary there (franchise.Fold). Kept for the callers that fold before
-// their own checks.
-func FoldUnderscores(s string) string { return franchise.Fold(s) }
 
 // matchesManualOnly reports whether one value names an owner-manual library.
 func matchesManualOnly(s string) bool { return franchise.Matches(s) }

@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -34,7 +34,7 @@
 //     the query was the only difference (EvaluateTranscribed).
 //  3. sequence: CheckSequence — the book's volume number and the candidate's
 //     must agree.
-//  4. evidence: CheckEvidence (evidence.go) — no hard contradiction from the
+//  4. evidence: CheckEvidenceInBatch (evidence.go) — no hard contradiction from the
 //     runtime, author-role, author-vs-path, title, narrator, ASIN,
 //     cast-in-author (cast.go), series-number-lost (booknum.go) or
 //     partial-book (partial.go) checks, and at least MinAgreements

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -397,7 +397,7 @@ func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
 		},
 	}
 	book := database.Book{ID: "b1", Duration: new(100)}
-	res := processBookForReextract(context.Background(), store, book, time.Time{})
+	res := processBookForReextractMode(context.Background(), store, book, time.Time{}, false, &readWarnLimiter{})
 
 	if !res.eligible {
 		t.Fatalf("expected eligible=true (stored duration used), got eligible=false missingOnDisk=%d readErrs=%d", res.missingOnDisk, res.readErrs)
@@ -428,7 +428,7 @@ func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
 	}
 	bookPID := pid
 	book := database.Book{ID: "b1", Duration: new(100), ITunesPersistentID: &bookPID}
-	res := processBookForReextract(context.Background(), store, book, time.Time{})
+	res := processBookForReextractMode(context.Background(), store, book, time.Time{}, false, &readWarnLimiter{})
 
 	if res.eligible {
 		t.Error("iTunes segment must go through ffprobe; file missing → not eligible")
@@ -455,7 +455,7 @@ func TestProcessBookForReextract_StoredDuration_BookITunesLinked(t *testing.T) {
 	}
 	bookPID := pid
 	book := database.Book{ID: "b1", Duration: new(100), ITunesPersistentID: &bookPID}
-	res := processBookForReextract(context.Background(), store, book, time.Time{})
+	res := processBookForReextractMode(context.Background(), store, book, time.Time{}, false, &readWarnLimiter{})
 
 	if res.eligible {
 		t.Error("book-level iTunes link must prevent stored-duration shortcut; file missing → not eligible")
@@ -500,7 +500,7 @@ func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 
 // onlyMissingDurationTestBooks returns one book with a known positive
 // Duration and one with Duration==nil, both virtual (no BookFile rows,
-// empty FilePath so processBookForReextract short-circuits on noPath
+// empty FilePath so processBookForReextractMode short-circuits on noPath
 // without touching the filesystem). Used by the OnlyMissingDuration tests
 // below, which only care about whether a book was DISPATCHED (i.e. counted
 // in "examined"), not how it was ultimately triaged.

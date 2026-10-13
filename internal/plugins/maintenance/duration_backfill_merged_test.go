@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
-// last-edited: 2026-10-01
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -389,7 +389,7 @@ func TestDurationBackfill_NormalModeMeasuresCountedRowsOnly(t *testing.T) {
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 	book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(15500)}
-	res := processBookForReextract(context.Background(), store, book, time.Time{})
+	res := processBookForReextractMode(context.Background(), store, book, time.Time{}, false, &readWarnLimiter{})
 	if want := 3600 + 4000 + 1900; res.newDur != want {
 		t.Errorf("newDur = %d, want the counted sum %d", res.newDur, want)
 	}
