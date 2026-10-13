@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -141,6 +141,12 @@ type bulkApplyPreviewRow struct {
 	// a review-only (Open Library / Google Books) candidate is not lifted,
 	// so the preview does not claim it would be.
 	OwnerReviewedWouldApply bool `json:"owner_reviewed_would_apply,omitempty"`
+	// RowReviewOnly narrows OwnerReviewedWouldApply: the row was found by the
+	// book's work folder (source folder_person_title), which only the
+	// single-row Apply lifts. A review-page bulk button sends a bulk pin, so a
+	// caller or lane that reads OwnerReviewedWouldApply as "a bulk apply would
+	// land this" must leave a RowReviewOnly row out of the bulk.
+	RowReviewOnly bool `json:"row_review_only,omitempty"`
 }
 
 // previewBulkApplyRow builds one book's row. plan is the same plan the real
@@ -233,6 +239,9 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 		reviewable = plan.reviewOnlyUnseen()
 	}
 	row.OwnerReviewedWouldApply = reviewable && row.Reason == plan.Gate.Reason
+	// The hashless marker's rule (reviewOnlyUnseen) never includes a folder
+	// row, so the flag only arises under the single-row rule.
+	row.RowReviewOnly = row.OwnerReviewedWouldApply && !unseen && plan.rowReviewOnly()
 	return row
 }
 

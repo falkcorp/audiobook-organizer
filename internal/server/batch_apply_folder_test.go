@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_folder_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c58d2e7-4b19-4f60-a3d1-9e7f2b8a6c35
 // last-edited: 2026-10-12
 
@@ -98,6 +98,20 @@ func TestPlanCachedApply_FolderQueryRowAppliesOnlyFromAnOwnerRowPin(t *testing.T
 			}
 			if c.pin == nil && plan.reviewOnly() != c.wantReviewer {
 				t.Errorf("reviewOnly = %v, want %v", plan.reviewOnly(), c.wantReviewer)
+			}
+			// The dry run says so too, and says it is the single-row Apply
+			// alone: a bulk button's pin would not land this book, so the
+			// row must not read as one a bulk apply would.
+			if c.pin == nil {
+				prev := previewBulkApplyRow(fakePreviewSvc{svc.fakeApplySvc}, "b1", plan, false, false)
+				if prev.OwnerReviewedWouldApply != c.wantReviewer || prev.RowReviewOnly != c.wantReviewer {
+					t.Errorf("preview: owner_reviewed_would_apply %v row_review_only %v, want both %v",
+						prev.OwnerReviewedWouldApply, prev.RowReviewOnly, c.wantReviewer)
+				}
+				unseen := previewBulkApplyRow(fakePreviewSvc{svc.fakeApplySvc}, "b1", plan, false, true)
+				if unseen.OwnerReviewedWouldApply || unseen.RowReviewOnly {
+					t.Errorf("select-all preview claims a folder row: %+v", unseen)
+				}
 			}
 		})
 	}
