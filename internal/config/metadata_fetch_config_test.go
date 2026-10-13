@@ -1,5 +1,5 @@
 // file: internal/config/metadata_fetch_config_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 14574916-bcbe-4887-ba11-5520e206bed2
 // last-edited: 2026-10-12
 
@@ -85,6 +85,42 @@ func TestUpdateConfig_CatalogStageSwitch(t *testing.T) {
 	}
 }
 
+// The folder-parse variant ships on and rolls back with
+// PUT /api/v1/config {"metadata_fetch":{"folder_parse_person_title":false}},
+// which persists and leaves the other metadata_fetch switches alone.
+func TestUpdateConfig_FolderParsePersonTitleSwitch(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.EnableAuth = false
+		c.MetadataFetch = DefaultMetadataFetchConfig()
+	})
+	if !Snapshot().MetadataFetch.FolderParsePersonTitle {
+		t.Fatal("folder_parse_person_title must ship on")
+	}
+	ms, blobs := ladderTestStore(t)
+
+	status, resp := NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{
+		"metadata_fetch": map[string]any{"folder_parse_person_title": false},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d; resp = %v", status, resp)
+	}
+	got := Snapshot().MetadataFetch
+	if got.FolderParsePersonTitle || !got.SharedCache || got.CatalogStage {
+		t.Fatalf("after the rollback PUT: %+v (only folder_parse_person_title may change)", got)
+	}
+	if len(*blobs) == 0 || !strings.Contains((*blobs)[len(*blobs)-1], `"folder_parse_person_title":false`) {
+		t.Errorf("the rollback was not persisted; blobs = %v", *blobs)
+	}
+
+	status, resp = NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{
+		"metadata_fetch": map[string]any{"folder_parse_person_title": true},
+	})
+	if status != http.StatusOK || !Snapshot().MetadataFetch.FolderParsePersonTitle {
+		t.Fatalf("turning it back on: status = %d; resp = %v", status, resp)
+	}
+}
+
 // ResetToDefaults restores the fetch-cache TTL: 0 would mean "never expire"
 // and every cached answer would live forever after a reset.
 func TestResetToDefaults_MetadataFetchCacheTTL(t *testing.T) {
@@ -93,6 +129,7 @@ func TestResetToDefaults_MetadataFetchCacheTTL(t *testing.T) {
 		c.MetadataFetchCacheTTLDays = 3
 		c.MetadataFetch.SharedCache = false
 		c.MetadataFetch.CatalogStage = true
+		c.MetadataFetch.FolderParsePersonTitle = false
 	})
 	ResetToDefaults()
 	snap := Snapshot()

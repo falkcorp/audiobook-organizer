@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.156.0
+// version: 1.157.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-12
 
@@ -2737,6 +2737,7 @@ func InitConfig() {
 	viper.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
 	viper.SetDefault("metadata_fetch.shared_cache", true)
 	viper.SetDefault("metadata_fetch.catalog_stage", false)
+	viper.SetDefault("metadata_fetch.folder_parse_person_title", true)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.audible", DefaultNegativeTTLDaysAudible)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.audnexus", DefaultNegativeTTLDaysAudnexus)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", DefaultNegativeTTLDaysOpenLibrary)
@@ -3300,8 +3301,9 @@ func InitConfig() {
 
 			// Shared provider-answer cache (metadata_fetch.*)
 			MetadataFetch: MetadataFetchConfig{
-				SharedCache:  viper.GetBool("metadata_fetch.shared_cache"),
-				CatalogStage: viper.GetBool("metadata_fetch.catalog_stage"),
+				SharedCache:            viper.GetBool("metadata_fetch.shared_cache"),
+				CatalogStage:           viper.GetBool("metadata_fetch.catalog_stage"),
+				FolderParsePersonTitle: viper.GetBool("metadata_fetch.folder_parse_person_title"),
 				NegativeTTLDays: MetadataFetchNegativeTTLDays{
 					Audible:     viper.GetInt("metadata_fetch.negative_ttl_days.audible"),
 					Audnexus:    viper.GetInt("metadata_fetch.negative_ttl_days.audnexus"),
@@ -4487,10 +4489,19 @@ const (
 // skip any provider call. Off, a search is exactly what it was; it stays off
 // until the owner has read the catalog coverage report
 // (catalog.coverage-report) and turns it on.
+//
+// folder_parse_person_title (default true) is the folder-parse variant of the
+// search question (spec 02 section 3.3 Q): a book whose stored title is a
+// person's name, or is its own live author, is searched by the name of the
+// folder holding its files when that folder names a real title. It is a new
+// question for those books (about 1,270 on the 10-06 census), so turning it on
+// makes the next candidate fetch ask the providers again for them; turning it
+// off restores the stored-title question.
 type MetadataFetchConfig struct {
-	SharedCache     bool                         `json:"shared_cache" mapstructure:"shared_cache"`
-	CatalogStage    bool                         `json:"catalog_stage" mapstructure:"catalog_stage"`
-	NegativeTTLDays MetadataFetchNegativeTTLDays `json:"negative_ttl_days" mapstructure:"negative_ttl_days"`
+	SharedCache            bool                         `json:"shared_cache" mapstructure:"shared_cache"`
+	CatalogStage           bool                         `json:"catalog_stage" mapstructure:"catalog_stage"`
+	FolderParsePersonTitle bool                         `json:"folder_parse_person_title" mapstructure:"folder_parse_person_title"`
+	NegativeTTLDays        MetadataFetchNegativeTTLDays `json:"negative_ttl_days" mapstructure:"negative_ttl_days"`
 }
 
 // MetadataFetchNegativeTTLDays is metadata_fetch.negative_ttl_days.*.
@@ -4507,6 +4518,8 @@ func DefaultMetadataFetchConfig() MetadataFetchConfig {
 		SharedCache: true,
 		// Off until the owner has read the catalog coverage report.
 		CatalogStage: false,
+		// On: the variant the brief ships. false is the rollback.
+		FolderParsePersonTitle: true,
 		NegativeTTLDays: MetadataFetchNegativeTTLDays{
 			Audible:     DefaultNegativeTTLDaysAudible,
 			Audnexus:    DefaultNegativeTTLDaysAudnexus,

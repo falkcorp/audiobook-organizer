@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 package config
 
@@ -127,27 +127,28 @@ var configFieldRules = map[string]fieldRule{
 	"plugins[].settings":             {FieldServerPath, "free-form plugin settings, which can name paths and programs"},
 
 	// ---- looked at and left unprotected (names matched the test's pattern) ----
-	"plugins[].enabled":                    {FieldUnprotected, "toggles code already in the binary"},
-	"exclude_patterns":                     {FieldUnprotected, "narrows what a scan reads; opens nothing new"},
-	"supported_extensions":                 {FieldUnprotected, "narrows what a scan reads; opens nothing new"},
-	"dedup_boilerplate":                    {FieldUnprotected, "title-matching regexes"},
-	"fingerprint_worker_tool_versions":     {FieldUnprotected, "version strings compared with what workers report"},
-	"fingerprint_window_reference_tools":   {FieldUnprotected, "version string"},
-	"filename_parse_model":                 {FieldUnprotected, "a model name"},
-	"purge_soft_deleted_delete_files":      {FieldUnprotected, "a switch over files the library already owns; names no path"},
-	"itunes.path_trim_enabled":             {FieldUnprotected, "a switch; names no path"},
-	"tools.allow_periodic_ollama":          {FieldUnprotected, "schedules the already-configured binary"},
-	"tools.ollama_debounce_min":            {FieldUnprotected, "a delay"},
-	"ai_endpoints_routing":                 {FieldUnprotected, "a switch"},
-	"ai_backend.embedding_mode":            {FieldUnprotected, "local vs remote model, not a program path"},
-	"ai_backend.llm_mode":                  {FieldUnprotected, "local vs remote model, not a program path"},
-	"api_rate_limit_per_minute":            {FieldUnprotected, "general API throughput; sign-in has its own limit"},
-	"metadata_sources[].rate_limit":        {FieldUnprotected, "outbound request pacing"},
-	"metadata_sources[].requires_auth":     {FieldUnprotected, "says whether a source needs credentials; changes no sign-in"},
-	"abs_auth_probe_enabled":               {FieldUnprotected, "a diagnostic probe; changes no sign-in"},
-	"abs_server_version":                   {FieldUnprotected, "a version string reported to ABS clients"},
-	"abs_default_library_id":               {FieldUnprotected, "which library ABS clients see first"},
-	"abs_itunes_position_backfill_user_id": {FieldUnprotected, "whose listening positions a backfill writes; no credential"},
+	"plugins[].enabled":                        {FieldUnprotected, "toggles code already in the binary"},
+	"metadata_fetch.folder_parse_person_title": {FieldUnprotected, "chooses which of a book's own names a metadata search asks; reads no path"},
+	"exclude_patterns":                         {FieldUnprotected, "narrows what a scan reads; opens nothing new"},
+	"supported_extensions":                     {FieldUnprotected, "narrows what a scan reads; opens nothing new"},
+	"dedup_boilerplate":                        {FieldUnprotected, "title-matching regexes"},
+	"fingerprint_worker_tool_versions":         {FieldUnprotected, "version strings compared with what workers report"},
+	"fingerprint_window_reference_tools":       {FieldUnprotected, "version string"},
+	"filename_parse_model":                     {FieldUnprotected, "a model name"},
+	"purge_soft_deleted_delete_files":          {FieldUnprotected, "a switch over files the library already owns; names no path"},
+	"itunes.path_trim_enabled":                 {FieldUnprotected, "a switch; names no path"},
+	"tools.allow_periodic_ollama":              {FieldUnprotected, "schedules the already-configured binary"},
+	"tools.ollama_debounce_min":                {FieldUnprotected, "a delay"},
+	"ai_endpoints_routing":                     {FieldUnprotected, "a switch"},
+	"ai_backend.embedding_mode":                {FieldUnprotected, "local vs remote model, not a program path"},
+	"ai_backend.llm_mode":                      {FieldUnprotected, "local vs remote model, not a program path"},
+	"api_rate_limit_per_minute":                {FieldUnprotected, "general API throughput; sign-in has its own limit"},
+	"metadata_sources[].rate_limit":            {FieldUnprotected, "outbound request pacing"},
+	"metadata_sources[].requires_auth":         {FieldUnprotected, "says whether a source needs credentials; changes no sign-in"},
+	"abs_auth_probe_enabled":                   {FieldUnprotected, "a diagnostic probe; changes no sign-in"},
+	"abs_server_version":                       {FieldUnprotected, "a version string reported to ABS clients"},
+	"abs_default_library_id":                   {FieldUnprotected, "which library ABS clients see first"},
+	"abs_itunes_position_backfill_user_id":     {FieldUnprotected, "whose listening positions a backfill writes; no credential"},
 	// Third-party credentials: the server sends them out; GET masks them, so
 	// replacing one cannot reveal it.
 	"openai_api_key":                 {FieldUnprotected, "third-party credential"},
