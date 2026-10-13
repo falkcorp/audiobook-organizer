@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -29,6 +29,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"golang.org/x/time/rate"
 )
 
@@ -459,9 +460,13 @@ var ErrNoSourceAnswered = errors.New("metadata search: no source answered (every
 // noSourceAnswered reports the ErrNoSourceAnswered case for resp, naming the
 // failures so the caller's result row says what happened.
 //
-// A response WITH results is never this case: the candidates came from a
-// source that returned them, so dating them now is true even if that source's
-// later ladder steps failed.
+// A response WITH provider results is never this case: the candidates came
+// from a source that returned them, so dating them now is true even if that
+// source's later ladder steps failed. Candidates of the local catalog stage
+// (Source == metadata.CatalogSourceName) are not a provider's answer: they
+// are there whether or not any provider was reachable, so a search whose
+// every provider failed is this case however many catalog candidates it
+// holds, and the cached row is left as it was.
 //
 // When the response names the sources it asked (SourcesAsked), only an
 // answered source that was ASKED counts: a source with nothing to be asked
@@ -471,8 +476,13 @@ var ErrNoSourceAnswered = errors.New("metadata search: no source answered (every
 // "nothing found". A search that asked nobody (a partial re-ask of only
 // Audnexus) counts its answered sources as before.
 func noSourceAnswered(resp *SearchMetadataResponse) error {
-	if resp == nil || len(resp.Results) > 0 {
+	if resp == nil {
 		return nil
+	}
+	for i := range resp.Results {
+		if resp.Results[i].Source != metadata.CatalogSourceName {
+			return nil
+		}
 	}
 	asked := make(map[string]bool, len(resp.SourcesAsked))
 	for _, n := range resp.SourcesAsked {

@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -250,4 +251,47 @@ func TestCatalogCredits_SearchAuthorOnlyWhenNoLiveCredit(t *testing.T) {
 	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) { return &database.Author{ID: id, Name: "Unknown Author"}, nil }
 	assert.Equal(t, []string{"Typed Author"}, svc.catalogCredits(book, "Typed Author"), "a placeholder-only list is no credit")
 	assert.Nil(t, svc.catalogCredits(&database.Book{ID: "b2"}, ""), "no credit, no search author")
+}
+
+// A provider outage is not made a settled look by catalog candidates: with
+// every provider erroring, a search that holds only the catalog's candidates
+// is still ErrNoSourceAnswered, writes nothing, and leaves the book's earlier
+// provider candidates exactly as they were.
+func TestCatalogStage_ProviderOutageWithCatalogMatchIsNotCached(t *testing.T) {
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: stageTitle, FilePath: "/lib/x/lantern.m4b"})
+	require.NoError(t, err)
+	a, err := f.store.CreateAuthor(stageAuthor)
+	require.NoError(t, err)
+	require.NoError(t, f.store.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: a.ID, Role: "author"}}))
+	old := time.Now().Add(-2 * database.MetadataCacheTTL).UTC().Truncate(time.Second)
+	prior := json.RawMessage(`{"title":"` + stageTitle + `","author":"` + stageAuthor + `","asin":"B0PROV0001","source":"Audible","score":0.97}`)
+	require.NoError(t, f.store.PutMetadataCache(&database.MetadataCandidateCache{
+		BookID: b.ID, FetchedAt: old, SourceHash: "h", SearchFingerprint: "f", Candidates: []json.RawMessage{prior},
+	}))
+
+	f.mfs.SetOverrideSources([]metadata.MetadataSource{
+		&verdictSource{name: "SrcA", byAuthorErr: errors.New("503"), byTitleErr: errors.New("503")},
+		&verdictSource{name: "SrcB", byAuthorErr: metadata.ErrProviderThrottled, byTitleErr: metadata.ErrProviderThrottled},
+	})
+	fm := &fakeCatalogMatcher{answer: catalogAnswer()}
+	f.mfs.SetCatalogMatcher(fm)
+	withCatalogStage(t, true)
+
+	_, resp, err := f.mfs.FetchAndCacheWithResponse(context.Background(), nil, b.ID, b.Title, "", "", "", SearchOptions{})
+	require.ErrorIs(t, err, ErrNoSourceAnswered)
+	require.EqualValues(t, 1, fm.calls.Load(), "fixture: the stage ran and found candidates")
+	require.NotNil(t, resp)
+	hasCatalog := false
+	for _, c := range resp.Results {
+		hasCatalog = hasCatalog || c.Source == metadata.CatalogSourceName
+	}
+	require.True(t, hasCatalog, "fixture: the response did hold catalog candidates")
+
+	stored, gerr := f.store.GetMetadataCache(b.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, stored)
+	require.True(t, stored.FetchedAt.Equal(old), "the outage dated the row (%v)", stored.FetchedAt)
+	require.Len(t, stored.Candidates, 1)
+	require.JSONEq(t, string(prior), string(stored.Candidates[0]), "the earlier provider candidate was replaced")
 }
