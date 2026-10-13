@@ -1,5 +1,5 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
 // last-edited: 2026-10-13
 
@@ -66,7 +66,7 @@ func TestCheckRuntime_PartialDurationsAreNotAMismatch(t *testing.T) {
 
 // TestCheckEvidence_PartialRuntimeDoesNotBlock runs the whole evidence leg:
 // a partial-coverage book must not be refused for runtime_mismatch.
-func TestCheckEvidence_PartialRuntimeDoesNotBlock(t *testing.T) {
+func TestCheckEvidenceInBatch_PartialRuntimeDoesNotBlock(t *testing.T) {
 	book := &database.Book{ID: "b", Title: "Shadow Rising", Duration: intp(2400)}
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 2))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", DurationSec: 36000}
@@ -89,7 +89,7 @@ func probeBook(narrator string, dur int) *database.Book {
 // TestCheckEvidence_PartialLowerBoundAboveCandidateStillBlocks (review ERROR 1):
 // 30 × 30 min chapters with 20 probed is AT LEAST 10 h. A 5 h candidate is a
 // contradiction whatever the other 10 chapters hold, and main blocked it.
-func TestCheckEvidence_PartialLowerBoundAboveCandidateStillBlocks(t *testing.T) {
+func TestCheckEvidenceInBatch_PartialLowerBoundAboveCandidateStillBlocks(t *testing.T) {
 	book := probeBook("", 36000)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1800, 20))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 18000}
@@ -104,7 +104,7 @@ func TestCheckEvidence_PartialLowerBoundAboveCandidateStillBlocks(t *testing.T) 
 // else. Main compared the 560 min sum, landed in the neutral band and let
 // the narrator contradiction block; an incomplete runtime confirms nothing,
 // so the veto must stay armed.
-func TestCheckEvidence_PartialRuntimeKeepsNarratorVeto(t *testing.T) {
+func TestCheckEvidenceInBatch_PartialRuntimeKeepsNarratorVeto(t *testing.T) {
 	book := probeBook("Kate Reading", 33600)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 28))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", Narrator: "Michael Kramer", DurationSec: 36000}
@@ -116,7 +116,7 @@ func TestCheckEvidence_PartialRuntimeKeepsNarratorVeto(t *testing.T) {
 
 // TestCheckEvidence_CompleteRuntimeContradictionsStillBlock: the fix must not
 // soften a real contradiction on a fully measured multi-file book.
-func TestCheckEvidence_CompleteRuntimeContradictionsStillBlock(t *testing.T) {
+func TestCheckEvidenceInBatch_CompleteRuntimeContradictionsStillBlock(t *testing.T) {
 	book := probeBook("Kate Reading", 1200)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 30)) // 10 h
 	short := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 18000}
@@ -183,7 +183,7 @@ func sweepShapes() []sweepShape {
 // runtime is PARTIAL (some counted row's duration unknown), the stored
 // Book.Duration main compared IS that partial known sum, and the sum is below
 // the candidate. A lower bound under the candidate proves nothing.
-func TestCheckEvidence_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
+func TestCheckEvidenceInBatch_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
 	violations := 0
 	for _, sh := range sweepShapes() {
 		for _, candMin := range []int{60, 300, 540, 570, 600, 630, 660, 700, 900, 1200} {
@@ -223,7 +223,7 @@ func TestCheckEvidence_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
 // chapters, 2 probed (2400 s), Book.Duration 36000 from an earlier fuller
 // measurement, candidate 20 h. Main compared 36000 against 72000 and
 // blocked; the stored value is not the partial sum, so it must still count.
-func TestCheckEvidence_StaleStoredDurationStillBlocks(t *testing.T) {
+func TestCheckEvidenceInBatch_StaleStoredDurationStillBlocks(t *testing.T) {
 	book := probeBook("", 36000)
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 2))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 72000}

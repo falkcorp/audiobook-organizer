@@ -1,5 +1,5 @@
 // file: internal/applygate/booknum_pin_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 5e8a1c47-9d20-4b36-a7f1-2c6d0b93e815
 // last-edited: 2026-10-13
 
@@ -41,7 +41,7 @@ func TestSeriesNumberLost_NameNumbersArePinned(t *testing.T) {
 
 // TestCheckEvidence_SeriesNumberLostIsWired proves the check is reached from
 // the evidence leg: dropping it from CheckEvidenceInBatch fails this test.
-func TestCheckEvidence_SeriesNumberLostIsWired(t *testing.T) {
+func TestCheckEvidenceInBatch_SeriesNumberLostIsWired(t *testing.T) {
 	book := database.Book{Title: "Empire of Man 04 - We Few", Duration: intp(61200),
 		Author: &database.Author{Name: "David Weber"}, FilePath: "/lib/David Weber/Empire of Man/We Few.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "We Few", Author: "David Weber", DurationSec: 61200}

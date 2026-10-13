@@ -1,7 +1,7 @@
 // file: internal/repairs/owner_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
-// last-edited: 2026-10-07
+// last-edited: 2026-10-13
 
 package repairs
 
@@ -49,11 +49,6 @@ func (f *ownerFixer) Replan(_ context.Context, _ json.RawMessage, planned Row, _
 }
 
 func (f *ownerFixer) Apply(ctx context.Context, w *Writer, fresh Row) error {
-	if !fresh.Applicable() {
-		if o, ok := OwnerApplyFrom(ctx); !ok || o.RowID != fresh.RowID {
-			return ErrChangedSincePlan
-		}
-	}
 	_, err := w.Modify(fresh.RowID, func(b *database.Book) error {
 		b.Title += " (done)"
 		return nil
@@ -264,16 +259,6 @@ func TestRunApply_ResumeNeverAppliesOwnerRows(t *testing.T) {
 		}
 	}
 	require.Empty(t, res.OwnerUserID)
-}
-
-func TestOwnerApplyFrom_RequiresRowAndUser(t *testing.T) {
-	_, ok := OwnerApplyFrom(context.Background())
-	require.False(t, ok)
-	_, ok = OwnerApplyFrom(WithOwnerApply(context.Background(), OwnerApplyContext{RowID: "r"}))
-	require.False(t, ok)
-	o, ok := OwnerApplyFrom(WithOwnerApply(context.Background(), OwnerApplyContext{RowID: "r", UserID: "u"}))
-	require.True(t, ok)
-	require.Equal(t, "r", o.RowID)
 }
 
 // An owner grant is minted only for a verified Cloudflare Access owner

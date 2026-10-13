@@ -1,12 +1,11 @@
 // file: internal/repairs/owner.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7a3d5f81-2c94-4e0b-b6a7-1f8e3c2d9b54
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 package repairs
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -190,30 +189,4 @@ func ResolveOwnerApproval(grants *OwnerGrants, p ApplyParams, who OwnerRedeemer)
 		return refuse("the owner grant's Cloudflare Access sign-in is not the configured owner_email")
 	}
 	return &OwnerApproval{UserID: gr.UserID, AuthMethod: gr.AuthMethod, RowIDs: ids}
-}
-
-type ownerCtxKey struct{}
-
-// OwnerApplyContext is what a fixer's Replan and Apply see for a row the
-// owner approved (OwnerApplyFrom).
-type OwnerApplyContext struct {
-	RowID      string
-	UserID     string
-	AuthMethod string
-}
-
-// WithOwnerApply marks ctx as the owner's apply of one row.
-func WithOwnerApply(ctx context.Context, o OwnerApplyContext) context.Context {
-	return context.WithValue(ctx, ownerCtxKey{}, o)
-}
-
-// OwnerApplyFrom reports the owner approval of the row being applied, if
-// any. A fixer relaxes nothing unless it is set AND names the row it is
-// writing.
-func OwnerApplyFrom(ctx context.Context) (OwnerApplyContext, bool) {
-	if ctx == nil {
-		return OwnerApplyContext{}, false
-	}
-	o, ok := ctx.Value(ownerCtxKey{}).(OwnerApplyContext)
-	return o, ok && o.RowID != "" && o.UserID != ""
 }
