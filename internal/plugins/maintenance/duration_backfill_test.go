@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
 // last-edited: 2026-10-13
 
@@ -387,7 +387,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 // shelling out to ffprobe. The file path does not exist on disk, so any ffprobe
 // attempt would produce a readErr and classify the book as ineligible. A result
 // of eligible=true proves the stored-duration path ran instead.
-func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
+func TestProcessBookForReextractMode_StoredDuration_NonITunes(t *testing.T) {
 	store := &database.MockStore{
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
@@ -417,7 +417,7 @@ func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
 // a segment that is iTunes-linked (ITunesPersistentID!="") may have the ms-bug
 // duration and must be verified via ffprobe rather than trusting the stored value.
 // Missing file → ffprobe fails → missingOnDisk, not eligible.
-func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
+func TestProcessBookForReextractMode_StoredDuration_ITunes(t *testing.T) {
 	pid := "itunes-pid-001"
 	store := &database.MockStore{
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
@@ -443,7 +443,7 @@ func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
 // the BOOK is iTunes-linked (book.ITunesPersistentID!=nil). Some organized-library
 // books are matched to an iTunes entry but the segment files themselves don't carry
 // the PID; the book-level field is the definitive iTunes guard.
-func TestProcessBookForReextract_StoredDuration_BookITunesLinked(t *testing.T) {
+func TestProcessBookForReextractMode_StoredDuration_BookITunesLinked(t *testing.T) {
 	pid := "book-itunes-pid"
 	store := &database.MockStore{
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {

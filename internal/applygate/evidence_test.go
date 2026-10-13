@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
 // last-edited: 2026-10-13
 
@@ -15,7 +15,7 @@ import (
 
 // TestCheckEvidence_OwnerExamples pins the rows the owner found in the
 // 2026-09-13 prod dry run, each of which the three-leg gate let through.
-func TestCheckEvidence_OwnerExamples(t *testing.T) {
+func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 	cases := []struct {
 		name string
 		book database.Book

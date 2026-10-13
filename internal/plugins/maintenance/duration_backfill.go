@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.1
+// version: 2.10.2
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-10-13
 
@@ -357,12 +357,19 @@ type bookProcessResult struct {
 // recentlyVerified=true.
 //
 // zeroRows is the ZeroRowsOnly scope: only rows stored as <= 0 become
-// writes, the total alone never does, and a book is filled in its counted rows only: copies are left alone (see
-// durationReextractParams.ZeroRowsOnly).
+// writes, the total alone never does, and a book is filled in its counted
+// rows only: copies are left alone (see durationReextractParams.ZeroRowsOnly).
 //
 // warns caps per-file read-error warnings across the run; one limiter is
 // shared by every worker.
-func processBookForReextractMode(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time, zeroRows bool, warns *readWarnLimiter) bookProcessResult {
+func processBookForReextractMode(
+	ctx context.Context,
+	store bookFileLister,
+	book database.Book,
+	skipBefore time.Time,
+	zeroRows bool,
+	warns *readWarnLimiter,
+) bookProcessResult {
 	res := bookProcessResult{book: book}
 	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
 		res.recentlyVerified = true

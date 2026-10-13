@@ -1,5 +1,5 @@
 // file: internal/applygate/live_authors_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c5d2e81-7a4b-4f93-9e16-b8a3c1d7f042
 // last-edited: 2026-10-13
 
@@ -26,7 +26,7 @@ func authorEvidence(t *testing.T, v EvidenceVerdict) CheckResult {
 // The evidence leg reads the authors it is given and ignores Book.Author: the
 // prod Valis shape, a stale "Unknown Author" snapshot and a path under the
 // placeholder folder, with the live author equal to the candidate's.
-func TestCheckEvidence_ReadsLiveAuthorsNotSnapshot(t *testing.T) {
+func TestCheckEvidenceInBatch_ReadsLiveAuthorsNotSnapshot(t *testing.T) {
 	book := &database.Book{
 		Title: "Valis", FilePath: "/lib/Unknown Author/Valis/Valis.m4b",
 		Author: &database.Author{Name: "Unknown Author"},
@@ -46,7 +46,7 @@ func TestCheckEvidence_ReadsLiveAuthorsNotSnapshot(t *testing.T) {
 
 // The placeholder is no author: it neither counts as an author the candidate
 // would overwrite nor as evidence.
-func TestCheckEvidence_PlaceholderLiveAuthorIsNoAuthor(t *testing.T) {
+func TestCheckEvidenceInBatch_PlaceholderLiveAuthorIsNoAuthor(t *testing.T) {
 	book := &database.Book{Title: "Valis", FilePath: "/lib/Unknown Author/Valis/Valis.m4b"}
 	cand := &metafetch.MetadataCandidate{Title: "Valis", Author: "Philip K. Dick"}
 	v := CheckEvidenceInBatch(book, Authors{"Unknown Author", " "}, database.BookRuntime{}, cand, false, nil)
@@ -59,7 +59,7 @@ func TestCheckEvidence_PlaceholderLiveAuthorIsNoAuthor(t *testing.T) {
 
 // Every live credit is protected: dropping a co-author is an overwrite, and a
 // co-author is evidence.
-func TestCheckEvidence_EveryLiveCredit(t *testing.T) {
+func TestCheckEvidenceInBatch_EveryLiveCredit(t *testing.T) {
 	book := &database.Book{Title: "Good Omens", FilePath: "/lib/x/Good Omens.m4b"}
 	live := Authors{"Terry Pratchett", "Neil Gaiman"}
 	onlyFirst := &metafetch.MetadataCandidate{Title: "Good Omens", Author: "Terry Pratchett"}

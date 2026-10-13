@@ -1,5 +1,5 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.16.3
+// version: 1.16.4
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
 // last-edited: 2026-10-13
 
@@ -315,7 +315,7 @@ func TestRunPlan_FrameworkGuardsSkipITunesAndOwnerManual(t *testing.T) {
 	}
 }
 
-func TestGuardBookPaths_TorchwoodAndDoctorWhoSeparators(t *testing.T) {
+func TestGuardBookPathsWith_TorchwoodAndDoctorWhoSeparators(t *testing.T) {
 	for _, p := range []string{"/lib/Torchwood/x.m4b", "/lib/Doctor_Who/x.m4b", "/lib/DoctorWho - Y/x.m4b"} {
 		k, _ := GuardBookPathsWith(nil, "b", []string{p}, "")
 		require.Equal(t, SkipOwnerManual, k, p)
@@ -437,7 +437,7 @@ func TestGuardBookTitle_BothDirections(t *testing.T) {
 
 // #3616 review F1: a prod book escaped every guard -- "_" is a regexp word
 // character, so \b never fired in "Doctor Who_ Mindwarp".
-func TestGuardBookPaths_UnderscoreColon(t *testing.T) {
+func TestGuardBookPathsWith_UnderscoreColon(t *testing.T) {
 	k, why := GuardBookPathsWith(nil, "b", []string{"/x/Unknown Author/Doctor Who_ Mindwarp/01.mp3"}, "")
 	require.Equal(t, SkipOwnerManual, k, why)
 	for _, series := range []string{"Doctor Who_ Mindwarp", "Doctor_Who_Mindwarp", "Torchwood_ Border Princes", "Big_Finish_Productions"} {
@@ -1235,7 +1235,7 @@ func TestRegistry(t *testing.T) {
 // for iTunes database rows still skips a row whose folder could not be
 // resolved (a permission error): behind it may be a Doctor Who / Big Finish
 // / Torchwood folder.
-func TestGuardBookPaths_ITunesClearedStillFailsClosedOnDoubt(t *testing.T) {
+func TestGuardBookPathsWith_ITunesClearedStillFailsClosedOnDoubt(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "Author", "Book", "01.mp3")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
