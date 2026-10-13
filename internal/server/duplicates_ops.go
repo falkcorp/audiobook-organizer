@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.27.0
+// version: 2.27.1
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-13
 
@@ -569,38 +569,33 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			if !dryRun {
 				s.dedupCache.InvalidateAll()
 			}
-			op.SetStatus("success")
-			logging.Info(ctx, "series deduplication complete",
-				"dry_run", dryRun, "total_merged", result.TotalMerged,
-				"books_reassigned", result.TotalBooksReassigned,
-				"errors", len(result.Errors))
+			// An apply that kept a duplicate series is not a finished dedup. It
+			// used to return nil here -- the refusal sat in result.Errors, the op
+			// logged "complete", wrote a "completed" activity row, and a client
+			// taking `completed` at its word treated the library as deduplicated
+			// while the series was still there. The merged ones stay merged (no
+			// rollback) and the cache is already invalidated; the failure names
+			// what was kept. A preview deletes nothing, so it has nothing left
+			// behind (LeftIDs is empty) and keeps reporting success.
+			kept := len(result.LeftIDs) > 0
+			if kept {
+				op.SetStatus("failed")
+				logging.Error(ctx, "series deduplication incomplete",
+					"total_merged", result.TotalMerged, "kept", len(result.LeftIDs), "errors", len(result.Errors))
+			} else {
+				op.SetStatus("success")
+				logging.Info(ctx, "series deduplication complete",
+					"dry_run", dryRun, "total_merged", result.TotalMerged,
+					"books_reassigned", result.TotalBooksReassigned,
+					"errors", len(result.Errors))
+			}
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
-				// The activity row must say which mode ran. An operator who
-				// cannot tell a preview from an apply in the activity log is
-				// the exact trap the dry run exists to prevent.
-				msg := fmt.Sprintf(
-					"Series deduplication completed: merged %d series, reassigned %d books",
-					result.TotalMerged, result.TotalBooksReassigned)
-				if dryRun {
-					msg = fmt.Sprintf(
-						"Series deduplication PREVIEW (dry_run=true, nothing written): "+
-							"would merge %d series and reassign %d books",
-						result.TotalMerged, result.TotalBooksReassigned)
-				}
 				activity.EmitInfo(s.activityWriter, opID, "dedup.series-dedup", "dedup",
-					msg, activity.AlwaysShow)
+					seriesDedupActivityMessage(result, dryRun), activity.AlwaysShow)
 			}
-			// An apply that kept a duplicate series is not a finished dedup. It
-			// used to return nil here -- the refusal sat in result.Errors, the op
-			// logged "complete", and a client taking `completed` at its word
-			// treated the library as deduplicated while the series was still
-			// there. The merged ones stay merged (no rollback), the cache is
-			// already invalidated, and the text names what was kept. A preview
-			// deletes nothing, so it has nothing left behind (LeftIDs is empty).
-			if len(result.LeftIDs) > 0 {
-				op.SetStatus("failed")
+			if kept {
 				detail := strings.Join(result.Errors[:min(len(result.Errors), 3)], "; ")
 				return fmt.Errorf("%s%s]: merged %d series, kept %d with %d error(s): %s",
 					SeriesDedupFailedIDsPrefix, joinInts(result.LeftIDs),
@@ -609,6 +604,30 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			return nil
 		},
 	})
+}
+
+// seriesDedupActivityMessage is the activity-log row for a dedup.series-dedup
+// run. It must say which mode ran (an operator who cannot tell a preview from an
+// apply in the activity log is the exact trap the dry run exists to prevent) and
+// must not say "completed" for an apply that kept series: that row is what the
+// operator reads after the failure.
+func seriesDedupActivityMessage(result dedup.SeriesDedupResult, dryRun bool) string {
+	switch {
+	case dryRun:
+		return fmt.Sprintf(
+			"Series deduplication PREVIEW (dry_run=true, nothing written): "+
+				"would merge %d series and reassign %d books",
+			result.TotalMerged, result.TotalBooksReassigned)
+	case len(result.LeftIDs) > 0:
+		return fmt.Sprintf(
+			"Series deduplication INCOMPLETE: merged %d series, reassigned %d books, "+
+				"kept %d series with %d error(s) -- see the operation's errors",
+			result.TotalMerged, result.TotalBooksReassigned, len(result.LeftIDs), len(result.Errors))
+	default:
+		return fmt.Sprintf(
+			"Series deduplication completed: merged %d series, reassigned %d books",
+			result.TotalMerged, result.TotalBooksReassigned)
+	}
 }
 
 // RegisterSeriesPruneOp registers the "dedup.series-prune" v2 OperationDef.
