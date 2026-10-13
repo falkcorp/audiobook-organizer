@@ -1,11 +1,12 @@
 // file: tools/cmd/opsgen/main.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6195880d-76b9-48b8-bd1c-802476be4131
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
-// Command opsgen writes web/src/generated/ops.ts from the run-status table in
-// internal/operations/state, so the web pollers and buttons classify a status
-// exactly the way the Go side does.
+// Command opsgen writes web/src/generated/ops.ts from the run-status tables in
+// internal/operations/state (the v2 status table in state.go and the v3 run
+// state table in v3.go), so the web pollers and buttons classify a status or
+// a run state exactly the way the Go side does.
 //
 //	go run ./tools/cmd/opsgen          # regenerate (make generate-ops)
 //	go run ./tools/cmd/opsgen -check   # exit 1 if the committed file is stale (make ci)
@@ -30,9 +31,9 @@ const defaultOut = "web/src/generated/ops.ts"
 // timestamp would make -check fail the day after every regeneration. Bump
 // genVersion and genLastEdited whenever the generated content changes.
 const (
-	genVersion    = "1.0.0"
+	genVersion    = "1.1.0"
 	genGUID       = "ee9b10ee-5197-4ca2-8649-1aa773c69ac0"
-	genLastEdited = "2026-10-10"
+	genLastEdited = "2026-10-13"
 )
 
 func main() {
@@ -92,7 +93,8 @@ func generate() []byte {
 	fmt.Fprintf(&b, "// file: %s\n// version: %s\n// guid: %s\n// last-edited: %s\n",
 		defaultOut, genVersion, genGUID, genLastEdited)
 	w(`//
-// Source of truth: internal/operations/state/state.go. Regenerate with
+// Source of truth: internal/operations/state/state.go (v2 statuses) and
+// internal/operations/state/v3.go (v3 run states). Regenerate with
 // ` + "`make generate-ops`" + `; ` + "`make ci`" + ` fails when this file is stale.
 
 /**
@@ -178,5 +180,65 @@ export function isDiscardable(status: string): boolean {
   return classifyStatus(status).discardable;
 }
 `)
+	writeRunStates(&b)
 	return b.Bytes()
+}
+
+// writeRunStates emits the v3 RunState union, its properties table and its
+// predicates from state.AllV3 / state.ClassifyV3. The predicates carry a
+// RunState prefix: isTerminal and isActive above answer for v2 statuses,
+// whose fallbacks (an interrupted_* prefix, a legacy spelling) are not v3's.
+func writeRunStates(b *bytes.Buffer) {
+	w := func(s string) { b.WriteString(s) }
+	w(`
+/**
+ * Every v3 run state (ops v3, internal/operations/state/v3.go). A timed_out
+ * run reads "canceled" with a "timeout:" message on the v2 row.
+ */
+export type RunState =
+`)
+	all := state.AllV3()
+	for i, s := range all {
+		end := "\n"
+		if i == len(all)-1 {
+			end = ";\n"
+		}
+		fmt.Fprintf(b, "  | '%s'%s", s, end)
+	}
+	w("\n/** What a v3 run state means; the same properties as StatusProps. */\n")
+	w("export const RUN_STATE_PROPS: Record<RunState, StatusProps> = {\n")
+	for _, s := range all {
+		fmt.Fprintf(b, "  %s: {\n", s)
+		writeProps(b, "    ", state.ClassifyV3(s))
+		w("  },\n")
+	}
+	w(`};
+
+/**
+ * classifyRunState returns the properties of a v3 run state. An unknown state
+ * is live (not terminal, not settled), the same safe direction as
+ * state.ClassifyV3.
+ */
+export function classifyRunState(s: string): StatusProps {
+  if (Object.prototype.hasOwnProperty.call(RUN_STATE_PROPS, s)) {
+    return RUN_STATE_PROPS[s as RunState];
+  }
+  return LIVE;
+}
+
+/** isRunStateTerminal: the run will never execute again. */
+export function isRunStateTerminal(s: string): boolean {
+  return classifyRunState(s).terminal;
+}
+
+/** isRunStateResumable: the startup resume sweep picks the run up. */
+export function isRunStateResumable(s: string): boolean {
+  return classifyRunState(s).resumable;
+}
+
+/** isRunStateActive: the run may still progress in this session (not settled). */
+export function isRunStateActive(s: string): boolean {
+  return !classifyRunState(s).settled;
+}
+`)
 }
