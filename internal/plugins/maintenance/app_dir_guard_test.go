@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
 // last-edited: 2026-10-13
 
@@ -62,13 +62,14 @@ func withPluginAppDirs(t *testing.T, root string, enabled bool) {
 	})
 }
 
-// TestRunCleanupOldBackups_SkipsAppDirs pins maintenance.cleanup-old-backups,
-// which DELETES any file whose name contains ".bak-" past the retention window.
-//
-// This is one of TWO implementations of "delete old backup files" in the tree
-// (the other is internal/maintenance/jobs/cleanup_backups.go, which uses a
-// different regex). scheduler.cleanup-old-backups was merged into this one; its
-// app-dir guard test is this test.
+// TestRunCleanupOldBackups_SkipsAppDirs pins the app-dir guard on
+// maintenance.cleanup-old-backups' call into sweep.RemoveOldBackupFiles. The op
+// deletes only names fileops.BackupNameTime accepts (<file>.bak-<unix>[-N] and
+// the legacy .bak-YYYYMMDD-HHMMSS) past the retention window, and never enters
+// the application's backup or OpenLibrary dump directories. The helper has its
+// own copy of the guard cases (internal/sweep/backup_cleanup_test.go); this one
+// proves the op passes appdirs.Current() through. scheduler.cleanup-old-backups
+// was merged into this op, and its app-dir guard test is this test.
 func TestRunCleanupOldBackups_SkipsAppDirs(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

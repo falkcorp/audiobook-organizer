@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.220.0",
+    "version": "0.220.1",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -7544,7 +7544,6 @@
               "backfill-sync-ids",
               "bulk-deluge-import",
               "bulk-fetch-metadata",
-              "cleanup-backups",
               "cleanup-empty-folders",
               "cleanup-organize-mess",
               "cleanup-series",

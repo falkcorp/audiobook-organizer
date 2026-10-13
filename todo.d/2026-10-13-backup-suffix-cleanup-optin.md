@@ -8,6 +8,8 @@
       holds, while it deliberately deletes only the `.bak-<unix>[-N]` names
       `fileops` writes. Option: an opt-in, age-gated, preview-default param on
       the survivor, so an operator can ask for the suffix sweep explicitly.
-      Otherwise leave it dropped. Also: after the 2-week soak of the op-id
-      retirement, re-check the op-id deprecation metric for any hit on
-      `maintenance.cleanup-backups`.
+      Otherwise leave it dropped. Also: after the 2-week soak of
+      the op-id retirement, check prod logs for
+      `unknown defID "maintenance.cleanup-backups"` and check for
+      `operations_v2` rows with that def_id (the alias deprecation metric
+      cannot fire for a retired, unaliased ID).
