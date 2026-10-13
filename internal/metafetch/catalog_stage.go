@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6c0f3b95-2e8a-4d71-b4a9-9f1d5a7e0c28
 // last-edited: 2026-10-12
 //
@@ -18,6 +18,7 @@ package metafetch
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 
@@ -30,7 +31,7 @@ import (
 
 // CatalogMatcher is the local catalog lookup (catalog.Matcher).
 type CatalogMatcher interface {
-	MatchBook(q metadata.CatalogQuestion) (metadata.CatalogMatch, error)
+	MatchBook(ctx context.Context, q metadata.CatalogQuestion) (metadata.CatalogMatch, error)
 }
 
 // SetCatalogMatcher installs the local catalog stage's matcher; nil removes
@@ -184,8 +185,19 @@ func (mfs *Service) catalogCredits(book *database.Book, searchAuthor string) []s
 // runCatalogStage runs the stage for one book. It returns nil when the stage
 // does not apply, has no question to ask, or failed (logged: the stage only
 // adds candidates, so the search carries on without it).
+//
+// It never panics out: the search runs it on its own goroutine, where an
+// escaped panic would take the process down for a stage that only adds
+// candidates. A panic is logged (with the stack) and reads as "no answer".
 func (mfs *Service) runCatalogStage(ctx context.Context, book *database.Book, in searchInputs,
-	searchTitle, rawTitle, series, asin string, opts SearchOptions) *metadata.CatalogMatch {
+	searchTitle, rawTitle, series, asin string, opts SearchOptions) (match *metadata.CatalogMatch) {
+	defer func() {
+		if r := recover(); r != nil {
+			searchFanoutLog.Error("catalog stage: book %s: panic: %v\n%s",
+				logger.SanitizeLogValue(book.ID), r, debug.Stack())
+			match = nil
+		}
+	}()
 	matcher, ok := mfs.catalogStageApplies(opts)
 	if !ok {
 		return nil
@@ -200,17 +212,25 @@ func (mfs *Service) runCatalogStage(ctx context.Context, book *database.Book, in
 	if q.ASIN == "" && (len(q.Titles) == 0 || len(q.Credits) == 0) {
 		return nil
 	}
-	match, err := matcher.MatchBook(q)
+	res, err := matcher.MatchBook(ctx, q)
 	if err != nil {
-		searchFanoutLog.Warn("catalog stage: book %s: %v", logger.SanitizeLogValue(book.ID), err)
+		// A search that was cancelled is not a catalog fault.
+		if ctx.Err() == nil {
+			searchFanoutLog.Warn("catalog stage: book %s: %v", logger.SanitizeLogValue(book.ID), err)
+		}
+		return nil
+	}
+	// An aborted search never merges this answer, so it must not count as a
+	// match in the tally either.
+	if ctx.Err() != nil {
 		return nil
 	}
 	if st := catalogStageStatsFrom(ctx); st != nil {
-		st.CatalogMatched.Add(int64(len(match.Candidates)))
-		st.OversizeBlocks.Add(int64(match.OversizeBlocks))
-		st.HomonymSkipped.Add(int64(match.HomonymSkipped))
+		st.CatalogMatched.Add(int64(len(res.Candidates)))
+		st.OversizeBlocks.Add(int64(res.OversizeBlocks))
+		st.HomonymSkipped.Add(int64(res.HomonymSkipped))
 	}
-	return &match
+	return &res
 }
 
 // tagCatalogCandidates stamps the stage of origin on the candidates the

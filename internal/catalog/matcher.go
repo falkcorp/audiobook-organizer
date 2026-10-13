@@ -1,11 +1,12 @@
 // file: internal/catalog/matcher.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a3e5c812-7b4d-4f09-9c26-d18f0e6b7a35
 // last-edited: 2026-10-12
 
 package catalog
 
 import (
+	"context"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
@@ -37,7 +38,7 @@ func NewMatcher(st func() *database.CatalogStore, marketplace func() string, aut
 }
 
 // MatchBook implements metafetch.CatalogMatcher.
-func (m *Matcher) MatchBook(q metadata.CatalogQuestion) (metadata.CatalogMatch, error) {
+func (m *Matcher) MatchBook(ctx context.Context, q metadata.CatalogQuestion) (metadata.CatalogMatch, error) {
 	cfg := Settings{}
 	if m.marketplace != nil {
 		cfg.Marketplace = m.marketplace()
@@ -51,7 +52,7 @@ func (m *Matcher) MatchBook(q metadata.CatalogQuestion) (metadata.CatalogMatch, 
 	if m.store != nil {
 		st = m.store()
 	}
-	return MatchBook(st, q)
+	return MatchBook(ctx, st, q)
 }
 
 // authorASINs is, per credit, the credit's contributor ASIN in the authority

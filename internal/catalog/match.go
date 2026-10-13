@@ -1,5 +1,5 @@
 // file: internal/catalog/match.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b9e6c10-5d2a-4f87-9a41-c8e0d7b25f93
 // last-edited: 2026-10-12
 //
@@ -18,6 +18,7 @@ package catalog
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -66,13 +67,18 @@ const (
 // MatchBook looks the book up in the local catalog: B1 by ASIN, otherwise B2
 // by author block. It returns at most MaxCandidatesPerBook candidates, each
 // from a live (not stale) entry, with their origins. An error is a store read
-// failure; "nothing matched" is an empty result.
+// failure or ctx ending (the context's error, checked before each block of
+// store reads, so a search that gave up stops asking the store); "nothing
+// matched" is an empty result.
 //
 // Credits are read in the order given and are never sorted, joined or
 // de-duplicated: the block of each credit is tried in turn, and a candidate
 // records the position of the credit that found it.
-func MatchBook(st *database.CatalogStore, q BookQuestion) (MatchResult, error) {
+func MatchBook(ctx context.Context, st *database.CatalogStore, q BookQuestion) (MatchResult, error) {
 	var res MatchResult
+	if err := ctx.Err(); err != nil {
+		return res, err
+	}
 	if st == nil {
 		return res, nil
 	}
@@ -96,6 +102,9 @@ func MatchBook(st *database.CatalogStore, q BookQuestion) (MatchResult, error) {
 	var picked []scoredEntry
 	seen := map[string]bool{}
 	for pos, credit := range q.Credits {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		fold, ids, oversize, err := blockFor(st, credit)
 		if err != nil {
 			return res, err
@@ -107,7 +116,7 @@ func MatchBook(st *database.CatalogStore, q BookQuestion) (MatchResult, error) {
 		if len(ids) == 0 {
 			continue
 		}
-		live, err := liveEntries(st, ids)
+		live, err := liveEntries(ctx, st, ids)
 		if err != nil {
 			return res, err
 		}
@@ -232,9 +241,16 @@ func blockFor(st *database.CatalogStore, credit string) (fold string, ids []stri
 
 // liveEntries loads the block's entries, leaving out stale ones (no harvest
 // lists them any more) and index rows whose entry is gone.
-func liveEntries(st *database.CatalogStore, ids []string) ([]*database.CatalogEntry, error) {
+func liveEntries(ctx context.Context, st *database.CatalogStore, ids []string) ([]*database.CatalogEntry, error) {
 	out := make([]*database.CatalogEntry, 0, len(ids))
-	for _, id := range ids {
+	for i, id := range ids {
+		// A block can hold MaxBlockEntries ids; look at ctx every so often
+		// rather than per read.
+		if i%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		e, err := st.GetEntry(id)
 		if errors.Is(err, database.ErrCatalogEntryNotFound) {
 			continue
