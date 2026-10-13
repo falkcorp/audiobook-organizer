@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package metafetch
 
@@ -532,20 +532,8 @@ func TestIntPtrHelper(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: derefString / derefIntAsString / jsonEncodeString
+// Helper: jsonEncodeString
 // ---------------------------------------------------------------------------
-
-func TestDerefString(t *testing.T) {
-	s := "hello"
-	assert.Equal(t, "hello", derefString(&s))
-	assert.Equal(t, "", derefString(nil))
-}
-
-func TestDerefIntAsString(t *testing.T) {
-	n := 42
-	assert.Equal(t, "42", derefIntAsString(&n))
-	assert.Equal(t, "", derefIntAsString(nil))
-}
 
 func TestJsonEncodeString(t *testing.T) {
 	assert.Equal(t, `"hello"`, jsonEncodeString("hello"))

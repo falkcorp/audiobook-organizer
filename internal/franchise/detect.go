@@ -1,7 +1,7 @@
 // file: internal/franchise/detect.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b0e6d2a-8c4f-4e71-9a3d-1f7c2b9e4d60
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package franchise
 
@@ -184,19 +184,6 @@ func (r Result) Strong() bool {
 		}
 	}
 	return false
-}
-
-// First returns the first signal (strong ones first), for a guard's reason.
-func (r Result) First() (Signal, bool) {
-	for _, s := range r.Signals {
-		if !s.Weak {
-			return s, true
-		}
-	}
-	if len(r.Signals) > 0 {
-		return r.Signals[0], true
-	}
-	return Signal{}, false
 }
 
 // Classify picks the franchise and range the signals agree on. Strong

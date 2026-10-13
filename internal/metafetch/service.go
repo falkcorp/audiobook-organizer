@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.57.0
+// version: 5.57.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package metafetch
 
@@ -1104,10 +1104,4 @@ func truncateActivity(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// bookFileLister is the one-method surface the free functions in batch.go
-// need. It took database.Store.
-type bookFileLister interface {
-	GetBookFiles(bookID string) ([]database.BookFile, error)
 }

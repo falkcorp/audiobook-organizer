@@ -1,126 +1,13 @@
 // file: internal/metabatch/upgrade_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package metabatch
 
 import (
 	"testing"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
-
-// ---------------------------------------------------------------------------
-// transcriptionConfirmsCandidate
-// ---------------------------------------------------------------------------
-
-func TestTranscriptionConfirmsCandidate_TitleAndAuthorMatch(t *testing.T) {
-	book := &database.Book{
-		TranscribedTitle:  new("Project Hail Mary"),
-		TranscribedAuthor: new("Andy Weir"),
-	}
-	c := &metafetch.MetadataCandidate{
-		Title:  "Project Hail Mary",
-		Author: "Andy Weir",
-		Score:  0.87,
-	}
-	if !transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected transcription to confirm when title and author both match")
-	}
-}
-
-func TestTranscriptionConfirmsCandidate_TitleMatchNoAuthor(t *testing.T) {
-	// No transcribed author — title match alone should confirm.
-	book := &database.Book{
-		TranscribedTitle: new("Dune"),
-	}
-	c := &metafetch.MetadataCandidate{
-		Title:  "Dune",
-		Author: "Frank Herbert",
-		Score:  0.87,
-	}
-	if !transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected transcription to confirm with title match when no author available")
-	}
-}
-
-func TestTranscriptionConfirmsCandidate_TitleMatchShortAuthor(t *testing.T) {
-	// Transcribed author is ≤3 chars — too short to be useful, ignore it.
-	book := &database.Book{
-		TranscribedTitle:  new("Dune"),
-		TranscribedAuthor: new("F"),
-	}
-	c := &metafetch.MetadataCandidate{
-		Title:  "Dune",
-		Author: "Frank Herbert",
-		Score:  0.87,
-	}
-	if !transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected transcription to confirm when transcribed author is too short to be useful")
-	}
-}
-
-func TestTranscriptionConfirmsCandidate_TitleMismatch(t *testing.T) {
-	book := &database.Book{
-		TranscribedTitle:  new("The Martian"),
-		TranscribedAuthor: new("Andy Weir"),
-	}
-	c := &metafetch.MetadataCandidate{
-		Title:  "Project Hail Mary",
-		Author: "Andy Weir",
-		Score:  0.87,
-	}
-	if transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected no confirmation when titles differ")
-	}
-}
-
-func TestTranscriptionConfirmsCandidate_AuthorMismatch(t *testing.T) {
-	book := &database.Book{
-		TranscribedTitle:  new("Project Hail Mary"),
-		TranscribedAuthor: new("Brandon Sanderson"),
-	}
-	c := &metafetch.MetadataCandidate{
-		Title:  "Project Hail Mary",
-		Author: "Andy Weir",
-		Score:  0.87,
-	}
-	if transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected no confirmation when authors differ")
-	}
-}
-
-func TestTranscriptionConfirmsCandidate_NoTranscription(t *testing.T) {
-	// Book has no transcription data at all.
-	book := &database.Book{}
-	c := &metafetch.MetadataCandidate{
-		Title:  "Dune",
-		Author: "Frank Herbert",
-		Score:  0.87,
-	}
-	if transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected no confirmation when book has no transcription")
-	}
-}
-
-func TestTranscriptionConfirmsCandidate_AuthorSubstringMatch(t *testing.T) {
-	// Transcribed author is a substring of the candidate's author field
-	// (e.g., last-name-only transcript vs "First Last" in metadata).
-	book := &database.Book{
-		TranscribedTitle:  new("The Way of Kings"),
-		TranscribedAuthor: new("Sanderson"),
-	}
-	c := &metafetch.MetadataCandidate{
-		Title:  "The Way of Kings",
-		Author: "Brandon Sanderson",
-		Score:  0.87,
-	}
-	if !transcriptionConfirmsCandidate(book, c) {
-		t.Error("expected confirmation when transcribed author is a substring of candidate author")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Gate threshold scenarios (TASK-03 requirements)

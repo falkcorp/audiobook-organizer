@@ -1,7 +1,7 @@
 // file: internal/catalog/match_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e8a1c37-9d40-4b62-a7f3-0c2d9b6e4815
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package catalog
 
@@ -49,7 +49,7 @@ func harvestSynthetic(t *testing.T, st *database.CatalogStore, author string, ps
 	t.Helper()
 	l := &scriptLister{list: func(_ string, page, size int) metadata.AuthorPage { return slicePage(ps, page, size) }}
 	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 50, Concurrency: 1, OpID: "op-test"})
-	state, err := h.HarvestAuthor(context.Background(), ScopeAuthor{Key: HarvestKey(author), Name: author}, nil)
+	state, err := h.harvestAuthor(context.Background(), ScopeAuthor{Key: HarvestKey(author), Name: author}, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, database.CatalogHarvestComplete, state.State)
 	return l

@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package applygate
 
@@ -245,6 +245,36 @@ var mainRefusedCorpus = struct {
 		"George R. R. Martin, assisted", "R. A. Salvatore", "R.A. Salvator", "Robert Salvatore",
 		"Brandon Sanderson", "Brandon Sanderson For Beth Sanderson, who's", "Frank Herbert", "",
 	},
+}
+
+// TestTranscriptionConfirms_Basics: the plain shapes of the unreviewed rule --
+// title and author both heard, title alone when the heard author is absent or
+// too short to use, a last-name-only heard author, and refusal on a mismatch
+// or when nothing was transcribed.
+func TestTranscriptionConfirms_Basics(t *testing.T) {
+	cases := []struct {
+		name                    string
+		heardTitle, heardAuthor *string
+		candTitle, candAuthor   string
+		want                    bool
+	}{
+		{"title and author match", strp("Project Hail Mary"), strp("Andy Weir"), "Project Hail Mary", "Andy Weir", true},
+		{"title match, no heard author", strp("Dune"), nil, "Dune", "Frank Herbert", true},
+		{"title match, heard author too short", strp("Dune"), strp("F"), "Dune", "Frank Herbert", true},
+		{"heard author is a surname substring", strp("The Way of Kings"), strp("Sanderson"), "The Way of Kings", "Brandon Sanderson", true},
+		{"title mismatch", strp("The Martian"), strp("Andy Weir"), "Project Hail Mary", "Andy Weir", false},
+		{"author mismatch", strp("Project Hail Mary"), strp("Brandon Sanderson"), "Project Hail Mary", "Andy Weir", false},
+		{"nothing transcribed", nil, nil, "Dune", "Frank Herbert", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			book := &database.Book{TranscribedTitle: tc.heardTitle, TranscribedAuthor: tc.heardAuthor}
+			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor, Score: 0.87}
+			if got := TranscriptionConfirms(book, c); got != tc.want {
+				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestUnreviewedPathsRefuseEveryPairMainRefused: over the whole corpus, with

@@ -1,7 +1,7 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package matcher
 
@@ -17,12 +17,6 @@ import (
 // while remaining below the exact/prefix heuristic tier (90-100). Because the
 // blend is raise-only, this constant only bounds how much a score can RISE.
 const tokenSetScale = 70
-
-// FuzzyResult holds a scored search result.
-type FuzzyResult struct {
-	Index int // index into the original slice
-	Score int // 0-100, higher is better
-}
 
 // LevenshteinDistance computes the case-insensitive edit distance between two
 // strings, in RUNES. It lowercases both sides and defers to
@@ -231,25 +225,6 @@ func tokenSimilarity(a, b string) float64 {
 	// verified across all 1,112,064 valid code points that ToLower never
 	// changes a string's rune count.
 	return 1.0 - float64(LevenshteinDistance(a, b))/float64(maxLen)
-}
-
-// RankResults scores each candidate against the query and returns results
-// sorted by score descending. Only results with score >= minScore are returned.
-func RankResults(query string, candidates []string, minScore int) []FuzzyResult {
-	var results []FuzzyResult
-	for i, c := range candidates {
-		s := ScoreMatch(query, c)
-		if s >= minScore {
-			results = append(results, FuzzyResult{Index: i, Score: s})
-		}
-	}
-	// Sort descending by score
-	for i := 1; i < len(results); i++ {
-		for j := i; j > 0 && results[j].Score > results[j-1].Score; j-- {
-			results[j], results[j-1] = results[j-1], results[j]
-		}
-	}
-	return results
 }
 
 // normalize lowercases and strips non-alphanumeric characters except spaces.

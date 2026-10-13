@@ -1,7 +1,7 @@
 // file: internal/matcher/fuzzy_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package matcher
 
@@ -119,37 +119,21 @@ func TestScoreMatch_Ranking(t *testing.T) {
 	}
 }
 
-func TestRankResults(t *testing.T) {
-	candidates := []string{
-		"The Lord of the Rings",
-		"Lord of the Flies",
-		"Lard of the Rings",
-		"Something Completely Different",
-	}
-	results := RankResults("Lord of the Rings", candidates, 10)
-
-	if len(results) == 0 {
-		t.Fatal("expected results")
-	}
-	// First result should be exact match
-	if results[0].Index != 0 {
-		t.Errorf("expected index 0 first, got %d (score %d)", results[0].Index, results[0].Score)
-	}
-	// Scores should be descending
-	for i := 1; i < len(results); i++ {
-		if results[i].Score > results[i-1].Score {
-			t.Errorf("results not sorted: score[%d]=%d > score[%d]=%d",
-				i, results[i].Score, i-1, results[i-1].Score)
+// TestScoreMatchRanksExactFirst: the exact title outscores near-misses and
+// unrelated text, and only the exact match clears a 90 floor.
+func TestScoreMatchRanksExactFirst(t *testing.T) {
+	query := "Lord of the Rings"
+	exact := ScoreMatch(query, "The Lord of the Rings")
+	for _, other := range []string{"Lord of the Flies", "Lard of the Rings", "Something Completely Different"} {
+		if got := ScoreMatch(query, other); got > exact {
+			t.Errorf("ScoreMatch(%q, %q)=%d outranks the exact match (%d)", query, other, got, exact)
 		}
 	}
-}
-
-func TestRankResults_MinScore(t *testing.T) {
-	candidates := []string{"Exact Match", "something else entirely"}
-	results := RankResults("Exact Match", candidates, 90)
-	// Only the exact match should pass
-	if len(results) != 1 {
-		t.Errorf("expected 1 result with minScore 90, got %d", len(results))
+	if got := ScoreMatch("Exact Match", "Exact Match"); got < 90 {
+		t.Errorf("exact match scored %d, want >= 90", got)
+	}
+	if got := ScoreMatch("Exact Match", "something else entirely"); got >= 90 {
+		t.Errorf("unrelated text scored %d, want < 90", got)
 	}
 }
 
@@ -168,7 +152,7 @@ func TestScoreMatchGolden(t *testing.T) {
 }
 
 // TestTokenSetRatioNoRegression is the anti-over-suppression guard: every
-// known-good pair that previously passed a given RankResults minScore must
+// known-good pair that previously scored at least a given minScore must
 // still pass it after the blend (the happy path still matches).
 func TestTokenSetRatioNoRegression(t *testing.T) {
 	// Known-good matches and the minScore threshold they cleared pre-blend.
@@ -186,10 +170,9 @@ func TestTokenSetRatioNoRegression(t *testing.T) {
 		{"Brandon Sanderson Mistborn", "Mistborn Brandon Sanderson", 50},
 	}
 	for _, m := range goodMatches {
-		res := RankResults(m.query, []string{m.target}, m.minScore)
-		if len(res) != 1 {
-			t.Errorf("RankResults(%q, [%q], %d) suppressed a known-good match: got %d results, score=%d",
-				m.query, m.target, m.minScore, len(res), ScoreMatch(m.query, m.target))
+		if got := ScoreMatch(m.query, m.target); got < m.minScore {
+			t.Errorf("ScoreMatch(%q, %q)=%d fell below the known-good floor %d",
+				m.query, m.target, got, m.minScore)
 		}
 	}
 }

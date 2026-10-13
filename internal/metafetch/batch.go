@@ -1,15 +1,9 @@
 // file: internal/metafetch/batch.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package metafetch
-
-import (
-	"errors"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-)
 
 // CandidateBookInfo contains summary info about a book used in candidate results.
 type CandidateBookInfo struct {
@@ -52,67 +46,3 @@ type CandidateResult struct {
 	Status    string             `json:"status"` // "matched", "no_match", "error"
 	Error     string             `json:"error_message,omitempty"`
 }
-
-// BuildCandidateBookInfo builds a CandidateBookInfo from a database.Book.
-// store is used to look up the first BookFile for ITunesPath; pass nil to skip.
-func BuildCandidateBookInfo(book *database.Book, store bookFileLister) CandidateBookInfo {
-	info := CandidateBookInfo{
-		ID:       book.ID,
-		Title:    book.Title,
-		FilePath: book.FilePath,
-		Format:   book.Format,
-	}
-	if book.Author != nil {
-		info.Author = book.Author.Name
-	}
-	var bfs []database.BookFile
-	var bfErr error
-	if store != nil {
-		bfs, bfErr = store.GetBookFiles(book.ID)
-		if bfErr == nil && len(bfs) > 0 {
-			info.ITunesPath = bfs[0].ITunesPath
-		}
-	} else {
-		bfErr = errNoFileStore
-	}
-	if book.CoverURL != nil {
-		info.CoverURL = *book.CoverURL
-	}
-	applyRuntimeInfo(&info, database.ComputeBookRuntime(book, bfs), bfErr)
-	if book.FileSize != nil {
-		info.FileSize = *book.FileSize
-	}
-	if book.Language != nil {
-		info.Language = *book.Language
-	}
-	return info
-}
-
-// CountByStatus counts CandidateResults with the given status.
-func CountByStatus(results []CandidateResult, status string) int {
-	n := 0
-	for _, r := range results {
-		if r.Status == status {
-			n++
-		}
-	}
-	return n
-}
-
-// applyRuntimeInfo copies a canonical runtime onto info. A file-read error
-// leaves the runtime unknown rather than trusting Book.Duration.
-func applyRuntimeInfo(info *CandidateBookInfo, rt database.BookRuntime, readErr error) {
-	if readErr != nil {
-		rt = database.BookRuntime{Source: database.RuntimeSourceNone, BookAggregateSec: rt.BookAggregateSec}
-	}
-	info.RuntimeStatus = rt.Status()
-	info.RuntimeFilesKnown, info.RuntimeFilesCounted = rt.FilesKnown, rt.FilesCounted
-	if sec, ok := rt.KnownSeconds(); ok {
-		info.Duration = sec
-	} else if rt.Partial() {
-		info.RuntimeLowerBoundSec = rt.Seconds
-	}
-}
-
-// errNoFileStore marks a runtime built without a file store: unknown.
-var errNoFileStore = errors.New("no book file store")
