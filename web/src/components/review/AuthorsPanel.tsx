@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d03b9f2-a4e1-4875-b3c6-0f92d8e15a47
 // last-edited: 2026-10-13
 
@@ -7,9 +7,10 @@
  * The Authors & series lane's surface: a rail, the group spine, and the lane's
  * action bar.
  *
- * The segmented control at the top picks the lane's sub-view. Only Authors exists
- * today; Series and AI scans join it in later changes, and the control is here
- * now so the lane does not change shape when they do.
+ * The segmented control at the top picks the lane's sub-view (Authors | Series;
+ * AI scans joins it in a later change). `AuthorsPanel` is the switch between
+ * them: it renders the Authors sub-view below or the Series sub-view
+ * (SeriesPanel.tsx), which carry the same control.
  *
  * THE FOUR STATES (plus one). Loading, error, empty and populated each render
  * differently, and so does a cold cache (`needs-scan`): the server answered, but
@@ -46,8 +47,6 @@ import {
   Popover,
   Stack,
   TablePagination,
-  ToggleButton,
-  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -70,9 +69,8 @@ import {
 } from './lanes/useAuthorsLane';
 import { fetchBooksByAuthor } from './lanes/authorsReads';
 import { AuthorGroupSpine } from './spine/AuthorGroupSpine';
-
-/** The lane's sub-views. Series and AI scans are added by later changes. */
-const SUB_VIEWS = [{ value: 'authors', label: 'Authors' }] as const;
+import { AuthorsSubViewSwitch } from './AuthorsSubViewSwitch';
+import { SeriesPanel } from './SeriesPanel';
 
 const KIND_CHIPS: ReadonlyArray<{ value: AuthorKindFilter; label: string }> = [
   { value: 'all', label: 'All groups' },
@@ -357,7 +355,12 @@ export interface AuthorsPanelProps {
   authors: AuthorsLane;
 }
 
+/** The lane's body: whichever sub-view is showing. */
 export function AuthorsPanel({ authors }: AuthorsPanelProps) {
+  return authors.view === 'series' ? <SeriesPanel authors={authors} /> : <AuthorsView authors={authors} />;
+}
+
+function AuthorsView({ authors }: AuthorsPanelProps) {
   // The groups the reviewer is confirming, captured when the dialog opened.
   const [confirmAll, setConfirmAll] = useState<AuthorId[] | null>(null);
   const [confirmSelected, setConfirmSelected] = useState(false);
@@ -387,13 +390,7 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
         sx={{ borderBottom: 1, borderColor: 'divider', px: 2, py: 1, display: 'flex', flexDirection: 'column', gap: 1 }}
       >
         <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
-          <ToggleButtonGroup size="small" exclusive value="authors" aria-label={`${authorsLane.label} sub-view`}>
-            {SUB_VIEWS.map(({ value, label }) => (
-              <ToggleButton key={value} value={value} data-testid={`authors-subview-${value}`}>
-                {label}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
+          <AuthorsSubViewSwitch view={authors.view} onChange={authors.setView} />
           <Typography variant="body2" sx={{ color: 'text.secondary', flexGrow: 1 }}>
             Author names that look like one person. Uses structured name comparison to detect variants like
             &quot;Author A. Example&quot; vs &quot;Author A Example&quot;.
@@ -469,7 +466,7 @@ export function AuthorsPanel({ authors }: AuthorsPanelProps) {
 
       <CandidatesSection authors={authors} />
 
-      {authors.bulk && (
+      {authors.bulk?.entity === 'author' && (
         <Box sx={{ px: 2 }} data-testid="authors-bulk-progress">
           <LinearProgress variant="determinate" value={(authors.bulk.done / authors.bulk.total) * 100} />
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>

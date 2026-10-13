@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.authors.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b6d94c3-f7a2-4e18-9d05-62c8e1a7b350
 // last-edited: 2026-10-13
 
@@ -55,6 +55,21 @@ beforeEach(() => {
         book_count: 4,
       },
     ],
+    needsRefresh: false,
+  });
+  vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({
+    groups: [
+      {
+        name: 'Series A',
+        count: 2,
+        match_type: 'exact',
+        series: [
+          { id: 11, name: 'Series A', created_at: '' },
+          { id: 12, name: 'series a', created_at: '' },
+        ],
+      },
+    ],
+    totalSeries: 2,
     needsRefresh: false,
   });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
@@ -134,5 +149,43 @@ describe('Authors & series in the workspace', () => {
     const card = await screen.findByTestId('author-group-2');
     await waitFor(() => expect(card).toHaveAttribute('data-focused', 'true'));
     expect(screen.getByTestId('author-group-1')).not.toHaveAttribute('data-focused');
+  });
+
+  it('?lane=authors&view=series opens the Series sub-view once; the Authors sub-view is one click away and nothing is written back', async () => {
+    const user = userEvent.setup();
+    renderWorkspace('/review?lane=authors&view=series');
+    expect(await screen.findByTestId('series-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('series-group-s11-12')).toBeInTheDocument();
+    expect(screen.getByTestId('authors-subview-series')).toHaveAttribute('aria-pressed', 'true');
+    expect(reads.fetchAuthorGroups).not.toHaveBeenCalled();
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    expect(await screen.findByRole('heading', { name: 'Author A' })).toBeInTheDocument();
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=authors&view=series');
+  });
+
+  it('?view=series is for the authors lane only: it does not open Series when the URL landed on another lane', async () => {
+    const user = userEvent.setup();
+    // `view` is also the Duplicates lane's parameter.
+    renderWorkspace('/review?lane=dupes&view=series');
+    await screen.findByTestId('dupes-rail');
+    await user.click(screen.getByTestId('lane-tab-authors'));
+    expect(await screen.findByTestId('authors-panel')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Author A' })).toBeInTheDocument();
+    expect(reads.fetchSeriesGroups).not.toHaveBeenCalled();
+  });
+
+  it('the lane makes no series request while another lane is showing, and stops when the lane is left', async () => {
+    const user = userEvent.setup();
+    renderWorkspace('/review?lane=authors&view=series');
+    await screen.findByTestId('series-group-s11-12');
+    const signal = vi.mocked(reads.fetchSeriesGroups).mock.calls[0][0];
+    expect(signal.aborted).toBe(false);
+    await user.click(screen.getByTestId('lane-tab-regroup'));
+    await screen.findByTestId('regroup-rail');
+    expect(signal.aborted).toBe(true);
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
   });
 });

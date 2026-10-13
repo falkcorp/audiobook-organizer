@@ -1,10 +1,11 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-10-13
 
 /**
- * The Authors & series lane's data layer (Authors sub-view).
+ * The Authors & series lane's data layer: the Authors sub-view and the Series
+ * sub-view, one hook, one write queue.
  *
  * Shaped like useDupesLabels, not like the DedupAuthorTab it replaces:
  *
@@ -42,11 +43,36 @@
  * What a merge DOES (which variants are excluded, which are narrators) is read
  * when the merge RUNS, not when it was clicked, so an exclusion made while the
  * merge was waiting in the queue is honoured.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO SUB-VIEWS, ONE QUEUE
+ * ---------------------------------------------------------------------------
+ *
+ * Authors and Series share this hook because they share the queue: a series
+ * merge repoints books and an author merge relinks them, and the two must not run
+ * at once any more than two author merges may. Everything else is kept apart.
+ *
+ *   - READS and KEYBOARD follow the SUB-VIEW. `authorsOn` / `seriesOn` are
+ *     "the lane is visible AND this sub-view is the one on screen". The Series
+ *     list is not requested while Authors is showing, and `m` on the Series
+ *     sub-view can never merge an author card nobody can see.
+ *   - WRITES follow the LANE. Switching sub-views does not abort a merge that is
+ *     queued or running (the progress bar and the busy state are shared, so it
+ *     stays visible and the other sub-view's buttons wait for it); leaving the
+ *     lane does, exactly as before, and says which writes were not sent.
+ *   - Each sub-view has its own list, selection, choices and page state, and the
+ *     list is edited IN PLACE after a write (see GroupsValue.stale): the server
+ *     clears its cached list on every write, so re-reading would blank it.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../../../services/api';
-import type { AuthorDedupGroup, DedupCandidate, Operation, ValidationResult } from '../../../services/api';
+import type {
+  AuthorDedupGroup,
+  DedupCandidate,
+  Operation,
+  ValidationResult,
+} from '../../../services/api';
 import { ApiTimeoutError, isAbortError, isAuthRedirectError } from '../../../utils/apiFetch';
 import { SESSION_EXPIRED_MESSAGE } from '../../../utils/apiResponse';
 import { useRowSelection, type RowSelection } from '../../../hooks/useRowSelection';
@@ -54,11 +80,37 @@ import {
   asAuthorId,
   type AuthorId,
   type AuthorsAction,
+  type SeriesEntityAction,
+  type SeriesId,
 } from '../reviewActions';
 import { isKeyboardShortcutSuppressed } from './useDupesLane';
-import { fetchAuthorGroups, fetchAuthorName, validateAuthorName } from './authorsReads';
+import {
+  fetchAuthorGroups,
+  fetchAuthorName,
+  fetchSeriesGroups,
+  validateAuthorName,
+  validateSeriesName,
+} from './authorsReads';
+import {
+  NO_SERIES_CHOICES,
+  dropSeriesRows,
+  inMergeAll,
+  isSeriesMergeable,
+  parseLeftSeriesIds,
+  planSeriesMerge,
+  renameSeriesRow,
+  toSeriesGroup,
+  type SeriesChoices,
+  type SeriesGroup,
+  type SeriesKindFilter,
+} from './seriesGroups';
 
-type Toast = (message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void;
+/** The toast API (ToastProvider's), with the optional action button an undo needs. */
+type Toast = (
+  message: string,
+  severity?: 'success' | 'error' | 'warning' | 'info',
+  action?: { label: string; onClick: () => void }
+) => void;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -132,6 +184,14 @@ interface GroupsValue {
   stale: boolean;
 }
 
+interface SeriesValue {
+  groups: SeriesGroup[];
+  totalSeries: number;
+  needsScan: boolean;
+  /** As GroupsValue.stale: the server's list is gone while this lane holds an edited one. */
+  stale: boolean;
+}
+
 export type ValidationState =
   | { forName: string; state: 'loading' }
   | { forName: string; state: 'error'; message: string }
@@ -148,6 +208,21 @@ export interface AuthorsUrlFilters {
    * variant). A seed, read once on the first load and never mirrored back.
    */
   authorId: string | null;
+  /**
+   * `?view=series`: open the Series sub-view. A seed like `authorId`, read once
+   * (the sub-view is local state afterwards; a click never writes the URL). The
+   * caller passes it only when the URL landed on this lane, because `view` is also
+   * the Duplicates lane's parameter.
+   */
+  view?: string | null;
+}
+
+/** The lane's sub-views. AI scans joins them in a later change. */
+export type AuthorsSubView = 'authors' | 'series';
+
+/** An unknown `?view=` opens Authors rather than nothing. */
+export function parseAuthorsSubView(raw: string | null | undefined): AuthorsSubView {
+  return raw === 'series' ? 'series' : 'authors';
 }
 
 export interface BooksTarget {
@@ -228,7 +303,22 @@ interface MergeOutcome {
   name: string;
   /** Narrator reclassifications that failed; a bulk run sums them. */
   reclassifyFailures: number;
+  /**
+   * The list can no longer be trusted: a failure that does not say what it left
+   * (a cancelled run). The caller re-reads, which lands on the stale banner when
+   * the server's list is gone.
+   */
+  reread?: boolean;
 }
+
+/**
+ * A merge that was sent whose outcome the lane never saw (see unconfirmedRef).
+ * Authors and series are followed differently when they finish, so the entry says
+ * which it is and, for a series, which rows the merge folded away.
+ */
+type Unconfirmed =
+  | { entity: 'author'; opId: string; name: string }
+  | { entity: 'series'; opId: string; name: string; mergeIds: number[] };
 
 /** Removes `gone` variants from one group, and the group itself when none is left. */
 function dropVariants(gs: AuthorGroup[], key: string, gone: ReadonlySet<number>): AuthorGroup[] {
@@ -264,17 +354,30 @@ export function parseLeftIds(message: string): Set<number> | null {
  */
 export const WRITE_DEADLINE_MS = 60_000;
 
+/**
+ * A series rename waits for its queued operation inside the api.ts wrapper for up
+ * to SERIES_RENAME_WAIT_MS, and says "rename still queued" when that runs out.
+ * The lane's own deadline must come AFTER that, or it would pre-empt the
+ * wrapper's more specific message with a generic "no answer". (A literal, not
+ * `api.SERIES_RENAME_WAIT_MS + n`: a test that replaces the api module without
+ * that constant would otherwise get a NaN timer that fires at once. The lane's
+ * tests assert this stays above the wrapper's wait.)
+ */
+export const SERIES_RENAME_DEADLINE_MS = 75_000;
+
 class WriteTimeoutError extends Error {
-  constructor() {
-    super(`no answer after ${WRITE_DEADLINE_MS / 1000}s`);
+  readonly ms: number;
+  constructor(ms = WRITE_DEADLINE_MS) {
+    super(`no answer after ${ms / 1000}s`);
     this.name = 'WriteTimeoutError';
+    this.ms = ms;
   }
 }
 
 /** Rejects with WriteTimeoutError if `work` has not settled by the deadline. */
-function withDeadline<T>(work: Promise<T>): Promise<T> {
+function withDeadline<T>(work: Promise<T>, ms = WRITE_DEADLINE_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new WriteTimeoutError()), WRITE_DEADLINE_MS);
+    const timer = setTimeout(() => reject(new WriteTimeoutError(ms)), ms);
     work.then(
       (v) => {
         clearTimeout(timer);
@@ -288,11 +391,91 @@ function withDeadline<T>(work: Promise<T>): Promise<T> {
   });
 }
 
+/** A bulk merge in progress. `entity` says which sub-view started it, so the other does not draw its bar. */
+export interface BulkProgress {
+  done: number;
+  total: number;
+  entity: 'author' | 'series';
+}
+
+/** The series row whose name is being edited. */
+export interface SeriesEditing {
+  groupKey: string;
+  seriesId: SeriesId;
+  initial: string;
+}
+
+/** A rename that can still be undone: the operation to revert and the names either side. */
+export interface SeriesRenameRecord {
+  opId: string;
+  oldName: string;
+  newName: string;
+}
+
+/** Page sizes for the series group list. */
+export const SERIES_PAGE_SIZES = AUTHOR_PAGE_SIZES;
+export const SERIES_DEFAULT_PAGE_SIZE = AUTHORS_DEFAULT_PAGE_SIZE;
+
+/** The Series sub-view's own state. The write state (pending, busy, bulk) is the lane's. */
+export interface SeriesLane {
+  status: ListStatus;
+  error: string | null;
+  /** The whole list, unfiltered. */
+  groups: SeriesGroup[];
+  /** Every series in the library, duplicate or not (the scan's denominator). */
+  totalSeries: number;
+  /** Per-kind counts; `exact` + `subseries` = `all` = `groups.length`. */
+  kindCounts: Record<SeriesKindFilter, number>;
+  filter: SeriesKindFilter;
+  setFilter: (f: SeriesKindFilter) => void;
+  filtered: SeriesGroup[];
+  pageGroups: SeriesGroup[];
+  page: number;
+  setPage: (p: number) => void;
+  pageSize: number;
+  setPageSize: (n: number) => void;
+  /** Groups a Merge button applies to (two or more series included), across the whole list. */
+  mergeable: SeriesGroup[];
+  /** The groups Merge All takes: same-name groups with something to merge. */
+  mergeAll: SeriesGroup[];
+  /** Selectable (mergeable) groups matching the current kind filter. */
+  selectableTotal: number;
+  /** The list is the lane's own edit of an earlier read; the server's copy is gone. */
+  stale: boolean;
+  selection: RowSelection<string>;
+  /** Selected groups that still exist and are mergeable: the rows `selectedCount` counts. */
+  selectedGroups: SeriesGroup[];
+  selectedCount: number;
+  choices: SeriesChoices;
+  /** Validation by group key. */
+  validation: Readonly<Record<string, ValidationState>>;
+  /** Renames that can still be undone, by series id. */
+  renames: Readonly<Record<number, SeriesRenameRecord>>;
+  editing: SeriesEditing | null;
+  startEdit: (groupKey: string, seriesId: SeriesId, initial: string) => void;
+  cancelEdit: () => void;
+  focusedKey: string | null;
+  helpOpen: boolean;
+  setHelpOpen: (open: boolean) => void;
+  validate: (key: string) => void;
+  /** Starts the series scan, then reloads the groups when it finishes. */
+  refresh: () => void;
+  /** Re-reads the groups without starting a scan. */
+  reload: () => void;
+}
+
 // ---------------------------------------------------------------------------
 // The lane
 // ---------------------------------------------------------------------------
 
 export interface AuthorsLane {
+  /** Which sub-view is showing. Local state, seeded once from `?view=`. */
+  view: AuthorsSubView;
+  setView: (v: AuthorsSubView) => void;
+  /** The Series sub-view's list and choices. */
+  series: SeriesLane;
+
+  // ---- the Authors sub-view ----
   status: ListStatus;
   error: string | null;
   /** The whole list, unfiltered. */
@@ -324,7 +507,7 @@ export interface AuthorsLane {
   validation: Readonly<Record<string, ValidationState>>;
   pendingKeys: ReadonlySet<string>;
   /** A bulk merge is running: `done` of `total` groups processed so far. */
-  bulk: { done: number; total: number } | null;
+  bulk: BulkProgress | null;
   scanning: boolean;
   /** Anything that writes is in flight: bulk buttons wait for it. */
   busy: boolean;
@@ -339,6 +522,7 @@ export interface AuthorsLane {
   helpOpen: boolean;
   setHelpOpen: (open: boolean) => void;
 
+  /** Every action of the lane, Authors and Series alike (they name their `entity`). */
   dispatch: (action: AuthorsAction) => void;
   validate: (key: string) => void;
   /** Starts the author scan, then reloads the groups when it finishes. */
@@ -365,25 +549,46 @@ export function useAuthorsLane(
   active = true,
   urlFilters: AuthorsUrlFilters = { authorId: null }
 ): AuthorsLane {
+  // ---- which sub-view is showing -------------------------------------------
+  // `active` is "the lane is the visible one"; `authorsOn` / `seriesOn` add "and
+  // this sub-view is the one on screen". Reads, keyboard and ephemeral UI follow
+  // the sub-view; the write queue follows the lane (see the header note).
+  const [view, setView] = useState<AuthorsSubView>(() => parseAuthorsSubView(urlFilters.view));
+  const authorsOn = active && view === 'authors';
+  const seriesOn = active && view === 'series';
+
   // ---- request identity ----------------------------------------------------
-  // A new activation is a new request: re-entering the lane must not paint what
-  // it held when it was left. Derived during render (React's "adjust state when
-  // a prop changes" pattern) so there is no committed frame in between.
+  // A new activation is a new request: re-entering the lane (or a sub-view) must
+  // not paint what it held when it was left. Derived during render (React's
+  // "adjust state when a prop changes" pattern) so there is no committed frame in
+  // between.
   const [activation, setActivation] = useState(0);
-  const [prevActive, setPrevActive] = useState(active);
+  const [prevAuthorsOn, setPrevAuthorsOn] = useState(authorsOn);
   // Declared ahead of the block below, which clears them on leaving.
   const [editing, setEditing] = useState<{ key: string; initial: string } | null>(null);
   const [booksFor, setBooksFor] = useState<BooksTarget | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
-  if (prevActive !== active) {
-    setPrevActive(active);
-    if (active) setActivation((a) => a + 1);
+  if (prevAuthorsOn !== authorsOn) {
+    setPrevAuthorsOn(authorsOn);
+    if (authorsOn) setActivation((a) => a + 1);
     else {
       // An open popover is anchored to a card that is about to unmount, and an
       // open editor or help dialog belongs to a screen nobody is on.
       setBooksFor(null);
       setEditing(null);
       setHelpOpen(false);
+    }
+  }
+  const [seriesActivation, setSeriesActivation] = useState(0);
+  const [prevSeriesOn, setPrevSeriesOn] = useState(seriesOn);
+  const [seriesEditing, setSeriesEditing] = useState<SeriesEditing | null>(null);
+  const [seriesHelpOpen, setSeriesHelpOpen] = useState(false);
+  if (prevSeriesOn !== seriesOn) {
+    setPrevSeriesOn(seriesOn);
+    if (seriesOn) setSeriesActivation((a) => a + 1);
+    else {
+      setSeriesEditing(null);
+      setSeriesHelpOpen(false);
     }
   }
   const [reloadToken, setReloadToken] = useState(0);
@@ -496,6 +701,114 @@ export function useAuthorsLane(
     [groups, selection.selected, mergeableKeys]
   );
 
+  // ---- series: the list ----------------------------------------------------------
+  const [seriesReloadToken, setSeriesReloadToken] = useState(0);
+  const seriesKey = `${seriesActivation}:${seriesReloadToken}`;
+  const [seriesResult, setSeriesResult] = useState<Keyed<SeriesValue> | null>(null);
+  const seriesRef = useRef<Keyed<SeriesValue> | null>(null);
+  const commitSeriesResult = useCallback((next: Keyed<SeriesValue>) => {
+    seriesRef.current = next;
+    setSeriesResult(next);
+  }, []);
+  /** Edit the series list the lane currently holds. Reads the latest, writes the latest. */
+  const commitSeries = useCallback(
+    (fn: (gs: SeriesGroup[]) => SeriesGroup[]) => {
+      const prev = seriesRef.current;
+      if (!prev || prev.load.state !== 'ready') return;
+      const next = fn(prev.load.value.groups);
+      if (next === prev.load.value.groups) return;
+      commitSeriesResult({
+        key: prev.key,
+        load: { state: 'ready', value: { ...prev.load.value, groups: next } },
+      });
+    },
+    [commitSeriesResult]
+  );
+  const seriesLoad = current(seriesResult, seriesKey);
+  const seriesGroups = useMemo(
+    () => (seriesLoad.state === 'ready' ? seriesLoad.value.groups : []),
+    [seriesLoad]
+  );
+  const seriesTotal = seriesLoad.state === 'ready' ? seriesLoad.value.totalSeries : 0;
+  const seriesNeedsScan = seriesLoad.state === 'ready' && seriesLoad.value.needsScan;
+  const seriesStale = seriesLoad.state === 'ready' && seriesLoad.value.stale;
+  // An editor on a series whose group has left the list (merged away) would point
+  // at a row that is gone.
+  if (seriesLoad.state === 'ready' && seriesEditing && !seriesGroups.some((g) => g.key === seriesEditing.groupKey)) {
+    setSeriesEditing(null);
+  }
+
+  // ---- series: choices (left-out series, narrator flags) --------------------------
+  const [seriesChoices, setSeriesChoices] = useState<SeriesChoices>(NO_SERIES_CHOICES);
+  const seriesChoicesRef = useRef<SeriesChoices>(NO_SERIES_CHOICES);
+  const commitSeriesChoices = useCallback((fn: (c: SeriesChoices) => SeriesChoices) => {
+    const next = fn(seriesChoicesRef.current);
+    if (next === seriesChoicesRef.current) return;
+    seriesChoicesRef.current = next;
+    setSeriesChoices(next);
+  }, []);
+
+  // ---- series: view state and selection -------------------------------------------
+  const [seriesFilter, setSeriesFilterState] = useState<SeriesKindFilter>('all');
+  const [seriesPageState, setSeriesPageState] = useState(0);
+  const [seriesPageSize, setSeriesPageSizeState] = useState<number>(SERIES_DEFAULT_PAGE_SIZE);
+  const [seriesFocusedKey, setSeriesFocusedKey] = useState<string | null>(null);
+  const seriesKindCounts = useMemo(() => {
+    const counts: Record<SeriesKindFilter, number> = { all: seriesGroups.length, exact: 0, subseries: 0 };
+    for (const g of seriesGroups) counts[g.matchKind] += 1;
+    return counts;
+  }, [seriesGroups]);
+  const seriesFiltered = useMemo(
+    () => (seriesFilter === 'all' ? seriesGroups : seriesGroups.filter((g) => g.matchKind === seriesFilter)),
+    [seriesGroups, seriesFilter]
+  );
+  const seriesLastPage = Math.max(0, Math.ceil(seriesFiltered.length / seriesPageSize) - 1);
+  const seriesPage = Math.min(seriesPageState, seriesLastPage);
+  const seriesPageGroups = useMemo(
+    () => seriesFiltered.slice(seriesPage * seriesPageSize, seriesPage * seriesPageSize + seriesPageSize),
+    [seriesFiltered, seriesPage, seriesPageSize]
+  );
+  const setSeriesFilter = useCallback((f: SeriesKindFilter) => {
+    setSeriesFilterState(f);
+    setSeriesPageState(0);
+  }, []);
+  const setSeriesPage = useCallback((p: number) => setSeriesPageState(Math.max(0, p)), []);
+  const setSeriesPageSize = useCallback((n: number) => {
+    setSeriesPageSizeState(n);
+    setSeriesPageState(0);
+  }, []);
+
+  const seriesMergeable = useMemo(
+    () => seriesGroups.filter((g) => isSeriesMergeable(g, seriesChoices)),
+    [seriesGroups, seriesChoices]
+  );
+  const seriesMergeAll = useMemo(
+    () => seriesGroups.filter((g) => inMergeAll(g, seriesChoices)),
+    [seriesGroups, seriesChoices]
+  );
+  const seriesMergeableKeys = useMemo(() => new Set(seriesMergeable.map((g) => g.key)), [seriesMergeable]);
+  const isSeriesUnselectable = useCallback((key: string) => !seriesMergeableKeys.has(key), [seriesMergeableKeys]);
+  const seriesPageKeys = useMemo(() => seriesPageGroups.map((g) => g.key), [seriesPageGroups]);
+  const allSeriesSelectableKeys = useMemo(
+    () => seriesFiltered.filter((g) => isSeriesMergeable(g, seriesChoices)).map((g) => g.key),
+    [seriesFiltered, seriesChoices]
+  );
+  const seriesSelection = useRowSelection<string>({
+    pageKeys: seriesPageKeys,
+    totalMatching: allSeriesSelectableKeys.length,
+    resetKey: `${seriesFilter}|${seriesPageSize}`,
+    isDisabled: isSeriesUnselectable,
+    allKeys: allSeriesSelectableKeys,
+  });
+  const { clear: clearSeriesSelection } = seriesSelection;
+  // The rows the count counts, as for authors: a group merged while ticked leaves a
+  // stale key in the set, and a count taken from the set would claim a row nobody
+  // can see.
+  const selectedSeriesGroups = useMemo(
+    () => seriesGroups.filter((g) => seriesSelection.selected.has(g.key) && seriesMergeableKeys.has(g.key)),
+    [seriesGroups, seriesSelection.selected, seriesMergeableKeys]
+  );
+
   // ---- lifetime -----------------------------------------------------------------
   // Aborted when the lane stops being the visible one and when the workspace
   // unmounts. Created in the effect so each mount (StrictMode runs two) has its own.
@@ -517,7 +830,7 @@ export function useAuthorsLane(
   // ---- loading the groups --------------------------------------------------------
   const seedRef = useRef<number | null>(parseAuthorId(urlFilters.authorId));
   useEffect(() => {
-    if (!active) return;
+    if (!authorsOn) return;
     const ctl = new AbortController();
     fetchAuthorGroups(ctl.signal)
       .then((r) => {
@@ -561,7 +874,48 @@ export function useAuthorsLane(
         });
       });
     return () => ctl.abort();
-  }, [active, groupsKey, commitResult]);
+  }, [authorsOn, groupsKey, commitResult]);
+
+  // ---- loading the series groups ---------------------------------------------------
+  useEffect(() => {
+    if (!seriesOn) return;
+    const ctl = new AbortController();
+    fetchSeriesGroups(ctl.signal)
+      .then((r) => {
+        if (ctl.signal.aborted) return;
+        const mapped = r.groups.map(toSeriesGroup);
+        // The latest, now: the lane may have edited its list since the request
+        // was sent.
+        const prev = seriesRef.current;
+        const held = prev && prev.load.state === 'ready' ? prev.load.value : null;
+        if (r.needsRefresh && mapped.length === 0 && held && held.groups.length > 0) {
+          // As for authors: every series write clears the server's list, including
+          // this lane's own, but the lane holds groups that already reflect those
+          // writes. Replacing them with "not scanned yet" would throw away real
+          // rows; keep them and say they are not backed by a fresh scan.
+          commitSeriesResult({
+            key: seriesKey,
+            load: { state: 'ready', value: { ...held, needsScan: false, stale: true } },
+          });
+          return;
+        }
+        commitSeriesResult({
+          key: seriesKey,
+          load: {
+            state: 'ready',
+            value: { groups: mapped, totalSeries: r.totalSeries, needsScan: r.needsRefresh, stale: false },
+          },
+        });
+      })
+      .catch((e: unknown) => {
+        if (ctl.signal.aborted || isAbortError(e)) return;
+        commitSeriesResult({
+          key: seriesKey,
+          load: { state: 'error', message: errorMessage(e, 'Failed to fetch series duplicates') },
+        });
+      });
+    return () => ctl.abort();
+  }, [seriesOn, seriesKey, commitSeriesResult]);
 
   // ---- author candidates ---------------------------------------------------------
   const [candOffset, setCandOffset] = useState(0);
@@ -570,7 +924,7 @@ export function useAuthorsLane(
   const [candResult, setCandResult] = useState<Keyed<CandidatesPage> | null>(null);
   const candLoad = current(candResult, candKey);
   useEffect(() => {
-    if (!active) return;
+    if (!authorsOn) return;
     const ctl = new AbortController();
     api
       .getDedupCandidates(
@@ -597,7 +951,7 @@ export function useAuthorsLane(
         });
       });
     return () => ctl.abort();
-  }, [active, candKey, candOffset]);
+  }, [authorsOn, candKey, candOffset]);
 
   // Names for the candidate rows: the groups already hold many; the rest are
   // looked up, a few at a time, and a failed lookup falls back to "Author #id"
@@ -626,7 +980,7 @@ export function useAuthorsLane(
   // Ids already looked up (or given up on) for this page of candidates.
   const askedRef = useRef<{ key: string; ids: Set<string> }>({ key: '', ids: new Set() });
   useEffect(() => {
-    if (!active || wantedKey === '') return;
+    if (!authorsOn || wantedKey === '') return;
     if (askedRef.current.key !== candKey) askedRef.current = { key: candKey, ids: new Set() };
     const asked = askedRef.current.ids;
     const queue = wantedKey.split(',').filter((id) => !asked.has(id));
@@ -660,7 +1014,7 @@ export function useAuthorsLane(
     });
     void Promise.all(lookups);
     return () => ctl.abort();
-  }, [active, wantedKey, candKey]);
+  }, [authorsOn, wantedKey, candKey]);
   const lookedNames = looked && looked.key === candKey && looked.load.state === 'ready' ? looked.load.value : null;
   const nameOf = useCallback(
     (authorId: string) => groupNames.get(authorId) ?? lookedNames?.[authorId] ?? `Author #${authorId}`,
@@ -676,7 +1030,7 @@ export function useAuthorsLane(
     else pendingRef.current.delete(key);
     setPendingKeys(new Set(pendingRef.current));
   }, []);
-  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const [bulk, setBulk] = useState<BulkProgress | null>(null);
   const [scanning, setScanning] = useState(false);
   // The ref is what the guard reads: two clicks inside one render must not
   // start two scans, and state would still say "not scanning" for the second.
@@ -689,7 +1043,7 @@ export function useAuthorsLane(
    * back, those groups stay locked and their operations are followed again
    * (see the effect below) instead of being offered for a second merge.
    */
-  const unconfirmedRef = useRef(new Map<string, { opId: string; name: string }>());
+  const unconfirmedRef = useRef(new Map<string, Unconfirmed>());
 
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   /**
@@ -737,32 +1091,52 @@ export function useAuthorsLane(
   const reload = useCallback(() => {
     setReloadToken((t) => t + 1);
   }, []);
+  const reloadSeries = useCallback(() => {
+    setSeriesReloadToken((t) => t + 1);
+  }, []);
   const candidatesReload = useCallback(() => setCandToken((t) => t + 1), []);
 
   /** Tells the caller a thrown error was the lane being left, not a failure. */
   const abandoned = useCallback((e: unknown) => isAbortError(e) || !mountedRef.current, []);
 
-  /** A write that got no answer is not a failure: say it may have run, and re-read. */
+  /**
+   * A write that got no answer is not a failure: say it may have run, and re-read
+   * (the sub-view's own list: `again` defaults to the Authors one).
+   */
   const timedOut = useCallback(
-    (what: string) => {
+    (what: string, again: () => void = reload, ms: number = WRITE_DEADLINE_MS) => {
       if (!mountedRef.current) return;
-      toast(`No answer after ${WRITE_DEADLINE_MS / 1000}s — the ${what} may have run; re-reading.`, 'warning');
-      reload();
+      toast(`No answer after ${ms / 1000}s — the ${what} may have run; re-reading.`, 'warning');
+      again();
     },
     [reload, toast]
   );
 
-  /** Queued merges that were never sent because the lane was left. */
+  /**
+   * Queued merges that were never sent because the lane was left. `names` says
+   * WHICH (a handful are listed, the rest counted), so the reviewer knows what to
+   * redo rather than only how many.
+   */
   const notSent = useCallback(
-    (n: number) => {
+    (n: number, names: string[] = []) => {
       if (n <= 0 || !mountedRef.current) return;
+      const shown = names.slice(0, 5).map((x) => `"${x}"`);
+      const which =
+        shown.length === 0 ? '' : `: ${shown.join(', ')}${names.length > shown.length ? `, and ${names.length - shown.length} more` : ''}`;
       toast(
-        `${n} queued merge${n === 1 ? ' was' : 's were'} not sent because you left the lane.`,
+        `${n} queued merge${n === 1 ? ' was' : 's were'} not sent because you left the lane${which}.`,
         'warning'
       );
     },
     [toast]
   );
+
+  /** The name a series group goes by in a message, from the list as it is now. */
+  const seriesLabel = useCallback((key: string) => {
+    const cur = seriesRef.current;
+    const g = cur && cur.load.state === 'ready' ? cur.load.value.groups.find((x) => x.key === key) : undefined;
+    return g?.name ?? key;
+  }, []);
 
   // ---- actions ------------------------------------------------------------------------
 
@@ -826,7 +1200,7 @@ export function useAuthorsLane(
       throwIfLeft(life);
       try {
         const op = await withDeadline(api.mergeAuthors(group.canonical.id, mergeIds));
-        unconfirmedRef.current.set(key, { opId: op.id, name });
+        unconfirmedRef.current.set(key, { entity: 'author', opId: op.id, name });
         const done = await waitFor(op, life);
         unconfirmedRef.current.delete(key);
         if (!done.ok) {
@@ -858,14 +1232,118 @@ export function useAuthorsLane(
     [abandoned, commitGroups, waitFor]
   );
 
+  /**
+   * One series group's merge, run inside the queue; the Series twin of mergeOne.
+   * The kept series and the ones folded into it are read NOW, from the list and
+   * choices as they are when this turn comes. The list is edited from what the
+   * server confirmed: the folded rows go when the merge completed, only the ones
+   * that really left when it partly failed, nothing when it failed without saying.
+   */
+  const mergeSeriesOne = useCallback(
+    async (key: string, life: AbortSignal): Promise<MergeOutcome> => {
+      const cur = seriesRef.current;
+      const group =
+        cur && cur.load.state === 'ready' ? cur.load.value.groups.find((g) => g.key === key) : undefined;
+      const outcome = (
+        result: MergeOutcome['result'],
+        message: string,
+        name: string,
+        reclassifyFailures = 0,
+        reread = false
+      ): MergeOutcome => ({ result, message, name, reclassifyFailures, reread });
+      if (!group) return outcome('skipped', 'the group is no longer in the list', key);
+      const name = group.name;
+      const plan = planSeriesMerge(group, seriesChoicesRef.current);
+      if (!plan) return outcome('skipped', 'fewer than two series are included in this merge', name);
+      const keepName = group.series.find((r) => r.id === plan.keepId)?.name ?? name;
+
+      // Reclassify the flagged authors first, as the old tab did. A failure here
+      // does not stop the merge (the series rows are independent of the author
+      // record); it is counted and reported with the result.
+      let reclassifyFailures = 0;
+      const reclassified: AuthorId[] = [];
+      for (const id of plan.narratorIds) {
+        throwIfLeft(life);
+        try {
+          await withDeadline(api.reclassifyAuthorAsNarrator(id));
+          reclassified.push(id);
+        } catch (e) {
+          if (abandoned(e)) throw e;
+          if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name, reclassifyFailures);
+          if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name, reclassifyFailures);
+          reclassifyFailures += 1;
+        }
+      }
+      if (reclassified.length > 0) {
+        // Done is done: the flag has nothing left to say about these authors.
+        commitSeriesChoices((c) => {
+          const flagged = c.narrators[key];
+          if (!flagged) return c;
+          const rest = new Set([...flagged].filter((id) => !reclassified.includes(asAuthorId(id))));
+          return { ...c, narrators: { ...c.narrators, [key]: rest } };
+        });
+      }
+      const suffix =
+        reclassifyFailures > 0
+          ? ` (${reclassifyFailures} narrator reclassification${reclassifyFailures === 1 ? '' : 's'} failed)`
+          : '';
+
+      throwIfLeft(life);
+      const folded = new Set<number>(plan.mergeIds);
+      try {
+        const op = await withDeadline(api.mergeSeriesGroup(plan.keepId, plan.mergeIds));
+        unconfirmedRef.current.set(key, { entity: 'series', opId: op.id, name, mergeIds: plan.mergeIds });
+        const done = await waitFor(op, life);
+        unconfirmedRef.current.delete(key);
+        if (!done.ok) {
+          const left = parseLeftSeriesIds(done.message);
+          if (left) {
+            // Some (or, after a later step failed, none) of the series were left:
+            // keep the group minus what really went.
+            const gone = new Set<number>(plan.mergeIds.filter((id) => !left.has(id)));
+            commitSeries((gs) => dropSeriesRows(gs, key, gone));
+            return outcome(
+              'failed',
+              left.size > 0
+                ? `${left.size} series ${left.size === 1 ? 'was' : 'were'} not merged (ids ${[...left].join(', ')})${gone.size > 0 ? `; the other ${gone.size} ${gone.size === 1 ? 'was' : 'were'}` : ''}${suffix}`
+                : `${done.message}${suffix}`,
+              name,
+              reclassifyFailures
+            );
+          }
+          // The failure does not say what it left (a cancelled run can stop after
+          // some deletes): keep the group, and have the caller re-read.
+          return outcome('failed', `${done.message}${suffix}`, name, reclassifyFailures, true);
+        }
+      } catch (e) {
+        // An abandon leaves the entry in `unconfirmedRef`: the merge was sent.
+        if (abandoned(e)) throw e;
+        unconfirmedRef.current.delete(key);
+        if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name, reclassifyFailures);
+        if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name, reclassifyFailures);
+        return outcome('failed', `${errorMessage(e, 'merge request failed')}${suffix}`, name, reclassifyFailures);
+      }
+      commitSeries((gs) => dropSeriesRows(gs, key, folded));
+      return outcome(
+        'merged',
+        `Merged ${folded.size} series into "${keepName}"${suffix}`,
+        name,
+        reclassifyFailures
+      );
+    },
+    [abandoned, commitSeries, commitSeriesChoices, waitFor]
+  );
+
+  /** One group's merge, queued. Which list it edits depends on the sub-view that asked. */
   const mergeGroup = useCallback(
-    (key: string) => {
+    (key: string, entity: 'author' | 'series' = 'author') => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
+      const again = entity === 'author' ? reload : reloadSeries;
       enqueue(
         async (life) => {
           try {
-            const out = await mergeOne(key, life);
+            const out = await (entity === 'author' ? mergeOne : mergeSeriesOne)(key, life);
             if (!mountedRef.current) return;
             switch (out.result) {
               case 'failed':
@@ -878,11 +1356,12 @@ export function useAuthorsLane(
                 toast(out.message, 'error');
                 break;
               case 'timeout':
-                timedOut('merge');
+                timedOut('merge', again);
                 break;
               default:
                 toast(out.message, out.reclassifyFailures > 0 ? 'warning' : 'success');
             }
+            if (out.reread) again();
           } catch (e) {
             // Only an abandon (the lane was left) reaches here; mergeOne reports
             // every other failure as a result.
@@ -894,18 +1373,27 @@ export function useAuthorsLane(
         },
         () => {
           markPending(key, false);
-          notSent(1);
+          notSent(1, entity === 'series' ? [seriesLabel(key)] : []);
         }
       );
     },
-    [abandoned, enqueue, markPending, mergeOne, notSent, timedOut, toast]
+    [abandoned, enqueue, markPending, mergeOne, mergeSeriesOne, notSent, reload, reloadSeries, seriesLabel, timedOut, toast]
   );
 
-  /** Merges `keys` one after another and reports the totals in one toast. */
+  /**
+   * Merges `keys` one after another and reports the totals in one toast. A run
+   * stops at the first expired login or unanswered request (the writes after it
+   * would be sent blind) and says how many were merged, how many were never
+   * sent, and which one may or may not have gone through.
+   */
   const runBulk = useCallback(
-    (keys: string[], noun: string) => {
+    (keys: string[], noun: string, entity: 'author' | 'series' = 'author') => {
       if (keys.length === 0) return;
-      setBulk({ done: 0, total: keys.length });
+      const mergeFor = entity === 'author' ? mergeOne : mergeSeriesOne;
+      const again = entity === 'author' ? reload : reloadSeries;
+      // What a message calls a key: a series group goes by its name, not `s11-12`.
+      const labelOf = (k: string) => (entity === 'series' ? seriesLabel(k) : k);
+      setBulk({ done: 0, total: keys.length, entity });
       for (const k of keys) markPending(k, true);
       const clear = () => {
         for (const k of keys) markPending(k, false);
@@ -918,22 +1406,24 @@ export function useAuthorsLane(
           const failures: string[] = [];
           let done = 0;
           let stop: { why: 'left' | 'session' | 'timeout'; at: number; name: string } | null = null;
+          let reread = false;
           for (let i = 0; i < keys.length; i++) {
             const key = keys[i];
             let out: MergeOutcome;
             try {
-              out = await mergeOne(key, life);
+              out = await mergeFor(key, life);
             } catch (e) {
               if (abandoned(e)) {
-                stop = { why: 'left', at: i, name: key };
+                stop = { why: 'left', at: i, name: labelOf(key) };
                 break;
               }
-              failures.push(`"${key}": ${errorMessage(e, 'merge request failed')}`);
+              failures.push(`"${labelOf(key)}": ${errorMessage(e, 'merge request failed')}`);
               done += 1;
               markPending(key, false);
               continue;
             }
             reclassifyFailures += out.reclassifyFailures;
+            if (out.reread) reread = true;
             if (out.result === 'session' || out.result === 'timeout') {
               stop = { why: out.result, at: i, name: out.name };
               break;
@@ -942,7 +1432,7 @@ export function useAuthorsLane(
               failures.push(`"${out.name}": ${out.message}`);
             } else merged += 1;
             done += 1;
-            if (mountedRef.current) setBulk({ done, total: keys.length });
+            if (mountedRef.current) setBulk({ done, total: keys.length, entity });
             markPending(key, false);
           }
           clear();
@@ -951,9 +1441,12 @@ export function useAuthorsLane(
             // Groups after the one that stopped the run were never sent. The one
             // that stopped it was, unless the lane was left before its request.
             const stoppedKey = keys[stop.at];
-            const unsent = keys.length - stop.at - 1 + (unconfirmedRef.current.has(stoppedKey) ? 0 : 1);
+            const sent = unconfirmedRef.current.has(stoppedKey);
+            const unsent = keys.length - stop.at - 1 + (sent ? 0 : 1);
             if (stop.why === 'left') {
-              notSent(unsent);
+              // The group being merged when the lane was left was sent already if
+              // it has an entry: it is followed, not counted as unsent.
+              notSent(unsent, entity === 'series' ? keys.slice(sent ? stop.at + 1 : stop.at).map(labelOf) : []);
             } else if (stop.why === 'session') {
               toast(
                 `${SESSION_EXPIRED_MESSAGE} ${merged} group(s) were merged before it expired; the other ${keys.length - stop.at - 1} were not sent, and "${stop.name}" may or may not have gone through.`,
@@ -964,10 +1457,11 @@ export function useAuthorsLane(
                 `No answer after ${WRITE_DEADLINE_MS / 1000}s — the merge of "${stop.name}" may have run. ${merged} group(s) were merged before it; the other ${keys.length - stop.at - 1} were not sent. Re-reading.`,
                 'warning'
               );
-              reload();
+              again();
             }
             return;
           }
+          if (reread) again();
           const attempted = merged + failures.length;
           const narrator =
             reclassifyFailures > 0
@@ -987,11 +1481,11 @@ export function useAuthorsLane(
         },
         () => {
           clear();
-          notSent(keys.length);
+          notSent(keys.length, entity === 'series' ? keys.map(labelOf) : []);
         }
       );
     },
-    [abandoned, enqueue, markPending, mergeOne, notSent, reload, toast]
+    [abandoned, enqueue, markPending, mergeOne, mergeSeriesOne, notSent, reload, reloadSeries, seriesLabel, toast]
   );
 
   const rename = useCallback(
@@ -1017,6 +1511,98 @@ export function useAuthorsLane(
       }
     },
     [abandoned, commitGroups, markPending, timedOut, toast]
+  );
+
+  // ---- series rename and its undo ------------------------------------------------
+  // Renames that can still be undone. The ref is what a toast's Undo button reads:
+  // it fires long after the render that created it.
+  const [seriesRenames, setSeriesRenames] = useState<Readonly<Record<number, SeriesRenameRecord>>>({});
+  const seriesRenamesRef = useRef<Readonly<Record<number, SeriesRenameRecord>>>({});
+  const commitSeriesRenames = useCallback(
+    (fn: (r: Readonly<Record<number, SeriesRenameRecord>>) => Readonly<Record<number, SeriesRenameRecord>>) => {
+      seriesRenamesRef.current = fn(seriesRenamesRef.current);
+      setSeriesRenames(seriesRenamesRef.current);
+    },
+    []
+  );
+  /** The group a series row sits in now, or null once it has left the list. */
+  const groupKeyOfSeries = useCallback((seriesId: number): string | null => {
+    const cur = seriesRef.current;
+    if (!cur || cur.load.state !== 'ready') return null;
+    return cur.load.value.groups.find((g) => g.series.some((r) => r.id === seriesId))?.key ?? null;
+  }, []);
+
+  /**
+   * Reverts a rename through the operation journal, not by renaming back: the
+   * server refuses when the series was renamed again since, and that refusal is
+   * shown rather than papered over.
+   */
+  const undoSeriesRenameOf = useCallback(
+    async (seriesId: number) => {
+      const record = seriesRenamesRef.current[seriesId];
+      if (!record) return;
+      const groupKey = groupKeyOfSeries(seriesId);
+      if (groupKey && pendingRef.current.has(groupKey)) return;
+      if (groupKey) markPending(groupKey, true);
+      try {
+        await withDeadline(api.undoSeriesRename(record.opId));
+        if (!mountedRef.current) return;
+        commitSeries((gs) => renameSeriesRow(gs, seriesId, record.oldName));
+        commitSeriesRenames((r) => withoutKey(r, seriesId));
+        toast(`Rename undone: "${record.newName}" is "${record.oldName}" again.`, 'success');
+      } catch (e) {
+        if (abandoned(e)) return;
+        if (e instanceof WriteTimeoutError) timedOut('undo', reloadSeries);
+        else {
+          // The revert said no (or the login expired). Offering the same undo
+          // again would only get the same answer, so the button goes.
+          if (!isAuthRedirectError(e)) commitSeriesRenames((r) => withoutKey(r, seriesId));
+          toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Could not undo the rename'), 'error');
+        }
+      } finally {
+        if (groupKey) markPending(groupKey, false);
+      }
+    },
+    [abandoned, commitSeries, commitSeriesRenames, groupKeyOfSeries, markPending, reloadSeries, timedOut, toast]
+  );
+
+  const renameSeriesTo = useCallback(
+    async (groupKey: string, seriesId: SeriesId, rawName: string) => {
+      const name = rawName.trim();
+      if (!name || pendingRef.current.has(groupKey)) return;
+      const cur = seriesRef.current;
+      const row =
+        cur && cur.load.state === 'ready'
+          ? cur.load.value.groups.find((g) => g.key === groupKey)?.series.find((r) => r.id === seriesId)
+          : undefined;
+      if (!row) return;
+      if (row.name === name) {
+        // Nothing to rename: close the editor instead of queueing a no-op that
+        // would also offer an undo of nothing.
+        setSeriesEditing((e) => (e && e.seriesId === seriesId ? null : e));
+        return;
+      }
+      const oldName = row.name;
+      markPending(groupKey, true);
+      try {
+        const op = await withDeadline(api.renameSeries(seriesId, name), SERIES_RENAME_DEADLINE_MS);
+        if (!mountedRef.current) return;
+        commitSeries((gs) => renameSeriesRow(gs, seriesId, name));
+        setSeriesEditing((e) => (e && e.seriesId === seriesId ? null : e));
+        commitSeriesRenames((r) => ({ ...r, [seriesId]: { opId: op.id, oldName, newName: name } }));
+        toast(`Renamed "${oldName}" to "${name}".`, 'success', {
+          label: 'Undo',
+          onClick: () => void undoSeriesRenameOf(seriesId),
+        });
+      } catch (e) {
+        if (abandoned(e)) return;
+        if (e instanceof WriteTimeoutError) timedOut('rename', reloadSeries, e.ms);
+        else toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Failed to rename series'), 'error');
+      } finally {
+        markPending(groupKey, false);
+      }
+    },
+    [abandoned, commitSeries, commitSeriesRenames, markPending, reloadSeries, timedOut, toast, undoSeriesRenameOf]
   );
 
   const split = useCallback(
@@ -1109,11 +1695,70 @@ export function useAuthorsLane(
     [abandoned, commitGroups, enqueue, markPending, timedOut, toast, waitFor]
   );
 
+  /** The Series sub-view's actions. None of them can reach an author endpoint: they never leave this function. */
+  const dispatchSeries = useCallback(
+    (action: SeriesEntityAction) => {
+      switch (action.type) {
+        case 'mergeSeriesGroup':
+          mergeGroup(action.groupKey, 'series');
+          return;
+        case 'mergeSelectedSeries':
+          runBulk(action.groupKeys, 'selected', 'series');
+          return;
+        case 'mergeAllSeriesGroups': {
+          const cur = seriesRef.current;
+          const now =
+            cur && cur.load.state === 'ready'
+              ? cur.load.value.groups.filter((g) => inMergeAll(g, seriesChoicesRef.current))
+              : [];
+          // The SET, not just its size: one group leaving and another becoming
+          // mergeable keeps the count and changes what would run.
+          const expected = new Set(action.expectedKeys);
+          if (now.length !== expected.size || now.some((g) => !expected.has(g.key))) {
+            toast(
+              `The list changed while you were confirming (${expected.size} group(s) became ${now.length}). Nothing was merged; check the count and try again.`,
+              'warning'
+            );
+            return;
+          }
+          runBulk(now.map((g) => g.key), 'same-name', 'series');
+          return;
+        }
+        case 'renameSeries':
+          void renameSeriesTo(action.groupKey, action.seriesId, action.name);
+          return;
+        case 'undoRenameSeries':
+          void undoSeriesRenameOf(action.seriesId);
+          return;
+        case 'toggleSeriesNarrator':
+          commitSeriesChoices((c) => {
+            const set = new Set(c.narrators[action.groupKey] ?? EMPTY_NUMBERS);
+            if (!set.delete(action.authorId)) set.add(action.authorId);
+            return { ...c, narrators: { ...c.narrators, [action.groupKey]: set } };
+          });
+          return;
+        case 'toggleSeriesIncluded':
+          commitSeriesChoices((c) => {
+            // A toggle, as for authors: leaving a series out is not a one-way door.
+            const set = new Set(c.excluded[action.groupKey] ?? EMPTY_NUMBERS);
+            if (!set.delete(action.seriesId)) set.add(action.seriesId);
+            return { ...c, excluded: { ...c.excluded, [action.groupKey]: set } };
+          });
+          return;
+      }
+    },
+    [commitSeriesChoices, mergeGroup, renameSeriesTo, runBulk, toast, undoSeriesRenameOf]
+  );
+
   const dispatch = useCallback(
     (action: AuthorsAction) => {
       // `entity` is checked first: a series action must never reach an author
-      // endpoint, whatever shape its ids have.
-      if (action.entity !== 'author') return;
+      // endpoint, whatever shape its ids have, and an author action never a
+      // series one. Each branch hands over to its own switch.
+      if (action.entity === 'series') {
+        dispatchSeries(action);
+        return;
+      }
       switch (action.type) {
         case 'mergeGroup':
           mergeGroup(String(action.canonicalId));
@@ -1174,7 +1819,7 @@ export function useAuthorsLane(
         }
       }
     },
-    [commitChoices, mergeGroup, rename, resolveProduction, runBulk, split, toast]
+    [commitChoices, dispatchSeries, mergeGroup, rename, resolveProduction, runBulk, split, toast]
   );
 
   // Merges that were sent before the lane was left: follow them again. The row
@@ -1185,7 +1830,8 @@ export function useAuthorsLane(
     const life = lifeRef.current.signal;
     // The Map itself is never replaced, only mutated, so this is the live one.
     const unconfirmed = unconfirmedRef.current;
-    for (const [key, { opId, name }] of unconfirmed) {
+    for (const [key, entry] of unconfirmed) {
+      const { opId, name } = entry;
       markPending(key, true);
       api
         .pollOperationV2(opId, undefined, AUTHORS_POLL_MS, {
@@ -1194,6 +1840,24 @@ export function useAuthorsLane(
         })
         .then((final) => {
           unconfirmed.delete(key);
+          if (entry.entity === 'series') {
+            // The Series twin: a completed merge folded every merge id away, a
+            // failed one folded away all but the ids it names. A failure that
+            // names none (a cancelled run) leaves the list as it was and
+            // re-reads it.
+            const folded = new Set<number>(entry.mergeIds);
+            if (final.status === 'completed') {
+              commitSeries((gs) => dropSeriesRows(gs, key, folded));
+              toast(`Merged series into "${name}" (it finished after you left).`, 'success');
+              return;
+            }
+            const message = final.error_message || final.status;
+            const left = parseLeftSeriesIds(message);
+            if (left) commitSeries((gs) => dropSeriesRows(gs, key, new Set(entry.mergeIds.filter((id) => !left.has(id)))));
+            else reloadSeries();
+            toast(`"${name}": ${message}`, 'error');
+            return;
+          }
           if (final.status === 'completed') {
             commitGroups((gs) => gs.filter((g) => g.key !== key));
             toast(`Merged author(s) into "${name}" (it finished after you left).`, 'success');
@@ -1213,19 +1877,19 @@ export function useAuthorsLane(
       // whose follow-up was cut short (they are followed again next time).
       for (const key of unconfirmed.keys()) markPending(key, false);
     };
-  }, [active, commitGroups, markPending, toast]);
+  }, [active, commitGroups, commitSeries, markPending, reloadSeries, toast]);
 
   // ---- validate ------------------------------------------------------------------------
   const [validation, setValidation] = useState<Readonly<Record<string, ValidationState>>>({});
   const validateCtls = useRef(new Map<string, AbortController>());
   useEffect(() => {
-    if (!active) return;
+    if (!authorsOn) return;
     const ctls = validateCtls.current;
     return () => {
       for (const c of ctls.values()) c.abort();
       ctls.clear();
     };
-  }, [active]);
+  }, [authorsOn]);
   const validate = useCallback(
     (key: string) => {
       const cur = groupsRef.current;
@@ -1260,37 +1924,119 @@ export function useAuthorsLane(
     []
   );
 
-  // ---- scan -----------------------------------------------------------------------------
-  const refresh = useCallback(() => {
-    if (scanningRef.current) return;
-    scanningRef.current = true;
-    setScanning(true);
-    const settle = () => {
-      scanningRef.current = false;
-      if (mountedRef.current) setScanning(false);
+  // ---- validate (series) ------------------------------------------------------------------
+  const [seriesValidation, setSeriesValidation] = useState<Readonly<Record<string, ValidationState>>>({});
+  const seriesValidateCtls = useRef(new Map<string, AbortController>());
+  useEffect(() => {
+    if (!seriesOn) return;
+    const ctls = seriesValidateCtls.current;
+    return () => {
+      for (const c of ctls.values()) c.abort();
+      ctls.clear();
     };
-    enqueue(async (life) => {
-      try {
-        const op = await withDeadline(api.refreshAuthorDuplicates());
-        if (mountedRef.current) toast('Author scan started — watch the bell for progress.', 'info');
-        const done = await waitFor(op, life);
-        if (!mountedRef.current) return;
-        if (done.ok) {
-          toast('Author scan finished.', 'success');
+  }, [seriesOn]);
+  const validateSeries = useCallback((key: string) => {
+    const cur = seriesRef.current;
+    const group = cur && cur.load.state === 'ready' ? cur.load.value.groups.find((g) => g.key === key) : undefined;
+    if (!group) return;
+    // The group's name, which does not follow a rename of one row, so the
+    // evidence on screen always answers the name the card heads with.
+    const forName = group.name;
+    seriesValidateCtls.current.get(key)?.abort();
+    const ctl = new AbortController();
+    seriesValidateCtls.current.set(key, ctl);
+    setSeriesValidation((v) => ({ ...v, [key]: { forName, state: 'loading' } }));
+    validateSeriesName(forName, ctl.signal)
+      .then((r) => {
+        if (ctl.signal.aborted) return;
+        setSeriesValidation((v) => ({ ...v, [key]: { forName, state: 'ready', results: r.results } }));
+      })
+      .catch((e: unknown) => {
+        if (ctl.signal.aborted || isAbortError(e)) return;
+        setSeriesValidation((v) => ({
+          ...v,
+          [key]: {
+            forName,
+            state: 'error',
+            message:
+              e instanceof ApiTimeoutError ? 'The providers did not answer in time.' : errorMessage(e, 'Validation failed'),
+          },
+        }));
+      })
+      .finally(() => {
+        if (seriesValidateCtls.current.get(key) === ctl) seriesValidateCtls.current.delete(key);
+      });
+  }, []);
+
+  // ---- scan -----------------------------------------------------------------------------
+  /**
+   * Starts a scan op through the queue and waits for it. One scan at a time across
+   * both sub-views (the ref is what the guard reads), and the cards are frozen for
+   * its duration. `finished` runs when the scan completed.
+   */
+  const startScan = useCallback(
+    (noun: 'Author' | 'Series', start: () => Promise<Operation>, finished: () => void, again: () => void) => {
+      if (scanningRef.current) return;
+      scanningRef.current = true;
+      setScanning(true);
+      const settle = () => {
+        scanningRef.current = false;
+        if (mountedRef.current) setScanning(false);
+      };
+      enqueue(async (life) => {
+        try {
+          const op = await withDeadline(start());
+          if (mountedRef.current) toast(`${noun} scan started — watch the bell for progress.`, 'info');
+          const done = await waitFor(op, life);
+          if (!mountedRef.current) return;
+          if (done.ok) {
+            toast(`${noun} scan finished.`, 'success');
+            finished();
+          } else toast(`${noun} scan did not finish: ${done.message}`, 'error');
+        } catch (e) {
+          if (abandoned(e)) return;
+          if (e instanceof WriteTimeoutError) timedOut('scan request', again);
+          else
+            toast(
+              isAuthRedirectError(e)
+                ? SESSION_EXPIRED_MESSAGE
+                : errorMessage(e, `Failed to start the ${noun.toLowerCase()} scan`),
+              'error'
+            );
+        } finally {
+          settle();
+        }
+      }, settle);
+    },
+    [abandoned, enqueue, timedOut, toast, waitFor]
+  );
+  const refresh = useCallback(
+    () =>
+      startScan(
+        'Author',
+        () => api.refreshAuthorDuplicates(),
+        () => {
           clearSelection();
           reload();
           candidatesReload();
-        } else toast(`Author scan did not finish: ${done.message}`, 'error');
-      } catch (e) {
-        if (abandoned(e)) return;
-        if (e instanceof WriteTimeoutError) timedOut('scan request');
-        else
-          toast(isAuthRedirectError(e) ? SESSION_EXPIRED_MESSAGE : errorMessage(e, 'Failed to start the author scan'), 'error');
-      } finally {
-        settle();
-      }
-    }, settle);
-  }, [abandoned, enqueue, timedOut, toast, waitFor, reload, candidatesReload, clearSelection]);
+        },
+        reload
+      ),
+    [startScan, clearSelection, reload, candidatesReload]
+  );
+  const refreshSeries = useCallback(
+    () =>
+      startScan(
+        'Series',
+        () => api.refreshSeriesDuplicates(),
+        () => {
+          clearSeriesSelection();
+          reloadSeries();
+        },
+        reloadSeries
+      ),
+    [startScan, clearSeriesSelection, reloadSeries]
+  );
 
   // ---- books popover / editing / focus ---------------------------------------------------
   const openBooks = useCallback((key: string, anchor: HTMLElement | null) => {
@@ -1310,11 +2056,77 @@ export function useAuthorsLane(
     [groups, pageSize]
   );
 
+  // ---- series: editing and keyboard -------------------------------------------------------
+  const startSeriesEdit = useCallback(
+    (groupKey: string, seriesId: SeriesId, initial: string) => setSeriesEditing({ groupKey, seriesId, initial }),
+    []
+  );
+  const cancelSeriesEdit = useCallback(() => setSeriesEditing(null), []);
+  // Same contract as the Authors sub-view's, minus the books popover (a series
+  // card has none): bound only while the Series sub-view is on screen, Escape
+  // first so it can always close what is open, then the typing guard, and j/k/m
+  // do nothing while the help or a name editor is in front.
+  //
+  // CAPTURE PHASE, and `?` stops propagating once this handler has taken it. The
+  // app has its own `?` handler (App.tsx -> useKeyboardShortcuts: a window
+  // listener that opens the app-wide shortcut dialog). It is registered first, so
+  // in the bubble phase it runs first: it opens its dialog, React renders it
+  // before the next listener is called, focus moves into it, and this handler
+  // then sees `isKeyboardShortcutSuppressed()` and never opens the lane's help.
+  // Measured on /review?lane=authors with Playwright: `?` opened the app dialog
+  // and `authors-shortcut-help` never appeared. Taking the key in the capture
+  // phase and stopping it is what lets the lane's own help open on this sub-view;
+  // every other key propagates as before.
+  useEffect(() => {
+    if (!seriesOn) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === '?' && seriesHelpOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        setSeriesHelpOpen(false);
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (seriesHelpOpen) setSeriesHelpOpen(false);
+        else if (seriesEditing) setSeriesEditing(null);
+        return;
+      }
+      if (isKeyboardShortcutSuppressed()) return;
+      if (event.key === '?') {
+        event.preventDefault();
+        event.stopPropagation();
+        setSeriesHelpOpen(!seriesHelpOpen);
+        return;
+      }
+      if (seriesHelpOpen || seriesEditing) return;
+      if (seriesPageGroups.length === 0) return;
+      const at = Math.max(0, seriesPageGroups.findIndex((g) => g.key === seriesFocusedKey));
+      const focused = seriesPageGroups[at];
+      switch (event.key) {
+        case 'j':
+          event.preventDefault();
+          setSeriesFocusedKey(seriesPageGroups[Math.min(at + 1, seriesPageGroups.length - 1)].key);
+          return;
+        case 'k':
+          event.preventDefault();
+          setSeriesFocusedKey(seriesPageGroups[Math.max(at - 1, 0)].key);
+          return;
+        case 'm':
+          if (!isSeriesMergeable(focused, seriesChoicesRef.current) || pendingRef.current.has(focused.key)) return;
+          event.preventDefault();
+          dispatch({ lane: 'authors', entity: 'series', type: 'mergeSeriesGroup', groupKey: focused.key });
+          return;
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [seriesOn, seriesHelpOpen, seriesEditing, seriesPageGroups, seriesFocusedKey, dispatch]);
+
   // ---- keyboard ----------------------------------------------------------------------------
   // In the hook, with the lane's state, and bound only while the lane is active:
   // a window listener that outlives the lane would move a focus ring nobody sees.
   useEffect(() => {
-    if (!active) return;
+    if (!authorsOn) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === '?' && helpOpen) {
         event.preventDefault();
@@ -1371,7 +2183,7 @@ export function useAuthorsLane(
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, booksFor, helpOpen, editing, pageGroups, focusedKey, dispatch]);
+  }, [authorsOn, booksFor, helpOpen, editing, pageGroups, focusedKey, dispatch]);
 
   // ---- result ------------------------------------------------------------------------------
   const status: ListStatus =
@@ -1385,7 +2197,58 @@ export function useAuthorsLane(
             ? 'needs-scan'
             : 'empty';
 
+  const seriesStatus: ListStatus =
+    seriesLoad.state === 'loading'
+      ? 'loading'
+      : seriesLoad.state === 'error'
+        ? 'error'
+        : seriesGroups.length > 0
+          ? 'populated'
+          : seriesNeedsScan
+            ? 'needs-scan'
+            : 'empty';
+
+  const seriesLane: SeriesLane = {
+    status: seriesStatus,
+    error: seriesLoad.state === 'error' ? seriesLoad.message : null,
+    groups: seriesGroups,
+    totalSeries: seriesTotal,
+    kindCounts: seriesKindCounts,
+    filter: seriesFilter,
+    setFilter: setSeriesFilter,
+    filtered: seriesFiltered,
+    pageGroups: seriesPageGroups,
+    page: seriesPage,
+    setPage: setSeriesPage,
+    pageSize: seriesPageSize,
+    setPageSize: setSeriesPageSize,
+    mergeable: seriesMergeable,
+    mergeAll: seriesMergeAll,
+    selectableTotal: allSeriesSelectableKeys.length,
+    stale: seriesStale,
+    selection: seriesSelection,
+    selectedGroups: selectedSeriesGroups,
+    selectedCount: selectedSeriesGroups.length,
+    choices: seriesChoices,
+    validation: seriesValidation,
+    renames: seriesRenames,
+    editing: seriesEditing,
+    startEdit: startSeriesEdit,
+    cancelEdit: cancelSeriesEdit,
+    focusedKey: seriesPageGroups.some((g) => g.key === seriesFocusedKey)
+      ? seriesFocusedKey
+      : (seriesPageGroups[0]?.key ?? null),
+    helpOpen: seriesHelpOpen,
+    setHelpOpen: setSeriesHelpOpen,
+    validate: validateSeries,
+    refresh: refreshSeries,
+    reload: reloadSeries,
+  };
+
   return {
+    view,
+    setView,
+    series: seriesLane,
     status,
     error: groupsLoad.state === 'error' ? groupsLoad.message : null,
     groups,
@@ -1444,6 +2307,12 @@ export function useAuthorsLane(
   };
 }
 
+function withoutKey<T>(record: Readonly<Record<number, T>>, key: number): Readonly<Record<number, T>> {
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
 /** Stops a queued write that was caught by the lane being left. */
 function throwIfLeft(life: AbortSignal): void {
   if (life.aborted) throw new DOMException('The lane was left', 'AbortError');
@@ -1460,6 +2329,14 @@ function parseAuthorId(raw: string | null): number | null {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
+
+/** The Series sub-view's, rendered by its help overlay. Kept beside the handler that implements them. */
+export const SERIES_SHORTCUTS = [
+  { keys: 'j / k', action: 'Move to the next / previous group' },
+  { keys: 'm', action: 'Merge the focused group' },
+  { keys: 'Esc', action: 'Close this help or the name editor' },
+  { keys: '?', action: 'Toggle this shortcut help' },
+];
 
 /** Rendered by the shortcut help overlay. Kept beside the handler that implements them. */
 export const AUTHOR_SHORTCUTS = [

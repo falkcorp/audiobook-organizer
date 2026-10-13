@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/AuthorGroupSpine.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8f6b04-d1a7-4c93-85e0-9b4c7a1f3d62
 // last-edited: 2026-10-13
 //
@@ -76,7 +76,7 @@ interface RowProps {
   handlers: Handlers;
 }
 
-function RoleChip({ narrator, onClick, disabled }: { narrator: boolean; onClick: () => void; disabled: boolean }) {
+export function RoleChip({ narrator, onClick, disabled }: { narrator: boolean; onClick: () => void; disabled: boolean }) {
   return (
     <Chip
       label={narrator ? 'Narrator' : 'Author'}
@@ -90,16 +90,19 @@ function RoleChip({ narrator, onClick, disabled }: { narrator: boolean; onClick:
   );
 }
 
-function NameEditor({
+export function NameEditor({
   initial,
   disabled,
   onSave,
   onCancel,
+  label = 'Canonical name',
 }: {
   initial: string;
   disabled: boolean;
   onSave: (name: string) => void;
   onCancel: () => void;
+  /** The input's accessible name. */
+  label?: string;
 }) {
   // The draft is local: typing must not re-render the workspace per keystroke.
   const [draft, setDraft] = useState(initial);
@@ -116,7 +119,7 @@ function NameEditor({
         onKeyDown={keyDown}
         autoFocus
         sx={{ minWidth: 300 }}
-        slotProps={{ htmlInput: { 'aria-label': 'Canonical name' } }}
+        slotProps={{ htmlInput: { 'aria-label': label } }}
       />
       <Tooltip title="Save name">
         <span>

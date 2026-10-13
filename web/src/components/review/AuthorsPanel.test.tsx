@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3b70c58-1d92-4a6f-8c45-7f20b9d6a184
 // last-edited: 2026-10-13
 
@@ -30,16 +30,16 @@ vi.mock('./lanes/authorsReads');
 
 const toast = vi.fn();
 
-function Harness({ active = true }: { active?: boolean }) {
-  const authors = useAuthorsLane(toast, active, { authorId: null });
+function Harness({ active = true, view = null }: { active?: boolean; view?: string | null }) {
+  const authors = useAuthorsLane(toast, active, { authorId: null, view });
   return <AuthorsPanel authors={authors} />;
 }
 
-function renderLane(active = true) {
+function renderLane(active = true, view: string | null = null) {
   return render(
     <MemoryRouter initialEntries={['/review']}>
       <Routes>
-        <Route path="/review" element={<Harness active={active} />} />
+        <Route path="/review" element={<Harness active={active} view={view} />} />
         <Route path="/library/:id" element={<div data-testid="book-detail">detail</div>} />
       </Routes>
     </MemoryRouter>
@@ -87,6 +87,8 @@ beforeEach(() => {
   vi.mocked(api.pollOperationV2).mockResolvedValue(done());
   vi.mocked(api.reclassifyAuthorAsNarrator).mockResolvedValue({ narrator_id: 1, books_updated: 1 });
   vi.mocked(reads.fetchAuthorName).mockResolvedValue('');
+  vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep: number) => op(`s${keep}`));
+  vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: false });
 });
 
 describe('books popover', () => {
@@ -723,5 +725,399 @@ describe('review fixes (PR #4004)', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('composite and production-company groups are not included');
     expect(dialog).toHaveTextContent('Keep this lane open');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Series sub-view
+// ---------------------------------------------------------------------------
+
+function srow(id: number, name: string, author?: number): api.SeriesWithBooks {
+  return {
+    id,
+    name,
+    created_at: '',
+    ...(author !== undefined ? { author_id: author, author_name: `Author ${author}` } : {}),
+  };
+}
+function swire(name: string, rows: api.SeriesWithBooks[], match_type = 'exact'): api.SeriesDupGroup {
+  return { name, count: rows.length, series: rows, match_type };
+}
+function serveSeries(groups: api.SeriesDupGroup[], opts: { needsRefresh?: boolean; total?: number } = {}) {
+  vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({
+    groups,
+    totalSeries: opts.total ?? groups.length * 2,
+    needsRefresh: opts.needsRefresh ?? false,
+  });
+}
+/** Series N: ids N*10+1 and N*10+2, the second credited to author N. */
+function series(n: number, match_type = 'exact'): api.SeriesDupGroup {
+  return swire(`Series ${n}`, [srow(n * 10 + 1, `Series ${n}`), srow(n * 10 + 2, `series ${n}`, n)], match_type);
+}
+const seriesCard = (n: number) => screen.findByTestId(`series-group-s${n * 10 + 1}-${n * 10 + 2}`);
+
+describe('the sub-view control', () => {
+  it('lists Authors then Series, opens on Authors, and Series is chosen from the control, not the URL', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author A', ['Author A.'])]);
+    serveSeries([series(1)]);
+    renderLane();
+    await screen.findByRole('heading', { name: 'Author A' });
+    const group = screen.getByRole('group', { name: 'Authors & series sub-view' });
+    expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Authors', 'Series']);
+    expect(screen.getByTestId('authors-subview-authors')).toHaveAttribute('aria-pressed', 'true');
+    expect(reads.fetchSeriesGroups).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('authors-subview-series'));
+    expect(await screen.findByTestId('series-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('authors-subview-series')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('authors-panel')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    expect(await screen.findByTestId('authors-panel')).toBeInTheDocument();
+    // One read per entry into each sub-view, none for the one not showing.
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2);
+  });
+
+  it('?view=series opens on Series with Series selected; Authors still works from the control', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author A', ['Author A.'])]);
+    serveSeries([series(1)]);
+    renderLane(true, 'series');
+    expect(await seriesCard(1)).toBeInTheDocument();
+    expect(screen.getByTestId('authors-subview-series')).toHaveAttribute('aria-pressed', 'true');
+    expect(reads.fetchAuthorGroups).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    expect(await screen.findByRole('heading', { name: 'Author A' })).toBeInTheDocument();
+  });
+});
+
+describe('the series four states', () => {
+  it('loading', async () => {
+    vi.mocked(reads.fetchSeriesGroups).mockReturnValue(new Promise(() => {}));
+    renderLane(true, 'series');
+    expect(await screen.findByTestId('series-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('series-empty')).not.toBeInTheDocument();
+  });
+
+  it('error names the failure, offers Retry, and is not the empty state', async () => {
+    const user = userEvent.setup();
+    vi.mocked(reads.fetchSeriesGroups).mockRejectedValueOnce(new Error('boom: 500'));
+    serveSeries([series(1)]);
+    renderLane(true, 'series');
+    const alert = await screen.findByTestId('series-error');
+    expect(alert).toHaveTextContent('Could not load duplicate series: boom: 500');
+    expect(screen.queryByTestId('series-empty')).not.toBeInTheDocument();
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(await seriesCard(1)).toBeInTheDocument();
+    expect(screen.queryByTestId('series-error')).not.toBeInTheDocument();
+  });
+
+  it('empty says so, with the library total as a link to the Series page', async () => {
+    serveSeries([], { total: 41 });
+    renderLane(true, 'series');
+    const empty = await screen.findByTestId('series-empty');
+    expect(empty).toHaveTextContent('No duplicate series found');
+    expect(within(empty).getByTestId('series-total-link')).toHaveTextContent('41 series in the library');
+    expect(within(empty).getByTestId('series-total-link')).toHaveAttribute('href', '/series');
+  });
+
+  it('a cold cache is "not scanned yet" with a way to scan, not "no duplicates"', async () => {
+    const user = userEvent.setup();
+    serveSeries([], { needsRefresh: true });
+    vi.mocked(api.refreshSeriesDuplicates).mockResolvedValue(op('scan1'));
+    renderLane(true, 'series');
+    const cold = await screen.findByTestId('series-needs-scan');
+    expect(screen.queryByTestId('series-empty')).not.toBeInTheDocument();
+    await user.click(within(cold).getByRole('button', { name: 'Scan for duplicate series' }));
+    await waitFor(() => expect(api.refreshSeriesDuplicates).toHaveBeenCalledTimes(1));
+  });
+
+  it('populated shows one card per group', async () => {
+    serveSeries([series(1), series(2)]);
+    renderLane(true, 'series');
+    expect(await seriesCard(1)).toBeInTheDocument();
+    expect(await seriesCard(2)).toBeInTheDocument();
+  });
+
+  it('says the results are stale, and offers a rescan, once the server cleared its list after a merge', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1), series(2)]);
+    vi.mocked(api.refreshSeriesDuplicates).mockResolvedValue(op('scan1'));
+    renderLane(true, 'series');
+    const card1 = await seriesCard(1);
+    await user.click(within(card1).getByRole('button', { name: /^Merge into/ }));
+    await waitFor(() => expect(screen.queryByTestId('series-group-s11-12')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('series-stale')).not.toBeInTheDocument();
+
+    // The reviewer retries; the server's list is gone, the lane's is not.
+    vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: true });
+    vi.mocked(reads.fetchAuthorGroups).mockResolvedValue({ groups: [], needsRefresh: false });
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    await user.click(await screen.findByTestId('authors-subview-series'));
+    const banner = await screen.findByTestId('series-stale');
+    expect(banner).toHaveTextContent('stale since your last change');
+    expect(screen.getByTestId('series-group-s21-22')).toBeInTheDocument();
+    expect(screen.queryByTestId('series-needs-scan')).not.toBeInTheDocument();
+    await user.click(within(banner).getByRole('button', { name: 'Rescan' }));
+    await waitFor(() => expect(api.refreshSeriesDuplicates).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('a series card', () => {
+  it('shows an editable name per series, a narrator flag per author, Validate and Merge, and no Prune Series', async () => {
+    serveSeries([series(1)]);
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    // The author-linked series is kept; the other is merged into it.
+    expect(within(card).getByTestId('series-row-12')).toHaveTextContent('Kept');
+    expect(within(card).getByTestId('series-row-11')).toHaveTextContent('Merged in');
+    expect(within(card).getByRole('button', { name: 'Edit series name Series 1' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Edit series name series 1' })).toBeInTheDocument();
+    // Only the series with an author gets the flag.
+    expect(within(card).getByTestId('series-row-12')).toHaveTextContent('Author');
+    expect(within(card).getAllByText('Author', { exact: true })).toHaveLength(1);
+    expect(within(card).getByRole('button', { name: 'Validate' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Merge into "series 1"' })).toBeEnabled();
+    expect(within(card).getByText('2 series')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /prune/i })).not.toBeInTheDocument();
+  });
+
+  it('the pencil opens an editor with the name; Enter renames through the undoable endpoint and an Undo is offered', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1)]);
+    vi.mocked(api.renameSeries).mockResolvedValue({ id: 'rename-op-1' } as api.Operation);
+    vi.mocked(api.undoSeriesRename).mockResolvedValue({ restored: 1 } as api.RevertOperationResult);
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    await user.click(within(card).getByRole('button', { name: 'Edit series name Series 1' }));
+    const input = within(card).getByRole('textbox', { name: 'Series name' });
+    expect(input).toHaveValue('Series 1');
+    await user.clear(input);
+    await user.type(input, 'Series One{Enter}');
+    await waitFor(() => expect(api.renameSeries).toHaveBeenCalledWith(11, 'Series One'));
+    expect(api.updateSeriesName).not.toHaveBeenCalled();
+    expect(await within(card).findByText(/"Series One"/)).toBeInTheDocument();
+    expect(toast).toHaveBeenCalledWith('Renamed "Series 1" to "Series One".', 'success', expect.objectContaining({ label: 'Undo' }));
+
+    await user.click(within(card).getByRole('button', { name: 'Undo rename of Series One' }));
+    await waitFor(() => expect(api.undoSeriesRename).toHaveBeenCalledWith('rename-op-1'));
+    expect(await within(card).findByText(/"Series 1"/)).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Undo rename/ })).not.toBeInTheDocument();
+  });
+
+  it('the suggested chip renames the kept series from the suggestion', async () => {
+    const user = userEvent.setup();
+    serveSeries([{ ...series(1), suggested_name: 'Series One' }]);
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    await user.click(within(card).getByText('Suggested: "Series One"'));
+    expect(within(card).getByRole('textbox', { name: 'Series name' })).toHaveValue('Series One');
+  });
+
+  it('a narrator flag is sent with the merge: the author is reclassified, then the series merge goes', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1)]);
+    const calls: string[] = [];
+    vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id) => {
+      calls.push(`reclassify:${id}`);
+      return { narrator_id: 1, books_updated: 1 };
+    });
+    vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep, ids) => {
+      calls.push(`merge:${keep}:${ids.join(',')}`);
+      return op('s12');
+    });
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    await user.click(within(card).getByText('Author', { exact: true }));
+    expect(within(card).getByText('Narrator')).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: /^Merge into/ }));
+    await waitFor(() => expect(screen.queryByTestId('series-group-s11-12')).not.toBeInTheDocument());
+    expect(calls).toEqual(['reclassify:1', 'merge:12:11']);
+  });
+
+  it('leaving a series out keeps it out of the merge; with one left the Merge button says why it is off', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1)]);
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    await user.click(within(card).getByRole('checkbox', { name: 'Include series Series 1 (ID 11) in the merge' }));
+    expect(within(card).getByTestId('series-row-11')).toHaveTextContent('Left out');
+    expect(within(card).getByRole('button', { name: /^Merge into/ })).toBeDisabled();
+    expect(within(card).getByRole('status')).toHaveTextContent('Include at least two series');
+    expect(screen.getByRole('checkbox', { name: 'Select group Series 1' })).toBeDisabled();
+    // Putting it back restores the merge.
+    await user.click(within(card).getByRole('checkbox', { name: 'Include series Series 1 (ID 11) in the merge' }));
+    expect(within(card).getByRole('button', { name: /^Merge into/ })).toBeEnabled();
+  });
+
+  it('Validate shows what the providers returned, on the group name', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1)]);
+    vi.mocked(reads.validateSeriesName).mockResolvedValue({
+      results: [{ source: 'openlibrary', title: 'Book One', author: 'Author A', series: 'Series 1', series_position: '1' }],
+      query: 'Series 1',
+    });
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    await user.click(within(card).getByRole('button', { name: 'Validate' }));
+    const results = await within(card).findByTestId('series-validation-results');
+    expect(results).toHaveTextContent('Book One');
+    expect(results).toHaveTextContent('Series: Series 1 #1');
+    expect(reads.validateSeriesName).toHaveBeenCalledWith('Series 1', expect.any(AbortSignal));
+  });
+
+  it('a failed Validate is an error line, not "No external matches"', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1)]);
+    vi.mocked(reads.validateSeriesName).mockRejectedValue(new Error('providers down'));
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    await user.click(within(card).getByRole('button', { name: 'Validate' }));
+    expect(await within(card).findByTestId('series-validation-error')).toHaveTextContent('Validation failed: providers down');
+    expect(within(card).queryByText(/No external matches/)).not.toBeInTheDocument();
+  });
+
+  it('marks a book listed under two of the series', async () => {
+    const shared = { id: 'b1', title: 'Book One' };
+    serveSeries([
+      swire('Series 1', [
+        { ...srow(11, 'Series 1'), books: [shared, { id: 'b2', title: 'Book Two' }] },
+        { ...srow(12, 'series 1'), books: [shared] },
+      ]),
+    ]);
+    renderLane(true, 'series');
+    const card = await seriesCard(1);
+    const titles = within(card).getAllByText('Book One');
+    expect(titles).toHaveLength(2);
+    expect(titles[0].closest('[title]')).toHaveAttribute('title', expect.stringContaining('more than one'));
+    expect(within(card).getByText('Book Two').closest('[title]')).toBeNull();
+  });
+});
+
+describe('the series bulk verbs', () => {
+  it('shows Merge All (N) with N the same-name groups, and the Same name chip opens exactly those', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1), series(2), series(3, 'subseries')]);
+    renderLane(true, 'series');
+    await seriesCard(1);
+    expect(screen.getByRole('button', { name: 'Merge All (2)' })).toBeEnabled();
+    expect(screen.getByTestId('series-kind-all')).toHaveTextContent('All groups (3)');
+    expect(screen.getByTestId('series-kind-exact')).toHaveTextContent('Same name (2)');
+    expect(screen.getByTestId('series-kind-subseries')).toHaveTextContent('Sub-series (1)');
+    await user.click(screen.getByTestId('series-kind-exact'));
+    expect(screen.getAllByTestId(/^series-group-s\d/)).toHaveLength(2);
+    await user.click(screen.getByTestId('series-kind-subseries'));
+    expect(screen.getAllByTestId(/^series-group-s\d/)).toHaveLength(1);
+    expect(screen.getByText('sub-series')).toBeInTheDocument();
+  });
+
+  it('Merge All asks first, lists every group it will merge, and nothing is merged on Cancel', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1), series(2), series(3, 'subseries')]);
+    renderLane(true, 'series');
+    await seriesCard(1);
+    await user.click(screen.getByRole('button', { name: 'Merge All (2)' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Confirm Merge All' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('This will merge 2 same-name series groups');
+    expect(dialog).toHaveTextContent('Sub-series groups are not included');
+    expect(within(dialog).getByTestId('series-merge-all-warning')).toHaveTextContent('leaving it stops the remaining merges');
+    const names = within(within(dialog).getByTestId('series-merge-all-list')).getAllByRole('listitem');
+    expect(names.map((li) => li.textContent)).toEqual(['Series 1', 'Series 2']);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Merge All (2)' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(2));
+    expect(api.deduplicateSeries).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Merged 2 of 2 same-name group(s).', 'success'));
+  });
+
+  it('select page -> all 30 -> confirmed merge of every group (ported from the old tab)', async () => {
+    const user = userEvent.setup();
+    serveSeries(Array.from({ length: 30 }, (_, i) => series(i + 1)));
+    renderLane(true, 'series');
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all 25 groups on this page' }));
+    await user.click(screen.getByTestId('series-groups-select-all-matching'));
+    expect(screen.getByTestId('series-groups-select-all-banner')).toHaveTextContent(
+      'All 30 groups matching this filter are selected.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (30)' }));
+    const dialog = await screen.findByTestId('series-merge-selected-confirm');
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByTestId('series-merge-selected-confirm-btn'));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(30));
+    await waitFor(() => expect(screen.queryByTestId('series-bulk-progress')).not.toBeInTheDocument());
+  });
+
+  it('merging one selected group keeps the keep choice and the selection on the right group (ported)', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1), series(2), series(3), series(4)]);
+    renderLane(true, 'series');
+    await screen.findByRole('checkbox', { name: 'Select group Series 1' });
+    await user.click(screen.getByRole('checkbox', { name: 'Select group Series 3' }));
+    await user.click(within(await seriesCard(1)).getByRole('button', { name: /^Merge into/ }));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledWith(12, [11]));
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: 'Select group Series 1' })).toBeNull());
+    // Series 4 on its own keeps Series 4's own series, not Series 3's.
+    await user.click(within(await seriesCard(4)).getByRole('button', { name: /^Merge into/ }));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenLastCalledWith(42, [41]));
+    // The selection stayed on Series 3.
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (1)' }));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(3));
+    expect(api.mergeSeriesGroup).toHaveBeenLastCalledWith(32, [31]);
+  });
+
+  it('shows how far a bulk merge has got as "processed", on the Series bar only', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author A', ['Author A.'])]);
+    serveSeries([series(1), series(2)]);
+    vi.mocked(api.pollOperationV2).mockImplementation(() => new Promise(() => {}));
+    renderLane(true, 'series');
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all 2 groups on this page' }));
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (2)' }));
+    expect(await screen.findByTestId('series-bulk-progress')).toHaveTextContent('Processed 0 of 2 groups');
+    // The Authors panel does not draw a bar for a run it did not start.
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    await screen.findByRole('heading', { name: 'Author A' });
+    expect(screen.queryByTestId('authors-bulk-progress')).not.toBeInTheDocument();
+  });
+
+  it('a group with a write in flight locks its own controls, while other groups stay usable', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1), series(2)]);
+    vi.mocked(api.pollOperationV2).mockImplementation(() => new Promise(() => {}));
+    renderLane(true, 'series');
+    const card1 = await seriesCard(1);
+    const merge1 = within(card1).getByRole('button', { name: /^Merge into/ });
+    await user.click(merge1);
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    expect(merge1).toBeDisabled();
+    expect(card1).toHaveAttribute('aria-busy', 'true');
+    expect(within(card1).getByRole('button', { name: 'Edit series name Series 1' })).toBeDisabled();
+    expect(within(await seriesCard(2)).getByRole('button', { name: /^Merge into/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Merge All/ })).toBeDisabled();
+  });
+});
+
+describe('series keyboard help', () => {
+  it('? opens the shortcut list and Esc closes it; the Authors list is not the one shown', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1)]);
+    renderLane(true, 'series');
+    await seriesCard(1);
+    await user.keyboard('?');
+    const help = await screen.findByTestId('series-shortcut-help');
+    expect(help).toHaveTextContent('Merge the focused group');
+    expect(help).not.toHaveTextContent("Show the focused group's books");
+    expect(screen.queryByTestId('authors-shortcut-help')).not.toBeInTheDocument();
+    await user.keyboard('m');
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('series-shortcut-help')).not.toBeInTheDocument());
   });
 });

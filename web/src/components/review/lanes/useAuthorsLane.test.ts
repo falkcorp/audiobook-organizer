@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: a5d29e61-7c04-4b8f-93e2-1f6a80c4b573
 // last-edited: 2026-10-13
 
@@ -17,10 +17,15 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
-import { asAuthorId } from '../reviewActions';
+import { asAuthorId, asSeriesId } from '../reviewActions';
 import { ApiAuthRedirectError } from '../../../utils/apiFetch';
 import { SESSION_EXPIRED_MESSAGE } from '../../../utils/apiResponse';
-import { WRITE_DEADLINE_MS, parseLeftIds, useAuthorsLane } from './useAuthorsLane';
+import {
+  SERIES_RENAME_DEADLINE_MS,
+  WRITE_DEADLINE_MS,
+  parseLeftIds,
+  useAuthorsLane,
+} from './useAuthorsLane';
 import * as reads from './authorsReads';
 
 vi.mock('../../../services/api');
@@ -75,10 +80,10 @@ const merge = (n: number) => ({
   canonicalId: asAuthorId(n),
 });
 
-function setup(opts: { active?: boolean; authorId?: string | null } = {}) {
+function setup(opts: { active?: boolean; authorId?: string | null; view?: string | null } = {}) {
   return renderHook(
     ({ active }: { active: boolean }) =>
-      useAuthorsLane(toast, active, { authorId: opts.authorId ?? null }),
+      useAuthorsLane(toast, active, { authorId: opts.authorId ?? null, view: opts.view ?? null }),
     { initialProps: { active: opts.active ?? true } }
   );
 }
@@ -91,6 +96,8 @@ beforeEach(() => {
   vi.mocked(api.mergeAuthors).mockImplementation(async (id: number) => op(`m${id}`));
   vi.mocked(api.reclassifyAuthorAsNarrator).mockResolvedValue({ narrator_id: 1, books_updated: 1 });
   vi.mocked(reads.fetchAuthorName).mockResolvedValue('');
+  vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep: number) => op(`s${keep}`));
+  vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: false });
 });
 
 afterEach(() => {
@@ -677,7 +684,7 @@ describe('leaving the lane or unmounting', () => {
       })
     );
     await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
-    expect(result.current.bulk).toEqual({ done: 0, total: 2 });
+    expect(result.current.bulk).toEqual({ done: 0, total: 2, entity: 'author' });
 
     rerender({ active: false });
     await waitFor(() => expect(result.current.bulk).toBeNull());
@@ -1275,5 +1282,920 @@ describe('candidate name lookups', () => {
     await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['2']));
     await act(async () => {});
     expect(reads.fetchAuthorName).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Series sub-view
+// ---------------------------------------------------------------------------
+
+/** A wire series row. `author` credits it to author id `author`. */
+function srow(id: number, name: string, author?: number): api.SeriesWithBooks {
+  return {
+    id,
+    name,
+    created_at: '2026-01-01T00:00:00Z',
+    ...(author !== undefined ? { author_id: author, author_name: `Author ${author}` } : {}),
+  };
+}
+function swire(name: string, rows: api.SeriesWithBooks[], match_type = 'exact'): api.SeriesDupGroup {
+  return { name, count: rows.length, series: rows, match_type };
+}
+
+/** Group "s11-12": 12 is credited to author 7, so it is the one a merge keeps. */
+const SG_A = () => swire('Series A', [srow(11, 'Series A'), srow(12, 'series a', 7)]);
+/** Group "s21-22". */
+const SG_B = () => swire('Series B', [srow(21, 'Series B'), srow(22, 'series b')]);
+/** A sub-series group "s31-32": never part of Merge All. */
+const SG_SUB = () => swire('Series C, Book 2', [srow(31, 'Series C'), srow(32, 'Series C, Book 2')], 'subseries');
+
+function serveSeries(groups: api.SeriesDupGroup[], opts: { needsRefresh?: boolean; total?: number } = {}) {
+  vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({
+    groups,
+    totalSeries: opts.total ?? groups.length * 2,
+    needsRefresh: opts.needsRefresh ?? false,
+  });
+}
+
+const sact = {
+  merge: (groupKey: string) => ({
+    lane: 'authors' as const,
+    entity: 'series' as const,
+    type: 'mergeSeriesGroup' as const,
+    groupKey,
+  }),
+  selected: (groupKeys: string[]) => ({
+    lane: 'authors' as const,
+    entity: 'series' as const,
+    type: 'mergeSelectedSeries' as const,
+    groupKeys,
+  }),
+  all: (expectedKeys: string[]) => ({
+    lane: 'authors' as const,
+    entity: 'series' as const,
+    type: 'mergeAllSeriesGroups' as const,
+    expectedKeys,
+  }),
+  rename: (groupKey: string, seriesId: number, name: string) => ({
+    lane: 'authors' as const,
+    entity: 'series' as const,
+    type: 'renameSeries' as const,
+    groupKey,
+    seriesId: asSeriesId(seriesId),
+    name,
+  }),
+  narrator: (groupKey: string, authorId: number) => ({
+    lane: 'authors' as const,
+    entity: 'series' as const,
+    type: 'toggleSeriesNarrator' as const,
+    groupKey,
+    authorId: asAuthorId(authorId),
+  }),
+  include: (groupKey: string, seriesId: number) => ({
+    lane: 'authors' as const,
+    entity: 'series' as const,
+    type: 'toggleSeriesIncluded' as const,
+    groupKey,
+    seriesId: asSeriesId(seriesId),
+  }),
+};
+
+const press = (key: string) =>
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key }));
+  });
+
+describe('the series sub-view fetches only when it is selected', () => {
+  it('makes no series request while Authors shows, one on selecting Series, and one authors read per return', async () => {
+    serve([GROUP_A()]);
+    serveSeries([SG_A()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    await act(async () => {});
+    expect(reads.fetchSeriesGroups).not.toHaveBeenCalled();
+
+    act(() => result.current.setView('series'));
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+    // Leaving Authors did not re-read it; coming back reads it once, and never reads Series again.
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.setView('authors'));
+    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2);
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(2);
+  });
+
+  it('?view=series opens on Series and makes no author request at all', async () => {
+    serve([GROUP_A()]);
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    await act(async () => {});
+    expect(result.current.view).toBe('series');
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+    expect(reads.fetchAuthorGroups).not.toHaveBeenCalled();
+    expect(api.getDedupCandidates).not.toHaveBeenCalled();
+  });
+
+  it('an unknown ?view= opens Authors', async () => {
+    serve([GROUP_A()]);
+    const { result } = setup({ view: 'labels' });
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.view).toBe('authors');
+    expect(reads.fetchSeriesGroups).not.toHaveBeenCalled();
+  });
+
+  it('an inactive lane reads nothing, and leaving aborts the series read; a late answer is never painted', async () => {
+    const pending = deferred<reads.SeriesGroupsResponse>();
+    vi.mocked(reads.fetchSeriesGroups).mockReturnValue(pending.promise);
+    const { result, rerender } = setup({ active: false, view: 'series' });
+    await act(async () => {});
+    expect(reads.fetchSeriesGroups).not.toHaveBeenCalled();
+
+    rerender({ active: true });
+    await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1));
+    const signal = vi.mocked(reads.fetchSeriesGroups).mock.calls[0][0];
+    expect(signal.aborted).toBe(false);
+    rerender({ active: false });
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      pending.resolve({ groups: [SG_A()], totalSeries: 4, needsRefresh: false });
+    });
+    expect(result.current.series.groups).toEqual([]);
+  });
+
+  it('does not duplicate the read on mount', async () => {
+    serveSeries([SG_A()]);
+    setup({ view: 'series' });
+    await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalled());
+    await act(async () => {});
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('series: loading, error, empty, needs-scan, populated', () => {
+  it('walks loading -> populated and keys groups on their series ids', async () => {
+    const d = deferred<reads.SeriesGroupsResponse>();
+    vi.mocked(reads.fetchSeriesGroups).mockReturnValue(d.promise);
+    const { result } = setup({ view: 'series' });
+    expect(result.current.series.status).toBe('loading');
+    await act(async () => d.resolve({ groups: [SG_A()], totalSeries: 40, needsRefresh: false }));
+    expect(result.current.series.status).toBe('populated');
+    expect(result.current.series.totalSeries).toBe(40);
+    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s11-12']);
+    // The author-linked series sorts first: it is the one a merge keeps.
+    expect(result.current.series.groups[0].series.map((r) => r.id)).toEqual([12, 11]);
+  });
+
+  it('a failed request is an error with its message, not an empty list; Retry recovers', async () => {
+    vi.mocked(reads.fetchSeriesGroups).mockRejectedValueOnce(new Error('boom: 500'));
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('error'));
+    expect(result.current.series.error).toBe('boom: 500');
+    expect(result.current.series.groups).toEqual([]);
+    act(() => result.current.series.reload());
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+  });
+
+  it('answered-with-nothing is empty; a cold cache is needs-scan, which is neither empty nor an error', async () => {
+    serveSeries([]);
+    const a = setup({ view: 'series' });
+    await waitFor(() => expect(a.result.current.series.status).toBe('empty'));
+    serveSeries([], { needsRefresh: true });
+    const b = setup({ view: 'series' });
+    await waitFor(() => expect(b.result.current.series.status).toBe('needs-scan'));
+    expect(b.result.current.series.error).toBeNull();
+  });
+
+  it('kind counts add up to the total and match what each filter shows', async () => {
+    serveSeries([SG_A(), SG_B(), SG_SUB()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    expect(result.current.series.kindCounts).toEqual({ all: 3, exact: 2, subseries: 1 });
+    act(() => result.current.series.setFilter('subseries'));
+    expect(result.current.series.filtered.map((g) => g.key)).toEqual(['s31-32']);
+    act(() => result.current.series.setFilter('exact'));
+    expect(result.current.series.filtered).toHaveLength(result.current.series.kindCounts.exact);
+  });
+});
+
+describe('the server clears its series list on every write', () => {
+  it('a merge edits the list in place; a later re-read that finds the cache gone keeps it, flagged stale', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22']));
+    // No re-read after the write.
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+    expect(result.current.series.stale).toBe(false);
+
+    vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: true });
+    act(() => result.current.series.reload());
+    await waitFor(() => expect(result.current.series.stale).toBe(true));
+    expect(result.current.series.status).toBe('populated');
+    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22']);
+    expect(result.current.series.totalSeries).toBe(4);
+  });
+
+  it('a lane that held nothing still shows a cold cache as needs-scan, not stale', async () => {
+    serveSeries([], { needsRefresh: true });
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('needs-scan'));
+    expect(result.current.series.stale).toBe(false);
+  });
+});
+
+describe('series rename', () => {
+  it('uses the undoable endpoint, edits the row in place, and Undo reverts through the journal', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.renameSeries).mockResolvedValue({ id: 'rename-op-1' } as api.Operation);
+    vi.mocked(api.undoSeriesRename).mockResolvedValue({ restored: 1 } as api.RevertOperationResult);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+
+    act(() => result.current.dispatch(sact.rename('s11-12', 11, '  Series A Renamed ')));
+    await waitFor(() => expect(result.current.series.renames[11]).toBeDefined());
+    expect(api.renameSeries).toHaveBeenCalledWith(11, 'Series A Renamed');
+    expect(api.updateSeriesName).not.toHaveBeenCalled();
+    const row = (id: number) => result.current.series.groups[0].series.find((r) => r.id === id);
+    expect(row(11)?.name).toBe('Series A Renamed');
+    // Edited in place: no re-read of the list.
+    expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1);
+    const undoAction = toast.mock.calls.find((c) => c[2]?.label === 'Undo')?.[2];
+    expect(undoAction).toBeDefined();
+
+    // The toast's Undo button.
+    await act(async () => undoAction.onClick());
+    await waitFor(() => expect(api.undoSeriesRename).toHaveBeenCalledWith('rename-op-1'));
+    await waitFor(() => expect(row(11)?.name).toBe('Series A'));
+    expect(result.current.series.renames[11]).toBeUndefined();
+    expect(api.renameSeries).toHaveBeenCalledTimes(1); // undo is a revert, not a second rename
+  });
+
+  it('Undo via the lane action does the same, and a refused revert is shown and not offered again', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.renameSeries).mockResolvedValue({ id: 'rename-op-1' } as api.Operation);
+    vi.mocked(api.undoSeriesRename).mockRejectedValue(new Error('renamed again since'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.rename('s11-12', 11, 'Series A Renamed')));
+    await waitFor(() => expect(result.current.series.renames[11]).toBeDefined());
+    act(() =>
+      result.current.dispatch({ lane: 'authors', entity: 'series', type: 'undoRenameSeries', seriesId: asSeriesId(11) })
+    );
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('renamed again since', 'error'));
+    expect(result.current.series.renames[11]).toBeUndefined();
+    expect(result.current.series.groups[0].series.find((r) => r.id === 11)?.name).toBe('Series A Renamed');
+  });
+
+  it('a rename that fails is reported and leaves the name alone; the row unlocks', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.renameSeries).mockRejectedValue(new Error('rename still queued (op x)'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.rename('s11-12', 11, 'New Name')));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('rename still queued (op x)', 'error'));
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(result.current.series.groups[0].series.find((r) => r.id === 11)?.name).toBe('Series A');
+    expect(result.current.series.renames[11]).toBeUndefined();
+  });
+
+  it('renaming to the name it already has sends nothing and closes the editor', async () => {
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.series.startEdit('s11-12', asSeriesId(11), 'Series A'));
+    expect(result.current.series.editing).not.toBeNull();
+    act(() => result.current.dispatch(sact.rename('s11-12', 11, 'Series A')));
+    expect(api.renameSeries).not.toHaveBeenCalled();
+    expect(result.current.series.editing).toBeNull();
+  });
+
+  it('its own deadline comes after the api wrapper\'s wait, so the wrapper\'s message wins', () => {
+    expect(SERIES_RENAME_DEADLINE_MS).toBeGreaterThan(api.SERIES_RENAME_WAIT_MS);
+  });
+
+  it('a rename that gets no answer unlocks the row and says it may have run', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.renameSeries).mockImplementation(() => new Promise(() => {}));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() => result.current.dispatch(sact.rename('s11-12', 11, 'New Name')));
+    expect(result.current.pendingKeys.has('s11-12')).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SERIES_RENAME_DEADLINE_MS + 1);
+    });
+    vi.useRealTimers();
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('the rename may have run'), 'warning');
+  });
+});
+
+describe('series merge', () => {
+  it('keeps the author-linked series and merges the rest into it', async () => {
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups).toEqual([]));
+    expect(api.mergeSeriesGroup).toHaveBeenCalledWith(12, [11]);
+    expect(toast).toHaveBeenCalledWith('Merged 1 series into "series a"', 'success');
+  });
+
+  it('the narrator flag is sent with the merge: reclassify first, then merge, and only the included series', async () => {
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    const calls: string[] = [];
+    vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id) => {
+      calls.push(`reclassify:${id}`);
+      return { narrator_id: 1, books_updated: 1 };
+    });
+    vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep, ids) => {
+      calls.push(`merge:${keep}:${ids.join(',')}`);
+      return op('s1');
+    });
+    act(() => result.current.dispatch(sact.narrator('s11-12', 7)));
+    expect(result.current.series.choices.narrators['s11-12']?.has(7)).toBe(true);
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups).toEqual([]));
+    expect(calls).toEqual(['reclassify:7', 'merge:12:11']);
+  });
+
+  it('a narrator flag on a series that was left out is not sent', async () => {
+    serveSeries([swire('Series A', [srow(11, 'Series A', 5), srow(12, 'series a', 7), srow(13, 'SERIES A')])]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.narrator('s11-12-13', 5)));
+    act(() => result.current.dispatch(sact.include('s11-12-13', 11)));
+    act(() => result.current.dispatch(sact.merge('s11-12-13')));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalled());
+    expect(api.reclassifyAuthorAsNarrator).not.toHaveBeenCalled();
+    // 11 left out: 12 (author-linked, lowest id) is kept and 13 merged into it. 11 stays.
+    expect(api.mergeSeriesGroup).toHaveBeenCalledWith(12, [13]);
+    await waitFor(() => expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 12]));
+  });
+
+  it('reads the choices when the merge RUNS: a series left out while it was queued is honoured', async () => {
+    serveSeries([swire('Series A', [srow(11, 'Series A'), srow(12, 'series a'), srow(13, 'SERIES A')]), SG_B()]);
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReturnValueOnce(gate.promise);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s21-22'))); // holds the queue
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    act(() => result.current.dispatch(sact.merge('s11-12-13'))); // waits
+    act(() => result.current.dispatch(sact.include('s11-12-13', 13)));
+    await act(async () => gate.resolve(settled()));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(2));
+    expect(api.mergeSeriesGroup).toHaveBeenLastCalledWith(11, [12]);
+  });
+
+  it('a group with fewer than two series included is not mergeable, and a merge of it says so', async () => {
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.include('s11-12', 11)));
+    expect(result.current.series.mergeable).toEqual([]);
+    expect(result.current.series.mergeAll).toEqual([]);
+    expect(result.current.series.selectableTotal).toBe(0);
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('"Series A": fewer than two series are included in this merge', 'warning'));
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+  });
+
+  it('a series action never reaches an author endpoint, and an author action never a series one', async () => {
+    serve([GROUP_A()]);
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    // A series group whose first id equals an author id: the shapes collide on purpose.
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups).toEqual([]));
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+
+    act(() => result.current.setView('authors'));
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a series merge that leaves series behind', () => {
+  it('keeps the group with the series that remain, and says which ids failed', async () => {
+    serveSeries([swire('Series A', [srow(11, 'Series A'), srow(12, 'series a'), srow(13, 'SERIES A')])]);
+    vi.mocked(api.pollOperationV2).mockResolvedValue(
+      settled('failed', 'series merge left series ids [13]: series merge merged 1 of 2 series with 1 error(s): refusing to delete series 13')
+    );
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s11-12-13')));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('1 series was not merged (ids 13); the other 1 was'), 'error'));
+    // 12 went; the kept series (11) and 13 remain: the group is still a duplicate.
+    expect(result.current.series.groups[0].series.map((r) => r.id)).toEqual([11, 13]);
+    expect(result.current.series.groups[0].key).toBe('s11-12-13'); // the key does not move
+    expect(result.current.pendingKeys.size).toBe(0);
+  });
+
+  it('a failure with an empty list means everything merged and something later failed: the group goes, the failure is shown', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.pollOperationV2).mockResolvedValue(
+      settled('failed', 'series merge left series ids []: series merge merged 1 of 1 series with 1 error(s): failed to set authors')
+    );
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups).toEqual([]));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('failed to set authors'), 'error');
+  });
+
+  it('a failure that names no ids (a cancelled run) keeps the group and re-reads', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.pollOperationV2).mockResolvedValue(settled('failed', 'cancelled'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('"Series A": cancelled', 'error'));
+    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s11-12']);
+    await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('series merge selected and merge all', () => {
+  it('merge all takes the same-name groups, never the sub-series ones, and merges each through the queue', async () => {
+    serveSeries([SG_A(), SG_SUB(), SG_B()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    expect(result.current.series.mergeAll.map((g) => g.key)).toEqual(['s11-12', 's21-22']);
+    expect(result.current.series.mergeable).toHaveLength(3);
+
+    act(() => result.current.dispatch(sact.all(['s11-12', 's21-22'])));
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s31-32']));
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(2);
+    expect(api.deduplicateSeries).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith('Merged 2 of 2 same-name group(s).', 'success');
+  });
+
+  it('merge all refuses, and merges nothing, when one group left and another became mergeable (same count)', async () => {
+    serveSeries([SG_A(), SG_B(), swire('Series D', [srow(41, 'Series D'), srow(42, 'series d')])]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    // The reviewer confirmed A and B; then B was reduced to one series (it left Merge All)
+    // while D, which was already there, is still in: the count is 2 either way.
+    act(() => result.current.dispatch(sact.include('s21-22', 21)));
+    act(() => result.current.dispatch(sact.all(['s11-12', 's21-22'])));
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Nothing was merged'), 'warning');
+    expect(result.current.series.groups).toHaveLength(3);
+  });
+
+  it('merge selected reports the failures, with counts, instead of "Merged N"', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    vi.mocked(api.pollOperationV2).mockImplementation(async (id: string) =>
+      id === 's21' ? settled('failed', 'store write failed') : settled()
+    );
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    // A failure that names no ids makes the lane re-read; the server now has only B.
+    vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [SG_B()], totalSeries: 2, needsRefresh: false });
+    act(() => result.current.dispatch(sact.selected(['s11-12', 's21-22'])));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Merged 1 of 2 selected group(s); 1 failed: "Series B": store write failed.',
+        'error'
+      )
+    );
+    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22']);
+    expect(result.current.bulk).toBeNull();
+  });
+
+  it('a partly merged group in a bulk run counts as a failure and keeps its remaining series', async () => {
+    serveSeries([swire('Series A', [srow(11, 'Series A'), srow(12, 'series a'), srow(13, 'SERIES A')]), SG_B()]);
+    vi.mocked(api.pollOperationV2).mockImplementation(async (id: string) =>
+      id === 's11' ? settled('failed', 'series merge left series ids [13]: series merge merged 1 of 2') : settled()
+    );
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.selected(['s11-12-13', 's21-22'])));
+    await waitFor(() => expect(result.current.bulk).toBeNull());
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/^Merged 1 of 2 selected group\(s\); 1 failed: "Series A": 1 series was not merged/), 'error');
+    expect(result.current.series.groups.map((g) => g.series.map((r) => r.id))).toEqual([[11, 13]]);
+  });
+
+  it('an expired session stops the run and says how many merged and how many were never sent', async () => {
+    serveSeries([SG_A(), SG_B(), swire('Series D', [srow(41, 'Series D'), srow(42, 'series d')])]);
+    vi.mocked(api.mergeSeriesGroup)
+      .mockImplementationOnce(async (keep: number) => op(`s${keep}`))
+      .mockRejectedValueOnce(new ApiAuthRedirectError('/api/v1/series/merge', 'https://login.example/'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.selected(['s11-12', 's21-22', 's41-42'])));
+    await waitFor(() => expect(result.current.bulk).toBeNull());
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(2);
+    expect(toast).toHaveBeenCalledTimes(1);
+    const [message, severity] = toast.mock.calls[0];
+    expect(message).toContain(SESSION_EXPIRED_MESSAGE);
+    expect(message).toContain('1 group(s) were merged before it expired');
+    expect(message).toContain('the other 1 were not sent');
+    expect(severity).toBe('error');
+    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22', 's41-42']);
+  });
+
+  it('a bulk run stops at the merge that gets no answer and does not send the rest', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    vi.mocked(api.mergeSeriesGroup).mockImplementation(() => new Promise<api.Operation>(() => {}));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() => result.current.dispatch(sact.selected(['s11-12', 's21-22'])));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WRITE_DEADLINE_MS + 1);
+    });
+    vi.useRealTimers();
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('the other 1 were not sent'), 'warning');
+    expect(result.current.bulk).toBeNull();
+    expect(result.current.pendingKeys.size).toBe(0);
+    // It re-read the SERIES list, not the authors one.
+    await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(2));
+  });
+
+  it('a merge that gets no answer unlocks the queue so the next merge goes', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    vi.mocked(api.mergeSeriesGroup).mockImplementationOnce(() => new Promise<api.Operation>(() => {}));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    act(() => result.current.dispatch(sact.merge('s21-22')));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WRITE_DEADLINE_MS + 1);
+    });
+    vi.useRealTimers();
+    expect(toast).toHaveBeenCalledWith(
+      `No answer after ${WRITE_DEADLINE_MS / 1000}s — the merge may have run; re-reading.`,
+      'warning'
+    );
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+    expect(result.current.busy).toBe(false);
+  });
+});
+
+describe('leaving the lane during a series merge', () => {
+  function hangingPoll() {
+    vi.mocked(api.pollOperationV2).mockImplementation(
+      (_id, _cb, _ms, opts) =>
+        new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          );
+        })
+    );
+  }
+
+  it('says WHICH queued merges were not sent, and follows the one already sent when the lane is re-entered', async () => {
+    serveSeries([SG_A(), SG_B(), swire('Series D', [srow(41, 'Series D'), srow(42, 'series d')])]);
+    const { result, rerender } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(sact.selected(['s11-12', 's21-22', 's41-42'])));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    expect(result.current.bulk).toEqual({ done: 0, total: 3, entity: 'series' });
+
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.bulk).toBeNull());
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+    // The first was sent; the other two were not, and the message names them.
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(
+      '2 queued merges were not sent because you left the lane: "Series B", "Series D".',
+      'warning'
+    );
+
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReset();
+    vi.mocked(api.pollOperationV2).mockReturnValue(gate.promise);
+    rerender({ active: true });
+    await waitFor(() =>
+      expect(api.pollOperationV2).toHaveBeenCalledWith('s12', undefined, expect.any(Number), expect.anything())
+    );
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    // Locked while it is followed: a second Merge for a group whose first may have gone through is not sent.
+    expect([...result.current.pendingKeys]).toEqual(['s11-12']);
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+
+    await act(async () => gate.resolve(settled()));
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22', 's41-42']));
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(toast).toHaveBeenCalledWith('Merged series into "Series A" (it finished after you left).', 'success');
+  });
+
+  it('a followed merge that finished partly drops only the series that went', async () => {
+    serveSeries([swire('Series A', [srow(11, 'Series A'), srow(12, 'series a'), srow(13, 'SERIES A')])]);
+    const { result, rerender } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(sact.merge('s11-12-13')));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+
+    vi.mocked(api.pollOperationV2).mockReset();
+    vi.mocked(api.pollOperationV2).mockResolvedValue(settled('failed', 'series merge left series ids [13]: x'));
+    rerender({ active: true });
+    await waitFor(() => expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('series merge left series ids [13]'), 'error');
+  });
+
+  it('a whole bulk run still queued behind another write is dropped, and the message names every group in it', async () => {
+    serveSeries([SG_A(), SG_B(), swire('Series D', [srow(41, 'Series D'), srow(42, 'series d')])]);
+    const { result, rerender } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(sact.merge('s11-12'))); // holds the queue
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    act(() => result.current.dispatch(sact.selected(['s21-22', 's41-42']))); // waits behind it
+    expect(result.current.bulk).toEqual({ done: 0, total: 2, entity: 'series' });
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.bulk).toBeNull());
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(
+      '2 queued merges were not sent because you left the lane: "Series B", "Series D".',
+      'warning'
+    );
+  });
+
+  it('a queued series merge is dropped, not sent, when the lane is left', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    const { result, rerender } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    act(() => result.current.dispatch(sact.merge('s21-22')));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+    expect(toast).toHaveBeenCalledWith('1 queued merge was not sent because you left the lane: "Series B".', 'warning');
+    rerender({ active: true });
+    await act(async () => {});
+    expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('switching sub-views while a write is in flight', () => {
+  it('does not abort the write (the lane is still visible), and the other sub-view waits for it', async () => {
+    serve([GROUP_A()]);
+    serveSeries([SG_A()]);
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReturnValue(gate.promise);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+    act(() => result.current.setView('authors'));
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.busy).toBe(true);
+    const signal = vi.mocked(api.pollOperationV2).mock.calls[0][3]?.signal;
+    expect(signal?.aborted).toBe(false);
+
+    await act(async () => gate.resolve(settled()));
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    expect(toast).toHaveBeenCalledWith('Merged 1 series into "series a"', 'success');
+  });
+});
+
+describe('series keyboard', () => {
+  it('m merges the focused SERIES group and never an author; j/k move the focus', async () => {
+    serve([GROUP_A()]);
+    serveSeries([SG_A(), SG_B()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    press('j');
+    expect(result.current.series.focusedKey).toBe('s21-22');
+    press('m');
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledWith(21, [22]));
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+  });
+
+  it('with the Series sub-view showing, the author keys do nothing; with Authors showing, the series keys do nothing', async () => {
+    serve([GROUP_A()]);
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    // Authors never loaded, so a stray `m` has nothing to merge in either handler's reach.
+    press('?');
+    expect(result.current.series.helpOpen).toBe(true);
+    expect(result.current.helpOpen).toBe(false);
+    press('?');
+
+    act(() => result.current.setView('authors'));
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    press('?');
+    expect(result.current.helpOpen).toBe(true);
+    expect(result.current.series.helpOpen).toBe(false);
+    press('?');
+    press('m');
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+  });
+
+  it('m, j and k do nothing behind the help; Escape closes it and they work again', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    press('?');
+    expect(result.current.series.helpOpen).toBe(true);
+    press('j');
+    press('m');
+    await act(async () => {});
+    expect(result.current.series.focusedKey).toBe('s11-12');
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+
+    press('Escape');
+    expect(result.current.series.helpOpen).toBe(false);
+    press('m');
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+  });
+
+  it('m does nothing behind an open name editor, and Escape closes the editor', async () => {
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.series.startEdit('s11-12', asSeriesId(11), 'Series A'));
+    press('m');
+    await act(async () => {});
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+    press('Escape');
+    expect(result.current.series.editing).toBeNull();
+  });
+
+  it("? is taken before the app's own ? handler sees it, so the lane's help opens and the app's dialog does not", async () => {
+    // The app registers its handler on window first (App.tsx), in the bubble phase.
+    const appHandler = vi.fn();
+    window.addEventListener('keydown', appHandler);
+    try {
+      serveSeries([SG_A()]);
+      const { result } = setup({ view: 'series' });
+      await waitFor(() => expect(result.current.series.status).toBe('populated'));
+      const pressOnPage = (key: string) =>
+        act(() => {
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+        });
+      pressOnPage('?');
+      expect(result.current.series.helpOpen).toBe(true);
+      pressOnPage('?'); // closing it is also the lane's
+      expect(result.current.series.helpOpen).toBe(false);
+      expect(appHandler).not.toHaveBeenCalled();
+      // Keys the lane does not take still reach the app.
+      pressOnPage('x');
+      expect(appHandler).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', appHandler);
+    }
+  });
+
+  it('a group that cannot be merged is not merged by m', async () => {
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.include('s11-12', 11)));
+    press('m');
+    await act(async () => {});
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+  });
+
+  it('handlers are unbound when the lane is left or the sub-view changes', async () => {
+    serveSeries([SG_A()]);
+    const { result, rerender } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    rerender({ active: false });
+    press('?');
+    expect(result.current.series.helpOpen).toBe(false);
+  });
+});
+
+describe('what is open is cleared when it can no longer be seen (series)', () => {
+  it('leaving the Series sub-view closes its help and name editor', async () => {
+    serve([]);
+    serveSeries([SG_A()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => {
+      result.current.series.startEdit('s11-12', asSeriesId(11), 'Series A');
+      result.current.series.setHelpOpen(true);
+    });
+    act(() => result.current.setView('authors'));
+    expect(result.current.series.editing).toBeNull();
+    expect(result.current.series.helpOpen).toBe(false);
+  });
+
+  it('an editor on a group that merged away is closed', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.series.startEdit('s21-22', asSeriesId(21), 'Series B'));
+    act(() => result.current.dispatch(sact.merge('s21-22')));
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s11-12']));
+    expect(result.current.series.editing).toBeNull();
+  });
+});
+
+describe('series selection', () => {
+  it('the selected count is the rows that still exist', async () => {
+    serveSeries([SG_A(), SG_B()]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => {
+      result.current.series.selection.toggle('s11-12');
+      result.current.series.selection.toggle('s21-22');
+    });
+    expect(result.current.series.selectedCount).toBe(2);
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22']));
+    expect(result.current.series.selection.selected.has('s11-12')).toBe(true);
+    expect(result.current.series.selectedCount).toBe(1);
+  });
+
+  it('the per-group choices do not slide onto the next group when one is merged away', async () => {
+    // Ported from the old tab's index-key test: merging Series 1 used to shift the
+    // keep choice and the selection onto Series 2.
+    serveSeries([SG_A(), SG_B(), swire('Series D', [srow(41, 'Series D'), srow(42, 'series d')])]);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.include('s41-42', 41)));
+    act(() => result.current.series.selection.toggle('s21-22'));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22', 's41-42']));
+    expect(result.current.series.choices.excluded['s41-42']?.has(41)).toBe(true);
+    expect(result.current.series.choices.excluded['s21-22']).toBeUndefined();
+    expect(result.current.series.selectedGroups.map((g) => g.key)).toEqual(['s21-22']);
+    act(() => result.current.dispatch(sact.selected(['s21-22'])));
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenLastCalledWith(21, [22]));
+  });
+});
+
+describe('series scan and validate', () => {
+  it('starts one scan across both sub-views however many times it is clicked, then re-reads the series list', async () => {
+    serveSeries([SG_A()]);
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.refreshSeriesDuplicates).mockResolvedValue(op('scan1'));
+    vi.mocked(api.pollOperationV2).mockReturnValueOnce(gate.promise);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => {
+      result.current.series.refresh();
+      result.current.series.refresh();
+      result.current.refresh(); // the Authors scan cannot start alongside it
+    });
+    expect(result.current.scanning).toBe(true);
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Series scan started — watch the bell for progress.', 'info'));
+    await act(async () => gate.resolve(settled()));
+    await waitFor(() => expect(result.current.scanning).toBe(false));
+    expect(api.refreshSeriesDuplicates).toHaveBeenCalledTimes(1);
+    expect(api.refreshAuthorDuplicates).not.toHaveBeenCalled();
+    await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(2));
+    expect(toast).toHaveBeenCalledWith('Series scan finished.', 'success');
+  });
+
+  it('a scan that fails to start says so', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.refreshSeriesDuplicates).mockRejectedValue(new Error('scan queue full'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.series.refresh());
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('scan queue full', 'error'));
+    expect(result.current.scanning).toBe(false);
+  });
+
+  it('validate keeps loading, error and results apart, on the group name', async () => {
+    serveSeries([SG_A()]);
+    const first = deferred<{ results: api.ValidationResult[]; query: string }>();
+    vi.mocked(reads.validateSeriesName).mockReturnValueOnce(first.promise);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.series.validate('s11-12'));
+    expect(result.current.series.validation['s11-12']).toEqual({ forName: 'Series A', state: 'loading' });
+    expect(reads.validateSeriesName).toHaveBeenCalledWith('Series A', expect.any(AbortSignal));
+    await act(async () =>
+      first.resolve({ results: [{ source: 'P', title: 'T', author: 'A' } as api.ValidationResult], query: 'Series A' })
+    );
+    expect(result.current.series.validation['s11-12']).toMatchObject({ state: 'ready' });
+
+    vi.mocked(reads.validateSeriesName).mockRejectedValueOnce(new Error('providers down'));
+    act(() => result.current.series.validate('s11-12'));
+    await waitFor(() =>
+      expect(result.current.series.validation['s11-12']).toMatchObject({ state: 'error', message: 'providers down' })
+    );
   });
 });

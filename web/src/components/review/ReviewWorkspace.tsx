@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.23.0
+// version: 1.24.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-13
 //
@@ -245,9 +245,16 @@ export function ReviewWorkspace() {
   const repairs = useRepairsLane(toast, lane === 'repairs');
   // Authors & series: fetches only while visible, like the others. `?author=` is
   // a seed (focus that author's group on the first load), read here so the hook
-  // has it on its first render, and never written back.
+  // has it on its first render, and never written back. `?view=series` seeds the
+  // lane's sub-view the same way -- but `view` is ALSO the dupes lane's parameter
+  // (labels|suspicious), so it is handed over only when the URL landed on the
+  // authors lane: `?lane=dupes&view=series` is not an instruction to the authors
+  // lane, and a later click on its tab must not inherit it.
   const authorsUrlFilters = useMemo(
-    () => ({ authorId: searchParams.get('author') }),
+    () => ({
+      authorId: searchParams.get('author'),
+      view: initialLaneFrom(searchParams) === 'authors' ? searchParams.get('view') : null,
+    }),
     [searchParams],
   );
   const authors = useAuthorsLane(toast, lane === 'authors', authorsUrlFilters);

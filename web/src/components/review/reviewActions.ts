@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
 // last-edited: 2026-10-13
 //
@@ -151,8 +151,7 @@ export type RepairsAction =
     };
 
 /**
- * Authors & series lane. Ids are numeric author ids (and, once the Series
- * sub-view lands, numeric series ids).
+ * Authors & series lane. Ids are numeric author ids and numeric series ids.
  *
  * BOTH id spaces are plain numbers on the wire, which is exactly why a series
  * id could be handed to `mergeAuthors(keepId, mergeIds)` and merge the wrong
@@ -164,8 +163,14 @@ export type RepairsAction =
  *     assignable where an `AuthorId` is required. The brand is applied once, at
  *     the edge where a server response becomes a group (`asAuthorId`).
  *
- * This PR uses `entity: 'author'` only; the Series sub-view adds the `series`
- * members of the union without touching these.
+ * The Series sub-view adds the `series` members below without touching the
+ * author ones. They have their OWN `type` names (`mergeSeriesGroup`, not a
+ * second `mergeGroup`): the lane descriptor's verbs map is keyed by `type`, so a
+ * shared name would give a series merge the wording of an author merge, and a
+ * `switch (action.type)` that forgot to look at `entity` would run the wrong
+ * endpoint. A series group has no canonical id (its rows are peers; the lane
+ * picks which one is kept), so a series action names the group by its `groupKey`,
+ * the stable key the lane gave it when it read the list.
  *
  * `mergeGroup` and `toggleRole`/`excludeVariant` name a group by its canonical
  * id and carry nothing else: which variants are excluded, and which are flagged
@@ -179,6 +184,11 @@ export type RepairsAction =
  */
 export type AuthorId = number & { readonly __entity: 'author' };
 export type SeriesId = number & { readonly __entity: 'series' };
+
+/** Brands a server-supplied series id. The one place a plain number becomes a SeriesId. */
+export function asSeriesId(n: number): SeriesId {
+  return n as SeriesId;
+}
 
 /** Brands a server-supplied author id. The one place a plain number becomes an AuthorId. */
 export function asAuthorId(n: number): AuthorId {
@@ -198,7 +208,18 @@ export type AuthorEntityAction =
   | { lane: 'authors'; entity: 'author'; type: 'toggleRole'; canonicalId: AuthorId; target: RoleTarget }
   | { lane: 'authors'; entity: 'author'; type: 'excludeVariant'; canonicalId: AuthorId; variantId: AuthorId };
 
-export type AuthorsAction = AuthorEntityAction;
+export type SeriesEntityAction =
+  | { lane: 'authors'; entity: 'series'; type: 'mergeSeriesGroup'; groupKey: string }
+  | { lane: 'authors'; entity: 'series'; type: 'mergeSelectedSeries'; groupKeys: string[] }
+  | { lane: 'authors'; entity: 'series'; type: 'mergeAllSeriesGroups'; expectedKeys: string[] }
+  | { lane: 'authors'; entity: 'series'; type: 'renameSeries'; groupKey: string; seriesId: SeriesId; name: string }
+  | { lane: 'authors'; entity: 'series'; type: 'undoRenameSeries'; seriesId: SeriesId }
+  /** The author record a series row is credited to: author or narrator, reclassified when the merge runs. */
+  | { lane: 'authors'; entity: 'series'; type: 'toggleSeriesNarrator'; groupKey: string; authorId: AuthorId }
+  /** Leave one series out of its group's merge, or put it back. */
+  | { lane: 'authors'; entity: 'series'; type: 'toggleSeriesIncluded'; groupKey: string; seriesId: SeriesId };
+
+export type AuthorsAction = AuthorEntityAction | SeriesEntityAction;
 
 export type ReviewAction =
   | DupesAction
@@ -281,6 +302,8 @@ export function needsConfirmation(action: ReviewAction): boolean {
     // applies below, which confirm in their lane -- so the ActionBar must not
     // ask a second time.
     case 'mergeAllGroups':
+    case 'mergeAllSeriesGroups':
+    case 'mergeSelectedSeries':
       return false;
     // The repairs applies DO confirm, but inside the lane's own dispatch (like
     // the metadata lane's Replace mode), so every entry point asks exactly once.
@@ -311,6 +334,10 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'mergeAllGroups':
       // The groups the reviewer confirmed, carried by the action itself.
       return action.expectedIds.length;
+    case 'mergeAllSeriesGroups':
+      return action.expectedKeys.length;
+    case 'mergeSelectedSeries':
+      return action.groupKeys.length;
     case 'linkCluster':
       return action.ids.length;
     case 'rejectCluster':

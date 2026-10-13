@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewActions.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9d4a7e21-05c8-4b63-a19f-3e8b2c60d475
 // last-edited: 2026-10-13
 
@@ -7,11 +7,14 @@ import { describe, expect, it } from 'vitest';
 import {
   affectedCount,
   asAuthorId,
+  asSeriesId,
   inverseOf,
   isReversible,
   needsConfirmation,
   type AuthorsAction,
+  type AuthorEntityAction,
   type ReviewAction,
+  type SeriesEntityAction,
   type SeriesId,
 } from './reviewActions';
 
@@ -236,5 +239,55 @@ describe('authors lane actions', () => {
     const wrongEntity: AuthorsAction = { lane: 'authors', entity: 'series', type: 'mergeGroup', canonicalId: asAuthorId(1) };
 
     expect([merge, bare, wrongEntity]).toHaveLength(3);
+  });
+});
+
+describe('series actions (the Series sub-view)', () => {
+  const mergeSel: ReviewAction = {
+    lane: 'authors',
+    entity: 'series',
+    type: 'mergeSelectedSeries',
+    groupKeys: ['s1-2', 's3-4', 's5-6'],
+  };
+  const mergeAll: ReviewAction = {
+    lane: 'authors',
+    entity: 'series',
+    type: 'mergeAllSeriesGroups',
+    expectedKeys: ['s1-2', 's3-4'],
+  };
+
+  it('knows its own counts, and confirms inside the lane like the authors lane', () => {
+    expect(affectedCount(mergeSel)).toBe(3);
+    expect(affectedCount(mergeAll)).toBe(2);
+    expect(needsConfirmation(mergeSel)).toBe(false);
+    expect(needsConfirmation(mergeAll)).toBe(false);
+  });
+
+  it('is irreversible from this screen, except the rename, which the lane undoes through the journal rather than here', () => {
+    expect(inverseOf(mergeSel)).toBeNull();
+    expect(inverseOf(mergeAll)).toBeNull();
+    expect(inverseOf({ lane: 'authors', entity: 'series', type: 'renameSeries', groupKey: 's1-2', seriesId: asSeriesId(1), name: 'x' })).toBeNull();
+  });
+
+  it('an author id cannot be passed to a series action, nor a series id to an author one (type test)', () => {
+    const authorId = asAuthorId(3);
+    const seriesId = asSeriesId(12);
+
+    // @ts-expect-error -- an AuthorId is not a SeriesId
+    const rename: SeriesEntityAction = { lane: 'authors', entity: 'series', type: 'renameSeries', groupKey: 's1', seriesId: authorId, name: 'x' };
+    // @ts-expect-error -- a bare number is not a SeriesId either: it must be branded at the edge
+    const bare: SeriesEntityAction = { lane: 'authors', entity: 'series', type: 'toggleSeriesIncluded', groupKey: 's1', seriesId: 12 };
+    // @ts-expect-error -- the narrator flag names an AUTHOR record
+    const flag: SeriesEntityAction = { lane: 'authors', entity: 'series', type: 'toggleSeriesNarrator', groupKey: 's1', authorId: seriesId };
+    // @ts-expect-error -- a series action cannot name the author entity
+    const wrongEntity: SeriesEntityAction = { lane: 'authors', entity: 'author', type: 'mergeSeriesGroup', groupKey: 's1' };
+    // @ts-expect-error -- and an author verb cannot be sent for the series entity
+    const authorVerb: AuthorsAction = { lane: 'authors', entity: 'series', type: 'mergeGroup', canonicalId: authorId };
+    // @ts-expect-error -- a series group has no canonical id: it is named by its group key
+    const byAuthorShape: SeriesEntityAction = { lane: 'authors', entity: 'series', type: 'mergeSeriesGroup', canonicalId: authorId };
+    // @ts-expect-error -- and an author action takes an author id, never a series id
+    const crossed: AuthorEntityAction = { lane: 'authors', entity: 'author', type: 'mergeGroup', canonicalId: seriesId };
+
+    expect([rename, bare, flag, wrongEntity, authorVerb, byAuthorShape, crossed]).toHaveLength(7);
   });
 });
