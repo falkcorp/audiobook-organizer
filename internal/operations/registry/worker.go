@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.37.0
+// version: 2.38.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-13
 
@@ -152,11 +152,17 @@ type runHandle struct {
 	// Shutdown for a row it stamped. Every per-handle count takes it with a
 	// compare-and-set, so a run whose end two of them see is counted once.
 	endCounted atomic.Bool
-	// deadlineHit is set when executeRun sees the run's context end with
-	// context.DeadlineExceeded (its def's Timeout). Shutdown reads it to stamp
-	// a run that timed out and did not drain as a timeout, not as an
-	// interrupted pause that the next boot would resume.
+	// deadlineHit is set when the run's context ends with
+	// context.DeadlineExceeded (its def's Timeout), by a context.AfterFunc
+	// registered in executeRun, so both the in-process and the subprocess
+	// (Isolate=true) paths set it. Shutdown reads it to stamp a run that timed
+	// out and did not drain as a timeout, not as an interrupted pause that the
+	// next boot would resume.
 	deadlineHit atomic.Bool
+	// params is the run's params, so Shutdown can tell the dependency
+	// scheduler about a row it stamped final (notifyDepTerminal reads the
+	// subjects from them). Nil on dispatcher stub handles.
+	params json.RawMessage
 }
 
 // zombieOutcome is a stopping run's decided final status. It carries no
@@ -369,8 +375,17 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		cancelCause:    cancelCause,
 		parked:         make(chan struct{}),
 		fence:          fence,
+		params:         qr.params,
 	}
 	h.attemptStartedAt.Store(attemptStartedAt.UnixNano())
+	// Record a deadline hit on the handle the moment runCtx ends, on every
+	// path (the subprocess path never reaches the select below). AfterFunc
+	// runs once, at the first Done: a deadline stores true; the deferred
+	// cancel at a normal exit stores false. Nothing to stop: runCtx always
+	// ends when executeRun returns.
+	context.AfterFunc(runCtx, func() {
+		h.deadlineHit.Store(errors.Is(runCtx.Err(), context.DeadlineExceeded))
+	})
 	r.mu.Lock()
 	// prev is always this run's own dispatcher stub, never a zombie (05-PR3):
 	// Gate 0 refuses to claim an id that is in r.running, so a zombie's
@@ -642,11 +657,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		if runCtx.Err() != nil {
 			ctxCanceled = true
 			fence.revoke()
-			h.deadlineHit.Store(errors.Is(runCtx.Err(), context.DeadlineExceeded))
 		}
 	case <-runCtx.Done():
 		ctxCanceled = true
-		h.deadlineHit.Store(errors.Is(runCtx.Err(), context.DeadlineExceeded))
 		// Revoke here for the stop paths no code of ours initiates: the def
 		// Timeout firing inside context.WithTimeout, or the parent context
 		// ending. Every other path (Cancel, watchdog, quiesce, shutdown) has
@@ -893,12 +906,17 @@ type terminalOutcome struct {
 	// over it. It is carried, not derived from status, because a timeout and
 	// a cancel share the status "canceled".
 	outcome string
-	// written is true when the row now holds a final status: this write
-	// applied, or the row already read "canceled" and was kept. False when the
-	// write failed or could not be confirmed, so the row may still read
-	// "running": its end is then not counted here (recordRunMetrics), because
+	// written is true when this run's end is to be counted from this
+	// result: the write applied, the row's existing cancel was kept, or the
+	// row is known to hold a status nobody will move again (another writer's
+	// final status, e.g. Cancel's "canceled" after the handle was released),
+	// in which case outcome is read off that row. It is false only when the
+	// row may still be live: it reads running, queued or
+	// interrupted_quiesced (a resumable status), or could not be read after a
+	// failed write. Its end is then not counted here (recordRunMetrics):
 	// whoever finishes the row counts it -- the boot sweep for a running or
-	// v3 stopping row, which ends it by its stop reason or resumes it.
+	// v3 stopping row, which ends it by its stop reason or resumes it, or the
+	// resumed attempt.
 	written bool
 }
 
@@ -947,7 +965,13 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, o
 		if err != nil {
 			r.logger.Warn("registry: failed to write op terminal status",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", err)
-			return terminalOutcome{status: status, publish: true, outcome: outcome}
+			// The write failed, so whether this run's end is countable
+			// depends on what the row holds now (unwrittenEnd).
+			row, gerr := r.store.GetOperationV2(qr.opID)
+			if gerr != nil || row == nil || row.ID == "" {
+				row = nil
+			}
+			return unwrittenEnd(status, outcome, row)
 		}
 		if applied {
 			break
@@ -956,6 +980,19 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, o
 		if gerr != nil || row == nil || row.ID == "" {
 			r.logger.Warn("registry: op terminal status not written; the row is no longer running and could not be re-read",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", gerr)
+			// The compare-and-set from "running" was refused, so another
+			// writer moved the row. Outside a shutdown that writer is Cancel,
+			// whose "canceled" nobody moves again and which counts nothing,
+			// so the run's decided outcome is counted (a user cancel decided
+			// canceled; not counting lost the end, since nothing counts a row
+			// that is no longer running). During a shutdown it may be
+			// Shutdown's stamp, possibly a resumable interrupted_quiesced
+			// whose resumed attempt counts the end; Shutdown counts its
+			// final stamps itself (countShutdownStamps), so nothing is
+			// counted here.
+			if from == "running" && !r.shuttingDown.Load() {
+				return terminalOutcome{status: status, publish: true, outcome: outcome, written: true}
+			}
 			return terminalOutcome{status: status, publish: true, outcome: outcome}
 		}
 		if row.Status == "canceled" && keepsUserCancel(status) {
@@ -983,7 +1020,7 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, o
 		if attempt >= runTerminalWriteAttempts {
 			r.logger.Warn("registry: op terminal status not written; the row's status kept changing",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "row_status", row.Status)
-			return terminalOutcome{status: status, publish: true, outcome: outcome}
+			return unwrittenEnd(status, outcome, row)
 		}
 		from = row.Status
 	}
@@ -1111,6 +1148,27 @@ func (r *Registry) markTimedOutStopping(runCtx context.Context, qr *queuedRun, h
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		r.markStopping(qr, h, state.StopTimeout, false)
 	}
+}
+
+// unwrittenEnd is writeRunTerminalStatus' result when this run's status did
+// not land. row is the row as last read (nil: unreadable). A row that reads a
+// resumable status (running, queued, interrupted_quiesced) may still end some
+// other way, and an unreadable one is unknown: neither is counted here
+// (written false), since the boot sweep or the resumed attempt counts the end.
+// Any other status is final and nobody will move it again (Cancel's
+// "canceled" written after the handle was released, a stamp), so the end is
+// counted, with the outcome that row reads ("" for interrupted_ask, which is
+// no outcome).
+func unwrittenEnd(status, decided string, row *database.OperationV2Row) terminalOutcome {
+	if row == nil || state.IsResumable(row.Status) {
+		return terminalOutcome{status: status, publish: true, outcome: decided}
+	}
+	msg := ""
+	if row.ErrorMessage != nil {
+		msg = *row.ErrorMessage
+	}
+	o, _ := opsmetrics.OutcomeFor(row.Status, msg)
+	return terminalOutcome{status: status, publish: true, outcome: o, written: true}
 }
 
 // rowOutcome is the ops.runs outcome of a stored "canceled" row: timed_out

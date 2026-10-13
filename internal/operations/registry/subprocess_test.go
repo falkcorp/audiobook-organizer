@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package registry_test
 
@@ -22,6 +22,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -33,9 +37,23 @@ const (
 	testChildExpectDefVar    = "TEST_SUBPROCESS_EXPECT_DEF"
 	testChildExpectParamsVar = "TEST_SUBPROCESS_EXPECT_PARAMS"
 	testChildResultErrorVar  = "TEST_SUBPROCESS_RESULT_ERROR"
+	// testChildHangVar makes the stub child, after the handshake, hand its
+	// end of the socket to a grandchild that ignores SIGTERM and holds it for
+	// this many milliseconds, then wait to be killed. runSubprocess kills the
+	// child at the run's deadline but then waits for the socket to close, so
+	// the run stays in flight past its deadline until the grandchild exits.
+	testChildHangVar = "TEST_SUBPROCESS_HANG_MS"
+	// testGrandchildHoldVar is the grandchild mode: ignore SIGTERM, sleep this
+	// many milliseconds holding the inherited socket, exit.
+	testGrandchildHoldVar = "TEST_SUBPROCESS_HOLD_MS"
 )
 
 func TestMain(m *testing.M) {
+	if ms, err := strconv.Atoi(os.Getenv(testGrandchildHoldVar)); err == nil {
+		signal.Ignore(syscall.SIGTERM)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		os.Exit(0)
+	}
 	if os.Getenv(testChildEnvVar) == "1" && len(os.Args) >= 2 && os.Args[1] == "--operation-runner" {
 		runStubChild()
 		return
@@ -263,6 +281,10 @@ func runStubChild() {
 		os.Exit(1)
 	}
 
+	if hold := os.Getenv(testChildHangVar); hold != "" {
+		holdSocketInGrandchild(conn, hold)
+		select {} // killed at the run's deadline
+	}
 	if errMsg := os.Getenv(testChildResultErrorVar); errMsg != "" {
 		writeStubChildResult(conn, errMsg)
 		os.Exit(0)
@@ -282,4 +304,28 @@ func writeStubChildResult(conn net.Conn, errMsg string) {
 	b, _ := json.Marshal(res)
 	b = append(b, '\n')
 	_, _ = conn.Write(b)
+}
+
+// holdSocketInGrandchild starts the test binary in grandchild mode with a
+// duplicate of conn as an extra file, in this process's group, so the socket
+// stays open after this child is killed.
+func holdSocketInGrandchild(conn net.Conn, holdMS string) {
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		os.Exit(2)
+	}
+	f, err := uc.File()
+	if err != nil {
+		os.Exit(2)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		os.Exit(2)
+	}
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), testGrandchildHoldVar+"="+holdMS)
+	cmd.ExtraFiles = []*os.File{f}
+	if err := cmd.Start(); err != nil {
+		os.Exit(2)
+	}
 }
