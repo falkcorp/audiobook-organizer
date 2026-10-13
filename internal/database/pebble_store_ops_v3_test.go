@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-13
 
@@ -1090,5 +1090,24 @@ func TestV2WriteLeavesLedgerProgress(t *testing.T) {
 	r := mustRun(t, p, id)
 	if r.Progress.Done != 700 || r.Progress.Total == nil || *r.Progress.Total != 700 || r.Progress.Current != "last item" {
 		t.Fatalf("progress after v2 writes = %+v", r.Progress)
+	}
+}
+
+// TestCommitLedgerKeepsPhase: a ledger commit carries the runner's numbers
+// but no phase; the phase the run set (through the v2 row) survives it.
+func TestCommitLedgerKeepsPhase(t *testing.T) {
+	p := newTimelineStore(t)
+	id := insertV3(t, p, "test.phase", "")
+	transition(t, p, id, state.EvDispatch, nil)
+	phase := "apply"
+	if err := p.UpdateOpPhaseV2(id, &phase); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CommitLedgerV3(id, LedgerBatch{Ledger: Ledger{ChunkCount: 1},
+		Progress: ProgressSnapshot{Done: 3, Chunks: &ChunkProgress{Done: 1, Total: 1, Size: 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustRun(t, p, id); r.Progress.Phase != "apply" || r.Progress.Done != 3 {
+		t.Fatalf("progress after a ledger commit = %+v", r.Progress)
 	}
 }

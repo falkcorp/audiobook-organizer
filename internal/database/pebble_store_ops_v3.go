@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-13
 
@@ -1485,9 +1485,13 @@ func (p *PebbleStore) getJSONFound(key []byte, dst any) (found bool, err error) 
 
 // openRunV3 refuses a per-run write for a run that does not exist or is
 // terminal. The caller holds opsMu and keeps holding it through the write, so
-// a terminal transition (which deletes the run's snapshot, ledger and intents
-// in its batch, under opsMu) cannot land between this check and the write and
-// leave a per-run key no pass ever cleans up. Same errors as CommitLedgerV3.
+// neither a terminal transition (which deletes the run's snapshot and ledger
+// in its batch, under opsMu) nor a discard (DeleteRunV3, which also deletes
+// its intents and log) can land between this check and the write and leave a
+// per-run key no pass ever cleans up. Intents are deliberately NOT deleted at
+// a terminal transition: an intent left by a crashed write is the "may be
+// partially applied" evidence and must outlive the run's end until a discard.
+// Same errors as CommitLedgerV3.
 func (p *PebbleStore) openRunV3(id string) error {
 	cur, err := p.loadRunV3(id)
 	if err != nil {
@@ -1601,7 +1605,16 @@ func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 		return err
 	}
 	next := *cur
-	next.Progress = lb.Progress
+	// The runner owns the numbers; the phase is the run's (rc.Phase writes
+	// it through the v2 row), so a ledger commit without one keeps it.
+	prog := lb.Progress
+	if prog.Phase == "" {
+		prog.Phase = cur.Progress.Phase
+	}
+	if prog.Phases == nil {
+		prog.Phases = cur.Progress.Phases
+	}
+	next.Progress = prog
 	next.LastProgressAt = &now
 	if err := p.stageItemOutcomes(b, &next, lb.ItemRows); err != nil {
 		return err
@@ -1632,10 +1645,15 @@ func (p *PebbleStore) PutIntentV3(id string, in Intent) (err error) {
 	return p.pebbleSetJSON(opv3IntentKey(id, in.Seq), &in)
 }
 
-// ClearIntentV3 deletes a committed intent.
+// ClearIntentV3 deletes a committed intent. It does not sync: by the time
+// it runs the write and its history row are already synced, so a crash that
+// loses the delete only leaves an intent behind, and a leftover intent makes
+// recovery report the subject as "may be partially applied" -- cautious,
+// never wrong in the direction that loses data. Skipping the fsync halves the
+// synced writes of every Writer call.
 func (p *PebbleStore) ClearIntentV3(id string, seq uint64) (err error) {
 	defer recoverPebbleClosed("ClearIntentV3", &err)
-	return p.db.Delete(opv3IntentKey(id, seq), pebble.Sync)
+	return p.db.Delete(opv3IntentKey(id, seq), pebble.NoSync)
 }
 
 // ListIntentsV3 returns a run's outstanding intents in seq order.
