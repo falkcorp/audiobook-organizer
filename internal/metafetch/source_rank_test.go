@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_rank_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d6c2f85-47e1-4b39-9a70-3e8b5c1d2f94
 // last-edited: 2026-10-12
 
@@ -88,17 +88,29 @@ func TestApplyOptions_RankUpgradeLabels(t *testing.T) {
 	}
 }
 
-// A book the owner fills from a local-catalog candidate is an Audible book:
-// its source tag and rank are Audible's, not an unranked slug the metadata
-// upgrade would never touch.
-func TestMetadataSourceSlug_LocalCatalogIsAudible(t *testing.T) {
-	if got := MetadataSourceSlug(metadata.CatalogSourceName); got != SourceSlugAudible {
-		t.Fatalf("MetadataSourceSlug(%q) = %q, want %q", metadata.CatalogSourceName, got, SourceSlugAudible)
+// A book the owner fills from a local-catalog candidate is tagged apart from
+// a live Audible fill, and ranked just below it: a live Audible answer may
+// replace it, and it replaces nothing Audible filled.
+func TestMetadataSourceSlug_LocalCatalogRanksJustBelowAudible(t *testing.T) {
+	if got := MetadataSourceSlug(metadata.CatalogSourceName); got != "audible_catalog" {
+		t.Fatalf("MetadataSourceSlug(%q) = %q, want audible_catalog", metadata.CatalogSourceName, got)
 	}
-	if got := MetadataSourceTag(metadata.CatalogSourceName); got != "metadata:source:audible" {
+	if got := MetadataSourceTag(metadata.CatalogSourceName); got != "metadata:source:audible_catalog" {
 		t.Errorf("MetadataSourceTag = %q", got)
 	}
-	if r, ok := SourceRank(metadata.CatalogSourceName); !ok || r != 50 {
-		t.Errorf("SourceRank = %d, %v; want Audible's 50", r, ok)
+	cat, ok := SourceRank(metadata.CatalogSourceName)
+	aud, _ := SourceRank("Audible")
+	hc, _ := SourceRank("Hardcover")
+	if !ok || cat >= aud || cat <= hc {
+		t.Errorf("catalog rank %d (ranked %v) must sit between Hardcover %d and Audible %d", cat, ok, hc, aud)
+	}
+	if !SourceOutranks("Audible", metadata.CatalogSourceName) || !SourceOutranks("Audnexus (Audible)", metadata.CatalogSourceName) {
+		t.Error("a live Audible answer must be able to replace a catalog fill")
+	}
+	if SourceOutranks(metadata.CatalogSourceName, "Audible") || SourceOutranks(metadata.CatalogSourceName, metadata.CatalogSourceName) {
+		t.Error("a catalog candidate must replace neither Audible's fill nor its own")
+	}
+	if !SourceOutranks(metadata.CatalogSourceName, "Open Library") {
+		t.Error("a catalog candidate outranks Open Library")
 	}
 }

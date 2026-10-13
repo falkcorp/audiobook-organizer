@@ -1,5 +1,5 @@
 // file: internal/metadata/source.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-12
 
@@ -35,6 +35,10 @@ func SourceProducesAudiobookReleaseYear(sourceName string) bool {
 // "audible_category" label so existing tags keep their vocabulary.
 func CategoryTagSource(sourceName string) string {
 	switch sourceName {
+	case CatalogSourceName:
+		// The catalog stores Audible's own product record, category ladder
+		// included.
+		return "audible_category"
 	case (&GoogleBooksClient{}).Name():
 		return "google_books_category"
 	case (&OpenLibraryClient{}).Name():
