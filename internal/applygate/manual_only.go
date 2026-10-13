@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 
 package applygate
 
@@ -281,6 +281,14 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 	}
 	if g.StoreDetail != "" {
 		return ReasonOwnerManualOnly, g.StoreDetail
+	}
+	// The local catalog stage tags an entry of the owner's manual-only
+	// libraries (catalog.IsManualOnly reads the subtitle and every series
+	// membership, which the candidate's own title, first series, publisher and
+	// author below do not carry). The tag is the stage's finding and holds the
+	// candidate however neutral its visible fields are.
+	if c != nil && c.ManualOnly {
+		return ReasonOwnerManualOnly, manualOnlyWhy + "candidate is tagged manual-only by the local catalog"
 	}
 	checks := []manualOnlyCheck{
 		{what: "path", value: book.FilePath},
