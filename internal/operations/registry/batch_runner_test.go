@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
 // last-edited: 2026-10-13
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -317,8 +318,12 @@ func TestChunkLeasing_ResumeLeasesExactlyUnfinished(t *testing.T) {
 // throttle (every completion, or a real throttle that leaves completions
 // folded but not committed), and up to three disruptions of three kinds: a
 // crash right after a commit, a crash right after a fold (before its
-// commit), and a fence revoked mid-run. Some items fail (OnItemError
-// Continue): they settle like any other.
+// commit), writes refused from some item on (ErrFenced or a lost lease, as
+// the Writer reports them), and a real fence revoked mid-run by an item that
+// swallows its refused write. A run that reached a refusal must end with that
+// error, no item that returned after a revoke may sit in a recorded chunk,
+// and the final Failed counts only the items that really fail
+// (OnItemError Continue): a refused write is never an ordinary failure.
 func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 	const seeds = 32
 	for seed := range seeds {
@@ -334,29 +339,60 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 			total := map[int]int{}
 			recorded := map[int]bool{} // items whose chunk/range a stored ledger recorded
 			var final ops.Summary
+			wantFailed := int64(0)
+			for i := range items {
+				if i%11 == 0 {
+					wantFailed++
+				}
+			}
 			for attempt := 0; ; attempt++ {
 				c := newCounts()
-				mode := 3 // clean
+				// 0: crash after a commit; 1: crash after a fold, before its
+				// commit; 2: the Writer refuses writes from fenceFrom on
+				// (an ErrFenced or lost-lease error, no revoke seen yet);
+				// 3: a real fence revoked by item fenceFrom, which swallows
+				// its refused write and returns nil, then the context is
+				// canceled as the registry does; 4: clean.
+				mode := 4
 				if attempt < 3 {
-					mode = rng.IntN(3)
+					mode = rng.IntN(4)
 				}
 				disruptAt := 1 + rng.IntN(max(n/size, 1)+1)
 				fenceFrom := rng.IntN(n)
+				refusal := []error{ops.ErrFenced, opswriter.ErrStandDownLost}[rng.IntN(2)]
+				fence, revoke := opswriter.NewFence(uint64(attempt+1), nil)
+				var reached atomic.Bool
+				fencedRan := newCounts() // items that returned after the revoke
+				var stopRun context.CancelFunc
 				job, rc, cancel := openJob(t, items, batchOpts{order: order, size: size, workers: workers},
 					func(_ *ops.ItemRC, i int) error {
 						c.add(i)
 						runtime.Gosched()
+						defer func() {
+							if fence.Revoked() {
+								fencedRan.add(i)
+							}
+						}()
 						if mode == 2 && i >= fenceFrom {
-							return fmt.Errorf("item %d: %w", i, ops.ErrFenced)
+							reached.Store(true)
+							return fmt.Errorf("item %d: %w", i, refusal)
+						}
+						if mode == 3 && i == fenceFrom {
+							reached.Store(true)
+							revoke()
+							stopRun()
+							return nil // the refused write, swallowed
 						}
 						if i%11 == 0 {
 							return errors.New("a failing item settles too")
 						}
 						return nil
 					})
+				stopRun = cancel
 				store.newAttempt()
 				commits, folds := 0, 0
-				sum, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: commitEvery,
+				ctx := opswriter.WithFence(rc.Context(), fence)
+				sum, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: commitEvery,
 					afterCommit: func(database.Ledger, database.ProgressSnapshot) bool {
 						commits++
 						return mode == 0 && commits == disruptAt
@@ -372,11 +408,21 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 					}
 					total[i] += c.get(i)
 				}
+				if reached.Load() && !errors.Is(err, errWorldStopped) {
+					want := refusal
+					if mode == 3 {
+						want = ops.ErrFenced
+					}
+					if !errors.Is(err, want) {
+						t.Fatalf("attempt %d (mode %d) reached the refusal at item %d but returned %v, want %v",
+							attempt, mode, fenceFrom, err, want)
+					}
+				}
 				if err == nil {
 					final = sum
 					break
 				}
-				if !errors.Is(err, errWorldStopped) && !errors.Is(err, ops.ErrFenced) {
+				if !errors.Is(err, errWorldStopped) && !errors.Is(err, ops.ErrFenced) && !errors.Is(err, opswriter.ErrStandDownLost) {
 					t.Fatalf("attempt %d: %v", attempt, err)
 				}
 				led, _ := store.GetLedgerV3("op")
@@ -391,6 +437,9 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 					} else if inRanges(led.Ranges, itemKey(i)) {
 						recorded[i] = true
 					}
+					if recorded[i] && fencedRan.get(i) > 0 && c.get(i) > 0 {
+						t.Fatalf("attempt %d (mode %d): item %d returned after the fence was revoked, and its chunk was recorded", attempt, mode, i)
+					}
 				}
 			}
 			for i := range items {
@@ -400,6 +449,9 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 			}
 			if final.Done != int64(n) {
 				t.Fatalf("final Done = %d, want %d", final.Done, n)
+			}
+			if final.Failed != wantFailed {
+				t.Fatalf("final Failed = %d, want %d (only the i%%11 items fail; a refused write is never a failure)", final.Failed, wantFailed)
 			}
 		})
 	}
