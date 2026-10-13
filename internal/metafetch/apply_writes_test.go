@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 //
 // Pins that a metadata apply writes every selected field, never a deselected
 // one, records provenance for every field it writes, downloads the new cover,
@@ -1182,8 +1182,8 @@ func TestFinishApplyFileWork_SameBookJobsSerialize(t *testing.T) {
 }
 
 // Auto-fetch keeps a cover the book already has; only an explicit apply
-// replaces it. Before the apply-writes change auto-fetch used DownloadCoverArt,
-// which skips an existing file, and that change had routed it through the
+// replaces it. Before the apply-writes change auto-fetch used DownloadCoverArt
+// (since deleted), which skipped an existing file, and that change had routed it through the
 // replace path.
 func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
 	const cover = "https://covers.example.test/new.jpg"

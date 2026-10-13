@@ -1,6 +1,7 @@
 // file: internal/metadata/custom_tags.go
 // version: 1.0.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -21,18 +22,3 @@ const (
 	// CustomTagVersion is the current schema version for custom tags.
 	CustomTagVersion = "1"
 )
-
-// CustomTags holds the custom audiobook organizer tag values extracted from or
-// destined for audio file metadata.
-type CustomTags struct {
-	BookID        string
-	Version       string
-	ISBN10        string
-	ISBN13        string
-	ASIN          string
-	OpenLibraryID string
-	HardcoverID   string
-	GoogleBooksID string
-	Edition       string
-	PrintYear     string
-}

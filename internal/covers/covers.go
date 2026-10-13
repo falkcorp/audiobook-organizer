@@ -1,7 +1,7 @@
 // file: internal/covers/covers.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c3d4e5f6-7890-abcd-ef12-34567890abcd
-// last-edited: 2026-09-13
+// last-edited: 2026-10-12
 //
 // Cover service logic for proxy caching and validation.
 // Business logic extracted from internal/server/covers.go.
@@ -94,7 +94,7 @@ func FetchAndCacheCover(coverURL, cacheDir string) (string, string) {
 
 // fetchAndCacheCoverWithClient is the implementation, split out so tests can
 // substitute a plain client pointing at a loopback httptest server — the same
-// seam metadata.downloadCoverArtWithClient uses, and the only way to assert
+// seam metadata.replaceCoverArtWithClient uses, and the only way to assert
 // that a permitted fetch still succeeds once the guard refuses loopback.
 func fetchAndCacheCoverWithClient(client *http.Client, coverURL, cacheDir string) (string, string) {
 	// Checked before the directory is created so a rejected URL leaves nothing

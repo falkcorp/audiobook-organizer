@@ -1,6 +1,7 @@
 // file: internal/metadata/cover_test.go
 // version: 1.1.1
 // guid: 5fa1b8c9-d3e4-48f5-95a8-4ac57cde0b12
+// last-edited: 2026-10-12
 
 package metadata
 

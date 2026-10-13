@@ -272,31 +272,6 @@ func TestCustomTagConsistency_MetadataStructHasFieldForEveryCustomTag(t *testing
 	}
 }
 
-// TestCustomTagConsistency_CustomTagsStructHasFieldForEveryTag ensures that
-// the CustomTags struct has a field for every writable custom tag.
-func TestCustomTagConsistency_CustomTagsStructHasFieldForEveryTag(t *testing.T) {
-	tagToField := map[string]string{
-		"TagBookID":      "BookID",
-		"TagVersion":     "Version",
-		"TagISBN10":      "ISBN10",
-		"TagISBN13":      "ISBN13",
-		"TagASIN":        "ASIN",
-		"TagOpenLibrary": "OpenLibraryID",
-		"TagHardcover":   "HardcoverID",
-		"TagGoogleBooks": "GoogleBooksID",
-		"TagEdition":     "Edition",
-		"TagPrintYear":   "PrintYear",
-	}
-
-	ctType := reflect.TypeFor[CustomTags]()
-	for constName, fieldName := range tagToField {
-		_, found := ctType.FieldByName(fieldName)
-		if !found {
-			t.Errorf("CustomTags struct missing field %q for constant %s", fieldName, constName)
-		}
-	}
-}
-
 // TestCustomTagConsistency_ProvenanceFieldsCoverMetadata verifies that every
 // Metadata field that carries file-level data is represented in the provenance
 // map built by buildMetadataProvenance (in server.go). We check the expected

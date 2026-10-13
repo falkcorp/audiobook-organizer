@@ -30,7 +30,7 @@ func TestParseBookName_CensusShapes(t *testing.T) {
 		name             string
 		raw              string
 		ev               NameEvidence
-		title, search    string
+		title, bookName  string
 		author, narrator string
 		year, suffix     string
 		series, position string
@@ -39,98 +39,98 @@ func TestParseBookName_CensusShapes(t *testing.T) {
 		{
 			name: "leading year with a one-word name", raw: "2018 - Glasswake",
 			ev:    NameEvidence{Authors: []string{"Mara Quill"}},
-			title: "Glasswake", search: "Glasswake", year: "2018", shapes: []string{ShapeLeadingYear},
+			title: "Glasswake", year: "2018", shapes: []string{ShapeLeadingYear},
 		},
 		{
 			name: "one-word series slot with a trailing track number", raw: "Driftworld 24 - The Seventh Lantern - 01",
 			ev:    NameEvidence{Authors: []string{"Dorian Vex"}},
-			title: "Driftworld 24 - The Seventh Lantern", search: "The Seventh Lantern",
+			title: "Driftworld 24 - The Seventh Lantern", bookName: "The Seventh Lantern",
 			series: "Driftworld", position: "24", suffix: "01", shapes: []string{ShapeTrackSuffix, ShapeSeriesSlot},
 		},
 		{
 			name: "author segment, then a labelled slot alone, then the placeholder", raw: "Kestrel Moon - Copper Regent Book 03 - Unknown Author",
 			ev:    NameEvidence{Authors: []string{"Kestrel Moon"}},
-			title: "Copper Regent Book 03", search: "Copper Regent Book 03", author: "Kestrel Moon",
+			title: "Copper Regent Book 03", author: "Kestrel Moon",
 			series: "Copper Regent", position: "03",
 			shapes: []string{ShapePlaceholderAuthor, ShapeLeadingAuthor, ShapeSeriesSlot},
 		},
 		{
 			name: "placeholder only", raw: "Hammer Fall Rising - Unknown Author",
-			title: "Hammer Fall Rising", search: "Hammer Fall Rising", shapes: []string{ShapePlaceholderAuthor},
+			title: "Hammer Fall Rising", shapes: []string{ShapePlaceholderAuthor},
 		},
 		{
 			name: "series book slot, sub-series, book name", raw: "Saga of Embers Book 05 - Frostvale Trilogy - Rivers of Ash",
 			ev:    NameEvidence{Authors: []string{"R. T. Ashby"}},
-			title: "Saga of Embers Book 05 - Frostvale Trilogy - Rivers of Ash", search: "Rivers of Ash",
+			title: "Saga of Embers Book 05 - Frostvale Trilogy - Rivers of Ash", bookName: "Rivers of Ash",
 			series: "Saga of Embers", position: "05", shapes: []string{ShapeSeriesSlot, ShapeSubseries},
 		},
 		{
 			name: "book one named for its series", raw: "The Hollow Wood 01 - The Hollow Wood",
-			title: "The Hollow Wood 01 - The Hollow Wood", search: "The Hollow Wood",
+			title: "The Hollow Wood 01 - The Hollow Wood", bookName: "The Hollow Wood",
 			series: "The Hollow Wood", position: "01", shapes: []string{ShapeSeriesSlot},
 		},
 		{
 			name: "unbracketed rip tail with narrator", raw: "1987 - The Last Orbit (Avers) 64k 12.07.23 {345mb}",
-			title: "The Last Orbit", search: "The Last Orbit", narrator: "Avers", year: "1987",
+			title: "The Last Orbit", narrator: "Avers", year: "1987",
 			shapes: []string{ShapeRipTail, ShapeLeadingYear},
 		},
 		{
 			name: "series - n - name", raw: "Squad K - 3 - The Night Shift",
-			title: "Squad K - 3 - The Night Shift", search: "The Night Shift", series: "Squad K", position: "3",
+			title: "Squad K - 3 - The Night Shift", bookName: "The Night Shift", series: "Squad K", position: "3",
 			shapes: []string{ShapeSeriesSlot},
 		},
 		{
 			name: "hyphenated series word", raw: "Semi-Trained Cadet 06 - Recruit",
-			title: "Semi-Trained Cadet 06 - Recruit", search: "Recruit", series: "Semi-Trained Cadet", position: "06",
+			title: "Semi-Trained Cadet 06 - Recruit", bookName: "Recruit", series: "Semi-Trained Cadet", position: "06",
 			shapes: []string{ShapeSeriesSlot},
 		},
 		{
 			name: "single-word author segment known to the book", raw: "Quillfeather - The One Who Hunts Storms 03 (Ada Penn)",
-			ev:    NameEvidence{Authors: []string{"Quillfeather"}},
-			title: "The One Who Hunts Storms 03 (Ada Penn)", search: "The One Who Hunts Storms 03 (Ada Penn)",
+			ev:     NameEvidence{Authors: []string{"Quillfeather"}},
+			title:  "The One Who Hunts Storms 03 (Ada Penn)",
 			author: "Quillfeather", shapes: []string{ShapeLeadingAuthor},
 		},
 		{
 			name: "initials author segment and trailing tags", raw: "J.K. Marlow - Freighter for Hire 02 [44m4] [Fixed]",
 			ev:    NameEvidence{Authors: []string{"J. K. Marlow"}},
-			title: "Freighter for Hire 02", search: "Freighter for Hire 02", author: "J.K. Marlow",
+			title: "Freighter for Hire 02", author: "J.K. Marlow",
 			shapes: []string{ShapeTrailingTag, ShapeTrailingTag, ShapeLeadingAuthor},
 		},
 		{
 			name: "leading year then a subtitle", raw: "2005 - Raven Song: A Novel of the Reach",
-			title: "Raven Song: A Novel of the Reach", search: "Raven Song: A Novel of the Reach", year: "2005",
+			title: "Raven Song: A Novel of the Reach", year: "2005",
 			shapes: []string{ShapeLeadingYear},
 		},
 		{
 			name: "transposed: title - author", raw: "The Paper Garden - Mara Quill",
 			ev:    NameEvidence{Authors: []string{"Mara Quill"}},
-			title: "The Paper Garden", search: "The Paper Garden", author: "Mara Quill", shapes: []string{ShapeTrailingAuthor},
+			title: "The Paper Garden", author: "Mara Quill", shapes: []string{ShapeTrailingAuthor},
 		},
 		{
 			name: "authority-known author segment", raw: "Dorian Vex - Ironclad - The Long Watch",
 			ev:    NameEvidence{IsKnownAuthor: known("Dorian Vex")},
-			title: "Ironclad - The Long Watch", search: "The Long Watch", author: "Dorian Vex", series: "Ironclad",
+			title: "Ironclad - The Long Watch", bookName: "The Long Watch", author: "Dorian Vex", series: "Ironclad",
 			shapes: []string{ShapeLeadingAuthor, ShapeSeriesSlot},
 		},
 		{
 			// A person-shaped name repeating its folder is that folder's author.
 			name: "leading segment that repeats an ancestor folder", raw: "Dorian Vex - Ironclad 02 - The Long Watch",
 			ev:    NameEvidence{Path: "/srv/library/Dorian Vex/Ironclad/Dorian Vex - Ironclad 02 - The Long Watch/book.m4b"},
-			title: "Ironclad 02 - The Long Watch", search: "The Long Watch", author: "Dorian Vex",
+			title: "Ironclad 02 - The Long Watch", bookName: "The Long Watch", author: "Dorian Vex",
 			series: "Ironclad", position: "02", shapes: []string{ShapeLeadingAuthor, ShapeSeriesSlot},
 		},
 		{
 			name: "explicit count suffix", raw: "The Glass Tower (1 of 3)",
-			title: "The Glass Tower", search: "The Glass Tower", suffix: "1 of 3", shapes: []string{ShapeTrackSuffix},
+			title: "The Glass Tower", suffix: "1 of 3", shapes: []string{ShapeTrackSuffix},
 		},
 		{
 			name: "folder parser: any author-shaped trailing segment", raw: "The Long Watch - Dorian Vex",
 			ev:    NameEvidence{FolderName: true},
-			title: "The Long Watch", search: "The Long Watch", author: "Dorian Vex", shapes: []string{ShapeTrailingAuthor},
+			title: "The Long Watch", author: "Dorian Vex", shapes: []string{ShapeTrailingAuthor},
 		},
 		{
 			name: "read by credit and placeholder", raw: "Cold Harbor - read by Ada Penn - Unknown Author",
-			title: "Cold Harbor", search: "Cold Harbor", narrator: "Ada Penn",
+			title: "Cold Harbor", narrator: "Ada Penn",
 			shapes: []string{ShapePlaceholderAuthor, ShapeNarratorCredit},
 		},
 	}
@@ -138,12 +138,7 @@ func TestParseBookName_CensusShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ParseBookName(tc.raw, tc.ev)
 			assert.Equal(t, tc.title, got.Title, "title")
-			// The book's own name: Name when a slot carried one, else Title.
-			searchName := got.Name
-			if searchName == "" {
-				searchName = got.Title
-			}
-			assert.Equal(t, tc.search, searchName, "search name")
+			assert.Equal(t, tc.bookName, got.Name, "name")
 			assert.Equal(t, tc.author, got.Author, "author")
 			assert.Equal(t, tc.narrator, got.Narrator, "narrator")
 			assert.Equal(t, tc.year, got.Year, "year")

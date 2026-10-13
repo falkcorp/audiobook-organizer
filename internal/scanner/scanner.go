@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.131.2
+// version: 1.131.3
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package scanner
 
@@ -845,7 +845,7 @@ type Book struct {
 	sharesDirectory bool
 
 	// folderParse holds the identity values this scan took from the folder
-	// parse (metadata.ExtractMetadataFromFolder via AssembleBookMetadata), so
+	// parse (metadata.ExtractMetadataFromFolderWith via AssembleBookMetadataWith), so
 	// a rescan of an EXISTING row never takes them (folderDerivedLocks).
 	folderParse folderParsed
 	// positionFromTitle is true when Position was read off the title
@@ -1710,7 +1710,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		// order). Without this, it would fall to the per-file ProcessFile
 		// path below and take its title from one chapter's tags — chapter
 		// titles ("Chapter 1", "Part 1") then leak into and collide across
-		// Book.Title. Route it through AssembleBookMetadata (folder preference)
+		// Book.Title. Route it through AssembleBookMetadataWith (folder preference)
 		// exactly like generically-named part files; the segments are still
 		// created from SegmentFiles at the saveBook step. This mirrors the
 		// album-grouped multi-file path, which already routes via the folder.
@@ -1723,7 +1723,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
 			bm, bmErr := metadata.AssembleBookMetadataWith(dirPath, firstFile, fileCount, 0, FolderNameEvidence())
 			if bmErr != nil {
-				scanLog.Warn("AssembleBookMetadata failed for %s: %v", dirPath, bmErr)
+				scanLog.Warn("AssembleBookMetadataWith failed for %s: %v", dirPath, bmErr)
 				fallbackUsed = true
 			} else {
 				books[idx].folderParse = folderParsedFrom(bm)

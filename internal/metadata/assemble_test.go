@@ -1,6 +1,7 @@
 // file: internal/metadata/assemble_test.go
 // version: 1.3.1
 // guid: 2c3d4e5f-6a7b-8c9d-0e1f-2a3b4c5d6e7f
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -71,7 +72,7 @@ func TestAssembleBookMetadata_GenericChapterUsesFolder(t *testing.T) {
 
 	bm, err := AssembleBookMetadataWith(bookDir, firstChapter, 5, 0, NameEvidence{})
 	if err != nil {
-		t.Fatalf("AssembleBookMetadata error: %v", err)
+		t.Fatalf("AssembleBookMetadataWith error: %v", err)
 	}
 	if bm.Title != "The Hitchhikers Guide" || bm.TitleSource != "folder.Title" {
 		t.Errorf("Title = %q (source %q), want 'The Hitchhikers Guide' / 'folder.Title'",
@@ -128,7 +129,7 @@ func TestAssembleBookMetadata_DisagreeingChapterTagsUseFolder(t *testing.T) {
 
 	bm, err := AssembleBookMetadataWith(bookDir, firstChapter, 2, 0, NameEvidence{})
 	if err != nil {
-		t.Fatalf("AssembleBookMetadata error: %v", err)
+		t.Fatalf("AssembleBookMetadataWith error: %v", err)
 	}
 	if bm.Title != "The Hitchhikers Guide" || bm.TitleSource != "folder.Title" {
 		t.Errorf("Title = %q (source %q), want 'The Hitchhikers Guide' / 'folder.Title' — "+
@@ -152,7 +153,7 @@ func TestAssembleBookMetadata_AgreeingChapterTagsWin(t *testing.T) {
 
 	bm, err := AssembleBookMetadataWith(bookDir, firstChapter, 3, 0, NameEvidence{})
 	if err != nil {
-		t.Fatalf("AssembleBookMetadata error: %v", err)
+		t.Fatalf("AssembleBookMetadataWith error: %v", err)
 	}
 	if bm.Title != "Aces Abroad" || bm.TitleSource != "tag.Title(agreed)" {
 		t.Errorf("Title = %q (source %q), want 'Aces Abroad' / 'tag.Title(agreed)'",
@@ -374,7 +375,7 @@ func TestAssembleBookMetadataIntegration(t *testing.T) {
 
 	bm, err := AssembleBookMetadataWith(bookDir, fakeFile, 3, 12345.0, NameEvidence{})
 	if err != nil {
-		t.Fatalf("AssembleBookMetadata error: %v", err)
+		t.Fatalf("AssembleBookMetadataWith error: %v", err)
 	}
 
 	if bm.FileCount != 3 {

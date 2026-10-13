@@ -1,6 +1,7 @@
 // file: internal/metadata/wikipedia_test.go
 // version: 1.0.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-10-12
 
 package metadata
 

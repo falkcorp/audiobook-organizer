@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.55.0
+// version: 5.55.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package metafetch
 
@@ -233,7 +233,7 @@ type Service struct {
 	// (see writeTags) and see the ctx it carries. Nil in production.
 	tagWriter func(ctx context.Context, id string) (int, error)
 
-	// coverDownload replaces metadata.DownloadCoverArt in tests (its SSRF guard
+	// coverDownload stands in for metadata.ReplaceCoverArt in tests (its SSRF guard
 	// refuses loopback, so an httptest server cannot stand in). Nil in production.
 	coverDownload func(coverURL, destDir, bookID string) (string, error)
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: ac1c25d1-3594-43f6-9254-90bf2ab0b284
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -51,7 +51,7 @@ const reparseSkipAuthor = "skipped_author_review_only"
 //
 // A field is a row only when the stored value IS what the old folder parse
 // produced (metadata.LegacyFolderParse, a frozen copy) and the new parse
-// (metadata.ExtractMetadataFromFolder) produces a different, non-empty one:
+// (metadata.ExtractMetadataFromFolderWith) produces a different, non-empty one:
 // a value from a tag, an apply or an edit is never listed. A field with a
 // user override or a repair lock is held. iTunes-owned and Doctor Who / Big
 // Finish / Torchwood rows are skipped by the framework's guards.
