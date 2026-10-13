@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-10-12
 //
@@ -257,11 +257,12 @@ func TestOwnerReview_PreviewUsesTheApplyOptions(t *testing.T) {
 // A queued run that absorbs a second request keeps both requests' pins; a
 // dropped pin would silently hard-gate a book the owner reviewed.
 func TestOwnerReview_QueuedMergeKeepsPins(t *testing.T) {
-	// Real row pins (origin + content hash), the only kind the lane sends: two
-	// debounced single-row requests can merge while a run is queued.
-	a := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "A"})
-	b1 := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B old"})
-	b2 := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B new"})
+	// Review-bulk pins (origin + content hash): two bulk-button requests can
+	// merge while a run is queued. A row pin never merges (see
+	// TestOwnerReview_QueuedMergeNeverMergesARowPin).
+	a := *bulkPin(metafetch.MetadataCandidate{Source: "Audible", Title: "A"})
+	b1 := *bulkPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B old"})
+	b2 := *bulkPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B new"})
 	cur, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"a", "b"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"a": a, "b": b1}})
 	next, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"b", "c"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"b": b2}})
 	raw, ok, err := mergeBatchApplyQueuedParams(cur, next)
@@ -277,12 +278,65 @@ func TestOwnerReview_QueuedMergeKeepsPins(t *testing.T) {
 	}
 }
 
+// A row-origin pin is one reviewer's approval of one book and lifts gates a
+// run of several books must not, so a queued run never absorbs a request that
+// carries one, nor is absorbed into one that does -- either way round. The
+// declined request queues and runs on its own.
+func TestOwnerReview_QueuedMergeNeverMergesARowPin(t *testing.T) {
+	row := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "A"})
+	bulk := *bulkPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B"})
+	withRow, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"a"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"a": row}})
+	withBulk, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"b"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"b": bulk}})
+	otherRow, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"c"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"c": row}})
+
+	for name, pair := range map[string][2]json.RawMessage{
+		"queued run has the row pin":   {withRow, withBulk},
+		"incoming request has it":      {withBulk, withRow},
+		"two row-pinned single clicks": {withRow, otherRow},
+	} {
+		raw, ok, err := mergeBatchApplyQueuedParams(pair[0], pair[1])
+		if err != nil || ok || raw != nil {
+			t.Errorf("%s: merged (ok=%v err=%v); a row pin must never merge", name, ok, err)
+		}
+	}
+	// Control: the same two books with bulk pins do merge.
+	bulk2, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"c"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"c": bulk}})
+	if _, ok, err := mergeBatchApplyQueuedParams(withBulk, bulk2); err != nil || !ok {
+		t.Fatalf("control: bulk pins did not merge (ok=%v err=%v)", ok, err)
+	}
+}
+
+// The op can be dispatched directly (POST /operations/v2), past the HTTP
+// route: Run refuses a row pin beside other books before any write, and takes
+// the one-book shape past the gate.
+func TestOwnerReview_RunRefusesARowPinOnSeveralBooks(t *testing.T) {
+	row := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "A"})
+	err := capRunOp(t, "metadata.batch-apply-cached", (*Server).RegisterBatchApplyFromCacheOp,
+		batchApplyOpParams{BookIDs: []string{"a", "b"}, Pins: map[string]metafetch.CandidatePin{"a": row}})
+	if err == nil || !strings.Contains(err.Error(), "only valid for a single-book apply") {
+		t.Fatalf("Run with a row pin on two books: err = %v, want the row-pin refusal", err)
+	}
+
+	err = capRunOp(t, "metadata.batch-apply-cached", (*Server).RegisterBatchApplyFromCacheOp,
+		batchApplyOpParams{BookIDs: []string{"a"}, Pins: map[string]metafetch.CandidatePin{"a": row}})
+	if err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("Run with a row pin on one book: err = %v, want to reach the dependency check", err)
+	}
+
+	bulk := *bulkPin(metafetch.MetadataCandidate{Source: "Audible", Title: "A"})
+	err = capRunOp(t, "metadata.batch-apply-cached", (*Server).RegisterBatchApplyFromCacheOp,
+		batchApplyOpParams{BookIDs: []string{"a", "b"}, Pins: map[string]metafetch.CandidatePin{"a": bulk}})
+	if err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("Run with a bulk pin on two books: err = %v, want to reach the dependency check", err)
+	}
+}
+
 // A newer request that names a book WITHOUT pinning it (a bulk button pressed
 // after a row review) drops that book's older pin: unpinned wins, so the book
 // gets the hard gate the latest request asked for.
 func TestOwnerReview_QueuedMergeUnpinnedDropsPin(t *testing.T) {
-	a := metafetch.CandidatePin{Origin: metafetch.PinOriginRow, Source: "Audible", Title: "A"}
-	b := metafetch.CandidatePin{Origin: metafetch.PinOriginRow, Source: "Audible", Title: "B"}
+	a := metafetch.CandidatePin{Origin: metafetch.PinOriginReviewBulk, Source: "Audible", Title: "A"}
+	b := metafetch.CandidatePin{Origin: metafetch.PinOriginReviewBulk, Source: "Audible", Title: "B"}
 	cur, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"a", "b"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"a": a, "b": b}})
 	next, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"b", "c"}, WriteBack: true})
 	raw, ok, err := mergeBatchApplyQueuedParams(cur, next)
