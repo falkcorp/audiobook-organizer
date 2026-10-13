@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.10 -->
+<!-- version: 10.76.11 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-12 -->
+<!-- last-edited: 2026-10-13 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,36 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AI-AUTHOR-REVIEW-GROUPS-EMPTY** The `ai.author-review` op's "groups"
+      mode now runs against an empty group list when started generically (via
+      the operations endpoints), because the deleted `ReviewDuplicateAuthors`
+      handler was what computed `DedupGroups` and passed them in the op
+      params. Move that computation into the op itself (`internal/server/ai_ops.go`,
+      feeding `handlers.AIReviewGroupsMode`) so the mode works without a
+      handler-supplied payload. Belongs to the 04 workstream.
+
+- [ ] **LSH-ACOUSTID-UNWIRED** The head-print acoustic dedup signals never run
+      in unified scoring: `dedup.Engine.SetLSHStore` and
+      `SetAcoustIDBookFileStore` (`internal/dedup/engine.go`) have no production
+      caller, so `de.lshAcoustIDStore` and `de.acoustidBookFileStore` are always
+      nil and `lsh_acoustid` / `exact_acoustid` are never collected. Separately,
+      `CollectLSHAcoustID` resolves each candidate with
+      `GetBookFileByID("", candFileID)`, which builds the key
+      `book_file::<id>` and always returns nil (its comment claims a scan
+      fallback that does not exist); `GetBookFileByFileID` is the by-ID read.
+      Wiring them changes every pair's score, so decide with a corpus rescore.
+      Found building 02-PR8 (the window signal is wired through
+      `database.AsCapability` in `registry_wire.go`); not fixed there.
+
+- [ ] **SERIES-NORMALIZE-OP-DRY-RUN** `dedup.series-normalize` lost its only
+      preview when 01-P72 deleted `GET /series/normalize/preview` and its
+      builder. The op moves files and has no dry-run mode (it is absent from
+      `write_op_modes.golden`). Make preview/dry-run a mode of the op itself,
+      built on `computeSeriesNormalizeActions`, so an operator can see the
+      planned renames before approving a run.
+
+- [ ] **MAC-WORKERS-REBUILD-ACOUSTID-SEGMENTS** Make the Mac fingerprint workers rebuild AcoustID segment fingerprints (AcoustIDSeg0..6) so a reset is recoverable on prod without server decode; then add the "Reset all audio fingerprints" command (03-PR4 D2) back to the Dedup menu Maintenance group, gated on a connected worker (needs a worker-presence status endpoint, since a worker polling hello into 503 has no live run). Today the reset wipes AcoustIDSeg0..6 and nothing rebuilds them on prod: `internal/server/fingerprint_rescan.go:74` (acoustid.fingerprint-rescan) calls serverdecode.Check and fails there, `internal/plugins/acoustid/window_backfill.go:537` is the only thing Mac workers lease (window-backfill jobs, which do not write AcoustIDSeg*), `internal/plugins/acoustid/reset_all.go` does the wipe, and `internal/plugins/acoustid/backfill.go` (around line 570) is where the Seg0..6 fields are written.
 
 - [ ] **FILTER-UNCHANGED-TAGS-REWRITES-UNVERIFIABLE-KEYS** The metafetch write-back
       (`FilterUnchangedTags` in `internal/metafetch/service_writeback.go`) keeps a
