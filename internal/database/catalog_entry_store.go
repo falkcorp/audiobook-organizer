@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-12
 
@@ -242,11 +242,13 @@ type CatalogStore struct {
 	// logical race, not a memory one.
 	writeMu sync.Mutex
 	now     func() time.Time
-	// scanHook, when set (tests only), is told every prefix a list or count
-	// scan walks, so a test can prove the entry values are never iterated.
-	// The bounded exact-key reads the bulk matcher uses (EntriesForAuthorKey,
-	// ResolveAuthorAlias) never report here: they are not scans, and a test
-	// that asserts the hook stays silent is asserting exactly that.
+	// scanHook, when set (tests only), is told the prefix of every iterator
+	// walk the store starts -- a list or count scan, and the exact-key reads
+	// HasAuthorKey and EntriesForAuthorKey (each with its exact
+	// "cat_author:name:<fold>:" prefix) -- so a test can prove the entry values
+	// are never iterated and the substring walk (the bare "cat_author:name:"
+	// prefix) never runs. Point reads (get, ResolveAuthorAlias) start no walk
+	// and never report.
 	scanHook func(prefix string)
 }
 
@@ -559,7 +561,7 @@ func (s *CatalogStore) GetEntry(id string) (*CatalogEntry, error) {
 
 // EntryIDsByAuthorName returns the ids of entries filed under an author name
 // key (catalog.AuthorNameKey's "name:<folded>" form) whose folded name
-// CONTAINS fold, so "phelps" finds "Joseph Phelps" and "Phelps, Joseph". An
+// CONTAINS fold, so "author" finds "Joan Author" and "Author, Joan". An
 // exact key ("name:"+fold) is walked first; the substring walk over every
 // cat_author:name: key runs only when the exact key holds nothing. Both walks
 // are keys-only (never an entry value). limit caps the ids returned (<= 0:
@@ -616,8 +618,8 @@ func (s *CatalogStore) EntryIDsByAuthorName(fold string, limit int) ([]string, e
 // iterator positioned at the first key of the exact prefix and stops there,
 // so it costs one seek however many entries the author has. Unlike
 // EntryIDsByAuthorName it never falls back to the substring walk over every
-// cat_author:name: key: "phelps" does not match a block filed under
-// "josephphelps".
+// cat_author:name: key: "author" does not match a block filed under
+// "joanauthor".
 func (s *CatalogStore) HasAuthorKey(fold string) (bool, error) {
 	// A fold never holds ':' (FoldKey emits letters and digits only); one
 	// that does would make the prefix span a different key shape.
@@ -679,8 +681,8 @@ func (s *CatalogStore) CountAuthorNameBlocks() (int, error) {
 // EntriesForAuthorKey returns the ids of the entries filed under the EXACT
 // author name key "name:"+fold (fold is authorjunk.FoldKey of the credit),
 // for the bulk matcher. It never takes EntryIDsByAuthorName's substring
-// fallback, which walks every cat_author:name: key: "phelps" does not find a
-// block filed under "josephphelps".
+// fallback, which walks every cat_author:name: key: "author" does not find a
+// block filed under "joanauthor".
 //
 // cap bounds the block: a block holding more than cap entries (a junk or
 // franchise row) is not returned, oversize is true and ids is nil, so the
@@ -691,7 +693,11 @@ func (s *CatalogStore) EntriesForAuthorKey(fold string, cap int) (ids []string, 
 	if fold == "" || strings.Contains(fold, ":") {
 		return nil, false, nil
 	}
-	p := []byte(catAuthorPrefix + "name:" + fold + ":")
+	prefix := catAuthorPrefix + "name:" + fold + ":"
+	if s.scanHook != nil {
+		s.scanHook(prefix)
+	}
+	p := []byte(prefix)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixUpperBound(p)})
 	if err != nil {
 		return nil, false, err

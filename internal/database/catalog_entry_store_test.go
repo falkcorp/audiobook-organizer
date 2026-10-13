@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
 // last-edited: 2026-10-12
 
@@ -150,8 +150,8 @@ func TestCountAuthorNameBlocks(t *testing.T) {
 // TestEntriesForAuthorKey_ExactCappedAndSilent: the bulk matcher's block read
 // takes the exact key only (a substring of a stored fold misses, where
 // EntryIDsByAuthorName's fallback would walk every name key and find it), caps
-// the block (an oversize block returns no ids and says so), and never reports
-// to the scan hook: it is a bounded read, not a scan.
+// the block (an oversize block returns no ids and says so), and walks only its
+// own exact prefix: the hook never sees the bare prefix of the substring walk.
 func TestEntriesForAuthorKey_ExactCappedAndSilent(t *testing.T) {
 	st := openTestCatalogStore(t)
 	items := make([]CatalogUpsert, 0, 6)
@@ -164,8 +164,8 @@ func TestEntriesForAuthorKey_ExactCappedAndSilent(t *testing.T) {
 	if _, err := st.UpsertEntries(items, "author07"); err != nil {
 		t.Fatal(err)
 	}
-	called := false
-	st.scanHook = func(string) { called = true }
+	var walked []string
+	st.scanHook = func(p string) { walked = append(walked, p) }
 
 	ids, oversize, err := st.EntriesForAuthorKey("author07", 5)
 	if err != nil || oversize || len(ids) != 5 {
@@ -182,17 +182,33 @@ func TestEntriesForAuthorKey_ExactCappedAndSilent(t *testing.T) {
 			t.Errorf("EntriesForAuthorKey(%q) = %v, %v, %v; want nothing", fold, ids, over, err)
 		}
 	}
+	walked = nil
+	_, _, _ = st.EntriesForAuthorKey("author07", 100)
+	_, _, _ = st.EntriesForAuthorKey("thor07", 100)
+	_, _, _ = st.ResolveAuthorAlias("anything")
+	_, _ = st.GetEntryByProviderID("audible", "us", "P0")
+	_, _ = st.GetAuthorState("author07")
+	if len(ids) > 0 {
+		_, _ = st.GetEntry(ids[0])
+	}
+	// Everything the bulk matcher calls: only exact-key walks, each reporting
+	// its own exact prefix, and never the bare prefix of the substring walk.
+	want := []string{catAuthorPrefix + "name:author07:", catAuthorPrefix + "name:thor07:"}
+	if !slices.Equal(walked, want) {
+		t.Errorf("the bulk matcher's store calls walked %q; want only the exact prefixes %q", walked, want)
+	}
+	for _, p := range walked {
+		if p == catAuthorPrefix+"name:" {
+			t.Errorf("a bulk-path call walked every author name key (%q)", p)
+		}
+	}
+	// Control: the substring walk does find the block, and does report the bare prefix.
+	walked = nil
 	if sub, _ := st.EntryIDsByAuthorName("thor07", 0); len(sub) != 5 {
 		t.Fatalf("control: the substring walk should find the block (got %d ids)", len(sub))
 	}
-	if !called {
-		t.Fatal("control: the substring walk did not report to the scan hook")
-	}
-	called = false
-	_, _, _ = st.EntriesForAuthorKey("author07", 100)
-	_, _, _ = st.ResolveAuthorAlias("anything")
-	if called {
-		t.Error("EntriesForAuthorKey or ResolveAuthorAlias reported a scan: the bulk path must be point/bounded reads only")
+	if !slices.Contains(walked, catAuthorPrefix+"name:") {
+		t.Fatalf("control: the substring walk did not report the bare prefix (walked %q)", walked)
 	}
 }
 
