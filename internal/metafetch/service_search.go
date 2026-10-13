@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-12
 
@@ -1235,7 +1235,16 @@ func (mfs *Service) searchMetadataForBook(
 	// first-wins, so a review-only catalog row can never shadow the live
 	// answer for the same ASIN, and nothing here changes which provider
 	// calls the fan-out makes.
-	catalogMatch := mfs.runCatalogStage(ctx, book, in, searchTitle, rawTitle, searchSeries, asinToLookup, opts)
+	//
+	// The lookup is local and runs beside the fan-out; its answer is awaited
+	// where it is merged, so the merge order (providers, then the catalog) and
+	// the pool are exactly what a sequential run gives. The channel is buffered
+	// and every path out of this function may leave it unread without leaking
+	// the goroutine.
+	catalogCh := make(chan *metadata.CatalogMatch, 1)
+	go func() {
+		catalogCh <- mfs.runCatalogStage(ctx, book, in, searchTitle, rawTitle, searchSeries, asinToLookup, opts)
+	}()
 	states := mfs.runSearchFanout(fp, sources, variants)
 	// One Audnexus lookup per book: the own-ASIN fallback below, when it may
 	// run, is reserved first; otherwise one runtime fill.
@@ -1544,6 +1553,7 @@ func (mfs *Service) searchMetadataForBook(
 	// provider's and last in the merge order. They are not a source: no
 	// per-provider cache row is written for them and the catalog is not among
 	// the sources tried, answered or asked.
+	catalogMatch := <-catalogCh
 	if catalogMatch != nil && len(catalogMatch.Candidates) > 0 {
 		baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, catalogMatch.Candidates, searchWords)
 		first := len(candidates)

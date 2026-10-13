@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-12-local-catalog-blocking-stage-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a53f4aca-4029-4768-a139-d539fca84e17 -->
 <!-- last-edited: 2026-10-12 -->
 
@@ -49,15 +49,21 @@ Branch `task/02-pr7b` (holistic plan task 02-PR7b).
   catalog now counts as having a usable candidate, so Open Library and Google
   Books are not asked about it. If you would rather they still were, that is a
   decision for you (filed in the TODO list).
-- **A separate change that is not behind the setting.** A book whose stored
-  title is just a person's name, or is its own author, is now searched by the
-  name of the folder holding its files when that folder names a real title
-  (the roughly 1,270 books in that group). It is a new question for those
-  books, so the next candidate fetch asks the providers again for them even
-  with the catalog stage off, and what that search finds cannot be bulk
-  applied, as for any other book searched by its folder. Reverting the change
-  is the only way to undo it.
+- **A separate change, with its own switch.** A book whose stored title is just
+  a person's name, or is its own author, is now searched by the name of the
+  folder holding its files when that folder names a real title (the roughly
+  1,270 books in that group). It is a new question for those books, so the
+  next candidate fetch asks the providers again for them. The setting
+  `metadata_fetch.folder_parse_person_title` ships on; set to `false` it asks
+  the stored title again. What that search finds cannot be applied by the
+  review page's bulk button or any unattended apply, as for any book searched
+  by its folder, but you can apply it from that book's own review row.
+- **Safety.** If every provider fails while the catalog has a match, the search
+  still counts as unanswered and the book keeps what it had. A Doctor Who, Big
+  Finish or Torchwood entry from the catalog is held by the manual-only rule
+  wherever it was flagged.
 - **Housekeeping.** The catalog harvest now files the alternate spellings of
   every author it stores, and at the end of every run files them for what it
   stored before. A book you fill from a catalog candidate is recorded as an
-  Audible book, with its year read as the audiobook's release year.
+  "Audible catalog" book, ranked just below Audible so a live Audible answer
+  can replace it, with its year read as the audiobook's release year.

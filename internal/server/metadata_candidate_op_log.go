@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
 // last-edited: 2026-10-12
 //
@@ -86,18 +86,19 @@ func (t *candidateFetchTally) record(r CandidateResult) {
 }
 
 // counts renders the outcome counts, e.g. "matched 820, no match 55, skipped
-// 2, errors 0, from cache 0, known empty 3, catalog_candidates 12,
+// 2, errors 0, from cache 0, known empty 3, catalog_matched 14, catalog_candidates 12,
 // provider_candidates 2400, oversize_block 0, homonym_skipped 1".
 func (t *candidateFetchTally) counts() string {
-	var catalogN, providerN, oversize, homonym int64
+	var matched, catalogN, providerN, oversize, homonym int64
 	if t.stage != nil {
+		matched = t.stage.CatalogMatched.Load()
 		catalogN, providerN = t.stage.CatalogCandidates.Load(), t.stage.ProviderCandidates.Load()
 		oversize, homonym = t.stage.OversizeBlocks.Load(), t.stage.HomonymSkipped.Load()
 	}
 	return fmt.Sprintf("matched %d, no match %d, skipped %d, deferred %d, errors %d, from cache %d, known empty %d, "+
-		"catalog_candidates %d, provider_candidates %d, oversize_block %d, homonym_skipped %d",
+		"catalog_matched %d, catalog_candidates %d, provider_candidates %d, oversize_block %d, homonym_skipped %d",
 		t.matched.Load(), t.noMatch.Load(), t.skipped.Load(), t.deferred.Load(), t.errored.Load(),
-		t.fromCache.Load(), t.knownEmpty.Load(), catalogN, providerN, oversize, homonym)
+		t.fromCache.Load(), t.knownEmpty.Load(), matched, catalogN, providerN, oversize, homonym)
 }
 
 // progressLine returns the progress message for finished of total books. The

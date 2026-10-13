@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -177,6 +177,7 @@ func TestCatalogStageOn_AddsReviewOnlyCandidatesAfterProviders(t *testing.T) {
 	assert.NotContains(t, resp.SourcesAnswered, metadata.CatalogSourceName)
 	assert.NotContains(t, resp.SourcesAsked, metadata.CatalogSourceName)
 
+	assert.EqualValues(t, 2, stats.CatalogMatched.Load(), "the stage found both, before the pool dropped the provider's duplicate")
 	assert.EqualValues(t, 1, stats.CatalogCandidates.Load())
 	assert.EqualValues(t, 1, stats.ProviderCandidates.Load())
 	assert.EqualValues(t, 1, stats.BooksWithCatalog.Load())

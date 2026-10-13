@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c0f3b95-2e8a-4d71-b4a9-9f1d5a7e0c28
 // last-edited: 2026-10-12
 //
@@ -48,6 +48,10 @@ func (mfs *Service) SetCatalogMatcher(m CatalogMatcher) {
 // under that context adds to it. They count THIS attempt's searches: a book
 // answered from the candidate cache runs no search and adds nothing.
 type CatalogStageStats struct {
+	// CatalogMatched counts the candidates the stage found, before the pool
+	// dropped any a provider also returned (same ASIN) or the scorer refused:
+	// with CatalogCandidates it shows how many the providers made redundant.
+	CatalogMatched atomic.Int64
 	// CatalogCandidates and ProviderCandidates count the candidates the
 	// searches returned, by origin: the first cost no provider call.
 	CatalogCandidates  atomic.Int64
@@ -202,6 +206,7 @@ func (mfs *Service) runCatalogStage(ctx context.Context, book *database.Book, in
 		return nil
 	}
 	if st := catalogStageStatsFrom(ctx); st != nil {
+		st.CatalogMatched.Add(int64(len(match.Candidates)))
 		st.OversizeBlocks.Add(int64(match.OversizeBlocks))
 		st.HomonymSkipped.Add(int64(match.HomonymSkipped))
 	}
