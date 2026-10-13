@@ -201,7 +201,7 @@ describe('authors lane actions', () => {
     type: 'mergeSelected',
     ids: [asAuthorId(1), asAuthorId(2), asAuthorId(3)],
   };
-  const mergeAll: ReviewAction = { lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedTotal: 7 };
+  const mergeAll: ReviewAction = { lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedIds: [1, 2, 3, 4, 5, 6, 7].map(asAuthorId) };
 
   it('knows its own counts: the selection, and the total the reviewer confirmed', () => {
     expect(affectedCount(mergeSel)).toBe(3);

@@ -18,7 +18,9 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { asAuthorId } from '../reviewActions';
-import { useAuthorsLane } from './useAuthorsLane';
+import { ApiAuthRedirectError } from '../../../utils/apiFetch';
+import { SESSION_EXPIRED_MESSAGE } from '../../../utils/apiResponse';
+import { WRITE_DEADLINE_MS, parseLeftIds, useAuthorsLane } from './useAuthorsLane';
 import * as reads from './authorsReads';
 
 vi.mock('../../../services/api');
@@ -402,17 +404,17 @@ describe('merge selected and merge all', () => {
     expect(result.current.kindCounts).toEqual({ all: 4, variants: 2, composite: 1, production: 1 });
     expect(result.current.mergeable.map((g) => g.key)).toEqual(['1', '2']);
 
-    act(() => result.current.dispatch({ lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedTotal: 2 }));
+    act(() => result.current.dispatch({ lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedIds: [asAuthorId(1), asAuthorId(2)] }));
     await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['3', '4']));
     expect(api.mergeAuthors).toHaveBeenCalledTimes(2);
-    expect(toast).toHaveBeenCalledWith('Merged 2 of 2 all group(s)', 'success');
+    expect(toast).toHaveBeenCalledWith('Merged 2 of 2 name-variant group(s).', 'success');
   });
 
   it('merge all refuses, and merges nothing, when the list moved since it was confirmed', async () => {
     serve([GROUP_A(), GROUP_B()]);
     const { result } = setup();
     await waitFor(() => expect(result.current.status).toBe('populated'));
-    act(() => result.current.dispatch({ lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedTotal: 5 }));
+    act(() => result.current.dispatch({ lane: 'authors', entity: 'author', type: 'mergeAllGroups', expectedIds: [asAuthorId(1), asAuthorId(2), asAuthorId(9)] }));
     expect(api.mergeAuthors).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('Nothing was merged'), 'warning');
     expect(result.current.groups).toHaveLength(2);
@@ -435,7 +437,7 @@ describe('merge selected and merge all', () => {
     );
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
-        'Merged 1 of 2 selected group(s); 1 failed: "Author B": store write failed',
+        'Merged 1 of 2 selected group(s); 1 failed: "Author B": store write failed.',
         'error'
       )
     );
@@ -462,8 +464,10 @@ describe('merge selected and merge all', () => {
 });
 
 describe('split, production, validate', () => {
-  it('a split reclassifies the names flagged as narrators, then reloads', async () => {
-    serve([wire(3, 'Author C / Author D', [], { split_names: ['Author C', 'Author D'] })]);
+  const compositeGroup = () => wire(3, 'Author C / Author D', [], { split_names: ['Author C', 'Author D'] });
+
+  it('a split reclassifies the names flagged as narrators and drops the group without re-reading', async () => {
+    serve([compositeGroup(), GROUP_A()]);
     vi.mocked(api.splitCompositeAuthor).mockResolvedValue({
       authors: [
         { id: 31, name: 'Author C' },
@@ -488,11 +492,40 @@ describe('split, production, validate', () => {
     await waitFor(() => expect(toast).toHaveBeenCalledWith('Split "Author C / Author D" into 2 authors', 'success'));
     expect(api.reclassifyAuthorAsNarrator).toHaveBeenCalledTimes(1);
     expect(api.reclassifyAuthorAsNarrator).toHaveBeenCalledWith(32);
-    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2));
+    expect(result.current.groups.map((g) => g.key)).toEqual(['1']);
+    // Every author write clears the server's list; a re-read would return
+    // "not scanned yet" and replace the groups still on screen.
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
   });
 
-  it('find real author starts the op, waits for it, and reloads on completion', async () => {
-    serve([wire(4, 'Studio One', [], { is_production_company: true })]);
+  it('a split narrator name that matches no new author is reported', async () => {
+    serve([compositeGroup()]);
+    vi.mocked(api.splitCompositeAuthor).mockResolvedValue({ authors: [{ id: 31, name: 'Someone Else' }], books_updated: 1 });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'toggleRole',
+        canonicalId: asAuthorId(3),
+        target: { kind: 'split', name: 'Author D' },
+      })
+    );
+    act(() =>
+      result.current.dispatch({ lane: 'authors', entity: 'author', type: 'splitComposite', canonicalId: asAuthorId(3) })
+    );
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining('"Author D" matched no new author, so it was not reclassified as narrator'),
+        'warning'
+      )
+    );
+    expect(api.reclassifyAuthorAsNarrator).not.toHaveBeenCalled();
+  });
+
+  it('find real author starts the op, waits for it, and drops the group without re-reading', async () => {
+    serve([wire(4, 'Studio One', [], { is_production_company: true }), GROUP_A()]);
     vi.mocked(api.resolveProductionAuthor).mockResolvedValue(op('r1'));
     const { result } = setup();
     await waitFor(() => expect(result.current.status).toBe('populated'));
@@ -501,7 +534,8 @@ describe('split, production, validate', () => {
     );
     await waitFor(() => expect(toast).toHaveBeenCalledWith('Found the real author(s).', 'success'));
     expect(api.pollOperationV2).toHaveBeenCalledWith('r1', undefined, expect.any(Number), expect.anything());
-    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2));
+    expect(result.current.groups.map((g) => g.key)).toEqual(['1']);
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
   });
 
   it('a failed resolve is reported, not swallowed', async () => {
@@ -592,11 +626,41 @@ describe('leaving the lane or unmounting', () => {
 
     rerender({ active: false });
     await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+    // The reviewer is told the second merge was never sent.
+    expect(toast).toHaveBeenCalledWith('1 queued merge was not sent because you left the lane.', 'warning');
     // Coming back does not revive it either.
     rerender({ active: true });
     await act(async () => {});
     expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
-    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('a merge that was sent before the lane was left stays locked on return and is followed to its end', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+
+    // On return its operation is followed again, and its row is locked: a second
+    // Merge for a group whose first one may have gone through must not be offered.
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReset();
+    vi.mocked(api.pollOperationV2).mockReturnValue(gate.promise);
+    rerender({ active: true });
+    await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledWith('m1', undefined, expect.any(Number), expect.anything()));
+    expect([...result.current.pendingKeys]).toEqual(['1']);
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(merge(1)));
+    expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
+
+    await act(async () => gate.resolve(settled()));
+    await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['2']));
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(toast).toHaveBeenCalledWith('Merged author(s) into "Author A" (it finished after you left).', 'success');
   });
 
   it('a bulk merge stops sending requests the moment the lane is left, and clears its progress', async () => {
@@ -619,8 +683,11 @@ describe('leaving the lane or unmounting', () => {
     await waitFor(() => expect(result.current.bulk).toBeNull());
     expect(result.current.pendingKeys.size).toBe(0);
     expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
-    // No "Merged 0 of 0" announcement for a run the reviewer walked away from.
-    expect(toast).not.toHaveBeenCalled();
+    // No "Merged 0 of 0" announcement for a run the reviewer walked away from;
+    // the one thing worth saying is what was never sent. The first group's merge
+    // WAS sent (it is unconfirmed), the second was not.
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith('1 queued merge was not sent because you left the lane.', 'warning');
   });
 
   it('a scan queued behind a write is dropped when the lane is left, and can be started again', async () => {
@@ -806,5 +873,407 @@ describe('refresh (the author scan)', () => {
     await waitFor(() => expect(result.current.scanning).toBe(false));
     expect(api.refreshAuthorDuplicates).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review fixes (PR #4004)
+// ---------------------------------------------------------------------------
+
+const exclude = (n: number, variantId: number) => ({
+  lane: 'authors' as const,
+  entity: 'author' as const,
+  type: 'excludeVariant' as const,
+  canonicalId: asAuthorId(n),
+  variantId: asAuthorId(variantId),
+});
+const narrator = (n: number, variantId: number) => ({
+  lane: 'authors' as const,
+  entity: 'author' as const,
+  type: 'toggleRole' as const,
+  canonicalId: asAuthorId(n),
+  target: { kind: 'variant' as const, id: asAuthorId(variantId) },
+});
+
+describe('the server clears its list on every author write', () => {
+  const composite = () => wire(3, 'Author C / Author D', [], { split_names: ['Author C', 'Author D'] });
+
+  it('keeps the groups it holds, flagged stale, when a re-read returns needs_refresh after a split', async () => {
+    serve([composite(), GROUP_A()]);
+    vi.mocked(api.splitCompositeAuthor).mockResolvedValue({
+      authors: [
+        { id: 31, name: 'Author C' },
+        { id: 32, name: 'Author D' },
+      ],
+      books_updated: 1,
+    });
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.stale).toBe(false);
+    act(() =>
+      result.current.dispatch({ lane: 'authors', entity: 'author', type: 'splitComposite', canonicalId: asAuthorId(3) })
+    );
+    await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['1']));
+
+    // The split cleared the server's cache: every read from now on is cold.
+    vi.mocked(reads.fetchAuthorGroups).mockResolvedValue({ groups: [], needsRefresh: true });
+    rerender({ active: false });
+    rerender({ active: true });
+    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.stale).toBe(true));
+    expect(result.current.status).toBe('populated');
+    expect(result.current.groups.map((g) => g.key)).toEqual(['1']);
+
+    // Retry reads cold again and the groups are still there.
+    act(() => result.current.reload());
+    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.stale).toBe(true));
+    expect(result.current.groups.map((g) => g.key)).toEqual(['1']);
+  });
+
+  it('a lane that held nothing still shows the cold cache as needs-scan, not stale', async () => {
+    serve([], true);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('needs-scan'));
+    expect(result.current.stale).toBe(false);
+  });
+
+  it('a narrator-only merge takes the reclassified variants out of the group and does not re-read', async () => {
+    serve([GROUP_A()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(exclude(1, 102))); // 102 stays, left out
+    act(() => result.current.dispatch(narrator(1, 101)));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Reclassified 1 variant(s) as narrator', 'success'));
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+    expect(result.current.groups.map((g) => g.variants.map((v) => v.id))).toEqual([[102]]);
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
+  });
+
+  it('a narrator-only merge removes the group when no variant is left', async () => {
+    serve([wire(1, 'Author A', ['Author A.'])]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(narrator(1, 101)));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(result.current.groups).toEqual([]));
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a partly failed merge', () => {
+  it('parses the ids the server says it left behind', () => {
+    expect(parseLeftIds('author merge left author ids [102 7] of 3 not merged, 1 merged: x')).toEqual(new Set([102, 7]));
+    expect(parseLeftIds('store write failed')).toBeNull();
+  });
+
+  it('keeps the group with only the variants that remain, and says which ids failed', async () => {
+    serve([GROUP_A()]);
+    vi.mocked(api.pollOperationV2).mockResolvedValue(
+      settled('failed', 'author merge left author ids [102] of 2 not merged, 1 merged: failed to update book b9')
+    );
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.stringContaining('1 author record(s) were not merged (ids 102)'), 'error')
+    );
+    expect(result.current.groups).toHaveLength(1);
+    expect(result.current.groups[0].variants.map((v) => v.id)).toEqual([102]);
+    expect(result.current.pendingKeys.size).toBe(0);
+  });
+});
+
+describe('a write that gets no answer', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('releases the queue, says the merge may have run, and lets the next merge go', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    vi.mocked(api.mergeAuthors).mockImplementationOnce(() => new Promise<api.Operation>(() => {}));
+    // Only the timer is faked: the queue and the mocks are promise-driven.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() => result.current.dispatch(merge(1)));
+    act(() => result.current.dispatch(merge(2)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WRITE_DEADLINE_MS + 1);
+    });
+    vi.useRealTimers();
+
+    expect(toast).toHaveBeenCalledWith(
+      `No answer after ${WRITE_DEADLINE_MS / 1000}s — the merge may have run; re-reading.`,
+      'warning'
+    );
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+    expect(result.current.busy).toBe(false);
+    // It re-read rather than assuming either outcome.
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2);
+  });
+
+  it('a hung rename unlocks its row', async () => {
+    serve([GROUP_A()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    vi.mocked(api.renameAuthor).mockImplementation(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'renameCanonical',
+        canonicalId: asAuthorId(1),
+        name: 'Author A Edited',
+      })
+    );
+    expect(result.current.pendingKeys.has('1')).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WRITE_DEADLINE_MS + 1);
+    });
+    vi.useRealTimers();
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('the rename may have run'), 'warning');
+  });
+
+  it('a bulk run stops at the hung merge and does not send the rest', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    vi.mocked(api.mergeAuthors).mockImplementation(() => new Promise<api.Operation>(() => {}));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'mergeSelected',
+        ids: [asAuthorId(1), asAuthorId(2)],
+      })
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WRITE_DEADLINE_MS + 1);
+    });
+    vi.useRealTimers();
+    expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('the other 1 were not sent'), 'warning');
+    expect(result.current.bulk).toBeNull();
+    expect(result.current.pendingKeys.size).toBe(0);
+  });
+});
+
+describe('narrator reclassification failures are reported', () => {
+  it('on a single merge', async () => {
+    serve([GROUP_A()]);
+    vi.mocked(api.reclassifyAuthorAsNarrator).mockRejectedValue(new Error('nope'));
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(narrator(1, 101)));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Merged author(s) into "Author A" (1 narrator reclassification failed)',
+        'warning'
+      )
+    );
+  });
+
+  it('in a bulk run, summed across the groups, even when every merge succeeds', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    vi.mocked(api.reclassifyAuthorAsNarrator).mockRejectedValue(new Error('nope'));
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(narrator(1, 101)));
+    act(() => result.current.dispatch(narrator(2, 201)));
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'mergeSelected',
+        ids: [asAuthorId(1), asAuthorId(2)],
+      })
+    );
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining('Merged 2 of 2 selected group(s). 2 narrator reclassifications failed.'),
+        'warning'
+      )
+    );
+  });
+});
+
+describe('a group whose every variant is left out', () => {
+  it('is not mergeable, not counted, and a merge of it says so instead of reporting success', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(exclude(2, 201)));
+    expect(result.current.mergeable.map((g) => g.key)).toEqual(['1']);
+    expect(result.current.selectableTotal).toBe(1);
+
+    act(() => result.current.dispatch(merge(2)));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith('"Author B": every variant is left out of this merge', 'warning')
+    );
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+    expect(result.current.groups).toHaveLength(2);
+  });
+});
+
+describe('an expired session during a bulk run', () => {
+  it('stops, says once how many merged, and does not send the rest', async () => {
+    const g3 = () => wire(3, 'Author C', ['Author C.']);
+    serve([GROUP_A(), GROUP_B(), g3()]);
+    vi.mocked(api.mergeAuthors)
+      .mockImplementationOnce(async (id: number) => op(`m${id}`))
+      .mockRejectedValueOnce(new ApiAuthRedirectError('/api/v1/authors/merge', 'https://login.example/'));
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'mergeSelected',
+        ids: [asAuthorId(1), asAuthorId(2), asAuthorId(3)],
+      })
+    );
+    await waitFor(() => expect(result.current.bulk).toBeNull());
+    expect(api.mergeAuthors).toHaveBeenCalledTimes(2);
+    expect(toast).toHaveBeenCalledTimes(1);
+    const [message, severity] = toast.mock.calls[0];
+    expect(message).toContain(SESSION_EXPIRED_MESSAGE);
+    expect(message).toContain('1 group(s) were merged before it expired');
+    expect(message).toContain('the other 1 were not sent');
+    expect(severity).toBe('error');
+  });
+});
+
+describe('keyboard while something is open in front of the list', () => {
+  const press = (key: string) =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key }));
+    });
+
+  it('m and j/k do nothing behind the books popover; Escape closes it and they work again', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.openBooks('1', document.body));
+    press('j');
+    press('m');
+    await act(async () => {});
+    expect(result.current.focusedKey).toBe('1');
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+
+    press('Escape');
+    expect(result.current.booksFor).toBeNull();
+    press('m');
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+  });
+
+  it('and behind the shortcut help', async () => {
+    serve([GROUP_A()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    press('?');
+    expect(result.current.helpOpen).toBe(true);
+    press('m');
+    await act(async () => {});
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+  });
+
+  it('Enter on a focused button leaves it to the button instead of opening the books', async () => {
+    serve([GROUP_A()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    press('Enter');
+    expect(result.current.booksFor).toBeNull();
+    button.blur();
+    document.body.removeChild(button);
+    press('Enter');
+    expect(result.current.booksFor?.key).toBe('1');
+  });
+});
+
+describe('what is open is cleared when it can no longer be seen', () => {
+  it('leaving the lane closes the books popover, the name editor and the help', async () => {
+    serve([GROUP_A()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => {
+      result.current.openBooks('1', document.body);
+      result.current.startEdit('1', 'Author A');
+      result.current.setHelpOpen(true);
+    });
+    rerender({ active: false });
+    expect(result.current.booksFor).toBeNull();
+    expect(result.current.editing).toBeNull();
+    expect(result.current.helpOpen).toBe(false);
+  });
+
+  it('a popover on a group that merged away is closed, not left pointing at a gone card', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.openBooks('1', document.body));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['2']));
+    expect(result.current.booksFor).toBeNull();
+  });
+});
+
+describe('merge all compares the set of groups, not just how many', () => {
+  it('refuses when one group left and another became mergeable, so the count is unchanged', async () => {
+    const composite = wire(3, 'Author C / Author D', [], { split_names: ['Author C', 'Author D'] });
+    serve([GROUP_A(), GROUP_B(), composite]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    // Confirmed {1, 3}; what would run is {1, 2}: same size, different groups.
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'mergeAllGroups',
+        expectedIds: [asAuthorId(1), asAuthorId(3)],
+      })
+    );
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Nothing was merged'), 'warning');
+  });
+});
+
+describe('candidate name lookups', () => {
+  it('are not restarted when the list is edited', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      total: 1,
+      candidates: [
+        {
+          id: 7,
+          entity_type: 'author',
+          entity_a_id: '999',
+          entity_b_id: '998',
+          layer: 'embedding',
+          status: 'pending',
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    });
+    vi.mocked(reads.fetchAuthorName).mockImplementation(async (id) => `Looked ${id}`);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.candidates.nameOf('999')).toBe('Looked 999'));
+    await waitFor(() => expect(result.current.candidates.nameOf('998')).toBe('Looked 998'));
+    expect(reads.fetchAuthorName).toHaveBeenCalledTimes(2);
+
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['2']));
+    await act(async () => {});
+    expect(reads.fetchAuthorName).toHaveBeenCalledTimes(2);
   });
 });

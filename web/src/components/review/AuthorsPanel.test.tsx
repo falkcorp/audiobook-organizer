@@ -91,7 +91,7 @@ beforeEach(() => {
 
 describe('books popover', () => {
   async function openBooks(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(await screen.findByText('3 book(s)'));
+    await user.click(await screen.findByText('3 credit(s)'));
   }
 
   it('shows a distinct fetch-error state, not an empty list, when the books read rejects', async () => {
@@ -165,7 +165,7 @@ describe('books popover', () => {
     serve([wire(101, 'Author A')]);
     vi.mocked(reads.fetchBooksByAuthor).mockResolvedValue([book('b1')]);
     renderLane();
-    await screen.findByText('3 book(s)');
+    await screen.findByText('3 credit(s)');
     await user.keyboard('{Enter}');
     expect(await screen.findByText('Populated Title b1')).toBeInTheDocument();
   });
@@ -290,7 +290,7 @@ describe('a group card', () => {
     expect(screen.getByText('Author A Suggested')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove "Author A." from this merge' })).toBeInTheDocument();
     expect(screen.getAllByText('Author')).toHaveLength(2); // one role toggle per variant
-    expect(screen.getByText('3 book(s)')).toBeInTheDocument();
+    expect(screen.getByText('3 credit(s)')).toBeInTheDocument();
   });
 
   it('the pencil opens an editor with the canonical name; Enter renames', async () => {
@@ -407,7 +407,7 @@ describe('a group card', () => {
     expect(screen.queryByTestId('author-validation-empty')).not.toBeInTheDocument();
   });
 
-  it('a production company shows its chip and Find Real Author, which resolves and reloads', async () => {
+  it('a production company shows its chip and Find Real Author, which resolves and drops the group without re-reading', async () => {
     const user = userEvent.setup();
     serve([wire(4, 'Studio One', [], { is_production_company: true })]);
     vi.mocked(api.resolveProductionAuthor).mockResolvedValue(op('r1'));
@@ -415,7 +415,10 @@ describe('a group card', () => {
     expect(await screen.findByText('Production Company')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /find real author/i }));
     await waitFor(() => expect(api.resolveProductionAuthor).toHaveBeenCalledWith(4));
-    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId('author-group-4')).not.toBeInTheDocument());
+    // Every author write clears the server's list; re-reading it would return
+    // "not scanned yet" and replace the other groups.
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
   });
 
   it('a composite shows its names and "Split into N authors"', async () => {
@@ -465,7 +468,7 @@ describe('a group with a write in flight', () => {
     const card2 = screen.getByTestId('author-group-2');
     expect(within(card2).getByRole('button', { name: 'Merge into "Author 2"' })).toBeEnabled();
     // Bulk verbs wait for the write.
-    expect(screen.getByRole('button', { name: /^Merge All/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Merge all/ })).toBeDisabled();
 
     gate.release();
     await waitFor(() => expect(screen.queryByTestId('author-group-1')).not.toBeInTheDocument());
@@ -520,7 +523,7 @@ describe('selection and the bulk verbs', () => {
     await user.click(screen.getByRole('button', { name: 'Merge Selected (2)' }));
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
-        'Merged 1 of 2 selected group(s); 1 failed: "Author 2": store write failed',
+        'Merged 1 of 2 selected group(s); 1 failed: "Author 2": store write failed.',
         'error'
       )
     );
@@ -536,7 +539,7 @@ describe('selection and the bulk verbs', () => {
       wire(4, 'Studio One', [], { is_production_company: true }),
     ]);
     renderLane();
-    expect(await screen.findByRole('button', { name: 'Merge All (1)' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Merge all 1 name-variant group' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Select group Studio One' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'Select group Author 1' })).toBeEnabled();
   });
@@ -545,15 +548,16 @@ describe('selection and the bulk verbs', () => {
     const user = userEvent.setup();
     serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
     renderLane();
-    await user.click(await screen.findByRole('button', { name: 'Merge All (2)' }));
+    await user.click(await screen.findByRole('button', { name: 'Merge all 2 name-variant groups' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Confirm Merge All' })).toBeInTheDocument();
-    expect(dialog).toHaveTextContent('This will merge 2 groups.');
+    expect(dialog).toHaveTextContent('This will merge 2 name-variant groups');
+    expect(within(dialog).getByTestId('authors-merge-all-warning')).toHaveTextContent('leaving it stops the remaining merges');
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(api.mergeAuthors).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: 'Merge All (2)' }));
+    await user.click(screen.getByRole('button', { name: 'Merge all 2 name-variant groups' }));
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(2));
   });
@@ -637,5 +641,87 @@ describe('keyboard help', () => {
     expect(help).toHaveTextContent('Merge the focused group');
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByTestId('authors-shortcut-help')).not.toBeInTheDocument());
+  });
+});
+
+describe('review fixes (PR #4004)', () => {
+  it('says the results are stale, and offers a rescan, when the server cleared its list after the reviewer changed something', async () => {
+    const user = userEvent.setup();
+    const composite = wire(3, 'Author C / Author D', [], { split_names: ['Author C', 'Author D'] });
+    serve([composite, wire(1, 'Author A', ['Author A.'])]);
+    vi.mocked(api.splitCompositeAuthor).mockResolvedValue({ authors: [{ id: 31, name: 'Author C' }], books_updated: 1 });
+    vi.mocked(api.refreshAuthorDuplicates).mockResolvedValue(op('scan1'));
+    const view = renderLane();
+    await user.click(await screen.findByRole('button', { name: /split into 2 authors/i }));
+    await waitFor(() => expect(screen.queryByTestId('author-group-3')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('authors-stale')).not.toBeInTheDocument();
+
+    // Leave and come back: the server's list is gone, the lane's is not.
+    vi.mocked(reads.fetchAuthorGroups).mockResolvedValue({ groups: [], needsRefresh: true });
+    view.rerender(
+      <MemoryRouter initialEntries={['/review']}>
+        <Routes>
+          <Route path="/review" element={<Harness active={false} />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    view.rerender(
+      <MemoryRouter initialEntries={['/review']}>
+        <Routes>
+          <Route path="/review" element={<Harness active />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const banner = await screen.findByTestId('authors-stale');
+    expect(banner).toHaveTextContent('stale since your last change');
+    expect(screen.getByRole('heading', { name: 'Author A' })).toBeInTheDocument();
+    expect(screen.queryByTestId('authors-needs-scan')).not.toBeInTheDocument();
+
+    await user.click(within(banner).getByRole('button', { name: 'Rescan' }));
+    await waitFor(() => expect(api.refreshAuthorDuplicates).toHaveBeenCalledTimes(1));
+  });
+
+  it('the books popover says how many distinct books it lists across how many author records', async () => {
+    const user = userEvent.setup();
+    serve([wire(101, 'Author A', ['Author A.'])]);
+    // b1 is credited to both records: two credits, one book.
+    vi.mocked(reads.fetchBooksByAuthor).mockImplementation(async (id) =>
+      id === 101 ? [book('b1')] : [book('b1'), book('b2')]
+    );
+    renderLane();
+    expect(await screen.findByText('3 credit(s)')).toBeInTheDocument();
+    await user.click(screen.getByText('3 credit(s)'));
+    expect(await screen.findByTestId('author-books-header')).toHaveTextContent('2 books across 2 author records');
+  });
+
+  it('shows how far a bulk merge has got as "processed", not "merged"', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
+    vi.mocked(api.pollOperationV2).mockImplementation(() => new Promise(() => {}));
+    renderLane();
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all 2 groups on this page' }));
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (2)' }));
+    expect(await screen.findByTestId('authors-bulk-progress')).toHaveTextContent('Processed 0 of 2 groups');
+  });
+
+  it('a group with every variant left out cannot be merged, and Merge all stops counting it', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
+    renderLane();
+    expect(await screen.findByRole('button', { name: 'Merge all 2 name-variant groups' })).toBeInTheDocument();
+    await user.click(within(screen.getByTestId('author-group-2')).getByRole('button', { name: 'Remove "Author 2." from this merge' }));
+    expect(within(screen.getByTestId('author-group-2')).getByRole('button', { name: 'Merge into "Author 2"' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Merge all 1 name-variant group' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select group Author 2' })).toBeDisabled();
+  });
+
+  it('Merge all asks with the groups it will merge, and says leaving the lane stops the rest', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
+    renderLane();
+    await user.click(await screen.findByRole('button', { name: 'Merge all 2 name-variant groups' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('composite and production-company groups are not included');
+    expect(dialog).toHaveTextContent('Keep this lane open');
   });
 });

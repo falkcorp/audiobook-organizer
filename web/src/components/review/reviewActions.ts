@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
 // last-edited: 2026-10-13
 //
@@ -172,9 +172,10 @@ export type RepairsAction =
  * as narrators, is state the lane holds and reads when the action RUNS, so an
  * action queued behind another can never merge a stale snapshot of the choices.
  *
- * `mergeAllGroups` carries the count the reviewer confirmed; the lane refuses
- * to run if the mergeable set has moved since (the client-side counterpart of
- * the server's FILTER_CHANGED guard).
+ * `mergeAllGroups` carries the groups the reviewer confirmed; the lane refuses
+ * to run if the mergeable SET has moved since (the client-side counterpart of
+ * the server's FILTER_CHANGED guard). A count would miss one group leaving while
+ * another became mergeable.
  */
 export type AuthorId = number & { readonly __entity: 'author' };
 export type SeriesId = number & { readonly __entity: 'series' };
@@ -190,7 +191,7 @@ export type RoleTarget = { kind: 'variant'; id: AuthorId } | { kind: 'split'; na
 export type AuthorEntityAction =
   | { lane: 'authors'; entity: 'author'; type: 'mergeGroup'; canonicalId: AuthorId }
   | { lane: 'authors'; entity: 'author'; type: 'mergeSelected'; ids: AuthorId[] }
-  | { lane: 'authors'; entity: 'author'; type: 'mergeAllGroups'; expectedTotal: number }
+  | { lane: 'authors'; entity: 'author'; type: 'mergeAllGroups'; expectedIds: AuthorId[] }
   | { lane: 'authors'; entity: 'author'; type: 'renameCanonical'; canonicalId: AuthorId; name: string }
   | { lane: 'authors'; entity: 'author'; type: 'splitComposite'; canonicalId: AuthorId }
   | { lane: 'authors'; entity: 'author'; type: 'resolveProduction'; canonicalId: AuthorId }
@@ -260,7 +261,7 @@ export function isReversible(action: ReviewAction): boolean {
 export function needsConfirmation(action: ReviewAction): boolean {
   switch (action.type) {
     case 'mergeSelected':
-      // The authors lane's own dispatch confirms (see below); the dupes lane's
+      // The authors lane confirms in AuthorsPanel (see below); the dupes lane's
       // goes through the ActionBar.
       return action.lane !== 'authors';
     case 'merge':
@@ -275,9 +276,10 @@ export function needsConfirmation(action: ReviewAction): boolean {
       return action.ids.length > 1;
     case 'bulk':
       return true;
-    // The authors lane confirms inside its own dispatch (a selection wider
-    // than the page, and Merge All), like the repairs applies below, so the
-    // entry points -- button, keyboard, a future command -- ask exactly once.
+    // The authors lane confirms in its PANEL (AuthorsPanel: a selection wider
+    // than the page, and Merge All), before it dispatches -- like the repairs
+    // applies below, which confirm in their lane -- so the ActionBar must not
+    // ask a second time.
     case 'mergeAllGroups':
       return false;
     // The repairs applies DO confirm, but inside the lane's own dispatch (like
@@ -307,8 +309,8 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'dismissSelected':
       return action.ids.length;
     case 'mergeAllGroups':
-      // The count the reviewer confirmed, carried by the action itself.
-      return action.expectedTotal;
+      // The groups the reviewer confirmed, carried by the action itself.
+      return action.expectedIds.length;
     case 'linkCluster':
       return action.ids.length;
     case 'rejectCluster':
