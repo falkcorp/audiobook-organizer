@@ -619,6 +619,9 @@ func (s *Server) Start(cfg ServerConfig) error {
 		slog.Warn("Background goroutines did not stop within 30s — proceeding with shutdown anyway",
 			"still_running", s.bgWG.Running())
 	}
+	// Whatever the index worker did not pop (wedged, or the wait above timed
+	// out) is only in memory; record it so the reconciler repairs it next boot.
+	s.markPendingIndexDirty()
 
 	// Stop the file I/O pool — waits for in-flight jobs to finish
 	if p := s.fileIOPool; p != nil {

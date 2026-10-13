@@ -359,6 +359,10 @@ func TestShutdown_ReleasesObserverAndProviderAfterWritersStop(t *testing.T) {
 			t.Fatalf("releaseSearchAndAuthority runs before %q: ops still running would resolve credits against no authority lists", earlier)
 		}
 	}
+	// What the worker did not pop is recorded only after the wait for it.
+	if mark, wait := strings.Index(src, "s.markPendingIndexDirty()"), strings.Index(src, "s.bgWG.Wait()"); mark < 0 || mark < wait {
+		t.Fatal("Shutdown must call markPendingIndexDirty after waiting for the background goroutines")
+	}
 }
 
 // A book_file edit reaches the index through the aggregate recompute the store

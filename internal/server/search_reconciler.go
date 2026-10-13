@@ -355,16 +355,36 @@ func (s *Server) reconcileOnce() (drained, remaining int) {
 			if err := gctx.Err(); err != nil {
 				return err
 			}
-			res := s.applyIndexChunk(store, chunk)
-			// Clear only what was written. A failed clear costs one redundant
-			// re-index next pass; clearing early would silently drop a repair.
-			n := 0
-			for _, id := range res.done {
+			// Clear the chunk's keys BEFORE its rows are read, then re-mark what
+			// did not get written. Clearing after the commit would erase a mark
+			// a writer made between this pass's read and the clear -- that write
+			// is newer than what the pass indexed, and nothing else would ever
+			// repair it. Cleared first, such a mark survives and the next pass
+			// reads the newer row. The cost: a crash between the clear and the
+			// commit loses this chunk's repair (a window of one chunk's batch
+			// commit); a failed clear costs one redundant re-index next pass.
+			stillDirty := map[string]struct{}{}
+			for _, id := range chunk {
 				if cerr := ds.ClearSearchIndexDirty(id); cerr != nil {
 					searchIndexLog.Warn("search reconcile: clear dirty key %s: %v", logger.SanitizeLogValue(id), cerr)
+					stillDirty[id] = struct{}{}
+				}
+			}
+			res := s.applyIndexChunk(store, chunk)
+			written := make(map[string]struct{}, len(res.done))
+			for _, id := range res.done {
+				written[id] = struct{}{}
+			}
+			n := 0
+			for _, id := range chunk {
+				if _, ok := written[id]; ok {
+					if _, dirty := stillDirty[id]; !dirty {
+						n++
+					}
 					continue
 				}
-				n++
+				// Not written (failed, or the chunk was skipped): put the mark back.
+				s.markIndexDirty(id)
 			}
 			mu.Lock()
 			upserted += res.upserted
