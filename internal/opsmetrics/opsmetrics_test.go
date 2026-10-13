@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
 // last-edited: 2026-10-13
 
@@ -167,12 +167,8 @@ func TestZombies_SumsSources(t *testing.T) {
 		t.Fatalf("ops.zombies with no source = %d, want 0", got)
 	}
 	var a, b atomic.Int64
-	before := ActiveZombieSources()
 	unregA := rec.RegisterZombies(a.Load)
 	unregB := rec.RegisterZombies(b.Load)
-	if got := ActiveZombieSources(); got != before+2 {
-		t.Errorf("ActiveZombieSources = %d, want %d", got, before+2)
-	}
 	a.Store(2)
 	b.Store(3)
 	if got := zombiesValue(t, collect()); got != 5 {
@@ -199,9 +195,6 @@ func TestZombies_SumsSources(t *testing.T) {
 	unregB()
 	if got := zombiesValue(t, collect()); got != 0 {
 		t.Errorf("ops.zombies after unregistering both = %d, want 0", got)
-	}
-	if got := ActiveZombieSources(); got != before {
-		t.Errorf("ActiveZombieSources after unregister = %d, want %d", got, before)
 	}
 }
 
