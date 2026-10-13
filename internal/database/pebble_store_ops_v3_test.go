@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-13
 
@@ -1187,5 +1187,18 @@ func TestMarksStagedWithLedger(t *testing.T) {
 	transition(t, p, id, state.EvReturnNil, nil)
 	if got, _ := p.ListMarksV3(id); len(got) != 0 {
 		t.Fatalf("marks left after the terminal transition: %v", got)
+	}
+	// A discard of a run that never ended deletes its marks too.
+	open := insertV3(t, p, "test.marks", "")
+	transition(t, p, open, state.EvDispatch, nil)
+	if err := p.CommitLedgerV3(open, LedgerBatch{Ledger: Ledger{ChunkSize: 1, ChunkCount: 1, Done: []byte{0}},
+		Marks: map[string][]string{"applied": {"z"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := p.DeleteRunV3(open, reachableV3States()); err != nil || !deleted {
+		t.Fatalf("DeleteRunV3: %v %v", deleted, err)
+	}
+	if got, _ := p.ListMarksV3(open); len(got) != 0 {
+		t.Fatalf("marks left after a discard: %v", got)
 	}
 }

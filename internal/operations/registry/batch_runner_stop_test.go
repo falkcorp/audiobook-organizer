@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -111,6 +111,37 @@ func TestRevokeBeforeCancelWindow(t *testing.T) {
 	}
 	if s := sum.Load(); s == nil || !s.Canceled {
 		t.Fatalf("Finish summary %+v: want Canceled", s)
+	}
+}
+
+// The fenced counterpart of TestCompletedChunkDeliveredWhenRunStops. Every
+// registry stop revokes the fence before it cancels, and the runner checks
+// the fence after every item (fail closed: an item may have swallowed a
+// refused write), so a chunk whose last item finished at a registry stop is
+// not recorded; a resume re-runs it. S1's delivery guarantee holds for an
+// unfenced stop only.
+func TestFencedStopDoesNotRecordTheChunkInHand(t *testing.T) {
+	for range 20 {
+		store := newMemLedgerStore(t)
+		fence, revoke := opswriter.NewFence(1, nil)
+		var stopRun context.CancelFunc
+		job, rc, cancel := openJob(t, seq(10), batchOpts{size: 5, workers: 1}, func(_ *ops.ItemRC, i int) error {
+			if i == 4 {
+				revoke() // the registry's order: revoke, then cancel
+				stopRun()
+			}
+			return nil
+		})
+		stopRun = cancel
+		ctx := opswriter.WithFence(rc.Context(), fence)
+		_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
+		cancel()
+		if !errors.Is(err, ops.ErrFenced) {
+			t.Fatalf("err = %v, want ErrFenced", err)
+		}
+		if led, _ := store.GetLedgerV3("op"); led != nil && slices.Contains(bitsSet(*led), 0) {
+			t.Fatal("a chunk whose last item ran under a revoked fence was recorded")
+		}
 	}
 }
 
