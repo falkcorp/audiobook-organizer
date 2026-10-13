@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -259,10 +259,19 @@ func (w *memTitles) Effect(context.Context, ops.EffectSpec, func() ([]ops.Histor
 	return errors.New("unused")
 }
 
-// S3: a Fixer apply interrupted after some rows were written lists every
-// applied row -- from both attempts -- when the resumed run finishes, and
-// AfterApply gets them all.
+// TestFixerAppliedSurvivesResume: rows a Fixer applied before a crash are
+// still listed in Applied and handed to AfterApply when the resumed run
+// finishes. blockAt 20 crashes on a chunk boundary (rows 0-19 are in two
+// completed chunks); blockAt 25 crashes inside chunk 2 after rows 20-24 were
+// written, so the resume re-runs rows whose fingerprint the write changed and
+// must report them applied, not changed since plan.
 func TestFixerAppliedSurvivesResume(t *testing.T) {
+	for _, blockAt := range []int{20, 25} {
+		t.Run(fmt.Sprint("block_at_", blockAt), func(t *testing.T) { fixerResumeCase(t, blockAt) })
+	}
+}
+
+func fixerResumeCase(t *testing.T, blockAt int) {
 	titles := map[string]string{}
 	var rows []ops.Row
 	for i := range 30 {
@@ -273,6 +282,7 @@ func TestFixerAppliedSurvivesResume(t *testing.T) {
 	}
 	var afterApply []string
 	block := true
+	blocked := make(chan struct{})
 	def := ops.Fixer("test.fixer", ops.FixerSpec[ops.NoParams, string]{
 		Common:     ops.Common{Title: "f", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
 		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[string], error) { return ops.Source[string]{}, nil },
@@ -286,7 +296,8 @@ func TestFixerAppliedSurvivesResume(t *testing.T) {
 				Proposed: map[string]string{"title": "1 " + id}}, nil
 		},
 		Apply: func(irc *ops.ItemRC, w ops.Writer, _ ops.NoParams, row ops.Row) error {
-			if block && row.ID >= itemKey(20) {
+			if block && row.ID == itemKey(blockAt) {
+				close(blocked)
 				<-irc.Context().Done()
 				return irc.Context().Err()
 			}
@@ -311,10 +322,22 @@ func TestFixerAppliedSurvivesResume(t *testing.T) {
 	store := newMemLedgerStore(t)
 	job, rc, cancel := open()
 	defer cancel()
+	// The world stops once chunks 0 and 1 are committed AND the worker is
+	// parked on row blockAt, so rows before it in chunk 2 are written but
+	// chunk 2 is never recorded.
 	_, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1,
-		afterCommit: func(l database.Ledger, _ database.ProgressSnapshot) bool { return len(bitsSet(l)) == 2 }})
+		afterCommit: func(l database.Ledger, _ database.ProgressSnapshot) bool {
+			if len(bitsSet(l)) != 2 {
+				return false
+			}
+			<-blocked
+			return true
+		}})
 	if !errors.Is(err, errWorldStopped) {
 		t.Fatalf("first attempt: %v", err)
+	}
+	if led, _ := store.GetLedgerV3("op"); slices.Contains(bitsSet(*led), 2) {
+		t.Fatal("chunk 2 was recorded; the case does not test an unfinished chunk")
 	}
 	block = false
 	job2, rc2, cancel2 := open()
@@ -332,6 +355,13 @@ func TestFixerAppliedSurvivesResume(t *testing.T) {
 		want[i] = itemKey(i)
 	}
 	if !slices.Equal(res.Applied, want) || !slices.Equal(afterApply, want) {
-		t.Fatalf("applied %d rows, AfterApply got %d; want all 30 across the resume", len(res.Applied), len(afterApply))
+		var missing []string
+		for _, id := range want {
+			if !slices.Contains(res.Applied, id) {
+				missing = append(missing, id)
+			}
+		}
+		t.Fatalf("applied %d rows, AfterApply got %d; want all 30 across the resume; missing %v",
+			len(res.Applied), len(afterApply), missing)
 	}
 }

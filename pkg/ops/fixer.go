@@ -1,5 +1,5 @@
 // file: pkg/ops/fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
 // last-edited: 2026-10-13
 
@@ -247,6 +247,15 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 	if err != nil {
 		return false, err
 	}
+	if alreadyApplied(planned, fresh) {
+		// This run (an earlier attempt, before a crash or a deploy) already
+		// wrote this row in a chunk that never completed, so the ledger did
+		// not record its mark and the resume re-runs it. Its fingerprint has
+		// changed because the write changed it; refusing it as changed since
+		// plan would drop a row the run did apply from Applied and AfterApply.
+		// Report it applied and do not write again.
+		return true, nil
+	}
 	switch {
 	case fresh.Fingerprint() != planned.Fingerprint():
 		irc.Skip(SkipChangedSincePlan)
@@ -277,4 +286,25 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 		return false, err
 	}
 	return true, nil
+}
+
+// alreadyApplied reports whether fresh shows the change planned proposes
+// already made: the plan proposed a real change (some Proposed value differs
+// from the planned Current) and every Proposed field now holds its proposed
+// value. A row with nothing proposed is never "already applied".
+func alreadyApplied(planned, fresh Row) bool {
+	if len(planned.Proposed) == 0 {
+		return false
+	}
+	changes := false
+	for k, v := range planned.Proposed {
+		got, ok := fresh.Current[k]
+		if !ok || got != v {
+			return false
+		}
+		if was, ok := planned.Current[k]; !ok || was != v {
+			changes = true
+		}
+	}
+	return changes
 }
