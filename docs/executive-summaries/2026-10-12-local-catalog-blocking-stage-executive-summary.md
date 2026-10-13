@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-12-local-catalog-blocking-stage-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: a53f4aca-4029-4768-a139-d539fca84e17 -->
 <!-- last-edited: 2026-10-12 -->
 
@@ -57,7 +57,12 @@ Branch `task/02-pr7b` (holistic plan task 02-PR7b).
   `metadata_fetch.folder_parse_person_title` ships on; set to `false` it asks
   the stored title again. What that search finds cannot be applied by the
   review page's bulk button or any unattended apply, as for any book searched
-  by its folder, but you can apply it from that book's own review row.
+  by its folder, but you can apply it from that book's own review row, one
+  book at a time (a request that pairs a single-row approval with other books
+  is refused). Only this kind of folder search gets that exception, and only
+  while the switch is on; the folder search for a book with no title at all is
+  still never applied that way. The dry-run report marks these rows so they are
+  not mistaken for ones a bulk apply would land.
 - **Safety.** If every provider fails while the catalog has a match, the search
   still counts as unanswered and the book keeps what it had. A Doctor Who, Big
   Finish or Torchwood entry from the catalog is held by the manual-only rule
@@ -65,5 +70,7 @@ Branch `task/02-pr7b` (holistic plan task 02-PR7b).
 - **Housekeeping.** The catalog harvest now files the alternate spellings of
   every author it stores, and at the end of every run files them for what it
   stored before. A book you fill from a catalog candidate is recorded as an
-  "Audible catalog" book, ranked just below Audible so a live Audible answer
-  can replace it, with its year read as the audiobook's release year.
+  "Audible catalog" book, ranked just below Audible: a hand-picked or
+  review-page apply from live Audible can replace it, but the automatic
+  upgrade sweep does not revisit it. Its year is read as the audiobook's
+  release year.

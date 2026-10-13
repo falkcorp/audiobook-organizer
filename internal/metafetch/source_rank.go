@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_rank.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c2618c2e-2a64-4761-bc76-c9bbd65b3792
 // last-edited: 2026-10-12
 //
@@ -44,8 +44,11 @@ const (
 var sourceRanks = map[string]int{
 	SourceSlugAudible:  50,
 	SourceSlugAudnexus: 50,
-	// Just below Audible: the same records, but a stored copy. A live Audible
-	// (or Audnexus) answer outranks it and may replace a catalog fill.
+	// Just below Audible: the same records, but a stored copy. A hand-picked
+	// or review-lane apply from live Audible (or Audnexus) outranks it and may
+	// replace a catalog fill. The automatic upgrade sweep does not: it visits
+	// books at or below LowQualitySourceMaxRank (Open Library's rank), which a
+	// catalog fill is above.
 	SourceSlugAudibleCatalog: 45,
 	SourceSlugHardcover:      40,
 	SourceSlugOpenLibrary:    30,
