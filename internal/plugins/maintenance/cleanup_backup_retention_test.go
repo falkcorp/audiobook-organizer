@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_backup_retention_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8d6e41-0c97-4a52-b1f6-92e7a5c04d18
 // last-edited: 2026-10-13
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -27,8 +28,15 @@ type retentionDeps struct {
 
 func (d retentionDeps) BackupRetentionDays() int { return d.days }
 
-// touchAged writes a file and sets its mtime to ageDays ago. The names these
-// tests use carry no time, so the sweep ages them by mtime.
+// bakSuffix is the backup suffix fileops writes for a backup taken ageDays ago:
+// ".bak-<unix>". The sweep ages a backup by this, never by the mtime.
+func bakSuffix(ageDays int) string {
+	return ".bak-" + strconv.FormatInt(time.Now().Add(-time.Duration(ageDays)*24*time.Hour).Unix(), 10)
+}
+
+// touchAged writes a file and sets its mtime to ageDays ago. A backup's own
+// age is in its name (bakSuffix); the mtime only matters to the files that
+// must NOT be treated as backups.
 func touchAged(t *testing.T, path string, ageDays int) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -65,13 +73,13 @@ func TestRunCleanupOldBackups_RetentionSource(t *testing.T) {
 
 			files := map[int]string{}
 			for _, age := range []int{5, 20, 40} {
-				p := filepath.Join(root, "lib", fmt.Sprintf("age%d", age), "a.bak-1")
+				p := filepath.Join(root, "lib", fmt.Sprintf("age%d", age), "a.m4b"+bakSuffix(age))
 				files[age] = p
 				touchAged(t, p, age)
 			}
 			notBackup := filepath.Join(root, "lib", "cover.jpg")
 			touchAged(t, notBackup, 400)
-			outsideBackup := filepath.Join(outside, "a.bak-1")
+			outsideBackup := filepath.Join(outside, "a.m4b"+bakSuffix(400))
 			touchAged(t, outsideBackup, 400)
 
 			p := New(retentionDeps{rootDirDeps: rootDirDeps{root: root}, days: tc.days})
@@ -119,11 +127,11 @@ func TestCleanupOldBackups_RequeueIsIdempotent(t *testing.T) {
 
 	var stale, fresh []string
 	for i := range 6 {
-		s := filepath.Join(root, "A", fmt.Sprintf("b%d", i), "x.m4b.bak-stale")
-		touchAged(t, s, 90)
+		s := filepath.Join(root, "A", fmt.Sprintf("b%d", i), "x.m4b"+bakSuffix(90))
+		touchAged(t, s, 400)
 		stale = append(stale, s)
-		f := filepath.Join(root, "A", fmt.Sprintf("b%d", i), "x.m4b.bak-fresh")
-		touchAged(t, f, 2)
+		f := filepath.Join(root, "A", fmt.Sprintf("b%d", i), "x.m4b"+bakSuffix(2))
+		touchAged(t, f, 400)
 		fresh = append(fresh, f)
 	}
 	keep := filepath.Join(root, "A", "b0", "x.m4b")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
 // last-edited: 2026-10-13
 
@@ -83,9 +83,10 @@ func TestRunCleanupOldBackups_SkipsAppDirs(t *testing.T) {
 			withPluginAppDirs(t, root, tc.appDirs)
 
 			old := time.Now().Add(-90 * 24 * time.Hour)
-			libraryFile := filepath.Join(root, "Author", "Book", "cover.bak-20250101")
-			backupFile := filepath.Join(root, "backups", "db.bak-20250101")
-			dumpFile := filepath.Join(root, "openlibrary-dumps", "db", "ol.bak-20250101")
+			stamp := bakSuffix(90)
+			libraryFile := filepath.Join(root, "Author", "Book", "cover.jpg"+stamp)
+			backupFile := filepath.Join(root, "backups", "db"+stamp)
+			dumpFile := filepath.Join(root, "openlibrary-dumps", "db", "ol"+stamp)
 			for _, p := range []string{libraryFile, backupFile, dumpFile} {
 				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 				require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))

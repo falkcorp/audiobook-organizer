@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-13
 
@@ -492,12 +492,20 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 			return nil
 		}
 		if strings.Contains(info.Name(), ".bak-") {
-			// Age is the time in the backup's NAME (fileops.BackupTime: <unix>[-N]
-			// or the legacy YYYYMMDD-HHMMSS), falling back to mtime for a name
-			// without one. A create_backups backup is a hardlink and keeps the
-			// original audio's mtime, often years old, so mtime alone would delete
-			// a fresh backup on the next run (fileops KeepBackup, AGE CONTRACT).
-			age := time.Since(fileops.BackupTime(info.Name(), info.ModTime()))
+			// Only a name fileops wrote is a backup: <file>.bak-<unix>[-N] or the
+			// legacy <file>.bak-YYYYMMDD-HHMMSS. Anything else that merely
+			// contains ".bak-" (a book called "x.bak-notes.m4b") is not ours to
+			// delete however old it is, so there is no mtime fallback either.
+			// Age is the time in the name: a create_backups backup is a hardlink
+			// and keeps the original audio's mtime, often years old, so mtime
+			// would delete a fresh backup on the next run (fileops KeepBackup,
+			// AGE CONTRACT).
+			taken, isBackup := fileops.BackupNameTime(info.Name())
+			if !isBackup {
+				logging.Debug(ctx, "keeping .bak- file whose name is not a recognised backup name", "path", path)
+				return nil
+			}
+			age := time.Since(taken)
 			if age > maxAge {
 				if rmErr := os.Remove(path); rmErr != nil {
 					logging.Warn(ctx, "failed to remove old backup", "path", path, "err", rmErr)
