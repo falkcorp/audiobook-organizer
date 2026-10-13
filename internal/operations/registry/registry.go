@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.49.0
+// version: 3.50.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-13
 
@@ -1848,9 +1848,12 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 			// (bounded) for its goroutine; if the goroutine returns first,
 			// the monitor's compare-and-set from "running" finds this status,
 			// keeps it, publishes op.terminal again (harmless, as for the
-			// stamp below) and tells the dependency scheduler, which this
-			// branch does not. A zombie from the shutdown branch has no
-			// decided status and is stamped as before.
+			// stamp below) and tells the dependency scheduler again. Shutdown
+			// tells it once itself for every final stamp (notifyStampedDeps,
+			// after the lock is released), because a goroutine that never
+			// returns never tells it, and a dependent then sat in
+			// waiting_deps. A zombie from the shutdown branch has no decided
+			// status and is stamped as before.
 			if h.slotReleased {
 				if out := h.zombieFinal.Load(); out != nil {
 					status, msg := out.status, out.msg
@@ -1920,6 +1923,10 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 		r.mu.Unlock()
 		r.logger.Warn("registry: shutdown timeout; stamped the runs that did not drain")
 		shutdownErr = ctx.Err()
+		// Outside r.mu (notifyDepFailed takes it) and before notifyStopped
+		// is set below (it enrolls in goroutineWG, which the wait below then
+		// covers).
+		r.notifyStampedDeps(stamped)
 	}
 
 	// Cancel the internal context to stop the dispatcher, watchdog, and any
@@ -1992,6 +1999,26 @@ type shutdownStamp struct {
 	h      *runHandle
 	status string
 	msg    *string
+}
+
+// notifyStampedDeps tells the dependency scheduler about every row Shutdown
+// stamped with a final status (a timeout, a user cancel, a zombie's decided
+// status, interrupted_dropped): the run's own exit, which normally does it,
+// may never come. A pause (interrupted_quiesced) is not an end: the resumed
+// attempt reports its own, so it tells nothing. A run whose goroutine does
+// return tells the scheduler a second time; OnOpFailed and OnOpCompleted are
+// idempotent for a dependent already moved.
+func (r *Registry) notifyStampedDeps(stamped []shutdownStamp) {
+	for _, st := range stamped {
+		msg := ""
+		if st.msg != nil {
+			msg = *st.msg
+		}
+		if _, final := opsmetrics.OutcomeFor(st.status, msg); !final {
+			continue
+		}
+		r.notifyDepTerminal(st.status, &queuedRun{opID: st.h.id, defID: st.h.defID, params: st.h.params})
+	}
 }
 
 // countShutdownStamps counts the end of each run Shutdown stamped whose own

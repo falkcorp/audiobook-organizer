@@ -1,5 +1,5 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
 // last-edited: 2026-10-13
 
@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -840,4 +841,237 @@ func TestUnwrittenCompletionIsCountedOnceByTheBootSweep(t *testing.T) {
 	if d := legacyCounter(t, "operations_completed_total", id) - completedBefore; d != 0 {
 		t.Errorf("operations_completed_total{type=%s} moved by %v, want 0", id, d)
 	}
+}
+
+// flakyFakeStore is a fakeStore that can, for one op id, move the row to
+// "canceled" (as Cancel's cancelByRow would) in place of the worker's
+// running -> completed write and then fail its retry from canceled, or fail
+// every read of the row.
+type flakyFakeStore struct {
+	*fakeStore
+	cancelThenFail atomic.Bool
+	failRead       atomic.Bool
+}
+
+func (s *flakyFakeStore) UpdateOperationV2StatusIf(id, from, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
+	if s.cancelThenFail.Load() && status == "completed" {
+		switch from {
+		case "running":
+			now := time.Now().UTC()
+			msg := "canceled by user"
+			if err := s.fakeStore.UpdateOperationV2Status(id, "canceled", nil, &now, &msg); err != nil {
+				return false, err
+			}
+			return false, nil
+		case "canceled":
+			return false, errors.New("injected write failure")
+		}
+	}
+	return s.fakeStore.UpdateOperationV2StatusIf(id, from, status, startedAt, completedAt, errMsg)
+}
+
+func (s *flakyFakeStore) GetOperationV2(id string) (*database.OperationV2Row, error) {
+	if s.failRead.Load() {
+		return nil, errors.New("injected read failure")
+	}
+	return s.fakeStore.GetOperationV2(id)
+}
+
+// TestCanceledRowThenFailedWriteCountsTheCancel: the run completed, but
+// Cancel moved its row to "canceled" between the handle release and the
+// terminal write, and the worker's retry from canceled then failed. The row
+// is final (canceled, never resumable) and Cancel counts nothing, so the
+// worker counts the end the row reads: canceled, once. Before the fix the
+// failed retry was counted nowhere.
+func TestCanceledRowThenFailedWriteCountsTheCancel(t *testing.T) {
+	rec, g := privateMeter()
+	store := &flakyFakeStore{fakeStore: newFakeStore()}
+	reg := registry.NewWithOptions(store, slog.Default(), 1, registry.Options{OpsMetrics: rec})
+	g.reg = reg
+	const id = "test.timedout-cancel-then-fail"
+	def := makeValidDef(id)
+	if err := reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	canceledBefore := legacyCounter(t, "operations_canceled_total", id)
+	store.cancelThenFail.Store(true)
+	reg.Start(t.Context())
+	t.Cleanup(func() { _ = reg.Shutdown(context.Background()) })
+	opID, err := reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitStatus(t, store.fakeStore, opID, "canceled", 5*time.Second)
+	waitForOtel(t, "runs{canceled}", func() bool { return g.runOutcomes(t, id)["canceled"] == 1 })
+	awaitNotRunning(t, reg, opID)
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "canceled": 1})
+	if d := legacyCounter(t, "operations_canceled_total", id) - canceledBefore; d != 1 {
+		t.Errorf("operations_canceled_total{type=%s} moved by %v, want 1", id, d)
+	}
+}
+
+// TestCanceledZombieUnreadableRowCountsTheCancel: a zombie whose stop was
+// not recorded in v3 (no v3 state in this store) is canceled again; Cancel
+// then writes the row "canceled" itself and counts nothing. When the
+// goroutine returns, the monitor's write from running is refused and its
+// re-read fails. Not shutting down, the refusal can only be that cancel, so
+// the monitor counts the run's decided outcome, canceled, once.
+func TestCanceledZombieUnreadableRowCountsTheCancel(t *testing.T) {
+	rec, g := privateMeter()
+	store := &flakyFakeStore{fakeStore: newFakeStore()}
+	s := newStubbornRun()
+	reg := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		OpsMetrics: rec, AbandonGrace: 50 * time.Millisecond, WatchdogInterval: time.Hour, SweepInterval: time.Hour, AbandonedCap: 100,
+	})
+	g.reg = reg
+	t.Cleanup(func() {
+		store.failRead.Store(false)
+		s.releaseRun()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = reg.Shutdown(sctx)
+	})
+	const id = "test.timedout-zombie-unreadable"
+	def := makeValidDef(id)
+	def.Run = s.run
+	if err := reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	reg.Start(t.Context())
+	opID, err := reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	if err := reg.Cancel(opID); err != nil {
+		t.Fatal(err)
+	}
+	awaitZombieCount(t, reg, 1)
+	if err := reg.Cancel(opID); err != nil {
+		t.Fatal(err)
+	}
+	awaitStatus(t, store.fakeStore, opID, "canceled", 5*time.Second)
+	store.failRead.Store(true)
+	s.releaseRun()
+	awaitZombieCount(t, reg, 0)
+	store.failRead.Store(false)
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "canceled": 1})
+}
+
+// TestShutdownTimeoutStampFailsDependents: a run stamped as a timeout by
+// Shutdown is final, and its goroutine may never return to tell the
+// dependency scheduler, so Shutdown tells it: a dependent waiting on it is
+// failed, not left in waiting_deps.
+func TestShutdownTimeoutStampFailsDependents(t *testing.T) {
+	store := newV3Store(t)
+	s := newStubbornRun()
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		AbandonGrace: time.Second, WatchdogInterval: time.Hour, SweepInterval: time.Hour, AbandonedCap: 100,
+	})
+	t.Cleanup(func() {
+		s.releaseRun()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = r.Shutdown(sctx)
+	})
+	defA := makeValidDef("test.timedout-dep-a")
+	defA.ResumePolicy = registry.ResumeRestart
+	defA.Timeout = 20 * time.Millisecond
+	defA.Run = s.run
+	defB := makeValidDef("test.timedout-dep-b")
+	defB.Requires = []registry.Requirement{{Kind: registry.ReqOpCompleted, OpType: defA.ID}}
+	for _, d := range []registry.OperationDef{defA, defB} {
+		if err := r.RegisterOp(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.SetDepsScheduler(registry.NewDepsScheduler(r, &pebbleSchedulerStore{PebbleStore: store}))
+	reqs, _ := json.Marshal(defB.Requires)
+	waiting := ulid.Make().String()
+	if err := store.InsertOperationV2(database.OperationV2Row{ID: waiting, DefID: defB.ID, Plugin: "test", Status: "waiting_deps",
+		QueuedAt: time.Now().UTC(), SubjectType: "book", SubjectID: "book-77", Requirements: string(reqs), Params: `{"book_id":"book-77"}`}); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	a, err := r.EnqueueOp(t.Context(), defA.ID, map[string]any{"book_id": "book-77"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	time.Sleep(150 * time.Millisecond) // past the deadline, inside the 1s grace
+	sctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = r.Shutdown(sctx)
+	row, err := store.GetOperationV2(a)
+	if err != nil || row == nil || row.Status != "canceled" || row.ErrorMessage == nil || !strings.HasPrefix(*row.ErrorMessage, state.TimeoutPrefix) {
+		t.Fatalf("prerequisite after Shutdown = %+v %v, want canceled with a %q message", row, err, state.TimeoutPrefix)
+	}
+	if got := v2Status(t, store, waiting); got != "failed" {
+		t.Fatalf("dependent after Shutdown = %q, want failed", got)
+	}
+	s.releaseRun()
+	recv(t, s.finished, "the stubborn run to return")
+}
+
+// TestShutdownStampsATimedOutSubprocessRunAsATimeout: the subprocess
+// (Isolate=true) path sets deadlineHit too. Its child is killed at the
+// deadline, but a grandchild holds the result socket open past Shutdown's
+// goroutine wait, so the run is still in flight when Shutdown's context
+// expires and when Shutdown returns; Shutdown stamps it as a timeout, not
+// interrupted_quiesced, and counts it timed_out.
+func TestShutdownStampsATimedOutSubprocessRunAsATimeout(t *testing.T) {
+	prev := registry.ChildEnvFunc
+	registry.ChildEnvFunc = func() []string {
+		return []string{testChildEnvVar + "=1", testChildHangVar + "=4500"}
+	}
+	t.Cleanup(func() { registry.ChildEnvFunc = prev })
+
+	rec, g := privateMeter()
+	store := newFakeStore()
+	r := registry.NewWithOptions(store, slog.Default(), 1, registry.Options{OpsMetrics: rec})
+	g.reg = r
+	t.Cleanup(func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = r.Shutdown(sctx)
+	})
+	const id = "test.timedout-subprocess"
+	def := makeValidDef(id)
+	def.Isolate = true
+	def.ResumePolicy = registry.ResumeRestart
+	def.Timeout = time.Second
+	def.Run = func(context.Context, json.RawMessage, registry.Reporter) error {
+		t.Error("def.Run should not be called in-process for Isolate=true")
+		return nil
+	}
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	r.Start(t.Context())
+	opID, err := r.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitStatus(t, store, opID, "running", 5*time.Second)
+	time.Sleep(1300 * time.Millisecond) // past the 1s deadline; the grandchild holds the socket
+	sctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = r.Shutdown(sctx)
+	row, err := store.GetOperationV2(opID)
+	if err != nil || row == nil {
+		t.Fatalf("GetOperationV2: %v %v", row, err)
+	}
+	if row.Status != "canceled" || row.ErrorMessage == nil || !strings.HasPrefix(*row.ErrorMessage, state.TimeoutPrefix) {
+		t.Fatalf("row after Shutdown = %q %v, want canceled with a %q message", row.Status, row.ErrorMessage, state.TimeoutPrefix)
+	}
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "timed_out": 1})
+	// The run ends when the grandchild lets go; it must not count again.
+	deadline := time.Now().Add(10 * time.Second)
+	for r.IsRunning(opID) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if r.IsRunning(opID) {
+		t.Fatal("the subprocess run never ended")
+	}
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "timed_out": 1})
 }
