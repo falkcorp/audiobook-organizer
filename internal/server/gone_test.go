@@ -1,5 +1,5 @@
 // file: internal/server/gone_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a3d6f12-c405-4e97-b1d8-72f9e0a5c346
 // last-edited: 2026-10-12
 

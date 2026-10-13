@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
 // last-edited: 2026-10-12
 
@@ -78,10 +78,11 @@ var filterIndexLog = logger.New("activity.filter-index")
 // "older matches were not examined" (a lower bound, logged) into "older matches
 // do not exist" (a wrong answer, silent).
 //
-// It deliberately lives OUTSIDE "act:", so a range delete of the whole act:
-// prefix does not take it: an empty store is trivially fully indexed, so the
-// sentinel must survive such a wipe rather than send every later query back to
-// the budget scan.
+// It deliberately lives OUTSIDE "act:" as a defensive guard: no code range
+// deletes the whole act: prefix today, but if one did it must not take the
+// sentinel. An empty store is trivially fully indexed, so the sentinel has to
+// survive such a wipe rather than send every later query back to the budget
+// scan.
 const ActivityFilterIndexBackfillKey = "system:backfill:activity_filter_index_v1_done"
 
 // pactFilterFamily is one indexed filter predicate.

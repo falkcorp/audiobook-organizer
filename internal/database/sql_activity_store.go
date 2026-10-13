@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-10-12
 
@@ -103,7 +103,7 @@ const sqlActReaderConns = 4
 // predicate is unindexable — can never turn pagination into a full-table count.
 const sqlActCountCap = 100000
 
-// sqlActDeleteChunk bounds each DELETE so an unbounded wipe/prune cannot build
+// sqlActDeleteChunk bounds each DELETE so an unbounded prune cannot build
 // one enormous WAL frame, and lets a cancelled pass report the rows it actually
 // deleted (it sums committed chunks).
 //

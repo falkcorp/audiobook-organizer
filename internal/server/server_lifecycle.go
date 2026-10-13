@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.34.0
+// version: 4.35.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-12
 
@@ -1200,10 +1200,9 @@ func (s *Server) startBackfills() {
 	// otherwise reconciled in place while it keeps serving, which repairs
 	// rows a build that predates the index wrote. Waits for memdb warmup so
 	// its full book scan does not compete with warmup's; never blocks startup.
-	// SuperviseIdentIndex retries a failed build with backoff and stays for
-	// the life of the server, rebuilding again when a wipe's own rebuild
-	// fails; after its retries it logs an ERROR naming the manual op
-	// (maintenance.ident-index-rebuild).
+	// SuperviseIdentIndex retries a failed boot build with backoff, then logs
+	// an ERROR naming the manual op (maintenance.ident-index-rebuild) and
+	// returns.
 	s.bgWG.Go("ident-index", func() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
