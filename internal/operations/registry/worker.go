@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.35.2
+// version: 2.36.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package registry
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 )
 
 var operationTracer = otel.Tracer("audiobook-organizer/operations")
@@ -154,6 +155,10 @@ type runHandle struct {
 type zombieOutcome struct {
 	status string
 	msg    *string
+	// outcome is the ops.runs outcome of status (finalStatusForCanceledRun's
+	// third result): status alone cannot tell a timeout from a cancel, both
+	// are "canceled".
+	outcome string
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -455,12 +460,15 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// A cancel that found this handle (it is registered, so Cancel takes it
 		// for a live run) set userCanceled and may have read the row before
 		// the write above. Honor it now, from the status just written.
-		out := r.settleInterrupted(qr, h, status, &quiescedAt)
+		out := r.settleInterrupted(qr, h, status, pauseOutcome(status), &quiescedAt)
 		status = out.status
 		r.releaseRunHandle(qr.opID)
 		if out.publish {
 			r.publishOpTerminal(qr.opID, qr.defID, status)
 		}
+		// A ResumeDrop scan quiesced before it started is dropped: a run end
+		// with no attempt to time. interrupted_quiesced records nothing.
+		r.recordRunEnd(qr.defID, out.outcome)
 		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
 		// Without this the dropped scan was never recorded anywhere a release
 		// reads, so it sat interrupted_quiesced until the next startup sweep.
@@ -557,25 +565,28 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if def.Isolate {
 		runErr := runSubprocess(runCtx, def, qr.opID, qr.params, reporter)
 		r.releaseRunHandle(qr.opID)
-		var finalStatus string
+		var finalStatus, outcome string
 		var errMsg *string
 		completedAt := time.Now().UTC()
 		if runCtx.Err() != nil {
-			finalStatus, errMsg = r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
+			finalStatus, errMsg, outcome = r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 		} else if runErr != nil {
-			finalStatus = "failed"
+			finalStatus, outcome = "failed", opsmetrics.OutcomeFailed
 			msg := runErr.Error()
 			errMsg = &msg
 		} else {
-			finalStatus = "completed"
+			finalStatus, outcome = "completed", opsmetrics.OutcomeCompleted
 		}
-		out := r.writeRunTerminalStatus(qr, h, finalStatus, &completedAt, errMsg)
+		if outcome == opsmetrics.OutcomeTimedOut {
+			r.markStopping(qr, h, state.StopTimeout, false)
+		}
+		out := r.writeRunTerminalStatus(qr, h, finalStatus, outcome, &completedAt, errMsg)
 		finalStatus = out.status
 		// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 		if out.publish {
 			r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 		}
-		r.recordRunMetrics(qr.defID, finalStatus, runStartedAt)
+		r.recordRunMetrics(qr.defID, out.outcome, runStartedAt)
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
@@ -660,7 +671,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// v3: the run is stopping, a zombie (05-PR4), recorded before
 				// it is listed as one. Its row keeps reading "running";
 				// Shutdown's timeout loop stamps it.
-				r.markStopping(qr, h, r.stopReasonFor(runCtx, h))
+				r.markStopping(qr, h, r.stopReasonFor(runCtx, h), true)
 				h.zombieSince.Store(r.livenessClock().UnixNano())
 				h.zombie.Store(true)
 				// R-3: same rationale as the genuine-abandonment path — the
@@ -712,7 +723,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// goroutine exits, so RetryInterrupted and Cancel always see either
 			// a live handle or a finished run. The fence was already revoked
 			// (select above).
-			abandonStatus, reason := r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
+			abandonStatus, reason, abandonOutcome := r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 			abandonMsg := "abandoned: op goroutine did not exit within grace after context cancellation"
 			if reason != nil {
 				// The decided reason leads: a timeout's message must start
@@ -722,8 +733,8 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// same outcome the boot sweep gives this run after a crash.
 				abandonMsg = *reason + "; " + abandonMsg
 			}
-			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg})
-			r.markStopping(qr, h, r.stopReasonFor(runCtx, h))
+			h.zombieFinal.Store(&zombieOutcome{status: abandonStatus, msg: &abandonMsg, outcome: abandonOutcome})
+			r.markStopping(qr, h, r.stopReasonFor(runCtx, h), true)
 			h.zombieSince.Store(r.livenessClock().UnixNano())
 			h.zombie.Store(true)
 			r.mu.Lock()
@@ -758,10 +769,15 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// since may have replaced it; Cancel), but the run ends now.
 				final := h.zombieFinal.Load()
 				endedAt := time.Now().UTC()
-				out := r.writeRunTerminalStatus(qr, h, final.status, &endedAt, final.msg)
+				out := r.writeRunTerminalStatus(qr, h, final.status, final.outcome, &endedAt, final.msg)
 				if out.publish {
 					r.publishOpTerminal(qr.opID, qr.defID, out.status)
 				}
+				// The run ends now, so it is counted now, with the duration
+				// up to its goroutine's return. Until 05-PR2 this path counted
+				// nothing in either family, so a timed-out run that ignored its
+				// context was never a failure or a timed_out run.
+				r.recordRunMetrics(qr.defID, out.outcome, runStartedAt)
 				r.notifyDepTerminal(out.status, qr)
 				// Release the key and write set now that the goroutine is gone.
 				// Handle first, abandoned counter second -- the shutdown branch's
@@ -799,29 +815,36 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// We have a result. Release the handle and write terminal status.
 	r.releaseRunHandle(qr.opID)
 
-	var finalStatus string
+	var finalStatus, outcome string
 	var errMsg *string
 	completedAt := time.Now().UTC()
 
 	switch {
 	case ctxCanceled:
-		finalStatus, errMsg = r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
+		finalStatus, errMsg, outcome = r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 	case runErr != nil:
-		finalStatus = "failed"
+		finalStatus, outcome = "failed", opsmetrics.OutcomeFailed
 		msg := runErr.Error()
 		errMsg = &msg
 	default:
-		finalStatus = "completed"
+		finalStatus, outcome = "completed", opsmetrics.OutcomeCompleted
 	}
 
-	out := r.writeRunTerminalStatus(qr, h, finalStatus, &completedAt, errMsg)
+	// A deadline hit is recorded natively in v3 first (stopping{timeout}),
+	// so the v2 write below projects stopping -> timed_out as the
+	// goroutine_returned event rather than an off-table v2_write. The row
+	// keeps reading "running" (stopping mirrors as running) until that write.
+	if outcome == opsmetrics.OutcomeTimedOut {
+		r.markStopping(qr, h, state.StopTimeout, false)
+	}
+	out := r.writeRunTerminalStatus(qr, h, finalStatus, outcome, &completedAt, errMsg)
 	finalStatus = out.status
 
 	// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 	if out.publish {
 		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 	}
-	r.recordRunMetrics(qr.defID, finalStatus, runStartedAt)
+	r.recordRunMetrics(qr.defID, out.outcome, runStartedAt)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
 	// for the same subject can be re-evaluated or failed as appropriate.
@@ -849,6 +872,11 @@ type terminalOutcome struct {
 	// stamp does not), and a duplicate op.terminal is harmless where a missing
 	// one leaves the legacy twin and the UI bell showing the op as running.
 	publish bool
+	// outcome is the ops.runs outcome of the run's end ("" for an interrupted
+	// pause): the decided outcome, or canceled when a user's cancel was kept
+	// over it. It is carried, not derived from status, because a timeout and
+	// a cancel share the status "canceled".
+	outcome string
 }
 
 // keepsUserCancel reports whether a run whose own outcome is status should
@@ -885,14 +913,18 @@ func keepsUserCancel(status string) bool {
 // status for the run, never a live one the row might momentarily hold.
 // settleInterrupted then covers the other order: a cancel that set
 // userCanceled after the status was decided.
-func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status string, completedAt *time.Time, errMsg *string) terminalOutcome {
+//
+// outcome is the decided ops.runs outcome of status (finalStatusForCanceledRun
+// for a stopped run). The result carries it, except where the row's existing
+// cancel is kept: that run ends canceled, even when it had decided timed_out.
+func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status, outcome string, completedAt *time.Time, errMsg *string) terminalOutcome {
 	from := "running"
 	for attempt := 1; ; attempt++ {
 		applied, err := r.store.UpdateOperationV2StatusIf(qr.opID, from, status, nil, completedAt, errMsg)
 		if err != nil {
 			r.logger.Warn("registry: failed to write op terminal status",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", err)
-			return terminalOutcome{status: status, publish: true}
+			return terminalOutcome{status: status, publish: true, outcome: outcome}
 		}
 		if applied {
 			break
@@ -901,14 +933,16 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status st
 		if gerr != nil || row == nil || row.ID == "" {
 			r.logger.Warn("registry: op terminal status not written; the row is no longer running and could not be re-read",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "error", gerr)
-			return terminalOutcome{status: status, publish: true}
+			return terminalOutcome{status: status, publish: true, outcome: outcome}
 		}
 		if row.Status == "canceled" && keepsUserCancel(status) {
 			r.logger.Info("registry: run stopped after its row was canceled; keeping canceled",
 				"op_id", qr.opID, "def_id", qr.defID, "run_status", status)
 			// Published even though Cancel may already have: Shutdown's
 			// timeout stamp also writes "canceled" and publishes nothing.
-			return terminalOutcome{status: "canceled", publish: true}
+			// The row's cancel is what the run ended as, so it is counted
+			// as canceled even when this run had decided timed_out.
+			return terminalOutcome{status: "canceled", publish: true, outcome: opsmetrics.OutcomeCanceled}
 		}
 		if row.Status == "canceled" && errMsg == nil {
 			// The run completed: its row must not keep the cancel's message.
@@ -923,11 +957,11 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status st
 		if attempt >= runTerminalWriteAttempts {
 			r.logger.Warn("registry: op terminal status not written; the row's status kept changing",
 				"op_id", qr.opID, "def_id", qr.defID, "status", status, "row_status", row.Status)
-			return terminalOutcome{status: status, publish: true}
+			return terminalOutcome{status: status, publish: true, outcome: outcome}
 		}
 		from = row.Status
 	}
-	return r.settleInterrupted(qr, h, status, completedAt)
+	return r.settleInterrupted(qr, h, status, outcome, completedAt)
 }
 
 // settleInterrupted runs after this worker wrote status to its row. For an
@@ -947,9 +981,12 @@ func (r *Registry) writeRunTerminalStatus(qr *queuedRun, h *runHandle, status st
 // "canceled" and Cancel published it, so the stale interrupted status is not
 // published; the re-read narrows that window, it cannot close it (Cancel may
 // still land after it), and the row is right either way.
-func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status string, completedAt *time.Time) terminalOutcome {
+//
+// outcome is status's ops.runs outcome; it is returned unless the run ends
+// canceled here.
+func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status, outcome string, completedAt *time.Time) terminalOutcome {
 	if !strings.HasPrefix(status, "interrupted_") {
-		return terminalOutcome{status: status, publish: true}
+		return terminalOutcome{status: status, publish: true, outcome: outcome}
 	}
 	if h != nil && h.userCanceled.Load() {
 		msg := "canceled by user while the run was being interrupted"
@@ -960,45 +997,70 @@ func (r *Registry) settleInterrupted(qr *queuedRun, h *runHandle, status string,
 		} else if applied {
 			r.logger.Info("registry: user canceled the run while it was being interrupted; recorded canceled",
 				"op_id", qr.opID, "def_id", qr.defID, "interrupted_status", status)
-			return terminalOutcome{status: "canceled", publish: true}
+			return terminalOutcome{status: "canceled", publish: true, outcome: opsmetrics.OutcomeCanceled}
 		}
 	}
 	if row, err := r.store.GetOperationV2(qr.opID); err == nil && row != nil && row.Status == "canceled" {
-		return terminalOutcome{status: "canceled", publish: false}
+		return terminalOutcome{status: "canceled", publish: false, outcome: opsmetrics.OutcomeCanceled}
 	}
-	return terminalOutcome{status: status, publish: true}
+	return terminalOutcome{status: status, publish: true, outcome: outcome}
 }
 
-// recordRunMetrics publishes one finished run attempt to the Prometheus
-// lifecycle counters and the operation_duration_seconds histogram, keyed by
-// def_id. Both the in-process and the subprocess (Isolate=true) completion
-// paths call it, right after publishOpTerminal, so every attempt that
-// executed is observed once. The counters map the terminal vocabulary as:
-// completed -> operations_completed_total; failed and timeout ->
-// operations_failed_total; canceled -> operations_canceled_total. The
-// interrupted_* statuses (quiesced, dropped, ask) are a pause, not an end,
-// and increment nothing -- the resumed attempt reports its own outcome. The
-// duration is observed for every status, so a run that was canceled after
-// three hours still shows up as three hours.
+// recordRunMetrics publishes one finished run attempt, keyed by def_id, to the
+// legacy lifecycle counters and operation_duration_seconds histogram and to
+// their OTel twins ops.runs and ops.run.duration (both families are emitted
+// during the soak). The in-process path, the subprocess (Isolate=true) path
+// and the zombie monitor call it right after the terminal write, so every
+// attempt that executed is observed once, when it really ends.
+//
+// outcome is the run's ops.runs outcome (terminalOutcome.outcome), not its v2
+// status: a timeout and a cancel are both "canceled" in v2. The legacy
+// counters map it as completed -> operations_completed_total; failed and
+// timed_out -> operations_failed_total (a deadline hit is a failure of the
+// op, and until 05-PR2 it was counted as canceled); canceled ->
+// operations_canceled_total; dropped has no legacy counter. "" is an
+// interrupted pause (interrupted_quiesced, interrupted_ask): no outcome, the
+// resumed attempt reports its own. The legacy duration is observed for every
+// attempt, so a run canceled after three hours still shows up as three hours;
+// ops.run.duration is observed with each run-end outcome.
 //
 // Before 2026-10-03 the four Inc* helpers and ObserveOperationDuration were
 // defined in internal/metrics and called from nowhere: the deploy/prometheus
 // alert rules on operations_failed_total had never had a sample to fire on.
-func (r *Registry) recordRunMetrics(defID, finalStatus string, startedAt time.Time) {
-	switch finalStatus {
-	case "completed":
-		metrics.IncOperationCompleted(defID)
-	case "failed", "timeout":
-		metrics.IncOperationFailed(defID)
-	case "canceled":
-		metrics.IncOperationCanceled(defID)
-	}
+func (r *Registry) recordRunMetrics(defID, outcome string, startedAt time.Time) {
+	incLegacyOutcome(defID, outcome)
 	took := time.Since(startedAt)
 	metrics.ObserveOperationDuration(defID, took)
-	// The OTel twin (ops.runs, ops.run.duration) records only the outcomes
-	// that exist at HEAD; see opsmetrics.OutcomeFor. Both families are emitted
-	// during the soak.
-	r.ops.Finished(defID, finalStatus, took)
+	r.ops.Finished(defID, outcome, took)
+}
+
+// recordRunEnd counts a run end that no attempt in this process timed: the
+// boot sweep finishing a stopped run or dropping one, a run force-dropped or
+// quiesced-and-dropped before it started. Same counters as recordRunMetrics,
+// no durations. "" records nothing.
+func (r *Registry) recordRunEnd(defID, outcome string) {
+	incLegacyOutcome(defID, outcome)
+	r.ops.Ended(defID, outcome)
+}
+
+// incLegacyOutcome is recordRunMetrics' legacy counter mapping.
+func incLegacyOutcome(defID, outcome string) {
+	switch outcome {
+	case opsmetrics.OutcomeCompleted:
+		metrics.IncOperationCompleted(defID)
+	case opsmetrics.OutcomeFailed, opsmetrics.OutcomeTimedOut:
+		metrics.IncOperationFailed(defID)
+	case opsmetrics.OutcomeCanceled:
+		metrics.IncOperationCanceled(defID)
+	}
+}
+
+// pauseOutcome is the ops.runs outcome of an interruptedStatus result:
+// dropped for interrupted_dropped (a ResumeDrop run does not come back), ""
+// for interrupted_quiesced (a pause; the resumed attempt reports its own).
+func pauseOutcome(status string) string {
+	outcome, _ := opsmetrics.OutcomeFor(status, "")
+	return outcome
 }
 
 // newAttemptItems builds the ops.items counter for this attempt, seeded with
@@ -1141,6 +1203,9 @@ func (r *Registry) checkInfiniteRestart(qr *queuedRun, def OperationDef) bool {
 		// the write lands. Say so rather than loop silently.
 		r.logger.Warn("registry: failed to mark force-dropped op interrupted_dropped; it will be dropped again",
 			"op_id", qr.opID, "def_id", def.ID, "error", err)
+	} else {
+		// Counted only once the write lands, so a retried drop counts once.
+		r.recordRunEnd(def.ID, opsmetrics.OutcomeDropped)
 	}
 	// R-1: fan out op.terminal for the force-drop transition.
 	r.publishOpTerminal(qr.opID, def.ID, "interrupted_dropped")
@@ -1214,31 +1279,38 @@ func (r *Registry) safeRun(ctx context.Context, def OperationDef, params json.Ra
 // row immediately via resumeQuiescedOp. (This comment previously claimed the
 // status recorded here never resumes; that predated the ListResumableOperationsV2
 // change and was stale.)
-func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandle, qr *queuedRun, timeout time.Duration) (string, *string) {
+//
+// The third result is the run's ops.runs outcome (opsmetrics), which the v2
+// status cannot carry: timed_out for a deadline (stored as "canceled" with a
+// state.TimeoutPrefix message, which the previous binary reads as canceled
+// and the v3 projection reads as timed_out), canceled for a cancel, dropped
+// for a stop that left a ResumeDrop run interrupted_dropped, and "" for an
+// interrupted pause, which is not an outcome.
+func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandle, qr *queuedRun, timeout time.Duration) (status string, msg *string, outcome string) {
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-		msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
+		m := fmt.Sprintf("%s run exceeded %s", state.TimeoutPrefix, timeout)
 		r.logger.Warn("registry: run timed out",
 			"op_id", qr.opID, "def_id", qr.defID, "timeout", timeout)
-		return "canceled", &msg
+		return "canceled", &m, opsmetrics.OutcomeTimedOut
 	}
 	if h != nil && h.userCanceled.Load() {
-		return "canceled", nil
+		return "canceled", nil, opsmetrics.OutcomeCanceled
 	}
 	if h != nil && h.quiescing.Load() {
 		status := interruptedStatus(qr.resumePolicy)
-		msg := "quiesced: stood down for a maintenance op holding the scan gate"
+		m := "quiesced: stood down for a maintenance op holding the scan gate"
 		r.logger.Info("registry: run quiesced for scan stand-down",
 			"op_id", qr.opID, "def_id", qr.defID, "status", status)
-		return status, &msg
+		return status, &m, pauseOutcome(status)
 	}
 	if r.shuttingDown.Load() {
 		status := interruptedStatus(qr.resumePolicy)
-		msg := "interrupted: server shutdown during run"
+		m := "interrupted: server shutdown during run"
 		r.logger.Info("registry: run interrupted by shutdown",
 			"op_id", qr.opID, "def_id", qr.defID, "status", status)
-		return status, &msg
+		return status, &m, pauseOutcome(status)
 	}
-	return "canceled", nil
+	return "canceled", nil, opsmetrics.OutcomeCanceled
 }
 
 // stopReasonFor names why a canceled run was stopped, in the v3 vocabulary,
@@ -1261,7 +1333,7 @@ func (r *Registry) stopReasonFor(runCtx context.Context, h *runHandle) string {
 	return state.StopUser
 }
 
-// markStopping records a zombie run as v3 stopping{reason, zombie}
+// markStopping records a stopped run as v3 stopping{reason, zombie}
 // (TransitionRunV3 stop_requested, a compare-and-set on the run's stored
 // state, attempt and fence epoch). The v2 row is untouched in substance:
 // stopping mirrors as "running". Best effort: a store without the run's v3
@@ -1269,15 +1341,22 @@ func (r *Registry) stopReasonFor(runCtx context.Context, h *runHandle) string {
 // run that is no longer running is logged and left alone -- the in-process
 // zombie handle is what holds the key either way. h.stoppingRecorded says
 // whether it stored the stop.
-func (r *Registry) markStopping(qr *queuedRun, h *runHandle, reason string) {
+//
+// zombie is true for a run whose goroutine outlived the abandon grace. The
+// other caller is a run that timed out and returned (05-PR2): it is stopping
+// only between this call and its terminal write, which then projects
+// stopping{timeout} -> timed_out as goroutine_returned, the event v3 names
+// for that end; written straight from running, the audit trail could only
+// call it an off-table v2_write.
+func (r *Registry) markStopping(qr *queuedRun, h *runHandle, reason string, zombie bool) {
 	rec, err := r.getRunV3(qr.opID)
 	if err != nil || rec == nil {
 		r.logger.Debug("registry: no v3 run record to mark stopping", "op_id", qr.opID, "error", err)
 		return
 	}
 	if rec.State != state.V3Running {
-		r.logger.Info("registry: zombie run is no longer running in v3; not marking it stopping",
-			"op_id", qr.opID, "v3_state", rec.State)
+		r.logger.Info("registry: stopped run is no longer running in v3; not marking it stopping",
+			"op_id", qr.opID, "v3_state", rec.State, "zombie", zombie)
 		return
 	}
 	if _, err := r.transitionRunV3(database.TransitionRequest{
@@ -1287,10 +1366,10 @@ func (r *Registry) markStopping(qr *queuedRun, h *runHandle, reason string) {
 		ExpectFenceEpoch: rec.FenceEpoch,
 		Event:            state.EvStopRequested,
 		StopReason:       reason,
-		Zombie:           true,
+		Zombie:           zombie,
 		Actor:            &database.Actor{AuthMethod: "system"},
 	}); err != nil {
-		r.logger.Warn("registry: could not record the zombie run as stopping", "op_id", qr.opID, "error", err)
+		r.logger.Warn("registry: could not record the stopped run as stopping", "op_id", qr.opID, "zombie", zombie, "error", err)
 		return
 	}
 	h.stoppingRecorded.Store(true)

@@ -1,13 +1,15 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package opsmetrics
 
 import (
 	"context"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,44 +52,154 @@ func runPoints(m metricdata.Metrics) map[string]int64 {
 	return out
 }
 
-func TestRuns_OutcomeMapping(t *testing.T) {
-	RegisterDefID("t.mapping")
+// TestOutcomeFor pins the v2 status (and message) to outcome table: a
+// canceled row with the timeout prefix is timed_out, interrupted_dropped is
+// dropped, and the pauses and live statuses are no outcome.
+func TestOutcomeFor(t *testing.T) {
 	cases := []struct {
-		status string
-		want   string // "" = records nothing
+		status, msg string
+		want        string // "" = no outcome
 	}{
-		{"completed", "completed"},
-		{"failed", "failed"},
-		{"canceled", "canceled"},
-		{"timeout", ""},
-		{"interrupted_dropped", ""},
-		{"interrupted_quiesced", ""},
-		{"interrupted_ask", ""},
-		{"running", ""},
-		{"queued", ""},
+		{"completed", "", "completed"},
+		{"failed", "boom", "failed"},
+		{"canceled", "", "canceled"},
+		{"canceled", "canceled by user", "canceled"},
+		{"canceled", "timeout: run exceeded 10ms", "timed_out"},
+		{"interrupted_dropped", "ResumePolicy=drop", "dropped"},
+		{"timeout", "", ""},
+		{"interrupted_quiesced", "", ""},
+		{"interrupted_ask", "", ""},
+		{"running", "", ""},
+		{"queued", "", ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.status, func(t *testing.T) {
+		got, ok := OutcomeFor(tc.status, tc.msg)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("OutcomeFor(%q, %q) = %q, %v; want %q, %v", tc.status, tc.msg, got, ok, tc.want, tc.want != "")
+		}
+	}
+}
+
+// TestRuns_OutcomeRecording: Finished records a run end with its duration,
+// Ended records it without one, and neither records started, an interrupted
+// pause or an unknown value.
+func TestRuns_OutcomeRecording(t *testing.T) {
+	RegisterDefID("t.mapping")
+	cases := []struct {
+		outcome string
+		ok      bool
+	}{
+		{OutcomeCompleted, true},
+		{OutcomeFailed, true},
+		{OutcomeCanceled, true},
+		{OutcomeTimedOut, true},
+		{OutcomeDropped, true},
+		{OutcomeStarted, false},
+		{"interrupted", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run("finished/"+tc.outcome, func(t *testing.T) {
 			rec, collect := newRig(t)
-			got := rec.Finished("t.mapping", tc.status, 2*time.Second)
-			if got != (tc.want != "") {
-				t.Fatalf("Finished(%q) = %v, want %v", tc.status, got, tc.want != "")
+			if got := rec.Finished("t.mapping", tc.outcome, 2*time.Second); got != tc.ok {
+				t.Fatalf("Finished(%q) = %v, want %v", tc.outcome, got, tc.ok)
 			}
 			m := collect()
 			pts := runPoints(m["audiobook_organizer.ops.runs"])
-			if tc.want == "" {
+			if !tc.ok {
 				if len(pts) != 0 {
-					t.Errorf("status %q recorded runs %v, want nothing", tc.status, pts)
+					t.Errorf("outcome %q recorded runs %v, want nothing", tc.outcome, pts)
 				}
 				if _, ok := m["audiobook_organizer.ops.run.duration"]; ok {
-					t.Errorf("status %q recorded a duration, want nothing", tc.status)
+					t.Errorf("outcome %q recorded a duration, want nothing", tc.outcome)
 				}
 				return
 			}
-			if pts["t.mapping/"+tc.want] != 1 || len(pts) != 1 {
-				t.Errorf("status %q recorded runs %v, want only t.mapping/%s=1", tc.status, pts, tc.want)
+			if pts["t.mapping/"+tc.outcome] != 1 || len(pts) != 1 {
+				t.Errorf("outcome %q recorded runs %v, want only t.mapping/%s=1", tc.outcome, pts, tc.outcome)
+			}
+			if _, ok := m["audiobook_organizer.ops.run.duration"]; !ok {
+				t.Errorf("outcome %q recorded no duration", tc.outcome)
 			}
 		})
+		t.Run("ended/"+tc.outcome, func(t *testing.T) {
+			rec, collect := newRig(t)
+			if got := rec.Ended("t.mapping", tc.outcome); got != tc.ok {
+				t.Fatalf("Ended(%q) = %v, want %v", tc.outcome, got, tc.ok)
+			}
+			m := collect()
+			pts := runPoints(m["audiobook_organizer.ops.runs"])
+			want := 0
+			if tc.ok {
+				want = 1
+			}
+			if pts["t.mapping/"+tc.outcome] != int64(want) || len(pts) != want {
+				t.Errorf("Ended(%q) recorded runs %v, want %d point(s)", tc.outcome, pts, want)
+			}
+			if _, ok := m["audiobook_organizer.ops.run.duration"]; ok {
+				t.Errorf("Ended(%q) recorded a duration; it must never", tc.outcome)
+			}
+		})
+	}
+}
+
+func zombiesValue(t *testing.T, m map[string]metricdata.Metrics) int64 {
+	t.Helper()
+	g, ok := m["audiobook_organizer.ops.zombies"].Data.(metricdata.Gauge[int64])
+	if !ok || len(g.DataPoints) != 1 {
+		t.Fatalf("want one ops.zombies point, got %+v", m["audiobook_organizer.ops.zombies"].Data)
+	}
+	if n := g.DataPoints[0].Attributes.Len(); n != 0 {
+		t.Errorf("ops.zombies carries %d attributes, want none", n)
+	}
+	return g.DataPoints[0].Value
+}
+
+// TestZombies_SumsSources: the gauge reads 0 with no source, the sum of every
+// registered source, follows each source's current value, and drops a source
+// once it is unregistered (idempotently). Run with -race: the sources are read
+// from the collecting goroutine while other goroutines change them.
+func TestZombies_SumsSources(t *testing.T) {
+	rec, collect := newRig(t)
+	if got := zombiesValue(t, collect()); got != 0 {
+		t.Fatalf("ops.zombies with no source = %d, want 0", got)
+	}
+	var a, b atomic.Int64
+	before := ActiveZombieSources()
+	unregA := rec.RegisterZombies(a.Load)
+	unregB := rec.RegisterZombies(b.Load)
+	if got := ActiveZombieSources(); got != before+2 {
+		t.Errorf("ActiveZombieSources = %d, want %d", got, before+2)
+	}
+	a.Store(2)
+	b.Store(3)
+	if got := zombiesValue(t, collect()); got != 5 {
+		t.Errorf("ops.zombies = %d, want 5 (2 + 3)", got)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Go(func() {
+			for j := 0; j < 50; j++ {
+				a.Add(1)
+				a.Add(-1)
+			}
+		})
+	}
+	for i := 0; i < 10; i++ {
+		collect()
+	}
+	wg.Wait()
+	unregA()
+	unregA() // idempotent
+	if got := zombiesValue(t, collect()); got != 3 {
+		t.Errorf("ops.zombies after unregistering a = %d, want 3", got)
+	}
+	unregB()
+	if got := zombiesValue(t, collect()); got != 0 {
+		t.Errorf("ops.zombies after unregistering both = %d, want 0", got)
+	}
+	if got := ActiveZombieSources(); got != before {
+		t.Errorf("ActiveZombieSources after unregister = %d, want %d", got, before)
 	}
 }
 
@@ -140,7 +252,7 @@ func TestNoRunIDAttribute(t *testing.T) {
 	RegisterDefID("t.keys")
 	rec, collect := newRig(t)
 	rec.Started("t.keys")
-	rec.Finished("t.keys", "failed", time.Second)
+	rec.Finished("t.keys", OutcomeFailed, time.Second)
 	rec.Items("t.keys", ItemsProcessed, 1)
 	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat {
 		return map[InflightKey]InflightStat{{DefID: "t.keys", Plugin: "p"}: {Runs: 1, ProgressAge: time.Second, ProgressTimeout: time.Minute}}
@@ -253,15 +365,15 @@ func TestInflightFoldsKeys(t *testing.T) {
 	}
 }
 
-// TestDeclaredButUnwiredAreListed pins the six spec 11 §3.7 instruments that
+// TestDeclaredButUnwiredAreListed pins the five spec 11 §3.7 instruments that
 // are declared but not created here. Creating one needs an ourInstruments
 // declaration, a golden row and a seed in internal/telemetry/contract, which
-// is how the task that wires it (05-PR5) moves it out of Unwired.
+// is how the task that wires it (05-PR5) moves it out of Unwired. 05-PR2 moved
+// ops.zombies out that way.
 func TestDeclaredButUnwiredAreListed(t *testing.T) {
 	want := []string{
 		"audiobook_organizer.ops.queue_depth",
 		"audiobook_organizer.ops.fenced_writes",
-		"audiobook_organizer.ops.zombies",
 		"audiobook_organizer.ops.checkpoint_age",
 		"audiobook_organizer.ops.schedule_lag",
 		"audiobook_organizer.ops.schedule_missed",
@@ -278,11 +390,11 @@ func TestDeclaredButUnwiredAreListed(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("Unwired = %v, want %v", got, want)
 	}
-	// None of them may be created by this package: the wired set is exactly five.
+	// None of them may be created by this package.
 	rec, collect := newRig(t)
 	RegisterDefID("t.unwired")
 	rec.Started("t.unwired")
-	rec.Finished("t.unwired", "completed", time.Second)
+	rec.Finished("t.unwired", OutcomeCompleted, time.Second)
 	rec.Items("t.unwired", ItemsProcessed, 1)
 	rec.RegisterInflight(func() map[InflightKey]InflightStat {
 		return map[InflightKey]InflightStat{{DefID: "t.unwired"}: {Runs: 1}}
