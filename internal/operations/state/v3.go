@@ -1,7 +1,7 @@
 // file: internal/operations/state/v3.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f4b44f29-abd2-405d-9167-2beac6c9d083
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package state
 
@@ -141,6 +141,17 @@ var v3ByName = func() map[V3]Props {
 // ClassifyV3 returns the properties of a v3 state. An unknown state is live
 // (zero Props), the same safe direction as Classify.
 func ClassifyV3(s V3) Props { return v3ByName[s] }
+
+// AllV3 returns the ten v3 states in table order. tools/cmd/opsgen emits
+// the web's RunState union from it; the database tests derive the reachable
+// set from Next instead (reachableV3States there).
+func AllV3() []V3 {
+	out := make([]V3, len(v3Table))
+	for i, e := range v3Table {
+		out[i] = e.state
+	}
+	return out
+}
 
 // StopTerminal is the state a stopping run reaches when its goroutine
 // returns: user -> canceled, timeout and watchdog -> timed_out, quiesce and
