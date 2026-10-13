@@ -1,5 +1,5 @@
 // file: internal/server/catalog_stage_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e9c34a70-5b18-4d2f-86a1-3d0f7b92c584
 // last-edited: 2026-10-12
 
@@ -101,7 +101,7 @@ func TestCatalogStage_EndToEnd_CountersAndSummaryLine(t *testing.T) {
 			if strings.Join(got, ",") != want {
 				t.Errorf("results = %v; want the two catalog candidates %s", got, want)
 			}
-			wantLine := "catalog_candidates 2, provider_candidates 0, oversize_block 0, homonym_skipped 0"
+			wantLine := "catalog_matched 2, catalog_candidates 2, provider_candidates 0, oversize_block 0, homonym_skipped 0"
 			if !strings.Contains(tally.counts(), wantLine) {
 				t.Errorf("summary counts %q lack %q", tally.counts(), wantLine)
 			}
@@ -122,17 +122,18 @@ func TestCatalogStage_EndToEnd_CountersAndSummaryLine(t *testing.T) {
 
 func TestCandidateFetchTally_CountsLineCarriesTheStageCounters(t *testing.T) {
 	stats := &metafetch.CatalogStageStats{}
+	stats.CatalogMatched.Store(14)
 	stats.CatalogCandidates.Store(12)
 	stats.ProviderCandidates.Store(2400)
 	stats.OversizeBlocks.Store(3)
 	stats.HomonymSkipped.Store(1)
 	tally := &candidateFetchTally{stage: stats}
 	want := "matched 0, no match 0, skipped 0, deferred 0, errors 0, from cache 0, known empty 0, " +
-		"catalog_candidates 12, provider_candidates 2400, oversize_block 3, homonym_skipped 1"
+		"catalog_matched 14, catalog_candidates 12, provider_candidates 2400, oversize_block 3, homonym_skipped 1"
 	if got := tally.counts(); got != want {
 		t.Errorf("counts = %q; want %q", got, want)
 	}
-	if got := (&candidateFetchTally{}).counts(); !strings.HasSuffix(got, "catalog_candidates 0, provider_candidates 0, oversize_block 0, homonym_skipped 0") {
+	if got := (&candidateFetchTally{}).counts(); !strings.HasSuffix(got, "catalog_matched 0, catalog_candidates 0, provider_candidates 0, oversize_block 0, homonym_skipped 0") {
 		t.Errorf("a tally with no stage counters reads zeros: %q", got)
 	}
 }
