@@ -1,7 +1,7 @@
 // file: internal/merge/carry_before_delete_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8b2e4d61-3c7a-4f95-b1d8-6a0c9e2f5b47
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package merge
 
@@ -275,7 +275,7 @@ func TestCombineOnRestore(t *testing.T) {
 }
 
 // Through a decorator that hides the concrete store, as the production
-// indexedStore does: the sync layer, bookmarks and copier still resolve, so
+// indexedStore did (until 07-S3): the sync layer, bookmarks and copier still resolve, so
 // the carry moves the redirect and the bookmarks, not only the progress.
 func TestCarryStateBeforeHardDelete_ThroughDecorator(t *testing.T) {
 	c := newCarryFixture(t)
@@ -333,7 +333,7 @@ func TestUserStateProbe_UndecodableUserRowFailsClosed(t *testing.T) {
 }
 
 // probeDecorator hides the concrete store, as the production indexedStore
-// does, and opts into unwrapping.
+// did (until 07-S3), and opts into unwrapping.
 type probeDecorator struct{ database.Store }
 
 func (d probeDecorator) Unwrap() database.Store { return d.Store }

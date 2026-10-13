@@ -1,7 +1,7 @@
 // file: internal/database/series_membership_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1a6f0d38-94c2-4b7e-8d51-c3e20f7a9b16
-// last-edited: 2026-09-13
+// last-edited: 2026-10-13
 
 package database
 
@@ -124,8 +124,8 @@ func TestSeriesMembershipAllVersions_EmptyRequestSkipsTheRead(t *testing.T) {
 	require.Zero(t, calls, "an empty request must not reach the store")
 }
 
-// TestAsSeriesMembershipStore_ResolvesThroughDecorator: prod wraps the store in
-// the Bleve indexedStore decorator, which embeds the Store INTERFACE and so does
+// TestAsSeriesMembershipStore_ResolvesThroughDecorator: prod wrapped the store in
+// the Bleve indexedStore decorator (removed in 07-S3), which embeds the Store INTERFACE and so does
 // not promote this capability. A bare type assertion would miss there and every
 // hoisted merge would fail closed in prod; AsCapability must see through it.
 func TestAsSeriesMembershipStore_ResolvesThroughDecorator(t *testing.T) {

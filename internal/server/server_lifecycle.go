@@ -598,11 +598,6 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// goroutine keeps iterating Pebble while CloseStore runs, and Pebble's
 	// FileCache.Unref panics with "element has outstanding references"
 	// during shutdown — which has been killing every restart mid-cycle.
-	// Stop offering this server's authority lists to credit resolution. Released
-	// by identity, so it never removes the provider a newer server registered.
-	if s.releaseAuthorityProvider != nil {
-		s.releaseAuthorityProvider()
-	}
 	if s.bgCancel != nil {
 		slog.Info("Canceling background goroutines...")
 		s.bgCancel()
@@ -644,6 +639,14 @@ func (s *Server) Start(cfg ServerConfig) error {
 		slog.Info("Shutting down plugins...")
 		s.pluginRegistry.ShutdownAll(ctx)
 	}
+
+	// Detach from the store and from credit resolution only now that every
+	// writer this server owns has stopped (ops drained or timed out, background
+	// work and the file I/O pool waited for, plugins shut down): an op still
+	// running after the registry's bounded shutdown resolves credits against the
+	// authority lists and writes books through the observer until here. Both are
+	// released by identity, so neither removes what a newer server registered.
+	s.releaseSearchAndAuthority()
 
 	// Search index is closed by Container.Stop below — IndexService.Stop
 	// runs in reverse-resolved order alongside the other registered

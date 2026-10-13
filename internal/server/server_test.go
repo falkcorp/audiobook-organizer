@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-10-13
 
@@ -69,9 +69,7 @@ const releaseForTestBGWait = 10 * time.Second
 // setupTestServerFS's cleanup and the t.Cleanup from newTestServer can both
 // run.
 func (s *Server) releaseForTest() {
-	if s.releaseAuthorityProvider != nil {
-		s.releaseAuthorityProvider()
-	}
+	s.releaseSearchAndAuthority()
 	if s.bgCancel != nil {
 		s.bgCancel()
 	}

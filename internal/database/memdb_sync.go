@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-10-01
+// last-edited: 2026-10-13
 
 package database
 
@@ -426,7 +426,7 @@ func (p *PebbleStore) ReplaceBookAuthorsInMemDB(bookID string, authors []BookAut
 	// Deferred: the change is announced after memSync has applied (or
 	// buffered) the write-through, so a reader re-evaluating on the
 	// announcement cannot read the old memdb row and be stamped current.
-	defer p.notifyBooksChanged(bookID)
+	defer p.notifyBookCreditsChanged(bookID)
 	// Copy the slice at enqueue — the closure iterates it much later during
 	// warmup replay, and the caller may reuse/mutate the backing array.
 	authors = append([]BookAuthor(nil), authors...)
@@ -474,7 +474,7 @@ func (p *PebbleStore) ReplaceBookNarratorsInMemDB(bookID string, narrators []Boo
 	// Deferred: the change is announced after memSync has applied (or
 	// buffered) the write-through, so a reader re-evaluating on the
 	// announcement cannot read the old memdb row and be stamped current.
-	defer p.notifyBooksChanged(bookID)
+	defer p.notifyBookCreditsChanged(bookID)
 	// Copy the slice at enqueue — see ReplaceBookAuthorsInMemDB.
 	narrators = append([]BookNarrator(nil), narrators...)
 	// Same primary-index rule as book_authors: {BookID, NarratorID}, not

@@ -1,14 +1,14 @@
 // file: internal/database/store_from_store_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1c4e7b28-6d93-4051-8f2a-9b6c3e5d7a14
-// last-edited: 2026-10-03
+// last-edited: 2026-10-13
 
 package database
 
 import "testing"
 
 // fromStoreDecorator embeds the Store INTERFACE and unwraps, exactly as
-// internal/server's indexedStore does in production.
+// internal/server's indexedStore did in production (until 07-S3).
 type fromStoreDecorator struct {
 	Store
 	inner Store

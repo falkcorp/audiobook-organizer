@@ -815,8 +815,9 @@ func asCollectionStore(s any) abshandler.CollectionStore {
 //
 // The store is a PARAMETER, and that is the entire reason this function exists.
 //
-// s.store is a plain field, and until 07-S3 Server.Start overwrote it with the
-// Bleve indexedStore wrapper (server_lifecycle.go). This goroutine is spawned at
+// s.store is a plain field, and until 2026-09-13 Server.Start overwrote it with the
+// Bleve indexedStore wrapper (server_lifecycle.go; NewServer installed it from
+// then until 07-S3). This goroutine is spawned at
 // route-wiring time, from NewServer, BEFORE Start runs. So reading s.Ops()
 // from the goroutine body is an unsynchronized read racing any such write, and
 // the two outcomes used to disagree: the old bare store.(*database.PebbleStore)
@@ -856,7 +857,8 @@ type warmupWaiter interface {
 }
 
 // resolveWarmupWaiter finds the memdb warmup gate through any store decorator
-// (until 07-S3 that was the Bleve indexedStore that Server.Start installed).
+// (Server.Start installed the Bleve indexedStore until 2026-09-13, NewServer until
+// 07-S3).
 //
 // This is a named function rather than an inline assertion for the same reason
 // resolveVGBackfiller is: a guard that cannot reach the production call site does

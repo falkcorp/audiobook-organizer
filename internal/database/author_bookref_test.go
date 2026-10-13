@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
-// last-edited: 2026-10-03
+// last-edited: 2026-10-13
 
 package database
 
@@ -177,7 +177,8 @@ func TestGetAllAuthorBookRefCounts_UnreferencedAuthorsAreAbsent(t *testing.T) {
 }
 
 // TestAsAuthorBookRefStore_ResolvesPebbleStore guards the capability lookup.
-// Production wraps the store in the Bleve indexedStore decorator, and a bare
+// Production wrapped the store in the Bleve indexedStore decorator (removed in
+// 07-S3), and a bare
 // type assertion against a wrapped store is indistinguishable from an
 // unsupported backend — which is how several ops silently no-opped in prod.
 func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
@@ -198,8 +199,8 @@ func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
 	//
 	// decoratorStore (store_capability_test.go) embeds the Store INTERFACE, so
 	// only Store's method set is promoted — exactly the shape of
-	// internal/server.indexedStore, the Bleve wrapper the live store always
-	// carries. AuthorBookRefStore is deliberately not part of Store.
+	// internal/server.indexedStore, the Bleve wrapper the live store carried
+	// until 07-S3. AuthorBookRefStore is deliberately not part of Store.
 	wrapped := &decoratorStore{Store: store}
 	require.NotNil(t, AsAuthorBookRefStore(wrapped),
 		"capability must resolve THROUGH the Bleve-style decorator; a bare type "+

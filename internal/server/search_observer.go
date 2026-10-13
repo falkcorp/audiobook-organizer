@@ -32,7 +32,11 @@ func (s *Server) installSearchObserver() {
 		searchCacheLog.Warn("search: store %T does not report writes (no ChangeObservable); the search index and result cache will not follow its writes", s.store)
 		return
 	}
-	obs.SetChangeObserver(&serverChangeObserver{s: s})
+	o := &serverChangeObserver{s: s}
+	obs.SetChangeObserver(o)
+	// By identity, so a server shutting down never removes the observer a
+	// newer server installed on the same store.
+	s.releaseSearchObserver = func() { obs.ClearChangeObserver(o) }
 }
 
 // renameFanOutWorkers bounds how many author/series rename fan-outs run at
@@ -88,18 +92,26 @@ type fanOutKey struct {
 	id   int
 }
 
-// BooksChanged is told about book rows (or their author/narrator junctions)
-// written, created or deleted: the result cache records them and the index
-// re-reads them. A deleted or soft-deleted book is removed by the worker, which
+// BooksChanged is told about book rows written, created or deleted: the result
+// cache records them and the index re-reads them. A deleted or soft-deleted book is removed by the worker, which
 // reads the row rather than trusting a flag.
 func (o *serverChangeObserver) BooksChanged(ids ...string) {
 	o.recordAndIndex(ids)
 }
 
 // BooksNeedReindex is told about books whose search document changed without a
-// book-row write: tag writes and aggregate recomputes.
+// book-row write: tag writes.
 func (o *serverChangeObserver) BooksNeedReindex(ids ...string) {
 	o.recordAndIndex(ids)
+}
+
+// BookCreditsChanged is told about author/narrator junction rows. The search
+// document is built from the book row and never reads the junction, so this
+// invalidates cached results only; scheduling a re-index would rebuild an
+// identical document (and a credit edit that also writes the book row reports
+// that through BooksChanged).
+func (o *serverChangeObserver) BookCreditsChanged(ids ...string) {
+	o.s.searchChanges.Record(ids...)
 }
 
 func (o *serverChangeObserver) recordAndIndex(ids []string) {
@@ -191,5 +203,16 @@ func (o *serverChangeObserver) runFanOut(load func() ([]database.BookCore, error
 	s.searchChanges.Record(ids...)
 	for _, bid := range ids {
 		s.enqueueIndex(bid)
+	}
+}
+
+// releaseSearchAndAuthority detaches this server's change observer from the
+// store and unregisters its authority provider, each by identity. Idempotent.
+func (s *Server) releaseSearchAndAuthority() {
+	if s.releaseSearchObserver != nil {
+		s.releaseSearchObserver()
+	}
+	if s.releaseAuthorityProvider != nil {
+		s.releaseAuthorityProvider()
 	}
 }

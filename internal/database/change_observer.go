@@ -26,13 +26,18 @@ package database
 // synchronously: several hooks fire while a store lock is held (the name-index
 // locks for renames).
 type ChangeObserver interface {
-	// BooksChanged reports book rows (or their author/narrator junctions)
-	// written, created or deleted.
+	// BooksChanged reports book rows written, created or deleted.
 	BooksChanged(ids ...string)
 	// BooksNeedReindex reports books whose search document changed without a
-	// book-row write through the choke points above: tag writes and aggregate
-	// recomputes.
+	// book-row write through the choke points above: tag writes.
 	BooksNeedReindex(ids ...string)
+	// BookCreditsChanged reports books whose author or narrator JUNCTION rows
+	// were rewritten. The search document is built from the book row (AuthorID,
+	// Narrator) and never reads the junction, so this can change a cached search
+	// result (a filter on credits) but cannot change the document: observers
+	// invalidate cached results and do NOT schedule a re-index. A credit edit
+	// that also writes the book row reports that through BooksChanged.
+	BookCreditsChanged(ids ...string)
 	// AuthorRenamed reports an author whose name changed or was deleted.
 	// Every book whose AuthorID is this author carries the old name in its
 	// search document.
@@ -45,6 +50,11 @@ type ChangeObserver interface {
 // ChangeObserver. Look it up with AsCapability so decorators are seen through.
 type ChangeObservable interface {
 	SetChangeObserver(o ChangeObserver)
+	// ClearChangeObserver removes o if it is still the installed observer
+	// (compared by identity), so a server shutting down never removes the
+	// observer a newer server installed on the same store. o must be a
+	// comparable value (a pointer).
+	ClearChangeObserver(o ChangeObserver)
 }
 
 type changeObserverBox struct{ o ChangeObserver }
@@ -57,6 +67,13 @@ func (p *PebbleStore) SetChangeObserver(o ChangeObserver) {
 		return
 	}
 	p.changeObs.Store(&changeObserverBox{o: o})
+}
+
+// ClearChangeObserver removes o only if it is the installed observer.
+func (p *PebbleStore) ClearChangeObserver(o ChangeObserver) {
+	if b := p.changeObs.Load(); b != nil && b.o == o {
+		p.changeObs.CompareAndSwap(b, nil)
+	}
 }
 
 func (p *PebbleStore) observer() ChangeObserver {
@@ -75,6 +92,12 @@ func (p *PebbleStore) notifyBooksChanged(ids ...string) {
 func (p *PebbleStore) notifyBooksNeedReindex(ids ...string) {
 	if o := p.observer(); o != nil {
 		o.BooksNeedReindex(ids...)
+	}
+}
+
+func (p *PebbleStore) notifyBookCreditsChanged(ids ...string) {
+	if o := p.observer(); o != nil {
+		o.BookCreditsChanged(ids...)
 	}
 }
 

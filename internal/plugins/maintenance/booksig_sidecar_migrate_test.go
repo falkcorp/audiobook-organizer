@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7f3d1b58-6c24-4a09-8e57-3b90d2f6c418
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -197,7 +197,7 @@ type unmigratableStore struct{ database.Store }
 
 // TestBookSigSidecarMigrate_UnsupportedStoreFailsLoudly.
 //
-// Production always installs the Bleve indexedStore decorator. A bare
+// Production used to install the Bleve indexedStore decorator (removed in 07-S3). A bare
 // `store.(*PebbleStore)` against a wrapped store is indistinguishable from a
 // genuinely unsupported backend, and several ops in this repo silently no-opped
 // in prod exactly that way — reporting success having migrated nothing. This op
