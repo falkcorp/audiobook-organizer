@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -30,6 +30,8 @@ import {
   MenuItem,
   Switch,
   Pagination,
+  ToggleButton,
+  ToggleButtonGroup,
   Stack,
   TextField,
   Tooltip,
@@ -54,6 +56,8 @@ import { DEFAULT_BULK_APPLY_MAX_ITEMS } from './lanes/useMetadataLane';
 import type { DedupSeriesSummary } from '../../services/api';
 import { useSeriesPairs } from './lanes/useDupesClusterData';
 import { buildClusters } from './lanes/dupesClusters';
+import { DupesLabelsView } from './DupesLabelsView';
+import { useDupesLabels, type DupesSubView } from './lanes/useDupesLabels';
 
 const BANDS: DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
 const STATUSES: { value: DedupStatusFilter; label: string }[] = [
@@ -308,11 +312,34 @@ export interface DupesPanelProps {
   viewMode: SpineViewMode;
   expandedId: number | null;
   onToggleExpand: (id: number) => void;
+  /**
+   * Which surface of the lane shows: the pair Queue, or the Gold Labels
+   * (Labels) / Suspicious sub-views. Owned by the workspace, which seeds it from
+   * `?view=` once and lets the "Manage labels" command set it; never written
+   * back to the URL.
+   */
+  subView: DupesSubView;
+  onSubViewChange: (view: DupesSubView) => void;
 }
 
-export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: DupesPanelProps) {
+const SUB_VIEW_OPTIONS: { value: DupesSubView; label: string }[] = [
+  { value: 'queue', label: 'Queue' },
+  { value: 'labels', label: 'Labels' },
+  { value: 'suspicious', label: 'Suspicious' },
+];
+
+export function DupesPanel({
+  dupes,
+  viewMode,
+  expandedId,
+  onToggleExpand,
+  subView,
+  onSubViewChange,
+}: DupesPanelProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const bookParam = searchParams.get('book');
+  // Fetches only while Labels or Suspicious is showing.
+  const labels = useDupesLabels(subView);
 
   // The URL is the source of truth for `book` and `band`, so a deep link from
   // FingerprintVisualsColumn lands on the right filter and a copied address bar
@@ -388,8 +415,36 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
     else dupes.dispatch({ lane: 'dupes', type: 'dismissSelected', ids: selectedIds });
   };
 
+  const subViewControl = (
+    <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+      <ToggleButtonGroup
+        size="small"
+        exclusive
+        value={subView}
+        onChange={(_, v: DupesSubView | null) => v && onSubViewChange(v)}
+        aria-label="Duplicates view"
+      >
+        {SUB_VIEW_OPTIONS.map(({ value, label }) => (
+          <ToggleButton key={value} value={value} data-testid={`dupes-subview-${value}`}>
+            {label}
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
+    </Box>
+  );
+
+  if (subView !== 'queue') {
+    return (
+      <>
+        {subViewControl}
+        <DupesLabelsView view={subView} labels={labels} onSelectView={onSubViewChange} />
+      </>
+    );
+  }
+
   return (
     <>
+      {subViewControl}
       <Box
         sx={{
           flex: 1,

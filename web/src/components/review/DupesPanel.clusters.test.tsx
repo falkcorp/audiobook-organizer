@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.clusters.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: a3d8f167-92c4-4e0b-b5a1-6f2e8c0d4b79
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 //
 // The Clusters view through the rendered DupesPanel: the cluster spine in place
 // of the pair rows, the By-series toggle with its confirmation, and the
@@ -62,7 +62,14 @@ beforeEach(() => {
 function Harness({ layer = null }: { layer?: 'embedding' | null }) {
   const dupes = useDupesLane(toast, true, { band: 'HIGH', entityId: null, layer }, true);
   return (
-    <DupesPanel dupes={dupes} viewMode="candidates" expandedId={null} onToggleExpand={() => {}} />
+    <DupesPanel
+      dupes={dupes}
+      viewMode="candidates"
+      expandedId={null}
+      onToggleExpand={() => {}}
+      subView="queue"
+      onSubViewChange={() => {}}
+    />
   );
 }
 
