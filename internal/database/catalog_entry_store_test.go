@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
 // last-edited: 2026-10-12
 
@@ -144,5 +144,100 @@ func TestCountAuthorNameBlocks(t *testing.T) {
 	}
 	if n, err := st.CountAuthorNameBlocks(); err != nil || n != 2 {
 		t.Fatalf("CountAuthorNameBlocks = %d, %v; want 2 (ann, bob)", n, err)
+	}
+}
+
+// TestEntriesForAuthorKey_ExactCappedAndSilent: the bulk matcher's block read
+// takes the exact key only (a substring of a stored fold misses, where
+// EntryIDsByAuthorName's fallback would walk every name key and find it), caps
+// the block (an oversize block returns no ids and says so), and never reports
+// to the scan hook: it is a bounded read, not a scan.
+func TestEntriesForAuthorKey_ExactCappedAndSilent(t *testing.T) {
+	st := openTestCatalogStore(t)
+	items := make([]CatalogUpsert, 0, 6)
+	for i := range 5 {
+		items = append(items, CatalogUpsert{Entry: CatalogEntry{Provider: "audible", Marketplace: "us",
+			ProviderID: fmt.Sprintf("P%d", i), Title: fmt.Sprintf("Title %06d", i), AuthorKeys: []string{"name:author07"}}})
+	}
+	items = append(items, CatalogUpsert{Entry: CatalogEntry{Provider: "audible", Marketplace: "us",
+		ProviderID: "P9", Title: "Title 000009", AuthorKeys: []string{"name:otherauthor08"}}})
+	if _, err := st.UpsertEntries(items, "author07"); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	st.scanHook = func(string) { called = true }
+
+	ids, oversize, err := st.EntriesForAuthorKey("author07", 5)
+	if err != nil || oversize || len(ids) != 5 {
+		t.Fatalf("exact block at the cap = %d ids, oversize %v, %v; want 5, false", len(ids), oversize, err)
+	}
+	if ids, oversize, err = st.EntriesForAuthorKey("author07", 4); err != nil || !oversize || ids != nil {
+		t.Fatalf("block over the cap = %v, oversize %v, %v; want nil, true", ids, oversize, err)
+	}
+	if ids, _, _ = st.EntriesForAuthorKey("author07", 0); len(ids) != 5 {
+		t.Errorf("cap 0 (no cap) = %d ids; want 5", len(ids))
+	}
+	for _, fold := range []string{"thor07", "author0", "author07x", "", "name:author07", "author07:"} {
+		if ids, over, err := st.EntriesForAuthorKey(fold, 100); err != nil || over || len(ids) != 0 {
+			t.Errorf("EntriesForAuthorKey(%q) = %v, %v, %v; want nothing", fold, ids, over, err)
+		}
+	}
+	if sub, _ := st.EntryIDsByAuthorName("thor07", 0); len(sub) != 5 {
+		t.Fatalf("control: the substring walk should find the block (got %d ids)", len(sub))
+	}
+	if !called {
+		t.Fatal("control: the substring walk did not report to the scan hook")
+	}
+	called = false
+	_, _, _ = st.EntriesForAuthorKey("author07", 100)
+	_, _, _ = st.ResolveAuthorAlias("anything")
+	if called {
+		t.Error("EntriesForAuthorKey or ResolveAuthorAlias reported a scan: the bulk path must be point/bounded reads only")
+	}
+}
+
+// TestPutAuthorAliases_ResolveAmbiguousAndIdempotent: an alias resolves to its
+// block; the same pair twice is one row; a second, different target makes the
+// alias ambiguous for good (resolves to nothing, even for the first target);
+// degenerate pairs are skipped.
+func TestPutAuthorAliases_ResolveAmbiguousAndIdempotent(t *testing.T) {
+	st := openTestCatalogStore(t)
+	n, err := st.PutAuthorAliases([]CatalogAuthorAlias{
+		{Alias: "authorseven", Target: "author07"},
+		{Alias: "a07", Target: "author07"},
+		{Alias: "author07", Target: "author07"},  // alias == target
+		{Alias: "", Target: "author07"},          // empty
+		{Alias: "x:y", Target: "author07"},       // ':' would forge a key shape
+		{Alias: "jauthor", Target: "janeauthor"}, // two claimants in one call
+		{Alias: "jauthor", Target: "johnauthor"}, // ... make it ambiguous
+	})
+	if err != nil || n != 4 {
+		t.Fatalf("first write = %d, %v; want 4 (two plain, one claimed, one demoted)", n, err)
+	}
+	if got, ok, err := st.ResolveAuthorAlias("authorseven"); err != nil || !ok || got != "author07" {
+		t.Fatalf("ResolveAuthorAlias(authorseven) = %q, %v, %v", got, ok, err)
+	}
+	if _, ok, _ := st.ResolveAuthorAlias("jauthor"); ok {
+		t.Error("an alias claimed by two blocks in one call still resolves")
+	}
+	if n, _ := st.PutAuthorAliases([]CatalogAuthorAlias{{Alias: "authorseven", Target: "author07"}}); n != 0 {
+		t.Errorf("rewriting the same pair wrote %d rows; want 0", n)
+	}
+	// A later, different claimant demotes the alias, and it stays demoted.
+	if n, _ := st.PutAuthorAliases([]CatalogAuthorAlias{{Alias: "authorseven", Target: "author08"}}); n != 1 {
+		t.Errorf("a conflicting claimant wrote %d rows; want 1 (the demotion)", n)
+	}
+	for _, target := range []string{"author07", "author08"} {
+		if _, err := st.PutAuthorAliases([]CatalogAuthorAlias{{Alias: "authorseven", Target: target}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, _ := st.ResolveAuthorAlias("authorseven"); ok {
+			t.Errorf("a demoted alias resolved again after a write for %s", target)
+		}
+	}
+	for _, alias := range []string{"missing", "", "a:b"} {
+		if _, ok, err := st.ResolveAuthorAlias(alias); ok || err != nil {
+			t.Errorf("ResolveAuthorAlias(%q) = %v, %v; want not found", alias, ok, err)
+		}
 	}
 }
