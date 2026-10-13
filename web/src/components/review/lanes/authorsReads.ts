@@ -1,28 +1,28 @@
 // file: web/src/components/review/lanes/authorsReads.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b31c5e8-92a4-4d6f-b0e3-5f18a96d2c70
 // last-edited: 2026-10-13
 //
-// The Authors lane's reads, each taking an AbortSignal and a deadline.
+// The Authors & series lane's reads, each taking an AbortSignal and a deadline.
 //
 // WHY THESE ARE NOT THE api.ts WRAPPERS
 //
-// `api.getAuthorDuplicates`, `api.getBooksByAuthor` and `api.validateDedupEntry`
-// take no signal, so a caller cannot cancel them: leaving the lane (or opening
-// another author's popover) would leave the request running, and the lane's
-// "no author requests while another lane is active" rule would be a promise the
-// wrapper cannot keep. api.ts is a shared hotspot that this change is told not
-// to touch, so the three requests are made here with `apiFetch`, the same thing
-// the wrappers call. Once api.ts is free, adding `opts?: { signal }` to those
-// three and deleting this file's copies is the follow-up; the wire shapes below
-// are copied from them and must move together.
+// `api.getAuthorDuplicates`, `api.getSeriesDuplicates`, `api.getBooksByAuthor` and
+// `api.validateDedupEntry` take no signal, so a caller cannot cancel them:
+// leaving the lane (or opening another author's popover) would leave the request
+// running, and the lane's "no author requests while another lane is active" rule
+// would be a promise the wrapper cannot keep. api.ts is a shared hotspot that
+// this change is told not to touch, so the requests are made here with
+// `apiFetch`, the same thing the wrappers call. Once api.ts is free, adding
+// `opts?: { signal }` to them and deleting this file's copies is the follow-up;
+// the wire shapes below are copied from them and must move together.
 //
 // The writes (merge, rename, split, reclassify, resolve-production, scan) DO use
 // the api.ts wrappers: a write that has been sent must not be abandoned
 // half-way by a re-render, and `pollOperationV2` already takes a signal for the
 // wait that follows.
 
-import type { AuthorDedupGroup, Book, ValidationResult } from '../../../services/api';
+import type { AuthorDedupGroup, Book, SeriesDupGroup, ValidationResult } from '../../../services/api';
 import { apiFetch } from '../../../utils/apiFetch';
 
 const API_BASE = '/api/v1';
@@ -91,20 +91,53 @@ export async function fetchBooksByAuthor(authorId: number, signal: AbortSignal):
   );
 }
 
-/** POST /dedup/validate for an author name: what the metadata providers know under it. */
-export async function validateAuthorName(
+async function validateName(
   query: string,
+  type: 'author' | 'series',
   signal: AbortSignal
 ): Promise<{ results: ValidationResult[]; query: string }> {
   const response = await apiFetch(`${API_BASE}/dedup/validate`, {
     method: 'POST',
-    body: JSON.stringify({ query, type: 'author' }),
+    body: JSON.stringify({ query, type }),
     signal,
     timeoutMs: AUTHORS_READ_TIMEOUT_MS,
   });
   if (!response.ok) throw await failure(response, 'Failed to validate the name');
   const data = (await response.json()).data ?? {};
   return { results: data.results ?? [], query: data.query ?? query };
+}
+
+/** POST /dedup/validate for an author name: what the metadata providers know under it. */
+export function validateAuthorName(query: string, signal: AbortSignal) {
+  return validateName(query, 'author', signal);
+}
+
+/** POST /dedup/validate for a series name. */
+export function validateSeriesName(query: string, signal: AbortSignal) {
+  return validateName(query, 'series', signal);
+}
+
+export interface SeriesGroupsResponse {
+  groups: SeriesDupGroup[];
+  /** Every series in the library, duplicate or not (the scan's denominator). */
+  totalSeries: number;
+  /** True when the server has no cached scan: the groups are empty because nobody has scanned. */
+  needsRefresh: boolean;
+}
+
+/** GET /series/duplicates. */
+export async function fetchSeriesGroups(signal: AbortSignal): Promise<SeriesGroupsResponse> {
+  const response = await apiFetch(`${API_BASE}/series/duplicates`, {
+    signal,
+    timeoutMs: AUTHORS_READ_TIMEOUT_MS,
+  });
+  if (!response.ok) throw await failure(response, 'Failed to fetch series duplicates');
+  const data = (await response.json()).data ?? {};
+  return {
+    groups: data.groups ?? [],
+    totalSeries: typeof data.total_series === 'number' ? data.total_series : 0,
+    needsRefresh: Boolean(data.needs_refresh),
+  };
 }
 
 /** GET /authors/:id, for the name only. */

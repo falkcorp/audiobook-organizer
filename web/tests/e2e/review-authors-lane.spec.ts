@@ -1,9 +1,10 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
 // last-edited: 2026-10-13
 
-// End-to-end coverage for the Authors & series lane of /review (Authors sub-view).
+// End-to-end coverage for the Authors & series lane of /review (Authors and Series
+// sub-views).
 //
 // Ported from the blocks of dedup.spec.ts and dedup-operations.spec.ts that drove
 // the Authors tab of /dedup: Author Dedup, Book Preview Popover, Dedup Refresh
@@ -18,6 +19,11 @@
 //   - the error cases assert the four-state rule: a failed read is an error with
 //     Retry, never an empty list;
 //   - fixtures are synthetic names ("Author A"), not real library rows.
+//
+// The Series block at the end is the port of dedup.spec.ts "Series Dedup", which
+// only asserted that a tab was selected; this one drives the sub-view. Its API is
+// mocked in this file (openSeries) rather than in test-helpers, whose series
+// fixture has no author ids, no match types and no merge or rename routes.
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi, generateTestBooks, type MockAuthorDedupGroup } from './utils/test-helpers';
@@ -511,5 +517,371 @@ test.describe('Dedup Error Handling', () => {
     });
     await page.getByRole('button', { name: /find real author/i }).first().click();
     await expect(page.getByText(/Resolution failed/)).toBeVisible();
+  });
+});
+
+// ── Series Dedup (the Series sub-view) ──
+
+interface SeriesFixture {
+  name: string;
+  match_type?: string;
+  suggested_name?: string;
+  series: Array<{ id: number; name: string; author_id?: number; author_name?: string; books?: Array<{ id: string; title: string }> }>;
+}
+
+const seriesGroups: SeriesFixture[] = [
+  {
+    name: 'Series One',
+    match_type: 'exact',
+    suggested_name: 'Series One Preferred',
+    series: [
+      { id: 11, name: 'Series One', books: [{ id: 'sb1', title: 'Book One' }] },
+      { id: 12, name: 'series one', author_id: 7, author_name: 'Author G', books: [{ id: 'sb1', title: 'Book One' }] },
+    ],
+  },
+  {
+    name: 'Series Two',
+    match_type: 'exact',
+    series: [
+      { id: 21, name: 'Series Two' },
+      { id: 22, name: 'series two' },
+    ],
+  },
+  {
+    name: 'Series Three, Book 2',
+    match_type: 'subseries',
+    series: [
+      { id: 31, name: 'Series Three' },
+      { id: 32, name: 'Series Three, Book 2' },
+    ],
+  },
+];
+
+const seriesPath = (id: string) => (id ? `/review?lane=authors&view=${id}` : '/review?lane=authors');
+
+/** Mocks the series endpoints this lane calls. A route registered here beats setupMockApi's. */
+async function openSeries(
+  page: Page,
+  opts: { groups?: SeriesFixture[]; needsRefresh?: boolean; total?: number; url?: string } = {}
+) {
+  const groups = opts.groups ?? seriesGroups;
+  await setupMockApi(page, {
+    books: generateTestBooks(5),
+    authorDedup: { groups: authorGroups },
+    operations: { active: [], history: [], logs: {} },
+  });
+  await page.route('**/api/v1/audiobooks?author_id=*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], count: 0 }) });
+  });
+  const json = (body: unknown, status = 200) => ({
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: body }),
+  });
+  await page.route('**/api/v1/series/duplicates', async (route) => {
+    await route.fulfill(
+      json({ groups: opts.needsRefresh ? [] : groups, count: groups.length, total_series: opts.total ?? 17, needs_refresh: Boolean(opts.needsRefresh) })
+    );
+  });
+  await page.route('**/api/v1/series/merge', async (route) => {
+    await route.fulfill(json({ id: 'series-merge-op', type: 'series-merge', status: 'queued' }, 202));
+  });
+  await page.route('**/api/v1/series/*/name', async (route) => {
+    await route.fulfill(json({ id: 'series-rename-op', type: 'series-rename', status: 'queued' }, 202));
+  });
+  await page.route('**/api/v1/operations/series-rename-op/revert', async (route) => {
+    await route.fulfill(json({ message: 'reverted', partial: false, restored: 1 }));
+  });
+  await page.goto(opts.url ?? seriesPath('series'));
+  await expect(page.getByTestId('authors-subview-series')).toBeVisible();
+}
+
+test.describe('Series Dedup', () => {
+  test('?view=series opens the Series sub-view, selected, and Authors still works from the control', async ({ page }) => {
+    await openSeries(page);
+    await expect(page.getByRole('tab', { name: 'Authors & series' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('authors-subview-series')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('series-panel')).toBeVisible();
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+
+    await page.getByTestId('authors-subview-authors').click();
+    await expect(page.getByRole('heading', { name: 'Author A', exact: true })).toBeVisible();
+    await expect(page.getByTestId('series-panel')).toHaveCount(0);
+  });
+
+  test('the sub-view control lists Authors then Series, and the Series choice is not written to the URL', async ({ page }) => {
+    await openSeries(page, { url: seriesPath('') });
+    await expect(page.getByTestId('authors-panel')).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Authors & series sub-view' }).getByRole('button')).toHaveText(['Authors', 'Series']);
+    await page.getByTestId('authors-subview-series').click();
+    await expect(page.getByTestId('series-panel')).toBeVisible();
+    expect(new URL(page.url()).search).toBe('?lane=authors');
+  });
+
+  test('displays the groups: names, author chips, a kept series, and the counts', async ({ page }) => {
+    await openSeries(page);
+    const card = page.getByTestId('series-group-s11-12');
+    await expect(card.getByRole('heading', { name: 'Series One' })).toBeVisible();
+    await expect(card.getByText('2 series')).toBeVisible();
+    await expect(card.getByText('Author G (id: 7)')).toBeVisible();
+    await expect(card.getByTestId('series-row-12')).toContainText('Kept');
+    await expect(card.getByTestId('series-row-11')).toContainText('Merged in');
+    await expect(page.getByTestId('series-group-s31-32').getByText('sub-series')).toBeVisible();
+    await expect(page.getByTestId('series-kind-all')).toHaveText('All groups (3)');
+    await expect(page.getByTestId('series-kind-exact')).toHaveText('Same name (2)');
+    await expect(page.getByTestId('series-total-link')).toHaveText('17 series in the library');
+  });
+
+  test('there is no Prune Series button in the lane', async ({ page }) => {
+    await openSeries(page);
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+    await expect(page.getByRole('button', { name: /prune/i })).toHaveCount(0);
+  });
+
+  test('empty state when there are no series duplicates', async ({ page }) => {
+    await openSeries(page, { groups: [], total: 41 });
+    await expect(page.getByTestId('series-empty')).toContainText('No duplicate series found');
+    await expect(page.getByTestId('series-total-link')).toHaveText('41 series in the library');
+  });
+
+  test('a cold cache is "not scanned yet", not "no duplicates"', async ({ page }) => {
+    await openSeries(page, { needsRefresh: true });
+    await expect(page.getByTestId('series-needs-scan')).toBeVisible();
+    await expect(page.getByTestId('series-empty')).toHaveCount(0);
+  });
+
+  test('the Same name chip opens exactly the groups Merge All counts', async ({ page }) => {
+    await openSeries(page);
+    await expect(page.getByRole('button', { name: 'Merge All (2)' })).toBeVisible();
+    await page.getByTestId('series-kind-exact').click();
+    await expect(page.getByTestId(/^series-group-s\d/)).toHaveCount(2);
+    await page.getByTestId('series-kind-subseries').click();
+    await expect(page.getByTestId(/^series-group-s\d/)).toHaveCount(1);
+  });
+
+  test('Merge keeps the author-linked series and merges the other into it', async ({ page }) => {
+    await openSeries(page);
+    const merged = page.waitForRequest((req) => req.url().endsWith('/api/v1/series/merge'));
+    await page.getByRole('button', { name: 'Merge into "series one"' }).click();
+    expect((await merged).postDataJSON()).toEqual({ keep_id: 12, merge_ids: [11] });
+    await expect(page.getByText('Merged 1 series into "series one"')).toBeVisible();
+    await expect(page.getByTestId('series-group-s11-12')).toHaveCount(0);
+    // Edited in place: the group is gone without a second read of the list.
+    await expect(page.getByTestId('series-group-s21-22')).toBeVisible();
+  });
+
+  test('a narrator flag is sent with the merge: the author is reclassified first', async ({ page }) => {
+    await openSeries(page);
+    const order: string[] = [];
+    page.on('request', (req) => {
+      if (req.method() !== 'POST') return;
+      if (req.url().includes('/authors/7/reclassify-as-narrator')) order.push('reclassify');
+      if (req.url().endsWith('/api/v1/series/merge')) order.push('merge');
+    });
+    await page.getByTestId('series-row-12').getByText('Author', { exact: true }).click();
+    await expect(page.getByTestId('series-row-12').getByText('Narrator')).toBeVisible();
+    await page.getByRole('button', { name: 'Merge into "series one"' }).click();
+    await expect(page.getByText('Merged 1 series into "series one"')).toBeVisible();
+    expect(order).toEqual(['reclassify', 'merge']);
+  });
+
+  test('leaving a series out keeps it out of the merge', async ({ page }) => {
+    await openSeries(page, {
+      groups: [
+        {
+          name: 'Series Four',
+          match_type: 'exact',
+          series: [
+            { id: 41, name: 'Series Four' },
+            { id: 42, name: 'series four' },
+            { id: 43, name: 'SERIES FOUR' },
+          ],
+        },
+      ],
+    });
+    await page.getByRole('checkbox', { name: 'Include series SERIES FOUR (ID 43) in the merge' }).uncheck();
+    const merged = page.waitForRequest((req) => req.url().endsWith('/api/v1/series/merge'));
+    await page.getByRole('button', { name: 'Merge into "Series Four"' }).click();
+    expect((await merged).postDataJSON()).toEqual({ keep_id: 41, merge_ids: [42] });
+  });
+
+  test('renaming a series uses the undoable endpoint and offers an Undo', async ({ page }) => {
+    await openSeries(page);
+    const card = page.getByTestId('series-group-s11-12');
+    await card.getByRole('button', { name: 'Edit series name Series One', exact: true }).click();
+    const input = card.getByRole('textbox', { name: 'Series name' });
+    await expect(input).toHaveValue('Series One');
+    const renamed = page.waitForRequest((req) => /\/api\/v1\/series\/11\/name$/.test(req.url()) && req.method() === 'PUT');
+    await input.fill('Series One Renamed');
+    await input.press('Enter');
+    expect((await renamed).postDataJSON()).toEqual({ name: 'Series One Renamed' });
+    await expect(card.getByTestId('series-row-11')).toContainText('ID 11: "Series One Renamed"');
+
+    const reverted = page.waitForRequest((req) => req.url().endsWith('/operations/series-rename-op/revert') && req.method() === 'POST');
+    await card.getByRole('button', { name: 'Undo rename of Series One Renamed' }).click();
+    await reverted;
+    await expect(card.getByTestId('series-row-11')).toContainText('ID 11: "Series One"');
+    await expect(card.getByTestId('series-row-11')).not.toContainText('Renamed');
+    await expect(card.getByRole('button', { name: /Undo rename/ })).toHaveCount(0);
+  });
+
+  test('the suggested name starts an edit of the kept series', async ({ page }) => {
+    await openSeries(page);
+    await page.getByTestId('series-group-s11-12').getByText('Suggested: "Series One Preferred"').click();
+    await expect(page.getByRole('textbox', { name: 'Series name' })).toHaveValue('Series One Preferred');
+  });
+
+  test('Validate asks the providers about the series name and shows what came back', async ({ page }) => {
+    await openSeries(page);
+    const validated = page.waitForRequest((req) => req.url().endsWith('/api/v1/dedup/validate'));
+    await page.getByTestId('series-group-s11-12').getByRole('button', { name: 'Validate' }).click();
+    expect((await validated).postDataJSON()).toEqual({ query: 'Series One', type: 'series' });
+    await expect(page.getByTestId('series-group-s11-12').getByTestId('series-validation-results')).toContainText('openlibrary');
+  });
+
+  test('Merge All asks first, lists the groups, and Cancel merges nothing', async ({ page }) => {
+    await openSeries(page);
+    const merges = await countRequests(page, '/api/v1/series/merge', 'POST');
+    await page.getByRole('button', { name: 'Merge All (2)' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: 'Confirm Merge All' })).toBeVisible();
+    await expect(dialog.getByRole('listitem')).toHaveText(['Series One', 'Series Two']);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(merges.n).toBe(0);
+  });
+
+  test('confirming Merge All merges each same-name group and leaves the sub-series group', async ({ page }) => {
+    await openSeries(page);
+    const merges = await countRequests(page, '/api/v1/series/merge', 'POST');
+    await page.getByRole('button', { name: 'Merge All (2)' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByText('Merged 2 of 2 same-name group(s).')).toBeVisible();
+    expect(merges.n).toBe(2);
+    await expect(page.getByTestId(/^series-group-s\d/)).toHaveCount(1);
+    await expect(page.getByTestId('series-group-s31-32')).toBeVisible();
+  });
+
+  test('Merge Selected (N) counts the ticked groups and merges only them', async ({ page }) => {
+    await openSeries(page);
+    await page.getByRole('checkbox', { name: 'Select group Series Two' }).check();
+    const merged = page.waitForRequest((req) => req.url().endsWith('/api/v1/series/merge'));
+    await page.getByRole('button', { name: 'Merge Selected (1)' }).click();
+    expect((await merged).postDataJSON()).toEqual({ keep_id: 21, merge_ids: [22] });
+    await expect(page.getByTestId('series-group-s21-22')).toHaveCount(0);
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+  });
+
+  test('a merge that left a series behind keeps the group with what remains, and says which', async ({ page }) => {
+    await openSeries(page, {
+      groups: [
+        {
+          name: 'Series Four',
+          match_type: 'exact',
+          series: [
+            { id: 41, name: 'Series Four' },
+            { id: 42, name: 'series four' },
+            { id: 43, name: 'SERIES FOUR' },
+          ],
+        },
+      ],
+    });
+    await page.route('**/api/v1/operations/v2/series-merge-op', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            operation: {
+              id: 'series-merge-op',
+              def_id: 'dedup.series-merge',
+              status: 'failed',
+              error_message: 'series merge left series ids [43]: series merge merged 1 of 2 series with 1 error(s)',
+            },
+            logs: [],
+          },
+        }),
+      });
+    });
+    await page.getByRole('button', { name: 'Merge into "Series Four"' }).click();
+    await expect(page.getByText(/1 series was not merged \(ids 43\)/)).toBeVisible();
+    // 42 went; 41 (kept) and 43 remain: still a duplicate pair.
+    const card = page.getByTestId('series-group-s41-42-43');
+    await expect(card.getByTestId('series-row-41')).toBeVisible();
+    await expect(card.getByTestId('series-row-43')).toBeVisible();
+    await expect(card.getByTestId('series-row-42')).toHaveCount(0);
+  });
+
+  test('a refused merge is reported and the group stays', async ({ page }) => {
+    await openSeries(page);
+    await page.route('**/api/v1/series/merge', async (route) => {
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Merge conflict' }) });
+    });
+    await page.getByRole('button', { name: 'Merge into "series one"' }).click();
+    await expect(page.getByText(/Merge conflict/)).toBeVisible();
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+  });
+
+  test('a failed read is an error with Retry, not an empty list', async ({ page }) => {
+    await setupMockApi(page, { books: generateTestBooks(3) });
+    let fail = true;
+    await page.route('**/api/v1/series/duplicates', async (route) => {
+      if (fail) {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { groups: [], total_series: 4, needs_refresh: false } }),
+      });
+    });
+    await page.goto(seriesPath('series'));
+    const alert = page.getByTestId('series-error');
+    await expect(alert).toContainText('Internal server error');
+    await expect(page.getByTestId('series-empty')).toHaveCount(0);
+    fail = false;
+    await alert.getByRole('button', { name: 'Retry' }).click();
+    await expect(page.getByTestId('series-empty')).toBeVisible();
+    await expect(page.getByTestId('series-error')).toHaveCount(0);
+  });
+
+  test('switching to Authors and back reads each list once per visit, never the other one', async ({ page }) => {
+    const seriesReads = { n: 0 };
+    const authorReads = { n: 0 };
+    page.on('request', (req) => {
+      if (req.method() !== 'GET') return;
+      if (req.url().endsWith('/api/v1/series/duplicates')) seriesReads.n++;
+      if (req.url().endsWith('/api/v1/authors/duplicates')) authorReads.n++;
+    });
+    await openSeries(page);
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+    expect(seriesReads.n).toBe(1);
+    expect(authorReads.n).toBe(0);
+
+    await page.getByTestId('authors-subview-authors').click();
+    await expect(page.getByRole('heading', { name: 'Author A', exact: true })).toBeVisible();
+    expect(authorReads.n).toBe(1);
+    expect(seriesReads.n).toBe(1);
+
+    await page.getByTestId('authors-subview-series').click();
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+    expect(seriesReads.n).toBe(2);
+    expect(authorReads.n).toBe(1);
+  });
+
+  test('keyboard: m merges the focused series group, and not while the help is open', async ({ page }) => {
+    await openSeries(page);
+    await expect(page.getByTestId('series-group-s11-12')).toHaveAttribute('data-focused', 'true');
+    await page.keyboard.press('?');
+    await expect(page.getByTestId('series-shortcut-help')).toBeVisible();
+    const merges = await countRequests(page, '/api/v1/series/merge', 'POST');
+    await page.keyboard.press('m');
+    expect(merges.n).toBe(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('series-shortcut-help')).toHaveCount(0);
+    const merged = page.waitForRequest((req) => req.url().endsWith('/api/v1/series/merge'));
+    await page.keyboard.press('m');
+    expect((await merged).postDataJSON()).toEqual({ keep_id: 12, merge_ids: [11] });
   });
 });
