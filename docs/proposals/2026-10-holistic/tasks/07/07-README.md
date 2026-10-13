@@ -29,8 +29,9 @@ Nineteen briefs: seventeen in this directory, `08-X2.md` and `08-X3.md` in `task
 | 17 | [F3](07-F3.md) | TanStack Query v5 pilot on the Repairs lane (revert on a miss) | 2 | opus | M | C1 |
 | 18 | [F1](07-F1.md) | tygo-generated TypeScript types | 3 | sonnet | M | C3, G4, T2 |
 | 19 | [F4](07-F4.md) | Delete `docs/api/openapi.json` | 4 | sonnet | S | F1 |
+| 20 | [F5](07-F5.md) | Collections page in the web UI (static and dynamic), visible in ABS | 3 | sonnet | L | 01-P81c |
 
-Model split: opus 5 (C3, R3, R4, S3, F3), sonnet 14. R4 raised to opus by the verifier advisory (TLS/HTTP3 listener rework).
+Model split: opus 5 (C3, R3, R4, S3, F3), sonnet 15. R4 raised to opus by the verifier advisory (TLS/HTTP3 listener rework).
 
 ### Merge-order constraints worth knowing
 - `ci.yml`: C2 -> C3 -> 06 P2 -> 01 P9 -> G4 -> F1 -> U1.
