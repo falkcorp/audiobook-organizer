@@ -1,5 +1,5 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
 // last-edited: 2026-10-13
 
@@ -416,23 +416,45 @@ func TestZombieGaugeTracksCount(t *testing.T) {
 	}
 }
 
-// TestShutdownUnregistersZombieSource: a registry started and shut down
-// leaves no ops.zombies source behind.
+// TestShutdownUnregistersZombieSource: Shutdown removes the registry's
+// ops.zombies source. A zombie can outlive Shutdown (its handle stays until
+// its goroutine returns), so a leaked source would keep reporting it through
+// the meter; read through the reader, the gauge drops to 0 at Shutdown while
+// the registry's own ZombieCount is still 1.
 func TestShutdownUnregistersZombieSource(t *testing.T) {
-	before := opsmetrics.ActiveZombieSources()
-	for i := 0; i < 5; i++ {
-		g := newOtelRig(t)
-		g.reg.Start(context.Background())
-		if got := opsmetrics.ActiveZombieSources(); got != before+1 {
-			t.Fatalf("round %d: %d zombie sources after Start, want %d", i, got, before+1)
-		}
-		if err := g.reg.Shutdown(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if got := opsmetrics.ActiveZombieSources(); got != before {
-			t.Fatalf("round %d: %d zombie sources after Shutdown, want %d", i, got, before)
-		}
+	s := newStubbornRun()
+	g := newOtelRigWith(t, registry.Options{AbandonGrace: 50 * time.Millisecond, WatchdogInterval: time.Hour,
+		SweepInterval: time.Hour, AbandonedCap: 100})
+	t.Cleanup(s.releaseRun)
+	def := makeValidDef("test.timedout-zombie-unregister")
+	def.Run = s.run
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
 	}
+	g.reg.Start(t.Context())
+	id, err := g.reg.EnqueueOp(t.Context(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	if err := g.reg.Cancel(id); err != nil {
+		t.Fatal(err)
+	}
+	awaitZombieCount(t, g.reg, 1)
+	if got := g.zombies(t); got != 1 {
+		t.Fatalf("ops.zombies before Shutdown = %d, want 1", got)
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = g.reg.Shutdown(sctx)
+	if n := g.reg.ZombieCount(); n != 1 {
+		t.Fatalf("ZombieCount after Shutdown = %d, want 1 (the goroutine has not returned)", n)
+	}
+	if got := g.zombies(t); got != 0 {
+		t.Errorf("ops.zombies after Shutdown = %d, want 0: the registry's source is still registered", got)
+	}
+	s.releaseRun()
+	recv(t, s.finished, "the stubborn run to return")
 }
 
 // privateMeter is a recorder on its own meter provider, and a rig that reads

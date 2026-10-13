@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
 // last-edited: 2026-10-13
 
@@ -296,14 +296,7 @@ func (r *Recorder) Items(defID, outcome string, n int64) {
 		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome)))
 }
 
-var (
-	activeCallbacks     atomic.Int64
-	activeZombieSources atomic.Int64
-)
-
-// ActiveZombieSources is the number of RegisterZombies sources registered and
-// not yet unregistered, process-wide. A leak check for tests.
-func ActiveZombieSources() int64 { return activeZombieSources.Load() }
+var activeCallbacks atomic.Int64
 
 // RegisterZombies adds source to the ops.zombies gauge and returns the
 // function that removes it (idempotent). The gauge reports the sum of every
@@ -318,14 +311,12 @@ func (r *Recorder) RegisterZombies(source func() int64) (unregister func()) {
 	id := r.zombieNext
 	r.zombieSrc[id] = source
 	r.zombieMu.Unlock()
-	activeZombieSources.Add(1)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			r.zombieMu.Lock()
 			delete(r.zombieSrc, id)
 			r.zombieMu.Unlock()
-			activeZombieSources.Add(-1)
 		})
 	}
 }
