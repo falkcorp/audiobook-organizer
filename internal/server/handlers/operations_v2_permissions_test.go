@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_permissions_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 61966351-b637-469e-8483-4e3819bf56f6
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 // Covers TriggerOperationV2's per-def permission gate.
 //
@@ -41,10 +41,10 @@ func withCallerPerms(c *gin.Context, perms ...auth.Permission) {
 }
 
 // maintenanceDef mirrors what RegisterMaintenanceJobOps registers for every one
-// of the 37 maintenance jobs: settings.manage.
+// of the 36 maintenance jobs: settings.manage.
 func maintenanceDef() opsregistry.OperationDef {
 	return opsregistry.OperationDef{
-		ID:          "maintenance.cleanup-backups",
+		ID:          "maintenance.cleanup-empty-folders",
 		Permissions: []auth.Permission{auth.PermSettingsManage},
 	}
 }
@@ -54,11 +54,11 @@ func maintenanceDef() opsregistry.OperationDef {
 // this returned 202 and ran a maintenance job.
 func TestTriggerOperationV2_EditorCannotRunAMaintenanceOp(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().Def("maintenance.cleanup-backups").Return(maintenanceDef(), true)
+	registry.EXPECT().Def("maintenance.cleanup-empty-folders").Return(maintenanceDef(), true)
 	// Deliberately NO EnqueueOp expectation: reaching it is the failure.
 
 	h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
-	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.cleanup-backups"}`, nil)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.cleanup-empty-folders"}`, nil)
 	withCallerPerms(c, auth.PermScanTrigger)
 	h.TriggerOperationV2(c)
 
@@ -70,11 +70,11 @@ func TestTriggerOperationV2_EditorCannotRunAMaintenanceOp(t *testing.T) {
 // An admin holds settings.manage and is let through.
 func TestTriggerOperationV2_AdminCanRunAMaintenanceOp(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().Def("maintenance.cleanup-backups").Return(maintenanceDef(), true)
-	registry.EXPECT().EnqueueOp(mock.Anything, "maintenance.cleanup-backups", mock.Anything).Return("op7", nil)
+	registry.EXPECT().Def("maintenance.cleanup-empty-folders").Return(maintenanceDef(), true)
+	registry.EXPECT().EnqueueOp(mock.Anything, "maintenance.cleanup-empty-folders", mock.Anything).Return("op7", nil)
 
 	h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
-	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.cleanup-backups"}`, nil)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.cleanup-empty-folders"}`, nil)
 	withCallerPerms(c, auth.PermScanTrigger, auth.PermSettingsManage)
 	h.TriggerOperationV2(c)
 
@@ -88,11 +88,11 @@ func TestTriggerOperationV2_AdminCanRunAMaintenanceOp(t *testing.T) {
 // must not even consult the registry for the def.
 func TestTriggerOperationV2_SkipsEnforcementWhenAuthDisabled(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().EnqueueOp(mock.Anything, "maintenance.cleanup-backups", mock.Anything).Return("op8", nil)
+	registry.EXPECT().EnqueueOp(mock.Anything, "maintenance.cleanup-empty-folders", mock.Anything).Return("op8", nil)
 	// No Def expectation: with auth disabled the gate must not run at all.
 
 	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
-	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.cleanup-backups"}`, nil)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.cleanup-empty-folders"}`, nil)
 	// No caller permissions at all, exactly as when auth is disabled.
 	h.TriggerOperationV2(c)
 
