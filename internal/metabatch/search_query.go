@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -159,6 +159,13 @@ func ResolveCandidateSearchQueryMemo(files SearchQueryReader, book *database.Boo
 		return CandidateSearchQuery{SkipKind: kind}
 	}
 	if t, ok := j.ownTitle(book.Title); ok {
+		// A title that is a person's name, or the book's own author, is
+		// searchable (a biography titled by its subject is a real title) but
+		// rarely the book's: the folder holding the files often names it.
+		// The folder is then the question, a new one (its own cache key).
+		if ft, ok := j.folderStandInForPersonTitle(t, book.FilePath); ok {
+			return CandidateSearchQuery{Title: ft, Source: SearchQuerySourceFolderTitle, Usable: true}
+		}
 		return CandidateSearchQuery{Title: t, Source: SearchQuerySourceTitle, Usable: true}
 	}
 	// A part row in a rip-detail folder is refused before any transcription:
@@ -388,12 +395,8 @@ func (j *titleJudge) namesAPerson(t string) bool {
 	if j.files == nil {
 		return false
 	}
-	name := strings.TrimSpace(t)
-	if !strings.Contains(name, " ") && slugSepRe.MatchString(name) {
-		name = strings.Join(strings.Fields(slugSepRe.ReplaceAllString(name, " ")), " ")
-	}
-	if strings.ContainsAny(name, "0123456789") || len(strings.Fields(name)) < 2 ||
-		!metadata.LooksLikeAuthorSegment(titleCaseIfLower(name)) {
+	name, shaped := personShapedName(t)
+	if !shaped {
 		return false
 	}
 	if j.personMemo == nil {
@@ -405,6 +408,66 @@ func (j *titleJudge) namesAPerson(t string) bool {
 	verdict := j.knownPerson(name) && j.namesOwnPersonOrNoAuthor(name)
 	j.personMemo[name] = verdict
 	return verdict
+}
+
+// personShapedName returns t with a slug's separators read as spaces, and
+// whether the result is shaped like a person's name: two or more words, no
+// digits, each capitalised (metadata.LooksLikeAuthorSegment).
+func personShapedName(t string) (string, bool) {
+	name := strings.TrimSpace(t)
+	if !strings.Contains(name, " ") && slugSepRe.MatchString(name) {
+		name = strings.Join(strings.Fields(slugSepRe.ReplaceAllString(name, " ")), " ")
+	}
+	if strings.ContainsAny(name, "0123456789") || len(strings.Fields(name)) < 2 ||
+		!metadata.LooksLikeAuthorSegment(titleCaseIfLower(name)) {
+		return name, false
+	}
+	return name, true
+}
+
+// folderStandInForPersonTitle returns the work folder's name to search by
+// instead of title t, when t is a person's name or the book's own author and
+// the folder offers a real title (the census bucket "author equals title").
+// t is a person's name when it is person-shaped and the authority lists know
+// it as an author or narrator (whether or not it is one of THIS book's
+// people: a title that is another person's name is the folder's to correct
+// too); it is the book's author when it names one of the book's LIVE authors
+// (database.LiveBookAuthorNames, never the Book.Author snapshot, which can
+// hold a junk credit the search drops).
+//
+// No stand-in when the folder offers no title, is the title itself, or is
+// itself a person ("Last, First", a known person, a live author): then the
+// title stays the question. A part row never gets here (partRowRefused).
+func (j *titleJudge) folderStandInForPersonTitle(t, bookPath string) (string, bool) {
+	if j.files == nil || j.book == nil {
+		return "", false
+	}
+	live, err := database.LiveBookAuthorNames(j.files, j.book)
+	if err != nil {
+		return "", false // a read fault is no evidence: the title is searched
+	}
+	namesLive := func(name string) bool {
+		for _, a := range live {
+			if authorjunk.SamePersonName(a, name) {
+				return true
+			}
+		}
+		return false
+	}
+	isPerson := func(name string) bool {
+		if shaped, ok := personShapedName(name); ok && j.knownPerson(shaped) {
+			return true
+		}
+		return lastFirstRe.MatchString(strings.TrimSpace(name))
+	}
+	if !namesLive(t) && !isPerson(t) {
+		return "", false
+	}
+	ft, _ := j.folderTitle(bookPath)
+	if ft == "" || authorjunk.FoldKey(ft) == authorjunk.FoldKey(t) || namesLive(ft) || isPerson(ft) {
+		return "", false
+	}
+	return ft, true
 }
 
 // knownPerson reports whether the authority lists know name as an author or
