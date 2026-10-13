@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -107,8 +107,7 @@ func TestCompletedChunkDeliveredWhenRunStops(t *testing.T) {
 func TestItemPanicIsAnItemError(t *testing.T) {
 	job, rc, cancel := openJob(t, seq(30), batchOpts{size: 10, workers: 3}, func(_ *ops.ItemRC, i int) error {
 		if i == 7 {
-			var m map[string]int
-			m["boom"]++ // nil map write: a real panic
+			panic("item 7 exploded")
 		}
 		return nil
 	})
