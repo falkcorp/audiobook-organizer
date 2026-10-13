@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.68.1
+// version: 1.68.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package audiobooks
 
@@ -666,7 +666,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertSeriesRename(c)
 	case undo.ChangeTypeBookFileReassign:
 		return rs.revertBookFileReassign(c, plan)
-	case undo.ChangeTypeBookFileRepoint:
+	case database.ChangeTypeBookFileRepoint:
 		return rs.revertBookFileRepoint(c)
 	case undo.ChangeTypeBookFileTrack:
 		return rs.revertBookFileTrack(c)
@@ -1312,7 +1312,7 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	if !ok {
 		return fmt.Errorf("no book_file id in field %q", c.FieldName)
 	}
-	was, err := undo.DecodeBookFileLocation(c.OldValue)
+	was, err := database.DecodeBookFileLocation(c.OldValue)
 	if err != nil {
 		return err
 	}
@@ -1341,7 +1341,7 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	// took the single-owner book_file_path key from that row; moving this row
 	// off the path dropped the key. Hand it back so GetBookFileByPath names a
 	// row at the path again.
-	set, err := undo.DecodeBookFileLocation(c.NewValue)
+	set, err := database.DecodeBookFileLocation(c.NewValue)
 	if err != nil {
 		return err
 	}

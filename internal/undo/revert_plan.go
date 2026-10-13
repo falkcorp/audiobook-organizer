@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package undo
 
@@ -247,8 +247,8 @@ func RetireDependents(rows []*database.OperationChange, files func(bookID string
 			if retired[c.OldValue] && c.OldValue != c.BookID {
 				out[c.OldValue] = append(out[c.OldValue], c.ID)
 			}
-		case ChangeTypeBookFileRepoint:
-			if to, err := DecodeBookFileLocation(c.NewValue); err == nil {
+		case database.ChangeTypeBookFileRepoint:
+			if to, err := database.DecodeBookFileLocation(c.NewValue); err == nil {
 				repointedTo[to.Path] = append(repointedTo[to.Path], c.ID)
 			}
 		}

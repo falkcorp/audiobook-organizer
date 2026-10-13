@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.34.0
+// version: 1.34.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -384,7 +384,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(CheckRepairBookCreate(rbs, c))
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
-		ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow,
+		ChangeTypeBookFileMove, database.ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow,
 		ChangeTypeITunesPathClear:
 		// A journaled step whose write never happened, or one already put
 		// back, is already restored.
@@ -509,9 +509,9 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		if _, err := os.Lstat(c.OldValue); err == nil {
 			return refuse(ReasonChangedSince, "%s is occupied again", c.OldValue)
 		}
-	case ChangeTypeBookFileRepoint:
+	case database.ChangeTypeBookFileRepoint:
 		// The revert puts the row back only while it still names the path
-		// (and Missing flag) the repoint wrote (SameFileLocation).
+		// (and Missing flag) the repoint wrote (database.SameFileLocation).
 		return checkFsRegroupRowCurrent(store, c, func(f *database.BookFile) error {
 			return CheckRepointCurrent(f, c)
 		})

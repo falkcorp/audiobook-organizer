@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_surface_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f69b17c-331b-4c43-9317-c7276540fe70
 // last-edited: 2026-10-13
 
@@ -39,7 +39,7 @@ var (
 	_ func(*Writer) string                                                                                 = (*Writer).OpID
 	_ func(*Writer, string) error                                                                          = (*Writer).Recompute
 	_ func(*Writer, string, UndoEntry) error                                                               = (*Writer).RecordChange
-	_ func(*Writer, string, string, undo.BookFileLocation, undo.BookFileLocation) error                    = (*Writer).RepointBookFile
+	_ func(*Writer, string, string, database.BookFileLocation, database.BookFileLocation) error            = (*Writer).RepointBookFile
 	_ func(*Writer, string, int, *database.Author) error                                                   = (*Writer).SetPrimaryAuthor
 	_ func(*Writer, string, string, int, int) error                                                        = (*Writer).SetTrackNumber
 	_ func(*Writer, context.Context, string, string, undo.UserStateSnapshot, undo.UserStateSnapshot) error = (*Writer).SetUserState

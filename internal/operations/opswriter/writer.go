@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -19,7 +19,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -34,7 +33,7 @@ var ErrNotJournaled = errors.New("opswriter: no operation journal; the write was
 // repointDetail is a repoint intent's Planned detail.
 type repointDetail struct {
 	BookID string `json:"book_id"`
-	From   string `json:"from"` // undo.BookFileLocation JSON
+	From   string `json:"from"` // database.BookFileLocation JSON
 	To     string `json:"to"`
 }
 
@@ -338,12 +337,12 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 
 // RepointBookFile points book_file fileID of bookID at the location to, only
 // while the row still names expect's path and Missing flag
-// (undo.SameFileLocation). Nothing on disk moves and no row is deleted. The
+// (database.SameFileLocation). Nothing on disk moves and no row is deleted. The
 // write is a compare-and-set against the location read here; the history row
 // (after the write) carries the whole location before and after, plus the row
 // that held to.Path's single-owner key, in the change type the operation
-// revert reverses (undo.ChangeTypeBookFileRepoint).
-func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, expect, to undo.BookFileLocation) error {
+// revert reverses (database.ChangeTypeBookFileRepoint).
+func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, expect, to database.BookFileLocation) error {
 	if w.cfg.Files == nil {
 		return errors.New("opswriter: no book_file store")
 	}
@@ -358,8 +357,8 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 	if cur == nil {
 		return fmt.Errorf("%w: book_file %s is no longer on book %s", ops.ErrChangedSincePlan, fileID, bookID)
 	}
-	was := undo.LocationOf(cur)
-	if !undo.SameFileLocation(was, expect) {
+	was := database.BookFileLocationOf(cur)
+	if !database.SameFileLocation(was, expect) {
 		return fmt.Errorf("%w: book_file %s is at %q, not %q", ops.ErrChangedSincePlan, fileID, was.Path, expect.Path)
 	}
 	to.KeyOwnerBook, to.KeyOwnerRow = "", ""
@@ -382,7 +381,7 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 	}
 	defer w.finish(seq)
 	written, err := w.cfg.Files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
-		if undo.LocationOf(f) != was {
+		if database.BookFileLocationOf(f) != was {
 			return ops.ErrChangedSincePlan
 		}
 		to.Apply(f)
@@ -395,7 +394,7 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 		return fmt.Errorf("%w: book_file %s vanished", ops.ErrChangedSincePlan, fileID)
 	}
 	w.writes.Add(1)
-	w.journalRows(undo.ChangeTypeBookFileRepoint, []ops.HistoryRow{{BookID: bookID,
+	w.journalRows(database.ChangeTypeBookFileRepoint, []ops.HistoryRow{{BookID: bookID,
 		Field: "book_file:" + fileID, Old: was.Encode(), New: to.Encode()}})
 	return nil
 }

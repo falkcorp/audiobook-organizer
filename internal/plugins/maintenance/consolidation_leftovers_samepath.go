@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 // The same-path-twin class of the consolidation-leftovers fixer (owner
 // decision 2026-10-06, plan op 01M48JSTKZV97BK42W675089GY): a leftover whose
@@ -29,7 +29,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // leftoverPathRowsReader lists EVERY book_file row at a path. It is on
@@ -410,7 +409,7 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		}
 		state.NotMissing = append(state.NotMissing, r.ID)
 		plan.Marks = append(plan.Marks, leftoverMark{RowID: r.ID,
-			Was: undo.BookFileLocation{Path: r.FilePath, Missing: false, Hash: r.FileHash, Size: r.FileSize}})
+			Was: database.BookFileLocation{Path: r.FilePath, Missing: false, Hash: r.FileHash, Size: r.FileSize}})
 		row.Evidence = append(row.Evidence, fmt.Sprintf("%s is gone from disk", r.FilePath))
 	}
 	row.Evidence = append(row.Evidence, fmt.Sprintf("the leftover's book path %s is on disk and owned only by %s (row %s, %d bytes)",

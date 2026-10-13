@@ -1,5 +1,5 @@
 // file: pkg/ops/kinds_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d3536389-9d87-4f21-b694-6ce022e230a8
 // last-edited: 2026-10-13
 
@@ -16,7 +16,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // titleWriter is a minimal Writer over an in-memory title map.
@@ -38,7 +37,7 @@ func (w *titleWriter) ModifyBook(_ context.Context, id string, fn func(*database
 func (w *titleWriter) ModifyBookFile(context.Context, string, string, func(*database.BookFile) error) (Changed, error) {
 	return Changed{}, errors.New("unused")
 }
-func (w *titleWriter) RepointBookFile(context.Context, string, string, undo.BookFileLocation, undo.BookFileLocation) error {
+func (w *titleWriter) RepointBookFile(context.Context, string, string, database.BookFileLocation, database.BookFileLocation) error {
 	return errors.New("unused")
 }
 func (w *titleWriter) ModifyBookAuthors(context.Context, string, func([]database.BookAuthor) ([]database.BookAuthor, error)) (Changed, error) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -118,7 +118,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -588,11 +587,11 @@ type dcFold struct {
 
 // dcRepoint is one survivor row repointed at a loser's present twin.
 type dcRepoint struct {
-	Row     string                `json:"row"` // the survivor's row
-	Loser   string                `json:"loser"`
-	LoserRw string                `json:"loser_row"`
-	Was     undo.BookFileLocation `json:"was"`
-	To      undo.BookFileLocation `json:"to"`
+	Row     string                    `json:"row"` // the survivor's row
+	Loser   string                    `json:"loser"`
+	LoserRw string                    `json:"loser_row"`
+	Was     database.BookFileLocation `json:"was"`
+	To      database.BookFileLocation `json:"to"`
 }
 
 // dcPlan is a merge row's decision (Row.Detail).
@@ -1425,8 +1424,8 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 					}
 				}
 				repointed[t.ID] = true
-				was := undo.BookFileLocation{Path: t.FilePath, Missing: t.Missing, Hash: t.FileHash, Size: t.FileSize}
-				to := undo.BookFileLocation{Path: x.FilePath, Missing: false, Hash: x.FileHash, Size: x.FileSize}
+				was := database.BookFileLocation{Path: t.FilePath, Missing: t.Missing, Hash: t.FileHash, Size: t.FileSize}
+				to := database.BookFileLocation{Path: x.FilePath, Missing: false, Hash: x.FileHash, Size: x.FileSize}
 				plan.Repoints = append(plan.Repoints, dcRepoint{Row: t.ID, Loser: l, LoserRw: x.ID, Was: was, To: to})
 				fp = append(fp, "rp:"+t.ID+"|"+x.ID)
 			case already:

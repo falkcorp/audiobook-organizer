@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 package repairs
 
@@ -369,15 +369,15 @@ func (w *Writer) Journaled() int { return int(w.journaled.Load()) }
 
 // RepointBookFile points the book_file row fileID of bookID at the location
 // to, only while the row still names expect's path and Missing flag
-// (undo.SameFileLocation: a hash or size filled in since does not count as a
+// (database.SameFileLocation: a hash or size filled in since does not count as a
 // change). Nothing on disk moves. Journaled first as
-// undo.ChangeTypeBookFileRepoint with the row's whole location before and
+// database.ChangeTypeBookFileRepoint with the row's whole location before and
 // after, so the revert restores path, Missing, hash and size exactly; the
 // write is then a compare-and-set against the location journaled. The
 // journaled after-location also names the row that held to.Path's
 // single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write:
 // the revert hands the key back to that row and no other.
-func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFileLocation) error {
+func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.BookFileLocation) error {
 	if err := w.denyTagsOnly("RepointBookFile"); err != nil {
 		return err
 	}
@@ -391,8 +391,8 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFile
 	if cur == nil {
 		return fmt.Errorf("%w: book_file %s is no longer on book %s", ErrChangedSincePlan, fileID, bookID)
 	}
-	was := undo.LocationOf(cur)
-	if !undo.SameFileLocation(was, expect) {
+	was := database.BookFileLocationOf(cur)
+	if !database.SameFileLocation(was, expect) {
 		return fmt.Errorf("%w: book_file %s is at %q, not %q", ErrChangedSincePlan, fileID, was.Path, expect.Path)
 	}
 	to.KeyOwnerBook, to.KeyOwnerRow = "", ""
@@ -403,9 +403,9 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFile
 	if owner != nil && owner.ID != fileID {
 		to.KeyOwnerBook, to.KeyOwnerRow = owner.BookID, owner.ID
 	}
-	return w.Step(bookID, undo.ChangeTypeBookFileRepoint, "book_file:"+fileID, was.Encode(), to.Encode(), func() error {
+	return w.Step(bookID, database.ChangeTypeBookFileRepoint, "book_file:"+fileID, was.Encode(), to.Encode(), func() error {
 		written, err := w.files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
-			if undo.LocationOf(f) != was {
+			if database.BookFileLocationOf(f) != was {
 				return ErrChangedSincePlan
 			}
 			to.Apply(f)

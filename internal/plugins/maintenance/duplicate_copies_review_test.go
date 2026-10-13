@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -18,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // The #3645 adversarial review's proving cases, each turned into the
@@ -591,11 +590,11 @@ func repointAndRevert(t *testing.T, d *dcFixture, xBook, xRow, path string, lega
 	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-rp")
 	cur, err := d.s.GetBookFileByID(xBook, xRow)
 	require.NoError(t, err)
-	was := undo.LocationOf(cur)
-	to := undo.BookFileLocation{Path: path, Hash: "k", Size: 500}
+	was := database.BookFileLocationOf(cur)
+	to := database.BookFileLocation{Path: path, Hash: "k", Size: 500}
 	if legacy {
 		// A repoint journaled before the key owner was recorded.
-		require.NoError(t, w.Step(xBook, undo.ChangeTypeBookFileRepoint, "book_file:"+xRow, was.Encode(), to.Encode(), func() error {
+		require.NoError(t, w.Step(xBook, database.ChangeTypeBookFileRepoint, "book_file:"+xRow, was.Encode(), to.Encode(), func() error {
 			_, err := d.s.ModifyBookFile(xBook, xRow, func(f *database.BookFile) error { to.Apply(f); return nil })
 			return err
 		}))
@@ -649,7 +648,7 @@ func TestRevertRepoint_UnclaimedOwnerFallsThroughToTheNextRow(t *testing.T) {
 	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-rp")
 	cur, err := d.s.GetBookFileByID(xBook, xRow)
 	require.NoError(t, err)
-	require.NoError(t, w.RepointBookFile(xBook, xRow, undo.LocationOf(cur), undo.BookFileLocation{Path: path, Hash: "k", Size: 500}))
+	require.NoError(t, w.RepointBookFile(xBook, xRow, database.BookFileLocationOf(cur), database.BookFileLocation{Path: path, Hash: "k", Size: 500}))
 	_, err = audiobooks.NewRevertService(dcClaimRefuses{PebbleStore: d.s, row: aRow}).RevertOperation("op-rp")
 	require.NoError(t, err)
 	got, err := d.s.GetBookFileByPath(path)

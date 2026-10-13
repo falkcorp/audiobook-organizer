@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -24,7 +24,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -250,7 +249,7 @@ func (w *memTitles) ModifyBook(_ context.Context, id string, fn func(*database.B
 func (w *memTitles) ModifyBookFile(context.Context, string, string, func(*database.BookFile) error) (ops.Changed, error) {
 	return ops.Changed{}, errors.New("unused")
 }
-func (w *memTitles) RepointBookFile(context.Context, string, string, undo.BookFileLocation, undo.BookFileLocation) error {
+func (w *memTitles) RepointBookFile(context.Context, string, string, database.BookFileLocation, database.BookFileLocation) error {
 	return errors.New("unused")
 }
 func (w *memTitles) ModifyBookAuthors(context.Context, string, func([]database.BookAuthor) ([]database.BookAuthor, error)) (ops.Changed, error) {

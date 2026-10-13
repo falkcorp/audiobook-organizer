@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-13
 
@@ -494,8 +494,8 @@ func TestFragmentFixer_ResumesAPartiallyAppliedRow(t *testing.T) {
 	w := f.fragWriter(t, "op-cut")
 	was := *f.fileRow(t, "parent", "p03")
 	frag := f.fileRow(t, "fragF", "f03")
-	require.NoError(t, w.RepointBookFile(f.ids["parent"], was.ID, undo.LocationOf(&was),
-		undo.BookFileLocation{Path: frag.FilePath, Hash: frag.FileHash, Size: frag.FileSize}))
+	require.NoError(t, w.RepointBookFile(f.ids["parent"], was.ID, database.BookFileLocationOf(&was),
+		database.BookFileLocation{Path: frag.FilePath, Hash: frag.FileHash, Size: frag.FileSize}))
 
 	out := f.apply(t, "op-plan", "op-apply", []string{movedID}, nil)
 	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
@@ -503,7 +503,7 @@ func TestFragmentFixer_ResumesAPartiallyAppliedRow(t *testing.T) {
 	changes, err := f.s.GetOperationChanges("op-apply")
 	require.NoError(t, err)
 	for _, c := range changes {
-		require.NotEqual(t, undo.ChangeTypeBookFileRepoint, c.ChangeType, "the finished repoint is not written twice")
+		require.NotEqual(t, database.ChangeTypeBookFileRepoint, c.ChangeType, "the finished repoint is not written twice")
 	}
 }
 
