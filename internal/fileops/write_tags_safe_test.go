@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c5d6e7f8-a9b0-1c2d-3e4f-5a6b7c8d9e0f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package fileops
 
@@ -325,7 +325,7 @@ func TestKeepBackup_SameSecondDoesNotOverwrite(t *testing.T) {
 
 // The backup is a hardlink to the pre-write inode (no data copied to take
 // it), and taking it changes nothing about that inode: its mtime stays the
-// audio's. The sweeps age a backup by the time in its name (BackupTime), so
+// audio's. The sweeps age a backup by the time in its name (BackupNameTime), so
 // the name must carry the write time.
 func TestWriteTagsSafe_KeepBackupIsHardlinkNamedNow(t *testing.T) {
 	dir := t.TempDir()
@@ -360,9 +360,9 @@ func TestWriteTagsSafe_KeepBackupIsHardlinkNamedNow(t *testing.T) {
 	if !bak.ModTime().Equal(before.ModTime()) {
 		t.Errorf("backup mtime = %v, want the original's %v: taking a backup must not touch the inode", bak.ModTime(), before.ModTime())
 	}
-	taken := BackupTime(filepath.Base(baks[0]), bak.ModTime())
-	if taken.Before(start.Add(-2*time.Second)) || taken.After(time.Now().Add(2*time.Second)) {
-		t.Errorf("BackupTime(%s) = %v, want about now (%v): the sweep would age it from the audio's old mtime", baks[0], taken, start)
+	taken, named := BackupNameTime(filepath.Base(baks[0]))
+	if !named || taken.Before(start.Add(-2*time.Second)) || taken.After(time.Now().Add(2*time.Second)) {
+		t.Errorf("BackupNameTime(%s) = %v, %v, want about now (%v): the sweep would age it from the audio's old mtime", baks[0], taken, named, start)
 	}
 	now, err := os.Stat(path)
 	if err != nil {
@@ -483,15 +483,18 @@ func TestBackupNameTime(t *testing.T) {
 		{"book.m4b.bak-notatime", time.Time{}, false},
 		{"book.m4b.bak-20250304-050607.tmp", time.Time{}, false},
 		{"book.m4b", time.Time{}, false},
+		{".bak-" + strconv.FormatInt(unix.Unix(), 10), time.Time{}, false},                  // nothing before the infix
+		{"book.bak-notes.m4b", time.Time{}, false},                                          // a book that merely contains the infix
+		{"book.m4b.bak-20251399-250000", time.Time{}, false},                                // legacy shape, impossible date
+		{"book.m4b.bak-" + strconv.FormatInt(unix.Unix(), 10) + ".m4b", time.Time{}, false}, // stamp not at the end
 	} {
 		got, ok := backupNameTime(tc.name, now)
 		if ok != tc.ok || (ok && !got.Equal(tc.want)) {
 			t.Errorf("backupNameTime(%q) = %v, %v; want %v, %v", tc.name, got, ok, tc.want, tc.ok)
 		}
 	}
-	mtime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
-	if got := BackupTime("book.m4b.bak-notatime", mtime); !got.Equal(mtime) {
-		t.Errorf("BackupTime fallback = %v, want the mtime %v", got, mtime)
+	if got, ok := BackupNameTime("book.m4b.bak-notatime"); ok {
+		t.Errorf("BackupNameTime of an unrecognised name = %v, true; want false (no mtime fallback)", got)
 	}
 }
 

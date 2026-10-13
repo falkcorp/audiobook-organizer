@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-10-13
 
@@ -74,9 +74,9 @@ type WriteTagsSafeOptions struct {
 	//
 	// AGE CONTRACT. The backup-cleanup sweep (maintenance.cleanup-old-backups,
 	// which scheduler.cleanup-old-backups resolves to) ages a .bak-* file by the
-	// time in its NAME (BackupTime), not by its mtime: a hardlinked backup keeps
+	// time in its NAME (BackupNameTime), not by its mtime: a hardlinked backup keeps
 	// the original's mtime, which can be years old. Changing the name format here
-	// means changing BackupTime with it. The sweep walks RootDir only, so a
+	// means changing BackupNameTime with it. The sweep walks RootDir only, so a
 	// backup beside a file outside the library root is never collected.
 	KeepBackup bool
 }
@@ -109,28 +109,31 @@ var (
 	legacyBackupSuffix = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}$`)
 	backupSuffix       = regexp.MustCompile(`^([0-9]+)(?:-[0-9]+)?$`)
 	// earliestBackupTime rejects a parsed time no backup can carry, so an
-	// unrelated ".bak-1" name falls back to its mtime instead of reading as
+	// unrelated ".bak-1" name is not a backup at all instead of reading as
 	// 1970 and being deleted at once.
 	earliestBackupTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 )
 
-// BackupTime returns when the .bak-* file called name was taken: the time in
-// its name (<unix>[-N], or the legacy YYYYMMDD-HHMMSS in local time), else
-// modTime. A name time before 2000 or in the future also falls back to
-// modTime. The backup sweeps age files by this (see KeepBackup, AGE
-// CONTRACT): a hardlinked backup's mtime is the original audio's, so mtime
-// alone would delete a fresh backup of an old file on the next sweep.
-func BackupTime(name string, modTime time.Time) time.Time {
-	if t, ok := backupNameTime(name, time.Now()); ok {
-		return t
-	}
-	return modTime
+// BackupNameTime reports whether name is a backup this package (or its retired
+// predecessor) wrote, and when it was taken. The two recognised names are
+// <file>.bak-<unix>[-N] (keepBackup) and the legacy <file>.bak-YYYYMMDD-HHMMSS
+// in local time (the retired write_backup_before switch). Every other name,
+// including one that merely contains ".bak-", a name with nothing before the
+// infix, a time before 2000 and a time in the future, reports false, and the
+// backup sweep must then leave the file alone: the match is on the whole name,
+// so a book called "x.bak-notes.m4b" is never mistaken for a backup however
+// old its mtime. There is no mtime fallback: both recognised names carry
+// their time, and a hardlinked backup's mtime is the original audio's (see
+// KeepBackup, AGE CONTRACT), so ageing by mtime would delete a fresh backup of
+// an old file.
+func BackupNameTime(name string) (time.Time, bool) {
+	return backupNameTime(name, time.Now())
 }
 
 // backupNameTime parses the timestamp after the last ".bak-" in name.
 func backupNameTime(name string, now time.Time) (time.Time, bool) {
 	i := strings.LastIndex(name, backupInfix)
-	if i < 0 {
+	if i <= 0 {
 		return time.Time{}, false
 	}
 	suffix := name[i+len(backupInfix):]
