@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-13
 
@@ -24,10 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -36,14 +34,11 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	"github.com/gin-gonic/gin"
 )
 
 // ExtraOpsDeps holds the typed dependencies needed by ExtraOpsRegistrar.
 // All fields are optional (nil-safe) to match the server's lazy-init pattern.
 type ExtraOpsDeps struct {
-	ActivityWriter       *activity.Writer
-	DedupCache           *cache.Cache[gin.H]
 	DedupEngine          *dedup.Engine
 	MetadataFetchService *metafetch.Service
 	// ScanStandDown is the scan stand-down gate the metadata upgrade op
@@ -52,29 +47,15 @@ type ExtraOpsDeps struct {
 	ScanStandDown opsregistry.ScanStandDownGate
 }
 
-// ExtraOpsStore is everything the remaining scheduler OperationDefs need from
-// the store: metabatch.Store, which the metadata upgrade forwards into its
-// service. Was database.Store (398 methods) until 2026-08-19;
-// versions.TrashedVersionCleaner and the db-optimize/tombstone methods left
-// with scheduler.trash-cleanup, scheduler.db-optimize and
-// scheduler.tombstone-cleanup on 2026-10-10, GetAllBooksCore left with
-// scheduler.metadata-refresh on 2026-10-11 (04-P4c), GetAuthorByID and
-// GetBooksByAuthorIDWithRoleCore left with scheduler.resolve-production-authors
-// the same day (04-P4d), and the author, author-link and ModifyBook methods
-// left with scheduler.author-split-scan on 2026-10-13 (04-P4e).
-type ExtraOpsStore interface {
-	metabatch.Store // NewMetadataUpgradeService
-}
-
 // ExtraOpsRegistrar holds a Store reference and typed Deps so the 3 scheduler
 // OperationDefs can be registered without a *Server pointer.
 type ExtraOpsRegistrar struct {
 	Deps  ExtraOpsDeps
-	Store ExtraOpsStore
+	Store metabatch.Store
 }
 
 // NewExtraOpsRegistrar constructs an ExtraOpsRegistrar.
-func NewExtraOpsRegistrar(store ExtraOpsStore, deps ExtraOpsDeps) *ExtraOpsRegistrar {
+func NewExtraOpsRegistrar(store metabatch.Store, deps ExtraOpsDeps) *ExtraOpsRegistrar {
 	return &ExtraOpsRegistrar{Store: store, Deps: deps}
 }
 

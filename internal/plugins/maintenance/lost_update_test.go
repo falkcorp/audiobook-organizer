@@ -166,7 +166,7 @@ func TestAuthorSplit_DoesNotRevertConcurrentColumns(t *testing.T) {
 	)
 	store, rows := newLostUpdateStore(nil, database.Book{
 		ID:       "bk1",
-		Title:    "The Left Hand of Darkness",
+		Title:    "Split Scan Fixture Title",
 		AuthorID: new(compositeID),
 		Author:   &database.Author{ID: compositeID, Name: "Alice Smith / Bob Jones"},
 	})
@@ -187,7 +187,7 @@ func TestAuthorSplit_DoesNotRevertConcurrentColumns(t *testing.T) {
 		if authorID != compositeID {
 			return nil, nil
 		}
-		return []database.BookCore{{ID: "bk1", Title: "The Left Hand of Darkness", AuthorID: new(compositeID)}}, nil
+		return []database.BookCore{{ID: "bk1", Title: "Split Scan Fixture Title", AuthorID: new(compositeID)}}, nil
 	}
 	store.DeleteAuthorFunc = func(_ int) error { return nil }
 	junction := map[string][]database.BookAuthor{}
