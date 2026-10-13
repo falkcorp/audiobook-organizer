@@ -643,14 +643,45 @@ describe('leaving the lane or unmounting', () => {
     expect(result.current.focusedKey).toBe('1');
 
     rerender({ active: false });
+    // Navigation and help are state the lane keeps; none of it may move while
+    // another lane is showing. (A merge key could not reach the server anyway --
+    // a write queued from an inactive lane is dropped -- so the observable proof
+    // that the listener is gone is the state it would have changed.)
     act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '?' }));
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
     });
-    // A merge starts on a later tick (it waits its turn in the queue); flush
-    // before asserting, or this passes whether or not the key did anything.
     await act(async () => {});
+    expect(result.current.focusedKey).toBe('1');
+    expect(result.current.helpOpen).toBe(false);
     expect(api.mergeAuthors).not.toHaveBeenCalled();
     expect(result.current.pendingKeys.size).toBe(0);
+  });
+
+  it('a merge whose narrator step was in flight when the lane was left never sends the merge', async () => {
+    serve([GROUP_A()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    const reclassify = deferred<{ narrator_id: number; books_updated: number }>();
+    vi.mocked(api.reclassifyAuthorAsNarrator).mockReturnValue(reclassify.promise);
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'toggleRole',
+        canonicalId: asAuthorId(1),
+        target: { kind: 'variant', id: asAuthorId(101) },
+      })
+    );
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(api.reclassifyAuthorAsNarrator).toHaveBeenCalledTimes(1));
+
+    rerender({ active: false });
+    await act(async () => reclassify.resolve({ narrator_id: 1, books_updated: 1 }));
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
   });
 
   it('m merges the focused group and ? toggles the help', async () => {
