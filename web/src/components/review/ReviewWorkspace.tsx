@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.20.0
+// version: 1.21.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -34,7 +34,7 @@
 // old surfaces, which is gated on docs/port-inventory.md.
 
 import { useCallback, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
   AlertTitle,
@@ -64,6 +64,7 @@ import { coverFullSizeUrl } from '../../utils/coverUrl';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import { normalizeViewMode, type SpineViewMode } from './spine/viewMode';
 import { DupesPanel } from './DupesPanel';
+import { parseDupesSubView, type DupesSubView } from './lanes/useDupesLabels';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
 import { MetadataPanel } from './MetadataPanel';
@@ -175,9 +176,14 @@ function initialLaneFrom(params: URLSearchParams): ReviewLane {
 export function ReviewWorkspace() {
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   // Seeded from the URL, not synced to it -- see the note at the top of the file.
   const [lane, setLane] = useState<ReviewLane>(() => initialLaneFrom(searchParams));
+  // The dupes lane's sub-view (Queue | Labels | Suspicious), seeded once from
+  // `?view=labels|suspicious` when the URL lands on the dupes lane and never
+  // written back -- same rule as `lane` above. "Manage labels" sets it.
+  const [dupesSubView, setDupesSubView] = useState<DupesSubView>(() =>
+    initialLaneFrom(searchParams) === 'dupes' ? parseDupesSubView(searchParams.get('view')) : 'queue',
+  );
   const [viewMode, setViewMode] = useState<SpineViewMode>('compact');
 
   const metadata = useMetadataLane(toast, lane === 'metadata');
@@ -199,7 +205,15 @@ export function ReviewWorkspace() {
   );
   // The third view position is the dupes lane's Clusters view; the lane makes
   // its two extra fetches only while that is showing.
-  const dupes = useDupesLane(toast, lane === 'dupes', dupesUrlFilters, viewMode === 'candidates');
+  // Active on the Queue sub-view only: Labels and Suspicious are not the pair
+  // list, and the lane's keyboard shortcuts must not act on pairs that are not
+  // on screen.
+  const dupes = useDupesLane(
+    toast,
+    lane === 'dupes' && dupesSubView === 'queue',
+    dupesUrlFilters,
+    viewMode === 'candidates',
+  );
   // Expansion is a view concern and the two lanes key it on different id types,
   // so it is not shared state.
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);
@@ -428,9 +442,10 @@ export function ReviewWorkspace() {
                 description:
                   'Opens your past "duplicate / not a duplicate" decisions, which are used to check and tune the scoring.',
                 run: () => {
-                  // Router navigation: a full page load would kill a
-                  // one-button run in progress.
-                  navigate('/dedup/labels');
+                  // A sub-view of the Duplicates lane, not a page: nothing
+                  // navigates, so a one-button run in progress is not disturbed.
+                  setLane('dupes');
+                  setDupesSubView('labels');
                 },
               },
             ],
@@ -635,7 +650,8 @@ export function ReviewWorkspace() {
       metadata.bulkApplyMode,
       dedupPipeline.busy,
       dedupPipeline.request,
-      navigate,
+      setLane,
+      setDupesSubView,
       toast,
       lane,
       exportDupes,
@@ -676,7 +692,7 @@ export function ReviewWorkspace() {
 
         {/* Hidden on lanes that ignore it (regroup, and any unported lane):
             three buttons that do nothing read as broken. */}
-        {lane !== 'regroup' && !unported && (
+        {lane !== 'regroup' && !unported && !(lane === 'dupes' && dupesSubView !== 'queue') && (
           <ToggleButtonGroup
             size="small"
             exclusive
@@ -716,6 +732,8 @@ export function ReviewWorkspace() {
           viewMode={viewMode}
           expandedId={dupesExpandedId}
           onToggleExpand={toggleDupesExpanded}
+          subView={dupesSubView}
+          onSubViewChange={setDupesSubView}
         />
       ) : unported ? (
         <Box sx={{ p: 3 }} data-testid={`lane-unported-${lane}`}>

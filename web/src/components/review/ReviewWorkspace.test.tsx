@@ -1,12 +1,12 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.20.1
+// version: 1.21.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
@@ -1106,5 +1106,142 @@ describe('duplicate export', () => {
     expect(p.get('both_unmatched')).toBe('true');
     // The lane opens on Pending; the export must carry the status it shows.
     expect(p.get('status')).toBe('pending');
+  });
+});
+
+describe('the dupes lane sub-views (Queue | Labels | Suspicious)', () => {
+  // The Labels and Suspicious views fetch through apiFetch (global fetch), not
+  // the mocked api module, so they get a stub of their own.
+  function stubLabelsApi() {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.includes('/dedup/labels/stats')
+        ? { total: 1, by_label: { unsure: 1 }, by_source: { rule: 1 } }
+        : url.includes('/dedup/labels')
+          ? {
+              labels: [
+                {
+                  candidate_id: 42,
+                  entity_a_id: 'BOOKA',
+                  entity_b_id: 'BOOKB',
+                  layer: 'exact',
+                  label: 'unsure',
+                  label_source: 'rule',
+                  a: { title: 'Book One' },
+                  b: { title: 'Book One (CD)' },
+                },
+              ],
+              total: 1,
+            }
+          : {};
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data }) });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  function LocationProbe() {
+    const loc = useLocation();
+    return <span data-testid="location">{loc.pathname + loc.search}</span>;
+  }
+
+  function renderWithLocation(entry: string) {
+    return render(
+      <MemoryRouter initialEntries={[entry]}>
+        <ToastProvider>
+          <ReviewWorkspace />
+          <LocationProbe />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+  }
+
+  // By test id: the command bar also has a menu called "Queue".
+  const subView = (name: 'queue' | 'labels' | 'suspicious') =>
+    screen.getByTestId(`dupes-subview-${name}`);
+  const isSelected = (name: 'queue' | 'labels' | 'suspicious') =>
+    expect(subView(name)).toHaveAttribute('aria-pressed', 'true');
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens on Queue by default, with the three-way control', async () => {
+    stubLabelsApi();
+    renderWithLocation('/review?lane=dupes');
+
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    isSelected('queue');
+    expect(subView('labels')).toHaveTextContent('Labels');
+    expect(subView('suspicious')).toHaveTextContent('Suspicious');
+  });
+
+  it('?view=labels seeds Labels, and clicking Queue leaves the URL alone', async () => {
+    const user = userEvent.setup();
+    stubLabelsApi();
+    renderWithLocation('/review?lane=dupes&view=labels');
+
+    expect(await screen.findByTestId('dupes-labels-view')).toBeInTheDocument();
+    isSelected('labels');
+    expect(await screen.findByText('Book One')).toBeInTheDocument();
+
+    await user.click(subView('queue'));
+
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=dupes&view=labels');
+  });
+
+  it('ignores ?view= when the URL does not land on the dupes lane', async () => {
+    stubLabelsApi();
+    renderWithLocation('/review?lane=regroup&view=labels');
+    expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('dupes-labels-view')).not.toBeInTheDocument();
+  });
+
+  it('hides the comparison-layout toggle off the Queue and brings it back', async () => {
+    const user = userEvent.setup();
+    stubLabelsApi();
+    renderWithLocation('/review?lane=dupes&view=labels');
+    await screen.findByTestId('dupes-labels-view');
+    expect(screen.queryByRole('group', { name: 'Comparison layout' })).not.toBeInTheDocument();
+
+    await user.click(subView('queue'));
+
+    expect(await screen.findByRole('group', { name: 'Comparison layout' })).toBeInTheDocument();
+  });
+
+  it('Manage labels switches to the Labels view without navigating', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    const fetchMock = stubLabelsApi();
+    renderWithLocation('/review?lane=dupes');
+    await screen.findByTestId('dupes-rail');
+    isSelected('queue');
+
+    await user.click(screen.getByTestId('command-menu-dedup'));
+    await user.click(await screen.findByTestId('command-manage-labels'));
+
+    expect(await screen.findByTestId('dupes-labels-view')).toBeInTheDocument();
+    isSelected('labels');
+    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=dupes');
+    expect(screen.getByTestId('location')).not.toHaveTextContent('/dedup/labels');
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/dedup/labels?'))).toBe(true)
+    );
+  });
+
+  it('Manage labels works from another lane too', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    stubLabelsApi();
+    renderWithLocation('/review?lane=regroup');
+    await screen.findByTestId('regroup-rail');
+
+    await user.click(screen.getByTestId('command-menu-dedup'));
+    await user.click(await screen.findByTestId('command-manage-labels'));
+
+    expect(await screen.findByTestId('dupes-labels-view')).toBeInTheDocument();
+    expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=regroup');
   });
 });

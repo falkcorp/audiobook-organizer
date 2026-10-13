@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 //
 // Select-page, "Select all N matching" across pages, and shift-range selection
 // on the dedup review lane (owner request 2026-10-06), through the lane hook
@@ -200,7 +200,14 @@ describe('useDupesLane selection', () => {
 function Harness({ layer = null }: { layer?: DedupLayer | null }) {
   const dupes = useDupesLane(toast, true, { band: null, entityId: null, layer });
   return (
-    <DupesPanel dupes={dupes} viewMode="compact" expandedId={null} onToggleExpand={() => {}} />
+    <DupesPanel
+      dupes={dupes}
+      viewMode="compact"
+      expandedId={null}
+      onToggleExpand={() => {}}
+      subView="queue"
+      onSubViewChange={() => {}}
+    />
   );
 }
 
