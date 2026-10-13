@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -28,8 +28,8 @@
 //      that offers undo uniformly would promise something it cannot deliver, so
 //      reversibility is declared per action rather than assumed.
 
-/** The four review lanes. */
-export type ReviewLane = 'dupes' | 'metadata' | 'regroup' | 'repairs';
+/** The five review lanes. */
+export type ReviewLane = 'dupes' | 'metadata' | 'regroup' | 'repairs' | 'authors';
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -150,7 +150,61 @@ export type RepairsAction =
       fragments: number;
     };
 
-export type ReviewAction = DupesAction | MetadataAction | RegroupAction | RepairsAction;
+/**
+ * Authors & series lane. Ids are numeric author ids (and, once the Series
+ * sub-view lands, numeric series ids).
+ *
+ * BOTH id spaces are plain numbers on the wire, which is exactly why a series
+ * id could be handed to `mergeAuthors(keepId, mergeIds)` and merge the wrong
+ * kind of row without a compile error or a runtime one. Two things stop that:
+ *
+ *   - every action names its `entity`, so the dispatcher switches on it before
+ *     it chooses an endpoint, and
+ *   - the ids are branded (`AuthorId`, `SeriesId`), so a `SeriesId` is not
+ *     assignable where an `AuthorId` is required. The brand is applied once, at
+ *     the edge where a server response becomes a group (`asAuthorId`).
+ *
+ * This PR uses `entity: 'author'` only; the Series sub-view adds the `series`
+ * members of the union without touching these.
+ *
+ * `mergeGroup` and `toggleRole`/`excludeVariant` name a group by its canonical
+ * id and carry nothing else: which variants are excluded, and which are flagged
+ * as narrators, is state the lane holds and reads when the action RUNS, so an
+ * action queued behind another can never merge a stale snapshot of the choices.
+ *
+ * `mergeAllGroups` carries the count the reviewer confirmed; the lane refuses
+ * to run if the mergeable set has moved since (the client-side counterpart of
+ * the server's FILTER_CHANGED guard).
+ */
+export type AuthorId = number & { readonly __entity: 'author' };
+export type SeriesId = number & { readonly __entity: 'series' };
+
+/** Brands a server-supplied author id. The one place a plain number becomes an AuthorId. */
+export function asAuthorId(n: number): AuthorId {
+  return n as AuthorId;
+}
+
+/** What `toggleRole` flips: a variant's author/narrator flag, or one name of a composite. */
+export type RoleTarget = { kind: 'variant'; id: AuthorId } | { kind: 'split'; name: string };
+
+export type AuthorEntityAction =
+  | { lane: 'authors'; entity: 'author'; type: 'mergeGroup'; canonicalId: AuthorId }
+  | { lane: 'authors'; entity: 'author'; type: 'mergeSelected'; ids: AuthorId[] }
+  | { lane: 'authors'; entity: 'author'; type: 'mergeAllGroups'; expectedTotal: number }
+  | { lane: 'authors'; entity: 'author'; type: 'renameCanonical'; canonicalId: AuthorId; name: string }
+  | { lane: 'authors'; entity: 'author'; type: 'splitComposite'; canonicalId: AuthorId }
+  | { lane: 'authors'; entity: 'author'; type: 'resolveProduction'; canonicalId: AuthorId }
+  | { lane: 'authors'; entity: 'author'; type: 'toggleRole'; canonicalId: AuthorId; target: RoleTarget }
+  | { lane: 'authors'; entity: 'author'; type: 'excludeVariant'; canonicalId: AuthorId; variantId: AuthorId };
+
+export type AuthorsAction = AuthorEntityAction;
+
+export type ReviewAction =
+  | DupesAction
+  | MetadataAction
+  | RegroupAction
+  | RepairsAction
+  | AuthorsAction;
 
 /** Narrow a ReviewAction to one lane's actions. */
 export type ActionForLane<L extends ReviewLane> = Extract<ReviewAction, { lane: L }>;
@@ -205,8 +259,11 @@ export function isReversible(action: ReviewAction): boolean {
  */
 export function needsConfirmation(action: ReviewAction): boolean {
   switch (action.type) {
-    case 'merge':
     case 'mergeSelected':
+      // The authors lane's own dispatch confirms (see below); the dupes lane's
+      // goes through the ActionBar.
+      return action.lane !== 'authors';
+    case 'merge':
     case 'mergeAllFiltered':
     case 'keepAAllFiltered':
     case 'keepBAllFiltered':
@@ -218,6 +275,11 @@ export function needsConfirmation(action: ReviewAction): boolean {
       return action.ids.length > 1;
     case 'bulk':
       return true;
+    // The authors lane confirms inside its own dispatch (a selection wider
+    // than the page, and Merge All), like the repairs applies below, so the
+    // entry points -- button, keyboard, a future command -- ask exactly once.
+    case 'mergeAllGroups':
+      return false;
     // The repairs applies DO confirm, but inside the lane's own dispatch (like
     // the metadata lane's Replace mode), so every entry point asks exactly once.
     // Returning true here would stack an ActionBar dialog on top of that one.
@@ -244,6 +306,9 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'mergeSelected':
     case 'dismissSelected':
       return action.ids.length;
+    case 'mergeAllGroups':
+      // The count the reviewer confirmed, carried by the action itself.
+      return action.expectedTotal;
     case 'linkCluster':
       return action.ids.length;
     case 'rejectCluster':

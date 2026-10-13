@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.22.0
+// version: 1.23.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-13
 //
@@ -67,12 +67,14 @@ import { DupesPanel } from './DupesPanel';
 import { parseDupesSubView, useDupesLabels, type DupesSubView } from './lanes/useDupesLabels';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
+import { AuthorsPanel } from './AuthorsPanel';
 import { MetadataPanel } from './MetadataPanel';
 import { ReplaceConfirmDialog } from './ReplaceConfirmDialog';
 import { parseDedupLayer, useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
 import { useRepairsLane } from './lanes/useRepairsLane';
+import { useAuthorsLane } from './lanes/useAuthorsLane';
 import { useDedupPipeline } from './useDedupPipeline';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
@@ -241,6 +243,14 @@ export function ReviewWorkspace() {
   const regroup = useRegroupLane(toast, lane === 'regroup');
   // Gated like the others: no fixer list, rows or trial polls unless visible.
   const repairs = useRepairsLane(toast, lane === 'repairs');
+  // Authors & series: fetches only while visible, like the others. `?author=` is
+  // a seed (focus that author's group on the first load), read here so the hook
+  // has it on its first render, and never written back.
+  const authorsUrlFilters = useMemo(
+    () => ({ authorId: searchParams.get('author') }),
+    [searchParams],
+  );
+  const authors = useAuthorsLane(toast, lane === 'authors', authorsUrlFilters);
 
   // From the lane, which counts them from its rows (index mode) or the
   // server's facets (page mode, where it holds only the current page).
@@ -705,9 +715,12 @@ export function ReviewWorkspace() {
 
         <CommandBar menus={menus} />
 
-        {/* Hidden on lanes that ignore it (regroup, and any unported lane):
+        {/* Hidden on lanes that ignore it (regroup, authors, and any unported lane):
             three buttons that do nothing read as broken. */}
-        {lane !== 'regroup' && !unported && !(lane === 'dupes' && dupesSubView !== 'queue') && (
+        {lane !== 'regroup' &&
+          lane !== 'authors' &&
+          !unported &&
+          !(lane === 'dupes' && dupesSubView !== 'queue') && (
           <ToggleButtonGroup
             size="small"
             exclusive
@@ -739,6 +752,8 @@ export function ReviewWorkspace() {
           metadata, so a lane missing here would silently show metadata. */}
       {lane === 'repairs' ? (
         <RepairsPanel repairs={repairs} viewMode={viewMode} />
+      ) : lane === 'authors' ? (
+        <AuthorsPanel authors={authors} />
       ) : lane === 'regroup' ? (
         <RegroupPanel regroup={regroup} />
       ) : lane === 'dupes' ? (
