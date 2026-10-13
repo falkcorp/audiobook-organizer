@@ -1,5 +1,5 @@
 // file: internal/server/series_ops_partial_failure_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d8a2f37-c1e9-4b64-a0f3-7e29b6d41c85
 // last-edited: 2026-10-13
 
@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 
 // These pin what the two series write ops REPORT when they leave series behind.
@@ -156,13 +157,14 @@ type seriesDedupOpReporter struct{ seriesMergeOpReporter }
 
 func (r *seriesDedupOpReporter) OpID() string { return "op-series-dedup-test" }
 
-func runSeriesDedupOp(t *testing.T, s *Server, params string) error {
+func runSeriesDedupOp(t *testing.T, s *Server, params string) (*seriesDedupOpReporter, error) {
 	t.Helper()
 	reg := seriesMergeOpTestReg(t)
 	require.NoError(t, s.RegisterSeriesDedupOp(reg))
 	def, ok := reg.Def("dedup.series-dedup")
 	require.True(t, ok)
-	return def.Run(context.Background(), []byte(params), &seriesDedupOpReporter{})
+	rep := &seriesDedupOpReporter{}
+	return rep, def.Run(context.Background(), []byte(params), rep)
 }
 
 func TestSeriesDedupOp_ApplyThatKeepsASeriesFailsAndNamesIt(t *testing.T) {
@@ -170,9 +172,13 @@ func TestSeriesDedupOp_ApplyThatKeepsASeriesFailsAndNamesIt(t *testing.T) {
 	s := newSeriesMergeOpServer(t, store)
 	s.dedupCache.Set("series-duplicates", map[string]any{"groups": []any{}})
 
-	err := runSeriesDedupOp(t, s, `{"dry_run":false}`)
+	rep, err := runSeriesDedupOp(t, s, `{"dry_run":false}`)
 
 	require.Error(t, err, "an apply that kept a duplicate series must not report success")
+	// The digest must reach op_errors_v2, which the db reporter fills only from
+	// error-level entries: at warn the failed run showed zero errors.
+	require.Len(t, rep.errorLevelLogs(), 1)
+	assert.Contains(t, rep.errorLevelLogs()[0], "refusing to delete series 2")
 	assert.Contains(t, err.Error(), SeriesDedupFailedIDsPrefix+"2]")
 	assert.NotContains(t, err.Error(), "4]", "the other group merged cleanly")
 	assert.NotEmpty(t, *deleted, "the clean group was still merged: a partial failure does not undo the rest")
@@ -185,13 +191,32 @@ func TestSeriesDedupOp_CleanApplySucceeds(t *testing.T) {
 		{id: 3, name: "Beta", visible: []database.BookCore{book("BOOK_B")}, refCount: 1},
 		{id: 4, name: "beta", visible: []database.BookCore{book("BOOK_C")}, refCount: 1},
 	})
-	require.NoError(t, runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), `{"dry_run":false}`))
+	rep, err := runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), `{"dry_run":false}`)
+	require.NoError(t, err)
+	assert.Empty(t, rep.errorLevelLogs())
 }
 
 // A preview deletes nothing, so nothing is "left behind": it keeps returning nil
 // even when it predicts a refusal (the refusal text is in the result).
 func TestSeriesDedupOp_PreviewDoesNotFail(t *testing.T) {
 	store, deleted := newSeriesDedupFixture()
-	require.NoError(t, runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), `{}`))
+	rep, err := runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), `{}`)
+	require.NoError(t, err)
 	assert.Empty(t, *deleted)
+	// The preview predicts a refusal; that prediction is a warning, not an error
+	// the operation's error table should hold.
+	assert.Empty(t, rep.errorLevelLogs())
+}
+
+func TestSeriesDedupActivityMessage(t *testing.T) {
+	merged := dedup.SeriesDedupResult{TotalMerged: 3, TotalBooksReassigned: 7}
+	kept := dedup.SeriesDedupResult{TotalMerged: 3, TotalBooksReassigned: 7, LeftIDs: []int{9}, Errors: []string{"x", "y"}}
+
+	assert.Equal(t, "Series deduplication completed: merged 3 series, reassigned 7 books",
+		seriesDedupActivityMessage(merged, false))
+	assert.Contains(t, seriesDedupActivityMessage(merged, true), "PREVIEW")
+	incomplete := seriesDedupActivityMessage(kept, false)
+	assert.Contains(t, incomplete, "INCOMPLETE")
+	assert.Contains(t, incomplete, "kept 1 series with 2 error(s)")
+	assert.NotContains(t, incomplete, "completed", "a failed apply must not write a 'completed' activity row")
 }

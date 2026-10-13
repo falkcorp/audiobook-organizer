@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-10-13
 
@@ -765,7 +765,16 @@ func DedupSeries(
 		_ = progress.Log("info", msg, nil)
 		if len(result.Errors) > 0 {
 			errDetail := strings.Join(result.Errors[:minInt(len(result.Errors), 10)], "; ")
-			_ = progress.Log("warn", fmt.Sprintf("Merge errors: %s", errDetail), nil)
+			// "error" on an APPLY: the db reporter copies an entry into
+			// op_errors_v2 only at error level or above, so a warn digest left a
+			// failed apply with an EMPTY error table (MergeSeries below learned
+			// this first). A preview stays at warn: its errors are predictions,
+			// and a dry run should not fill the table a real failure reads.
+			level := "error"
+			if dryRun {
+				level = "warn"
+			}
+			_ = progress.Log(level, fmt.Sprintf("Merge errors: %s", errDetail), nil)
 		}
 		denom := len(dupGroups)
 		if denom == 0 {
