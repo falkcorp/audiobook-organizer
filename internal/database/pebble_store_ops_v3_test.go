@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -1022,5 +1022,42 @@ func TestMirrorOffSwitch(t *testing.T) {
 	}
 	if r, _ := p.GetRunV3(facade); r != nil {
 		t.Fatal("the v3 record survived its discard")
+	}
+}
+
+// TestPerRunWritersRefuseMissingOrTerminalRun: the per-run writers 05-PR5
+// gives callers (snapshot pages, chunk offsets, intents, log lines) refuse a
+// run that does not exist or is terminal, and write nothing. A write that
+// landed after a terminal transition or a discard would re-create per-run keys
+// that no pass ever cleans up.
+func TestPerRunWritersRefuseMissingOrTerminalRun(t *testing.T) {
+	p := newTimelineStore(t)
+	done := insertV3(t, p, "test.closed", "")
+	transition(t, p, done, state.EvDispatch, nil)
+	transition(t, p, done, state.EvReturnNil, nil)
+	open := insertV3(t, p, "test.open", "")
+	transition(t, p, open, state.EvDispatch, nil)
+	writers := map[string]func(id string) error{
+		"PutSnapshotPageV3": func(id string) error { return p.PutSnapshotPageV3(id, 0, []string{"a"}) },
+		"PutChunkOffsetsV3": func(id string) error { return p.PutChunkOffsetsV3(id, []int32{0}) },
+		"PutIntentV3":       func(id string) error { return p.PutIntentV3(id, Intent{Seq: 1, Subject: "book:x"}) },
+		"AppendLogV3":       func(id string) error { return p.AppendLogV3(id, LogLine{Message: "m"}) },
+	}
+	for name, write := range writers {
+		t.Run(name, func(t *testing.T) {
+			before := v3Digest(t, p, "opv3:")
+			if err := write(newRunID()); !errors.Is(err, ErrRunNotFoundV3) {
+				t.Errorf("missing run: err = %v, want ErrRunNotFoundV3", err)
+			}
+			if err := write(done); !errors.Is(err, ErrStaleTransition) {
+				t.Errorf("terminal run: err = %v, want ErrStaleTransition", err)
+			}
+			if v3Digest(t, p, "opv3:") != before {
+				t.Fatal("a refused write changed opv3:")
+			}
+			if err := write(open); err != nil {
+				t.Fatalf("running run: %v", err)
+			}
+		})
 	}
 }

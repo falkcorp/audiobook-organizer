@@ -1,28 +1,26 @@
 // file: internal/repairs/writer.go
-// version: 1.14.0
+// version: 2.0.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package repairs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"time"
 
-	"github.com/oklog/ulid/v2"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // ChangeTypeApplyIncomplete matches metafetch.ChangeTypeApplyIncomplete:
 // UndoLastApply refuses a batch carrying it. Spelled out rather than imported
 // so the framework does not depend on the metafetch service.
-const ChangeTypeApplyIncomplete = "apply_incomplete"
+const ChangeTypeApplyIncomplete = opswriter.ChangeTypeApplyIncomplete
 
 // ChangeTypeApplyOpJournaled matches metafetch.ChangeTypeApplyOpJournaled: a
 // Writer wired to an op journal (WithJournal) writes it into the history
@@ -32,7 +30,7 @@ const ChangeTypeApplyIncomplete = "apply_incomplete"
 // only the operation revert puts back. A book the apply only Modify'd, with
 // nothing journaled (the version-group-primary fixer's flag writes), gets no
 // marker: its batch is undone field by field, as before.
-const ChangeTypeApplyOpJournaled = "apply_op_journaled"
+const ChangeTypeApplyOpJournaled = opswriter.ChangeTypeApplyOpJournaled
 
 // BookModifier is the one book write primitive a fixer gets.
 type BookModifier interface {
@@ -57,12 +55,15 @@ type HistoryRecorder interface {
 // change for is also marked apply_op_journaled: that apply is undone from its
 // operation, never field by field. Safe for concurrent use.
 type Writer struct {
-	store   BookModifier
-	history HistoryRecorder
-	// Source / ChangeType go on every history row; BatchPrefix starts every
-	// batch id.
-	source, changeType, batchPrefix string
-	log                             logger.LevelLogger
+	// core is the fenced write path this Writer wraps
+	// (internal/operations/opswriter): the fence and stand-down gate every
+	// write passes, the book write that captures "previous" inside the
+	// store's critical section, and the metadata-history recording.
+	core  *opswriter.Writer
+	store BookModifier
+	// Source goes on every journal row.
+	source string
+	log    logger.LevelLogger
 
 	// Operation journal and book_file surface (writer_files.go); nil until
 	// WithJournal.
@@ -95,37 +96,30 @@ type Writer struct {
 	// above.
 	userState UserStateStore
 
-	// lease renews the apply's scan stand-down lease and reports whether it
-	// is still held; nil when no lease is held (RunApply installs it for the
-	// run, see setLease). leaseLost latches the first failed renewal.
-	lease     func() bool
-	leaseLost atomic.Bool
-	// leaseValid reports, WITHOUT renewing, whether the lease is still held
-	// (ScanStandDownValid); nil when none is installed. beat consults it only
-	// on a fenced write, to tell a lost lease from a cancel without renewing
-	// a stopped run's lease (see setLeaseValid).
-	leaseValid func() bool
-	// fence is the run's write permit check (registry.Fence.Check); nil when
-	// none is installed. RunApply installs it for the run (setFence). beat
-	// checks it BEFORE the lease, so a canceled, timed-out or abandoned run
-	// writes nothing through this Writer.
-	fence func() error
 	// lockRenewEvery is how often LockWaiting renews the lease while it
 	// waits; zero means defaultLockRenewEvery. RunApply sets it from
 	// WaitOptions.LockRenewEvery.
 	lockRenewEvery time.Duration
 
-	writes        atomic.Int64
-	historyRows   atomic.Int64
-	historyFailed atomic.Int64
-	journaled     atomic.Int64
+	writes    atomic.Int64
+	journaled atomic.Int64
 }
 
 // NewWriter builds a Writer. Its warnings go to the "repairs" subsystem
 // logger (printf-style, values sanitized).
 func NewWriter(store BookModifier, history HistoryRecorder, source, changeType, batchPrefix string) *Writer {
-	return &Writer{store: store, history: history, source: source, changeType: changeType,
-		batchPrefix: batchPrefix, log: logger.New("repairs")}
+	w := &Writer{store: store, source: source, log: logger.New("repairs")}
+	w.core = opswriter.New(opswriter.Config{
+		Mode:          ops.Live,
+		Books:         store,
+		History:       opswriter.NewBookHistory(history, source, changeType, batchPrefix, w.log),
+		JournaledBook: w.journaledBook,
+		LeaseLostErr:  ErrStandDownLost,
+		// No intent store: every journaled step is written to the op
+		// journal BEFORE its write (writer_files.go, JOURNAL FIRST), which
+		// is what a resumed repairs.apply replays.
+	})
+	return w
 }
 
 // Modify runs fn on the book row inside ModifyBook (so a check fn makes and
@@ -137,103 +131,12 @@ func (w *Writer) Modify(bookID string, fn func(*database.Book) error) ([]string,
 	if err := w.denyTagsOnly("Modify"); err != nil {
 		return nil, err
 	}
-	if err := w.beat("book " + bookID); err != nil {
-		return nil, err
-	}
-	var before, after *database.Book
-	written, err := w.store.ModifyBook(bookID, func(row *database.Book) error {
-		snap, serr := database.SnapshotBook(row)
-		if serr != nil {
-			return serr
-		}
-		if ferr := fn(row); ferr != nil {
-			return ferr
-		}
-		post, perr := database.SnapshotBook(row)
-		if perr != nil {
-			return perr
-		}
-		// Captured on every invocation, so a retried callback leaves the
-		// values of the attempt that committed.
-		before, after = snap, post
-		return nil
-	})
+	changed, err := w.core.ModifyBook(context.Background(), bookID, fn)
 	if err != nil {
 		return nil, err
 	}
-	if written == nil {
-		return nil, fmt.Errorf("book %s vanished before the write", bookID)
-	}
 	w.writes.Add(1)
-	return w.recordHistory(bookID, before, after), nil
-}
-
-func (w *Writer) recordHistory(bookID string, before, after *database.Book) []string {
-	batchID := w.batchPrefix + ulid.Make().String()
-	now := time.Now()
-	var changed []string
-	failed := 0
-	for _, field := range database.TrackedBookFields() {
-		oldV, oerr := database.RenderBookField(before, field)
-		newV, nerr := database.RenderBookField(after, field)
-		if oerr != nil || nerr != nil || oldV == newV {
-			continue
-		}
-		changed = append(changed, field)
-		oldJSON, newJSON := jsonString(oldV), jsonString(newV)
-		rec := &database.MetadataChangeRecord{
-			BookID:        bookID,
-			Field:         field,
-			PreviousValue: &oldJSON,
-			NewValue:      &newJSON,
-			ChangeType:    w.changeType,
-			Source:        w.source,
-			ChangedAt:     now,
-			BatchID:       batchID,
-		}
-		// "Undo last apply" restores a foreign-key column from the row's refs,
-		// never from the rendered value, and fails the field without them; a
-		// series_id write through the Writer was not undoable until these
-		// were recorded. author_id is left without refs on purpose: undo of
-		// that column also needs the book_authors join (BookAuthorsKnown),
-		// which the Writer does not read, and reverting the column alone
-		// would leave the join naming the new author.
-		if field == "series_id" {
-			rec.PreviousRef = &database.MetadataChangeRef{SeriesID: copyInt(before.SeriesID)}
-			rec.NewRef = &database.MetadataChangeRef{SeriesID: copyInt(after.SeriesID)}
-		}
-		if err := w.history.RecordMetadataChange(rec); err != nil {
-			failed++
-			w.log.Warn("%s: history row not recorded (the write itself committed): book_id=%s field=%s err=%s",
-				w.source, logger.SanitizeLogValue(bookID), field, logger.SanitizeLogValue(err.Error()))
-			continue
-		}
-		w.historyRows.Add(1)
-	}
-	if len(changed) > 0 && w.journaledBook(bookID) {
-		if err := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
-			BookID: bookID, Field: "apply", ChangeType: ChangeTypeApplyOpJournaled,
-			Source: w.source, ChangedAt: now, BatchID: batchID,
-		}); err != nil {
-			// Without the marker, undo-last-apply would revert this batch's
-			// fields alone; fall through to the incomplete marker, which it
-			// also refuses.
-			failed++
-			w.log.Warn("%s: op-journaled marker not recorded: book_id=%s batch_id=%s err=%s",
-				w.source, logger.SanitizeLogValue(bookID), batchID, logger.SanitizeLogValue(err.Error()))
-		}
-	}
-	if failed > 0 {
-		w.historyFailed.Add(int64(failed))
-		if err := w.history.RecordMetadataChange(&database.MetadataChangeRecord{
-			BookID: bookID, Field: "apply", ChangeType: ChangeTypeApplyIncomplete,
-			Source: w.source, ChangedAt: now, BatchID: batchID,
-		}); err != nil {
-			w.log.Error("%s: neither the history nor the incomplete marker was recorded: book_id=%s batch_id=%s err=%s",
-				w.source, logger.SanitizeLogValue(bookID), batchID, logger.SanitizeLogValue(err.Error()))
-		}
-	}
-	return changed
+	return changed.Fields, nil
 }
 
 // setLease installs the scan stand-down renewal every write beats (nil
@@ -250,10 +153,7 @@ func (w *Writer) recordHistory(bookID string, before, after *database.Book) []st
 // is an in-memory map update (the registry throttles the marker it persists
 // to once a second), so it is not throttled here; a throttle would only
 // delay noticing a lost lease.
-func (w *Writer) setLease(renew func() bool) {
-	w.lease = renew
-	w.leaseLost.Store(false)
-}
+func (w *Writer) setLease(renew func() bool) { w.core.SetLease(renew) }
 
 // setLeaseValid installs the non-renewing lease check beat uses on a fenced
 // write (nil removes it). RunApply installs it beside setLease.
@@ -262,19 +162,15 @@ func (w *Writer) setLease(renew func() bool) {
 // run's progress heartbeat, and a canceled or abandoned run that keeps
 // calling the Writer would otherwise keep its stand-down lease alive -- and
 // the library scan parked -- for as long as it keeps trying.
-func (w *Writer) setLeaseValid(valid func() bool) {
-	w.leaseValid = valid
-}
+func (w *Writer) setLeaseValid(valid func() bool) { w.core.SetLeaseValid(valid) }
 
 // setFence installs the run's write permit; nil clears it. beat checks it
 // before the lease, so a fenced Writer refuses every write.
-func (w *Writer) setFence(check func() error) {
-	w.fence = check
-}
+func (w *Writer) setFence(check func() error) { w.core.SetFence(check) }
 
 // beat checks the run's fence, then renews the lease, before a write. A
 // revoked fence refuses with an error wrapping whatever the check returned
-// (registry.ErrFenced), and never renews the lease. Once a renewal fails the
+// (opswriter.ErrFenced), and never renews the lease. Once a renewal fails the
 // lease is gone for good (the registry never resurrects a lapsed holder), so
 // every later write is refused without trying again; that error wraps
 // ErrStandDownLost. Either way the write it guards is not made.
@@ -284,32 +180,7 @@ func (w *Writer) setFence(check func() error) {
 // directly, and every journaled step (Journal, Step, JournalStep(s),
 // RepointBookFile, MoveBookFiles, SetTrackNumber, the iTunes-path clears,
 // LockFields) through journalRow.
-func (w *Writer) beat(what string) error {
-	if w.fence != nil {
-		if err := w.fence(); err != nil {
-			// The registry also revokes the fence when the stand-down lease
-			// is lost (RenewScanStandDown). Report that loss too, so callers
-			// that stop on ErrStandDownLost (retire_into, repairs_ops, the
-			// engine's abort path) still see it behind the fence. Decided
-			// from the latched loss or the non-renewing check, never from
-			// w.lease(): renewing here would keep a stopped run's lease, and
-			// the parked scan, alive while it keeps retrying.
-			if w.lease != nil && (w.leaseLost.Load() || (w.leaseValid != nil && !w.leaseValid())) {
-				w.leaseLost.Store(true)
-				return fmt.Errorf("%w: %s not written: %w", ErrStandDownLost, what, err)
-			}
-			return fmt.Errorf("%s not written: %w", what, err)
-		}
-	}
-	if w.lease == nil {
-		return nil
-	}
-	if w.leaseLost.Load() || !w.lease() {
-		w.leaseLost.Store(true)
-		return fmt.Errorf("%w: %s not written", ErrStandDownLost, what)
-	}
-	return nil
-}
+func (w *Writer) beat(what string) error { return w.core.Gate(what) }
 
 // Beat renews the scan stand-down lease, as every Writer write does, for a
 // write the Writer cannot route: a store helper that writes directly
@@ -382,26 +253,10 @@ func (w *Writer) LockWaiting(ctx context.Context, what string, lock, unlock func
 func (w *Writer) Writes() int { return int(w.writes.Load()) }
 
 // HistoryRows is how many history rows were recorded.
-func (w *Writer) HistoryRows() int { return int(w.historyRows.Load()) }
+func (w *Writer) HistoryRows() int { return w.core.History().Rows() }
 
 // HistoryFailed is how many history rows could not be recorded.
-func (w *Writer) HistoryFailed() int { return int(w.historyFailed.Load()) }
-
-func copyInt(p *int) *int {
-	if p == nil {
-		return nil
-	}
-	v := *p
-	return &v
-}
+func (w *Writer) HistoryFailed() int { return w.core.History().Failed() }
 
 // jsonString encodes s as a JSON string, the shape every history value has.
-// Marshalling a Go string cannot fail; the fallback only satisfies the
-// linter.
-func jsonString(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return strconv.Quote(s)
-	}
-	return string(b)
-}
+func jsonString(s string) string { return opswriter.JSONString(s) }

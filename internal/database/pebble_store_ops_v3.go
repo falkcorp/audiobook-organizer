@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
@@ -1475,10 +1475,36 @@ func (p *PebbleStore) getJSONFound(key []byte, dst any) (found bool, err error) 
 	return true, json.Unmarshal(val, dst)
 }
 
-// PutSnapshotPageV3 stores one page of frozen item keys.
-func (p *PebbleStore) PutSnapshotPageV3(id string, page int, keys []string) error {
+// openRunV3 refuses a per-run write for a run that does not exist or is
+// terminal. The caller holds opsMu and keeps holding it through the write, so
+// a terminal transition (which deletes the run's snapshot, ledger and intents
+// in its batch, under opsMu) cannot land between this check and the write and
+// leave a per-run key no pass ever cleans up. Same errors as CommitLedgerV3.
+func (p *PebbleStore) openRunV3(id string) error {
+	cur, err := p.loadRunV3(id)
+	if err != nil {
+		return err
+	}
+	if cur == nil {
+		return fmt.Errorf("%w: %s", ErrRunNotFoundV3, id)
+	}
+	if state.ClassifyV3(cur.State).Terminal {
+		return fmt.Errorf("%w: run %s is %s; its per-run keys are closed", ErrStaleTransition, id, cur.State)
+	}
+	return nil
+}
+
+// PutSnapshotPageV3 stores one page of frozen item keys. Refused for a
+// missing or terminal run (openRunV3).
+func (p *PebbleStore) PutSnapshotPageV3(id string, page int, keys []string) (err error) {
+	defer recoverPebbleClosed("PutSnapshotPageV3", &err)
 	if keys == nil {
 		keys = []string{}
+	}
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+	if err := p.openRunV3(id); err != nil {
+		return err
 	}
 	return p.pebbleSetJSON(opv3SnapKey(id, page), keys)
 }
@@ -1491,10 +1517,16 @@ func (p *PebbleStore) GetSnapshotPageV3(id string, page int) ([]string, bool, er
 }
 
 // PutChunkOffsetsV3 stores the chunk start offsets (only when PartitionBy
-// adjusted them).
-func (p *PebbleStore) PutChunkOffsetsV3(id string, offsets []int32) error {
+// adjusted them). Refused for a missing or terminal run (openRunV3).
+func (p *PebbleStore) PutChunkOffsetsV3(id string, offsets []int32) (err error) {
+	defer recoverPebbleClosed("PutChunkOffsetsV3", &err)
 	if offsets == nil {
 		offsets = []int32{}
+	}
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+	if err := p.openRunV3(id); err != nil {
+		return err
 	}
 	return p.pebbleSetJSON(opv3SnapChunksKey(id), offsets)
 }
@@ -1577,10 +1609,17 @@ func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 
 // ── intents ─────────────────────────────────────────────────────────────────
 
-// PutIntentV3 writes a write-ahead intent.
-func (p *PebbleStore) PutIntentV3(id string, in Intent) error {
+// PutIntentV3 writes a write-ahead intent. Refused for a missing or terminal
+// run (openRunV3).
+func (p *PebbleStore) PutIntentV3(id string, in Intent) (err error) {
+	defer recoverPebbleClosed("PutIntentV3", &err)
 	if in.WrittenAt.IsZero() {
 		in.WrittenAt = time.Now().UTC()
+	}
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+	if err := p.openRunV3(id); err != nil {
+		return err
 	}
 	return p.pebbleSetJSON(opv3IntentKey(id, in.Seq), &in)
 }
@@ -1721,12 +1760,20 @@ func (p *PebbleStore) ListItemOutcomesV3(id string, q ItemQuery) (page ItemPage,
 
 // ── log ─────────────────────────────────────────────────────────────────────
 
-// AppendLogV3 appends one log line to a run.
-func (p *PebbleStore) AppendLogV3(id string, line LogLine) error {
+// AppendLogV3 appends one log line to a run. Refused for a missing or
+// terminal run (openRunV3): a line landing after a discard would re-create a
+// log key nothing deletes.
+func (p *PebbleStore) AppendLogV3(id string, line LogLine) (err error) {
+	defer recoverPebbleClosed("AppendLogV3", &err)
 	if line.At.IsZero() {
 		line.At = time.Now().UTC()
 	}
 	line.Key = ""
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+	if err := p.openRunV3(id); err != nil {
+		return err
+	}
 	return p.pebbleSetJSON(opv3LogKey(id, line.At, p.opsLogSeq.Add(1)), &line)
 }
 

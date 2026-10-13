@@ -1,14 +1,15 @@
 // file: internal/operations/registry/fence_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c8fe3c17-3eeb-4b19-b528-3b405e193472
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package registry
 
 import (
-	"context"
 	"errors"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 )
 
 // TestCancelPaths_RevokeBeforeCancel pins the core fence invariant without
@@ -73,8 +74,8 @@ func TestCancelPaths_RevokeBeforeCancel(t *testing.T) {
 			if !revokedAtCancel {
 				t.Fatal("the context was canceled before the fence was revoked")
 			}
-			if !errors.Is(h.fence.Check(), ErrFenced) {
-				t.Fatalf("Check() after stop = %v, want ErrFenced", h.fence.Check())
+			if !errors.Is(h.fence.Check(), opswriter.ErrFenced) {
+				t.Fatalf("Check() after stop = %v, want opswriter.ErrFenced", h.fence.Check())
 			}
 		})
 	}
@@ -88,38 +89,5 @@ func TestCancelPaths_StubHandleIsNoop(t *testing.T) {
 	h.cancelWithCause(ErrShutdown)
 	if h.fence.Revoked() || h.fence.Check() != nil {
 		t.Fatalf("zero fence on a stub: revoked=%v check=%v", h.fence.Revoked(), h.fence.Check())
-	}
-}
-
-// A fence bound to the run context refuses as soon as that context is done,
-// before (and without) any revoke: the timeout and parent-cancel paths, where
-// the registry's revoke can only follow the cancel. Revoked() keeps meaning
-// "explicitly revoked".
-func TestFence_CheckRefusesOnceTheBoundContextIsDone(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	f := newFence(1, ctx.Done())
-	if err := f.Check(); err != nil {
-		t.Fatalf("Check() on a live context = %v, want nil", err)
-	}
-	cancel()
-	if !errors.Is(f.Check(), ErrFenced) {
-		t.Fatalf("Check() after the bound context ended = %v, want ErrFenced", f.Check())
-	}
-	if f.Revoked() {
-		t.Fatal("Revoked() reports a context end; it must report only the explicit revoke")
-	}
-	f.revoke()
-	if !f.Revoked() || !errors.Is(f.Check(), ErrFenced) {
-		t.Fatalf("after revoke: revoked=%v check=%v", f.Revoked(), f.Check())
-	}
-
-	// An unbound fence is fenced only by revoke.
-	u := newFence(1, nil)
-	if u.Check() != nil {
-		t.Fatalf("unbound fence Check() = %v, want nil", u.Check())
-	}
-	u.revoke()
-	if !errors.Is(u.Check(), ErrFenced) {
-		t.Fatalf("unbound fence after revoke Check() = %v, want ErrFenced", u.Check())
 	}
 }

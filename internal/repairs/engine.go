@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -628,7 +629,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	// asked cannot keep writing. Installed whether or not a stand-down is
 	// held. Without a registry the ctx carries the zero Fence, never revoked.
 	if deps.Writer != nil {
-		deps.Writer.setFence(registry.FenceFromContext(ctx).Check)
+		deps.Writer.setFence(opswriter.FenceFromContext(ctx).Check)
 		defer deps.Writer.setFence(nil)
 	}
 	var lost atomic.Bool
@@ -867,7 +868,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 				out.Outcome = OutcomeAborted
 				return out
 			}
-			if errors.Is(err, registry.ErrFenced) {
+			if errors.Is(err, opswriter.ErrFenced) {
 				out.Outcome = OutcomeCanceledSkip
 				return out
 			}
@@ -886,7 +887,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 			// keeps the fixer's account of how far the row got.
 			lost.Store(true)
 			out.Outcome = OutcomeAborted
-		case errors.Is(err, registry.ErrFenced):
+		case errors.Is(err, opswriter.ErrFenced):
 			// The run was stopped (cancel, timeout, watchdog, quiesce,
 			// shutdown) and its fence refused a write mid-row. Checked before
 			// partial for the same reason as the lease case: canceled_skipped
