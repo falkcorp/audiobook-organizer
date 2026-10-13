@@ -1,11 +1,11 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/07/07-README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f1ed0a96-1c52-4ef9-8d4f-1a8e87cbcc76 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-13 -->
 
 # Task briefs from doc 07 (design decisions and modularity) and X2/X3 from the coordinator
 
-Nineteen briefs: seventeen in this directory, `08-X2.md` and `08-X3.md` in `tasks/08/`. Each follows `tasks/00-TEMPLATE.md`. Source: `07-design-decisions-and-modularity.md` §3-§4 with its appendices `A-measurements.md`, `B-decisions.md`, `C-server-state-library.md`; owner decisions in `09-owner-decisions.md`.
+Twenty briefs: eighteen in this directory, `08-X2.md` and `08-X3.md` in `tasks/08/`. Each follows `tasks/00-TEMPLATE.md`. Source: `07-design-decisions-and-modularity.md` §3-§4 with its appendices `A-measurements.md`, `B-decisions.md`, `C-server-state-library.md`; owner decisions in `09-owner-decisions.md`.
 
 ## Briefs in merge order
 | # | ID | Title | Wave | Model | Size | Depends on |
