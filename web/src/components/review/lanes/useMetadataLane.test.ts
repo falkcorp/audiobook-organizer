@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.29.0
+// version: 1.30.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -698,8 +698,11 @@ describe('dispatch', () => {
     await waitFor(() => expect(result.current.spineCtx.rowState('a')).toBe('pending'));
   });
 
-  it('batches rapid single applies into one call', async () => {
-    // Applying five rows in a row must not fire five requests.
+  it('sends rapid single applies as one request per row-pinned book', async () => {
+    // Rapid clicks still share one debounce timer, but a 'row' pin is one
+    // reviewer's look at one book and the server answers 400 to a request that
+    // pairs one with other books (the apply lifts gates for it). So the flush
+    // splits: one request per pinned book, never a shared one.
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
       reviewPayload(['a', 'b', 'c'].map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
     );
@@ -732,15 +735,48 @@ describe('dispatch', () => {
       vi.advanceTimersByTime(600);
     });
 
-    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
     // Each single-row click carries a row pin of the candidate it showed:
     // clicking Apply on a row is the owner's review, and the server checks the
-    // pin (content hash included) against the cache. Debounced clicks share
-    // one request; pins are per book.
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
+    // pin (content hash included) against the cache.
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(2);
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a'], undefined, {
       a: { origin: 'row', content_hash: 'h-a', source: 'audible', title: 'Cand a', author: 'A' },
+    });
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['b'], undefined, {
       b: { origin: 'row', content_hash: 'h-b', source: 'audible', title: 'Cand b', author: 'A' },
     });
+    // One toast for the whole flush, not one per request.
+    const queuedToasts = toast.mock.calls.filter((c) => String(c[0]).includes('apply queued'));
+    expect(queuedToasts).toHaveLength(1);
+    expect(queuedToasts[0][0]).toContain('2 book(s)');
+    vi.useRealTimers();
+  });
+
+  it('keeps rapid applies of unpinned rows in one request', async () => {
+    // A row the server served with no candidate hash gets no pin, so nothing
+    // ties its apply to a single book; those still share a request.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(['a', 'b'].map((id) => makeResult(id)))
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op1',
+    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(2));
+    vi.useFakeTimers();
+    act(() => {
+      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'a' });
+      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'b' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {});
     vi.useRealTimers();
   });
 

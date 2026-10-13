@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.13.1
+// version: 2.14.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -930,17 +930,20 @@ func TestScanActiveLogAttrs(t *testing.T) {
 // hashless review_bulk owner marker enqueues the preview op WITHOUT them, so
 // every preview row is judged by the hard gate. The real apply forwards both.
 func TestBatchApplyFromCache_DryRunNeverForwardsOwnerPins(t *testing.T) {
-	body := `{"book_ids":["b1","b2"],%s"pins":{"b1":{"origin":"row","content_hash":"h1","source":"Audible","title":"T"},"b2":{"origin":"review_bulk"}}}`
+	// A row pin only travels with a single-book request on the apply path (see
+	// TestBatchApplyFromCache_RowPinNeedsASingleBook); the preview ignores it
+	// whatever the book count.
+	body := `{"book_ids":["b1","b2"],%s"pins":{"b1":{"origin":"%s","content_hash":"h1","source":"Audible","title":"T"},"b2":{"origin":"review_bulk"}}}`
 
 	ops := &capturingEnqueuer{}
-	c, _ := batchApplyCtx(fmt.Sprintf(body, `"dry_run":true,`))
+	c, _ := batchApplyCtx(fmt.Sprintf(body, `"dry_run":true,`, "row"))
 	newDispatchHandler(t, ops).BatchApplyFromCache(c)
 	require.Equal(t, 1, ops.calls)
 	assert.Equal(t, "metadata.bulk-apply-preview", ops.defID)
 	assert.NotContains(t, paramsMap(t, ops.params), "pins", "the preview must never receive owner pins")
 
 	ops = &capturingEnqueuer{}
-	c, _ = batchApplyCtx(fmt.Sprintf(body, `"dry_run":false,`))
+	c, _ = batchApplyCtx(fmt.Sprintf(body, `"dry_run":false,`, "review_bulk"))
 	newDispatchHandler(t, ops).BatchApplyFromCache(c)
 	require.Equal(t, 1, ops.calls)
 	assert.Equal(t, "metadata.batch-apply-cached", ops.defID)
@@ -948,6 +951,46 @@ func TestBatchApplyFromCache_DryRunNeverForwardsOwnerPins(t *testing.T) {
 	require.True(t, ok, "the apply must forward the pins")
 	assert.Equal(t, map[string]any{"origin": "review_bulk", "source": "", "title": ""}, pins["b2"],
 		"the hashless owner marker reaches the op as sent")
+}
+
+// A "row" pin is the single-row Apply's: one reviewer, one book. The apply
+// lifts gates on the strength of that one look (a folder-derived search's
+// identity_stale among them), so a request that pairs a row pin with other
+// books is a 400 and enqueues nothing; the same pin on a one-book request is
+// accepted and forwarded.
+func TestBatchApplyFromCache_RowPinNeedsASingleBook(t *testing.T) {
+	rowPin := `{"origin":"row","content_hash":"h1","source":"Audible","title":"T"}`
+
+	t.Run("row pin with several books is refused", func(t *testing.T) {
+		ops := &capturingEnqueuer{}
+		c, w := batchApplyCtx(`{"book_ids":["b1","b2"],"dry_run":false,"pins":{"b1":` + rowPin + `}}`)
+		newDispatchHandler(t, ops).BatchApplyFromCache(c)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Zero(t, ops.calls, "nothing may be enqueued")
+		assert.Contains(t, w.Body.String(), "single-book")
+	})
+	t.Run("row pin on a book that is not the only one is still refused", func(t *testing.T) {
+		ops := &capturingEnqueuer{}
+		c, w := batchApplyCtx(`{"book_ids":["b1","b2"],"dry_run":false,"pins":{"b1":{"origin":"review_bulk"},"b2":` + rowPin + `}}`)
+		newDispatchHandler(t, ops).BatchApplyFromCache(c)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Zero(t, ops.calls)
+	})
+	t.Run("row pin with one book is forwarded", func(t *testing.T) {
+		ops := &capturingEnqueuer{}
+		c, w := batchApplyCtx(`{"book_ids":["b1"],"dry_run":false,"pins":{"b1":` + rowPin + `}}`)
+		newDispatchHandler(t, ops).BatchApplyFromCache(c)
+		require.Equal(t, http.StatusAccepted, w.Code)
+		require.Equal(t, 1, ops.calls)
+		assert.Contains(t, paramsMap(t, ops.params), "pins")
+	})
+	t.Run("bulk pins with several books are untouched", func(t *testing.T) {
+		ops := &capturingEnqueuer{}
+		c, w := batchApplyCtx(`{"book_ids":["b1","b2"],"dry_run":false,"pins":{"b1":{"origin":"review_bulk"},"b2":{"origin":"review_bulk"}}}`)
+		newDispatchHandler(t, ops).BatchApplyFromCache(c)
+		assert.Equal(t, http.StatusAccepted, w.Code)
+		assert.Equal(t, 1, ops.calls)
+	})
 }
 
 // The review page's bulk toggle (owner ruling 2026-09-27): only "replace" is

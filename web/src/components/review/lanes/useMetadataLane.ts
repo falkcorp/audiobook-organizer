@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.41.0
+// version: 1.42.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -2304,18 +2304,40 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     const ids = [...applyQueueRef.current];
     applyQueueRef.current = [];
     if (ids.length === 0) return;
-    const pins: Record<string, ApplyPin> = {};
+    // A 'row' pin is one reviewer's look at one book, and the server refuses a
+    // request that pairs one with other books (a row pin lifts gates a bulk
+    // apply must not). So each row-pinned book goes out as its own request;
+    // books with no pin (index mode) still share one. The dispatches return as
+    // soon as the op is queued, so splitting costs a few round trips, not a
+    // wait on each apply.
+    const rowPinned: Array<[string, ApplyPin]> = [];
+    const rest: string[] = [];
     for (const id of ids) {
       const pin = applyPinsRef.current.get(id);
-      if (pin) pins[id] = pin;
       applyPinsRef.current.delete(id);
+      if (pin && pin.origin === 'row') rowPinned.push([id, pin]);
+      else rest.push(id);
     }
-    try {
-      await runApplyOp(ids, pins);
-    } catch (err) {
-      handleApplyError(err, ids);
+    const groups: Array<{ ids: string[]; pins: Record<string, ApplyPin> }> = rowPinned.map(
+      ([id, pin]) => ({ ids: [id], pins: { [id]: pin } })
+    );
+    if (rest.length > 0) groups.push({ ids: rest, pins: {} });
+    let queued = 0;
+    for (const g of groups) {
+      try {
+        await runApplyOp(g.ids, g.pins, undefined, undefined, false);
+        queued += g.ids.length;
+      } catch (err) {
+        handleApplyError(err, g.ids);
+      }
     }
-  }, [runApplyOp, handleApplyError]);
+    if (queued > 0) {
+      toast(
+        `Metadata apply queued for ${queued.toLocaleString()} book(s) — watch the bell for progress.`,
+        'success'
+      );
+    }
+  }, [runApplyOp, handleApplyError, toast]);
 
   const applyOne = useCallback(
     (bookId: string) => {
