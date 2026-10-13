@@ -1,7 +1,7 @@
 // file: internal/metadata/hardcover.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: e7e02554-8931-49ba-9528-d3d51279da1d
-// last-edited: 2026-09-10
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -36,15 +36,6 @@ func NewHardcoverClient(apiToken string) *HardcoverClient {
 	return &HardcoverClient{
 		httpClient: providerhttp.Client(SourceIDHardcover),
 		baseURL:    "https://api.hardcover.app/v1/graphql",
-		apiToken:   apiToken,
-	}
-}
-
-// NewHardcoverClientWithBaseURL creates a client with a custom base URL (for testing).
-func NewHardcoverClientWithBaseURL(baseURL, apiToken string) *HardcoverClient {
-	return &HardcoverClient{
-		httpClient: providerhttp.Client(SourceIDHardcover),
-		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiToken:   apiToken,
 	}
 }

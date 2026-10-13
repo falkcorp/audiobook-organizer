@@ -1,7 +1,7 @@
 // file: internal/metadata/cover.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
-// last-edited: 2026-09-26
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -32,29 +32,20 @@ import (
 // finding and #662 was not. One implementation now serves both.
 var ErrSSRFBlocked = safehttp.ErrBlockedAddress
 
-// DownloadCoverArt downloads a cover image from coverURL and saves it to
-// {destDir}/covers/{bookID}.{ext}. Returns the local file path on success.
-// Skips download if the file already exists. Only accepts image/* content types.
-// Rejects non-http(s) URLs and URLs that resolve to private/reserved IPs.
-func DownloadCoverArt(coverURL string, destDir string, bookID string) (string, error) {
-	// Rate-limited, but the SSRF guard is preserved: safeCoverDialContext refuses
-	// private/reserved IPs and MUST stay on the transport. providerhttp wraps the
-	// caller's transport rather than replacing it, so throttling is added without
-	// dropping the security control.
-	return downloadCoverArtWithClient(coverClient(), coverURL, destDir, bookID)
-}
-
-// ReplaceCoverArt is DownloadCoverArt for an explicitly applied cover. It
-// always fetches coverURL -- DownloadCoverArt returns an existing cover file
-// without fetching, so applying a new cover to a book that already had one
-// kept the old image forever. The new image is written to a temp file in the
-// covers directory and renamed over the old cover only once it is complete; on
-// any failure the existing cover is left exactly as it was.
+// ReplaceCoverArt downloads a cover image from coverURL and saves it to
+// {destDir}/covers/{bookID}.{ext}, replacing any cover already on disk. It
+// always fetches coverURL: an earlier entry point returned an existing cover
+// file without fetching, so applying a new cover to a book that already had
+// one kept the old image forever. The new image is written to a temp file in
+// the covers directory and renamed over the old cover only once it is
+// complete; on any failure the existing cover is left exactly as it was. Only
+// accepts image/* content types. Rejects non-http(s) URLs and URLs that
+// resolve to private/reserved IPs.
 func ReplaceCoverArt(coverURL string, destDir string, bookID string) (string, error) {
 	return replaceCoverArtWithClient(coverClient(), coverURL, destDir, bookID)
 }
 
-// coverClient is the rate-limited, SSRF-guarded client both entry points use.
+// coverClient is the rate-limited, SSRF-guarded client ReplaceCoverArt uses.
 func coverClient() *http.Client {
 	// Rate-limited, but the SSRF guard is preserved: safeCoverDialContext refuses
 	// private/reserved IPs and MUST stay on the transport. providerhttp wraps the
@@ -69,29 +60,16 @@ func coverClient() *http.Client {
 	return client
 }
 
-// downloadCoverArtWithClient is the internal implementation — accepts a custom
-// client so tests can substitute a plain http.Client pointing to localhost.
-func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir string, bookID string) (string, error) {
-	return fetchCoverArt(client, coverURL, destDir, bookID, false)
-}
-
-// replaceCoverArtWithClient is ReplaceCoverArt with a caller-supplied client.
+// replaceCoverArtWithClient is ReplaceCoverArt with a caller-supplied client
+// so tests can substitute a plain http.Client pointing to localhost.
 func replaceCoverArtWithClient(client *http.Client, coverURL string, destDir string, bookID string) (string, error) {
-	return fetchCoverArt(client, coverURL, destDir, bookID, true)
-}
-
-// fetchCoverArt is the shared implementation. replace=false keeps the
-// long-standing short-circuit (an existing cover is returned unfetched);
-// replace=true always fetches and swaps the new image in.
-func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID string, replace bool) (string, error) {
 	if coverURL == "" {
 		return "", fmt.Errorf("empty cover URL")
 	}
 	if bookID == "" {
 		return "", fmt.Errorf("empty book ID")
 	}
-	// Sanitize once, here, so the existence check and the os.Create below cannot
-	// disagree about which file they mean. This site previously used bookID raw
+	// Sanitize once, here, so the paths below cannot disagree about which file they mean. This site previously used bookID raw
 	// while CoverPathForBook applied filepath.Base; CodeQL flagged the read as
 	// "uncontrolled data used in path expression" and the write one line down had
 	// the identical exposure, so both now go through the sanitized id.
@@ -106,15 +84,8 @@ func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID 
 
 	coversDir := filepath.Join(destDir, "covers")
 
-	// Check if cover already exists (any known extension). This is the same
-	// lookup CoverPathForBook does; see findExistingCover for why it is a stat
-	// probe rather than a glob.
-	// Skipped under replace: an explicitly applied new cover must be fetched.
-	if !replace {
-		if existing := findExistingCover(coversDir, safeID); existing != "" {
-			return existing, nil
-		}
-	}
+	// An existing cover is not a reason to skip the fetch: an explicitly
+	// applied new cover must always be downloaded.
 
 	// Create covers directory
 	if err := os.MkdirAll(coversDir, 0775); err != nil {
@@ -123,7 +94,7 @@ func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID 
 
 	// The SSRF control is the transport, not this line: safehttp's DialContext
 	// checks the resolved address on every hop. The nolint is only about the
-	// missing context — DownloadCoverArt takes none, and the providerhttp
+	// missing context — ReplaceCoverArt takes none, and the providerhttp
 	// client's own timeout bounds the request.
 	resp, err := client.Get(coverURL) //nolint:noctx // no caller-supplied context; client.Timeout bounds this
 	if err != nil {
@@ -178,9 +149,7 @@ func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID 
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to move cover file into place: %w", err)
 	}
-	if replace {
-		removeOtherCovers(root, safeID, name)
-	}
+	removeOtherCovers(root, safeID, name)
 	return destPath, nil
 }
 
@@ -284,7 +253,7 @@ func findExistingCover(coversDir, id string) string {
 // which is worse than useless on the write path: two different book IDs sharing
 // a last segment would resolve to the same cover filename and one book's art
 // would overwrite the other's. Book IDs are DB-minted ULIDs — both cover-writing
-// callers reach DownloadCoverArt only after GetBookByID has returned a real book
+// callers reach ReplaceCoverArt only after GetBookByID has returned a real book
 // — so a separator here means the caller is wrong, and guessing which book was
 // meant is not this function's job.
 //

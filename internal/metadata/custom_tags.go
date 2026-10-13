@@ -1,5 +1,5 @@
 // file: internal/metadata/custom_tags.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 
 package metadata
@@ -35,39 +35,4 @@ type CustomTags struct {
 	GoogleBooksID string
 	Edition       string
 	PrintYear     string
-}
-
-// ToMap converts CustomTags to a map[string]string for writing to audio files.
-// Only non-empty values are included.
-func (ct CustomTags) ToMap() map[string]string {
-	m := make(map[string]string)
-	if ct.BookID != "" {
-		m[TagBookID] = ct.BookID
-	}
-	m[TagVersion] = CustomTagVersion
-	if ct.ISBN10 != "" {
-		m[TagISBN10] = ct.ISBN10
-	}
-	if ct.ISBN13 != "" {
-		m[TagISBN13] = ct.ISBN13
-	}
-	if ct.ASIN != "" {
-		m[TagASIN] = ct.ASIN
-	}
-	if ct.OpenLibraryID != "" {
-		m[TagOpenLibrary] = ct.OpenLibraryID
-	}
-	if ct.HardcoverID != "" {
-		m[TagHardcover] = ct.HardcoverID
-	}
-	if ct.GoogleBooksID != "" {
-		m[TagGoogleBooks] = ct.GoogleBooksID
-	}
-	if ct.Edition != "" {
-		m[TagEdition] = ct.Edition
-	}
-	if ct.PrintYear != "" {
-		m[TagPrintYear] = ct.PrintYear
-	}
-	return m
 }

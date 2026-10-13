@@ -1,7 +1,7 @@
 // file: internal/metadata/cover_replace_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f1d2c84-93a7-4e0b-b5c2-8d47e19a3f60
-// last-edited: 2026-09-12
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -37,8 +37,7 @@ func noTempFiles(t *testing.T, dir string) {
 	}
 }
 
-// An explicitly applied cover replaces the one on disk. DownloadCoverArt's
-// short-circuit (return the existing file unfetched) is kept for its callers.
+// An explicitly applied cover replaces the one on disk, even when one exists.
 func TestReplaceCoverArt_ReplacesTheExistingCover(t *testing.T) {
 	dir := t.TempDir()
 	old := seedCover(t, dir, "book1.jpg", "old")
@@ -48,12 +47,7 @@ func TestReplaceCoverArt_ReplacesTheExistingCover(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := downloadCoverArtWithClient(testClient(), srv.URL+"/c.png", dir, "book1")
-	if err != nil || got != old {
-		t.Fatalf("download path: got %q, %v; want the existing %q unfetched", got, err, old)
-	}
-
-	got, err = replaceCoverArtWithClient(testClient(), srv.URL+"/c.png", dir, "book1")
+	got, err := replaceCoverArtWithClient(testClient(), srv.URL+"/c.png", dir, "book1")
 	if err != nil {
 		t.Fatalf("replace: %v", err)
 	}

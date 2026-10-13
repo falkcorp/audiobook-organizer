@@ -1,7 +1,7 @@
 // file: internal/metadata/write_roundtrip_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f4a7b8c9-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-09-14
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -70,71 +70,6 @@ func TestCustomTagConstants_NoDuplicateValues(t *testing.T) {
 			t.Errorf("duplicate tag value %q used by both %s and %s", value, prev, name)
 		}
 		seen[value] = name
-	}
-}
-
-// TestCustomTagsToMap_AllFieldsPresent verifies that CustomTags.ToMap() produces
-// an entry for every tag constant when all fields are populated.
-func TestCustomTagsToMap_AllFieldsPresent(t *testing.T) {
-	ct := CustomTags{
-		BookID:        "book-123",
-		Version:       "1",
-		ISBN10:        "0123456789",
-		ISBN13:        "9780123456789",
-		ASIN:          "B00TEST",
-		OpenLibraryID: "OL12345M",
-		HardcoverID:   "hc-999",
-		GoogleBooksID: "gb-abc",
-		Edition:       "2nd",
-		PrintYear:     "2020",
-	}
-
-	m := ct.ToMap()
-
-	// Every constant (except TagVersion which is always set to CustomTagVersion)
-	// should appear if the corresponding field is non-empty.
-	expected := map[string]string{
-		TagBookID:      "book-123",
-		TagVersion:     CustomTagVersion, // always set
-		TagISBN10:      "0123456789",
-		TagISBN13:      "9780123456789",
-		TagASIN:        "B00TEST",
-		TagOpenLibrary: "OL12345M",
-		TagHardcover:   "hc-999",
-		TagGoogleBooks: "gb-abc",
-		TagEdition:     "2nd",
-		TagPrintYear:   "2020",
-	}
-
-	for key, want := range expected {
-		got, ok := m[key]
-		if !ok {
-			t.Errorf("ToMap() missing key %q (expected %q)", key, want)
-			continue
-		}
-		if got != want {
-			t.Errorf("ToMap()[%q] = %q, want %q", key, got, want)
-		}
-	}
-
-	// Ensure no extra keys snuck in.
-	if len(m) != len(expected) {
-		t.Errorf("ToMap() returned %d keys, want %d", len(m), len(expected))
-	}
-}
-
-// TestCustomTagsToMap_EmptyFieldsOmitted verifies that empty fields are not
-// written (except TagVersion which is always present).
-func TestCustomTagsToMap_EmptyFieldsOmitted(t *testing.T) {
-	ct := CustomTags{} // all zero values
-	m := ct.ToMap()
-
-	// Only TagVersion should be present.
-	if len(m) != 1 {
-		t.Errorf("empty CustomTags.ToMap() returned %d keys, want 1 (only TagVersion)", len(m))
-	}
-	if v, ok := m[TagVersion]; !ok || v != CustomTagVersion {
-		t.Errorf("empty CustomTags.ToMap()[TagVersion] = %q, want %q", v, CustomTagVersion)
 	}
 }
 

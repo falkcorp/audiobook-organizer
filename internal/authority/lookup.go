@@ -1,7 +1,7 @@
 // file: internal/authority/lookup.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8214ae7d-59fb-46c8-9d73-9301ffdd21eb
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 
 package authority
 
@@ -247,23 +247,6 @@ func (x *Index) IsKnownPerson(name string, role Role) (bool, error) {
 	return e.Qualifies(role), nil
 }
 
-// LookupPublisher returns the publisher a name folds to, or nil.
-func (x *Index) LookupPublisher(name string) (*PublisherEntry, error) {
-	f := Fold(name)
-	if f == "" {
-		return nil, nil
-	}
-	base, err := getJSON[Publisher](x.r, PublisherPrefix+f)
-	if err != nil {
-		return nil, err
-	}
-	ovr, err := getJSON[PublisherOverride](x.r, pubOverrideKey(f))
-	if err != nil {
-		return nil, err
-	}
-	return mergePublisher(f, base, ovr), nil
-}
-
 func mergePublisher(f string, base *Publisher, ovr *PublisherOverride) *PublisherEntry {
 	if base == nil && ovr == nil {
 		return nil
@@ -291,25 +274,4 @@ func mergePublisher(f string, base *Publisher, ovr *PublisherOverride) *Publishe
 		}
 	}
 	return e
-}
-
-// LookupASIN returns every fold a contributor ASIN was credited under, or
-// nil.
-func (x *Index) LookupASIN(asin string) (*ASINRef, error) {
-	k := PersonASINKey(asin)
-	if k == "" {
-		return nil, nil
-	}
-	return getJSON[ASINRef](x.r, k)
-}
-
-// CanonicalPublisher is the single-lookup form of Lookup.CanonicalPublisher
-// (a store read per call; bulk callers load a Snapshot instead).
-func (x *Index) CanonicalPublisher(name string) (string, bool, error) {
-	e, err := x.LookupPublisher(name)
-	if err != nil {
-		return "", false, err
-	}
-	c, ok := canonicalOf(e)
-	return c, ok, nil
 }

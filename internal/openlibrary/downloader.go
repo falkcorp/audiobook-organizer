@@ -1,7 +1,7 @@
 // file: internal/openlibrary/downloader.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-03
+// last-edited: 2026-10-12
 
 package openlibrary
 
@@ -26,11 +26,6 @@ var DumpSources = []string{
 // DumpFilename returns the expected filename for a dump type.
 func DumpFilename(dumpType string) string {
 	return fmt.Sprintf("ol_dump_%s_latest.txt.gz", dumpType)
-}
-
-// DumpURL returns the primary download URL for a dump type.
-func DumpURL(dumpType string) string {
-	return fmt.Sprintf("%s/%s", DumpSources[0], DumpFilename(dumpType))
 }
 
 // DownloadProgress tracks live download state for a single dump type.

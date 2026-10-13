@@ -1,7 +1,7 @@
 // file: internal/authority/authority.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5baf3d40-9887-4365-8743-452d7a73c619
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 
 // Package authority keeps the authority lists: a rebuildable reference index
 // of known people (authors, narrators, cast members) and publishers, with
@@ -169,15 +169,6 @@ func PersonKey(name string) string {
 		return ""
 	}
 	return PersonPrefix + f
-}
-
-// PublisherKey is the ref_pub: key for a name ("" when it folds to nothing).
-func PublisherKey(name string) string {
-	f := Fold(name)
-	if f == "" {
-		return ""
-	}
-	return PublisherPrefix + f
 }
 
 // PersonASINKey is the ref_asin:person: key for a contributor ASIN.

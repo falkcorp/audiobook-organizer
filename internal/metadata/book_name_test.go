@@ -1,7 +1,7 @@
 // file: internal/metadata/book_name_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: fd994992-1a70-4204-b1cc-72148bda319a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -138,7 +138,12 @@ func TestParseBookName_CensusShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ParseBookName(tc.raw, tc.ev)
 			assert.Equal(t, tc.title, got.Title, "title")
-			assert.Equal(t, tc.search, got.SearchName(), "search name")
+			// The book's own name: Name when a slot carried one, else Title.
+			searchName := got.Name
+			if searchName == "" {
+				searchName = got.Title
+			}
+			assert.Equal(t, tc.search, searchName, "search name")
 			assert.Equal(t, tc.author, got.Author, "author")
 			assert.Equal(t, tc.narrator, got.Narrator, "narrator")
 			assert.Equal(t, tc.year, got.Year, "year")
@@ -197,7 +202,7 @@ func TestExtractMetadataFromFolder_FilenameShapes(t *testing.T) {
 		{"/srv/library/Kestrel Moon/Kestrel Moon - Copper Regent/Kestrel Moon - Copper Regent Book 03 - Unknown Author", "Copper Regent Book 03", "Copper Regent", 3, []string{"Kestrel Moon"}},
 		{"/srv/library/incoming/The Long Watch - Dorian Vex", "The Long Watch", "", 0, []string{"Dorian Vex"}},
 	} {
-		fm, err := ExtractMetadataFromFolder(tc.path)
+		fm, err := ExtractMetadataFromFolderWith(tc.path, NameEvidence{})
 		assert.NoError(t, err)
 		assert.Equal(t, tc.title, fm.Title, tc.path)
 		assert.Equal(t, tc.series, fm.SeriesName, tc.path)
@@ -219,7 +224,7 @@ func TestExtractMetadataFromFolder_FolderRegressions(t *testing.T) {
 		{"/srv/library/incoming/Glass Tower – A Story", "Glass Tower – A Story"},
 		{"/srv/library/Mara Quill/Saving Honor/Saving Honor - 02 - Claimed by Night", "Claimed by Night"},
 	} {
-		fm, err := ExtractMetadataFromFolder(tc.path)
+		fm, err := ExtractMetadataFromFolderWith(tc.path, NameEvidence{})
 		assert.NoError(t, err)
 		assert.Equal(t, tc.title, fm.Title, tc.path)
 	}
@@ -291,7 +296,7 @@ func TestLegacyFolderParse_IsTheOldParse(t *testing.T) {
 // ExtractMetadataFromFolderTitle is the current parse's title, for the
 // comparison above.
 func ExtractMetadataFromFolderTitle(p string) string {
-	fm, err := ExtractMetadataFromFolder(p)
+	fm, err := ExtractMetadataFromFolderWith(p, NameEvidence{})
 	if err != nil {
 		return ""
 	}

@@ -1,7 +1,7 @@
 // file: internal/metadata/signal_fields_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d6b1f90-2a7c-4e58-9b03-1c8e5a2f7d64
-// last-edited: 2026-09-10
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -45,7 +45,7 @@ func TestAudible_ProductToMetadata_FormatTypeAndSubtitle(t *testing.T) {
 }
 
 func TestAudnexus_BookToMetadata_SecondarySeriesAndRuntime(t *testing.T) {
-	client := NewAudnexusClientWithBaseURL("http://unused")
+	client := newAudnexusTestClient("http://unused")
 	runtimeMin := 615
 	book := &audnexusBook{
 		ASIN:             "B02",

@@ -1,7 +1,7 @@
 // file: internal/metadata/metadata.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -552,16 +552,6 @@ func cleanTagValue(value string) string {
 		return r
 	}, value)
 	return strings.TrimSpace(cleaned)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 // binaryTagKeyRe matches tag keys that hold embedded artwork / binary blobs,

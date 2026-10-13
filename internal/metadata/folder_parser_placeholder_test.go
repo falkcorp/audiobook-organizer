@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser_placeholder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d9c4a13-72e8-4b05-8f61-2a37e0b95cd4
-// last-edited: 2026-09-01
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -61,13 +61,13 @@ func TestFolderParserNeverReturnsThePlaceholderAsAnAuthor(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fm, err := ExtractMetadataFromFolder(tc.path)
+			fm, err := ExtractMetadataFromFolderWith(tc.path, NameEvidence{})
 			if err != nil {
-				t.Fatalf("ExtractMetadataFromFolder(%q) error = %v", tc.path, err)
+				t.Fatalf("ExtractMetadataFromFolderWith(%q, NameEvidence{}) error = %v", tc.path, err)
 			}
 			for _, a := range fm.Authors {
 				if authorname.IsPlaceholder(a) {
-					t.Errorf("ExtractMetadataFromFolder(%q) returned the placeholder as an author "+
+					t.Errorf("ExtractMetadataFromFolderWith(%q, NameEvidence{}) returned the placeholder as an author "+
 						"(Authors=%v, conf=%d).\nscanner.go assigns this to book.Author, whose recovery "+
 						"guard is `Author == \"\"` -- so a non-empty placeholder skips the guard that "+
 						"would have cleared it, and resolveAuthorID then mints an \"Unknown Author\" row",
@@ -87,9 +87,9 @@ func TestFolderParserNeverReturnsThePlaceholderAsAnAuthor(t *testing.T) {
 func TestFolderParserStillReadsARealAuthor(t *testing.T) {
 	const path = "/books/Terry Pratchett/(Discworld 04) Mort/Mort - read by Nigel Planer"
 
-	fm, err := ExtractMetadataFromFolder(path)
+	fm, err := ExtractMetadataFromFolderWith(path, NameEvidence{})
 	if err != nil {
-		t.Fatalf("ExtractMetadataFromFolder(%q) error = %v", path, err)
+		t.Fatalf("ExtractMetadataFromFolderWith(%q, NameEvidence{}) error = %v", path, err)
 	}
 	found := false
 	for _, a := range fm.Authors {
@@ -98,7 +98,7 @@ func TestFolderParserStillReadsARealAuthor(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("ExtractMetadataFromFolder(%q) Authors = %v, want it to contain %q -- "+
+		t.Errorf("ExtractMetadataFromFolderWith(%q, NameEvidence{}) Authors = %v, want it to contain %q -- "+
 			"the parser is not reaching real authors, which would make the placeholder test above vacuous",
 			path, fm.Authors, "Terry Pratchett")
 	}

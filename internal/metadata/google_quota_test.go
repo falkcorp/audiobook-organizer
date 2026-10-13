@@ -1,12 +1,13 @@
 // file: internal/metadata/google_quota_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d79d70eb-b6e8-442b-8889-7f4d6132ff49
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -95,7 +96,7 @@ func TestGoogleBooksClient_SharedBudgetCannotBeBypassed(t *testing.T) {
 	}
 	for i := range 6 { // more than the breaker's threshold of 5
 		_, err := bg1.SearchByTitle(ctx, "Some Title")
-		if !IsDailyBudgetSpent(err) {
+		if !errors.Is(err, dailyquota.ErrDailyBudgetSpent) {
 			t.Fatalf("background lookup %d past 800: err = %v, want a daily-budget refusal", 801+i, err)
 		}
 	}
@@ -112,7 +113,7 @@ func TestGoogleBooksClient_SharedBudgetCannotBeBypassed(t *testing.T) {
 			t.Fatalf("interactive lookup %d: %v", i+1, err)
 		}
 	}
-	if _, err := bg2.SearchByTitle(ictx, "Some Title"); !IsDailyBudgetSpent(err) {
+	if _, err := bg2.SearchByTitle(ictx, "Some Title"); !errors.Is(err, dailyquota.ErrDailyBudgetSpent) {
 		t.Fatalf("interactive lookup 1,001: err = %v, want refused", err)
 	}
 	if got := hits.Load(); got != 1000 {

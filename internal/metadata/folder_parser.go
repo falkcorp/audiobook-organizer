@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package metadata
 
@@ -73,7 +73,7 @@ var (
 	reLeadingTrackNum = regexp.MustCompile(`^\d{1,3}(?:\.|-)?\s+`)
 )
 
-// ExtractMetadataFromFolder parses a directory path hierarchy to extract book metadata.
+// ExtractMetadataFromFolderWith parses a directory path hierarchy to extract book metadata.
 // dirPath should be the directory containing the audio files (or the audio file path itself;
 // the function will walk up the path components).
 //
@@ -82,17 +82,14 @@ var (
 //	/mnt/bigdata/books/Terry Pratchett & Stephen Baxter/(Long Earth 05) The Long Cosmos/
 //	  (Long Earth 05) The Long Cosmos - Terry Pratchett & Stephen Baxter - read by Michael Fenton Stevens/
 //
+// evidence carries person and series evidence for the title shapes
+// (ParseBookName): the authority lists (IsKnownAuthor), the library's author
+// rows (IsAuthorRow) and series rows (IsKnownSeries). They decide whether a
+// segment repeating its folder's name ("Brandon Sanderson - Elantris" in
+// "Brandon Sanderson/") is the author or the series
+// (NameEvidence.folderLeadKind). Path and FolderName are set here.
+//
 // Returns FolderMetadata with best-effort values and per-field confidence scores.
-func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
-	return ExtractMetadataFromFolderWith(dirPath, NameEvidence{})
-}
-
-// ExtractMetadataFromFolderWith is ExtractMetadataFromFolder with person and
-// series evidence for the title shapes (ParseBookName): the authority lists
-// (IsKnownAuthor), the library's author rows (IsAuthorRow) and series rows
-// (IsKnownSeries). They decide whether a segment repeating its folder's name
-// ("Brandon Sanderson - Elantris" in "Brandon Sanderson/") is the author or
-// the series (NameEvidence.folderLeadKind). Path and FolderName are set here.
 func ExtractMetadataFromFolderWith(dirPath string, evidence NameEvidence) (*FolderMetadata, error) {
 	// Normalise: if dirPath points to a file, use its parent directory.
 	// We operate on path components, not the filesystem.
@@ -193,7 +190,7 @@ func splitPathSegments(path string) []string {
 		//
 		// This parser was missed when the same guard was added to the two
 		// parsers now in internal/authorname -- three copies, not two. Measured
-		// 2026-09-01 by driving ExtractMetadataFromFolder over organizer-layout
+		// 2026-09-01 by driving ExtractMetadataFromFolderWith over organizer-layout
 		// paths; see folder_parser_placeholder_test.go.
 		strings.ToLower(authorname.Placeholder): true,
 

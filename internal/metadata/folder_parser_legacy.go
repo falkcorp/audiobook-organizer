@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser_legacy.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 533e69bc-e80c-4ec1-9f90-065dca107c40
-// last-edited: 2026-10-05
+// last-edited: 2026-10-12
 //
 // The folder parse as it stood before ParseBookName (main @ 2b969e5f9),
 // FROZEN. It is evidence, not a parser anyone scans or searches with: the
@@ -19,7 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
-// LegacyFolderParse returns what ExtractMetadataFromFolder returned for
+// LegacyFolderParse returns what ExtractMetadataFromFolderWith returned for
 // dirPath before 2026-10-05.
 func LegacyFolderParse(dirPath string) *FolderMetadata {
 	fm, err := legacyExtractMetadataFromFolder(dirPath)
