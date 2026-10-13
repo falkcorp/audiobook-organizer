@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.24.1
+// version: 1.25.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-14
 //
@@ -75,6 +75,7 @@ import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
 import { useRepairsLane } from './lanes/useRepairsLane';
 import { useAuthorsLane } from './lanes/useAuthorsLane';
+import { useAIScans } from './lanes/useAIScans';
 import { useDedupPipeline } from './useDedupPipeline';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
@@ -258,6 +259,11 @@ export function ReviewWorkspace() {
     [searchParams],
   );
   const authors = useAuthorsLane(toast, lane === 'authors', authorsUrlFilters);
+  // The AI scans sub-view's data. Owned here, not by the panel, because the
+  // "Authors & series" menu's Start / Cancel commands read it (the mode switch,
+  // which scan is running). It reads only while that sub-view is the one on
+  // screen; `?view=ai` seeds it through `authors.view`, once, like `?view=series`.
+  const aiScans = useAIScans(toast, lane === 'authors' && authors.view === 'ai');
 
   // From the lane, which counts them from its rows (index mode) or the
   // server's facets (page mode, where it holds only the current page).
@@ -336,6 +342,8 @@ export function ReviewWorkspace() {
       : dupesSubView !== 'queue'
         ? 'Switch to the Queue view to export duplicates.'
         : undefined;
+
+  const aiScansOpen = lane === 'authors' && authors.view === 'ai';
 
   const menus: CommandMenu[] = useMemo(
     () => [
@@ -590,6 +598,40 @@ export function ReviewWorkspace() {
         ],
       },
       {
+        id: 'authors',
+        label: 'Authors & series',
+        commands: [
+          {
+            id: 'ai-author-scan-start',
+            label: 'Start AI author scan',
+            scope: 'library',
+            description:
+              aiScans.mode === 'batch'
+                ? 'Asks the AI to look for duplicate author names across the whole library, in Batch mode: cheaper, and it takes hours. Progress shows in the bell; the results appear under AI scans.'
+                : 'Asks the AI to look for duplicate author names across the whole library, in Realtime mode: faster, and more expensive. Progress shows in the bell; the results appear under AI scans.',
+            // The Realtime / Batch switch lives on the AI scans sub-view, and the
+            // choice costs money, so the command is available only where the
+            // reviewer can see which mode it will run in.
+            disabledReason: aiScansOpen
+              ? aiScans.startDisabledReason
+              : 'Open Authors & series, then AI scans, to see whether it will run in Realtime or Batch mode.',
+            run: startJob('AI author scan', () => aiScans.startScan()),
+          },
+          {
+            id: 'ai-author-scan-cancel',
+            label: 'Cancel scan',
+            scope: 'library',
+            description: 'Stops the AI author scan that is running, including any batch already submitted.',
+            disabledReason: aiScansOpen
+              ? aiScans.cancelTarget
+                ? undefined
+                : 'No AI author scan is running.'
+              : 'Open Authors & series, then AI scans, to see which scan is running.',
+            run: () => void aiScans.cancelScan(),
+          },
+        ],
+      },
+      {
         id: 'queue',
         label: 'Queue',
         commands: [
@@ -681,6 +723,12 @@ export function ReviewWorkspace() {
       metadata.bulkApplyMode,
       dedupPipeline.busy,
       dedupPipeline.request,
+      aiScansOpen,
+      aiScans.mode,
+      aiScans.startScan,
+      aiScans.startDisabledReason,
+      aiScans.cancelScan,
+      aiScans.cancelTarget,
       setLane,
       setDupesSubView,
       toast,
@@ -760,7 +808,7 @@ export function ReviewWorkspace() {
       {lane === 'repairs' ? (
         <RepairsPanel repairs={repairs} viewMode={viewMode} />
       ) : lane === 'authors' ? (
-        <AuthorsPanel authors={authors} />
+        <AuthorsPanel authors={authors} aiScans={aiScans} />
       ) : lane === 'regroup' ? (
         <RegroupPanel regroup={regroup} />
       ) : lane === 'dupes' ? (

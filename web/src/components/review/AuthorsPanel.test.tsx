@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: e3b70c58-1d92-4a6f-8c45-7f20b9d6a184
 // last-edited: 2026-10-13
 
@@ -23,6 +23,7 @@ import * as api from '../../services/api';
 import type { Book } from '../../services/api';
 import { AuthorsPanel } from './AuthorsPanel';
 import { useAuthorsLane } from './lanes/useAuthorsLane';
+import { useAIScans } from './lanes/useAIScans';
 import * as reads from './lanes/authorsReads';
 
 vi.mock('../../services/api');
@@ -32,7 +33,10 @@ const toast = vi.fn();
 
 function Harness({ active = true, view = null }: { active?: boolean; view?: string | null }) {
   const authors = useAuthorsLane(toast, active, { authorId: null, view });
-  return <AuthorsPanel authors={authors} />;
+  // The workspace owns this hook; the panel only renders it. Inactive here, so
+  // these tests (which never open AI scans) make no AI scan reads.
+  const aiScans = useAIScans(toast, active && authors.view === 'ai');
+  return <AuthorsPanel authors={authors} aiScans={aiScans} />;
 }
 
 function renderLane(active = true, view: string | null = null) {
@@ -757,14 +761,14 @@ function series(n: number, match_type = 'exact'): api.SeriesDupGroup {
 const seriesCard = (n: number) => screen.findByTestId(`series-group-s${n * 10 + 1}-${n * 10 + 2}`);
 
 describe('the sub-view control', () => {
-  it('lists Authors then Series, opens on Authors, and Series is chosen from the control, not the URL', async () => {
+  it('lists Authors, Series then AI scans, opens on Authors, and Series is chosen from the control, not the URL', async () => {
     const user = userEvent.setup();
     serve([wire(1, 'Author A', ['Author A.'])]);
     serveSeries([series(1)]);
     renderLane();
     await screen.findByRole('heading', { name: 'Author A' });
     const group = screen.getByRole('group', { name: 'Authors & series sub-view' });
-    expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Authors', 'Series']);
+    expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Authors', 'Series', 'AI scans']);
     expect(screen.getByTestId('authors-subview-authors')).toHaveAttribute('aria-pressed', 'true');
     expect(reads.fetchSeriesGroups).not.toHaveBeenCalled();
 
