@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_fallback.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b452994-605f-4efc-9523-eccefaafce31
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package metafetch
 
@@ -25,17 +25,6 @@ import (
 // search path still asks every enabled source at once; only the batch
 // candidate fetch tiers them. (The ASIN backfill asks Audible only.)
 var CandidateFallbackProviderIDs = []string{metadata.SourceIDOpenLibrary, metadata.SourceIDGoogleBooks}
-
-// IsCandidateFallbackProvider reports whether id is one of
-// CandidateFallbackProviderIDs.
-func IsCandidateFallbackProvider(id string) bool {
-	for _, f := range CandidateFallbackProviderIDs {
-		if f == id {
-			return true
-		}
-	}
-	return false
-}
 
 // ActiveSourceNamesByID maps the provider id of every source a search would
 // ask right now (the test override, or the configured chain) to its display

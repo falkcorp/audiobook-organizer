@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_normalize.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: eceba49a-b99f-476f-9d43-fd6fd39a8e24
-// last-edited: 2026-09-13
+// last-edited: 2026-10-13
 
 package metafetch
 
@@ -9,25 +9,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
-func derefString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-func derefIntAsString(p *int) string {
-	if p == nil {
-		return ""
-	}
-	return strconv.Itoa(*p)
-}
 func jsonEncodeString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

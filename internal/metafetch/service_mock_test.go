@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package metafetch
 
@@ -130,81 +130,6 @@ func TestExtractASIN(t *testing.T) {
 			assert.Equal(t, tt.expect, extractASIN(tt.input))
 		})
 	}
-}
-
-// ---------------------------------------------------------------------------
-// BuildCandidateBookInfo
-// ---------------------------------------------------------------------------
-
-func TestBuildCandidateBookInfo(t *testing.T) {
-	t.Run("full_book", func(t *testing.T) {
-		coverURL := "http://cover.jpg"
-		duration := 3600
-		fileSize := int64(1000000)
-		language := "en"
-
-		book := &database.Book{
-			ID:       "book-1",
-			Title:    "Test Book",
-			FilePath: "/path/to/book.m4b",
-			Format:   "m4b",
-			Author:   &database.Author{Name: "Test Author"},
-			CoverURL: &coverURL,
-			Duration: &duration,
-			FileSize: &fileSize,
-			Language: &language,
-		}
-		store := &database.MockStore{}
-		store.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
-			return []database.BookFile{{ITunesPath: "/itunes/path"}}, nil
-		}
-
-		info := BuildCandidateBookInfo(book, store)
-		assert.Equal(t, "book-1", info.ID)
-		assert.Equal(t, "Test Book", info.Title)
-		assert.Equal(t, "Test Author", info.Author)
-		assert.Equal(t, "/path/to/book.m4b", info.FilePath)
-		assert.Equal(t, "m4b", info.Format)
-		assert.Equal(t, "/itunes/path", info.ITunesPath)
-		assert.Equal(t, "http://cover.jpg", info.CoverURL)
-		assert.Equal(t, 3600, info.Duration)
-		assert.Equal(t, int64(1000000), info.FileSize)
-		assert.Equal(t, "en", info.Language)
-	})
-
-	t.Run("minimal_book", func(t *testing.T) {
-		book := &database.Book{
-			ID:       "book-2",
-			Title:    "Minimal",
-			FilePath: "/path.m4b",
-		}
-		info := BuildCandidateBookInfo(book, nil)
-		assert.Equal(t, "book-2", info.ID)
-		assert.Equal(t, "", info.Author)
-		assert.Equal(t, "", info.ITunesPath)
-		assert.Equal(t, "", info.CoverURL)
-		assert.Equal(t, 0, info.Duration)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// CountByStatus
-// ---------------------------------------------------------------------------
-
-func TestCountByStatus(t *testing.T) {
-	results := []CandidateResult{
-		{Status: "matched"},
-		{Status: "no_match"},
-		{Status: "matched"},
-		{Status: "error"},
-		{Status: "matched"},
-	}
-
-	assert.Equal(t, 3, CountByStatus(results, "matched"))
-	assert.Equal(t, 1, CountByStatus(results, "no_match"))
-	assert.Equal(t, 1, CountByStatus(results, "error"))
-	assert.Equal(t, 0, CountByStatus(results, "nonexistent"))
-	assert.Equal(t, 0, CountByStatus(nil, "matched"))
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package metafetch
 
@@ -271,9 +271,7 @@ func FilterUnchangedTags(filePath string, tagMap map[string]any) map[string]any 
 }
 
 // currentTagValueMap renders a file's current tags under the keys the tag
-// writer takes, the comparison half of filterTagsAgainst. CurrentTagValues
-// hands the same map to the organizer, which records it as the pre-write
-// value of each tag_write undo row.
+// writer takes, the comparison half of filterTagsAgainst.
 func currentTagValueMap(current metadata.Metadata) map[string]string {
 	trackCur := ""
 	if current.TrackNumber > 0 {
@@ -322,21 +320,6 @@ func currentTagValueMap(current metadata.Metadata) map[string]string {
 	}
 
 	return currentVals
-}
-
-// CurrentTagValues reads a file's tags and returns them as
-// currentTagValueMap renders them, except that an absent year is "" rather
-// than "0" (a restored "0" would be written as a year).
-func CurrentTagValues(filePath string) (map[string]string, error) {
-	current, err := metadata.ExtractMetadata(filePath, nil)
-	if err != nil {
-		return nil, err
-	}
-	vals := currentTagValueMap(current)
-	if current.Year == 0 {
-		vals["year"] = ""
-	}
-	return vals, nil
 }
 
 // filterTagsAgainst is the pure comparison half of FilterUnchangedTags, split

@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package catalog
 
@@ -177,7 +177,7 @@ type fetchResult struct {
 }
 
 // Short-listing kinds, and how many consecutive agreeing short runs it takes
-// to accept one (see HarvestAuthor).
+// to accept one (see harvestAuthor).
 const (
 	shortTruncated = "truncated"
 	shortZeroTotal = "zero_total"
@@ -255,7 +255,7 @@ func (r fetchResult) complete() bool { return r.err == nil && r.short == "" }
 // entries filed under its harvest key (filed == 0); for an author that has
 // entries, an empty "0 results" reply is far likelier a transient provider
 // answer than the author's whole catalog vanishing, and believing it would
-// stale every entry. HarvestAuthor accepts it only after ShortAcceptRuns
+// stale every entry. harvestAuthor accepts it only after ShortAcceptRuns
 // consecutive zero-total runs.
 func (h *Harvester) fetchAll(ctx context.Context, name string, filed int, touch func()) fetchResult {
 	r := fetchResult{products: map[string]metadata.CatalogProduct{}}
@@ -312,18 +312,15 @@ func (h *Harvester) fetchAll(ctx context.Context, name string, filed int, touch 
 	}
 }
 
-// HarvestAuthor fetches, disambiguates, filters and stores one author's
+// harvestAuthor fetches, disambiguates, filters and stores one author's
 // catalog, and writes its state. touch is called after each provider
 // response (liveness inside a long author). The returned state is also
 // persisted; the error is non-nil only for a store failure or cancellation.
-func (h *Harvester) HarvestAuthor(ctx context.Context, a ScopeAuthor, touch func()) (database.CatalogAuthorState, error) {
-	return h.harvestAuthor(ctx, a, touch, nil)
-}
-
-// harvestAuthor is HarvestAuthor with an optional run-level zero-total
-// ledger. With rz set (inside Run) every zero-total reply is reported to it
-// and its persisted state and stale pass are held for it, so the
-// breaker can judge the whole run before anything is staled.
+//
+// rz is an optional run-level zero-total ledger. With rz set (inside Run)
+// every zero-total reply is reported to it and its persisted state and stale
+// pass are held for it, so the breaker can judge the whole run before
+// anything is staled. With rz nil the author settles on its own.
 func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func(), rz *zeroLedger) (database.CatalogAuthorState, error) {
 	now := h.Cfg.Now().UTC()
 	st := database.CatalogAuthorState{Key: a.Key, Name: a.Name, LastAttemptAt: now, OpID: h.Cfg.OpID}
@@ -749,7 +746,7 @@ func (z *zeroLedger) judge() (v zeroVerdict, zeros, pop int, scope string) {
 // changed since its hold (another OpID or a newer LastAttemptAt). Within one
 // op that cannot happen: ConcurrencyKey "catalog.harvest" lets one harvest
 // run at a time and a run gives each author to one worker. It guards against
-// a direct HarvestAuthor call, or a future change to that key, landing a
+// a direct harvestAuthor call, or a future change to that key, landing a
 // newer result that a stale settle would overwrite.
 func (h *Harvester) settleZero(reporter registry.Reporter, z *zeroLedger, tally *Tally) error {
 	z.mu.Lock()

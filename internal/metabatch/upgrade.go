@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -350,13 +350,6 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		return result, stopErr
 	}
 	return result, nil
-}
-
-// transcriptionConfirmsCandidate returns true when the candidate's title/author
-// independently matches the book's audio-derived (transcribed) title/author.
-// The rule lives in internal/applygate so every bulk-apply path shares it.
-func transcriptionConfirmsCandidate(book *database.Book, c *metafetch.MetadataCandidate) bool {
-	return applygate.TranscriptionConfirms(book, c)
 }
 
 // isOwnerManualOnly reports whether the book belongs to a library the owner

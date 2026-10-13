@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package catalog
 
@@ -161,7 +161,7 @@ func TestHarvest_PagingIsZeroIndexedAndStopsAtTotal(t *testing.T) {
 	f := newFixtureServer(t)
 	st, _ := openCatalog(t)
 	h := newTestHarvester(f, st, 20)
-	s, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestHarvest_LanguageFilterNameOnlyAndGroups(t *testing.T) {
 	f := newFixtureServer(t)
 	st, _ := openCatalog(t)
 	h := newTestHarvester(f, st, 50)
-	s, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +233,13 @@ func TestHarvest_IdempotentUpsert(t *testing.T) {
 	f := newFixtureServer(t)
 	st, _ := openCatalog(t)
 	h := newTestHarvester(f, st, 50)
-	s1, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s1, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cot1, _ := st.GetEntryByProviderID("audible", "us", "B071Y9TTHC")
 	n1, _ := st.CountEntries()
-	s2, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s2, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestHarvest_StaleOnlyAfterCompleteFetch(t *testing.T) {
 	// and must fall back to the ASIN the complete run stored.
 	tchaikovsky := tchaikovsky
 	tchaikovsky.OwnedASINs = []string{"B0D4ZNFVBT"}
-	if _, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil); err != nil {
+	if _, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	const gone = "B0FMLC4795" // Green City Wars
@@ -275,7 +275,7 @@ func TestHarvest_StaleOnlyAfterCompleteFetch(t *testing.T) {
 	f.mu.Unlock()
 
 	// Partial fetch (page 2 fails): nothing may go stale.
-	s, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestHarvest_StaleOnlyAfterCompleteFetch(t *testing.T) {
 	f.mu.Lock()
 	f.failPage = -1
 	f.mu.Unlock()
-	s, err = h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s, err = h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestHarvest_StaleOnlyAfterCompleteFetch(t *testing.T) {
 	f.mu.Lock()
 	delete(f.drop, gone)
 	f.mu.Unlock()
-	if _, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil); err != nil {
+	if _, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	e, _ = st.GetEntryByProviderID("audible", "us", gone)
@@ -331,14 +331,14 @@ func TestHarvest_CapIsLoggedAndNeverStales(t *testing.T) {
 	f := newFixtureServer(t)
 	st, _ := openCatalog(t)
 	h := newTestHarvester(f, st, 20)
-	if _, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil); err != nil {
+	if _, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.Cfg.MaxProducts = 40
 	f.mu.Lock()
 	f.pages = nil
 	f.mu.Unlock()
-	s, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestHarvest_StandDownWhenThrottled(t *testing.T) {
 	st, _ := openCatalog(t)
 	h := newTestHarvester(f, st, 20)
 	h.Cfg.Throttled = func() bool { return true }
-	s, err := h.HarvestAuthor(context.Background(), tchaikovsky, nil)
+	s, err := h.harvestAuthor(context.Background(), tchaikovsky, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func TestRun_ConcurrentCoAuthorsShareOneEntry(t *testing.T) {
 	// One author's later complete listing without the shared product must
 	// NOT stale it: the other eleven still list it.
 	l.byAuthor[credits[0].Name] = l.byAuthor[credits[0].Name][1:2]
-	if _, err := h.HarvestAuthor(context.Background(), authors[0], nil); err != nil {
+	if _, err := h.harvestAuthor(context.Background(), authors[0], nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	e, _ = st.GetEntryByProviderID("audible", "us", "SHARED")
@@ -568,7 +568,7 @@ func TestHarvest_OwnedASINNotFoundIsNotALookupError(t *testing.T) {
 	h.Cfg.OnProviderError = func(error) { reported.Add(1) }
 	a := tchaikovsky
 	a.OwnedASINs = []string{"B071Y9TTHC", "BNOTREAL00"}
-	s, err := h.HarvestAuthor(context.Background(), a, nil)
+	s, err := h.harvestAuthor(context.Background(), a, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ func TestHarvest_OwnedASINNotFoundIsNotALookupError(t *testing.T) {
 	}
 
 	f.lookupStatus["BNOTREAL00"] = http.StatusServiceUnavailable
-	s, err = h.HarvestAuthor(context.Background(), a, nil)
+	s, err = h.harvestAuthor(context.Background(), a, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,12 +742,12 @@ func harvestTwice(t *testing.T, st *database.CatalogStore, second func(page, siz
 	}}
 	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, OpID: "op-test"})
 	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
-	s, err := h.HarvestAuthor(context.Background(), a, nil)
+	s, err := h.harvestAuthor(context.Background(), a, nil, nil)
 	if err != nil || s.State != database.CatalogHarvestComplete || s.Kept != 6 {
 		t.Fatalf("first run = %+v, %v; want complete with 6 kept", s, err)
 	}
 	run = 1
-	s, err = h.HarvestAuthor(context.Background(), a, nil)
+	s, err = h.harvestAuthor(context.Background(), a, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,7 +797,7 @@ func TestHarvest_ZeroTotalForNewAuthorIsComplete(t *testing.T) {
 		return metadata.AuthorPage{Products: []metadata.CatalogProduct{}}
 	}}
 	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1})
-	s, err := h.HarvestAuthor(context.Background(), ScopeAuthor{Key: HarvestKey("Nobody"), Name: "Nobody"}, nil)
+	s, err := h.harvestAuthor(context.Background(), ScopeAuthor{Key: HarvestKey("Nobody"), Name: "Nobody"}, nil, nil)
 	if err != nil || s.State != database.CatalogHarvestComplete {
 		t.Errorf("state = %+v, %v; want complete", s, err)
 	}
@@ -897,12 +897,12 @@ func harvestN(t *testing.T, st *database.CatalogStore, n int, next func(page, si
 	}}
 	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1, OpID: "op-test"})
 	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
-	if s, err := h.HarvestAuthor(context.Background(), a, nil); err != nil || s.State != database.CatalogHarvestComplete {
+	if s, err := h.harvestAuthor(context.Background(), a, nil, nil); err != nil || s.State != database.CatalogHarvestComplete {
 		t.Fatalf("first run = %+v, %v", s, err)
 	}
 	var out []database.CatalogAuthorState
 	for run = 1; run <= n; run++ {
-		s, err := h.HarvestAuthor(context.Background(), a, nil)
+		s, err := h.harvestAuthor(context.Background(), a, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -995,7 +995,7 @@ func annRuns(t *testing.T, st *database.CatalogStore, l *scriptLister, c *clock,
 		if i >= 0 {
 			c.Add(advance[i])
 		}
-		s, err := h.HarvestAuthor(context.Background(), a, nil)
+		s, err := h.harvestAuthor(context.Background(), a, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1084,7 +1084,7 @@ func TestHarvest_ErrorRunResetsShortRuns(t *testing.T) {
 	var got []int
 	for i := 0; i < 4; i++ {
 		failing.Store(i == 2)
-		s, err := h.HarvestAuthor(context.Background(), a, nil)
+		s, err := h.harvestAuthor(context.Background(), a, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1422,7 +1422,7 @@ func TestSettleZero_SkipsAStateChangedSinceItsHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Add(time.Hour)
-	newer, err := h.HarvestAuthor(context.Background(), a, nil)
+	newer, err := h.harvestAuthor(context.Background(), a, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

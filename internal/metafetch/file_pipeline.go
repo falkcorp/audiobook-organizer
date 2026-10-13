@@ -1,7 +1,7 @@
 // file: internal/metafetch/file_pipeline.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-07
+// last-edited: 2026-10-13
 
 // The metadata-apply rename path, expressed entirely in terms of
 // internal/organizer.
@@ -145,10 +145,4 @@ func newPathOrganizer(store organizer.OrganizerStore) *organizer.Organizer {
 	org := organizer.NewOrganizer(&config.AppConfig)
 	org.SetStore(store)
 	return org
-}
-
-// ComputeTargetPaths computes the target path for every file of a book using
-// the SAME builder the organize path uses. See organizer.ComputeTargetPaths.
-func ComputeTargetPaths(rootDir, folderPattern, filePattern string, files []database.BookFile, vars organizer.PathVars, opts organizer.BuildOpts) ([]FileRenameEntry, error) {
-	return organizer.ComputeTargetPaths(rootDir, folderPattern, filePattern, files, vars, opts)
 }
