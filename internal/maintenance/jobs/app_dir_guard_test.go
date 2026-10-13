@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/app_dir_guard_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b0e47c9-a2d3-4816-9f74-0c63e8b1a5de
 // last-edited: 2026-10-13
 
@@ -61,12 +61,6 @@ func withLibraryRoot(t *testing.T, root string, appDirs bool) {
 		config.AppConfig.OpenLibraryDumpDir = prevDump
 		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = prevDB, prevPlaylist
 	})
-}
-
-func mkfile(t *testing.T, path string) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
 }
 
 // TestCleanupEmptyFoldersJob_SkipsAppDirs — the highest-risk walker in the set.
