@@ -54,8 +54,8 @@ backup keeps the original audio's mtime, which can be years old, so aging by
 mtime would delete a fresh backup on the next run. The sweep walks `RootDir` only: a backup
 beside a file outside the library root (for example in an import path) is
 never removed automatically. The manual `cleanup-backups` maintenance job
-matches only `.backup`, `.bak` and legacy `.bak-YYYYMMDD-HHMMSS` names, so it
-does not remove the new `.bak-<unix>` backups.
+that used to sit beside this sweep has been removed, so this nightly sweep is
+the only automatic backup cleanup.
 
 ### Removed
 
