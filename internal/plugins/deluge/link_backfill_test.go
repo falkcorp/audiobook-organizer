@@ -984,7 +984,9 @@ func TestLinkBackfill_Race(t *testing.T) {
 }
 
 // TestLinkBackfill_MemDBNotServingFailsClosed pins what the op does while the
-// store's memdb is not serving (the ~130s of boot warmup in production):
+// store's memdb is not serving (reached in tests that skip the warmup wait,
+// and in production only past the registry warmup gate's timeout or after a
+// failed warmup):
 // BookFilesWithHash refuses rather than answering from a possibly short list,
 // so the torrent is counted as an error, links nothing, and writes nothing.
 // It is the deterministic form of the state tests used to hit by accident when
