@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -26,6 +26,17 @@ import (
 // ErrStandDownLost is the default error a write is refused with once the
 // run's scan stand-down lease is gone (Config.LeaseLostErr overrides it).
 var ErrStandDownLost = errors.New("opswriter: scan stand-down lease lost; remaining writes not made")
+
+// ErrNotJournaled refuses a write whose history row could not be recorded
+// because the Writer has no operation journal: the write is not made.
+var ErrNotJournaled = errors.New("opswriter: no operation journal; the write was not made")
+
+// repointDetail is a repoint intent's Planned detail.
+type repointDetail struct {
+	BookID string `json:"book_id"`
+	From   string `json:"from"` // undo.BookFileLocation JSON
+	To     string `json:"to"`
+}
 
 // pkgLog is the subsystem logger for this package's own warnings.
 var pkgLog = logger.New("opswriter")
@@ -190,16 +201,34 @@ func (w *Writer) Planned() ([]database.Intent, int) { return w.intents.plannedLi
 
 // begin runs steps 1 and 2: the gate, then (Live) the intent or (Preview) the
 // plan line and ErrPreview. It returns the intent's seq.
-func (w *Writer) begin(ctx context.Context, what, subject, kind, op, detail string) (uint64, error) {
-	if ctx != nil && ctx.Err() != nil {
-		return 0, fmt.Errorf("%s not written: %w", what, context.Cause(ctx))
-	}
-	if err := w.Gate(what); err != nil {
+func (w *Writer) begin(ctx context.Context, what, subject, kind, op, detail string, journaled bool) (uint64, error) {
+	if err := w.check(ctx, what); err != nil {
 		return 0, err
 	}
+	return w.intent(what, subject, kind, op, detail, journaled)
+}
+
+// check is step 1 alone: the item's context, then the fence and lease gate.
+// Every method runs it before it reads anything, so a fenced run gets
+// ErrFenced, never a stale-read error such as ErrChangedSincePlan.
+func (w *Writer) check(ctx context.Context, what string) error {
+	if ctx != nil && ctx.Err() != nil {
+		return fmt.Errorf("%s not written: %w", what, context.Cause(ctx))
+	}
+	return w.Gate(what)
+}
+
+// intent is step 2: the plan line (Preview) or the write-ahead row (Live).
+// A write whose history goes to the operation journal (journaled) is refused
+// before anything is written when no journal is wired: a committed write
+// nothing records could never be reverted.
+func (w *Writer) intent(what, subject, kind, op, detail string, journaled bool) (uint64, error) {
 	if w.cfg.Mode == ops.Preview {
 		w.intents.plan(subject, kind, op, detail)
 		return 0, ops.ErrPreview
+	}
+	if journaled && w.cfg.Journal == nil {
+		return 0, fmt.Errorf("%w: %s not written", ErrNotJournaled, what)
 	}
 	seq, err := w.intents.put(subject, kind, op, detail)
 	if err != nil {
@@ -226,7 +255,7 @@ func (w *Writer) ModifyBook(ctx context.Context, bookID string, fn func(*databas
 	if w.cfg.Books == nil {
 		return ops.Changed{}, errors.New("opswriter: no book store")
 	}
-	seq, err := w.begin(ctx, "book "+bookID, "book:"+bookID, "modify", "modify_book", "")
+	seq, err := w.begin(ctx, "book "+bookID, "book:"+bookID, "modify", "modify_book", "", false)
 	if err != nil {
 		return ops.Changed{}, err
 	}
@@ -265,7 +294,7 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 	if w.cfg.Files == nil {
 		return ops.Changed{}, errors.New("opswriter: no book_file store")
 	}
-	seq, err := w.begin(ctx, "book_file "+fileID, "book_file:"+fileID, "modify", "modify_book_file", bookID)
+	seq, err := w.begin(ctx, "book_file "+fileID, "book_file:"+fileID, "modify", "modify_book_file", bookID, true)
 	if err != nil {
 		return ops.Changed{}, err
 	}
@@ -318,6 +347,10 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 	if w.cfg.Files == nil {
 		return errors.New("opswriter: no book_file store")
 	}
+	what := "book_file " + fileID
+	if err := w.check(ctx, what); err != nil {
+		return err
+	}
 	cur, err := w.cfg.Files.GetBookFileByID(bookID, fileID)
 	if err != nil {
 		return fmt.Errorf("read book_file %s: %w", fileID, err)
@@ -337,7 +370,13 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 	if owner != nil && owner.ID != fileID {
 		to.KeyOwnerBook, to.KeyOwnerRow = owner.BookID, owner.ID
 	}
-	seq, err := w.begin(ctx, "book_file "+fileID, "book_file:"+fileID, "repoint", "repoint_book_file", bookID)
+	// The intent carries both locations, so a crash between the write and
+	// the history row still leaves what a revert needs.
+	detail, err := json.Marshal(repointDetail{BookID: bookID, From: was.Encode(), To: to.Encode()})
+	if err != nil {
+		return fmt.Errorf("%s not written: %w", what, err)
+	}
+	seq, err := w.intent(what, "book_file:"+fileID, "repoint", "repoint_book_file", string(detail), true)
 	if err != nil {
 		return err
 	}
@@ -367,7 +406,7 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 	if w.cfg.Authors == nil {
 		return ops.Changed{}, errors.New("opswriter: no author store")
 	}
-	seq, err := w.begin(ctx, "credits of book "+bookID, "book:"+bookID, "modify", "modify_book_authors", "")
+	seq, err := w.begin(ctx, "credits of book "+bookID, "book:"+bookID, "modify", "modify_book_authors", "", true)
 	if err != nil {
 		return ops.Changed{}, err
 	}
@@ -404,7 +443,7 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 // rows it returned are still recorded.
 func (w *Writer) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.HistoryRow, error)) error {
 	subject := string(e.Subject.Type) + ":" + e.Subject.ID
-	seq, err := w.begin(ctx, "effect "+e.Name+" on "+subject, subject, "effect", e.Name, string(e.Resource))
+	seq, err := w.begin(ctx, "effect "+e.Name+" on "+subject, subject, "effect", e.Name, string(e.Resource), true)
 	if err != nil {
 		return err
 	}

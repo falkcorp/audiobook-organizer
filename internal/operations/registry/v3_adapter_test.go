@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
 // last-edited: 2026-10-13
 
@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -464,5 +466,234 @@ func TestBatchResumesThroughTheExecutor(t *testing.T) {
 	rec, err := store.GetRunV3(opID)
 	if err != nil || rec == nil || rec.Progress.Done != 4*size || rec.Progress.Chunks == nil || rec.Progress.Chunks.Done != 4 {
 		t.Fatalf("resumed run progress: %+v %v", rec, err)
+	}
+}
+
+// TestBatchResumesAfterACrash: the process dies mid-batch (no Shutdown: the
+// row is left "running" with chunks 0 and 1 in the ledger). The next
+// process's boot sweep (bootSweepV3) maps it to interrupted{crash}, the
+// ResumeRestart policy re-queues the same op id (resumeRestart), and the
+// runner leases only chunks 2 and 3.
+func TestBatchResumesAfterACrash(t *testing.T) {
+	store := newPebbleV3(t)
+	const size = 10
+	mkDef := func(ran *counts) ops.Definition {
+		return ops.Batch("test.crashy", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
+			Common: ops.Common{Title: "crashy", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
+			Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
+				return ops.Source[int]{Items: seq(4 * size), Key: itemKey}, nil
+			},
+			Item: func(rc *ops.ItemRC, _ ops.NoParams, i int) error {
+				ran.add(i)
+				if i/size >= 2 && rc.OpID() == "crashing" {
+					<-rc.Context().Done()
+					return rc.Context().Err()
+				}
+				return nil
+			},
+			Concurrency: ops.Network(2, "two chunks finish, two are in flight"),
+			ChunkSize:   size,
+		})
+	}
+
+	// The dead process: its run row says running, and its runner got
+	// chunks 0 and 1 into the ledger before the world stopped.
+	opID := "01M4VZZZZZZZZZZZZZZZZZZZZZ"
+	now := time.Now().UTC()
+	if err := store.InsertOperationV2(database.OperationV2Row{ID: opID, DefID: "test.crashy", Status: "queued", Priority: 1, QueuedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateOperationV2Status(opID, "running", &now, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	first := newCounts()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := ops.NewRC(ops.RunEnv{Context: ctx, OpID: "crashing", DefID: "test.crashy", Mode: ops.Live})
+	job, err := ops.Compile(mkDef(first)).OpenBatch(rc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = runBatch(ctx, batchConfig{opID: opID, job: job, rc: rc, store: store, commitEvery: -1,
+		afterCommit: func(l database.Ledger, _ database.ProgressSnapshot) bool {
+			return slices.Equal(bitsSet(l), []int{0, 1})
+		}})
+	if !errors.Is(err, errWorldStopped) {
+		t.Fatalf("dead process: %v", err)
+	}
+	if row, _ := store.GetOperationV2(opID); row == nil || row.Status != "running" {
+		t.Fatalf("fixture: the row must still read running, got %+v", row)
+	}
+
+	second := newCounts()
+	r := NewWithOptions(store, slog.Default(), 2, Options{WatchdogInterval: time.Hour, SweepInterval: time.Hour})
+	if err := Register(r, "test", mkDef(second)); err != nil {
+		t.Fatal(err)
+	}
+	rctx, rcancel := context.WithCancel(context.Background())
+	r.Start(rctx)
+	t.Cleanup(func() {
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer scancel()
+		if err := r.Shutdown(sctx); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+		rcancel()
+	})
+	row := awaitTerminal(t, store, opID)
+	if row.Status != "completed" {
+		t.Fatalf("resumed run: %s %v", row.Status, row.ErrorMessage)
+	}
+	for i := range 4 * size {
+		if i/size < 2 && second.get(i) != 0 {
+			t.Fatalf("item %d of a chunk the dead process recorded ran again", i)
+		}
+		if first.get(i)+second.get(i) < 1 {
+			t.Fatalf("item %d never ran", i)
+		}
+	}
+	rec, err := store.GetRunV3(opID)
+	if err != nil || rec == nil || rec.Progress.Done != 4*size || rec.Attempt < 2 {
+		t.Fatalf("resumed record: %+v %v", rec, err)
+	}
+}
+
+// TestLeaseLossThroughWriterFailsRun drives a real stand-down lease loss:
+// the run holds the stand-down and writes through its Writer; the lease
+// lapses mid-run, the next write is refused and the registry revokes the
+// fence. The run must end failed, with only the chunk that finished before
+// the loss counted -- not "completed" with the rest counted as failures.
+func TestLeaseLossThroughWriterFailsRun(t *testing.T) {
+	store := newPebbleV3(t)
+	var ids []string
+	for i := range 20 {
+		b, err := store.CreateBook(&database.Book{Title: fmt.Sprintf("book %02d", i), FilePath: fmt.Sprintf("/library/%02d", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, b.ID)
+	}
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	r := startV3Registry(t, store, Options{ScanStandDownLease: time.Minute,
+		ScanStandDownNow: func() time.Time { return time.Unix(0, clock.Load()) }})
+	var once sync.Once
+	var written atomic.Int64
+	def := ops.Batch("test.lease-loss", ops.BatchSpec[ops.NoParams, string, ops.NoResult]{
+		Common: ops.Common{Title: "lease", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Source: func(*ops.RC, ops.NoParams) (ops.Source[string], error) {
+			return ops.Source[string]{Items: ids, Key: func(s string) string { return s }}, nil
+		},
+		Item: func(rc *ops.ItemRC, _ ops.NoParams, id string) error {
+			var herr error
+			once.Do(func() { _, herr = rc.StandDown() })
+			if herr != nil {
+				return herr
+			}
+			if written.Load() == 7 {
+				clock.Add(int64(2 * time.Minute)) // the lease lapses
+			}
+			_, err := rc.Writer().ModifyBook(rc.Context(), id, func(b *database.Book) error { b.Title += " (x)"; return nil })
+			if err == nil {
+				written.Add(1)
+			}
+			return err
+		},
+		Concurrency: ops.Sequential("one stand-down holder writing in order"),
+		ChunkSize:   5,
+	})
+	if err := Register(r, "test", def); err != nil {
+		t.Fatal(err)
+	}
+	id, err := r.EnqueueOp(context.Background(), "test.lease-loss", map[string]bool{"dry_run": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := awaitTerminal(t, store, id)
+	if row.Status == "completed" {
+		t.Fatal("a run that lost its stand-down lease ended completed")
+	}
+	if written.Load() != 7 {
+		t.Fatalf("%d writes landed, want the 7 before the loss", written.Load())
+	}
+	rec, err := store.GetRunV3(id)
+	if err != nil || rec == nil || rec.Progress.Done != 5 || rec.Progress.Failed != 0 {
+		t.Fatalf("progress after the loss: %+v %v", rec, err)
+	}
+}
+
+// v2SurfaceStore hides every capability but the v2 operations surface: no
+// write-ahead intents, no operation journal.
+type v2SurfaceStore struct{ database.OpsV2Store }
+
+// S4a: a Live run of a writing def refuses to start on a store that cannot
+// back its Writer (no intents, no journal); a Preview run, which writes
+// nothing, still runs.
+func TestLiveWriterNeedsIntentsAndJournal(t *testing.T) {
+	inner := newPebbleV3(t)
+	store := v2SurfaceStore{inner}
+	r := startV3Registry(t, store, Options{})
+	var ran atomic.Int32
+	def := ops.Task("test.writes", ops.TaskSpec[ops.NoParams, ops.NoResult]{
+		Common: ops.Common{Title: "w", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { ran.Add(1); return ops.NoResult{}, nil },
+	})
+	if err := Register(r, "test", def); err != nil {
+		t.Fatal(err)
+	}
+	live, err := r.EnqueueOp(context.Background(), "test.writes", map[string]bool{"dry_run": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := awaitTerminal(t, inner, live)
+	if row.Status != "failed" || row.ErrorMessage == nil || ran.Load() != 0 {
+		t.Fatalf("live run on a store without intents/journal: %s ran=%d", row.Status, ran.Load())
+	}
+	preview, err := r.EnqueueOp(context.Background(), "test.writes", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := awaitTerminal(t, inner, preview); row.Status != "completed" || ran.Load() != 1 {
+		t.Fatalf("preview run: %s ran=%d", row.Status, ran.Load())
+	}
+}
+
+// N4: a native registration that the registry refuses leaves no native
+// entry behind, and a duplicate does not disturb the original's.
+func TestRegisterFailureLeavesNoNativeEntry(t *testing.T) {
+	r := startV3Registry(t, newPebbleV3(t), Options{})
+	if err := r.RegisterOp(OperationDef{ID: "test.v2", Plugin: "test", ResumePolicy: ResumeDrop, Liveness: LivenessManual,
+		Run: func(context.Context, json.RawMessage, Reporter) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	clash := ops.Task("test.native", ops.TaskSpec[ops.NoParams, ops.NoResult]{
+		Common: ops.Common{Title: "n", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, FormerIDs: []string{"test.v2"}},
+		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
+	})
+	if err := Register(r, "test", clash); err == nil {
+		t.Fatal("a former id naming a registered def was accepted")
+	}
+	r.mu.RLock()
+	_, stale := r.v3defs["test.native"]
+	r.mu.RUnlock()
+	if stale {
+		t.Fatal("a refused registration left a native catalog entry")
+	}
+	good := ops.Task("test.good", ops.TaskSpec[ops.NoParams, ops.NoResult]{
+		Common: ops.Common{Title: "g", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
+		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
+	})
+	if err := Register(r, "test", good); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(r, "test", good); err == nil {
+		t.Fatal("a duplicate registration was accepted")
+	}
+	kinds := map[string]ops.Kind{}
+	for _, d := range r.Catalog() {
+		kinds[d.ID()] = d.Kind()
+	}
+	if kinds["test.good"] != ops.KindTask || kinds["test.v2"] != ops.KindAdapted || len(kinds) != 2 {
+		t.Fatalf("catalog = %v", kinds)
 	}
 }
