@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -475,4 +475,20 @@ func TestVersionTwinFixer_Registered(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, repairs.AllowsITunesDatabaseOnly(f))
 	require.False(t, repairs.SkipsScanStandDown(f))
+}
+
+// The local catalog's manual-only tag holds a candidate for the version-twin
+// copy whatever its visible fields say (the catalog also flags by subtitle-free
+// series membership the checks below do not see).
+func TestVTRecordManualOnly_CatalogTagHoldsNeutralFields(t *testing.T) {
+	c := metafetch.MetadataCandidate{Title: "Synthetic Field Notes", Publisher: "Synthetic Press", Series: "Synthetic Series",
+		Source: "Audible Catalog (local)"}
+	require.Empty(t, vtRecordManualOnly(&c), "fixture: neutral fields are not held")
+	c.ManualOnly = true
+	require.Contains(t, vtRecordManualOnly(&c), "manual-only by the local catalog")
+
+	raw, err := json.Marshal(c)
+	require.NoError(t, err)
+	row := &database.MetadataCandidateCache{BookID: "b1", Candidates: []json.RawMessage{raw}}
+	require.Contains(t, vtCandidatesManualOnly(row), "(#1)")
 }

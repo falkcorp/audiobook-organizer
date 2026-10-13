@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-10-10
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -1306,9 +1306,14 @@ func vtCacheVerdict(e *database.MetadataCandidateCache) bool {
 }
 
 // vtRecordManualOnly names how a record marks Doctor Who / Big Finish /
-// Torchwood (applygate.IsOwnerManualOnly on its title, subtitle, series and
-// publisher), "" when it does not.
+// Torchwood (the local catalog's tag, or applygate.IsOwnerManualOnly on its
+// title, subtitle, series and publisher), "" when it does not.
 func vtRecordManualOnly(c *metafetch.MetadataCandidate) string {
+	// The local catalog's own finding (catalog.IsManualOnly reads the subtitle
+	// and every series membership): held however neutral the fields below are.
+	if c.ManualOnly {
+		return "is tagged manual-only by the local catalog"
+	}
 	for _, v := range []struct{ field, value string }{{"title", c.Title}, {"subtitle", c.Subtitle},
 		{"series", c.Series}, {"secondary series", c.SeriesSecondary}, {"publisher", c.Publisher}} {
 		if v.value != "" && applygate.IsOwnerManualOnly(v.value, "") {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -1022,6 +1022,35 @@ func TestJunkTitleFixer_CandidateTitlePrefersTheBooksASIN(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "Other Record", title, "a book with no ASIN keeps the highest score")
+}
+
+// A candidate the local catalog tagged manual-only is never proposed as a
+// title, whatever its neutral visible fields say; the same candidate untagged is.
+func TestJunkTitleFixer_CandidateTitleSkipsCatalogManualOnly(t *testing.T) {
+	cand := func(title string, manual bool) json.RawMessage {
+		b, err := json.Marshal(map[string]any{"title": title, "author": "Author A", "score": 0.95, "manual_only": manual,
+			"source": "Audible Catalog (local)", "publisher": "Synthetic Press"})
+		require.NoError(t, err)
+		return b
+	}
+	lib := newJunkLib(t)
+	for _, tc := range []struct {
+		name   string
+		manual bool
+		want   bool
+	}{{"untagged is proposed", false, true}, {"tagged manual-only is skipped", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := &database.MetadataCandidateCache{BookID: "b1", Candidates: []json.RawMessage{cand("Synthetic Field Notes", tc.manual)}}
+			f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
+				filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+			title, _, ok, err := f.candidateTitle(&database.Book{ID: "b1"}, "Author A")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+			if tc.want {
+				require.Equal(t, "Synthetic Field Notes", title)
+			}
+		})
+	}
 }
 
 // A row marked Stale (the book was retitled or re-credited after the fetch)
