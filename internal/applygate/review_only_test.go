@@ -1,5 +1,5 @@
 // file: internal/applygate/review_only_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c09f46a0-0fa5-4191-b572-ea43cc5ace8b
 // last-edited: 2026-10-12
 
@@ -87,5 +87,19 @@ func TestCatalogCandidate_IsReviewOnly(t *testing.T) {
 	if !v.OwnerReviewOverridable() || v.UnseenOwnerReviewOverridable() {
 		t.Fatalf("an owner review applies it by hand, the hashless marker does not (overridable=%v unseen=%v)",
 			v.OwnerReviewOverridable(), v.UnseenOwnerReviewOverridable())
+	}
+}
+
+// A catalog entry of the owner's manual-only libraries (here by publisher) is
+// held by the bulk guard as any manual-only record is, on the candidate's own
+// fields; the stage's ManualOnly tag is informational.
+func TestCatalogCandidate_ManualOnlyEntryIsHeldByTheBulkGuard(t *testing.T) {
+	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: intp(36000)}
+	rt := database.ComputeBookRuntime(book, nil)
+	c := metafetch.MetadataCandidate{Source: metadata.CatalogSourceName, Title: "Synthetic Field Notes 1", Publisher: "Big Finish Productions",
+		SeriesPosition: "1", Score: 1.0, DurationSec: 36000, Stage: metadata.CatalogStageAuthor, ManualOnly: true}
+	v := EvaluateTranscribed(book, snap(book), rt, &c, nil, nil, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true})
+	if v.Allowed || v.Reason != ReasonOwnerManualOnly || v.OwnerReviewOverridable() {
+		t.Fatalf("allowed=%v reason=%q overridable=%v; want refused owner_manual_only, which no review lifts", v.Allowed, v.Reason, v.OwnerReviewOverridable())
 	}
 }
