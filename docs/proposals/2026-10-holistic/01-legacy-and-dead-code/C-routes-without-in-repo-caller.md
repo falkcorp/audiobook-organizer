@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/01-legacy-and-dead-code/C-routes-without-in-repo-caller.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: cf3c3044-cbe2-474c-a6b1-851a99f8650f -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-13 -->
 
 # Appendix C: API routes with no in-repo caller
 
@@ -147,6 +147,15 @@ Read-only diagnostic and census routes used from curl and Claude sessions. These
 - `GET /api/v1/series/normalize/preview`
 - `GET /api/v1/maintenance/repair-missing-files/:id`
 - `GET /api/v1/maintenance/scan-composer-tags/:id`
+
+## Kept by owner (D74, answered 2026-10-13): 4
+
+The owner uses a dynamic collection, and dynamic collections can only be created or edited through the native routes (the ABS surface refuses: `internal/server/handlers/abs/collections.go:249`, `:321`, `:378`). The planned Collections page (07-F5) needs these routes. They stay registered; 01 P81c marks their rows `(KEEP, owner 2026-10-13)`. They are listed in the triage list above only for the record.
+
+- `GET /api/v1/collections/:id`
+- `PUT /api/v1/collections/:id`
+- `DELETE /api/v1/collections/:id`
+- `POST /api/v1/collections/:id/materialize`
 
 ## Referenced only by scripts or skills (keep unless the script is retired)
 

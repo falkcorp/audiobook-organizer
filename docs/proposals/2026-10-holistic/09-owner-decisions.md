@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/09-owner-decisions.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 3b9e6f2a-71c4-4d0e-a8b5-9f1c2e7d4a60 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-13 -->
 
 # 09: Owner decisions on the holistic roadmap
 
@@ -105,3 +105,11 @@ Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v
 | D71 | 01 P81b. Does anything Mac-side sync listening position through `/books/:id/position`? | **No.** Retire the `/books/` alias behind `gone()`; `/audiobooks/:id/position` stays. | **answered 2026-10-09** |
 | D72 | 06 P2 decision flag. Pin workflow `go-version:` to the full patch (14 literals, 8 workflows, checker flips to full-pin equality) or keep floating minors? | **Full patch pin everywhere.** | **answered 2026-10-09** |
 | D73 | 01 Q6 / appendix C triage. Which of the 72 no-caller routes survive? | **Keep the 24 read-only diagnostic GETs** (db-census, fingerprint-failures, signals/coverage, work/stats, iTunes stats, merge journals, cache stats, activity-log, AI/tool status, op-defs, deluge discover/labels, metadata fields/throttles, policy tags, series normalize preview, two maintenance status GETs); **retire the other 48** (write/undo paths and orphan CRUD) behind 410 stubs for one release. Listed in appendix C "Kept by owner (D73)". | **answered 2026-10-09** |
+
+## Round-3 decisions
+
+Recorded by the coordinator on 2026-10-13.
+
+| # | Question (source) | Recommended answer | Status |
+|---|---|---|---|
+| D74 | 01 P81c / appendix C. The four `/api/v1/collections/:id` routes (`GET`, `PUT`, `DELETE`, and `POST .../materialize`) have no web caller. Dynamic (query-backed) collections can only be created or edited through them: the ABS surface refuses to edit them (`internal/server/handlers/abs/collections.go:249`, `:321`, `:378`). Retire them behind 410, or keep? | **Keep the routes and add a UI page.** Owner, 2026-10-13: "Keep routes + add a UI page". The owner already has a dynamic collection. 01 P81c no longer retires the collection routes (it retires only `GET /api/v1/playlists/:id/export.m3u`), and new brief 07-F5 builds a Collections page in the web UI (create, edit, delete, preview or materialize; static and dynamic) so collections can be managed there and appear in ABS. | **answered 2026-10-13** |
