@@ -1,0 +1,1 @@
+- Removed seven functions that no running binary can reach, from the apply-cap counter, the bulk-apply gate, the repairs path guard and the duration, author and fragment maintenance fixers. Their tests now exercise the live functions they wrapped. No behaviour changes.

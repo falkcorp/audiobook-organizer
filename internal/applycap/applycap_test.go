@@ -1,7 +1,7 @@
 // file: internal/applycap/applycap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e2b7c41-3f8a-4d16-b6e5-0a7c4d9f2e18
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package applycap
 
@@ -70,14 +70,14 @@ func TestCounter_RefusesTheCapPlusOneth(t *testing.T) {
 		t.Fatalf("4th Admit: got %v, want ExceededError{Requested:4 Cap:3}", err)
 	}
 	// The refused apply is not counted, and refusing is sticky.
-	if c.Admitted() != 3 {
-		t.Fatalf("Admitted after refusal = %d, want 3", c.Admitted())
+	if int(c.admitted.Load()) != 3 {
+		t.Fatalf("admitted after refusal = %d, want 3", int(c.admitted.Load()))
 	}
 	if err := c.Admit(); err == nil {
 		t.Fatal("5th Admit: want refusal")
 	}
-	if c.Admitted() != 3 {
-		t.Fatalf("Admitted after second refusal = %d, want 3", c.Admitted())
+	if int(c.admitted.Load()) != 3 {
+		t.Fatalf("admitted after second refusal = %d, want 3", int(c.admitted.Load()))
 	}
 }
 
@@ -98,9 +98,9 @@ func TestCounter_ConcurrentAdmitsNeverExceedCap(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if okCount.n != limit || refused.n != workers*perWorker-limit || c.Admitted() != limit {
+	if okCount.n != limit || refused.n != workers*perWorker-limit || int(c.admitted.Load()) != limit {
 		t.Fatalf("ok=%d refused=%d admitted=%d, want %d/%d/%d",
-			okCount.n, refused.n, c.Admitted(), limit, workers*perWorker-limit, limit)
+			okCount.n, refused.n, int(c.admitted.Load()), limit, workers*perWorker-limit, limit)
 	}
 }
 

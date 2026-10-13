@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-08
+// last-edited: 2026-10-13
 
 package repairs
 
@@ -34,20 +34,14 @@ const (
 	SkipOwnerManual = "skipped_owner_manual"
 )
 
-// GuardBookPaths is the one hands-off check for a single book. paths should
-// hold Book.FilePath and the path of every book_file row, missing rows
+// GuardBookPathsWith is the one hands-off check for a single book. paths
+// should hold Book.FilePath and the path of every book_file row, missing rows
 // included: the rules are about where the book lives, not whether its file
 // is on disk right now. seriesName is the book's series name ("" for none).
 // It returns "" when the book may be touched.
 //
-// It resolves symlinks with a fresh PathResolver; a caller checking many books
-// in one run passes its own through GuardBookPathsWith.
-func GuardBookPaths(bookID string, paths []string, seriesName string) (kind, reason string) {
-	return GuardBookPathsWith(nil, bookID, paths, seriesName)
-}
-
-// GuardBookPathsWith is GuardBookPaths resolving symlinks through res (nil:
-// a fresh resolver for this call).
+// Symlinks resolve through res (nil: a fresh resolver for this call); a
+// caller checking many books in one run passes its own.
 func GuardBookPathsWith(res *PathResolver, bookID string, paths []string, seriesName string) (kind, reason string) {
 	return guardBookPaths(res, bookID, paths, seriesName, false)
 }

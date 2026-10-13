@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -1069,7 +1069,7 @@ func combinedVariants(idx *combinedAuthorIndex, name string) []database.Author {
 	return out
 }
 
-// combinedNextCredits returns the credit list with the combined records
+// combinedProposal returns the credit list with the combined records
 // removed and their authors in place, positions renumbered 0..n-1.
 //
 // recIDs are the combined records; targets[i] the author ids of recIDs[i] in
@@ -1084,13 +1084,9 @@ func combinedVariants(idx *combinedAuthorIndex, name string) []database.Author {
 // A combined record held only as the primary AuthorID puts its parts first.
 // Non-author-role rows (a narrator credit, even of a combined record) keep
 // their role and relative order; every row is renumbered.
-func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
-	out, _ := combinedProposal(cur, bookID, recIDs, targets, 0, nil)
-	return out
-}
-
-// combinedProposal is combinedNextCredits followed by the clean-up a
-// rewritten list needs (keyOf nil skips it): a credit whose author no longer
+//
+// After that rewrite (combinedRewrite) it applies the clean-up a rewritten
+// list needs (keyOf nil skips it): a credit whose author no longer
 // exists (keyOf returns "") is dropped, and of credits naming one person
 // (keyOf returns one key: same letters, or one an alias of the other) only
 // the first is kept. dropped lists what was removed, for the row's reason.

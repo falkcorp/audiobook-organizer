@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5e8a0b17-4c3d-4f92-a6e1-2d9c7b0f8e35
-// last-edited: 2026-09-27
+// last-edited: 2026-10-13
 
 package applygate
 
@@ -124,14 +124,14 @@ func TestCheckSeriesNumberLost(t *testing.T) {
 }
 
 // TestCheckEvidence_FillOnlyTitleIsNotChecked drives a real fill-only pair
-// through CheckEvidence: every stored title word survives, so overwrites()
+// through CheckEvidenceInBatch: every stored title word survives, so overwrites()
 // does not list "title" and series_number stays neutral, although the same
 // pair blocks when the title IS overwritten.
 func TestCheckEvidence_FillOnlyTitleIsNotChecked(t *testing.T) {
 	book := database.Book{Title: "Pixel Dust Book 1", Duration: intp(30000),
 		Author: &database.Author{Name: "Ann Author"}, FilePath: "/lib/Ann Author/Pixel Dust/Pixel Dust Book 1.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "Pixel Dust 1 Party Hard", Author: "Ann Author", DurationSec: 30000}
-	v := CheckEvidence(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false)
+	v := CheckEvidenceInBatch(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false, nil)
 	if contains(v.Overwrites, "title") {
 		t.Fatalf("overwrites = %v; the pair was meant to be fill-only", v.Overwrites)
 	}

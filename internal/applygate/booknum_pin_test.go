@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_pin_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5e8a1c47-9d20-4b36-a7f1-2c6d0b93e815
-// last-edited: 2026-09-27
+// last-edited: 2026-10-13
 
 package applygate
 
@@ -45,7 +45,7 @@ func TestCheckEvidence_SeriesNumberLostIsWired(t *testing.T) {
 	book := database.Book{Title: "Empire of Man 04 - We Few", Duration: intp(61200),
 		Author: &database.Author{Name: "David Weber"}, FilePath: "/lib/David Weber/Empire of Man/We Few.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "We Few", Author: "David Weber", DurationSec: 61200}
-	v := CheckEvidence(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false)
+	v := CheckEvidenceInBatch(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false, nil)
 	if v.Pass {
 		t.Fatalf("passed: %+v", v)
 	}

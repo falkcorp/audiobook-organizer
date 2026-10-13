@@ -1,7 +1,7 @@
 // file: internal/applygate/live_authors_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c5d2e81-7a4b-4f93-9e16-b8a3c1d7f042
-// last-edited: 2026-09-27
+// last-edited: 2026-10-13
 
 package applygate
 
@@ -34,12 +34,12 @@ func TestCheckEvidence_ReadsLiveAuthorsNotSnapshot(t *testing.T) {
 	cand := &metafetch.MetadataCandidate{Title: "Valis", Author: "Philip K. Dick", DurationSec: 36000}
 	rt := database.BookRuntime{Seconds: 36000, Source: database.RuntimeSourceBook}
 
-	if ch := authorEvidence(t, CheckEvidence(book, Authors{"Philip K. Dick"}, rt, cand, false)); ch.Outcome != OutcomeAgree {
+	if ch := authorEvidence(t, CheckEvidenceInBatch(book, Authors{"Philip K. Dick"}, rt, cand, false, nil)); ch.Outcome != OutcomeAgree {
 		t.Fatalf("live author Philip K. Dick: %s/%s %s, want agree", ch.Outcome, ch.Reason, ch.Detail)
 	}
 	// With no live author the snapshot must NOT stand in for one.
 	book.Author = &database.Author{Name: "Philip K. Dick"}
-	if ch := authorEvidence(t, CheckEvidence(book, nil, rt, cand, false)); ch.Outcome != OutcomeBlock || ch.Reason != ReasonAuthorNotInPath {
+	if ch := authorEvidence(t, CheckEvidenceInBatch(book, nil, rt, cand, false, nil)); ch.Outcome != OutcomeBlock || ch.Reason != ReasonAuthorNotInPath {
 		t.Fatalf("no live author: %s/%s, want block %s (the snapshot is not evidence)", ch.Outcome, ch.Reason, ReasonAuthorNotInPath)
 	}
 }
@@ -49,7 +49,7 @@ func TestCheckEvidence_ReadsLiveAuthorsNotSnapshot(t *testing.T) {
 func TestCheckEvidence_PlaceholderLiveAuthorIsNoAuthor(t *testing.T) {
 	book := &database.Book{Title: "Valis", FilePath: "/lib/Unknown Author/Valis/Valis.m4b"}
 	cand := &metafetch.MetadataCandidate{Title: "Valis", Author: "Philip K. Dick"}
-	v := CheckEvidence(book, Authors{"Unknown Author", " "}, database.BookRuntime{}, cand, false)
+	v := CheckEvidenceInBatch(book, Authors{"Unknown Author", " "}, database.BookRuntime{}, cand, false, nil)
 	for _, o := range v.Overwrites {
 		if o == "author" {
 			t.Fatalf("placeholder counted as an overwritten author: %v", v.Overwrites)
