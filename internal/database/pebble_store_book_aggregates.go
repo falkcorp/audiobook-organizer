@@ -190,9 +190,9 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 	if !wrote {
 		return nil
 	}
-	// Duration and file size are in the search document, and this write went
-	// through the store itself, not through a book-write method the caller made.
-	p.notifyBooksNeedReindex(bookID)
+	// Duration and file size are in the search document. No explicit
+	// notification here: the write above went through ModifyBook, whose memdb
+	// write-through already reported the book (BooksChanged).
 
 	// "caller" names the subsystem that drove this write. This is the line the
 	// 126,928-sample production count was drawn from, so adding the field here

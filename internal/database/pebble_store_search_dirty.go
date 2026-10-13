@@ -6,7 +6,7 @@
 // Durable dirty-set for search-index reconciliation.
 //
 // The Bleve index is fed by a bounded channel that DROPS events when full
-// (internal/server/indexed_store.go). Dropping under pressure is the right
+// (internal/server/index_queue.go). Dropping under pressure is the right
 // call — blocking the indexer would backpressure every write path — but
 // until this file existed, nothing recorded WHICH updates were dropped, so
 // the index diverged from the DB permanently. Measured on prod 2026-08-10:

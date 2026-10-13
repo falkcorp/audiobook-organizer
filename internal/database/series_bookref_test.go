@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -144,7 +144,7 @@ func sumCounts(m map[int]int) int {
 }
 
 // TestAsSeriesBookRefStore_ResolvesPebbleStore guards the capability lookup.
-// prod wraps the store in the Bleve indexedStore decorator, and a bare type
+// prod wrapped the store in the Bleve indexedStore decorator (removed in 07-S3), and a bare type
 // assertion against a wrapped store is indistinguishable from an unsupported
 // backend — which is how several ops silently no-opped in production.
 func TestAsSeriesBookRefStore_ResolvesPebbleStore(t *testing.T) {
@@ -162,8 +162,8 @@ func TestAsSeriesBookRefStore_ResolvesPebbleStore(t *testing.T) {
 	// exists to avoid -- verified by mutation, which printed `ok` with the
 	// assertion swapped in.
 	//
-	// Production never holds a bare *PebbleStore: it is wrapped in the Bleve
-	// indexedStore decorator, which embeds the Store INTERFACE and so does not
+	// Production did not hold a bare *PebbleStore (until 07-S3): it was wrapped in
+	// the Bleve indexedStore decorator, which embedded the Store INTERFACE and so does not
 	// promote SeriesBookRefStore. Against a decorator the bare assertion finds
 	// nothing and the guard silently no-ops -- exactly where it matters most.
 	require.NotNil(t, AsSeriesBookRefStore(&decoratorStore{Store: store}),

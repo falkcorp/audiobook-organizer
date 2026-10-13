@@ -1,7 +1,7 @@
 // file: internal/audiobooks/list_pagination_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7c1e9b42-3a6d-4f01-9d8e-2b5c6a7e1f04
-// last-edited: 2026-09-02
+// last-edited: 2026-10-13
 
 package audiobooks
 
@@ -67,10 +67,10 @@ func TestGetAudiobooks_TitlePrimaryPagination(t *testing.T) {
 	}
 }
 
-// unwrapStore mimics the production indexedStore decorator: it embeds a
-// database.Store and exposes Unwrap() so capability resolution can reach the
-// concrete PebbleStore underneath. This proves the fix holds for the real
-// production store shape (service store is wrapped, not bare).
+// unwrapStore mimics the indexedStore decorator the server installed until
+// 07-S3: it embeds a database.Store and exposes Unwrap() so capability
+// resolution can reach the concrete PebbleStore underneath. This proves the fix
+// holds for a decorated service store (wrapped, not bare).
 //
 // It nests: unwrapStore embeds the Store interface, so it satisfies Store
 // itself and can wrap another unwrapStore. See the two-level test below.

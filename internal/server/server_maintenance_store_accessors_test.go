@@ -12,8 +12,8 @@ import (
 )
 
 // The maintenance plugin's capability accessors run at OP-RUN time, when
-// s.store can sit behind a decorator (until 07-S3 Start() replaced it with the
-// indexedStore decorator). A decorator embedding the Store interface exposes none
+// s.store can sit behind a decorator (Start() replaced it with the
+// indexedStore decorator until 2026-09-13, then NewServer did, until 07-S3). A decorator embedding the Store interface exposes none
 // of the capability methods; a bare `s.store.(database.X)` therefore returns nil
 // while passing every test that hands the accessor a bare *PebbleStore.
 //

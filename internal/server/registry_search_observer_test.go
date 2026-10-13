@@ -37,12 +37,14 @@ func isRawStore(s database.Store) bool {
 }
 
 // queuedIDs drains the recording queue (no worker runs in the tests that use
-// it) and returns the book IDs that were enqueued, in order.
+// it) and returns the book IDs that were enqueued, in order. Like the worker it
+// lifts each ID's pending mark, so a later write to the same book queues again.
 func queuedIDs(srv *Server) []string {
 	var ids []string
 	for {
 		select {
 		case r := <-srv.indexQueue:
+			srv.indexRequestPopped(r.bookID) // what the worker does on a pop
 			ids = append(ids, r.bookID)
 		default:
 			return ids

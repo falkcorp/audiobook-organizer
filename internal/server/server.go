@@ -271,6 +271,16 @@ type Server struct {
 	indexQueue       chan indexRequest
 	indexQueueMu     sync.RWMutex
 	indexQueueClosed bool
+	// indexPending holds the IDs queued on indexQueue and not yet popped by
+	// the worker, so a book written many times while it waits is queued once
+	// (indexPendingMu guards it; see enqueueIndex and indexRequestPopped).
+	indexPendingMu sync.Mutex
+	indexPending   map[string]struct{}
+	// indexDropLog throttles the "queue full" warning (index_queue.go).
+	indexDropLog dropLogGate
+	// releaseSearchObserver removes this server's change observer from the
+	// store, by identity (installSearchObserver); nil if none was installed.
+	releaseSearchObserver func()
 	// indexWorkerBusy is atomically incremented while the worker processes
 	// an item and decremented when done. Tests use this to synchronize
 	// without relying on timed sleeps.

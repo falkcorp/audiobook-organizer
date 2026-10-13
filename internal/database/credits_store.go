@@ -1,7 +1,7 @@
 // file: internal/database/credits_store.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -102,10 +102,11 @@ func (p *PebbleStore) ModifyBookNarrators(bookID string, fn func([]BookNarrator)
 // applies here too. The credits are added to that path's batch through
 // bookWriteOpts.stage.
 //
-// After the commit the credit lists are mirrored into memdb and the book is
-// queued for search reindexing (BooksNeedReindex), so a credit-only change
-// reaches the search index; ReplaceBook*InMemDB alone only invalidates the
-// result cache.
+// After the commit the credit lists are mirrored into memdb. The book row went
+// through updateBookLockedMode, whose write-through reports the book
+// (BooksChanged), so the search index follows; ReplaceBook*InMemDB reports only
+// BookCreditsChanged, which invalidates cached results and re-indexes nothing
+// (the document never reads the junction).
 //
 // It does NOT run the Narrator-column -> junction sync that ModifyBook runs:
 // the narrator list is whatever fn leaves in credits.Narrators. Nor does it
@@ -176,7 +177,6 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 	}
 	p.ReplaceBookAuthorsInMemDB(bookID, newAuthors)
 	p.ReplaceBookNarratorsInMemDB(bookID, newNarrators)
-	p.notifyBooksNeedReindex(bookID)
 	return updated, BookCreditsEdit{Authors: newAuthors, Narrators: newNarrators}, nil
 }
 

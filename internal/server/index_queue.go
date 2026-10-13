@@ -29,7 +29,9 @@
 package server
 
 import (
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -44,26 +46,88 @@ type indexRequest struct {
 	bookID string
 }
 
-// enqueueIndex submits an index event. A full queue drops the event from
-// the channel and records the book in the durable dirty set instead, so
-// runSearchReconciler repairs it on the next tick. (It previously dropped
-// with no record at all, on the false premise that a startup reindex would
-// heal it — see the package comment.) Safe to call
-// concurrently with Shutdown: the mutex + closed flag prevents
-// sending on a closed channel during teardown.
+// dropLogInterval is the least time between "queue full" warnings. A bulk
+// operation that saturates the queue drops thousands of events a second, each
+// from inside a store write; one log line per drop would turn the overflow
+// into the load that keeps it overflowing. searchIndexDropped and the
+// search_index_dropped metric still count every drop.
+const dropLogInterval = 10 * time.Second
+
+// dropLogGate lets one warning through per dropLogInterval and counts the
+// drops it swallowed in between.
+type dropLogGate struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+// allow reports whether to log a drop at now, and how many drops were
+// swallowed since the last logged one.
+func (g *dropLogGate) allow(now time.Time) (bool, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.last.IsZero() && now.Sub(g.last) < dropLogInterval {
+		g.suppressed++
+		return false, 0
+	}
+	g.last = now
+	n := g.suppressed
+	g.suppressed = 0
+	return true, n
+}
+
+// enqueueIndex asks the worker to re-read a book's search document.
+//
+// A book already queued and not yet popped is not queued again: the worker
+// reads the row when it pops the ID, so that one request already covers every
+// write made while it waited. Without this a bulk write (a credit edit reports
+// the book several times, a scan thousands of books) fills the bounded channel
+// with duplicates that only the worker's per-batch dedup removes, and the
+// overflow is what drops real events. indexRequestPopped lifts the mark when
+// the worker pops the ID, BEFORE it reads the row, so a write that lands after
+// the pop queues a fresh request.
+//
+// A full queue drops the event from the channel and records the book in the
+// durable dirty set instead, so runSearchReconciler repairs it on the next
+// tick. (It previously dropped with no record at all, on the false premise that
+// a startup reindex would heal it -- see the package comment.) Safe to call
+// concurrently with Shutdown: the mutex + closed flag prevents sending on a
+// closed channel during teardown.
+//
+// Before Start has created the queue (indexQueue nil, not closed) the book is
+// recorded in the dirty set too, so a write made between NewServer and Start is
+// not lost: the reconciler started by startSearchIndexing drains the set once
+// the index has opened. If the index never opens, the set just holds one key per
+// book written since boot and is never drained.
 //
 // indexWorkerBusy is incremented before enqueueing so drainQueue can
 // reliably wait for completion: the window between dequeue and the
-// worker starting work is covered by the pre-increment.
+// worker starting work is covered by the pre-increment. A coalesced call adds
+// nothing to it: the request already queued is what the counter is waiting on.
 func (s *Server) enqueueIndex(bookID string) {
 	if bookID == "" {
 		return
 	}
 	s.indexQueueMu.RLock()
 	defer s.indexQueueMu.RUnlock()
-	if s.indexQueueClosed || s.indexQueue == nil {
+	if s.indexQueueClosed {
 		return
 	}
+	if s.indexQueue == nil {
+		s.markIndexDirty(bookID)
+		return
+	}
+	s.indexPendingMu.Lock()
+	if _, queued := s.indexPending[bookID]; queued {
+		s.indexPendingMu.Unlock()
+		return
+	}
+	if s.indexPending == nil {
+		s.indexPending = map[string]struct{}{}
+	}
+	s.indexPending[bookID] = struct{}{}
+	s.indexPendingMu.Unlock()
+
 	atomic.AddInt32(&s.indexWorkerBusy, 1)
 	select {
 	case s.indexQueue <- indexRequest{bookID: bookID}:
@@ -71,12 +135,25 @@ func (s *Server) enqueueIndex(bookID string) {
 		atomic.AddInt32(&s.indexWorkerBusy, -1)
 		searchIndexDropped.Add(1)
 		metrics.IncSearchIndexDropped()
-		// Record it durably before logging, so a crash between the two still
-		// leaves the book reconcilable.
+		// Record it durably before lifting the pending mark, so a crash
+		// between the two still leaves the book reconcilable, and a write that
+		// coalesced against the mark in the meantime is covered by the same
+		// dirty entry (the reconciler reads the latest row).
 		s.markIndexDirty(bookID)
-		searchIndexLog.Warn("search index queue full, event dropped and marked for reconcile: book %s, %d dropped in total",
-			logger.SanitizeLogValue(bookID), searchIndexDropped.Load())
+		s.indexRequestPopped(bookID)
+		if ok, swallowed := s.indexDropLog.allow(time.Now()); ok {
+			searchIndexLog.Warn("search index queue full: events are being dropped and marked for reconcile (latest: book %s; %d more dropped since the last report, %d in total)",
+				logger.SanitizeLogValue(bookID), swallowed, searchIndexDropped.Load())
+		}
 	}
+}
+
+// indexRequestPopped lifts bookID's pending mark. The worker calls it for
+// every request it takes off the channel, before it reads the book.
+func (s *Server) indexRequestPopped(bookID string) {
+	s.indexPendingMu.Lock()
+	delete(s.indexPending, bookID)
+	s.indexPendingMu.Unlock()
 }
 
 // closeIndexQueue takes the write lock, closes the channel, and
@@ -120,6 +197,7 @@ func (s *Server) runIndexWorker() {
 		if !open {
 			return
 		}
+		s.indexRequestPopped(req.bookID)
 		ids := []string{req.bookID}
 		seen := map[string]struct{}{req.bookID: {}}
 		consumed := 1
@@ -131,6 +209,7 @@ func (s *Server) runIndexWorker() {
 					break collect
 				}
 				consumed++
+				s.indexRequestPopped(r.bookID)
 				if _, dup := seen[r.bookID]; !dup {
 					seen[r.bookID] = struct{}{}
 					ids = append(ids, r.bookID)

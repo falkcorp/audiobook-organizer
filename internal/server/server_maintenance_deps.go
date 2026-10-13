@@ -95,8 +95,9 @@ func (s *Server) VersionPrimaryStore() maintenanceplugin.VersionPrimaryStore { r
 //
 // 🔴 RESOLVED THROUGH database.AsCapability, NOT A BARE TYPE ASSERTION. These
 // accessors run at op-run time, when s.store can sit behind a decorator that
-// embeds the Store INTERFACE and so exposes none of the capability methods (until
-// 07-S3, Start() replaced s.store with the Bleve indexedStore decorator). A bare
+// embeds the Store INTERFACE and so exposes none of the capability methods (Start
+// replaced s.store with the Bleve indexedStore decorator until 2026-09-13, then
+// NewServer did, until 07-S3). A bare
 // `s.store.(database.FileProvenanceStore)` compiles, passes every test that hands
 // in a *PebbleStore, and returns nil behind one — which is what this accessor did
 // in production from 2026-08-21 until 2026-09-02,

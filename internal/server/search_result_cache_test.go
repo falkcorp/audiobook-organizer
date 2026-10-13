@@ -519,10 +519,11 @@ func TestSearchResultCache_Timing(t *testing.T) {
 // document stale in Bleve while the result cache already knows the book changed.
 type recordOnlyObserver struct{ s *Server }
 
-func (o recordOnlyObserver) BooksChanged(ids ...string)     { o.s.searchChanges.Record(ids...) }
-func (o recordOnlyObserver) BooksNeedReindex(ids ...string) { o.s.searchChanges.Record(ids...) }
-func (o recordOnlyObserver) AuthorRenamed(int)              {}
-func (o recordOnlyObserver) SeriesRenamed(int)              {}
+func (o recordOnlyObserver) BooksChanged(ids ...string)       { o.s.searchChanges.Record(ids...) }
+func (o recordOnlyObserver) BooksNeedReindex(ids ...string)   { o.s.searchChanges.Record(ids...) }
+func (o recordOnlyObserver) BookCreditsChanged(ids ...string) { o.s.searchChanges.Record(ids...) }
+func (o recordOnlyObserver) AuthorRenamed(int)                {}
+func (o recordOnlyObserver) SeriesRenamed(int)                {}
 
 // TestSearchResultCache_IndexLagIsRepatched: a read that lands between a book
 // write and its Bleve commit re-evaluates against the old document and is

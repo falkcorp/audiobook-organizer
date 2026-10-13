@@ -51,7 +51,6 @@ var storeReferenceKinds = map[string]string{
 	"internal/server/provider_throttle_wire.go":                       "consumer",
 	"internal/server/catalog_harvest_op.go":                           "consumer",
 	"cmd/root.go":                                                     "consumer",
-	"internal/server/indexed_store.go":                                "wiring",
 	"internal/server/server.go":                                       "wiring",
 	"internal/operations/registry/register.go":                        "wiring",
 	"internal/scanner/scanner.go":                                     "wiring",

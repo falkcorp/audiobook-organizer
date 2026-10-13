@@ -1,7 +1,7 @@
 // file: internal/database/credits_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a5a7e839-5ad1-49ad-8401-9428121f66e7
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -499,29 +499,57 @@ func TestModifyBookNarrators_SkipAndError(t *testing.T) {
 	}
 }
 
+// reindexRecorder counts every ChangeObserver notification per kind, so a test
+// can pin which events a write produces (each BooksChanged / BooksNeedReindex
+// becomes a search index request in the server; BookCreditsChanged does not).
 type reindexRecorder struct {
-	mu      sync.Mutex
-	reindex []string
+	mu          sync.Mutex
+	changed     []string
+	needReindex []string
+	credits     []string
 }
 
-func (r *reindexRecorder) BooksChanged(...string) {}
+func (r *reindexRecorder) BooksChanged(ids ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.changed = append(r.changed, ids...)
+}
 func (r *reindexRecorder) BooksNeedReindex(ids ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.reindex = append(r.reindex, ids...)
+	r.needReindex = append(r.needReindex, ids...)
+}
+func (r *reindexRecorder) BookCreditsChanged(ids ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.credits = append(r.credits, ids...)
 }
 func (r *reindexRecorder) AuthorRenamed(int) {}
 func (r *reindexRecorder) SeriesRenamed(int) {}
 
-func (r *reindexRecorder) saw(id string) bool {
+// indexEvents is how many notifications would each schedule a re-index of id.
+func (r *reindexRecorder) indexEvents(id string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, x := range r.reindex {
+	n := 0
+	for _, x := range append(append([]string(nil), r.changed...), r.needReindex...) {
 		if x == id {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
+}
+
+func (r *reindexRecorder) creditEvents(id string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, x := range r.credits {
+		if x == id {
+			n++
+		}
+	}
+	return n
 }
 
 func TestModifyBookCredits_OneBatchWithRow(t *testing.T) {
@@ -579,8 +607,34 @@ func TestModifyBookCredits_OneBatchWithRow(t *testing.T) {
 	if row.Title != "Renamed" {
 		t.Errorf("row title = %q", row.Title)
 	}
-	if !rec.saw(b.ID) {
-		t.Error("a credits write did not queue the book for search reindexing")
+	// The row write reports the book once (BooksChanged); the two junction
+	// mirrors report credits only, which re-index nothing.
+	if got := rec.indexEvents(b.ID); got != 1 {
+		t.Errorf("a credits write produced %d re-index notifications, want exactly 1 (the row write)", got)
+	}
+	if got := rec.creditEvents(b.ID); got != 2 {
+		t.Errorf("a credits write produced %d credit-only notifications, want 2 (authors, narrators)", got)
+	}
+}
+
+// The aggregate recompute that follows a book_file write rewrites the book row
+// through ModifyBook, whose write-through reports the book once; it must not
+// add a second re-index notification of its own.
+func TestRecomputeBookAggregates_ProducesOneReindexNotification(t *testing.T) {
+	s := newCreditsTestStore(t)
+	b := mustCreditsBook(t, s, "/tmp/credits-aggregates.m4b")
+	rec := &reindexRecorder{}
+	s.SetChangeObserver(rec)
+
+	if err := s.CreateBookFile(&BookFile{ID: "agg-file-1", BookID: b.ID, FilePath: "/tmp/credits-aggregates.m4b", Format: "m4b", Duration: 3600}); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := s.GetBookByID(b.ID)
+	if row.Duration == nil || *row.Duration != 3600 {
+		t.Fatalf("the recompute did not write the aggregate (duration %v); the test proves nothing", row.Duration)
+	}
+	if got := rec.indexEvents(b.ID); got != 1 {
+		t.Errorf("a recompute that wrote produced %d re-index notifications, want 1", got)
 	}
 }
 

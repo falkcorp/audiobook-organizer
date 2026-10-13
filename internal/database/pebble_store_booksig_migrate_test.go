@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_migrate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e51c0d3-2a87-4f16-b74e-5c8203f9a1d6
-// last-edited: 2026-09-12
+// last-edited: 2026-10-13
 
 package database
 
@@ -523,8 +523,8 @@ func TestBookSigMigrate_ConformancePairing(t *testing.T) {
 	}
 }
 
-// TestAsBookSigMigrateStore_ResolvesPebbleStore. Prod always installs the Bleve
-// indexedStore decorator, and a bare `store.(*PebbleStore)` against a wrapped
+// TestAsBookSigMigrateStore_ResolvesPebbleStore. Prod used to install the Bleve
+// indexedStore decorator (removed in 07-S3), and a bare `store.(*PebbleStore)` against a wrapped
 // store is indistinguishable from an unsupported backend — which is how several
 // ops silently no-opped in production. The op must resolve through the helper.
 func TestAsBookSigMigrateStore_ResolvesPebbleStore(t *testing.T) {

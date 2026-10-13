@@ -18,15 +18,18 @@ Branch `task/07-s3` (07-S3).
   knew about could leave search showing an old title or an old author until a
   periodic repair pass happened to notice.
 - **What could go wrong.** A change made by a part of the program that did not
-  go through the wrapper, for example editing only the credited authors or
-  narrators of a book, was not guaranteed to refresh search. The wrapper also
-  hid several database features from the code that needed them, which in the
-  past silently switched off repair jobs on the live server.
+  go through the wrapper, such as a background recalculation of running times,
+  was not guaranteed to refresh search. The wrapper also hid several database
+  features from the code that needed them, which in the past silently switched
+  off repair jobs on the live server.
 - **The fix.** The wrapper is gone. The database now tells the search index
-  about every change it actually commits, and that is the only path. Credit
-  edits now refresh search by themselves. Author-list matching for credits
-  (used when importing and repairing books) is handed over through a small,
-  explicit hookup instead of through the wrapper.
+  about every change it actually commits, and that is the only path. A book that
+  is already waiting to be refreshed is not queued a second time, and a change
+  made while the server is still starting up is remembered so the repair pass
+  can catch up once search is ready. Author-list matching for credits (used
+  when importing and repairing books) is handed over through a small, explicit
+  hookup instead of through the wrapper, and is released only after the last
+  background job has stopped.
 - **What has not changed.** Nothing visible in the app changes. Search results,
   the repair pass, and the setting that turns the author lists on or off behave
   as before. Tests cover each kind of change, many changes at once, and the

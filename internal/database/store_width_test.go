@@ -1,7 +1,7 @@
 // file: internal/database/store_width_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7d1b6c2e-4a93-4f58-9e0d-3c8a52b7f1e4
-// last-edited: 2026-10-10
+// last-edited: 2026-10-13
 
 package database
 
@@ -17,9 +17,9 @@ import (
 
 // storeMethodBaseline is the flattened method count of the Store interface.
 // This is a ratchet: it may only be lowered, by hand, in the PR that lowers
-// the count. The test fails only on a rise. 07-S3 and 07-M14 are the PRs
-// expected to lower the companion reference baseline in
-// store_consumers_test.go; any PR that removes Store methods lowers this one.
+// the count. The test fails only on a rise. 07-S3 lowered the companion
+// reference baseline in store_consumers_test.go (31 -> 28); 07-M14 is expected to
+// lower it next. Any PR that removes Store methods lowers this one.
 //
 // Why a test and not interfacebloat: that linter counts declared entries
 // (Store declares 6 embedded interfaces), so it cannot see the 453 methods

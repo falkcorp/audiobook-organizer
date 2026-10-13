@@ -8,9 +8,15 @@ package server
 import (
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -92,16 +98,6 @@ func TestSearchObserver_EveryWritePathReachesTheIndexQueue(t *testing.T) {
 		{"AddBookTag (tag write)", func(t *testing.T, s *database.PebbleStore) {
 			must(t, s.AddBookTag(target, "synthetic-tag"))
 		}},
-		{"SetBookAuthors (credit junction)", func(t *testing.T, s *database.PebbleStore) {
-			a, err := s.CreateAuthor("Synthetic Writer")
-			must(t, err)
-			must(t, s.SetBookAuthors(target, []database.BookAuthor{{BookID: target, AuthorID: a.ID, Role: "author", Position: 0}}))
-		}},
-		{"SetBookNarrators (credit junction)", func(t *testing.T, s *database.PebbleStore) {
-			n, err := s.CreateNarrator("Synthetic Reader")
-			must(t, err)
-			must(t, s.SetBookNarrators(target, []database.BookNarrator{{BookID: target, NarratorID: n.ID, Role: "narrator", Position: 0}}))
-		}},
 	}
 	for _, p := range paths {
 		t.Run(p.name, func(t *testing.T) {
@@ -133,6 +129,235 @@ func TestSearchObserver_EveryWritePathReachesTheIndexQueue(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Credit junction rows are not in the search document (BookDocument reads
+// AuthorID and Narrator off the book row), so rewriting them must invalidate
+// cached results and enqueue NO re-index; a credit edit that also writes the
+// book row still enqueues exactly that book, once.
+func TestSearchObserver_CreditJunctionWritesRecordButDoNotEnqueue(t *testing.T) {
+	srv, store := newObserverServer(t)
+	const bookID = "credited-book"
+	must(t, createBook(store, bookID, "Credited Title"))
+	a, err := store.CreateAuthor("Synthetic Writer")
+	must(t, err)
+	n, err := store.CreateNarrator("Synthetic Reader")
+	must(t, err)
+	srv.indexQueue = make(chan indexRequest, 64)
+	t.Cleanup(srv.closeIndexQueue)
+
+	gen := srv.searchChanges.Generation()
+	must(t, store.SetBookAuthors(bookID, []database.BookAuthor{{BookID: bookID, AuthorID: a.ID, Role: "author", Position: 0}}))
+	must(t, store.SetBookNarrators(bookID, []database.BookNarrator{{BookID: bookID, NarratorID: n.ID, Role: "narrator", Position: 0}}))
+	if ids := queuedIDs(srv); len(ids) != 0 {
+		t.Fatalf("junction-only writes enqueued %v; the document does not read the junction", ids)
+	}
+	changed, _, ok := srv.searchChanges.ChangedSince(gen, 100)
+	if !ok || !slices.Contains(changed, bookID) {
+		t.Fatalf("junction writes did not reach the result-cache change log (ok=%v, changed=%v)", ok, changed)
+	}
+
+	// ModifyBookCredits writes the row: one request for the book, not four.
+	_, _, err = store.ModifyBookCredits(bookID, func(b *database.Book, c *database.BookCreditsEdit) error {
+		b.Title = "Credited Again"
+		c.Authors = []database.BookAuthor{{AuthorID: a.ID, Role: "author", Position: 0}}
+		c.Narrators = []database.BookNarrator{{NarratorID: n.ID, Role: "narrator", Position: 0}}
+		return nil
+	})
+	must(t, err)
+	if got := len(srv.indexQueue); got != 1 {
+		t.Fatalf("ModifyBookCredits left %d requests on the queue, want exactly 1", got)
+	}
+	if ids := queuedIDs(srv); len(ids) != 1 || ids[0] != bookID {
+		t.Fatalf("ModifyBookCredits enqueued %v, want [%s]", ids, bookID)
+	}
+}
+
+// RecomputeBookAggregates reports the book once (the ModifyBook inside it), not
+// twice, so a bulk backfill does not double its queue load.
+func TestSearchObserver_RecomputeAggregatesQueuesTheBookOnce(t *testing.T) {
+	srv, store := newObserverServer(t)
+	const bookID = "aggregated-book"
+	must(t, createBook(store, bookID, "Aggregated Title"))
+	srv.indexQueue = make(chan indexRequest, 64)
+	t.Cleanup(srv.closeIndexQueue)
+
+	must(t, store.CreateBookFile(&database.BookFile{ID: "agg-1", BookID: bookID, FilePath: "/lib/agg.m4b", Format: "m4b", Duration: 600}))
+	if got := len(srv.indexQueue); got != 1 {
+		t.Fatalf("a recompute that wrote left %d requests on the queue, want exactly 1", got)
+	}
+}
+
+// A book already queued and not yet popped is not queued again, however many
+// writers hit it at once; once the worker pops it a new write queues afresh.
+// Run with -race.
+func TestEnqueueIndex_CoalescesPendingBooksUnderConcurrentWrites(t *testing.T) {
+	srv := &Server{indexQueue: make(chan indexRequest, 1024)}
+	const books, writers, rounds = 20, 8, 50
+
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Go(func() {
+			for range rounds {
+				for i := range books {
+					srv.enqueueIndex(fmt.Sprintf("book-%02d", i))
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if got := len(srv.indexQueue); got != books {
+		t.Fatalf("queue holds %d requests after %d writes of %d books, want %d (one per book)", got, writers*rounds*books, books, books)
+	}
+	if got := atomic.LoadInt32(&srv.indexWorkerBusy); got != books {
+		t.Fatalf("indexWorkerBusy = %d, want %d: a coalesced write must not count as outstanding work", got, books)
+	}
+
+	// The worker pops book-00 (lifting its mark) and later writes queue again.
+	first := <-srv.indexQueue
+	srv.indexRequestPopped(first.bookID)
+	srv.enqueueIndex(first.bookID)
+	srv.enqueueIndex(first.bookID)
+	if got := len(srv.indexQueue); got != books {
+		t.Fatalf("after a pop and a re-write the queue holds %d, want %d (the popped book queued once more)", got, books)
+	}
+}
+
+// With a live worker, a flood of writes to a few books still ends with the
+// index reading each book's LATEST row: coalescing must not swallow the write
+// that lands after a pop.
+func TestEnqueueIndex_CoalescingKeepsIndexCurrentUnderLiveWorker(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
+	if err != nil {
+		t.Fatalf("bleve: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+	srv := newTestServer(t, store)
+	srv.setSearchIndex(idx)
+	srv.indexQueue = make(chan indexRequest, 1024)
+	done := make(chan struct{})
+	go func() { srv.runIndexWorker(); close(done) }()
+	t.Cleanup(func() { srv.closeIndexQueue(); <-done })
+
+	const books, writers, rounds = 4, 6, 40
+	for i := range books {
+		must(t, createBook(store, fmt.Sprintf("flood-%d", i), "Seed"))
+	}
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Go(func() {
+			for r := range rounds {
+				for i := range books {
+					id := fmt.Sprintf("flood-%d", i)
+					title := fmt.Sprintf("Flood Book%d Writer%d Round%d", i, w, r)
+					_, _ = store.ModifyBook(id, func(b *database.Book) error { b.Title = title; return nil })
+				}
+			}
+		})
+	}
+	wg.Wait()
+	drainQueue(t, srv)
+	for i := range books {
+		id := fmt.Sprintf("flood-%d", i)
+		final, err := store.GetBookByID(id)
+		must(t, err)
+		hits, _, err := idx.Search(fmt.Sprintf("title:%q", final.Title), 0, 10)
+		must(t, err)
+		if len(hits) != 1 || hits[0].BookID != id {
+			t.Fatalf("%s: index does not carry the store's final title %q; hits = %v", id, final.Title, hits)
+		}
+	}
+}
+
+func TestDropLogGate_LogsOncePerIntervalAndCountsTheRest(t *testing.T) {
+	var g dropLogGate
+	t0 := time.Unix(1000, 0)
+	if ok, n := g.allow(t0); !ok || n != 0 {
+		t.Fatalf("first drop: allow=%v swallowed=%d, want true/0", ok, n)
+	}
+	for i := 1; i <= 5; i++ {
+		if ok, _ := g.allow(t0.Add(time.Duration(i) * time.Second)); ok {
+			t.Fatalf("drop %d inside the interval was logged", i)
+		}
+	}
+	if ok, n := g.allow(t0.Add(dropLogInterval)); !ok || n != 5 {
+		t.Fatalf("after the interval: allow=%v swallowed=%d, want true/5", ok, n)
+	}
+}
+
+// A write between NewServer and Start has no queue to land on; it is recorded
+// in the durable dirty set so the reconciler Start launches closes the gap.
+func TestEnqueueIndex_BeforeStartMarksTheBookDirty(t *testing.T) {
+	srv, store := newObserverServer(t)
+	if srv.indexQueue != nil {
+		t.Fatal("index queue exists before Start")
+	}
+	must(t, createBook(store, "early-book", "Early Title"))
+	ds := database.AsSearchIndexDirtyStore(store)
+	if ds == nil {
+		t.Fatal("store has no dirty set")
+	}
+	ids, err := ds.ListSearchIndexDirty(0)
+	must(t, err)
+	if !slices.Equal(ids, []string{"early-book"}) {
+		t.Fatalf("dirty set = %v, want [early-book]", ids)
+	}
+}
+
+// Shutdown removes this server's observer and authority provider by identity:
+// an older server shutting down leaves a newer server's observer on the store.
+func TestReleaseSearchAndAuthority_IsByIdentity(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	older := newTestServer(t, store)
+	newer := newTestServer(t, store) // installs its observer over older's
+
+	older.indexQueue = make(chan indexRequest, 8)
+	newer.indexQueue = make(chan indexRequest, 8)
+	t.Cleanup(older.closeIndexQueue)
+	t.Cleanup(newer.closeIndexQueue)
+
+	older.releaseSearchAndAuthority()
+	must(t, createBook(store, "still-observed", "Title"))
+	if got := len(newer.indexQueue); got != 1 {
+		t.Fatalf("the newer server's observer was removed by the older server's release (queue %d)", got)
+	}
+	newer.releaseSearchAndAuthority()
+	must(t, createBook(store, "unobserved", "Title"))
+	if got := len(newer.indexQueue) + len(older.indexQueue); got != 1 {
+		t.Fatalf("a released observer still enqueued (total queued %d)", got)
+	}
+}
+
+// Shutdown must detach the observer and the authority provider only after every
+// writer this server owns has stopped: a still-running op resolves credits and
+// writes books until then. Pinned by source order, because Shutdown cannot be
+// driven to a half-way state in a unit test.
+func TestShutdown_ReleasesObserverAndProviderAfterWritersStop(t *testing.T) {
+	raw, err := os.ReadFile("server_lifecycle.go")
+	must(t, err)
+	src := string(raw)
+	release := strings.Index(src, "s.releaseSearchAndAuthority()")
+	if release < 0 {
+		t.Fatal("Shutdown no longer calls releaseSearchAndAuthority")
+	}
+	for _, earlier := range []string{"s.opRegistry.Shutdown(", "s.bgCancel()", "s.bgWG.Wait()", "p.Stop()", "s.pluginRegistry.ShutdownAll("} {
+		i := strings.Index(src, earlier)
+		if i < 0 {
+			t.Fatalf("Shutdown no longer contains %q; update this test", earlier)
+		}
+		if i > release {
+			t.Fatalf("releaseSearchAndAuthority runs before %q: ops still running would resolve credits against no authority lists", earlier)
+		}
 	}
 }
 

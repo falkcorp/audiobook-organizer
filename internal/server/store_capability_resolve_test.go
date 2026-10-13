@@ -28,8 +28,9 @@ func (d *embeddingDecorator) Unwrap() database.Store { return d.Store }
 // TestDecoratedStorePreservesCapabilityLookups pins the production regression
 // at its real site.
 //
-// Until 07-S3, Server.Start() replaced s.store with &indexedStore{Store: inner}
-// whenever the Bleve index opened successfully -- true on the production host,
+// Until 2026-09-13 Server.Start() replaced s.store with &indexedStore{Store: inner}
+// whenever the Bleve index opened successfully (from then until 07-S3, NewServer
+// installed it unconditionally) -- true on the production host,
 // false in most local runs, which is why this class of bug reproduced nowhere
 // else. Because indexedStore embedded the database.Store INTERFACE, every
 // narrow capability interface that deliberately lives outside database.Store
