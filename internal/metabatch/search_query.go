@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
 // last-edited: 2026-10-12
 //
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
@@ -428,31 +429,37 @@ func personShapedName(t string) (string, bool) {
 // folderStandInForPersonTitle returns the work folder's name to search by
 // instead of title t, when t is a person's name or the book's own author and
 // the folder offers a real title (the census bucket "author equals title").
-// t is a person's name when it is person-shaped and the authority lists know
-// it as an author or narrator (whether or not it is one of THIS book's
-// people: a title that is another person's name is the folder's to correct
-// too); it is the book's author when it names one of the book's LIVE authors
-// (database.LiveBookAuthorNames, never the Book.Author snapshot, which can
-// hold a junk credit the search drops).
+// t is a person's name when it is person-shaped (or "Last, First") and the
+// authority lists know it as an author or narrator (whether or not it is one
+// of THIS book's people: a title that is another person's name is the
+// folder's to correct too); it is the book's author when it names one of the
+// book's LIVE authors (database.LiveBookAuthorNames, never the Book.Author
+// snapshot, which can hold a junk credit the search drops).
 //
 // No stand-in when the folder offers no title, is the title itself, or is
 // itself a person ("Last, First", a known person, a live author): then the
 // title stays the question. A part row never gets here (partRowRefused).
+// metadata_fetch.folder_parse_person_title off switches the whole variant off.
 //
-// Reads, cheapest first: none when the book's own path already names the
-// title (almost every book); the book's files when the path says something
-// else; its authors only when a folder title differs from the stored one. The
-// candidate pass runs this for every book, so a book it cannot change costs
-// nothing.
+// The candidate pass runs this for every book, so a book it cannot change
+// costs nothing, and the checks run cheapest first: the string test that the
+// folder of the book's own path already names the title (almost every book);
+// the setting; the string test that the title could be a person at all
+// (person-shaped, "Last, First", or the row's own author snapshot); and only
+// then the reads -- the book's files, the authority lists, the book's authors.
 func (j *titleJudge) folderStandInForPersonTitle(t, bookPath string) (string, bool) {
 	if j.files == nil || j.book == nil {
 		return "", false
 	}
-	// The usual case first, and with no store read: the folder of the book's
-	// own path already carries the title, so there is nothing to correct.
-	// Every read below (the book's files, then its authors) is made only for
-	// a book whose folder says something else.
 	if wf, ok := metadata.WorkFolderTitle(bookPath); ok && authorjunk.FoldKey(wf) == authorjunk.FoldKey(t) {
+		return "", false
+	}
+	if !config.Snapshot().MetadataFetch.FolderParsePersonTitle {
+		return "", false
+	}
+	_, shaped := personShapedName(t)
+	snapshotAuthor := j.book.Author != nil && authorjunk.SamePersonName(j.book.Author.Name, t)
+	if !shaped && !snapshotAuthor && !lastFirstRe.MatchString(strings.TrimSpace(t)) {
 		return "", false
 	}
 	ft, _ := j.folderTitle(bookPath)

@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-12
 
@@ -1520,6 +1520,10 @@ func applySetting(key, value, typ string) error {
 		case "metadata_fetch.shared_cache":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.MetadataFetch.SharedCache = b
+			}
+		case "metadata_fetch.folder_parse_person_title":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.MetadataFetch.FolderParsePersonTitle = b
 			}
 		case "metadata_fetch.catalog_stage":
 			if b, err := strconv.ParseBool(value); err == nil {

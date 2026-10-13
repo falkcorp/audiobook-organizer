@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_folderparse_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b7e9d40-6a15-4c83-8f2e-d0a41c9b7e56
 // last-edited: 2026-10-12
 
@@ -12,8 +12,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// withFolderParse sets metadata_fetch.folder_parse_person_title for one test
+// (the zero Config has it off, as the variant's rollback does).
+func withFolderParse(t *testing.T, on bool) {
+	t.Helper()
+	prev := config.AppConfig.MetadataFetch
+	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
+	config.AppConfig.MetadataFetch.FolderParsePersonTitle = on
+}
 
 // The folder-parse variant (spec 02 section 3.3 Q; census bucket "author
 // equals title"): a title that is a person's name or the book's own live
@@ -33,6 +43,7 @@ func liveAuthorFiles(files []database.BookFile, raw map[string][]byte) fakeBookF
 // (so the existing known-person rule does not fire): the folder
 // "Author/Real Title/file" becomes the question, and the source says so.
 func TestFolderParseVariant_TitleEqualsAuthorFolderIsTheQuestion(t *testing.T) {
+	withFolderParse(t, true)
 	path := "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b"
 	files := liveAuthorFiles([]database.BookFile{{FilePath: path, Duration: 9 * 3600}}, nil)
 	for _, title := range []string{"Mara Quill", "mara quill", "Quill, Mara", "Mara  Quill."} {
@@ -54,6 +65,7 @@ func TestFolderParseVariant_TitleEqualsAuthorFolderIsTheQuestion(t *testing.T) {
 // titled by its subject, or a misfiled credit of someone else) is searched
 // by the folder when the folder offers a different, real title.
 func TestFolderParseVariant_TitleIsADifferentPersonsName(t *testing.T) {
+	withFolderParse(t, true)
 	path := "/library/Gene Holt/The Paper Garden/The Paper Garden.m4b"
 	files := fakeBookFiles{files: []database.BookFile{{FilePath: path}}, raw: knownPeople(t, "Ada Penn")}
 	book := database.Book{ID: "b1", Title: "Ada Penn", FilePath: path, Author: &database.Author{Name: "Gene Holt"}}
@@ -75,6 +87,7 @@ func TestFolderParseVariant_TitleIsADifferentPersonsName(t *testing.T) {
 // under its author's folder, in "Last, First" form, or under a known
 // person's.
 func TestFolderParseVariant_FolderThatIsAPersonKeepsTheTitle(t *testing.T) {
+	withFolderParse(t, true)
 	for _, path := range []string{
 		"/library/Mara Quill/Mara Quill.m4b",        // the live author's own folder
 		"/library/Quill, Mara/Quill, Mara.m4b",      // "Last, First"
@@ -101,6 +114,7 @@ func TestFolderParseVariant_FolderThatIsAPersonKeepsTheTitle(t *testing.T) {
 // A part row is refused outright, as before: no stand-in is tried for one
 // file of a set filed as separate rows.
 func TestFolderParseVariant_PartRowStillRefused(t *testing.T) {
+	withFolderParse(t, true)
 	dir := "/library/Mara Quill/The Paper Garden"
 	self := "The Paper Garden - 02.mp3"
 	path := dir + "/" + self
@@ -141,6 +155,7 @@ func (c countingAuthors) GetAuthorByID(id int) (*database.Author, error) {
 // cannot change nothing: no author is read unless a folder title differs from
 // the stored title, and none at all when the folder is the title's.
 func TestFolderParseVariant_ReadsAuthorsOnlyWhenAFolderTitleDiffers(t *testing.T) {
+	withFolderParse(t, true)
 	reads := &atomic.Int32{}
 	resolve := func(title, path string) CandidateSearchQuery {
 		files := countingAuthors{fakeBookFilesAuthors: liveAuthorFiles([]database.BookFile{{FilePath: path}}, nil), reads: reads}
@@ -156,4 +171,23 @@ func TestFolderParseVariant_ReadsAuthorsOnlyWhenAFolderTitleDiffers(t *testing.T
 	q = resolve("Mara Quill", "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b")
 	assert.Equal(t, SearchQuerySourceFolderTitle, q.Source)
 	assert.Positive(t, reads.Load())
+}
+
+// metadata_fetch.folder_parse_person_title=false is the rollback: every case
+// above asks the stored title again.
+func TestFolderParseVariant_SwitchOffAsksTheStoredTitle(t *testing.T) {
+	withFolderParse(t, false)
+	path := "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b"
+	files := liveAuthorFiles([]database.BookFile{{FilePath: path, Duration: 9 * 3600}}, nil)
+	book := database.Book{ID: "b1", Title: "Mara Quill", FilePath: path, Duration: ip(9 * 3600)}
+	q := ResolveCandidateSearchQuery(files, &book)
+	require.True(t, q.Usable)
+	assert.Equal(t, "Mara Quill", q.Title)
+	assert.Equal(t, SearchQuerySourceTitle, q.Source)
+
+	bio := fakeBookFiles{files: []database.BookFile{{FilePath: path}}, raw: knownPeople(t, "Ada Penn")}
+	b2 := database.Book{ID: "b2", Title: "Ada Penn", FilePath: path, Author: &database.Author{Name: "Gene Holt"}}
+	q = ResolveCandidateSearchQuery(bio, &b2)
+	assert.Equal(t, "Ada Penn", q.Title)
+	assert.Equal(t, SearchQuerySourceTitle, q.Source)
 }
