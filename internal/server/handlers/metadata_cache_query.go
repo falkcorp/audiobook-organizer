@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package handlers
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
@@ -647,7 +648,10 @@ func (f *reviewTitleFilter) match(row *snapshotRow, title string, budget *queryg
 func reviewProviderID(source string) string {
 	n := strings.ToLower(strings.TrimSpace(source))
 	switch n {
-	case "audible", "audnexus", "audnexus (audible)":
+	case "audible", "audnexus", "audnexus (audible)",
+		// The local catalog is a copy of Audible's own catalog; its
+		// review-only candidates count and filter under the Audible chip.
+		strings.ToLower(metadata.CatalogSourceName):
 		return "audible"
 	case "google", "google books", "google_books":
 		return "google_books"

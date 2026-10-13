@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.42.0
+// version: 1.43.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-12
 //
@@ -530,12 +530,16 @@ export function normalizeLanguage(lang: string | undefined | null): string {
 // into the stable ids owned by QueueRail's provider chips. Cache data comes from
 // several provider clients, so it is intentionally tolerant of their historical
 // spelling variants; counts and filtering must use this same function.
+// 'Audible Catalog (local)' (the local catalog stage's review-only candidates)
+// is a copy of Audible's own catalog and counts under the Audible chip. Server
+// twin: reviewProviderID in internal/server/handlers/metadata_cache_query.go.
 export function reviewProviderID(source: string | undefined | null): string {
   const normalized = source?.trim().toLowerCase() ?? '';
   switch (normalized) {
     case 'audible':
     case 'audnexus':
     case 'audnexus (audible)':
+    case 'audible catalog (local)':
       return 'audible';
     case 'google':
     case 'google books':
