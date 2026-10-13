@@ -418,6 +418,57 @@ describe('a group card', () => {
   });
 });
 
+describe('a group with a write in flight', () => {
+  function hangingPoll() {
+    const gate = { release: () => {} };
+    vi.mocked(api.pollOperationV2).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          gate.release = () => resolve(done());
+        })
+    );
+    return gate;
+  }
+
+  it('locks its own controls and cannot be merged twice, while other groups stay usable', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
+    const gate = hangingPoll();
+    renderLane();
+    const card1 = await screen.findByTestId('author-group-1');
+    const merge1 = within(card1).getByRole('button', { name: 'Merge into "Author 1"' });
+    await user.click(merge1);
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+
+    expect(merge1).toBeDisabled();
+    expect(within(card1).getByRole('button', { name: 'Edit canonical name' })).toBeDisabled();
+    expect(within(card1).getByRole('checkbox')).toBeDisabled();
+    expect(card1).toHaveAttribute('aria-busy', 'true');
+    const card2 = screen.getByTestId('author-group-2');
+    expect(within(card2).getByRole('button', { name: 'Merge into "Author 2"' })).toBeEnabled();
+    // Bulk verbs wait for the write.
+    expect(screen.getByRole('button', { name: /^Merge All/ })).toBeDisabled();
+
+    gate.release();
+    await waitFor(() => expect(screen.queryByTestId('author-group-1')).not.toBeInTheDocument());
+    expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
+  });
+
+  it('freezes every card while the author scan runs', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.'])]);
+    vi.mocked(api.refreshAuthorDuplicates).mockResolvedValue(op('scan1'));
+    hangingPoll();
+    renderLane();
+    await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+    const card = await screen.findByTestId('author-group-1');
+    await waitFor(() =>
+      expect(within(card).getByRole('button', { name: 'Merge into "Author 1"' })).toBeDisabled()
+    );
+    expect(screen.getByTestId('authors-scanning')).toBeInTheDocument();
+  });
+});
+
 describe('selection and the bulk verbs', () => {
   function thirty(): api.AuthorDedupGroup[] {
     return Array.from({ length: 30 }, (_, i) => wire(i + 1, `Author ${i + 1}`, [`Author ${i + 1}.`]));
