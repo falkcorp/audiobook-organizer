@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-13
 
@@ -664,7 +664,8 @@ func isStopOutcome(s state.V3) bool {
 
 // fillRunFromV2Row copies every field the v2 row carries onto r (not the
 // state, which projectRunFromV2 decides). Typed progress beyond what v2 has
-// (phases, chunks, workers, counters) is left as it was.
+// (phases, chunks, workers, counters) is left as it was, and so are Done,
+// Total and Current once the chunk ledger owns them (Chunks set).
 func fillRunFromV2Row(r *RunRecord, row *OperationV2Row) {
 	r.SchemaVersion = opv3RunSchemaVersion
 	r.ID = row.ID
@@ -693,6 +694,13 @@ func fillRunFromV2Row(r *RunRecord, row *OperationV2Row) {
 		r.Result = nil
 	}
 	r.Progress.Phase = derefStr(row.CurrentPhase)
+	if r.Progress.Chunks != nil {
+		// A chunk-ledger run (05-PR5 Batch runner): its progress has ONE
+		// writer, the runner's ledger goroutine (CommitLedgerV3). The v2
+		// row's numbers lag it (the v2 reporter flushes lazily), so a v2
+		// write must not move Done, Total or Current back.
+		return
+	}
 	r.Progress.Done = int64(row.ProgressCurrent)
 	if row.ProgressTotal > 0 {
 		t := int64(row.ProgressTotal)
