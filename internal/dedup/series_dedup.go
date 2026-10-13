@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-14
+// last-edited: 2026-10-13
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -287,6 +287,13 @@ type SeriesDedupResult struct {
 	// the result (an activity row, a log line) can tell a preview from an
 	// apply without also carrying the request params around.
 	DryRun bool
+
+	// LeftIDs lists, in the order they were visited, the duplicate series an
+	// APPLY kept: the delete was refused (a book still references the series
+	// and could not be repointed) or failed. Empty on a clean run and always
+	// empty on a dry run, which deletes nothing. A caller that reports "done"
+	// while this is non-empty is claiming a merge that did not finish.
+	LeftIDs []int
 
 	Errors []string
 }
@@ -679,6 +686,9 @@ func DedupSeries(
 						"(trashed rows, which cannot be repointed, or rows whose reassignment failed); "+
 						"the reassignable books were moved, the series row is kept",
 						s.ID, s.Name, stranded))
+				if !dryRun {
+					result.LeftIDs = append(result.LeftIDs, s.ID)
+				}
 				continue
 			}
 			if dryRun {
@@ -688,6 +698,7 @@ func DedupSeries(
 			if err := store.DeleteSeries(s.ID); err != nil {
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("failed to delete series %d: %v", s.ID, err))
+				result.LeftIDs = append(result.LeftIDs, s.ID)
 			} else {
 				result.TotalMerged++
 				// The audit half of the ledger. internal/undo does not know how
@@ -772,7 +783,12 @@ func DedupSeries(
 // SeriesMergeResult summarises the outcome of MergeSeries.
 type SeriesMergeResult struct {
 	MergedCount int
-	Errors      []string
+	// LeftIDs lists, in request order, the merge ids whose series row is still
+	// there: the delete was refused or failed. A merge that ends with
+	// MergedCount short of the request has them; one that merged every series
+	// but failed afterwards (linking authors) has none.
+	LeftIDs []int
+	Errors  []string
 }
 
 // MergeSeries reassigns all books from each series in mergeIDs to keepID,
@@ -1064,9 +1080,11 @@ func MergeSeries(
 					"after reassigning %d to %d (trashed rows, which cannot be repointed, or rows "+
 					"whose reassignment failed); the reassignable books were moved, the series row is kept",
 					mergeID, named, stranded, moved, keepID))
+			result.LeftIDs = append(result.LeftIDs, mergeID)
 		} else if err := store.DeleteSeries(mergeID); err != nil {
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("failed to delete series %d: %v", mergeID, err))
+			result.LeftIDs = append(result.LeftIDs, mergeID)
 		} else {
 			result.MergedCount++
 			_ = store.CreateOperationChange(&database.OperationChange{
