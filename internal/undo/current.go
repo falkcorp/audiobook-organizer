@@ -1,7 +1,7 @@
 // file: internal/undo/current.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e7b4c19-8d3a-4f60-9b15-c6a0e8d2f473
-// last-edited: 2026-10-07
+// last-edited: 2026-10-13
 
 package undo
 
@@ -133,17 +133,17 @@ func CheckTrackCurrent(track int, c *database.OperationChange) error {
 }
 
 // CheckRepointCurrent compares a book_file row's location, path and Missing
-// flag only (SameFileLocation).
+// flag only (database.SameFileLocation).
 func CheckRepointCurrent(f *database.BookFile, c *database.OperationChange) error {
-	set, err := DecodeBookFileLocation(c.NewValue)
+	set, err := database.DecodeBookFileLocation(c.NewValue)
 	if err != nil {
 		return refuse(ReasonOldValueUnparsable, "%v", err)
 	}
-	cur := LocationOf(f)
-	if SameFileLocation(cur, set) {
+	cur := database.BookFileLocationOf(f)
+	if database.SameFileLocation(cur, set) {
 		return nil
 	}
-	if was, err := DecodeBookFileLocation(c.OldValue); err == nil && SameFileLocation(cur, was) {
+	if was, err := database.DecodeBookFileLocation(c.OldValue); err == nil && database.SameFileLocation(cur, was) {
 		return ErrAlreadyRestored
 	}
 	return refuse(ReasonChangedSince, "book_file %s is now at %q, not where the operation pointed it (%q)", f.ID, f.FilePath, set.Path)

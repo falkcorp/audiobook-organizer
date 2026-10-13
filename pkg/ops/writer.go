@@ -1,5 +1,5 @@
 // file: pkg/ops/writer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dc4d264d-6ac3-4ecd-bd11-247d5300dd3c
 // last-edited: 2026-10-13
 
@@ -9,7 +9,6 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // Writer is the only write path an op gets (internal/operations/opswriter
@@ -33,7 +32,7 @@ import (
 type Writer interface {
 	ModifyBook(ctx context.Context, bookID string, fn func(*database.Book) error) (Changed, error)
 	ModifyBookFile(ctx context.Context, bookID, fileID string, fn func(*database.BookFile) error) (Changed, error)
-	RepointBookFile(ctx context.Context, bookID, fileID string, expect, to undo.BookFileLocation) error
+	RepointBookFile(ctx context.Context, bookID, fileID string, expect, to database.BookFileLocation) error
 	ModifyBookAuthors(ctx context.Context, bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) (Changed, error)
 	// Effect wraps a write the typed surface does not cover (a file
 	// reflink, a settings key, an index rebuild): the Writer applies steps

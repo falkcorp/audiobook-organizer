@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.51.2
+// version: 1.51.3
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-13
 
@@ -614,8 +614,8 @@ func fragSharedAlbumTitle(lib *fragLibrary, dir string, first *fragCandidate, cs
 	return title, true
 }
 
-func (x fragFile) location() undo.BookFileLocation {
-	return undo.BookFileLocation{Path: x.Path, Missing: x.Missing, Hash: x.Hash, Size: x.Size}
+func (x fragFile) location() database.BookFileLocation {
+	return database.BookFileLocation{Path: x.Path, Missing: x.Missing, Hash: x.Hash, Size: x.Size}
 }
 
 // fragCandidate is one fragment book: a live single-file book with chapter
@@ -7509,7 +7509,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			}
 			if locked.Class == fragClassMoved && !p.Done && !repointed[p.Parent.ID] {
 				from := target[p.Parent.ID].Frag.File
-				to := undo.BookFileLocation{Path: from.Path, Missing: false, Hash: from.Hash, Size: from.Size}
+				to := database.BookFileLocation{Path: from.Path, Missing: false, Hash: from.Hash, Size: from.Size}
 				if err := w.RepointBookFile(parentID, p.Parent.ID, p.Parent.location(), to); err != nil {
 					return partial(err)
 				}

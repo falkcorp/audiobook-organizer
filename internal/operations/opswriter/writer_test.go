@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-13
 
@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -235,7 +234,7 @@ func TestPreviewRefusesAndRecords(t *testing.T) {
 	if _, err := w.ModifyBook(ctx, "b1", func(*database.Book) error { called = true; return nil }); !errors.Is(err, ops.ErrPreview) {
 		t.Fatalf("ModifyBook in Preview = %v, want ErrPreview", err)
 	}
-	err := w.RepointBookFile(ctx, "b1", "f1", undo.BookFileLocation{Path: "/lib/a.m4b"}, undo.BookFileLocation{Path: "/lib/b.m4b"})
+	err := w.RepointBookFile(ctx, "b1", "f1", database.BookFileLocation{Path: "/lib/a.m4b"}, database.BookFileLocation{Path: "/lib/b.m4b"})
 	if !errors.Is(err, ops.ErrPreview) {
 		t.Fatalf("RepointBookFile in Preview = %v", err)
 	}
@@ -413,21 +412,21 @@ func TestRepointBookFile(t *testing.T) {
 	s.files["f2"] = &database.BookFile{ID: "f2", BookID: "b2", FilePath: "/lib/new.m4b"}
 	w := newTestWriter(s, ops.Live)
 	ctx := context.Background()
-	stale := undo.BookFileLocation{Path: "/lib/elsewhere.m4b"}
-	if err := w.RepointBookFile(ctx, "b1", "f1", stale, undo.BookFileLocation{Path: "/lib/new.m4b"}); !errors.Is(err, ops.ErrChangedSincePlan) {
+	stale := database.BookFileLocation{Path: "/lib/elsewhere.m4b"}
+	if err := w.RepointBookFile(ctx, "b1", "f1", stale, database.BookFileLocation{Path: "/lib/new.m4b"}); !errors.Is(err, ops.ErrChangedSincePlan) {
 		t.Fatalf("stale expect = %v", err)
 	}
-	expect := undo.BookFileLocation{Path: "/lib/old.m4b", Missing: true}
-	if err := w.RepointBookFile(ctx, "b1", "f1", expect, undo.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
+	expect := database.BookFileLocation{Path: "/lib/old.m4b", Missing: true}
+	if err := w.RepointBookFile(ctx, "b1", "f1", expect, database.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
 		t.Fatal(err)
 	}
 	if s.files["f1"].FilePath != "/lib/new.m4b" || len(s.files) != 2 {
 		t.Fatalf("files = %+v", s.files)
 	}
-	if len(s.changes) != 1 || s.changes[0].ChangeType != undo.ChangeTypeBookFileRepoint || s.changes[0].FieldName != "book_file:f1" {
+	if len(s.changes) != 1 || s.changes[0].ChangeType != database.ChangeTypeBookFileRepoint || s.changes[0].FieldName != "book_file:f1" {
 		t.Fatalf("history = %+v", s.changes)
 	}
-	to, err := undo.DecodeBookFileLocation(s.changes[0].NewValue)
+	to, err := database.DecodeBookFileLocation(s.changes[0].NewValue)
 	if err != nil || to.KeyOwnerRow != "f2" || to.KeyOwnerBook != "b2" {
 		t.Fatalf("the repoint must name the key owner it took the path from: %+v %v", to, err)
 	}
@@ -467,7 +466,7 @@ func TestRepointWithoutJournalRefused(t *testing.T) {
 	s := newRecStore()
 	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"}
 	w := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Files: s, Authors: s, History: NewBookHistory(s, "t", "x", "p-", nil)})
-	err := w.RepointBookFile(context.Background(), "b1", "f1", undo.BookFileLocation{Path: "/lib/old.m4b"}, undo.BookFileLocation{Path: "/lib/new.m4b"})
+	err := w.RepointBookFile(context.Background(), "b1", "f1", database.BookFileLocation{Path: "/lib/old.m4b"}, database.BookFileLocation{Path: "/lib/new.m4b"})
 	if !errors.Is(err, ErrNotJournaled) {
 		t.Fatalf("err = %v, want ErrNotJournaled", err)
 	}
@@ -505,7 +504,7 @@ func TestRepointChecksFenceFirst(t *testing.T) {
 	w := newTestWriter(s, ops.Live)
 	w.SetFence(f.Check)
 	revoke()
-	err := w.RepointBookFile(context.Background(), "b1", "f1", undo.BookFileLocation{Path: "/lib/old.m4b"}, undo.BookFileLocation{Path: "/lib/new.m4b"})
+	err := w.RepointBookFile(context.Background(), "b1", "f1", database.BookFileLocation{Path: "/lib/old.m4b"}, database.BookFileLocation{Path: "/lib/new.m4b"})
 	if !errors.Is(err, ErrFenced) || errors.Is(err, ops.ErrChangedSincePlan) {
 		t.Fatalf("err = %v, want ErrFenced only", err)
 	}
@@ -519,8 +518,8 @@ func TestRepointIntentCarriesLocations(t *testing.T) {
 	w := newTestWriter(s, ops.Live)
 	var planned json.RawMessage
 	s.onPut = func(in database.Intent) { planned = in.Planned }
-	if err := w.RepointBookFile(context.Background(), "b1", "f1", undo.BookFileLocation{Path: "/lib/old.m4b"},
-		undo.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
+	if err := w.RepointBookFile(context.Background(), "b1", "f1", database.BookFileLocation{Path: "/lib/old.m4b"},
+		database.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
 		t.Fatal(err)
 	}
 	var plan struct{ Op, Detail string }
@@ -531,8 +530,8 @@ func TestRepointIntentCarriesLocations(t *testing.T) {
 	if err := json.Unmarshal([]byte(plan.Detail), &d); err != nil {
 		t.Fatalf("detail %q: %v", plan.Detail, err)
 	}
-	from, ferr := undo.DecodeBookFileLocation(d.From)
-	to, terr := undo.DecodeBookFileLocation(d.To)
+	from, ferr := database.DecodeBookFileLocation(d.From)
+	to, terr := database.DecodeBookFileLocation(d.To)
 	if ferr != nil || terr != nil || from.Path != "/lib/old.m4b" || to.Path != "/lib/new.m4b" || d.BookID != "b1" {
 		t.Fatalf("intent detail = %+v (%v %v)", d, ferr, terr)
 	}

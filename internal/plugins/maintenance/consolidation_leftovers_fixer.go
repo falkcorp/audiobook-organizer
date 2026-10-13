@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -28,7 +28,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -176,7 +175,7 @@ type leftoverState struct {
 // leftoverMark is one dead row Apply marks Missing.
 type leftoverMark struct {
 	RowID string
-	Was   undo.BookFileLocation
+	Was   database.BookFileLocation
 }
 
 // leftoverPlan is the Detail Replan hands Apply.
@@ -796,7 +795,7 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		}
 		state.NotMissing = append(state.NotMissing, r.ID)
 		plan.Marks = append(plan.Marks, leftoverMark{RowID: r.ID,
-			Was: undo.BookFileLocation{Path: r.FilePath, Missing: false, Hash: r.FileHash, Size: r.FileSize}})
+			Was: database.BookFileLocation{Path: r.FilePath, Missing: false, Hash: r.FileHash, Size: r.FileSize}})
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {

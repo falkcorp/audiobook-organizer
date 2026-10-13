@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
-// last-edited: 2026-10-08
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -389,7 +389,7 @@ func TestDuplicateCopies_ResumesACutOffRow(t *testing.T) {
 	changes, err := d.s.GetOperationChanges("op-apply")
 	require.NoError(t, err)
 	for _, c := range changes {
-		require.NotEqual(t, undo.ChangeTypeBookFileRepoint, c.ChangeType, "the finished repoint is not written twice")
+		require.NotEqual(t, database.ChangeTypeBookFileRepoint, c.ChangeType, "the finished repoint is not written twice")
 		require.NotEqual(t, undo.ChangeTypeBookFileReassign, c.ChangeType, "the finished fold is not written twice")
 	}
 }
