@@ -1,5 +1,5 @@
 <!-- file: deploy/prometheus/README.md -->
-<!-- version: 1.3.2 -->
+<!-- version: 1.3.3 -->
 <!-- guid: e3f4a5b6-c7d8-4e9f-0a1b-2c3d4e5f6a7b -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -66,7 +66,7 @@ at 0/0 or the iTunes hash pass pinned at total/total. Both rules are
 pre-empted by the registry watchdog, which cancels a run that is silent for
 longer than its def's `ProgressTimeout` (5 minutes by default, up to 2 hours
 for the LivenessNone defs: `scheduler.dedup-llm-review` 2h;
-`maintenance.trash-cleanup`, `scheduler.cleanup-old-backups`,
+`maintenance.trash-cleanup`, `maintenance.cleanup-old-backups`,
 `maintenance.temp-file-cleanup`, AI journal prune and recompact activity digests
 1h; `maintenance.library-optimize` 65m, the temp-file-cleanup child's 1h plus
 5m; `maintenance.activity-reclaim` and `maintenance.optimize-activity-db`

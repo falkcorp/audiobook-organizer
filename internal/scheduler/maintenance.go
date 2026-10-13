@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-10-13
 
@@ -175,7 +175,7 @@ var taskV2DefIDs = map[string]string{
 	"author_split_scan":           "maintenance.author-split-scan",
 	"db_optimize":                 "maintenance.db-optimize",
 	"acoustid_online_lookup":      "acoustid.lookup-online",
-	"cleanup_old_backups":         "scheduler.cleanup-old-backups",
+	"cleanup_old_backups":         "maintenance.cleanup-old-backups",
 	"purge_deleted":               "maintenance.purge-deleted",
 	"tombstone_cleanup":           "maintenance.tombstone-cleanup",
 	"resolve_production_authors":  "maintenance.resolve-production-authors",
