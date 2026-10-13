@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -253,8 +253,12 @@ func (w *Writer) intent(what, subject, kind, op, detail string, journaled bool) 
 // makes recovery cautious.
 func (w *Writer) finish(seq uint64, recorded bool) {
 	if !recorded {
-		pkgLog.Warn("intent %d of op %s left in place: the write's history is incomplete",
-			seq, logger.SanitizeLogValue(w.cfg.OpID))
+		// seq 0: no intent store (internal/repairs journals first itself),
+		// so there is no intent to leave, and nothing to say.
+		if seq != 0 {
+			pkgLog.Warn("intent %d of op %s left in place: the write's history is incomplete",
+				seq, logger.SanitizeLogValue(w.cfg.OpID))
+		}
 		return
 	}
 	if err := w.intents.clear(seq); err != nil {
