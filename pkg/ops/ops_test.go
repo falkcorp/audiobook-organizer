@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-13
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -88,13 +89,24 @@ func readOnlyCommon(title string) Common {
 // runSet runs every item of a set in order, the way one worker runs a chunk.
 func runSet(t *testing.T, rc *RC, set ItemSet) (skips []string, errs []error) {
 	t.Helper()
+	skips, errs, _ = runSetMarks(t, rc, set)
+	return skips, errs
+}
+
+// runSetMarks is runSet that also folds rc.Mark calls, as the ledger does.
+func runSetMarks(t *testing.T, rc *RC, set ItemSet) (skips []string, errs []error, marks map[string][]string) {
+	t.Helper()
+	marks = map[string][]string{}
 	for i := 0; i < set.Len(); i++ {
 		tally := &Tally{}
 		err := set.Run(NewItemRC(rc, rc.Context(), tally, nil), i)
 		skips = append(skips, tally.SkipReason())
 		errs = append(errs, err)
+		for _, m := range tally.Marks() {
+			marks[m] = append(marks[m], set.Key(i))
+		}
 	}
-	return skips, errs
+	return skips, errs, marks
 }
 
 func TestCompileDefaults(t *testing.T) {
@@ -127,6 +139,7 @@ func TestConcurrencyWorkers(t *testing.T) {
 	}{
 		{CPU(), "", runtime.NumCPU()},
 		{Network(4, "rate limited"), "", 4},
+		{Network(1000, "typo"), "", MaxNetworkWorkers},
 		{Sequential("ordered"), "", 1},
 		{FromParam("workers", 3, 8), `{}`, 3},
 		{FromParam("workers", 3, 8), `{"workers":6}`, 6},
@@ -236,11 +249,16 @@ func TestItemRCCountAndSkip(t *testing.T) {
 	irc.Count("indexed", 2)
 	irc.Count("indexed", 1)
 	irc.Skip("")
+	irc.Mark("seen")
+	irc.Mark("seen")
+	if !slices.Equal(tally.Marks(), []string{"seen"}) {
+		t.Fatalf("marks = %v, want one seen", tally.Marks())
+	}
 	if tally.Counters()["indexed"] != 3 || tally.SkipReason() != "unspecified" {
 		t.Fatalf("tally = %v %q", tally.Counters(), tally.SkipReason())
 	}
 	tally.Reset()
-	if len(tally.Counters()) != 0 || tally.SkipReason() != "" {
+	if len(tally.Counters()) != 0 || tally.SkipReason() != "" || len(tally.Marks()) != 0 {
 		t.Fatal("Reset left state behind")
 	}
 }

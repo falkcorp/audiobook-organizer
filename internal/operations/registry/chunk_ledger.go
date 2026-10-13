@@ -1,5 +1,5 @@
 // file: internal/operations/registry/chunk_ledger.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d4e18b1-a85c-41de-bd02-4a39b90f180a
 // last-edited: 2026-10-13
 
@@ -108,15 +108,21 @@ type chunkLedger struct {
 	// order still merge. Merging only shrinks the ledger; a range left
 	// unmerged is still skipped correctly on resume.
 	after map[string]string // range First -> preceding stream key
-	// chunksDone counts completed chunks (AppendOnly: since this attempt
-	// started, plus the ranges it loaded, a lower bound after a merge).
+	// chunksDone counts completed chunks across every attempt; persisted as
+	// Ledger.ChunksDone because merged AppendOnly ranges cannot be counted
+	// back into chunks.
 	chunksDone int
 }
+
+// maxMarkedKeys caps the keys a run records with rc.Mark across all names.
+// Marks ride in every ledger commit, so they are for small sets (a Fixer's
+// applied rows); a key past the cap is counted under "marks_dropped".
+const maxMarkedKeys = 50_000
 
 func newChunkLedger(size, count int) *chunkLedger {
 	return &chunkLedger{
 		l: database.Ledger{SchemaVersion: 1, ChunkSize: size, ChunkCount: count,
-			Done: make([]byte, (count+7)/8), Counters: map[string]int64{}},
+			Done: make([]byte, (count+7)/8), Counters: map[string]int64{}, Marks: map[string][]string{}},
 		after: map[string]string{},
 	}
 }
@@ -130,16 +136,23 @@ func loadChunkLedger(stored *database.Ledger) *chunkLedger {
 	if l.Counters == nil {
 		l.Counters = map[string]int64{}
 	}
+	l.Marks = map[string][]string{}
+	for k, v := range stored.Marks {
+		l.Marks[k] = slices.Clone(v)
+	}
 	cl := &chunkLedger{l: l, after: map[string]string{}}
 	if want := (l.ChunkCount + 7) / 8; len(cl.l.Done) < want {
 		cl.l.Done = append(cl.l.Done, make([]byte, want-len(cl.l.Done))...)
 	}
-	for c := range l.ChunkCount {
-		if cl.isDone(c) {
-			cl.chunksDone++
+	cl.chunksDone = stored.ChunksDone
+	if cl.chunksDone == 0 {
+		// A ledger written before ChunksDone was persisted: count the bitmap.
+		for c := range l.ChunkCount {
+			if cl.isDone(c) {
+				cl.chunksDone++
+			}
 		}
 	}
-	cl.chunksDone += len(l.Ranges)
 	return cl
 }
 
@@ -207,6 +220,23 @@ func (c *chunkLedger) fold(b *chunkTally) {
 	for k, v := range b.counters {
 		c.l.Counters[k] += v
 	}
+	for name, keys := range b.marks {
+		for _, k := range keys {
+			if c.markedKeys() >= maxMarkedKeys {
+				c.l.Counters["marks_dropped"]++
+				continue
+			}
+			c.l.Marks[name] = append(c.l.Marks[name], k)
+		}
+	}
+}
+
+func (c *chunkLedger) markedKeys() int {
+	n := 0
+	for _, ks := range c.l.Marks {
+		n += len(ks)
+	}
+	return n
 }
 
 // snapshot returns a copy safe to hand to the store.
@@ -215,6 +245,11 @@ func (c *chunkLedger) snapshot() database.Ledger {
 	l.Done = slices.Clone(c.l.Done)
 	l.Ranges = slices.Clone(c.l.Ranges)
 	l.Counters = maps.Clone(c.l.Counters)
+	l.Marks = make(map[string][]string, len(c.l.Marks))
+	for k, v := range c.l.Marks {
+		l.Marks[k] = slices.Clone(v)
+	}
+	l.ChunksDone = c.chunksDone
 	return l
 }
 
@@ -223,6 +258,7 @@ func (c *chunkLedger) snapshot() database.Ledger {
 type chunkTally struct {
 	ok, failed, skipped int64
 	counters            map[string]int64
+	marks               map[string][]string
 	rows                []database.ItemOutcome
 }
 

@@ -1,11 +1,14 @@
 // file: pkg/ops/progress.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d5f77ea-78d1-4e75-bdef-9e92f10feb81
 // last-edited: 2026-10-13
 
 package ops
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Progress is a run's structured progress handle (rc.Progress()). A Batch or
 // Fixer gets its numbers from the runner; a Task sets them itself.
@@ -98,9 +101,19 @@ type WorkerProgress struct {
 type Summary struct {
 	Done, Total, Failed, Skipped int64
 	Counters                     map[string]int64
-	ChunksDone, ChunksTotal      int
-	Canceled                     bool
+	// Marks are the keys items recorded with rc.Mark, by name, from every
+	// completed chunk of every attempt.
+	Marks                   map[string][]string
+	ChunksDone, ChunksTotal int
+	Canceled                bool
 }
 
 // Counter returns an op-defined counter (rc.Count) or skipped:<reason>.
 func (s Summary) Counter(name string) int64 { return s.Counters[name] }
+
+// Marked returns the keys marked with name (rc.Mark), sorted.
+func (s Summary) Marked(name string) []string {
+	out := slices.Clone(s.Marks[name])
+	slices.Sort(out)
+	return out
+}

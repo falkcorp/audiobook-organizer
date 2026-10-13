@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-13
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sync"
 )
 
@@ -244,6 +245,7 @@ type Tally struct {
 	mu       sync.Mutex
 	counters map[string]int64
 	skip     string
+	marks    []string
 }
 
 // Counters returns a copy of the item's op-defined counters.
@@ -260,12 +262,20 @@ func (t *Tally) SkipReason() string {
 	return t.skip
 }
 
+// Marks returns the names the item was marked with (rc.Mark).
+func (t *Tally) Marks() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.marks)
+}
+
 // Reset clears the tally for the next item.
 func (t *Tally) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	clear(t.counters)
 	t.skip = ""
+	t.marks = t.marks[:0]
 }
 
 // ItemRC is RC plus the item's own deadline and counters.
@@ -304,6 +314,18 @@ func (rc *ItemRC) Skip(reason string) {
 		reason = "unspecified"
 	}
 	rc.tally.skip = reason
+}
+
+// Mark records the item's key under name. Like the counters, marks reach
+// the ledger only when the item's chunk completes, and they survive a
+// resume; Finish reads them as Summary.Marks. Meant for small sets a Finish
+// must list (a Fixer's applied rows), not for every item of a large run.
+func (rc *ItemRC) Mark(name string) {
+	rc.tally.mu.Lock()
+	defer rc.tally.mu.Unlock()
+	if !slices.Contains(rc.tally.marks, name) {
+		rc.tally.marks = append(rc.tally.marks, name)
+	}
 }
 
 // Touch is liveness inside one long item (v2 TouchLiveness). Call it after

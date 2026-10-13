@@ -1,5 +1,5 @@
 // file: pkg/ops/batch.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d9e5b5a9-3c58-4d74-aac9-55d6b89b6410
 // last-edited: 2026-10-13
 
@@ -129,7 +129,12 @@ const (
 // CPU is runtime.NumCPU() workers: the CPU-bound default.
 func CPU() Concurrency { return Concurrency{kind: concCPU} }
 
-// Network is a fixed small pool for a rate-limited backend.
+// MaxNetworkWorkers caps Network(n): a "small pool for a rate-limited
+// backend" larger than this is a typo or a CPU-bound op in disguise.
+const MaxNetworkWorkers = 64
+
+// Network is a fixed small pool for a rate-limited backend, capped at
+// MaxNetworkWorkers.
 func Network(n int, why string) Concurrency {
 	return Concurrency{kind: concNetwork, n: n, reason: why}
 }
@@ -170,8 +175,10 @@ func (c Concurrency) problems() []string {
 // Always >= 1.
 func (c Concurrency) Workers(params json.RawMessage) int {
 	switch c.kind {
-	case concNetwork, concSequential:
-		return max(c.n, 1)
+	case concNetwork:
+		return min(max(c.n, 1), MaxNetworkWorkers)
+	case concSequential:
+		return 1
 	case concParam:
 		n := c.n
 		var m map[string]json.RawMessage
