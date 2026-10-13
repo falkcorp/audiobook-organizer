@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_backfill_gate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e9c3b27-1a8d-4f64-b0c2-7d3e6a9f1c58
-// last-edited: 2026-09-11
+// last-edited: 2026-10-12
 
 package database
 
@@ -173,8 +173,7 @@ func TestSQLActivityStore_DeletingPassesTakeTheGate(t *testing.T) {
 			_, err := s.Summarize(context.Background(), cutoff, "debug")
 			return err
 		},
-		"Prune":   func(s *SQLActivityStore) error { _, err := s.Prune(context.Background(), cutoff, "debug"); return err },
-		"WipeAll": func(s *SQLActivityStore) error { _, err := s.WipeAllActivity(context.Background()); return err },
+		"Prune": func(s *SQLActivityStore) error { _, err := s.Prune(context.Background(), cutoff, "debug"); return err },
 	}
 	for name, pass := range passes {
 		t.Run(name, func(t *testing.T) {

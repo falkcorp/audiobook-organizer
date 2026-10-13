@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_summary_clamp.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-12
 
 // Package database — retroactive clamp of oversized activity `summary` values.
 //
@@ -278,8 +278,7 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 	// Measured on prod 2026-09-08, first run of this pass: the main file fell
 	// 22,898,438,144 → 11,447,480,320 (10.66 GB freed) while the WAL sat at
 	// 11,514,065,152 and did not move for the next three minutes. Net reclaim
-	// was therefore approximately zero until the service restarted. Same reason
-	// WipeAllActivity ends with this pragma.
+	// was therefore approximately zero until the service restarted.
 	//
 	// Failure here is not fatal to the vacuum, which has already committed:
 	// report it so the caller can say the space is still held, rather than

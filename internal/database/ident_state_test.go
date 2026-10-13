@@ -1,5 +1,5 @@
 // file: internal/database/ident_state_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
 // last-edited: 2026-10-12
 
@@ -416,12 +416,6 @@ func TestIdentRebuild_IdempotentAndReportsNotReady(t *testing.T) {
 	drift, err := s.IdentCountersDrift()
 	require.NoError(t, err)
 	require.Zero(t, drift.Total())
-
-	// A wipe of the cache keyspace rebuilds the index from what is left.
-	_, err = s.WipeByPrefixes([]string{metadataCacheKeyPrefix})
-	require.NoError(t, err)
-	require.True(t, s.IdentCounts().Ready)
-	requireCountsMatchOracle(t, s)
 
 	// Reset leaves an empty, built index.
 	require.NoError(t, s.Reset())
@@ -936,8 +930,7 @@ func TestIdentRebuild_SupersededByInvalidation(t *testing.T) {
 }
 
 // TestSuperviseIdentIndex_RetriesFailedBuild: the boot build is retried
-// after a failure, and a wipe whose own rebuild fails wakes the supervisor,
-// which rebuilds it.
+// after a failure.
 func TestSuperviseIdentIndex_RetriesFailedBuild(t *testing.T) {
 	s := newIdentStore(t)
 	pool := &identPool{}
@@ -969,18 +962,6 @@ func TestSuperviseIdentIndex_RetriesFailedBuild(t *testing.T) {
 	})
 	require.Eventually(t, s.IdentIndexReady, 10*time.Second, 5*time.Millisecond)
 	requireCountsMatchOracle(t, s)
-
-	// A wipe of the cache keyspace whose rebuild fails: the supervisor
-	// rebuilds it.
-	for _, id := range pool.ids[:5] {
-		require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)}))
-	}
-	fails.Store(1)
-	_, err := s.WipeByPrefixes([]string{metadataCacheKeyPrefix})
-	require.NoError(t, err)
-	require.Eventually(t, s.IdentIndexReady, 10*time.Second, 5*time.Millisecond)
-	requireCountsMatchOracle(t, s)
-	require.Equal(t, int64(len(pool.ids)), s.IdentCounts().All[IdentUnasked])
 }
 
 // TestIdentCounters_RecountWhileWriting runs the whole-index operations --

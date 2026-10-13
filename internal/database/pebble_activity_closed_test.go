@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_closed_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7bcf71c3-3a7a-48f4-93ee-6399233ce17c
-// last-edited: 2026-10-03
+// last-edited: 2026-10-12
 
 // Package database — regression suite for PebbleActivityStore on a closed DB.
 //
@@ -87,10 +87,6 @@ func TestPebbleActivityStore_ReadsAndMaintenanceAfterBorrowedDBClosed(t *testing
 		},
 		"Prune": func(s *PebbleActivityStore) error {
 			_, err := s.Prune(ctx, old, "change")
-			return err
-		},
-		"WipeAllActivity": func(s *PebbleActivityStore) error {
-			_, err := s.WipeAllActivity(ctx)
 			return err
 		},
 		"RepairActivityIndexes": func(s *PebbleActivityStore) error {

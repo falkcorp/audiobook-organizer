@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.19.2
+// version: 1.20.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-10-09
+// last-edited: 2026-10-12
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -60,7 +60,7 @@ type SQLActivityStore struct {
 	path    string
 
 	// backfillGate keeps every row-deleting maintenance pass (CompactByDay,
-	// Summarize, Prune, WipeAllActivity — write side) out of the window between
+	// Summarize, Prune — write side) out of the window between
 	// the Pebble→SQLite backfill copying a batch and re-presenting it for
 	// parity (read side, copyAndVerifyBatch). The parity check counts any row
 	// the re-present has to insert as "a copied row did not land" and fails
@@ -104,8 +104,8 @@ const sqlActReaderConns = 4
 const sqlActCountCap = 100000
 
 // sqlActDeleteChunk bounds each DELETE so an unbounded wipe/prune cannot build
-// one enormous WAL frame; it also makes WipeAllActivity's "rows actually
-// deleted on cancel" contract real (it sums committed chunks).
+// one enormous WAL frame, and lets a cancelled pass report the rows it actually
+// deleted (it sums committed chunks).
 //
 // A var only so a multi-chunk test can shrink it (shrinkSQLActChunksForTest):
 // at 5,000 a three-chunk fixture is 15,001 rows, and under -race those tests
@@ -960,38 +960,6 @@ func (s *SQLActivityStore) Prune(ctx context.Context, olderThan time.Time, tier 
 			break
 		}
 	}
-	return deleted, nil
-}
-
-// WipeAllActivity deletes every row, chunked and ctx-aware. On cancellation it
-// returns the count actually committed so far (a lower bound, never fabricated)
-// alongside ctx.Err(), and a plain retry finishes the rest — satisfying the
-// interface contract.
-func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
-	s.backfillGate.Lock()
-	defer s.backfillGate.Unlock()
-	var deleted int64
-	for {
-		select {
-		case <-ctx.Done():
-			return deleted, ctx.Err()
-		default:
-		}
-		res, err := s.writer.ExecContext(ctx, s.dialect.rebind(
-			`DELETE FROM activity WHERE id IN (SELECT id FROM activity LIMIT ?)`), sqlActDeleteChunk)
-		if err != nil {
-			return deleted, fmt.Errorf("sql_activity: wipe: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		deleted += n
-		s.checkpointBetweenBatches(ctx)
-		if n < int64(sqlActDeleteChunk) {
-			break
-		}
-	}
-	// On the checkpoint handle, never the writer: a checkpoint on the
-	// single writer connection queues every live Record behind it.
-	s.checkpointAndMaybeTruncate(ctx, true)
 	return deleted, nil
 }
 

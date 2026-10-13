@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.217.1
+// version: 1.218.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-12
 
@@ -706,7 +706,6 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	// The identification index: recount its counters when it is built, stamp
 	// it when the store is empty, or leave it not ready for
 	// SuperviseIdentIndex's build.
-	store.ident.wake = make(chan struct{}, 1)
 	if err := store.loadIdentIndexState(); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			identLog.Error("close PebbleDB after identification index load failure: path=%s error=%s",
@@ -6042,126 +6041,6 @@ func (p *PebbleStore) Reset() error {
 	p.replaceMemStoreAfterReset(fresh)
 
 	return nil
-}
-
-// CountByPrefix counts keys that start with the given prefix.
-func (p *PebbleStore) CountByPrefix(prefix string) (int, error) {
-	lb := []byte(prefix)
-	ub := make([]byte, len(lb))
-	copy(ub, lb)
-	ub[len(ub)-1]++
-
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lb, UpperBound: ub})
-	if err != nil {
-		return 0, fmt.Errorf("CountByPrefix %q: %w", prefix, err)
-	}
-	defer iter.Close()
-
-	count := 0
-	for iter.First(); iter.Valid(); iter.Next() {
-		count++
-	}
-	return count, iter.Error()
-}
-
-// WipeByPrefixes deletes all keys that start with any of the given prefix strings.
-// Returns the total number of keys deleted.
-func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
-	total := 0
-	// maybeApplied is set when a commit returned an error: a failed synced
-	// commit cannot be assumed not to have applied.
-	maybeApplied := false
-	// Any prefix may cover work: rows ("work:", "w", or ""), and an error part
-	// way through leaves earlier prefixes' deletes committed. Bump the works
-	// generation whenever anything was (or may have been) deleted, success or
-	// not. A spurious bump only costs the scanner one works reload.
-	defer func() {
-		if total > 0 || maybeApplied {
-			p.bumpWorksGeneration()
-		}
-	}()
-	// A prefix that covers the book: or metadata_cache: keyspace (shorter than
-	// it, or naming keys inside it) deletes rows the change logs cannot name,
-	// so the generation moves with a bumpAll and readers behind it rebuild --
-	// the review snapshot would otherwise serve the wiped books as live rows
-	// until its age net fired. Same rule as the works bump: on a commit error
-	// too, since a failed synced commit may have applied.
-	covers := func(prefix, keyspace string) bool {
-		return strings.HasPrefix(keyspace, prefix) || strings.HasPrefix(prefix, keyspace)
-	}
-	bumpCovered := func(prefix string) {
-		if covers(prefix, bookRowPrefix) {
-			p.bookChanges.bumpAll(&p.libGen)
-		}
-		if covers(prefix, metadataCacheKeyPrefix) {
-			p.cacheChanges.bumpAll(&p.cacheGen)
-		}
-	}
-	// A prefix covering book:, metadata_cache: or ident: rows deletes inputs
-	// (or rows) of the identification index without going through its
-	// write-through. The index is marked not ready (and its marker removed,
-	// so a crash mid-wipe rebuilds on boot) before the first delete, and
-	// rebuilt from what is left after the last, error or not. A failed
-	// rebuild wakes SuperviseIdentIndex, which retries it with backoff.
-	identCovered := false
-	for _, prefix := range prefixes {
-		if covers(prefix, bookRowPrefix) || covers(prefix, metadataCacheKeyPrefix) || covers(prefix, "ident:") {
-			identCovered = true
-		}
-	}
-	if identCovered {
-		if err := p.invalidateIdentIndex(); err != nil {
-			return 0, fmt.Errorf("wipe: invalidate identification index: %w", err)
-		}
-		defer func() {
-			if _, err := p.RebuildIdentIndex(p.closingContext()); err != nil {
-				identLog.Warn("identification index rebuild after a wipe failed; the supervisor retries it (and the next boot rebuilds it): %v", err)
-				p.ident.nudge()
-			}
-		}()
-	}
-	for _, prefix := range prefixes {
-		lb := []byte(prefix)
-		// Upper bound: increment the last byte to cover all keys with this prefix.
-		ub := make([]byte, len(lb))
-		copy(ub, lb)
-		ub[len(ub)-1]++
-
-		iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lb, UpperBound: ub})
-		if err != nil {
-			return total, fmt.Errorf("wipe prefix %q: iter: %w", prefix, err)
-		}
-
-		var keys [][]byte
-		for iter.First(); iter.Valid(); iter.Next() {
-			k := make([]byte, len(iter.Key()))
-			copy(k, iter.Key())
-			keys = append(keys, k)
-		}
-		if err := iter.Close(); err != nil {
-			return total, fmt.Errorf("wipe prefix %q: iter close: %w", prefix, err)
-		}
-
-		if len(keys) == 0 {
-			continue
-		}
-
-		batch := p.db.NewBatch()
-		for _, k := range keys {
-			if err := batch.Delete(k, nil); err != nil {
-				batch.Close()
-				return total, fmt.Errorf("wipe prefix %q: delete: %w", prefix, err)
-			}
-		}
-		if err := batch.Commit(pebble.Sync); err != nil {
-			maybeApplied = true
-			bumpCovered(prefix)
-			return total, fmt.Errorf("wipe prefix %q: commit: %w", prefix, err)
-		}
-		total += len(keys)
-		bumpCovered(prefix)
-	}
-	return total, nil
 }
 
 // Optimize compacts the PebbleDB database to reclaim space.

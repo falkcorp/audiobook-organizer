@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -227,26 +227,6 @@ func TestPebbleActivityStore_Prune(t *testing.T) {
 }
 
 // ── parity: wipe all activity ─────────────────────────────────────────────────
-
-func TestPebbleActivityStore_WipeAllActivity(t *testing.T) {
-	s := newTestPebbleActivityStore(t)
-
-	for _, tier := range actTiers[:4] { // change/debug/audit/info
-		_, err := s.Record(ActivityEntry{
-			Tier: tier, Type: "test", Level: "info",
-			Source: "test", Summary: "entry in " + tier,
-		})
-		require.NoError(t, err)
-	}
-
-	n, err := s.WipeAllActivity(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, int64(4), n)
-
-	_, total, err := s.Query(context.Background(), ActivityFilter{Limit: 50})
-	require.NoError(t, err)
-	assert.Equal(t, 0, total)
-}
 
 // ── parity: GetDistinctSources ────────────────────────────────────────────────
 

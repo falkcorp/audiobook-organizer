@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_batch_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8b41d0c7-3e59-4a16-b2d7-6f9c1a840e35
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package database — regression suite for the batched activity write path.
 //
@@ -166,34 +166,6 @@ func TestRecordBatch_RowsAreDeletableByPrune(t *testing.T) {
 	opKeys, bookKeys = countIndexKeys(t, s)
 	assert.Zero(t, opKeys, "orphaned act:op: keys left after prune")
 	assert.Zero(t, bookKeys, "orphaned act:bk: keys left after prune")
-}
-
-// TestRecordBatch_RowsAreDeletableByWipeAllActivity is the same round trip
-// through the other deletion contract.
-func TestRecordBatch_RowsAreDeletableByWipeAllActivity(t *testing.T) {
-	s := newTestPebbleActivityStore(t)
-	ts := time.Now().UTC().Add(-time.Hour)
-
-	const n = 8
-	written, err := s.RecordBatch(batchTestEntries(n, ts))
-	require.NoError(t, err)
-	require.Equal(t, n, written)
-	require.Equal(t, n, countKeysWithPrefix(t, s, "act:change:"))
-
-	// Assert the index families are NON-ZERO first. Without this the "zero
-	// keys remain" assertions below pass 0 → 0 against a batch path that never
-	// wrote an index key, or wrote it under some other prefix.
-	opBefore, bookBefore := countIndexKeys(t, s)
-	require.Equal(t, n, opBefore, "fixture must create act:op: keys or the wipe assertions are vacuous")
-	require.Equal(t, n, bookBefore, "fixture must create act:bk: keys or the wipe assertions are vacuous")
-
-	_, err = s.WipeAllActivity(context.Background())
-	require.NoError(t, err)
-
-	assert.Zero(t, countKeysWithPrefix(t, s, "act:change:"), "primary rows left after wipe")
-	opKeys, bookKeys := countIndexKeys(t, s)
-	assert.Zero(t, opKeys, "act:op: keys left after wipe")
-	assert.Zero(t, bookKeys, "act:bk: keys left after wipe")
 }
 
 // TestRecordBatch_SplitsOverTheCap pins the memory bound: a flush larger than

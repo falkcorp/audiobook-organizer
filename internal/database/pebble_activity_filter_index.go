@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -78,9 +78,10 @@ var filterIndexLog = logger.New("activity.filter-index")
 // "older matches were not examined" (a lower bound, logged) into "older matches
 // do not exist" (a wrong answer, silent).
 //
-// It deliberately lives OUTSIDE "act:". WipeAllActivity range-deletes the whole
-// act: prefix; an empty store is trivially fully indexed, so the sentinel must
-// survive the wipe rather than send every later query back to the budget scan.
+// It deliberately lives OUTSIDE "act:", so a range delete of the whole act:
+// prefix does not take it: an empty store is trivially fully indexed, so the
+// sentinel must survive such a wipe rather than send every later query back to
+// the budget scan.
 const ActivityFilterIndexBackfillKey = "system:backfill:activity_filter_index_v1_done"
 
 // pactFilterFamily is one indexed filter predicate.

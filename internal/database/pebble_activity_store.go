@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.30.4
+// version: 1.31.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -491,7 +491,7 @@ func pactPrimaryKeySuffix(key []byte) (string, bool) {
 // consistent, and (b) re-scanning act:op:/act:bk: per delete, which is
 // O(whole index) per row. Decoding wins here for a reason specific to these
 // call sites and not generally true: every path that deletes a primary row
-// (Summarize, Prune, WipeAllActivity, CompactByDay) already goes through
+// (Summarize, Prune, CompactByDay) already goes through
 // scanTierKVs, which json.Unmarshals EVERY row it returns — Summarize and
 // CompactByDay cannot group by day/op/type without it. So reading
 // e.OperationID and e.BookID here adds ZERO additional decodes; the marginal
@@ -540,9 +540,8 @@ func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
 // AND the secondary index entries Record wrote with it, in the same batch.
 //
 // EVERY deletion path must go through this. Before it existed, Prune,
-// Summarize, CompactByDay and WipeAllActivity each deleted kv.key alone, so
-// nothing in the codebase ever deleted an act:op: or act:bk: key:
-// WipeAllActivity did not wipe all activity, and on production act:op: alone
+// Summarize and CompactByDay each deleted kv.key alone, so nothing in the
+// codebase ever deleted an act:op: or act:bk: key: on production act:op: alone
 // reached ~0.783 GiB of a ~1.342 GiB activity keyspace — roughly 60% — largely
 // index rows whose primary row had been pruned months earlier.
 //
@@ -551,9 +550,7 @@ func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
 // That is the deliberate choice, not an oversight: the primary/index pair stays
 // intact together, no new orphan is manufactured from a row whose ids we cannot
 // read, and the drop is counted and reported in aggregate by pactDecodeTally —
-// it is never silent. The one contract that cannot live with that is
-// WipeAllActivity, which therefore range-deletes the entire "act:" prefix after
-// its row-by-row pass rather than relying on it; see its doc comment.
+// it is never silent.
 func pactDeleteEntry(batch *GatedBatch, kv pactKV) error {
 	if err := batch.Delete(kv.key, nil); err != nil {
 		return err
@@ -1309,108 +1306,6 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 		}
 	}
 	s.sourcesCache[key] = pactSourcesCacheEntry{at: now, out: stored}
-}
-
-// WipeAllActivity deletes every entry from all tier buckets. Returns the
-// count of rows ACTUALLY deleted, whether it finished or was cancelled.
-//
-// Cancellation is checked at two points per tier: once before the tier's scan
-// starts (so an already-cancelled ctx stops before the next tier is even
-// read), and once before each 500-row delete batch (so a large tier's delete
-// loop itself stops promptly rather than draining a fully-scanned kvs slice).
-// scanTierKVs also carries ctx down into its own per-row check, so a
-// cancellation mid-scan of one tier aborts that tier's scan too — see its
-// doc comment. On cancellation, rows already committed in prior batches and
-// prior tiers stay deleted; rows not yet reached are left untouched. There is
-// no partial-tier bookkeeping to resume: a retry just calls WipeAllActivity
-// again, which rescans every tier and deletes whatever remains.
-//
-// After the tier scan, the WHOLE "act:" prefix is removed with one DeleteRange.
-// This method's contract is its name, and the row-by-row path cannot honour it
-// on its own — in two directions, both of which were verified by test rather
-// than assumed:
-//
-//   - A row whose stored JSON will not decode is dropped by scanTierKVs, so it
-//     is never staged for deletion at all. Sweeping only the two index families
-//     would leave that PRIMARY row sitting in the log after a "wipe all"; the
-//     test seeds exactly such a row and asserts nothing under "act:" survives.
-//   - An index row orphaned before this leak was closed has no primary left to
-//     drive its deletion, and its ids are only recoverable from the key itself.
-//
-// A range delete needs neither a decode nor the ids, and one range tombstone is
-// cheaper than millions of point tombstones. It is safe because "act:" is the
-// activity subsystem's entire keyspace: the only other key it owns is the
-// backfill sentinel "system:backfill:activity_pebble_v1_done", which is outside
-// "act:" — and ';' is one above ':' in ASCII, so ["act:", "act;") is exactly
-// that prefix and nothing beyond it.
-//
-// The blast radius was ENUMERATED, not reasoned about: every "act"-prefixed key
-// literal in internal/ is either act:<tier>: for a member of actTiers (all seven,
-// "digest" included — so the digest rollup is inside the sweep, and the test
-// seeds a digest row so the assertion is not vacuously true of one tier) or one
-// of the two index families. The unrelated "action:..." literals are activity
-// field values rather than keys, and sort after "act;" regardless.
-//
-// The returned count stays PRIMARY ROWS ONLY and is therefore a LOWER BOUND: it
-// counts the rows deleted individually above, so a row the scan could not decode
-// is swept but not counted (pactDecodeTally counts and logs those separately),
-// and index keys are never counted at all. That is deliberate — the
-// ActivityRetention doc promises "rows actually deleted", and counting index
-// keys would silently inflate the number the wipe endpoint shows a user.
-func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (total int64, err error) {
-	defer recoverPebbleClosed("pebble_activity_store.WipeAllActivity", &err)
-	for _, tier := range actTiers {
-		if err := ctx.Err(); err != nil {
-			return total, err
-		}
-		kvs, err := s.scanTierKVs(ctx, tier, nil, nil)
-		if err != nil {
-			return total, err
-		}
-		for i := 0; i < len(kvs); i += 500 {
-			if err := ctx.Err(); err != nil {
-				return total, err
-			}
-			end := min(i+500, len(kvs))
-			batch := s.db.NewBatch()
-			for _, kv := range kvs[i:end] {
-				if err := pactDeleteEntry(batch, kv); err != nil {
-					batch.Close()
-					return total, fmt.Errorf("pebble_activity_store: wipe batch delete: %w", err)
-				}
-			}
-			if err := batch.Commit(pebble.Sync); err != nil {
-				batch.Close()
-				return total, fmt.Errorf("pebble_activity_store: wipe batch commit: %w", err)
-			}
-			batch.Close()
-			total += int64(end - i)
-		}
-	}
-
-	// Sweep the whole act: keyspace. See the doc comment: this is what makes
-	// "wipe all" true for the rows the per-row path above cannot reach — a
-	// primary row whose JSON will not decode, and an index row whose primary
-	// was already gone. The ctx check keeps the cancellation contract: a
-	// cancelled wipe leaves the rows it has not reached alone rather than
-	// destroying the whole log on its way out.
-	if err := ctx.Err(); err != nil {
-		return total, err
-	}
-	sweep := s.db.NewBatch()
-	defer sweep.Close()
-	// ';' is one above ':' in ASCII, so ["act:", "act;") is every activity key:
-	// all tier rows and both index families, and nothing else.
-	if err := sweep.DeleteRange([]byte("act:"), []byte("act;"), nil); err != nil {
-		return total, fmt.Errorf("pebble_activity_store: wipe activity range: %w", err)
-	}
-	if err := sweep.Commit(pebble.Sync); err != nil {
-		return total, fmt.Errorf("pebble_activity_store: wipe activity range commit: %w", err)
-	}
-	slog.Info("[activity] wipe swept the entire act: keyspace",
-		"range", "act: .. act;", "primary_rows_counted", total)
-
-	return total, nil
 }
 
 // activityRepairChunkSize is how many index rows one repair worker checks per
@@ -2448,7 +2343,7 @@ func (s *PebbleActivityStore) scanNewestFirst(
 // scanTierKVs returns key+entry pairs for a tier within the time range.
 //
 // This is a FULL materializing scan and is used only by the maintenance
-// operations (Summarize, Prune, WipeAllActivity, CompactByDay), which
+// operations (Summarize, Prune, CompactByDay), which
 // legitimately need every row. Query and GetDistinctSources deliberately do NOT
 // use it — see scanNewestFirst.
 // This scan is unbounded by design, so ctx is its ONLY brake: it is checked
