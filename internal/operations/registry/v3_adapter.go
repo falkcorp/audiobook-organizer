@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-13
 
@@ -300,9 +300,10 @@ type v3WriterStores struct {
 const historyChangeTypeV3 = "ops_v3"
 
 // ErrWriterUnavailable refuses a Live run of a writing def whose store lacks
-// the write-ahead intents or the operation journal: without them a write
-// could commit with no intent and no revertable history.
-var ErrWriterUnavailable = errors.New("registry: the store cannot back a v3 Writer (no intents or no operation journal)")
+// the write-ahead intents, the operation journal or the metadata history
+// recorder: without them a write could commit with no intent and no
+// revertable history.
+var ErrWriterUnavailable = errors.New("registry: the store cannot back a v3 Writer (no intents, operation journal or metadata history)")
 
 func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops.Mode) (*opswriter.Writer, error) {
 	var s v3WriterStores
@@ -312,7 +313,7 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	s.history, _ = database.AsCapability[opswriter.HistoryRecorder](r.store)
 	s.journal, _ = database.AsCapability[opswriter.ChangeJournal](r.store)
 	s.intents, _ = database.AsCapability[opswriter.IntentStore](r.store)
-	if mode == ops.Live && (s.intents == nil || s.journal == nil) {
+	if mode == ops.Live && (s.intents == nil || s.journal == nil || s.history == nil) {
 		return nil, fmt.Errorf("%s: %w", defID, ErrWriterUnavailable)
 	}
 	return opswriter.New(opswriter.Config{

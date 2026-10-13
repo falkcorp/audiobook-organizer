@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -29,6 +29,11 @@ var ErrStandDownLost = errors.New("opswriter: scan stand-down lease lost; remain
 // ErrNotJournaled refuses a write whose history row could not be recorded
 // because the Writer has no operation journal: the write is not made.
 var ErrNotJournaled = errors.New("opswriter: no operation journal; the write was not made")
+
+// ErrNoHistory refuses a Live ModifyBook when the Writer has no metadata
+// history recorder: the field changes would commit with nothing recording
+// them, so neither undo nor an audit could see them.
+var ErrNoHistory = errors.New("opswriter: no metadata history recorder; the write was not made")
 
 // repointDetail is a repoint intent's Planned detail.
 type repointDetail struct {
@@ -267,7 +272,14 @@ func (w *Writer) ModifyBook(ctx context.Context, bookID string, fn func(*databas
 	if w.cfg.Books == nil {
 		return ops.Changed{}, errors.New("opswriter: no book store")
 	}
-	seq, err := w.begin(ctx, "book "+bookID, "book:"+bookID, "modify", "modify_book", "", false)
+	what := "book " + bookID
+	if err := w.check(ctx, what); err != nil {
+		return ops.Changed{}, err
+	}
+	if w.cfg.Mode == ops.Live && !w.cfg.History.recording() {
+		return ops.Changed{}, fmt.Errorf("%w: %s not written", ErrNoHistory, what)
+	}
+	seq, err := w.intent(what, "book:"+bookID, "modify", "modify_book", "", false)
 	if err != nil {
 		return ops.Changed{}, err
 	}

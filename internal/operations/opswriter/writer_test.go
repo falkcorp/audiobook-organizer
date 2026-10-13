@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-13
 
@@ -624,5 +624,24 @@ func TestRepointIntentCarriesLocations(t *testing.T) {
 	to, terr := database.DecodeBookFileLocation(d.To)
 	if ferr != nil || terr != nil || from.Path != "/lib/old.m4b" || to.Path != "/lib/new.m4b" || d.BookID != "b1" {
 		t.Fatalf("intent detail = %+v (%v %v)", d, ferr, terr)
+	}
+}
+
+// A Live ModifyBook with no metadata history recorder is refused before the
+// intent and the write; Preview still records its plan line.
+func TestModifyBookWithoutHistoryRefused(t *testing.T) {
+	s := newRecStore()
+	s.books["b1"] = &database.Book{ID: "b1", Title: "Old"}
+	w := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Journal: s})
+	_, err := w.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "New"; return nil })
+	if !errors.Is(err, ErrNoHistory) {
+		t.Fatalf("err = %v, want ErrNoHistory", err)
+	}
+	if s.books["b1"].Title != "Old" || len(s.intents) != 0 {
+		t.Fatalf("a refused write wrote: title %q intents %d", s.books["b1"].Title, len(s.intents))
+	}
+	p := New(Config{OpID: "op1", Mode: ops.Preview, Books: s})
+	if _, err := p.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "New"; return nil }); !errors.Is(err, ops.ErrPreview) {
+		t.Fatalf("preview: err = %v, want ErrPreview", err)
 	}
 }
