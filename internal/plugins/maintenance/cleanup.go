@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-13
 
@@ -431,9 +431,11 @@ func (p *Plugin) runPurgeOldLogs(ctx context.Context, _ json.RawMessage, reporte
 //
 // ResumePolicy is ResumeRequeue (both copies were ResumeDrop) because the sweep
 // is idempotent: it keeps no cursor, a file removed by an interrupted run is
-// simply absent from the rerun's walk, a file that vanishes between the walk and
-// the remove only logs a warning, and the age test gives the same answer on the
-// rerun (TestCleanupOldBackups_RequeueIsIdempotent).
+// simply absent from the rerun's walk, a remove that fails (a file that vanished
+// after the walk saw it included) only logs a warning and is not counted, and
+// the age test gives the same answer on the rerun
+// (TestCleanupOldBackups_RequeueIsIdempotent, and
+// TestRunCleanupOldBackups_FailedRemoveIsLoggedNotCounted for the failed remove).
 func (p *Plugin) cleanupOldBackupsDef() sdk.OperationDef {
 	sched := "0 5 * * *" // 05:00 daily
 	return sdk.OperationDef{
