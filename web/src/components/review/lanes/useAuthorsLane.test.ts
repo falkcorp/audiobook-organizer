@@ -558,6 +558,76 @@ describe('leaving the lane or unmounting', () => {
     errors.mockRestore();
   });
 
+  /** A poll that ends only when it is aborted, as the real one does. */
+  function hangingPoll() {
+    vi.mocked(api.pollOperationV2).mockImplementation(
+      (_id, _cb, _ms, opts) =>
+        new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          );
+        })
+    );
+  }
+
+  it('a write still queued when the lane is left is dropped, not sent', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(merge(1)));
+    act(() => result.current.dispatch(merge(2))); // queued behind the first
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    expect([...result.current.pendingKeys].sort()).toEqual(['1', '2']);
+
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+    // Coming back does not revive it either.
+    rerender({ active: true });
+    await act(async () => {});
+    expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('a bulk merge stops sending requests the moment the lane is left, and clears its progress', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    hangingPoll();
+    act(() =>
+      result.current.dispatch({
+        lane: 'authors',
+        entity: 'author',
+        type: 'mergeSelected',
+        ids: [asAuthorId(1), asAuthorId(2)],
+      })
+    );
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    expect(result.current.bulk).toEqual({ done: 0, total: 2 });
+
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.bulk).toBeNull());
+    expect(result.current.pendingKeys.size).toBe(0);
+    expect(api.mergeAuthors).toHaveBeenCalledTimes(1);
+    // No "Merged 0 of 0" announcement for a run the reviewer walked away from.
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('a scan queued behind a write is dropped when the lane is left, and can be started again', async () => {
+    serve([GROUP_A()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    act(() => result.current.refresh());
+    expect(result.current.scanning).toBe(true);
+
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.scanning).toBe(false));
+    expect(api.refreshAuthorDuplicates).not.toHaveBeenCalled();
+  });
+
   it('keyboard handlers exist only while the lane is active', async () => {
     serve([GROUP_A(), GROUP_B()]);
     const { result, rerender } = setup();
@@ -576,7 +646,11 @@ describe('leaving the lane or unmounting', () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
     });
+    // A merge starts on a later tick (it waits its turn in the queue); flush
+    // before asserting, or this passes whether or not the key did anything.
+    await act(async () => {});
     expect(api.mergeAuthors).not.toHaveBeenCalled();
+    expect(result.current.pendingKeys.size).toBe(0);
   });
 
   it('m merges the focused group and ? toggles the help', async () => {

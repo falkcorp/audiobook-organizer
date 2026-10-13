@@ -545,17 +545,33 @@ export function useAuthorsLane(
   const busy = pendingKeys.size > 0 || bulk !== null || scanning;
 
   const queueRef = useRef<Promise<void>>(Promise.resolve());
-  /** Runs `task` after every earlier write has finished. `task` must not throw. */
-  const enqueue = useCallback((task: () => Promise<void>) => {
-    const run = queueRef.current.then(task);
+  /**
+   * Runs `task` after every earlier write has finished. `task` must not throw.
+   *
+   * It is handed the lane's lifetime signal AS IT WAS when the write was queued.
+   * A write still waiting when the lane is left is not sent -- `onSkip` clears
+   * its pending marks instead -- because leaving the lane stops its requests, and
+   * a queued merge that fired a minute later would be a request from a screen
+   * nobody is looking at. (Re-entering the lane makes a new signal; it does not
+   * revive what was queued under the old one.)
+   */
+  const enqueue = useCallback((task: (life: AbortSignal) => Promise<void>, onSkip: () => void) => {
+    const life = lifeRef.current.signal;
+    const run = queueRef.current.then(() => {
+      if (life.aborted) {
+        onSkip();
+        return undefined;
+      }
+      return task(life);
+    });
     queueRef.current = run.catch(() => undefined);
   }, []);
 
   /** Waits for a started operation. `ok` is true only for 'completed'. */
   const waitFor = useCallback(
-    async (op: Operation): Promise<{ ok: boolean; message: string }> => {
+    async (op: Operation, life: AbortSignal): Promise<{ ok: boolean; message: string }> => {
       const final = await api.pollOperationV2(op.id, undefined, AUTHORS_POLL_MS, {
-        signal: lifeRef.current.signal,
+        signal: life,
         requestTimeoutMs: POLL_REQUEST_TIMEOUT_MS,
       });
       return {
@@ -582,7 +598,8 @@ export function useAuthorsLane(
    */
   const mergeOne = useCallback(
     async (
-      key: string
+      key: string,
+      life: AbortSignal
     ): Promise<{ result: 'merged' | 'reclassified' | 'skipped' | 'failed'; message: string; name: string }> => {
       // Read NOW: the list and the choices as they are when this turn comes.
       const cur = groupsRef.current;
@@ -594,6 +611,7 @@ export function useAuthorsLane(
 
       let reclassifyFailures = 0;
       for (const id of narratorIds) {
+        throwIfLeft(life);
         try {
           await api.reclassifyAuthorAsNarrator(id);
         } catch (e) {
@@ -612,9 +630,10 @@ export function useAuthorsLane(
           name,
         };
       }
+      throwIfLeft(life);
       try {
         const op = await api.mergeAuthors(group.canonical.id, mergeIds);
-        const done = await waitFor(op);
+        const done = await waitFor(op, life);
         if (!done.ok) return { result: 'failed', message: `${done.message}${suffix}`, name };
       } catch (e) {
         if (abandoned(e)) throw e;
@@ -630,9 +649,9 @@ export function useAuthorsLane(
     (key: string) => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
-      enqueue(async () => {
+      enqueue(async (life) => {
         try {
-          const out = await mergeOne(key);
+          const out = await mergeOne(key, life);
           if (!mountedRef.current) return;
           if (out.result === 'failed') toast(`"${out.name}": ${out.message}`, 'error');
           else if (out.result === 'skipped') toast(`"${out.name}": ${out.message}`, 'warning');
@@ -649,7 +668,7 @@ export function useAuthorsLane(
         } finally {
           markPending(key, false);
         }
-      });
+      }, () => markPending(key, false));
     },
     [abandoned, enqueue, markPending, mergeOne, reload, toast]
   );
@@ -660,14 +679,18 @@ export function useAuthorsLane(
       if (keys.length === 0) return;
       setBulk({ done: 0, total: keys.length });
       for (const k of keys) markPending(k, true);
-      enqueue(async () => {
+      const clear = () => {
+        for (const k of keys) markPending(k, false);
+        if (mountedRef.current) setBulk(null);
+      };
+      enqueue(async (life) => {
         let merged = 0;
         const failures: string[] = [];
         let done = 0;
         let left = false;
         for (const key of keys) {
           try {
-            const out = await mergeOne(key);
+            const out = await mergeOne(key, life);
             if (out.result === 'failed' || out.result === 'skipped') {
               failures.push(`"${out.name}": ${out.message}`);
             } else merged += 1;
@@ -682,9 +705,8 @@ export function useAuthorsLane(
           if (mountedRef.current) setBulk({ done, total: keys.length });
           markPending(key, false);
         }
-        for (const k of keys) markPending(k, false);
+        clear();
         if (!mountedRef.current) return;
-        setBulk(null);
         if (left) return;
         const attempted = merged + failures.length;
         if (failures.length === 0) toast(`Merged ${merged} of ${attempted} ${noun} group(s)`, 'success');
@@ -693,7 +715,7 @@ export function useAuthorsLane(
             `Merged ${merged} of ${attempted} ${noun} group(s); ${failures.length} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '; …' : ''}`,
             'error'
           );
-      });
+      }, clear);
     },
     [abandoned, enqueue, markPending, mergeOne, toast]
   );
@@ -726,8 +748,9 @@ export function useAuthorsLane(
     (key: string, canonicalId: AuthorId) => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
-      enqueue(async () => {
+      enqueue(async (life) => {
         try {
+          throwIfLeft(life);
           const cur = groupsRef.current;
           const group =
             cur && cur.load.state === 'ready' ? cur.load.value.groups.find((g) => g.key === key) : undefined;
@@ -739,6 +762,7 @@ export function useAuthorsLane(
             const match = result.authors.find((a) => a.name === name);
             if (!match) continue;
             try {
+              throwIfLeft(life);
               await api.reclassifyAuthorAsNarrator(match.id);
             } catch (e) {
               if (abandoned(e)) throw e;
@@ -758,7 +782,7 @@ export function useAuthorsLane(
         } finally {
           markPending(key, false);
         }
-      });
+      }, () => markPending(key, false));
     },
     [abandoned, enqueue, markPending, reload, toast]
   );
@@ -767,11 +791,11 @@ export function useAuthorsLane(
     (key: string, canonicalId: AuthorId) => {
       if (pendingRef.current.has(key)) return;
       markPending(key, true);
-      enqueue(async () => {
+      enqueue(async (life) => {
         try {
           const op = await api.resolveProductionAuthor(canonicalId);
           if (mountedRef.current) toast('Looking up the real author — watch the bell for progress.', 'info');
-          const done = await waitFor(op);
+          const done = await waitFor(op, life);
           if (!mountedRef.current) return;
           if (done.ok) {
             toast('Found the real author(s).', 'success');
@@ -783,7 +807,7 @@ export function useAuthorsLane(
         } finally {
           markPending(key, false);
         }
-      });
+      }, () => markPending(key, false));
     },
     [abandoned, enqueue, markPending, reload, toast, waitFor]
   );
@@ -903,11 +927,15 @@ export function useAuthorsLane(
     if (scanningRef.current) return;
     scanningRef.current = true;
     setScanning(true);
-    enqueue(async () => {
+    const settle = () => {
+      scanningRef.current = false;
+      if (mountedRef.current) setScanning(false);
+    };
+    enqueue(async (life) => {
       try {
         const op = await api.refreshAuthorDuplicates();
         if (mountedRef.current) toast('Author scan started — watch the bell for progress.', 'info');
-        const done = await waitFor(op);
+        const done = await waitFor(op, life);
         if (!mountedRef.current) return;
         if (done.ok) {
           toast('Author scan finished.', 'success');
@@ -919,10 +947,9 @@ export function useAuthorsLane(
         if (abandoned(e)) return;
         toast(errorMessage(e, 'Failed to start the author scan'), 'error');
       } finally {
-        scanningRef.current = false;
-        if (mountedRef.current) setScanning(false);
+        settle();
       }
-    });
+    }, settle);
   }, [abandoned, enqueue, toast, waitFor, reload, candidatesReload, clearSelection]);
 
   // ---- books popover / editing / focus ---------------------------------------------------
@@ -1065,6 +1092,11 @@ export function useAuthorsLane(
       reload: candidatesReload,
     },
   };
+}
+
+/** Stops a queued write that was caught by the lane being left. */
+function throwIfLeft(life: AbortSignal): void {
+  if (life.aborted) throw new DOMException('The lane was left', 'AbortError');
 }
 
 function abortedController(): AbortController {
