@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -33,13 +33,24 @@ type fakeCatalogMatcher struct {
 	answer metadata.CatalogMatch
 	err    error
 	calls  atomic.Int64
+	// onMatch runs inside MatchBook, before it answers (a test cancels the
+	// search's context there, as a client disconnect would mid-lookup).
+	onMatch func()
+	// panicWith, when set, is panicked with from MatchBook.
+	panicWith any
 }
 
-func (f *fakeCatalogMatcher) MatchBook(q metadata.CatalogQuestion) (metadata.CatalogMatch, error) {
+func (f *fakeCatalogMatcher) MatchBook(_ context.Context, q metadata.CatalogQuestion) (metadata.CatalogMatch, error) {
 	f.calls.Add(1)
 	f.mu.Lock()
 	f.asked = append(f.asked, q)
 	f.mu.Unlock()
+	if f.onMatch != nil {
+		f.onMatch()
+	}
+	if f.panicWith != nil {
+		panic(f.panicWith)
+	}
 	return f.answer, f.err
 }
 
@@ -385,4 +396,55 @@ func TestCatalogStage_ProvidersEmptyNoPriorRowStoresCatalogCandidates(t *testing
 // user-facing text names it instead of listing only the two web sources.
 func TestReviewOnlyRefusalMessageNamesTheCatalog(t *testing.T) {
 	assert.Contains(t, ErrReviewOnlyCandidatesNotApplied.Error(), "the local catalog")
+}
+
+// The stage runs on its own goroutine beside the fan-out, where an escaped
+// panic is not recovered by anything above it and would end the process. A
+// matcher that panics is a stage with no answer: the search is the
+// providers' alone, and the next search still runs the stage.
+func TestCatalogStage_PanickingMatcherDoesNotCrashTheSearch(t *testing.T) {
+	svc, _ := stageHarness(t, lanternAnswer("B0PROV0001"))
+	withCatalogStage(t, true)
+	fm := &fakeCatalogMatcher{panicWith: "synthetic matcher fault"}
+	svc.SetCatalogMatcher(fm)
+
+	resp := searchStage(t, svc, context.Background(), SearchOptions{})
+	require.EqualValues(t, 1, fm.calls.Load(), "the stage was asked")
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "B0PROV0001", resp.Results[0].ASIN, "the providers' answer is untouched")
+	assert.NotEqual(t, metadata.CatalogSourceName, resp.Results[0].Source)
+
+	resp = searchStage(t, svc, context.Background(), SearchOptions{})
+	assert.EqualValues(t, 2, fm.calls.Load(), "one fault does not switch the stage off")
+	require.Len(t, resp.Results, 1)
+}
+
+// A search whose context ended while the matcher was working never merges the
+// stage's answer, so its candidates are not counted as matches either.
+func TestCatalogStage_AbortedSearchIsNotCounted(t *testing.T) {
+	svc, _ := stageHarness(t, lanternAnswer("B0PROV0001"))
+	withCatalogStage(t, true)
+	book := &database.Book{ID: "b1", Title: stageTitle}
+	run := func(cancelMidMatch bool) (*metadata.CatalogMatch, *CatalogStageStats) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fm := &fakeCatalogMatcher{answer: catalogAnswer()}
+		if cancelMidMatch {
+			fm.onMatch = cancel
+		}
+		svc.SetCatalogMatcher(fm)
+		stats := &CatalogStageStats{}
+		m := svc.runCatalogStage(WithCatalogStageStats(ctx, stats), book, searchInputs{}, stageTitle, stageTitle, "", "B0PROV0001", SearchOptions{})
+		return m, stats
+	}
+
+	m, stats := run(false)
+	require.NotNil(t, m)
+	assert.EqualValues(t, 2, stats.CatalogMatched.Load(), "control: a finished lookup is counted")
+
+	m, stats = run(true)
+	assert.Nil(t, m)
+	assert.Zero(t, stats.CatalogMatched.Load())
+	assert.Zero(t, stats.OversizeBlocks.Load())
+	assert.Zero(t, stats.HomonymSkipped.Load())
 }

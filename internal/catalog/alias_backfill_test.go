@@ -1,5 +1,5 @@
 // file: internal/catalog/alias_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4b71e90-2f5c-4a68-9e13-7c8a0b5f2d46
 // last-edited: 2026-10-12
 
@@ -75,7 +75,7 @@ func TestBackfillAuthorAliases(t *testing.T) {
 		assert.True(t, ok, alias)
 		assert.Equal(t, want, got, alias)
 	}
-	q, err := MatchBook(st, BookQuestion{Titles: []string{"Title 001102"}, Credits: []string{"Jane Quinn Author"}})
+	q, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 001102"}, Credits: []string{"Jane Quinn Author"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Title 001102"}, titlesOf(q), "the authority spelling now reaches the block")
 

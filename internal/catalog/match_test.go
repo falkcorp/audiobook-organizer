@@ -1,5 +1,5 @@
 // file: internal/catalog/match_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e8a1c37-9d40-4b62-a7f3-0c2d9b6e4815
 // last-edited: 2026-10-12
 
@@ -84,7 +84,7 @@ func TestMatchBook_SeriesDecoratedTitleZeroProviderCalls(t *testing.T) {
 	l.pages.Store(0)
 	l.lookups.Store(0)
 
-	res, err := MatchBook(st, BookQuestion{
+	res, err := MatchBook(context.Background(), st, BookQuestion{
 		Titles:   []string{"Series 05, Book 3 - Title 000104", "Title 000104"}, // stored (decorated) and parsed
 		Credits:  []string{"Author 07"},
 		Series:   "Series 05",
@@ -109,19 +109,19 @@ func TestMatchBook_HomonymAuthorNoCrossMatch(t *testing.T) {
 		synthProduct("B0BBB00001", "Title 000202", "Author 07", "AUTHBBB"))
 	q := BookQuestion{Titles: []string{"Title 000201"}, Credits: []string{"Author 07"}}
 
-	res, err := MatchBook(st, q)
+	res, err := MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	assert.Empty(t, res.Candidates, "two author ids, nothing to choose with: no cross-match")
 	assert.Equal(t, 1, res.HomonymSkipped)
 
 	q.AuthorASINs = []string{"authaaa"} // the book's author is the first person (case is folded)
-	res, err = MatchBook(st, q)
+	res, err = MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Title 000201"}, titlesOf(res))
 	assert.Zero(t, res.HomonymSkipped)
 
 	q.AuthorASINs = []string{"AUTHBBB"} // the other person: the block holds no such title
-	res, err = MatchBook(st, q)
+	res, err = MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	assert.Empty(t, res.Candidates)
 	assert.Zero(t, res.HomonymSkipped)
@@ -131,12 +131,12 @@ func TestMatchBook_HomonymAuthorNoCrossMatch(t *testing.T) {
 	// found exactly one author id and saw no conflict.
 	q.AuthorASINs = nil
 	require.NoError(t, st.PutAuthorState(&database.CatalogAuthorState{Key: "author07", Name: "Author 07", AuthorASINs: []string{"AUTHAAA"}}))
-	res, err = MatchBook(st, q)
+	res, err = MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Title 000201"}, titlesOf(res))
 
 	require.NoError(t, st.PutAuthorState(&database.CatalogAuthorState{Key: "author07", Name: "Author 07", AuthorASINs: []string{"AUTHAAA", "AUTHBBB"}, Conflict: true}))
-	res, err = MatchBook(st, q)
+	res, err = MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	assert.Empty(t, res.Candidates, "the library itself holds both people under this name: not a pick")
 	assert.Equal(t, 1, res.HomonymSkipped)
@@ -147,7 +147,7 @@ func TestMatchBook_HomonymAuthorNoCrossMatch(t *testing.T) {
 func TestMatchBook_SecondPositionCreditFindsBlock(t *testing.T) {
 	st, _ := openCatalog(t)
 	seedProducts(t, st, "author08", block("Author 08", "AUTH08", 3, 401)...)
-	res, err := MatchBook(st, BookQuestion{
+	res, err := MatchBook(context.Background(), st, BookQuestion{
 		Titles:  []string{"Title 000402"},
 		Credits: []string{"Author 99", "Author 08"}, // the first credit has no block
 	})
@@ -165,19 +165,19 @@ func TestMatchBook_AliasFindsBlock(t *testing.T) {
 	harvestSynthetic(t, st, "Jane Q. Author", block("Jane Q. Author", "AUTHJQA", 4, 501))
 
 	for _, credit := range []string{"Jane Q. Author", "Jane Author", "Author, Jane Q.", "J. Q. Author", "J Author"} {
-		res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000503"}, Credits: []string{credit}})
+		res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000503"}, Credits: []string{credit}})
 		require.NoError(t, err, credit)
 		assert.Equal(t, []string{"Title 000503"}, titlesOf(res), credit)
 	}
 
 	harvestSynthetic(t, st, "Jane R. Author", block("Jane R. Author", "AUTHJRA", 4, 601))
 	for _, credit := range []string{"Jane Author", "J Author"} {
-		res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000503", "Title 000603"}, Credits: []string{credit}})
+		res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000503", "Title 000603"}, Credits: []string{credit}})
 		require.NoError(t, err, credit)
 		assert.Empty(t, res.Candidates, "%q is claimed by two authors: it names neither", credit)
 	}
 	// Their own spellings still hit their own blocks.
-	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000603"}, Credits: []string{"Jane R. Author"}})
+	res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000603"}, Credits: []string{"Jane R. Author"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Title 000603"}, titlesOf(res))
 }
@@ -189,7 +189,7 @@ func TestMatchBook_OversizeBlockSkippedAndCounted(t *testing.T) {
 	seedProducts(t, st, "author09", block("Author 09", "AUTH09", MaxBlockEntries+1, 1)...)
 	seedProducts(t, st, "author10", block("Author 10", "AUTH10", MaxBlockEntries, 1)...)
 
-	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000007"}, Credits: []string{"Author 09", "Author 10"}})
+	res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000007"}, Credits: []string{"Author 09", "Author 10"}})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.OversizeBlocks)
 	require.Len(t, res.Candidates, 1, "the block at the cap is scored")
@@ -206,7 +206,7 @@ func TestMatchBook_NeverUsesSubstringWalk(t *testing.T) {
 	seedProducts(t, st, "joanauthor", synthProduct("B0JOAN0001", "Title 000301", "Joan Author", "AUTHJP"))
 
 	for _, credit := range []string{"Author", "Joan", "Joan Autho", "Joan Authorr"} {
-		res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{credit}})
+		res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{credit}})
 		require.NoError(t, err, credit)
 		assert.Empty(t, res.Candidates, credit)
 	}
@@ -214,7 +214,7 @@ func TestMatchBook_NeverUsesSubstringWalk(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1, "control: the substring walk does find the entry")
 
-	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{"Joan Author"}})
+	res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{"Joan Author"}})
 	require.NoError(t, err)
 	assert.Len(t, res.Candidates, 1, "control: the exact credit does")
 }
@@ -226,14 +226,14 @@ func TestMatchBook_StaleEntriesSkipped(t *testing.T) {
 	seedProducts(t, st, "author07", block("Author 07", "AUTH07", 3, 701)...)
 	q := BookQuestion{Titles: []string{"Title 000702"}, Credits: []string{"Author 07"},
 		ASIN: "B0AUTH0700702", Provider: testProvider, Marketplace: testMarket}
-	res, err := MatchBook(st, q)
+	res, err := MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	require.Equal(t, metadata.CatalogStageIdentifier, res.Stage, "fixture: live, the ASIN hits")
 
 	stale, err := st.MarkUnseen("author07", map[string]bool{})
 	require.NoError(t, err)
 	require.Equal(t, 3, stale)
-	res, err = MatchBook(st, q)
+	res, err = MatchBook(context.Background(), st, q)
 	require.NoError(t, err)
 	assert.Empty(t, res.Candidates)
 	assert.Empty(t, res.Stage)
@@ -245,7 +245,7 @@ func TestMatchBook_B1ASINPointRead(t *testing.T) {
 	st, _ := openCatalog(t)
 	seedProducts(t, st, "author07", block("Author 07", "AUTH07", 3, 801)...)
 
-	res, err := MatchBook(st, BookQuestion{ASIN: "B0AUTH0700802", Provider: testProvider, Marketplace: testMarket})
+	res, err := MatchBook(context.Background(), st, BookQuestion{ASIN: "B0AUTH0700802", Provider: testProvider, Marketplace: testMarket})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Title 000802"}, titlesOf(res), "no title and no credit needed: the ASIN alone")
 	assert.Equal(t, metadata.CatalogStageIdentifier, res.Stage)
@@ -258,7 +258,7 @@ func TestMatchBook_B1ASINPointRead(t *testing.T) {
 		{ASIN: "B0UNKNOWN", Provider: testProvider, Marketplace: testMarket},
 	} {
 		q.Titles, q.Credits = []string{"Title 000803"}, []string{"Author 07"}
-		res, err = MatchBook(st, q)
+		res, err = MatchBook(context.Background(), st, q)
 		require.NoError(t, err)
 		assert.Equal(t, metadata.CatalogStageAuthor, res.Stage)
 		assert.Equal(t, []string{"Title 000803"}, titlesOf(res))
@@ -275,7 +275,7 @@ func TestMatchBook_TitleFloor(t *testing.T) {
 	seedProducts(t, st, "author07", ps...)
 	match := func(q BookQuestion) MatchResult {
 		q.Credits = []string{"Author 07"}
-		res, err := MatchBook(st, q)
+		res, err := MatchBook(context.Background(), st, q)
 		require.NoError(t, err)
 		return res
 	}
@@ -334,12 +334,12 @@ func TestMatchBook_OversizeFoldDoesNotHideTheOtherReading(t *testing.T) {
 	seedProducts(t, st, "authorjane", block("Author Jane", "AUTHAJ", MaxBlockEntries+1, 1)...)
 	seedProducts(t, st, "janeauthor", block("Jane Author", "AUTHJA", 3, 5001)...)
 
-	res, err := MatchBook(st, BookQuestion{Titles: []string{"Title 005002"}, Credits: []string{"Author, Jane"}})
+	res, err := MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 005002"}, Credits: []string{"Author, Jane"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Title 005002"}, titlesOf(res))
 	assert.Zero(t, res.OversizeBlocks, "a block was found: the junk one is not reported")
 
-	res, err = MatchBook(st, BookQuestion{Titles: []string{"Title 000007"}, Credits: []string{"Author Jane"}})
+	res, err = MatchBook(context.Background(), st, BookQuestion{Titles: []string{"Title 000007"}, Credits: []string{"Author Jane"}})
 	require.NoError(t, err)
 	assert.Empty(t, res.Candidates)
 	assert.Equal(t, 1, res.OversizeBlocks, "nothing else answers: the over-cap block is counted")
@@ -357,4 +357,30 @@ func TestTitleKey_DigitSignatureIsConsistent(t *testing.T) {
 	assert.Equal(t, sig("Title 12 Extra"), sig("12 Title"))
 	assert.NotEqual(t, sig("Title 1 Part 2"), sig("Title 12"), "separate runs stay separate")
 	assert.Equal(t, "", sig("Title Words"))
+}
+
+// A search that gave up (its context ended) stops asking the catalog store:
+// the lookup returns the context's error and an empty result, before the first
+// read when the context is already over and between credits after it.
+func TestMatchBook_StopsWhenContextEnds(t *testing.T) {
+	st, _ := openCatalog(t)
+	seedProducts(t, st, "author07",
+		synthProduct("B0AAA00001", "Title 000301", "Author 07", "AUTHAAA"))
+	q := BookQuestion{Titles: []string{"Title 000301"}, Credits: []string{"Author 07"}}
+
+	res, err := MatchBook(context.Background(), st, q)
+	require.NoError(t, err)
+	require.Len(t, res.Candidates, 1, "control: a live context finds it")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err = MatchBook(ctx, st, q)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, res.Candidates)
+
+	// The ASIN point read is also behind the check.
+	q.ASIN = "B0AAA00001"
+	res, err = MatchBook(ctx, st, q)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, res.Candidates)
 }
