@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-19
+// last-edited: 2026-10-13
 
 package deluge
 
@@ -18,6 +18,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// pathUpdateConcurrency is the worker-pool size for deluge.path-update: one
+// Deluge move_storage RPC per version, so bounded by the daemon, not the CPU.
+const pathUpdateConcurrency = 4
 
 func (p *Plugin) pathUpdateDef() sdk.OperationDef {
 	return sdk.OperationDef{
@@ -138,7 +142,15 @@ func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, repo
 			updated.Add(1)
 		}
 		return nil
-	}, registry.RunItemsOptions{ErrMode: registry.ErrModeCollect}); err != nil {
+	}, registry.RunItemsOptions{
+		ErrMode: registry.ErrModeCollect,
+		// A Deluge RPC per version, so a small fixed pool rather than one
+		// per core. The items are one book's versions: each names its own
+		// torrent hash (the store keeps one version per hash) and its own
+		// target directory, so no two items move the same torrent, and the
+		// closure's only shared state is the atomic updated counter.
+		Concurrency: pathUpdateConcurrency,
+	}); err != nil {
 		return err
 	}
 

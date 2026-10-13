@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package deluge
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +47,13 @@ func (p *Plugin) centralizationDef() sdk.OperationDef {
 		MinCheckpointInterval: 30 * time.Second,
 	}
 }
+
+// centralizeConcurrency is the worker-pool size for deluge.centralize. Each
+// item is a disk copy plus a store write and, when Deluge storage moves are
+// enabled, a Deluge RPC, so this is bounded by what the Deluge daemon and the
+// library disk tolerate rather than by core count. 4 matches
+// deluge.link-backfill's default pool.
+const centralizeConcurrency = 4
 
 // centralizationCheckpoint tracks state across restarts.
 type centralizationCheckpoint struct {
@@ -86,13 +94,12 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		checkpoint.TotalFiles = total
 	}
 
-	// Pre-slice to the resume point so RunItems starts at the right position.
-	// Progress labels show global position (baseIdx + local) for accurate display.
+	// Resume point: RunItemsOptions.ResumeFrom skips the first baseIdx items
+	// and shifts the progress offset, so labels show global position.
 	baseIdx := checkpoint.ProcessedFiles
-	resumeSlice := toImport[baseIdx:]
 
 	sdk.NewProgress(reporter, total).Start(
-		fmt.Sprintf("Centralizing %d files (%d remaining)...", total, len(resumeSlice)),
+		fmt.Sprintf("Centralizing %d files (%d remaining)...", total, max(total-baseIdx, 0)),
 	)
 
 	var successCount, skipCount, inPlaceCount, protectedCount, notLoadedCount, errCount atomic.Int64
@@ -107,14 +114,17 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		protected = p.cache
 	}
 
-	// localCount tracks how many items RunItems has dispatched so far.
-	// Sequential (Concurrency=0 default), so plain increment is safe, but
-	// atomic keeps the intent clear if concurrency is raised later.
-	var localCount atomic.Int64
+	// ckptMu guards checkpoint. The workers set LastError; the checkpoint
+	// callback (serialized by RunItems, but not against the workers) writes
+	// ProcessedFiles and hands the whole struct to the reporter.
+	var ckptMu sync.Mutex
+	setLastError := func(msg string) {
+		ckptMu.Lock()
+		checkpoint.LastError = msg
+		ckptMu.Unlock()
+	}
 
-	runErr := registry.RunItems(ctx, reporter, resumeSlice, func(ctx context.Context, bf *database.BookFileCore) error {
-		globalIdx := baseIdx + int(localCount.Add(1)) - 1
-
+	runErr := registry.RunItems(ctx, reporter, toImport, func(ctx context.Context, bf *database.BookFileCore) error {
 		srcPath := bf.FilePath
 		if srcPath == "" {
 			skipCount.Add(1)
@@ -140,7 +150,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			switch {
 			case markErr != nil:
 				errCount.Add(1)
-				checkpoint.LastError = markErr.Error()
+				setLastError(markErr.Error())
 				reporter.Logger().Error("mark in-place file imported failed", "id", bf.ID, "error", markErr)
 			case outcome == delugeclient.InPlaceMarked:
 				inPlaceCount.Add(1)
@@ -167,7 +177,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		full, hydrateErr := p.store.GetBookFileByID(bf.BookID, bf.ID)
 		if hydrateErr != nil || full == nil {
 			errCount.Add(1)
-			checkpoint.LastError = fmt.Sprintf("hydrate book file %s: %v", bf.ID, hydrateErr)
+			setLastError(fmt.Sprintf("hydrate book file %s: %v", bf.ID, hydrateErr))
 			reporter.Logger().Error("hydrate book file failed", "id", bf.ID, "error", hydrateErr)
 			return nil // non-fatal
 		}
@@ -195,7 +205,7 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			return nil
 		case importErr != nil:
 			errCount.Add(1)
-			checkpoint.LastError = fmt.Sprintf("import %s: %v", srcPath, importErr)
+			setLastError(fmt.Sprintf("import %s: %v", srcPath, importErr))
 			if newPath != "" {
 				reporter.Logger().Error("import failed and its copy could not be removed", "id", bf.ID, "src", srcPath, "left_at", newPath, "error", importErr)
 			} else {
@@ -206,13 +216,27 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 		dest = newPath
 
 		n := successCount.Add(1)
-		checkpoint.ProcessedFiles = globalIdx + 1
-		_ = reporter.Checkpoint(checkpoint)
 
 		reporter.Logger().Debug("centralized file",
 			"src", srcPath, "dest", dest, "progress", fmt.Sprintf("%d/%d", n, total))
 		return nil
-	}, registry.RunItemsOptions{ErrMode: registry.ErrModeCollect})
+	}, registry.RunItemsOptions{
+		ErrMode:     registry.ErrModeCollect,
+		Concurrency: centralizeConcurrency,
+		ResumeFrom:  baseIdx,
+		// CheckpointStateFn, not a Checkpoint call in the closure: under a
+		// pool the closure's index is DISPATCH order, and items finish out of
+		// order, so "my index + 1" is not a resume point (index 5 done before
+		// index 3 would skip 3 on resume). The watermark is the unbroken
+		// completed prefix, absolute across ResumeFrom, which is exactly what
+		// ProcessedFiles must hold. Calls are serialized.
+		CheckpointStateFn: func(_ context.Context, watermark int) error {
+			ckptMu.Lock()
+			defer ckptMu.Unlock()
+			checkpoint.ProcessedFiles = watermark
+			return reporter.Checkpoint(checkpoint)
+		},
+	})
 
 	reporter.Logger().Info("deluge centralization complete",
 		"succeeded", successCount.Load(),

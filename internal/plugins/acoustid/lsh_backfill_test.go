@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.3.0
+// version: 1.3.2
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
-// last-edited: 2026-08-21
+// last-edited: 2026-10-13
 
 package acoustid
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -154,13 +155,13 @@ func TestLSHBackfill_IdempotentWithHasLSHIndex(t *testing.T) {
 		{ID: "f3", BookID: "b3", AcoustIDFingerprintDurationSec: 1800},
 	}
 
-	updateCalls := 0
+	var updateCalls atomic.Int64 // written from the op's worker pool
 	mock := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			return files, nil
 		},
 		UpdateBookFileFunc: func(string, *database.BookFile) error {
-			updateCalls++
+			updateCalls.Add(1)
 			return nil
 		},
 	}
@@ -175,16 +176,16 @@ func TestLSHBackfill_IdempotentWithHasLSHIndex(t *testing.T) {
 	if err := p.runLSHBackfill(context.Background(), nil, r); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if updateCalls != 0 {
-		t.Fatalf("idempotent run still called UpdateBookFile %d times", updateCalls)
+	if got := updateCalls.Load(); got != 0 {
+		t.Fatalf("idempotent run still called UpdateBookFile %d times", got)
 	}
 
 	// Run twice — should still be zero.
 	if err := p.runLSHBackfill(context.Background(), nil, r); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if updateCalls != 0 {
-		t.Fatalf("second idempotent run called UpdateBookFile %d times", updateCalls)
+	if got := updateCalls.Load(); got != 0 {
+		t.Fatalf("second idempotent run called UpdateBookFile %d times", got)
 	}
 }
 
@@ -207,13 +208,18 @@ func TestLSHBackfill_PartialIndex(t *testing.T) {
 			{ID: "f3", AcoustIDFingerprint: []byte{3}},
 		},
 	}
-	var updates []string
+	var (
+		updMu   sync.Mutex // UpdateBookFile is called from the op's worker pool
+		updates []string
+	)
 	mock := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
 			return hydrateFiles[bookID], nil
 		},
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
+			updMu.Lock()
+			defer updMu.Unlock()
 			updates = append(updates, id)
 			return nil
 		},
@@ -253,15 +259,16 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var updates int
+	// Atomic: the op runs UpdateBookFile from a worker pool, and several
+	// workers can be past the cancel check when the fifth update fires.
+	var updates atomic.Int64
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		// None of the files set BookID, so every hydrate call shares the
 		// same full slice; the op matches by file ID within it.
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) { return hydrateFiles, nil },
 		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
-			updates++
-			if updates == 5 {
+			if updates.Add(1) == 5 {
 				cancel()
 			}
 			return nil
@@ -275,11 +282,11 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-	if updates < 5 {
-		t.Errorf("expected at least 5 updates before cancel, got %d", updates)
+	if got := updates.Load(); got < 5 {
+		t.Errorf("expected at least 5 updates before cancel, got %d", got)
 	}
-	if updates >= len(files) {
-		t.Errorf("expected updates < total after cancel, got %d/%d", updates, len(files))
+	if got := updates.Load(); got >= int64(len(files)) {
+		t.Errorf("expected updates < total after cancel, got %d/%d", got, len(files))
 	}
 }
 
@@ -404,7 +411,7 @@ func TestLSHBackfill_HasLSHIndexThroughDecorator(t *testing.T) {
 			{ID: "f1", BookID: "b1", AcoustIDFingerprintDurationSec: 1800},
 			{ID: "f2", BookID: "b2", AcoustIDFingerprintDurationSec: 1800},
 		}
-		updateCalls := 0
+		var updateCalls atomic.Int64 // the op now calls UpdateBookFile from a worker pool
 		mock := &database.MockStore{
 			GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 				return files, nil
@@ -418,7 +425,7 @@ func TestLSHBackfill_HasLSHIndexThroughDecorator(t *testing.T) {
 				return nil, nil
 			},
 			UpdateBookFileFunc: func(string, *database.BookFile) error {
-				updateCalls++
+				updateCalls.Add(1)
 				return nil
 			},
 		}
@@ -427,7 +434,7 @@ func TestLSHBackfill_HasLSHIndexThroughDecorator(t *testing.T) {
 		if err := p.runLSHBackfill(context.Background(), nil, &lshTestReporter{}); err != nil {
 			t.Fatalf("runLSHBackfill: %v", err)
 		}
-		return updateCalls
+		return int(updateCalls.Load())
 	}
 
 	// Instrument check FIRST. "0 updates" is only evidence that the fast-skip
