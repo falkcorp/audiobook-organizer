@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-13
 
@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,7 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -470,55 +468,31 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 		retentionDays = 30
 	}
 	maxAge := time.Duration(retentionDays) * 24 * time.Hour
-	removed := 0
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays))
 
-	// The library root holds a multi-GB backup directory and an OpenLibrary
-	// dump directory, both operator-settable to dot-free names, and this op
-	// DELETES by filename. This rule exists in two places with two different
-	// predicates (the other is internal/maintenance/jobs/cleanup_backups.go,
-	// which uses a different regex and no retention age); consolidating them is
-	// a separate change (TODO BACKUP-SWEEP-CONSOLIDATE).
-	app := appdirs.Current()
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			if pathutil.ShouldSkipDir(rootDir, path, app) {
-				return filepath.SkipDir
+	// The walk, the app-dir guard, the name-time age test and the remove live in
+	// sweep.RemoveOldBackupFiles. This op supplies the one thing that is its own:
+	// which names are backups. Only a name fileops wrote is one, aged by the time
+	// in that name (a create_backups backup is a hardlink and keeps the original
+	// audio's mtime, often years old, so mtime would delete a fresh backup on the
+	// next run; fileops KeepBackup, AGE CONTRACT). Anything else that merely
+	// contains ".bak-" (a book called "x.bak-notes.m4b") is kept at any age.
+	removed, err := sweep.RemoveOldBackupFiles(ctx, rootDir, appdirs.Current(),
+		func(name string) (time.Time, bool) {
+			taken, isBackup := fileops.BackupNameTime(name)
+			if !isBackup && strings.Contains(name, ".bak-") {
+				logging.Debug(ctx, "keeping .bak- file whose name is not a recognised backup name", "name", name)
 			}
-			return nil
-		}
-		if strings.Contains(info.Name(), ".bak-") {
-			// Only a name fileops wrote is a backup: <file>.bak-<unix>[-N] or the
-			// legacy <file>.bak-YYYYMMDD-HHMMSS. Anything else that merely
-			// contains ".bak-" (a book called "x.bak-notes.m4b") is not ours to
-			// delete however old it is, so there is no mtime fallback either.
-			// Age is the time in the name: a create_backups backup is a hardlink
-			// and keeps the original audio's mtime, often years old, so mtime
-			// would delete a fresh backup on the next run (fileops KeepBackup,
-			// AGE CONTRACT).
-			taken, isBackup := fileops.BackupNameTime(info.Name())
-			if !isBackup {
-				logging.Debug(ctx, "keeping .bak- file whose name is not a recognised backup name", "path", path)
-				return nil
+			return taken, isBackup
+		},
+		maxAge,
+		func(level slog.Level, msg string, kv ...any) {
+			if level >= slog.LevelWarn {
+				logging.Warn(ctx, msg, kv...)
+				return
 			}
-			age := time.Since(taken)
-			if age > maxAge {
-				if rmErr := os.Remove(path); rmErr != nil {
-					logging.Warn(ctx, "failed to remove old backup", "path", path, "err", rmErr)
-				} else {
-					removed++
-					logging.Info(ctx, "cleaned up old backup", "path", path, "age", age.Round(time.Hour))
-				}
-			}
-		}
-		return nil
-	})
+			logging.Info(ctx, msg, kv...)
+		})
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed))
 	return err
 }
