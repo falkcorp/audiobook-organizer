@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_rank_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0d6c2f85-47e1-4b39-9a70-3e8b5c1d2f94
 // last-edited: 2026-10-12
 
@@ -89,8 +89,10 @@ func TestApplyOptions_RankUpgradeLabels(t *testing.T) {
 }
 
 // A book the owner fills from a local-catalog candidate is tagged apart from
-// a live Audible fill, and ranked just below it: a live Audible answer may
-// replace it, and it replaces nothing Audible filled.
+// a live Audible fill, and ranked just below it: a hand-picked or review-lane
+// apply from live Audible may replace it, and it replaces nothing Audible
+// filled. The automatic upgrade sweep never visits it (it stays above the
+// sweep's ceiling, LowQualitySourceMaxRank).
 func TestMetadataSourceSlug_LocalCatalogRanksJustBelowAudible(t *testing.T) {
 	if got := MetadataSourceSlug(metadata.CatalogSourceName); got != "audible_catalog" {
 		t.Fatalf("MetadataSourceSlug(%q) = %q, want audible_catalog", metadata.CatalogSourceName, got)
@@ -105,12 +107,15 @@ func TestMetadataSourceSlug_LocalCatalogRanksJustBelowAudible(t *testing.T) {
 		t.Errorf("catalog rank %d (ranked %v) must sit between Hardcover %d and Audible %d", cat, ok, hc, aud)
 	}
 	if !SourceOutranks("Audible", metadata.CatalogSourceName) || !SourceOutranks("Audnexus (Audible)", metadata.CatalogSourceName) {
-		t.Error("a live Audible answer must be able to replace a catalog fill")
+		t.Error("a hand-picked or review-lane apply from live Audible must be able to replace a catalog fill")
 	}
 	if SourceOutranks(metadata.CatalogSourceName, "Audible") || SourceOutranks(metadata.CatalogSourceName, metadata.CatalogSourceName) {
 		t.Error("a catalog candidate must replace neither Audible's fill nor its own")
 	}
 	if !SourceOutranks(metadata.CatalogSourceName, "Open Library") {
 		t.Error("a catalog candidate outranks Open Library")
+	}
+	if cat <= LowQualitySourceMaxRank {
+		t.Errorf("catalog rank %d is at or below the upgrade sweep's ceiling %d: the sweep would revisit catalog fills", cat, LowQualitySourceMaxRank)
 	}
 }
