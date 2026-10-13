@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-13-operations-v3-sdk-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9d0eaa44-fcb8-4058-bb16-c2e4a2c47636 -->
 <!-- last-edited: 2026-10-13 -->
 
@@ -37,10 +37,17 @@ Branch `task/05-pr5`. Task brief:
   records history only after the write really happened. It has no way to
   delete a book or a book file. A run whose writes start being refused
   stops right there and is reported as failed, rather than finishing as if
-  nothing were wrong.
+  nothing were wrong. If a write fails or its history cannot be recorded,
+  the note stays, so the change is still listed as possibly half-applied.
+  A run that cannot keep history does not start.
 - **A restart does not lose the list of what was applied.** A fixer
   interrupted by a deploy still reports, and follows up on, every change it
-  made before and after the restart, and its follow-up step runs once.
+  made before and after the restart, including changes made just before
+  the restart cut a chunk short, and its follow-up step runs once. The list
+  has no size limit. One gap is left for a decision: if a person discards an
+  interrupted fixer run instead of retrying it, the follow-up for the
+  changes it already made never runs.
+- **A crash inside an operation's code fails that run, not the server.**
 - **The existing Repairs tools use the same gatekeeper.** They behave as
   before. A test checks that none of the tools they call has disappeared
   or changed shape.

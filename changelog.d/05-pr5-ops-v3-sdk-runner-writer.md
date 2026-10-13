@@ -13,16 +13,22 @@ the chunks the ledger does not record, so finished work is never redone and
 the progress count never goes backwards. Every write goes through a fenced
 `Writer` that refuses writes from a canceled or abandoned run, writes an
 intent before touching the store, records history only after the write
-committed, and has no delete method. A run whose writes start being refused
-(it was canceled, or lost its hold on the library scan) stops with an error
-instead of counting the refused items as ordinary failures and ending
-"completed"; a crashing item is recorded as that item's failure instead of
-taking the server down; and a run stopped by a server shutdown leaves its
+committed, and has no delete method. An intent is cleared only once its
+write and history are recorded, so a failed, panicking or unrecorded write
+stays listed as "may be partially applied". A run whose writes start being
+refused (it was canceled, or lost its hold on the library scan) stops with
+an error instead of counting the refused items as ordinary failures and
+ending "completed", even when an item swallows the refusal; a crash in an
+item or in any of the op's other callbacks is recorded as a failure instead
+of taking the server down. A run stopped by a server shutdown leaves its
 final summary to the resumed run, so a fixer's follow-up step runs once,
-over every row applied before and after the restart. A writing run refuses
-to start when the store cannot record intents or history, instead of
-writing without them. Nothing in production
-uses the SDK yet:
+over every row applied before and after the restart, including rows applied
+in a chunk the restart cut short. (A fixer run that is discarded from
+"awaiting decision" instead of retried never runs its follow-up; that
+choice is filed for the owner.) The applied list is stored a row at a time,
+so it has no size cap. A writing run refuses to start when the store cannot
+record intents, the operation journal or metadata history, instead of
+writing without them. Nothing in production uses the SDK yet:
 the adapter registers a v3 definition on the existing registry (one queue,
 one exclusive-key map; `library.scan` keeps its key) and holds unchanged v2
 definitions in the same catalog.
@@ -41,10 +47,12 @@ run fence moved from the registry to `opswriter` with it.
 
 #### Late writes can no longer re-create a finished run's per-run keys
 
-The v3 snapshot-page, chunk-offset, intent and log writers now refuse a run
-that does not exist or has already ended, under the same lock as the
-terminal transition. Before, a write landing after a run ended or was
-discarded re-created keys that no cleanup pass ever removed.
+The v3 snapshot-page, chunk-offset and intent writers now refuse a run that
+does not exist or has already ended, under the same lock as the terminal
+transition, and the log writer refuses a run that was discarded. Before, a
+write landing after a run ended or was discarded re-created keys that no
+cleanup pass ever removed. A log line written as a run finishes is still
+kept: the run's log lives until the run is discarded.
 
 #### A v2 progress write no longer rolls back a batch run's ledger progress
 
