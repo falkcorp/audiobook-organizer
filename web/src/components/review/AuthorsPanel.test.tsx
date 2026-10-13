@@ -379,6 +379,24 @@ describe('a group card', () => {
     expect(await within(cardB).findByTestId('author-validation-empty')).toBeInTheDocument();
   });
 
+  it('evidence for a name is hidden once the group is renamed, rather than shown under the new name', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author A', ['Author A.'])]);
+    vi.mocked(reads.validateAuthorName).mockResolvedValue({
+      query: 'Author A',
+      results: [{ source: 'Provider One', title: 'Book One', author: 'Author A' }],
+    });
+    vi.mocked(api.renameAuthor).mockResolvedValue({ id: 1, name: 'Author A Edited' });
+    renderLane();
+    await user.click(await screen.findByRole('button', { name: 'Validate' }));
+    expect(await screen.findByText('Provider One: Author A')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Edit canonical name' }));
+    await user.type(screen.getByRole('textbox', { name: 'Canonical name' }), ' Edited{Enter}');
+    await screen.findByRole('heading', { name: 'Author A Edited' });
+    expect(screen.queryByText('Provider One: Author A')).not.toBeInTheDocument();
+  });
+
   it('a failed Validate is an error line, not "No external matches"', async () => {
     const user = userEvent.setup();
     serve([wire(1, 'Author A', ['Author A.'])]);
@@ -579,6 +597,20 @@ describe('author candidates', () => {
     expect(rows[0]).toHaveTextContent('Author A ↔ Author B');
     expect(rows[1]).toHaveTextContent('Author A. ↔ Author B');
     expect(rows[0]).toHaveTextContent('91% similar');
+  });
+
+  it('Show group focuses the group a candidate names, whichever page it is on', async () => {
+    const user = userEvent.setup();
+    const groups = Array.from({ length: 30 }, (_, i) => wire(i + 1, `Author ${i + 1}`, [`Author ${i + 1}.`]));
+    serve(groups);
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({ total: 1, candidates: [pair(7, '28', '999')] });
+    vi.mocked(reads.fetchAuthorName).mockResolvedValue('Author Z');
+    renderLane();
+    await user.click(await screen.findByRole('button', { name: 'Author candidates (1)' }));
+    expect(screen.queryByTestId('author-group-28')).not.toBeInTheDocument(); // page two
+    await user.click(await screen.findByRole('button', { name: 'Show group' }));
+    const card = await screen.findByTestId('author-group-28');
+    expect(card).toHaveAttribute('data-focused', 'true');
   });
 
   it('a failed read is an error with Retry, and an empty one says so', async () => {
