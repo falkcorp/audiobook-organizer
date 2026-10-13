@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-12
 //
@@ -783,7 +783,7 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// ones and capped. They never move FetchedAt, which dates the providers'
 	// answer, and never clear LastEmptyFetchAt.
 	if len(catalogRaw) > 0 {
-		entry.Candidates = mergeCandidateRows(entry.Candidates, catalogRaw, resp.mergeRank)
+		entry.Candidates = joinCatalogRows(entry.Candidates, catalogRaw, resp.mergeRank)
 	}
 
 	if mfs.db != nil {
@@ -863,6 +863,64 @@ func mergeCandidateRows(fresh, cached []json.RawMessage, rank func(MetadataCandi
 		}
 	}
 	out := rankCandidateRows(union, rank)
+	if len(out) > metadataCacheTopN {
+		out = out[:metadataCacheTopN]
+	}
+	return out
+}
+
+// joinCatalogRows adds the local catalog stage's fresh candidates to a row
+// that already holds the providers' (and any carried ones). It is NOT
+// mergeCandidateRows: that re-sorts everything by rank then SCORE, which would
+// undo the tier-stable order rankCandidatesByTier gave the providers and the
+// search's own-ASIN-first order, moving slot 0 -- the candidate the review lane
+// shows and every bulk apply reads. Here the existing rows keep their order and
+// only the rank decides where the catalog's go (after the usable ones; a stable
+// sort leaves ties in place, existing first).
+//
+// The fresh catalog rows REPLACE any catalog rows the existing ones carry: a
+// stored catalog copy is an older reading of the same entries, and on a
+// Source|Title|ASIN collision its ManualOnly tag, stage and score must not beat
+// the fresh one. Rows that do not decode keep their order after the ranked ones.
+func joinCatalogRows(existing, catalogRaw []json.RawMessage, rank func(MetadataCandidate) int) []json.RawMessage {
+	if rank == nil {
+		rank = reviewOnlyLastRank
+	}
+	type ranked struct {
+		raw  json.RawMessage
+		rank int
+	}
+	var rows []ranked
+	var undecoded []json.RawMessage
+	seen := map[string]bool{}
+	add := func(r json.RawMessage, dropCatalog bool) {
+		var c MetadataCandidate
+		if err := json.Unmarshal(r, &c); err != nil {
+			undecoded = append(undecoded, r)
+			return
+		}
+		if dropCatalog && c.Source == metadata.CatalogSourceName {
+			return
+		}
+		key := strings.ToLower(c.Source + "|" + c.Title + "|" + strings.TrimSpace(c.ASIN))
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		rows = append(rows, ranked{raw: r, rank: rank(c)})
+	}
+	for _, r := range existing {
+		add(r, true)
+	}
+	for _, r := range catalogRaw {
+		add(r, false)
+	}
+	slices.SortStableFunc(rows, func(a, b ranked) int { return cmp.Compare(a.rank, b.rank) })
+	out := make([]json.RawMessage, 0, len(rows)+len(undecoded))
+	for _, r := range rows {
+		out = append(out, r.raw)
+	}
+	out = append(out, undecoded...)
 	if len(out) > metadataCacheTopN {
 		out = out[:metadataCacheTopN]
 	}
