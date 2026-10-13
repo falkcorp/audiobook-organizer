@@ -1,5 +1,5 @@
 // file: internal/catalog/scenario_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8b0e26-9c71-4f35-a2b8-6e1f3a05d947
 // last-edited: 2026-10-12
 
@@ -8,6 +8,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -26,11 +27,23 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
-// The 02-PR7b measurement: 5,000 unidentified books against a catalog of 800
-// author blocks of about 100 titles each (plus three franchise blocks over the
-// cap and five homonym authors), searched through the real metadata search
-// with a counting fake Audible, with the catalog stage off, off with no
-// matcher installed, and on. Synthetic throughout.
+// The 02-PR7b measurement: unidentified books against a catalog of author
+// blocks of about 100 titles each (plus three franchise blocks over the cap and
+// five homonym authors), searched through the real metadata search with a
+// counting fake Audible, with the catalog stage off, off with no matcher
+// installed, and on. Synthetic throughout.
+//
+// Two sizes, the same shape and the same asserted invariants:
+//
+//	default  500 books, 80 author blocks. About a minute under -race -cover:
+//	         the store reads per matched book (one point read per entry of the
+//	         author's block) cost a captured stack each under the race build of
+//	         pebble, which is what made the full size take ~10 minutes on a CI
+//	         runner. The matcher itself is cheap: the full size takes ~6 s
+//	         without -race.
+//	full     5,000 books, 800 author blocks: the measurement the executive
+//	         summary quotes. Run it with
+//	         CATALOG_SCENARIO_FULL=1 go test ./internal/catalog -run TestScenario_LocalCatalogStage -count=1 -v
 //
 // Shape of the library (by book index mod 25):
 //
@@ -41,12 +54,24 @@ import (
 //	20..21 a book of an author the catalog never harvested
 //	22..24 a book of a franchise author whose block is over the cap
 const (
-	scenarioBooks      = 5000
-	scenarioAuthors    = 800
 	scenarioPerAuthor  = 100
 	scenarioHomonymAut = 5 // authors 0..4 carry two provider author ids
 	scenarioFranchise  = 3
 )
+
+// scenarioSize is how many books and author blocks the scenario builds.
+type scenarioSize struct{ books, authors int }
+
+// scenarioSizeFor is the default size, or the full 5,000 x 800 when
+// CATALOG_SCENARIO_FULL=1. Both keep the 25-book cycle, so the mix of plain,
+// decorated, unharvested and franchise books is the same; the author count
+// stays coprime with the cycle's stride (7) so the books spread over the blocks.
+func scenarioSizeFor() scenarioSize {
+	if os.Getenv("CATALOG_SCENARIO_FULL") == "1" {
+		return scenarioSize{books: 5000, authors: 800}
+	}
+	return scenarioSize{books: 500, authors: 80}
+}
 
 type scenarioAnswerer struct {
 	calls atomic.Int64
@@ -82,8 +107,10 @@ type scenarioBook struct {
 
 func TestScenario_LocalCatalogStage_5000Books_800Blocks(t *testing.T) {
 	if testing.Short() {
-		t.Skip("5,000-book scenario")
+		t.Skip("catalog-stage scenario")
 	}
+	size := scenarioSizeFor()
+	scenarioBooks, scenarioAuthors := size.books, size.authors
 	db, err := pebble.Open("scenario.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -256,7 +283,7 @@ func TestScenario_LocalCatalogStage_5000Books_800Blocks(t *testing.T) {
 	}
 	n, k, h := on.stats.BooksWithCatalog.Load(), on.stats.OversizeBlocks.Load(), on.stats.HomonymSkipped.Load()
 	m := on.stats.ProviderCandidates.Load()
-	t.Logf("MEASURED (5,000 books, %d author blocks of %d + %d franchise blocks of %d, %d homonym authors):", scenarioAuthors, scenarioPerAuthor, scenarioFranchise, MaxBlockEntries+1, scenarioHomonymAut)
+	t.Logf("MEASURED (%d books, %d author blocks of %d + %d franchise blocks of %d, %d homonym authors):", scenarioBooks, scenarioAuthors, scenarioPerAuthor, scenarioFranchise, MaxBlockEntries+1, scenarioHomonymAut)
 	t.Logf("  provider calls: no matcher %d, stage off %d, stage on %d (unchanged: the fan-out still runs)", none.providerCalls, off.providerCalls, on.providerCalls)
 	t.Logf("  N books with at least one catalog candidate: %d of %d", n, scenarioBooks)
 	t.Logf("  catalog candidates: %d; M provider candidates: %d", on.stats.CatalogCandidates.Load(), m)
