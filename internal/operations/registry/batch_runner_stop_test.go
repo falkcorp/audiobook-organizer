@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -114,6 +115,73 @@ func TestItemPanicIsAnItemError(t *testing.T) {
 	sum, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, commitEvery: -1})
 	if err != nil || sum.Done != 30 || sum.Failed != 1 {
 		t.Fatalf("err %v done %d failed %d", err, sum.Done, sum.Failed)
+	}
+}
+
+// panicKeySet is an ItemSet whose Key panics at one index.
+type panicKeySet struct {
+	ops.ItemSet
+	at int
+}
+
+func (p panicKeySet) Key(i int) string {
+	if i == p.at {
+		panic("key exploded")
+	}
+	return p.ItemSet.Key(i)
+}
+
+// S2 (re-review): a panic in an op callback that runs on the runner's own
+// goroutines -- Label in a worker, Pages or Key in the producer -- fails the
+// run with an error instead of crashing the process, and records no chunk
+// that did not finish.
+func TestCallbackPanicFailsRun(t *testing.T) {
+	cases := map[string]struct {
+		opts batchOpts
+		wrap func(*ops.BatchJob)
+	}{
+		"label in worker": {opts: batchOpts{size: 5, workers: 2, label: func(i int) string {
+			if i == 12 {
+				panic("label exploded")
+			}
+			return itemKey(i)
+		}}},
+		"pages in producer": {opts: batchOpts{size: 5, workers: 2, order: ops.AppendOnly}, wrap: func(j *ops.BatchJob) {
+			pages := j.Pages
+			j.Pages = func(ctx context.Context, after string, limit int) (ops.ItemSet, string, error) {
+				if after != "" {
+					panic("pages exploded")
+				}
+				return pages(ctx, after, limit)
+			}
+		}},
+		"key in producer": {opts: batchOpts{size: 5, workers: 2, order: ops.AppendOnly}, wrap: func(j *ops.BatchJob) {
+			pages := j.Pages
+			j.Pages = func(ctx context.Context, after string, limit int) (ops.ItemSet, string, error) {
+				set, next, err := pages(ctx, after, limit)
+				if after != "" && set != nil {
+					set = panicKeySet{ItemSet: set, at: 2}
+				}
+				return set, next, err
+			}
+		}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newMemLedgerStore(t)
+			job, rc, cancel := openJob(t, seq(30), c.opts, func(*ops.ItemRC, int) error { return nil })
+			defer cancel()
+			if c.wrap != nil {
+				c.wrap(job)
+			}
+			sum, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
+			if err == nil || !strings.Contains(err.Error(), "panicked") {
+				t.Fatalf("err = %v, want a panicked error", err)
+			}
+			if sum.Done == 30 {
+				t.Fatal("a run whose callback panicked counted every item")
+			}
+		})
 	}
 }
 
