@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-10-13
 
@@ -209,20 +209,25 @@ export interface AuthorsUrlFilters {
    */
   authorId: string | null;
   /**
-   * `?view=series`: open the Series sub-view. A seed like `authorId`, read once
-   * (the sub-view is local state afterwards; a click never writes the URL). The
-   * caller passes it only when the URL landed on this lane, because `view` is also
-   * the Duplicates lane's parameter.
+   * `?view=series` or `?view=ai`: open the Series or the AI scans sub-view. A
+   * seed like `authorId`, read once (the sub-view is local state afterwards; a
+   * click never writes the URL). The caller passes it only when the URL landed on
+   * this lane, because `view` is also the Duplicates lane's parameter.
    */
   view?: string | null;
 }
 
-/** The lane's sub-views. AI scans joins them in a later change. */
-export type AuthorsSubView = 'authors' | 'series';
+/**
+ * The lane's sub-views. `ai` (AI scans) has no data here: `useAIScans` owns it,
+ * because the lane menu's Start / Cancel commands need its state. This hook only
+ * knows which sub-view is showing, so its Authors and Series reads and key
+ * handlers go quiet while AI scans is on screen.
+ */
+export type AuthorsSubView = 'authors' | 'series' | 'ai';
 
 /** An unknown `?view=` opens Authors rather than nothing. */
 export function parseAuthorsSubView(raw: string | null | undefined): AuthorsSubView {
-  return raw === 'series' ? 'series' : 'authors';
+  return raw === 'series' || raw === 'ai' ? raw : 'authors';
 }
 
 export interface BooksTarget {
