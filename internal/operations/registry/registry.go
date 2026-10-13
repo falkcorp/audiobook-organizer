@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.48.0
+// version: 3.49.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-13
 
@@ -1811,6 +1811,10 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	}()
 
 	var shutdownErr error
+	// stamped lists the rows the timeout branch below gave a final status,
+	// with that status, so their ends are counted after the goroutine wait
+	// (countShutdownStamps) unless the run's own exit counted first.
+	var stamped []shutdownStamp
 	select {
 	case <-done:
 		r.logger.Info("registry: all workers drained")
@@ -1864,23 +1868,35 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 						r.logger.Warn("registry: shutdown timeout: recorded a stopping zombie's final status",
 							"op_id", opID, "status", status)
 						r.publishOpTerminal(opID, h.defID, status)
+						stamped = append(stamped, shutdownStamp{h: h, status: status, msg: msg})
 					}
 				}
 				continue
 			}
 			h.abandoned = true
-			// A run the user canceled is stamped "canceled", not resumable:
-			// Cancel set userCanceled and left the row to the run, which will
-			// not write it now. The stamp is a compare-and-set from "running",
-			// so it leaves a row Cancel already wrote "canceled" (a
-			// shutdown-branch zombie), and a pre-claim handle's "queued" row,
-			// alone.
+			// A run that hit its def's Timeout is stamped a timeout
+			// ("canceled" with the state.TimeoutPrefix message, v3
+			// timed_out), and a run the user canceled is stamped "canceled";
+			// neither is resumable. The deadline comes first, as in
+			// finalStatusForCanceledRun. Stamping a timed-out run
+			// interrupted_* lost the deadline and made it resumable, so the
+			// next boot ran it again. Cancel set userCanceled and left the row
+			// to the run, which will not write it now. The stamp is a
+			// compare-and-set from "running", so it leaves a row Cancel
+			// already wrote "canceled" (a shutdown-branch zombie), and a
+			// pre-claim handle's "queued" row, alone.
 			status := interruptedStatus(h.resumePolicy)
-			if h.userCanceled.Load() {
+			var msg *string
+			switch {
+			case h.deadlineHit.Load():
+				status = "canceled"
+				m := state.TimeoutPrefix + " run exceeded its timeout; the server shut down before its goroutine returned"
+				msg = &m
+			case h.userCanceled.Load():
 				status = "canceled"
 			}
 			now := time.Now().UTC()
-			applied, err := r.store.UpdateOperationV2StatusIf(opID, "running", status, nil, &now, nil)
+			applied, err := r.store.UpdateOperationV2StatusIf(opID, "running", status, nil, &now, msg)
 			switch {
 			case err != nil:
 				r.logger.Warn("registry: shutdown timeout: could not stamp a run that did not drain",
@@ -1891,6 +1907,7 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 			default:
 				r.logger.Warn("registry: shutdown timeout: stamped a run that did not drain",
 					"op_id", opID, "status", status)
+				stamped = append(stamped, shutdownStamp{h: h, status: status, msg: msg})
 				if status == "canceled" {
 					// The run may never write its own terminal status now (a
 					// zombie, or the process exits first), and the legacy twin
@@ -1954,6 +1971,7 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	case <-time.After(2 * time.Second):
 		r.logger.Warn("registry: goroutines did not exit within 2s; proceeding")
 	}
+	r.countShutdownStamps(stamped)
 	// Last, flush and stop the Activity Log mirror. It runs after the op
 	// goroutines are gone so their final lines are drained, and it must finish
 	// before Shutdown returns because the server closes the activity store
@@ -1967,6 +1985,32 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 		mirror.Stop()
 	}
 	return shutdownErr
+}
+
+// shutdownStamp is a row Shutdown's timeout branch gave a final status.
+type shutdownStamp struct {
+	h      *runHandle
+	status string
+	msg    *string
+}
+
+// countShutdownStamps counts the end of each run Shutdown stamped whose own
+// exit has not counted it. A run whose goroutine returned during the wait
+// above counted its end itself (the worker's write found the stamp and kept or
+// replaced it), and endCounted makes this a no-op for it; a run still running
+// will never count it, and the next boot does not either: the row is no longer
+// "running", so the boot sweep does not touch it. An interrupted_quiesced
+// stamp is a pause and counts nothing.
+func (r *Registry) countShutdownStamps(stamped []shutdownStamp) {
+	for _, st := range stamped {
+		msg := ""
+		if st.msg != nil {
+			msg = *st.msg
+		}
+		if outcome, ok := opsmetrics.OutcomeFor(st.status, msg); ok {
+			r.recordRunEnd(st.h, st.h.defID, outcome)
+		}
+	}
 }
 
 // writeStrike appends a strike record to op_strikes_v2 and logs it.

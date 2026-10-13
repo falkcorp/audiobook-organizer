@@ -1,5 +1,5 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
 // last-edited: 2026-10-13
 
@@ -9,24 +9,25 @@ package registry_test
 // still reads "canceled" with the timeout: prefix, for the previous binary),
 // counts as a failure on the legacy operations_failed_total and as
 // ops.runs{outcome="timed_out"} on the OTel meter; interrupted_dropped runs
-// count as dropped; interrupted pauses count nothing; and the ops.zombies
-// gauge follows the registry's ZombieCount.
+// count as dropped; interrupted pauses count nothing; every run end is counted
+// exactly once, by whichever of the worker, the zombie monitor, Shutdown's
+// stamp and the next boot's sweep finishes its row; and the ops.zombies gauge
+// follows the registry's ZombieCount.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
@@ -67,31 +68,6 @@ func newV3OtelRig(t *testing.T, opts registry.Options, release ...func()) (*otel
 		_ = reg.Shutdown(sctx)
 	})
 	return &otelRig{reader: reader, reg: reg}, store
-}
-
-// legacyCounter reads the process-global legacy counter
-// audiobook_organizer_<name>{type=defID} through the default gatherer. Tests use a def id of their own, so
-// the value is theirs alone.
-func legacyCounter(t *testing.T, name, defID string) float64 {
-	t.Helper()
-	metrics.Register()
-	mfs, err := prometheus.DefaultGatherer.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	for _, mf := range mfs {
-		if mf.GetName() != "audiobook_organizer_"+name {
-			continue
-		}
-		for _, m := range mf.GetMetric() {
-			for _, lp := range m.GetLabel() {
-				if lp.GetName() == "type" && lp.GetValue() == defID {
-					return m.GetCounter().GetValue()
-				}
-			}
-		}
-	}
-	return 0
 }
 
 // runOutcomes is every ops.runs point of defID, keyed by outcome.
@@ -455,5 +431,343 @@ func TestShutdownUnregistersZombieSource(t *testing.T) {
 		if got := opsmetrics.ActiveZombieSources(); got != before {
 			t.Fatalf("round %d: %d zombie sources after Shutdown, want %d", i, got, before)
 		}
+	}
+}
+
+// privateMeter is a recorder on its own meter provider, and a rig that reads
+// it, for tests that build their registries by hand (several on one store,
+// or on a custom store).
+func privateMeter() (*opsmetrics.Recorder, *otelRig) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	return opsmetrics.New(mp), &otelRig{reader: reader}
+}
+
+// awaitNotRunning waits until opID has no handle in r.
+func awaitNotRunning(t *testing.T, r *registry.Registry, opID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.IsRunning(opID) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.IsRunning(opID) {
+		t.Fatalf("op %s still has a handle after 5s", opID)
+	}
+}
+
+// TestShutdownStampedTimedOutZombieCountsTimedOutOnce: a timed-out zombie is
+// stamped by Shutdown with its decided status (canceled + timeout:); its
+// goroutine then returns inside Shutdown's wait, and the zombie monitor finds
+// the stamp, keeps it and counts it. The kept row's outcome is read off the
+// row, so the run is timed_out once, never canceled. Mutation check: make the
+// kept-cancel branch of writeRunTerminalStatus report OutcomeCanceled.
+func TestShutdownStampedTimedOutZombieCountsTimedOutOnce(t *testing.T) {
+	s := newStubbornRun()
+	g, store := newV3OtelRig(t, registry.Options{}, s.releaseRun)
+	const id = "test.timedout-stamped-zombie"
+	def := makeValidDef(id)
+	def.Timeout = 30 * time.Millisecond
+	def.Run = s.run
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	failedBefore := legacyCounter(t, "operations_failed_total", id)
+	canceledBefore := legacyCounter(t, "operations_canceled_total", id)
+	g.reg.Start(t.Context())
+	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	awaitZombieCount(t, g.reg, 1)
+	// Release inside Shutdown's goroutine wait: after its 100ms stamp, well
+	// before the 2s escape, so the monitor writes and counts first.
+	time.AfterFunc(400*time.Millisecond, s.releaseRun)
+	sctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = g.reg.Shutdown(sctx)
+	awaitV2(t, store, opID, "canceled")
+	if rec := runV3(t, store, opID); rec.State != state.V3TimedOut {
+		t.Fatalf("v3 state = %s, want timed_out", rec.State)
+	}
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "timed_out": 1})
+	if d := legacyCounter(t, "operations_failed_total", id) - failedBefore; d != 1 {
+		t.Errorf("operations_failed_total{type=%s} moved by %v, want 1", id, d)
+	}
+	if d := legacyCounter(t, "operations_canceled_total", id) - canceledBefore; d != 0 {
+		t.Errorf("operations_canceled_total{type=%s} moved by %v, want 0", id, d)
+	}
+}
+
+// TestShutdownCountsAStampedRunThatNeverReturns: a ResumeDrop run that
+// ignores its context does not drain, so Shutdown stamps it
+// interrupted_dropped. Its goroutine is still running when Shutdown returns,
+// so the run's own exit will never count it, and the next boot will not
+// either (the row is no longer running): Shutdown counts it, once, and the
+// late return adds nothing. Mutation check: drop countShutdownStamps.
+func TestShutdownCountsAStampedRunThatNeverReturns(t *testing.T) {
+	s := newStubbornRun()
+	g, store := newV3OtelRig(t, registry.Options{}, s.releaseRun)
+	const id = "test.timedout-stamped-drop"
+	def := makeValidDef(id) // ResumeDrop
+	def.Run = s.run
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	g.reg.Start(t.Context())
+	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	sctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = g.reg.Shutdown(sctx)
+	if got := v2Status(t, store, opID); got != "interrupted_dropped" {
+		t.Fatalf("status after Shutdown = %q, want interrupted_dropped", got)
+	}
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "dropped": 1})
+	s.releaseRun()
+	recv(t, s.finished, "the stubborn run to return")
+	awaitNotRunning(t, g.reg, opID)
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "dropped": 1})
+}
+
+// TestShutdownStampsATimedOutRunAsATimeout: a run that hit its deadline and
+// is still inside its abandon grace when Shutdown's context expires is stamped
+// as a timeout (canceled + timeout:, v3 timed_out) and counted timed_out, not
+// stamped interrupted_quiesced, which lost the deadline and made the run
+// resumable on the next boot.
+func TestShutdownStampsATimedOutRunAsATimeout(t *testing.T) {
+	s := newStubbornRun()
+	g, store := newV3OtelRig(t, registry.Options{AbandonGrace: time.Second}, s.releaseRun)
+	const id = "test.timedout-shutdown-in-grace"
+	def := makeValidDef(id)
+	def.ResumePolicy = registry.ResumeRestart
+	def.Timeout = 20 * time.Millisecond
+	def.Run = s.run
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	g.reg.Start(t.Context())
+	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv(t, s.started, "run to start")
+	time.Sleep(150 * time.Millisecond) // past the deadline, inside the 1s grace
+	sctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = g.reg.Shutdown(sctx)
+	row, err := store.GetOperationV2(opID)
+	if err != nil || row == nil {
+		t.Fatalf("GetOperationV2: %v %v", row, err)
+	}
+	if row.Status != "canceled" || row.ErrorMessage == nil || !strings.HasPrefix(*row.ErrorMessage, state.TimeoutPrefix) {
+		t.Fatalf("row after Shutdown = %q %v, want canceled with a %q message", row.Status, row.ErrorMessage, state.TimeoutPrefix)
+	}
+	if rec := runV3(t, store, opID); rec.State != state.V3TimedOut {
+		t.Errorf("v3 state = %s, want timed_out", rec.State)
+	}
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "timed_out": 1})
+	s.releaseRun()
+	recv(t, s.finished, "the stubborn run to return")
+	awaitNotRunning(t, g.reg, opID)
+}
+
+// TestBootSweepCountsStoppedRunsItFinishes: a run the previous process
+// stopped for a timeout, or a user cancel, and left stopping is finished by
+// the boot sweep, and counted there: timed_out (a legacy failure) and
+// canceled, with no duration. A row whose def is not registered is counted
+// in ops.runs only, under def_id="other", and mints no legacy series.
+// Mutation check: make endStoppedRunAtBoot count every final as canceled.
+func TestBootSweepCountsStoppedRunsItFinishes(t *testing.T) {
+	g, store := newV3OtelRig(t, registry.Options{})
+	const timedOutDef, canceledDef, unknownDef = "test.timedout-boot-timeout", "test.timedout-boot-user", "test.timedout-boot-unknown"
+	timedOutID := seedStoppingRun(t, store, timedOutDef, state.StopTimeout)
+	canceledID := seedStoppingRun(t, store, canceledDef, state.StopUser)
+	unknownID := seedStoppingRun(t, store, unknownDef, state.StopTimeout)
+	for _, d := range []string{timedOutDef, canceledDef} {
+		def := makeValidDef(d)
+		def.ResumePolicy = registry.ResumeRestart
+		if err := g.reg.RegisterOp(def); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failedBefore := legacyCounter(t, "operations_failed_total", timedOutDef)
+	canceledBefore := legacyCounter(t, "operations_canceled_total", canceledDef)
+	g.reg.Start(t.Context())
+	for _, id := range []string{timedOutID, canceledID, unknownID} {
+		awaitV2(t, store, id, "canceled")
+	}
+	waitForOtel(t, "boot-sweep run ends", func() bool {
+		return g.runOutcomes(t, timedOutDef)["timed_out"] == 1 && g.runOutcomes(t, canceledDef)["canceled"] == 1
+	})
+	wantOutcomes(t, g, timedOutDef, map[string]int64{"timed_out": 1})
+	wantOutcomes(t, g, canceledDef, map[string]int64{"canceled": 1})
+	wantOutcomes(t, g, opsmetrics.OtherDefID, map[string]int64{"timed_out": 1})
+	if n := g.durationCount(t, timedOutDef, "timed_out") + g.durationCount(t, canceledDef, "canceled"); n != 0 {
+		t.Errorf("run.duration has %d observations for boot-sweep ends, want 0", n)
+	}
+	if d := legacyCounter(t, "operations_failed_total", timedOutDef) - failedBefore; d != 1 {
+		t.Errorf("operations_failed_total{type=%s} moved by %v, want 1", timedOutDef, d)
+	}
+	if d := legacyCounter(t, "operations_canceled_total", canceledDef) - canceledBefore; d != 1 {
+		t.Errorf("operations_canceled_total{type=%s} moved by %v, want 1", canceledDef, d)
+	}
+	if v := legacyCounter(t, "operations_failed_total", unknownDef); v != 0 {
+		t.Errorf("operations_failed_total{type=%s} = %v for an unregistered def, want no series", unknownDef, v)
+	}
+}
+
+// TestForceDropCountsDropped: a row restarted three times without progress is
+// force-dropped at pickup, before any attempt runs: one dropped, no started,
+// no duration. Mutation check: drop the force-drop's recordRunEnd.
+func TestForceDropCountsDropped(t *testing.T) {
+	g := newOtelRig(t)
+	const id = "test.timedout-force-drop"
+	var runs atomic.Int32
+	def := makeValidDef(id)
+	def.ResumePolicy = registry.ResumeRestart
+	def.Run = func(context.Context, json.RawMessage, registry.Reporter) error { runs.Add(1); return nil }
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	// Enqueued and marked before Start, as TestWatchdog_InfiniteRestartForceDrop
+	// does, so the first dispatch already sees resume_count=3.
+	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.store.setResumeCount(opID, 3)
+	g.reg.Start(t.Context())
+	t.Cleanup(func() { _ = g.reg.Shutdown(context.Background()) })
+	awaitStatus(t, g.store, opID, "interrupted_dropped", 5*time.Second)
+	waitForOtel(t, "runs{dropped}", func() bool { return g.runOutcomes(t, id)["dropped"] == 1 })
+	wantOutcomes(t, g, id, map[string]int64{"dropped": 1})
+	if got := g.durationCount(t, id, "dropped"); got != 0 {
+		t.Errorf("run.duration{dropped} observations = %d, want 0", got)
+	}
+	if n := runs.Load(); n != 0 {
+		t.Errorf("Run called %d times, want 0", n)
+	}
+}
+
+// TestScanQuiescedBeforeStartWithResumeDropCountsDropped: the scan
+// stand-down pickup gate writes interruptedStatus(ResumePolicy), which is
+// interrupted_dropped for a ResumeDrop def: the run ends before it starts and
+// counts one dropped. (Production library.scan is ResumeRestart, so its
+// pickup-gate stop is interrupted_quiesced, a pause, and counts nothing; the
+// gate itself is policy-generic.) Mutation check: drop the dropped count in
+// the pickup gate.
+func TestScanQuiescedBeforeStartWithResumeDropCountsDropped(t *testing.T) {
+	rec, g := privateMeter()
+	store := newInterleaveStore("op-target")
+	reg := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{OpsMetrics: rec})
+	g.reg = reg
+	store.r = reg
+	var runs atomic.Int32
+	def := makeValidDef(registry.ScanStandDownDefIDForTest) // ResumeDrop
+	def.Run = func(context.Context, json.RawMessage, registry.Reporter) error { runs.Add(1); return nil }
+	if err := reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	reg.Start(t.Context())
+	t.Cleanup(func() {
+		if store.releaseGate != nil {
+			store.releaseGate()
+		}
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = reg.Shutdown(sctx)
+	})
+	store.raiseGate.Store(true)
+	store.insertQueuedAtomic(database.OperationV2Row{
+		ID: store.target, DefID: def.ID, Plugin: def.Plugin, Status: "queued", QueuedAt: time.Now().UTC(),
+	})
+	reg.DispatchCycleForTest(t.Context())
+	recv(t, store.gateRaised, "the scan gate to go up between claim and pickup")
+	awaitStatus(t, store.fakeStore, store.target, "interrupted_dropped", 5*time.Second)
+	waitForOtel(t, "runs{dropped}", func() bool { return g.runOutcomes(t, def.ID)["dropped"] == 1 })
+	wantOutcomes(t, g, def.ID, map[string]int64{"dropped": 1})
+	if n := runs.Load(); n != 0 {
+		t.Errorf("Run called %d times, want 0", n)
+	}
+}
+
+// finalWriteFailingStore fails the worker's terminal write of a timeout
+// (running -> canceled) while armed.
+type finalWriteFailingStore struct {
+	*database.PebbleStore
+	armed atomic.Bool
+}
+
+func (s *finalWriteFailingStore) UpdateOperationV2StatusIf(id, from, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
+	if s.armed.Load() && from == "running" && status == "canceled" {
+		return false, errors.New("injected terminal write failure")
+	}
+	return s.PebbleStore.UpdateOperationV2StatusIf(id, from, status, startedAt, completedAt, errMsg)
+}
+
+// TestUnwrittenTimeoutIsCountedOnceByTheBootSweep: a timed-out run whose
+// terminal write fails is left v3 stopping{timeout} with its row "running".
+// The worker does not count it; the next start's boot sweep finishes it
+// timed_out and counts it there, so the run is timed_out once, not twice.
+// Mutation check: drop the !out.written gate in recordRunMetrics.
+func TestUnwrittenTimeoutIsCountedOnceByTheBootSweep(t *testing.T) {
+	store := newV3Store(t)
+	rec, g := privateMeter()
+	const id = "test.timedout-unwritten"
+	failing := &finalWriteFailingStore{PebbleStore: store}
+	failing.armed.Store(true)
+	newReg := func(st database.OpsV2Store) *registry.Registry {
+		reg := registry.NewWithOptions(st, slog.Default(), 2, registry.Options{
+			OpsMetrics: rec, AbandonGrace: 50 * time.Millisecond, WatchdogInterval: time.Hour, SweepInterval: time.Hour,
+		})
+		def := makeValidDef(id)
+		def.Timeout = 10 * time.Millisecond
+		def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		if err := reg.RegisterOp(def); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = reg.Shutdown(sctx)
+		})
+		return reg
+	}
+	failedBefore := legacyCounter(t, "operations_failed_total", id)
+
+	first := newReg(failing)
+	g.reg = first
+	first.Start(t.Context())
+	opID, err := first.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitV3State(t, store, opID, state.V3Stopping)
+	awaitNotRunning(t, first, opID)
+	if got := v2Status(t, store, opID); got != "running" {
+		t.Fatalf("row after the failed terminal write = %q, want running", got)
+	}
+	if got := g.runOutcomes(t, id)["timed_out"]; got != 0 {
+		t.Fatalf("runs{timed_out} = %d after a terminal write that failed, want 0", got)
+	}
+	if err := first.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newReg(store)
+	second.Start(t.Context())
+	awaitV2(t, store, opID, "canceled")
+	awaitV3State(t, store, opID, state.V3TimedOut)
+	waitForOtel(t, "runs{timed_out}", func() bool { return g.runOutcomes(t, id)["timed_out"] == 1 })
+	wantOutcomes(t, g, id, map[string]int64{"started": 1, "timed_out": 1})
+	if d := legacyCounter(t, "operations_failed_total", id) - failedBefore; d != 1 {
+		t.Errorf("operations_failed_total{type=%s} moved by %v, want 1", id, d)
 	}
 }
