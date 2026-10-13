@@ -1,5 +1,5 @@
 // file: internal/database/activity_storer.go
-// version: 1.11.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
 // last-edited: 2026-10-12
 
@@ -44,9 +44,10 @@ type ActivityRetention interface {
 	// the count actually deleted. It takes a context because, since 2026-09-10,
 	// the migrating wrapper runs it on BOTH backends: a cancelled nightly
 	// cleanup (or one past its op budget) must stop at its next batch rather
-	// than prune both stores to completion. On cancellation it returns the rows deleted so far — a
-	// lower bound, never a projection — alongside ctx.Err(); rows not yet
-	// reached are left untouched and a plain retry finishes them.
+	// than prune both stores to completion. On cancellation it returns the
+	// rows deleted so far — a lower bound, never a projection — alongside
+	// ctx.Err(); rows not yet reached are left untouched and a plain retry
+	// finishes them.
 	// Implementations report each committed batch through
 	// ReportMaintenanceProgress (MaintenancePhasePrune) when a
 	// WithMaintenanceProgress hook rides ctx.
@@ -105,20 +106,21 @@ type ActivityLifecycle interface {
 // activity.Writer. PebbleActivityStore is the production implementation.
 //
 // Query and GetDistinctSources take a context and there is deliberately NO
-// context-free variant of either. Both walk the activity log, and on production an abandoned request whose scan could not
-// be cancelled kept decoding entries after the client had disconnected: 30
-// goroutines held 30.8 GB inside the scan with ZERO connected clients, and
-// only a restart freed it. A parallel non-context method would let the next
-// caller reintroduce that outage, so the cancellable path is the only path.
-// Prune and MigrateSystemActivityLogs remain intentionally context-free per
-// scope: they share the same defect shape but are not reachable from a live
-// request path today, so widening them is left as a follow-up. (Summarize and
-// CompactByDay already took a context before this change.)
+// context-free variant of either. Both walk the activity log, and on
+// production an abandoned request whose scan could not be cancelled kept
+// decoding entries after the client had disconnected: 30 goroutines held
+// 30.8 GB inside the scan with ZERO connected clients, and only a restart
+// freed it. A parallel non-context method would let the next caller
+// reintroduce that outage, so the cancellable path is the only path.
+// MigrateSystemActivityLogs remains intentionally context-free: it shares the
+// same defect shape but is not reachable from a live request path today, so
+// widening it is left as a follow-up. (Summarize, Prune and CompactByDay
+// already take a context.)
 //
 // Split into the 4 interfaces above on 2026-08-18. This name is retained as
-// their composition so the method set is byte-identical and no consumer moves; the
-// type checker proves it, because every implementation -- PebbleStore (496 methods)
-// and database.MockStore (399) among them -- fails to compile on a dropped or
+// their composition so the method set is byte-identical and no consumer moves;
+// the type checker proves it, because every implementation -- PebbleStore and
+// database.MockStore among them -- fails to compile on a dropped or
 // re-signatured method.
 type ActivityStorer interface {
 	ActivityWriter

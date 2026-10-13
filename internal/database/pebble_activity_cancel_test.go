@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_cancel_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e91b7d2-6c04-4a58-9f13-8d27e5a06b41
 // last-edited: 2026-10-12
 

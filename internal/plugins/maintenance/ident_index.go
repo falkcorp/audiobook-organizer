@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -22,8 +22,8 @@ import (
 // The index (ident:state:, ident:by:, the in-memory counters), its
 // write-through and its boot build live in internal/database/ident_state.go.
 // Every boot builds or reconciles it, and SuperviseIdentIndex retries a failed
-// build with backoff and rebuilds after a wipe whose own rebuild failed; once
-// those retries are spent it logs an ERROR naming this op. This op is the
+// boot build with backoff; once those retries are spent it logs an ERROR
+// naming this op. This op is the
 // manual handle for the same rebuild: after that ERROR, or after a rollback to
 // a build that predates the index (whose writes did not maintain it).
 //

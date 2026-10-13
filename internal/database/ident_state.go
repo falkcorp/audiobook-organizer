@@ -1,5 +1,5 @@
 // file: internal/database/ident_state.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
 // last-edited: 2026-10-12
 
@@ -262,11 +262,11 @@ type identIndex struct {
 	// ready is true when the counters and membership keys can be trusted.
 	// Written under mu for write; read without it by the query paths.
 	ready atomic.Bool
-	// gen counts invalidations (bumped under mu for write). A rebuild that
-	// sees it move between its start and its final recount was overtaken by
-	// a Reset, and leaves the index not ready for the rebuild that follows
-	// it, rather than declaring ready an index built over rows the Reset
-	// removed.
+	// gen counts Resets (bumped under mu for write). A rebuild that sees it
+	// move between its start and its final recount was overtaken by a Reset:
+	// it returns errIdentRebuildSuperseded and leaves the Reset's own empty,
+	// ready index in place, rather than overwriting it with counters built
+	// over rows the Reset removed.
 	gen atomic.Uint64
 	// rebuildMu serializes RebuildIdentIndex runs.
 	rebuildMu sync.Mutex
@@ -371,7 +371,8 @@ func (p *PebbleStore) IdentBookIDs(states []IdentState) (map[string]struct{}, er
 		}
 	}
 	if !p.ident.ready.Load() {
-		// A Reset dropped the index while this read ran.
+		// Defensive: nothing sets ready=false while the server runs once the
+		// boot build has finished (Reset leaves an empty, ready index).
 		return nil, ErrIdentIndexBuilding
 	}
 	return out, nil
@@ -825,16 +826,14 @@ func (p *PebbleStore) loadIdentCounters() error {
 }
 
 // invalidateIdentIndex marks the index not ready and removes its marker, so
-// a crash before the next rebuild finishes leaves a store that rebuilds on
-// boot. Used by a rebuild from scratch and by Reset, which removes book and
-// cache rows the change paths cannot see. It bumps the invalidation
-// generation, which makes a rebuild already running leave the index not
-// ready at its end.
+// a crash before the rebuild that called it finishes leaves a store that
+// rebuilds on boot. Only a rebuild from scratch calls it, under rebuildMu, so
+// it does not bump the Reset generation: no other rebuild can be running to
+// observe a bump.
 func (p *PebbleStore) invalidateIdentIndex() error {
 	p.ident.mu.Lock()
 	defer p.ident.mu.Unlock()
 	p.ident.ready.Store(false)
-	p.ident.gen.Add(1)
 	return p.db.Delete([]byte(identBuiltKey), pebble.Sync)
 }
 
@@ -867,10 +866,9 @@ const IdentIndexRebuildOpID = "maintenance.ident-index-rebuild"
 // for the life of the server on a tracked goroutine after memdb warmup. It
 // runs the boot build (EnsureIdentIndex) at once, retrying a failure with
 // backoff (identRetryDelays). After the last retry it logs an ERROR naming
-// the manual op and waits for ctx to end. It returns when ctx ends.
+// the manual op and returns. It also returns when ctx ends.
 func (p *PebbleStore) SuperviseIdentIndex(ctx context.Context) {
 	p.ensureIdentIndexRetrying(ctx)
-	<-ctx.Done()
 }
 
 // ensureIdentIndexRetrying runs EnsureIdentIndex until it succeeds, ctx
@@ -879,6 +877,11 @@ func (p *PebbleStore) ensureIdentIndexRetrying(ctx context.Context) {
 	for attempt := 0; ; attempt++ {
 		err := p.EnsureIdentIndex(ctx)
 		if err == nil || ctx.Err() != nil {
+			return
+		}
+		// A Reset overtook the build and left its own empty, ready index:
+		// nothing to retry.
+		if errors.Is(err, errIdentRebuildSuperseded) && p.ident.ready.Load() {
 			return
 		}
 		if attempt >= len(identRetryDelays) {
@@ -899,9 +902,9 @@ func (p *PebbleStore) ensureIdentIndexRetrying(ctx context.Context) {
 	}
 }
 
-// errIdentRebuildSuperseded is a rebuild that a Reset invalidated while it
-// ran: it leaves the index not ready, for the rebuild that follows the Reset.
-var errIdentRebuildSuperseded = errors.New("identification index was invalidated while it was being rebuilt")
+// errIdentRebuildSuperseded is a rebuild that a Reset overtook while it ran:
+// it writes nothing at its end, so the Reset's empty, ready index stays.
+var errIdentRebuildSuperseded = errors.New("identification index was reset while it was being rebuilt")
 
 // IdentRebuildStats reports what a rebuild did.
 type IdentRebuildStats struct {
@@ -939,7 +942,7 @@ type IdentRebuildStats struct {
 // At the end, under identMu for write, the counters are recounted from the
 // membership keys, compared with the counters as they stood (the drift,
 // logged at WARN when non-zero) and replaced, the marker is stamped and the
-// index is ready -- unless a Reset invalidated the index meanwhile
+// index is ready -- unless a Reset overtook the rebuild meanwhile
 // (errIdentRebuildSuperseded).
 func (p *PebbleStore) RebuildIdentIndex(ctx context.Context) (IdentRebuildStats, error) {
 	p.ident.rebuildMu.Lock()
@@ -1369,11 +1372,11 @@ func (p *PebbleStore) identRecount() ([2][numIdentStates]int64, error) {
 	return counts, err
 }
 
-// identFinishRebuild, under identMu for write: unless the invalidation
-// generation moved since gen (a Reset overtook the rebuild), it recounts the
-// membership keys, logs any drift from the counters (when the index was
-// ready), replaces the counters, stamps the marker and makes the index
-// ready.
+// identFinishRebuild, under identMu for write: unless the Reset generation
+// moved since gen (a Reset overtook the rebuild; its empty, ready index
+// stays), it recounts the membership keys, logs any drift from the counters
+// (when the index was ready), replaces the counters, stamps the marker and
+// makes the index ready.
 func (p *PebbleStore) identFinishRebuild(gen uint64) (int64, error) {
 	p.ident.mu.Lock()
 	defer p.ident.mu.Unlock()

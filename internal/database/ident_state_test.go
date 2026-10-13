@@ -1,5 +1,5 @@
 // file: internal/database/ident_state_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
 // last-edited: 2026-10-12
 
@@ -914,17 +914,35 @@ func TestIdentRebuild_RemovesOrphansAndBadKeys(t *testing.T) {
 	require.True(t, rep.Clean(), "%+v", rep)
 }
 
-// TestIdentRebuild_SupersededByInvalidation: a rebuild overtaken by an
-// invalidation (a wipe) does not declare the index ready at its end.
-func TestIdentRebuild_SupersededByInvalidation(t *testing.T) {
+// TestIdentRebuild_SupersededByReset: a rebuild overtaken by a Reset does not
+// overwrite the Reset's empty, ready index with counters built over rows the
+// Reset removed.
+func TestIdentRebuild_SupersededByReset(t *testing.T) {
 	s := newIdentStore(t)
 	identCreateBook(t, s, &identPool{})
 	gen := s.ident.gen.Load()
-	require.NoError(t, s.invalidateIdentIndex())
+	require.NoError(t, s.Reset())
 	_, err := s.identFinishRebuild(gen)
 	require.ErrorIs(t, err, errIdentRebuildSuperseded)
+	c := s.IdentCounts()
+	require.True(t, c.Ready, "the Reset's own empty index stays in place")
+	for _, st := range AllIdentStates {
+		require.Zero(t, c.All[st])
+	}
+	require.True(t, s.IdentIndexReady())
+}
+
+// TestIdentRebuild_InvalidateDoesNotBumpResetGeneration: invalidateIdentIndex
+// is the from-scratch rebuild's own step, taken under rebuildMu before it reads
+// the generation, so it must not move the generation a Reset uses to
+// supersede a running rebuild.
+func TestIdentRebuild_InvalidateDoesNotBumpResetGeneration(t *testing.T) {
+	s := newIdentStore(t)
+	gen := s.ident.gen.Load()
+	require.NoError(t, s.invalidateIdentIndex())
+	require.Equal(t, gen, s.ident.gen.Load())
 	require.False(t, s.IdentIndexReady())
-	_, err = s.RebuildIdentIndex(t.Context())
+	_, err := s.RebuildIdentIndex(t.Context())
 	require.NoError(t, err)
 	require.True(t, s.IdentIndexReady())
 }
