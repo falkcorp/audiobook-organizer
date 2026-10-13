@@ -1,7 +1,7 @@
 // file: internal/server/author_relink_trashed_ops_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f2a9c41-7d38-4e05-b1a6-93c8e2d05f17
-// last-edited: 2026-09-13
+// last-edited: 2026-10-13
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -148,13 +149,21 @@ func (f failSetBookAuthorsStore) SetBookAuthors(bookID string, authors []databas
 	return f.PebbleStore.SetBookAuthors(bookID, authors)
 }
 
-func runAuthorMergeOp(t *testing.T, s *Server, keep database.Author, merge int) *relinkOpReporter {
+// runAuthorMergeOpIDs runs the merge op and returns what the run returned: nil
+// when every id merged, an error naming the ids left behind otherwise.
+func runAuthorMergeOpIDs(t *testing.T, s *Server, keep database.Author, merge ...int) (*relinkOpReporter, error) {
 	t.Helper()
 	def := relinkOpDef(t, s.RegisterAuthorMergeOp, "entities.author-merge")
-	params, err := json.Marshal(authorMergeOpParams{KeepID: keep.ID, MergeIDs: []int{merge}, KeepName: keep.Name})
+	params, err := json.Marshal(authorMergeOpParams{KeepID: keep.ID, MergeIDs: merge, KeepName: keep.Name})
 	require.NoError(t, err)
 	rep := &relinkOpReporter{}
-	require.NoError(t, def.Run(context.Background(), params, rep))
+	return rep, def.Run(context.Background(), params, rep)
+}
+
+func runAuthorMergeOp(t *testing.T, s *Server, keep database.Author, merge int) *relinkOpReporter {
+	t.Helper()
+	rep, err := runAuthorMergeOpIDs(t, s, keep, merge)
+	require.NoError(t, err)
 	return rep
 }
 
@@ -188,7 +197,10 @@ func TestAuthorMergeOp_KeepsSourceWhileTrashedBookStillCredits(t *testing.T) {
 	require.NoError(t, err)
 	trashed := mkRelinkOpBook(t, st, "merge-op-held-trashed", from.ID, true)
 
-	rep := runAuthorMergeOp(t, newRelinkOpServer(failSetBookAuthorsStore{PebbleStore: st, failBook: trashed}), *into, from.ID)
+	rep, runErr := runAuthorMergeOpIDs(t, newRelinkOpServer(failSetBookAuthorsStore{PebbleStore: st, failBook: trashed}), *into, from.ID)
+	// The run must say it did not finish: it used to return nil here, and the
+	// UI took that for a completed merge and dropped the group.
+	require.Error(t, runErr)
 
 	kept, err := st.GetAuthorByID(from.ID)
 	require.NoError(t, err)
@@ -233,4 +245,36 @@ func TestAIAuthorMergeApplyOp_MovesTrashedBookCredit(t *testing.T) {
 			require.Equal(t, into.ID, canonical, "tombstone must resolve the leftover legacy AuthorID")
 		})
 	}
+}
+
+// A merge of several ids where one cannot be moved reports failure naming
+// exactly that id, and still merges the others.
+func TestAuthorMergeOp_PartialFailureNamesTheIDsLeftBehind(t *testing.T) {
+	st := newRelinkOpStore(t)
+	into, err := st.CreateAuthor("Partial Into")
+	require.NoError(t, err)
+	good, err := st.CreateAuthor("Partial Good")
+	require.NoError(t, err)
+	held, err := st.CreateAuthor("Partial Held")
+	require.NoError(t, err)
+	mkRelinkOpBook(t, st, "partial-good", good.ID, false)
+	heldBook := mkRelinkOpBook(t, st, "partial-held", held.ID, false)
+
+	_, runErr := runAuthorMergeOpIDs(t, newRelinkOpServer(failSetBookAuthorsStore{PebbleStore: st, failBook: heldBook}),
+		*into, good.ID, held.ID)
+
+	require.Error(t, runErr)
+	require.Contains(t, runErr.Error(), AuthorMergeFailedIDsPrefix+strconv.Itoa(held.ID)+"]",
+		"the failed id list is the client's contract")
+	require.NotContains(t, runErr.Error(), strconv.Itoa(good.ID)+"]")
+	requireSourceDeleted(t, st, good.ID)
+	stillThere, err := st.GetAuthorByID(held.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stillThere)
+}
+
+func TestUnmergedAuthorIDs(t *testing.T) {
+	require.Equal(t, []int{3, 5}, unmergedAuthorIDs([]int{2, 3, 4, 5}, 4, map[int]bool{2: true}))
+	require.Empty(t, unmergedAuthorIDs([]int{2, 4}, 4, map[int]bool{2: true}))
+	require.Equal(t, "3 5", joinInts([]int{3, 5}))
 }

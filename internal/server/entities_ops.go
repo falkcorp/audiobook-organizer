@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +95,10 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 
 			merged := 0
 			var mergeErrors []string
+			// mergedIDs is the set of ids whose author was really folded in and
+			// deleted. The failed set is everything else, and it is what the
+			// caller needs: a per-id log line is not something a client can act on.
+			mergedIDs := make(map[int]bool, len(mergeIDs))
 			for i, mergeID := range mergeIDs {
 				if progress.IsCanceled() {
 					return fmt.Errorf("cancelled")
@@ -195,6 +200,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 						NewValue:    fmt.Sprintf("merged_into:%d:%s", keepID, keepName),
 					})
 					merged++
+					mergedIDs[mergeID] = true
 				}
 
 				_ = progress.UpdateProgress(i+1, len(mergeIDs),
@@ -207,11 +213,50 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 				errDetail := strings.Join(mergeErrors[:min(len(mergeErrors), 10)], "; ")
 				_ = progress.Log("warn", fmt.Sprintf("Errors: %s", errDetail), nil)
 			}
+			// Invalidate even on a partial failure: the ids that DID merge are gone.
 			s.dedupCache.InvalidateAll()
 			s.authorsCache.InvalidateAll()
+			if failed := unmergedAuthorIDs(mergeIDs, keepID, mergedIDs); len(failed) > 0 {
+				// Report failure rather than completing: the op used to return nil
+				// here, so the UI treated a merge that left authors behind as done
+				// and dropped the whole group. The id list is in a fixed form
+				// (AuthorMergeFailedIDsPrefix) so the client can keep exactly the
+				// variants that remain.
+				detail := ""
+				if len(mergeErrors) > 0 {
+					detail = ": " + strings.Join(mergeErrors[:min(len(mergeErrors), 3)], "; ")
+				}
+				return fmt.Errorf("%s%s] of %d not merged, %d merged%s",
+					AuthorMergeFailedIDsPrefix, joinInts(failed), len(mergeIDs), merged, detail)
+			}
 			return nil
 		},
 	})
+}
+
+// AuthorMergeFailedIDsPrefix opens the list of author ids a failed
+// entities.author-merge run did not merge: "<prefix>12 15] of ...". The web lane
+// (useAuthorsLane) parses it; change both together.
+const AuthorMergeFailedIDsPrefix = "author merge left author ids ["
+
+// unmergedAuthorIDs lists, in request order, the ids that were asked for and
+// are still there: not the kept id, not already merged.
+func unmergedAuthorIDs(mergeIDs []int, keepID int, mergedIDs map[int]bool) []int {
+	var failed []int
+	for _, id := range mergeIDs {
+		if id != keepID && !mergedIDs[id] {
+			failed = append(failed, id)
+		}
+	}
+	return failed
+}
+
+func joinInts(ids []int) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.Itoa(id)
+	}
+	return strings.Join(parts, " ")
 }
 
 // RegisterResolveProductionAuthorOp registers the
