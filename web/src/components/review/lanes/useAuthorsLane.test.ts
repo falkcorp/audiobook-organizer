@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: a5d29e61-7c04-4b8f-93e2-1f6a80c4b573
 // last-edited: 2026-10-13
 
@@ -1537,6 +1537,26 @@ describe('series rename', () => {
     expect(api.renameSeries).toHaveBeenCalledTimes(1); // undo is a revert, not a second rename
   });
 
+  it('Undo while the group has a change in flight says so instead of doing nothing', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.renameSeries).mockResolvedValue({ id: 'rename-op-1' } as api.Operation);
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReturnValue(gate.promise);
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.rename('s11-12', 11, 'Series A Renamed')));
+    await waitFor(() => expect(result.current.series.renames[11]).toBeDefined());
+    act(() => result.current.dispatch(sact.merge('s11-12'))); // holds the group
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+
+    act(() =>
+      result.current.dispatch({ lane: 'authors', entity: 'series', type: 'undoRenameSeries', seriesId: asSeriesId(11) })
+    );
+    expect(toast).toHaveBeenCalledWith('That series group has a change in flight. Try Undo again in a moment.', 'info');
+    expect(api.undoSeriesRename).not.toHaveBeenCalled();
+    await act(async () => gate.resolve(settled()));
+  });
+
   it('Undo via the lane action does the same, and a refused revert is shown and not offered again', async () => {
     serveSeries([SG_A()]);
     vi.mocked(api.renameSeries).mockResolvedValue({ id: 'rename-op-1' } as api.Operation);
@@ -1608,7 +1628,7 @@ describe('series merge', () => {
     expect(toast).toHaveBeenCalledWith('Merged 1 series into "series a"', 'success');
   });
 
-  it('the narrator flag is sent with the merge: reclassify first, then merge, and only the included series', async () => {
+  it('the narrator flag is sent AFTER the merge completes: merge first, then reclassify', async () => {
     serveSeries([SG_A()]);
     const { result } = setup({ view: 'series' });
     await waitFor(() => expect(result.current.series.status).toBe('populated'));
@@ -1624,8 +1644,51 @@ describe('series merge', () => {
     act(() => result.current.dispatch(sact.narrator('s11-12', 7)));
     expect(result.current.series.choices.narrators['s11-12']?.has(7)).toBe(true);
     act(() => result.current.dispatch(sact.merge('s11-12')));
-    await waitFor(() => expect(result.current.series.groups).toEqual([]));
-    expect(calls).toEqual(['reclassify:7', 'merge:12:11']);
+    await waitFor(() => expect(calls).toEqual(['merge:12:11', 'reclassify:7']));
+    expect(result.current.series.groups).toEqual([]);
+    expect(toast).toHaveBeenCalledWith('Merged 1 series into "series a"', 'success');
+  });
+
+  it.each([
+    ['the merge operation fails without naming ids', () => settled('failed', 'cancelled')],
+    ['the merge fails part-way', () => settled('failed', 'series merge left series ids [11]: x')],
+  ])('no author is reclassified when %s, and the flag stays for a retry', async (_name, outcome) => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.pollOperationV2).mockResolvedValue(outcome());
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.narrator('s11-12', 7)));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('narrator flags not applied'), 'error'));
+    expect(api.reclassifyAuthorAsNarrator).not.toHaveBeenCalled();
+    expect(result.current.series.choices.narrators['s11-12']?.has(7)).toBe(true);
+  });
+
+  it('no author is reclassified when the merge request is refused', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.mergeSeriesGroup).mockRejectedValue(new Error('refused'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.narrator('s11-12', 7)));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('"Series A": refused (narrator flags not applied)', 'error'));
+    expect(api.reclassifyAuthorAsNarrator).not.toHaveBeenCalled();
+  });
+
+  it('a reclassification that fails after the merge names the author and does not undo the merge', async () => {
+    serveSeries([SG_A()]);
+    vi.mocked(api.reclassifyAuthorAsNarrator).mockRejectedValue(new Error('author gone'));
+    const { result } = setup({ view: 'series' });
+    await waitFor(() => expect(result.current.series.status).toBe('populated'));
+    act(() => result.current.dispatch(sact.narrator('s11-12', 7)));
+    act(() => result.current.dispatch(sact.merge('s11-12')));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Merged 1 series into "series a" (narrator reclassification failed or was not sent for author id 7)',
+        'warning'
+      )
+    );
+    expect(result.current.series.groups).toEqual([]);
   });
 
   it('a narrator flag on a series that was left out is not sent', async () => {
@@ -2058,6 +2121,29 @@ describe('series keyboard', () => {
       expect(result.current.series.helpOpen).toBe(false);
       expect(appHandler).not.toHaveBeenCalled();
       // Keys the lane does not take still reach the app.
+      pressOnPage('x');
+      expect(appHandler).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', appHandler);
+    }
+  });
+
+  it("the Authors sub-view takes ? before the app's own handler too", async () => {
+    const appHandler = vi.fn();
+    window.addEventListener('keydown', appHandler);
+    try {
+      serve([GROUP_A()]);
+      const { result } = setup();
+      await waitFor(() => expect(result.current.status).toBe('populated'));
+      const pressOnPage = (key: string) =>
+        act(() => {
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+        });
+      pressOnPage('?');
+      expect(result.current.helpOpen).toBe(true);
+      pressOnPage('?');
+      expect(result.current.helpOpen).toBe(false);
+      expect(appHandler).not.toHaveBeenCalled();
       pressOnPage('x');
       expect(appHandler).toHaveBeenCalledTimes(1);
     } finally {

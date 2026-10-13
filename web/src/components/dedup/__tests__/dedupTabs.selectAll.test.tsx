@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/dedupTabs.selectAll.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e1a9c40-2b7d-4f58-8c13-9d0e5f2a7b64
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 //
 // Select page / select all / shift range on the Authors, Series, AI Review
 // and Reconcile tabs. Authors and Series page client-side, so "select all
@@ -136,6 +136,32 @@ describe('SeriesDedupTab', () => {
     await user.click(screen.getByRole('button', { name: 'Merge Selected (1)' }));
     await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(3));
     expect(api.mergeSeriesGroup).toHaveBeenLastCalledWith(31, [32]);
+  });
+
+  it('Merge All that fails part-way re-reads the list, so groups it already merged are not left on screen, and keeps the error', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getSeriesDuplicates)
+      .mockResolvedValueOnce({ groups: [1, 2, 3].map(seriesGroup), total_series: 6 } as never)
+      // After the failed apply: Series 1 and 2 merged and are gone; Series 3 was kept.
+      .mockResolvedValue({ groups: [seriesGroup(3)], total_series: 4 } as never);
+    vi.mocked(api.deduplicateSeries).mockResolvedValue(op('dedupe1'));
+    vi.mocked(api.pollOperation).mockResolvedValue({
+      ...op('dedupe1', 'failed'),
+      error_message: 'series dedup left series ids [32]: merged 2 series, kept 1',
+    });
+    renderIn(<SeriesDedupTab />);
+    await user.click(await screen.findByRole('button', { name: /^Merge All/ }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm' }));
+
+    // The error is shown AFTER the re-read (the re-read clears it), and the
+    // groups that merged are gone.
+    expect(await screen.findByText(/series dedup left series ids \[32\]/)).toBeInTheDocument();
+    expect(await screen.findByRole('checkbox', { name: 'Select group Series 3' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select group Series 1' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Select group Series 2' })).toBeNull();
+    expect(screen.getByText(/series dedup left series ids \[32\]/)).toBeInTheDocument();
+    expect(api.deduplicateSeries).toHaveBeenCalledWith(false);
+    expect(api.getSeriesDuplicates).toHaveBeenCalledTimes(2);
   });
 });
 

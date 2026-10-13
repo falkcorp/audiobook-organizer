@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3b70c58-1d92-4a6f-8c45-7f20b9d6a184
 // last-edited: 2026-10-13
 
@@ -916,7 +916,7 @@ describe('a series card', () => {
     expect(within(card).getByRole('textbox', { name: 'Series name' })).toHaveValue('Series One');
   });
 
-  it('a narrator flag is sent with the merge: the author is reclassified, then the series merge goes', async () => {
+  it('a narrator flag is sent with the merge: the series merge goes, then the author is reclassified', async () => {
     const user = userEvent.setup();
     serveSeries([series(1)]);
     const calls: string[] = [];
@@ -934,7 +934,7 @@ describe('a series card', () => {
     expect(within(card).getByText('Narrator')).toBeInTheDocument();
     await user.click(within(card).getByRole('button', { name: /^Merge into/ }));
     await waitFor(() => expect(screen.queryByTestId('series-group-s11-12')).not.toBeInTheDocument());
-    expect(calls).toEqual(['reclassify:1', 'merge:12:11']);
+    await waitFor(() => expect(calls).toEqual(['merge:12:11', 'reclassify:1']));
   });
 
   it('leaving a series out keeps it out of the merge; with one left the Merge button says why it is off', async () => {
@@ -1119,5 +1119,72 @@ describe('series keyboard help', () => {
     expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByTestId('series-shortcut-help')).not.toBeInTheDocument());
+  });
+});
+
+describe('keyboard while a menu is open in front of the list', () => {
+  it('m does nothing on the Series sub-view while the "Groups per page" menu is open', async () => {
+    const user = userEvent.setup();
+    serveSeries([series(1), series(2)]);
+    renderLane(true, 'series');
+    await seriesCard(1);
+    await user.click(screen.getByRole('combobox', { name: /groups per page/i }));
+    expect(await screen.findByRole('listbox')).toBeInTheDocument();
+    await user.keyboard('m');
+    await user.keyboard('j');
+    expect(api.mergeSeriesGroup).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument());
+    await user.keyboard('m');
+    await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+  });
+
+  it('and on the Authors sub-view', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
+    renderLane();
+    await screen.findByRole('heading', { name: 'Author 1' });
+    await user.click(screen.getByRole('combobox', { name: /groups per page/i }));
+    expect(await screen.findByRole('listbox')).toBeInTheDocument();
+    await user.keyboard('m');
+    expect(api.mergeAuthors).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument());
+    await user.keyboard('m');
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('one write queue, two sub-views', () => {
+  it('while a Series bulk run is going, the Authors sub-view says why its buttons are grey', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author A', ['Author A.'])]);
+    serveSeries([series(1), series(2)]);
+    vi.mocked(api.pollOperationV2).mockImplementation(() => new Promise(() => {}));
+    renderLane(true, 'series');
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all 2 groups on this page' }));
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (2)' }));
+    await screen.findByTestId('series-bulk-progress');
+
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    await screen.findByRole('heading', { name: 'Author A' });
+    expect(screen.getByTestId('authors-series-running')).toHaveTextContent('A series merge is running (0 of 2 groups)');
+    expect(screen.getByRole('button', { name: /^Merge all/ })).toBeDisabled();
+  });
+
+  it('and the Series sub-view says so for an Authors bulk run', async () => {
+    const user = userEvent.setup();
+    serve([wire(1, 'Author 1', ['Author 1.']), wire(2, 'Author 2', ['Author 2.'])]);
+    serveSeries([series(1)]);
+    vi.mocked(api.pollOperationV2).mockImplementation(() => new Promise(() => {}));
+    renderLane();
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all 2 groups on this page' }));
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (2)' }));
+    await screen.findByTestId('authors-bulk-progress');
+    expect(screen.queryByTestId('authors-series-running')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('authors-subview-series'));
+    expect(await screen.findByTestId('series-authors-running')).toHaveTextContent('An author merge is running (0 of 2 groups)');
   });
 });

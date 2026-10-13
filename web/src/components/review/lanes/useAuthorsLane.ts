@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-10-13
 
@@ -318,7 +318,7 @@ interface MergeOutcome {
  */
 type Unconfirmed =
   | { entity: 'author'; opId: string; name: string }
-  | { entity: 'series'; opId: string; name: string; mergeIds: number[] };
+  | { entity: 'series'; opId: string; name: string; mergeIds: number[]; narratorIds: AuthorId[] };
 
 /** Removes `gone` variants from one group, and the group itself when none is left. */
 function dropVariants(gs: AuthorGroup[], key: string, gone: ReadonlySet<number>): AuthorGroup[] {
@@ -1257,42 +1257,24 @@ export function useAuthorsLane(
       if (!plan) return outcome('skipped', 'fewer than two series are included in this merge', name);
       const keepName = group.series.find((r) => r.id === plan.keepId)?.name ?? name;
 
-      // Reclassify the flagged authors first, as the old tab did. A failure here
-      // does not stop the merge (the series rows are independent of the author
-      // record); it is counted and reported with the result.
-      let reclassifyFailures = 0;
-      const reclassified: AuthorId[] = [];
-      for (const id of plan.narratorIds) {
-        throwIfLeft(life);
-        try {
-          await withDeadline(api.reclassifyAuthorAsNarrator(id));
-          reclassified.push(id);
-        } catch (e) {
-          if (abandoned(e)) throw e;
-          if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name, reclassifyFailures);
-          if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name, reclassifyFailures);
-          reclassifyFailures += 1;
-        }
-      }
-      if (reclassified.length > 0) {
-        // Done is done: the flag has nothing left to say about these authors.
-        commitSeriesChoices((c) => {
-          const flagged = c.narrators[key];
-          if (!flagged) return c;
-          const rest = new Set([...flagged].filter((id) => !reclassified.includes(asAuthorId(id))));
-          return { ...c, narrators: { ...c.narrators, [key]: rest } };
-        });
-      }
-      const suffix =
-        reclassifyFailures > 0
-          ? ` (${reclassifyFailures} narrator reclassification${reclassifyFailures === 1 ? '' : 's'} failed)`
-          : '';
-
       throwIfLeft(life);
       const folded = new Set<number>(plan.mergeIds);
+      // Narrator flags are applied AFTER the merge completes, never before. A merge
+      // that fails (or fails part-way, or never gets an answer) must not leave
+      // authors reclassified for a merge that did not happen -- and the server's
+      // merge links every merged series' author onto the kept series' books, so a
+      // reclassification done first would be undone by the link. The flags stay on
+      // the card while the group does, so the reviewer can retry.
+      const flagsNote = plan.narratorIds.length > 0 ? ' (narrator flags not applied)' : '';
       try {
         const op = await withDeadline(api.mergeSeriesGroup(plan.keepId, plan.mergeIds));
-        unconfirmedRef.current.set(key, { entity: 'series', opId: op.id, name, mergeIds: plan.mergeIds });
+        unconfirmedRef.current.set(key, {
+          entity: 'series',
+          opId: op.id,
+          name,
+          mergeIds: plan.mergeIds,
+          narratorIds: plan.narratorIds,
+        });
         const done = await waitFor(op, life);
         unconfirmedRef.current.delete(key);
         if (!done.ok) {
@@ -1305,31 +1287,63 @@ export function useAuthorsLane(
             return outcome(
               'failed',
               left.size > 0
-                ? `${left.size} series ${left.size === 1 ? 'was' : 'were'} not merged (ids ${[...left].join(', ')})${gone.size > 0 ? `; the other ${gone.size} ${gone.size === 1 ? 'was' : 'were'}` : ''}${suffix}`
-                : `${done.message}${suffix}`,
+                ? `${left.size} series ${left.size === 1 ? 'was' : 'were'} not merged (ids ${[...left].join(', ')})${gone.size > 0 ? `; the other ${gone.size} ${gone.size === 1 ? 'was' : 'were'}` : ''}${flagsNote}`
+                : `${done.message}${flagsNote}`,
               name,
-              reclassifyFailures
+              0
             );
           }
           // The failure does not say what it left (a cancelled run can stop after
           // some deletes): keep the group, and have the caller re-read.
-          return outcome('failed', `${done.message}${suffix}`, name, reclassifyFailures, true);
+          return outcome('failed', `${done.message}${flagsNote}`, name, 0, true);
         }
       } catch (e) {
         // An abandon leaves the entry in `unconfirmedRef`: the merge was sent.
         if (abandoned(e)) throw e;
         unconfirmedRef.current.delete(key);
-        if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name, reclassifyFailures);
-        if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name, reclassifyFailures);
-        return outcome('failed', `${errorMessage(e, 'merge request failed')}${suffix}`, name, reclassifyFailures);
+        if (e instanceof WriteTimeoutError) return outcome('timeout', 'no answer', name);
+        if (isAuthRedirectError(e)) return outcome('session', SESSION_EXPIRED_MESSAGE, name);
+        return outcome('failed', `${errorMessage(e, 'merge request failed')}${flagsNote}`, name);
       }
       commitSeries((gs) => dropSeriesRows(gs, key, folded));
-      return outcome(
-        'merged',
-        `Merged ${folded.size} series into "${keepName}"${suffix}`,
-        name,
-        reclassifyFailures
-      );
+
+      // The merge completed: now the flagged authors. The merge is done and the
+      // group is gone, so nothing here can fail the outcome; a reclassification
+      // that fails, or is not sent because the lane was left, is counted and named.
+      const notDone: AuthorId[] = [];
+      const reclassified: AuthorId[] = [];
+      let stopped = false;
+      for (const id of plan.narratorIds) {
+        if (stopped || life.aborted) {
+          notDone.push(id);
+          continue;
+        }
+        try {
+          await withDeadline(api.reclassifyAuthorAsNarrator(id));
+          reclassified.push(id);
+        } catch (e) {
+          if (!abandoned(e)) {
+            notDone.push(id);
+            // A login that expired or a request that got no answer will not get
+            // better for the next author: do not send the rest.
+            if (e instanceof WriteTimeoutError || isAuthRedirectError(e)) stopped = true;
+          } else notDone.push(id);
+        }
+      }
+      if (reclassified.length > 0) {
+        // Done is done: the flag has nothing left to say about these authors.
+        commitSeriesChoices((c) => {
+          const flagged = c.narrators[key];
+          if (!flagged) return c;
+          const rest = new Set([...flagged].filter((id) => !reclassified.includes(asAuthorId(id))));
+          return { ...c, narrators: { ...c.narrators, [key]: rest } };
+        });
+      }
+      const suffix =
+        notDone.length > 0
+          ? ` (narrator reclassification failed or was not sent for author id${notDone.length === 1 ? '' : 's'} ${notDone.join(', ')})`
+          : '';
+      return outcome('merged', `Merged ${folded.size} series into "${keepName}"${suffix}`, name, notDone.length);
     },
     [abandoned, commitSeries, commitSeriesChoices, waitFor]
   );
@@ -1542,7 +1556,12 @@ export function useAuthorsLane(
       const record = seriesRenamesRef.current[seriesId];
       if (!record) return;
       const groupKey = groupKeyOfSeries(seriesId);
-      if (groupKey && pendingRef.current.has(groupKey)) return;
+      if (groupKey && pendingRef.current.has(groupKey)) {
+        // A write for this group is queued or running, and a revert on top of it
+        // could race it. Say so rather than letting the click do nothing.
+        toast('That series group has a change in flight. Try Undo again in a moment.', 'info');
+        return;
+      }
       if (groupKey) markPending(groupKey, true);
       try {
         await withDeadline(api.undoSeriesRename(record.opId));
@@ -1848,7 +1867,12 @@ export function useAuthorsLane(
             const folded = new Set<number>(entry.mergeIds);
             if (final.status === 'completed') {
               commitSeries((gs) => dropSeriesRows(gs, key, folded));
-              toast(`Merged series into "${name}" (it finished after you left).`, 'success');
+              toast(
+                `Merged series into "${name}" (it finished after you left)${
+                  entry.narratorIds.length > 0 ? '; its narrator flags were not applied' : ''
+                }.`,
+                entry.narratorIds.length > 0 ? 'warning' : 'success'
+              );
               return;
             }
             const message = final.error_message || final.status;
@@ -2125,11 +2149,18 @@ export function useAuthorsLane(
   // ---- keyboard ----------------------------------------------------------------------------
   // In the hook, with the lane's state, and bound only while the lane is active:
   // a window listener that outlives the lane would move a focus ring nobody sees.
+  //
+  // CAPTURE PHASE, and `?` stops propagating once this handler has taken it: see
+  // the Series handler above for why (the app's own `?` handler runs first in the
+  // bubble phase, and the dialog it opens takes the focus before this handler's
+  // typing guard runs). Measured with Playwright on /review?lane=authors before
+  // this: `?` opened the app dialog and `authors-shortcut-help` never appeared.
   useEffect(() => {
     if (!authorsOn) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === '?' && helpOpen) {
         event.preventDefault();
+        event.stopPropagation();
         setHelpOpen(false);
         return;
       }
@@ -2146,6 +2177,7 @@ export function useAuthorsLane(
       if (isKeyboardShortcutSuppressed()) return;
       if (event.key === '?') {
         event.preventDefault();
+        event.stopPropagation();
         setHelpOpen(!helpOpen);
         return;
       }
@@ -2181,8 +2213,8 @@ export function useAuthorsLane(
           return;
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [authorsOn, booksFor, helpOpen, editing, pageGroups, focusedKey, dispatch]);
 
   // ---- result ------------------------------------------------------------------------------

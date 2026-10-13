@@ -1,5 +1,5 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
 // last-edited: 2026-10-13
 
@@ -287,6 +287,18 @@ test.describe('Author Dedup', () => {
     await openLane(page);
     await page.getByTestId('author-group-1').getByRole('button', { name: 'Validate' }).click();
     await expect(page.getByTestId('author-group-1').getByTestId('author-validation-results')).toContainText('openlibrary');
+  });
+
+  test('? opens the lane\'s own shortcut help (the app-wide ? handler does not take it), and m does nothing behind it', async ({ page }) => {
+    await openLane(page);
+    await expect(page.getByRole('heading', { name: 'Author A', exact: true })).toBeVisible();
+    await page.keyboard.press('?');
+    await expect(page.getByTestId('authors-shortcut-help')).toBeVisible();
+    const merges = await countRequests(page, '/api/v1/authors/merge', 'POST');
+    await page.keyboard.press('m');
+    expect(merges.n).toBe(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('authors-shortcut-help')).toHaveCount(0);
   });
 
   test('shows the empty state when there are no duplicate groups', async ({ page }) => {
@@ -670,7 +682,7 @@ test.describe('Series Dedup', () => {
     await expect(page.getByTestId('series-group-s21-22')).toBeVisible();
   });
 
-  test('a narrator flag is sent with the merge: the author is reclassified first', async ({ page }) => {
+  test('a narrator flag is sent with the merge: the author is reclassified after it completes', async ({ page }) => {
     await openSeries(page);
     const order: string[] = [];
     page.on('request', (req) => {
@@ -682,7 +694,9 @@ test.describe('Series Dedup', () => {
     await expect(page.getByTestId('series-row-12').getByText('Narrator')).toBeVisible();
     await page.getByRole('button', { name: 'Merge into "series one"' }).click();
     await expect(page.getByText('Merged 1 series into "series one"')).toBeVisible();
-    expect(order).toEqual(['reclassify', 'merge']);
+    // After the merge completed, never before: a merge that fails must not leave an
+    // author reclassified.
+    await expect.poll(() => order).toEqual(['merge', 'reclassify']);
   });
 
   test('leaving a series out keeps it out of the merge', async ({ page }) => {
@@ -868,6 +882,18 @@ test.describe('Series Dedup', () => {
     await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
     expect(seriesReads.n).toBe(2);
     expect(authorReads.n).toBe(1);
+  });
+
+  test('keyboard: m does nothing while the "Groups per page" menu is open', async ({ page }) => {
+    await openSeries(page);
+    await expect(page.getByTestId('series-group-s11-12')).toBeVisible();
+    const merges = await countRequests(page, '/api/v1/series/merge', 'POST');
+    await page.getByRole('combobox', { name: /groups per page/i }).click();
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('m');
+    expect(merges.n).toBe(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('listbox')).toHaveCount(0);
   });
 
   test('keyboard: m merges the focused series group, and not while the help is open', async ({ page }) => {

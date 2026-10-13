@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.17.1
+// version: 1.18.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 import {
   startTransition,
@@ -1556,8 +1556,13 @@ export function isKeyboardShortcutSuppressed(): boolean {
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
   const el = active as HTMLElement;
   if (el.isContentEditable) return true;
-  // MUI renders modals as div[role="dialog"], not native <dialog>.
-  return Boolean(el.closest('[role="dialog"]'));
+  // MUI renders modals as div[role="dialog"], not native <dialog>. A Select's
+  // menu and a Menu are not dialogs: focus sits in a [role="listbox"] / [role="menu"]
+  // inside a Popover, and anything under a MUI modal root (a Popover, a Menu, a
+  // Drawer) is in front of the list, so `m` there must not act on a card behind it.
+  // (Found on the Series sub-view's "Groups per page" menu; the Authors handler and
+  // the Dupes one share this guard and had the same gap.)
+  return Boolean(el.closest('[role="dialog"], [role="listbox"], [role="menu"], .MuiModal-root'));
 }
 
 /** Rendered by the shortcut help overlay. Kept beside the handler that implements them. */
