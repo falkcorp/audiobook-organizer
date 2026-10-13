@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-13
 
@@ -367,5 +367,22 @@ func TestAlreadyApplied(t *testing.T) {
 		if got := alreadyApplied(c.planned, c.fresh); got != c.want {
 			t.Errorf("%s: alreadyApplied = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A mark name that cannot be stored (empty, or holding the NUL the store
+// splits on) is a programming error: Mark panics, and the runner reports
+// the panic as the item's error.
+func TestMarkRefusesBadNames(t *testing.T) {
+	for _, name := range []string{"", "a\x00b"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Mark(%q) did not panic", name)
+				}
+			}()
+			irc := NewItemRC(NewRC(RunEnv{Context: context.Background()}), context.Background(), &Tally{}, nil)
+			irc.Mark(name)
+		}()
 	}
 }

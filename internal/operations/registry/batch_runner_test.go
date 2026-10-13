@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
 // last-edited: 2026-10-13
 
@@ -40,10 +40,24 @@ type memLedgerStore struct {
 	commitAt   []time.Time
 	inFlight   atomic.Int32
 	committers map[uint64]bool
+	marks      map[string]map[string]bool // name -> key set (opv3:mark:)
 }
 
 func newMemLedgerStore(t *testing.T) *memLedgerStore {
-	return &memLedgerStore{t: t, snap: map[int][]string{}, committers: map[uint64]bool{}}
+	return &memLedgerStore{t: t, snap: map[int][]string{}, committers: map[uint64]bool{}, marks: map[string]map[string]bool{}}
+}
+
+func (s *memLedgerStore) ListMarksV3(string) (map[string][]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string][]string{}
+	for name, set := range s.marks {
+		for k := range set {
+			out[name] = append(out[name], k)
+		}
+		slices.Sort(out[name])
+	}
+	return out, nil
 }
 
 func goroutineID() uint64 {
@@ -91,6 +105,14 @@ func (s *memLedgerStore) CommitLedgerV3(_ string, b database.LedgerBatch) error 
 	s.committers[goroutineID()] = true
 	l := b.Ledger
 	s.ledger = &l
+	for name, keys := range b.Marks {
+		if s.marks[name] == nil {
+			s.marks[name] = map[string]bool{}
+		}
+		for _, k := range keys {
+			s.marks[name][k] = true
+		}
+	}
 	s.commits = append(s.commits, b)
 	s.commitAt = append(s.commitAt, time.Now())
 	return nil

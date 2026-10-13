@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
 // last-edited: 2026-10-13
 
@@ -181,12 +181,8 @@ type Ledger struct {
 	// ChunksDone counts completed chunks across every attempt. A Snapshot
 	// run can count its bitmap, but merged AppendOnly ranges cannot be
 	// counted back into chunks, so the runner persists the number (05-PR5).
-	ChunksDone int `json:"chunks_done,omitempty"`
-	// Marks are the keys items recorded with rc.Mark, by name, from
-	// completed chunks only (a Fixer's applied rows), so they survive a
-	// resume exactly as the counters do.
-	Marks     map[string][]string `json:"marks,omitempty"`
-	UpdatedAt time.Time           `json:"updated_at"`
+	ChunksDone int       `json:"chunks_done,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Lease is one chunk a worker holds. Leases live in the runner's memory and
@@ -248,6 +244,13 @@ type LedgerBatch struct {
 	Leases   []Lease          // stored inside opv3:ckpt:
 	Progress ProgressSnapshot // folded into RunRecord.Progress
 	ItemRows []ItemOutcome    // optional; same batch
+	// Marks are the keys items recorded with rc.Mark, by name, in the
+	// chunks folded since the previous commit (a Fixer's applied rows). Each
+	// is written once, as its own opv3:mark: key in the same batch as the
+	// ledger that records its chunk, so marks survive a resume exactly as
+	// the counters do without riding in every ledger write. A mark name
+	// must not contain a NUL byte.
+	Marks map[string][]string
 }
 
 // OpCounts is opv3:meta:counts, maintained in the same batch as the ix:state
@@ -381,6 +384,9 @@ type OpsV3ChunkStore interface {
 	// ledger).
 	CommitLedgerV3(id string, b LedgerBatch) error
 	GetLedgerV3(id string) (*Ledger, error)
+	// ListMarksV3 returns every mark CommitLedgerV3 stored for the run, by
+	// name, keys in key order.
+	ListMarksV3(id string) (map[string][]string, error)
 }
 
 // OpsV3AuxStore is the write-ahead intents, per-item outcomes and run log.

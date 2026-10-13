@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-13
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -318,9 +319,15 @@ func (rc *ItemRC) Skip(reason string) {
 
 // Mark records the item's key under name. Like the counters, marks reach
 // the ledger only when the item's chunk completes, and they survive a
-// resume; Finish reads them as Summary.Marks. Meant for small sets a Finish
-// must list (a Fixer's applied rows), not for every item of a large run.
+// resume; Finish reads them as Summary.Marks, every one of them (each is
+// stored once, as its own key, so there is no cap). Meant for the sets a
+// Finish must list (a Fixer's applied rows). name is a short identifier:
+// empty or holding a NUL byte is a programming error and panics, which the
+// runner reports as this item's error.
 func (rc *ItemRC) Mark(name string) {
+	if name == "" || strings.ContainsRune(name, 0) {
+		panic(fmt.Sprintf("ops: mark name %q is empty or holds a NUL", name))
+	}
 	rc.tally.mu.Lock()
 	defer rc.tally.mu.Unlock()
 	if !slices.Contains(rc.tally.marks, name) {

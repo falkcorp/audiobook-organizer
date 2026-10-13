@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-13
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -928,7 +929,7 @@ func TestOpv3KeysAllInRegisteredFamilies(t *testing.T) {
 	_ = p.PutIntentV3(child, Intent{Seq: 1})
 	_ = p.AppendLogV3(child, LogLine{Message: "m"})
 	if err := p.CommitLedgerV3(child, LedgerBatch{Ledger: Ledger{ChunkCount: 1},
-		ItemRows: []ItemOutcome{{Key: "k", Outcome: "skipped:dup"}}}); err != nil {
+		ItemRows: []ItemOutcome{{Key: "k", Outcome: "skipped:dup"}}, Marks: map[string][]string{"applied": {"k"}}}); err != nil {
 		t.Fatal(err)
 	}
 	done := insertV3(t, p, "test.census", "")
@@ -1146,5 +1147,45 @@ func TestCommitLedgerKeepsPhase(t *testing.T) {
 	}
 	if r := mustRun(t, p, id); r.Progress.Phase != "apply" || r.Progress.Done != 3 {
 		t.Fatalf("progress after a ledger commit = %+v", r.Progress)
+	}
+}
+
+// TestMarksStagedWithLedger: marks ride in the ledger commit as their own
+// opv3:mark: keys (written once, never in the ledger value), list back by
+// name in key order with item keys that hold ':' intact, are deleted with
+// the ledger at the terminal transition, and a bad name is refused.
+func TestMarksStagedWithLedger(t *testing.T) {
+	p := newTimelineStore(t)
+	id := insertV3(t, p, "test.marks", "")
+	transition(t, p, id, state.EvDispatch, nil)
+	commit := func(marks map[string][]string) error {
+		return p.CommitLedgerV3(id, LedgerBatch{Ledger: Ledger{ChunkSize: 1, ChunkCount: 3, Done: []byte{0}}, Marks: marks})
+	}
+	if err := commit(map[string][]string{"applied": {"b:2", "a:1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit(map[string][]string{"applied": {"c"}, "held": {"x"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ListMarksV3(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got["applied"], []string{"a:1", "b:2", "c"}) || !slices.Equal(got["held"], []string{"x"}) {
+		t.Fatalf("marks = %v", got)
+	}
+	if led, _ := p.GetLedgerV3(id); led == nil {
+		t.Fatal("no ledger")
+	}
+	before := v3Digest(t, p, "opv3:")
+	if err := commit(map[string][]string{"bad\x00name": {"k"}}); err == nil {
+		t.Fatal("a mark name holding a NUL was accepted")
+	}
+	if v3Digest(t, p, "opv3:") != before {
+		t.Fatal("a refused commit changed opv3:")
+	}
+	transition(t, p, id, state.EvReturnNil, nil)
+	if got, _ := p.ListMarksV3(id); len(got) != 0 {
+		t.Fatalf("marks left after the terminal transition: %v", got)
 	}
 }

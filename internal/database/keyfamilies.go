@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -263,6 +263,7 @@ var keyFamilies = []KeyFamily{
 	{"opv3:ix:state:", "operations v3 index: exact census per state", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:ledger:", "operations v3 chunk ledgers", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:log:", "operations v3 run logs", "internal/database/pebble_store_ops_v3.go"},
+	{"opv3:mark:", "operations v3 keys an op marked with rc.Mark (a Fixer's applied rows), per run", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:meta:", "operations v3 per-state/per-def counters", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:prog:", "operations v3 run progress, checkpoint stamp and synced opv2 row hash (the small half of a run record)", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:q:", "operations v3 dispatch queue", "internal/database/pebble_store_ops_v3.go"},

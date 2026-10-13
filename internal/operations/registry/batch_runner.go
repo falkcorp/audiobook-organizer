@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -73,6 +73,7 @@ type batchStore interface {
 	GetChunkOffsetsV3(id string) ([]int32, bool, error)
 	CommitLedgerV3(id string, b database.LedgerBatch) error
 	GetLedgerV3(id string) (*database.Ledger, error)
+	ListMarksV3(id string) (map[string][]string, error)
 }
 
 var _ batchStore = (*database.PebbleStore)(nil)
@@ -315,7 +316,7 @@ func (b *batchRun) finish(sum ops.Summary) (json.RawMessage, error) {
 func (b *batchRun) summary() ops.Summary {
 	l := b.ledger.snapshot()
 	s := ops.Summary{Done: l.Items.Done, Failed: l.Items.Failed, Skipped: l.Items.Skipped,
-		Counters: l.Counters, Marks: l.Marks, ChunksDone: b.ledger.chunksDone, ChunksTotal: b.chunkTotal(),
+		Counters: l.Counters, Marks: b.ledger.allMarks(), ChunksDone: b.ledger.chunksDone, ChunksTotal: b.chunkTotal(),
 		Canceled: b.ctx.Err() != nil}
 	if b.total != nil {
 		s.Total = *b.total
@@ -343,12 +344,20 @@ func (b *batchRun) plan() error {
 		}
 		stored = l
 	}
+	var marks map[string][]string
+	if stored != nil {
+		m, err := b.cfg.store.ListMarksV3(b.cfg.opID)
+		if err != nil {
+			return fmt.Errorf("%s: read the run's marks: %w", b.cfg.opID, err)
+		}
+		marks = m
+	}
 	switch b.job.Order {
 	case ops.Snapshot:
-		return b.planSnapshot(stored)
+		return b.planSnapshot(stored, marks)
 	case ops.AppendOnly:
 		if stored != nil {
-			b.ledger = loadChunkLedger(stored)
+			b.ledger = loadChunkLedger(stored, marks)
 			b.size = max(stored.ChunkSize, 1)
 			b.skip = slices.Clone(b.ledger.l.Ranges)
 			b.priorChunks = b.ledger.chunksDone
@@ -364,7 +373,7 @@ func (b *batchRun) plan() error {
 
 // planSnapshot freezes the snapshot (first attempt, or ResumeFromZero) or
 // reloads it (resume), and queues every chunk the ledger does not record.
-func (b *batchRun) planSnapshot(stored *database.Ledger) error {
+func (b *batchRun) planSnapshot(stored *database.Ledger, marks map[string][]string) error {
 	set, err := b.snapshotItems()
 	if err != nil {
 		return err
@@ -382,7 +391,7 @@ func (b *batchRun) planSnapshot(stored *database.Ledger) error {
 		if t, ok, err := b.loadSnapshot(stored); err != nil {
 			return err
 		} else if ok {
-			b.table, b.ledger = t, loadChunkLedger(stored)
+			b.table, b.ledger = t, loadChunkLedger(stored, marks)
 			b.size = max(stored.ChunkSize, 1)
 		}
 	}
@@ -895,7 +904,7 @@ func (b *batchRun) ledgerLoop() {
 		led.ChunkCount = b.chunkTotal()
 		if b.cfg.store != nil && !closed {
 			err := b.cfg.store.CommitLedgerV3(b.cfg.opID, database.LedgerBatch{
-				Ledger: led, Leases: b.leaseCopy(), Progress: prog, ItemRows: send})
+				Ledger: led, Leases: b.leaseCopy(), Progress: prog, ItemRows: send, Marks: b.ledger.pendingMarks()})
 			if err != nil {
 				if errors.Is(err, database.ErrStaleTransition) || errors.Is(err, database.ErrRunNotFoundV3) {
 					closed = true
@@ -906,6 +915,7 @@ func (b *batchRun) ledgerLoop() {
 		}
 		rowsSent += len(send)
 		rows = nil
+		b.ledger.clearPending()
 		dirty, lastCommit = false, now
 		if b.cfg.rep != nil {
 			total := 0
