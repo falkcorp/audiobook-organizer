@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_rank.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c2618c2e-2a64-4761-bc76-c9bbd65b3792
 // last-edited: 2026-10-12
 //
@@ -25,12 +25,16 @@ import (
 // "Hardcover", "Open Library", "Google Books", "Wikipedia"). They are also the
 // <slug> in the book's metadata:source:<slug> tag.
 const (
-	SourceSlugAudible     = "audible"
-	SourceSlugAudnexus    = "audnexus"
-	SourceSlugHardcover   = "hardcover"
-	SourceSlugOpenLibrary = "open_library"
-	SourceSlugGoogleBooks = "google_books"
-	SourceSlugWikipedia   = "wikipedia"
+	SourceSlugAudible  = "audible"
+	SourceSlugAudnexus = "audnexus"
+	// SourceSlugAudibleCatalog is a book filled from a local-catalog candidate
+	// (metadata.CatalogSourceName): Audible's own product record as the
+	// harvest stored it, which can lag the live API.
+	SourceSlugAudibleCatalog = "audible_catalog"
+	SourceSlugHardcover      = "hardcover"
+	SourceSlugOpenLibrary    = "open_library"
+	SourceSlugGoogleBooks    = "google_books"
+	SourceSlugWikipedia      = "wikipedia"
 )
 
 // sourceRanks ranks every metadata provider; higher is better. Audible and
@@ -38,12 +42,15 @@ const (
 // replaces the other. A slug missing from this table is unranked: it is never
 // replaced and never replaces anything.
 var sourceRanks = map[string]int{
-	SourceSlugAudible:     50,
-	SourceSlugAudnexus:    50,
-	SourceSlugHardcover:   40,
-	SourceSlugOpenLibrary: 30,
-	SourceSlugGoogleBooks: 20,
-	SourceSlugWikipedia:   10,
+	SourceSlugAudible:  50,
+	SourceSlugAudnexus: 50,
+	// Just below Audible: the same records, but a stored copy. A live Audible
+	// (or Audnexus) answer outranks it and may replace a catalog fill.
+	SourceSlugAudibleCatalog: 45,
+	SourceSlugHardcover:      40,
+	SourceSlugOpenLibrary:    30,
+	SourceSlugGoogleBooks:    20,
+	SourceSlugWikipedia:      10,
 }
 
 // sourceSlugAliases maps spellings of a slug that older code or docs used to
@@ -76,10 +83,11 @@ func MetadataSourceSlug(name string) string {
 		return SourceSlugAudnexus
 	}
 	// The local catalog holds Audible's own product records, so a book filled
-	// from one is an Audible book: ranked like one, not an unranked source
-	// the metadata upgrade would never touch.
+	// from one is ranked next to Audible (SourceSlugAudibleCatalog) rather than
+	// as an unranked source nothing would ever replace; the tag tells the two
+	// apart.
 	if name == metadata.CatalogSourceName {
-		return SourceSlugAudible
+		return SourceSlugAudibleCatalog
 	}
 	slug := strings.ToLower(name)
 	slug = strings.ReplaceAll(slug, " ", "_")
