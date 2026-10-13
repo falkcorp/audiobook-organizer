@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.89.1
+// version: 2.90.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package server
 
@@ -786,12 +786,11 @@ func NewServer(store database.Store) *Server {
 	// available — same lifecycle as before.
 
 	// SERVER-THIN-RESIDUAL: build the ExtraOpsRegistrar before the opRegistrars
-	// loop so the 7 scheduler ops (scheduler_extra_ops.go shim) can delegate
+	// loop so the 3 scheduler ops (scheduler_extra_ops.go shim) can delegate
 	// to it. Fields available from wireServerFromContainer are set now;
-	// dedupEngine and activityWriter are back-filled below after
-	// their lazy initialisation. Closures see the updated values at op run time.
+	// dedupEngine is back-filled below after its lazy
+	// initialisation. Closures see the updated values at op run time.
 	server.extraOpsRegistrar = scheduler.NewExtraOpsRegistrar(resolvedStore, scheduler.ExtraOpsDeps{
-		DedupCache:           server.dedupCache,
 		MetadataFetchService: server.metadataFetchService,
 		ScanStandDown:        server,
 	})
@@ -1044,7 +1043,6 @@ func NewServer(store database.Store) *Server {
 		// extraOpsRegistrar back-fill + log.SetOutput global, both of
 		// which need the writer reference but not its Start.
 		if aw := server.activityWriter; aw != nil {
-			server.extraOpsRegistrar.Deps.ActivityWriter = aw
 			log.SetOutput(aw)
 			// Also route the slog default to a text handler writing to
 			// the activity writer (in addition to stderr). Without this,
