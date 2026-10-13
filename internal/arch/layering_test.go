@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -194,6 +194,7 @@ var layerOf = map[string]int{
 	"internal/watcher":                  3, // computed: max of imports=3, floored at 3
 	"internal/work":                     3, // computed: max of imports=2, floored at 3
 	"internal/writeback":                3, // table: domain
+	"pkg/ops":                           3, // computed: max of imports=3 (auth, undo), floored at 3
 
 	// Layer 4: jobs
 	"internal/authority/authoritybuild": 4, // computed: max of imports=4, floored at 3
