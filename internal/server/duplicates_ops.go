@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.26.0
+// version: 2.27.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -482,6 +482,18 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 	})
 }
 
+// SeriesMergeFailedIDsPrefix opens the list of series ids a failed
+// dedup.series-merge run did not merge: "<prefix>12 15]: merged 0 of 2 ...". The
+// web lane (useAuthorsLane) parses it; change both together. The list may be
+// empty ("[]"): every series merged and a later step (linking authors) failed.
+const SeriesMergeFailedIDsPrefix = "series merge left series ids ["
+
+// SeriesDedupFailedIDsPrefix is the same for dedup.series-dedup: the duplicate
+// series an apply kept. Nothing in the web lane parses it (its Merge All merges
+// the groups the reviewer confirmed, one by one), but the Dedup page and any
+// other client that polls the op read the failure text.
+const SeriesDedupFailedIDsPrefix = "series dedup left series ids ["
+
 // RegisterSeriesDedupOp registers the "dedup.series-dedup" v2 OperationDef.
 func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
@@ -551,7 +563,9 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 				return err
 			}
 
-			// A dry run wrote nothing, so there is nothing to invalidate.
+			// A dry run wrote nothing, so there is nothing to invalidate. An apply
+			// invalidates even when it kept some series (below): the ones it did
+			// merge are gone.
 			if !dryRun {
 				s.dedupCache.InvalidateAll()
 			}
@@ -577,6 +591,20 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 				}
 				activity.EmitInfo(s.activityWriter, opID, "dedup.series-dedup", "dedup",
 					msg, activity.AlwaysShow)
+			}
+			// An apply that kept a duplicate series is not a finished dedup. It
+			// used to return nil here -- the refusal sat in result.Errors, the op
+			// logged "complete", and a client taking `completed` at its word
+			// treated the library as deduplicated while the series was still
+			// there. The merged ones stay merged (no rollback), the cache is
+			// already invalidated, and the text names what was kept. A preview
+			// deletes nothing, so it has nothing left behind (LeftIDs is empty).
+			if len(result.LeftIDs) > 0 {
+				op.SetStatus("failed")
+				detail := strings.Join(result.Errors[:min(len(result.Errors), 3)], "; ")
+				return fmt.Errorf("%s%s]: merged %d series, kept %d with %d error(s): %s",
+					SeriesDedupFailedIDsPrefix, joinInts(result.LeftIDs),
+					result.TotalMerged, len(result.LeftIDs), len(result.Errors), detail)
 			}
 			return nil
 		},
@@ -771,7 +799,11 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 				if len(result.Errors) > 10 {
 					detail += fmt.Sprintf(" (and %d more)", len(result.Errors)-10)
 				}
-				return fmt.Errorf("series merge merged %d of %d series with %d error(s): %s",
+				// The id list leads: it is the part a client parses (see
+				// SeriesMergeFailedIDsPrefix). It is empty when every series merged
+				// and a later step failed.
+				return fmt.Errorf("%s%s]: series merge merged %d of %d series with %d error(s): %s",
+					SeriesMergeFailedIDsPrefix, joinInts(result.LeftIDs),
 					result.MergedCount, len(p.MergeIDs), len(result.Errors), detail)
 			}
 
