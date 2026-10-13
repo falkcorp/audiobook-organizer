@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.clusters.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: a3d8f167-92c4-4e0b-b5a1-6f2e8c0d4b79
 // last-edited: 2026-10-13
 //
@@ -13,6 +13,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { DupesPanel } from './DupesPanel';
+import { useDupesLabels } from './lanes/useDupesLabels';
 import { useDupesLane } from './lanes/useDupesLane';
 
 vi.mock('../../services/api');
@@ -61,6 +62,7 @@ beforeEach(() => {
 
 function Harness({ layer = null }: { layer?: 'embedding' | null }) {
   const dupes = useDupesLane(toast, true, { band: 'HIGH', entityId: null, layer }, true);
+  const labels = useDupesLabels('queue');
   return (
     <DupesPanel
       dupes={dupes}
@@ -69,6 +71,7 @@ function Harness({ layer = null }: { layer?: 'embedding' | null }) {
       onToggleExpand={() => {}}
       subView="queue"
       onSubViewChange={() => {}}
+      labels={labels}
     />
   );
 }

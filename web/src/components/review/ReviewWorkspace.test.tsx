@@ -1,9 +1,9 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.21.0
+// version: 1.22.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-13
 
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -1243,5 +1243,106 @@ describe('the dupes lane sub-views (Queue | Labels | Suspicious)', () => {
     expect(await screen.findByTestId('dupes-labels-view')).toBeInTheDocument();
     expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=regroup');
+  });
+
+  it('keeps the dupes lane silent on Labels, and fetches once when Queue is chosen', async () => {
+    const user = userEvent.setup();
+    stubLabelsApi();
+    renderWithLocation('/review?lane=dupes&view=labels');
+    expect(await screen.findByText('Book One')).toBeInTheDocument();
+
+    // The pair list is not on screen: no fetch, and its j/k/m/d keys are unbound.
+    fireEvent.keyDown(window, { key: 'j' });
+    fireEvent.keyDown(window, { key: 'd' });
+    expect(api.getDedupCandidates).not.toHaveBeenCalled();
+
+    await user.click(subView('queue'));
+
+    await waitFor(() => expect(api.getDedupCandidates).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    await act(async () => {});
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Export duplicates off the Queue', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    stubLabelsApi();
+    renderWithLocation('/review?lane=dupes&view=labels');
+    await screen.findByTestId('dupes-labels-view');
+
+    await user.click(await screen.findByTestId('command-menu-queue'));
+
+    expect(await screen.findByTestId('command-export-dupes-csv')).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByTestId('command-export-dupes-json')).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+  });
+
+  it('keeps the Labels filter and view when the reviewer visits another lane and returns', async () => {
+    const user = userEvent.setup();
+    const fetchMock = stubLabelsApi();
+    renderWithLocation('/review?lane=dupes&view=labels');
+    const strip = await screen.findByTestId('dupes-labels-stats');
+    await user.click(within(strip).getByRole('button', { name: 'unsure: 1' }));
+    await waitFor(() =>
+      expect(within(strip).getByRole('button', { name: 'unsure: 1' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+    );
+
+    await user.click(screen.getByTestId('lane-tab-regroup'));
+    expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
+    await user.click(screen.getByTestId('lane-tab-dupes'));
+
+    expect(await screen.findByTestId('dupes-labels-view')).toBeInTheDocument();
+    isSelected('labels');
+    const listUrls = fetchMock.mock.calls
+      .map(([u]) => String(u))
+      .filter((u) => u.includes('/dedup/labels?'));
+    expect(listUrls.at(-1)).toContain('label=unsure');
+    expect(
+      within(await screen.findByTestId('dupes-labels-stats')).getByRole('button', {
+        name: 'unsure: 1',
+      })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows the Queue when the one-button run finishes, not the label view it was started from', async () => {
+    const user = userEvent.setup();
+    stubLabelsApi();
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '',
+      dedup: { auto_merge_enabled: false, llm_auto_merge_high_confidence: false },
+    } as unknown as api.Config);
+    vi.mocked(api.startDedupRunAll).mockResolvedValue({ id: 'run-1' } as api.Operation);
+    vi.mocked(api.getOperationStatus).mockResolvedValue({
+      id: 'run-1',
+      status: 'completed',
+      progress: 5000,
+      total: 5000,
+      message: '',
+    } as api.Operation);
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: {
+        steps: [],
+        skipped: null,
+        rescore_preview: { inspected: 12, skipped: 0, changed: 4, applied: false, band_deltas: {} },
+      },
+    });
+    renderWithLocation('/review?lane=dupes&view=suspicious');
+    await screen.findByTestId('dupes-labels-view');
+    isSelected('suspicious');
+
+    await user.click(screen.getByTestId('command-menu-dedup'));
+    await user.click(await screen.findByTestId('command-find-all-duplicates'));
+
+    await waitFor(() => isSelected('queue'));
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
   });
 });

@@ -1,7 +1,7 @@
 // file: internal/database/dedup_label_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 28cfcafd-ac95-4175-8fe7-b0fc46bd05bb
-// last-edited: 2026-10-03
+// last-edited: 2026-10-13
 
 package database
 
@@ -89,5 +89,46 @@ func TestLabeledExample_AbsentAndOffset(t *testing.T) {
 	}
 	if len(page) != 1 {
 		t.Fatalf("list with offset: expected 1 row, got %d", len(page))
+	}
+}
+
+// The label stats report by_label["unlabeled"] as total minus the three decided
+// labels, and dataset backfill writes undecided rows with Label=="". The
+// "unlabeled" filter must select exactly that set, or the stats chip opens a
+// table that is empty while the chip says N.
+func TestLabeledExample_UnlabeledFilterMatchesStatsDefinition(t *testing.T) {
+	es := newTestLabelStore(t)
+	for i, label := range []string{"true_dup", "not_dup", "unsure", "", "", "unlabeled"} {
+		ex := LabeledExample{
+			CandidateID: int64(i + 1),
+			EntityAID:   "a",
+			EntityBID:   "b",
+			Layer:       "exact",
+			Label:       label,
+			LabelSource: "rule",
+		}
+		if err := es.UpsertLabeledExample(ex); err != nil {
+			t.Fatalf("upsert %d: %v", i, err)
+		}
+	}
+
+	n, err := es.CountLabeledExamples(LabeledExampleFilter{Label: LabelFilterUnlabeled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("unlabeled count = %d, want 3 (two empty + one literal)", n)
+	}
+	list, err := es.ListLabeledExamples(LabeledExampleFilter{Label: LabelFilterUnlabeled, Limit: 10})
+	if err != nil || len(list) != 3 {
+		t.Fatalf("unlabeled list: err=%v len=%d", err, len(list))
+	}
+	for _, ex := range list {
+		if isDecidedLabel(ex.Label) {
+			t.Fatalf("decided label %q in the unlabeled list", ex.Label)
+		}
+	}
+	if n, _ := es.CountLabeledExamples(LabeledExampleFilter{Label: "unsure"}); n != 1 {
+		t.Fatalf("unsure count = %d, want 1", n)
 	}
 }

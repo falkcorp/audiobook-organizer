@@ -1,7 +1,7 @@
 // file: internal/database/dedup_label.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 5a0319bd-8bc4-4135-91e6-dfd43628dcc5
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package database
 
@@ -151,8 +151,23 @@ type LabeledExampleFilter struct {
 	Offset            int
 }
 
+// LabelFilterUnlabeled is the LabeledExampleFilter.Label value that selects the
+// rows carrying no decision. Dataset backfill writes such rows with Label=="" (a
+// candidate with features but nothing to say yet), and the label stats report
+// them as by_label["unlabeled"] = total - (true_dup + not_dup + unsure); this
+// filter selects exactly that set, so the count and the rows it opens agree.
+const LabelFilterUnlabeled = "unlabeled"
+
+func isDecidedLabel(l string) bool {
+	return l == "true_dup" || l == "not_dup" || l == "unsure"
+}
+
 func (f LabeledExampleFilter) matches(ex *LabeledExample) bool {
-	if f.Label != "" && ex.Label != f.Label {
+	if f.Label == LabelFilterUnlabeled {
+		if isDecidedLabel(ex.Label) {
+			return false
+		}
+	} else if f.Label != "" && ex.Label != f.Label {
 		return false
 	}
 	if f.LabelSource != "" && ex.LabelSource != f.LabelSource {

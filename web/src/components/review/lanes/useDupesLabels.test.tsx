@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLabels.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7c4a19-8e53-4d60-b1a8-6c0e9d3b5f47
 // last-edited: 2026-10-13
 //
@@ -15,12 +15,30 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../hooks/useDebouncedSearch', () => ({
-  useDebouncedSearch: (value: string) => value,
-}));
+// Pass-through by default. `held` freezes the settled value where it is, which is
+// what the real hook looks like during its 300ms wait: the box has moved on, the
+// settled twin has not. A test releases it and re-renders, so nothing waits on a
+// timer.
+const debounce = vi.hoisted(() => ({ held: false }));
+vi.mock('../../../hooks/useDebouncedSearch', async () => {
+  const { useRef } = await import('react');
+  return {
+    useDebouncedSearch: (value: string) => {
+      const settled = useRef('');
+      if (!debounce.held) settled.current = value;
+      return settled.current;
+    },
+  };
+});
+vi.mock('../../../utils/apiFetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../utils/apiFetch')>();
+  return { ...actual, apiFetch: vi.fn(actual.apiFetch) };
+});
 
+import { ApiTimeoutError, apiFetch } from '../../../utils/apiFetch';
 import {
   LABELS_PAGE,
+  LABELS_TIMEOUT_MS,
   parseDupesSubView,
   useDupesLabels,
   type DupesSubView,
@@ -85,9 +103,11 @@ beforeEach(() => {
     return json({ data: {} });
   });
   vi.stubGlobal('fetch', fetchMock);
+  vi.mocked(apiFetch).mockClear();
 });
 
 afterEach(() => {
+  debounce.held = false;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -289,5 +309,225 @@ describe('useDupesLabels', () => {
     rerender({ view: 'queue' });
 
     expect(signal!.aborted).toBe(true);
+  });
+
+  it('shows loading, not the previous page, while a changed filter is fetched', async () => {
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+
+    let release!: (r: Response) => void;
+    server.labels = () => new Promise<Response>((resolve) => (release = resolve));
+    act(() => result.current.setLabelFilter('true_dup'));
+
+    await waitFor(() => expect(result.current.status).toBe('loading'));
+    expect(result.current.rows).toEqual([]);
+
+    release(await json({ data: { labels: [row(9, { label: 'true_dup' })], total: 1 } }));
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.rows.map((r) => r.candidate_id)).toEqual([9]);
+  });
+
+  it('sends no request for a typed band until the debounce settles, then exactly one', async () => {
+    debounce.held = true;
+    const { result, rerender } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    const before = listUrls().length;
+
+    act(() => result.current.setBandInput('title_author'));
+    await act(async () => {});
+    expect(result.current.bandInput).toBe('title_author');
+    expect(result.current.filters.band).toBe('');
+    expect(listUrls()).toHaveLength(before);
+
+    debounce.held = false;
+    rerender({ view: 'labels' });
+    await waitFor(() => expect(listUrls()).toHaveLength(before + 1));
+    expect(listUrls().at(-1)).toContain('band=title_author');
+    await act(async () => {});
+    expect(listUrls()).toHaveLength(before + 1);
+  });
+
+  it('showOnly while a band is applied does not send a request with the old band', async () => {
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.setBandInput('HIGH'));
+    await waitFor(() => expect(listUrls().at(-1)).toContain('band=HIGH'));
+
+    // The settled twin lags the emptied box, as the real debounce does.
+    debounce.held = true;
+    const before = listUrls().length;
+    act(() => result.current.showOnly({ label: 'unsure' }));
+    await waitFor(() => expect(listUrls().length).toBeGreaterThan(before));
+    await act(async () => {});
+
+    const sent = listUrls().slice(before);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('label=unsure');
+    expect(sent[0]).not.toContain('band=');
+  });
+
+  it('drops an overridden row that no longer matches the label filter, and the total follows', async () => {
+    server.labels = () => json({ data: { labels: [row(1), row(2)], total: 2 } });
+    const { result } = mount('labels');
+    act(() => result.current.setLabelFilter('unsure'));
+    await waitFor(() => expect(listUrls().at(-1)).toContain('label=unsure'));
+    await waitFor(() => expect(result.current.rows).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.override(1, 'not_dup');
+    });
+
+    expect(result.current.rows.map((r) => r.candidate_id)).toEqual([2]);
+    expect(result.current.total).toBe(1);
+  });
+
+  it('keeps an overridden row that still matches the filters', async () => {
+    const { result } = mount('labels');
+    act(() => result.current.setSourceFilter('human'));
+    await waitFor(() => expect(listUrls().at(-1)).toContain('label_source=human'));
+    await waitFor(() => expect(result.current.rows).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.override(1, 'not_dup');
+    });
+
+    expect(result.current.rows).toHaveLength(2);
+    expect(result.current.total).toBe(2);
+  });
+
+  it('refetches when an override empties a page that has more rows behind it', async () => {
+    server.labels = () => json({ data: { labels: [row(1)], total: 5 } });
+    const { result } = mount('labels');
+    act(() => result.current.setLabelFilter('unsure'));
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    await waitFor(() => expect(listUrls().at(-1)).toContain('label=unsure'));
+    const before = listUrls().length;
+    server.labels = () => json({ data: { labels: [row(4)], total: 4 } });
+
+    await act(async () => {
+      await result.current.override(1, 'not_dup');
+    });
+
+    await waitFor(() => expect(listUrls().length).toBe(before + 1));
+    await waitFor(() => expect(result.current.rows.map((r) => r.candidate_id)).toEqual([4]));
+    expect(result.current.total).toBe(4);
+  });
+
+  it('keeps the suspicious queue total, and refills the page when overrides empty it', async () => {
+    server.suspicious = () => json({ data: { labels: [suspicious(7)], total: 3 } });
+    const { result } = mount('suspicious');
+    await waitFor(() => expect(result.current.suspiciousStatus).toBe('populated'));
+    expect(result.current.suspiciousTotal).toBe(3);
+    const susp = () => urls().filter((u) => u.includes('/labels/suspicious')).length;
+    const before = susp();
+    server.suspicious = () => json({ data: { labels: [suspicious(8)], total: 2 } });
+
+    await act(async () => {
+      await result.current.overrideSuspicious(7, 'true_dup');
+    });
+
+    // Not "empty": 2 are still waiting, so the page is fetched again.
+    await waitFor(() => expect(susp()).toBe(before + 1));
+    await waitFor(() =>
+      expect(result.current.suspiciousRows.map((r) => r.candidate_id)).toEqual([8])
+    );
+    expect(result.current.suspiciousTotal).toBe(2);
+  });
+
+  it('sends every read with the lane timeout', async () => {
+    const stats = mount('suspicious');
+    await waitFor(() => expect(stats.result.current.suspiciousStatus).toBe('populated'));
+    const list = mount('labels');
+    await waitFor(() => expect(list.result.current.status).toBe('populated'));
+
+    const reads = vi.mocked(apiFetch).mock.calls.filter(([, o]) => !o?.method);
+    expect(reads.length).toBeGreaterThanOrEqual(3);
+    for (const [, options] of reads) expect(options?.timeoutMs).toBe(LABELS_TIMEOUT_MS);
+  });
+
+  it('turns a timed-out read into the error state', async () => {
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiTimeoutError('/api/v1/dedup/labels/stats', LABELS_TIMEOUT_MS)
+    );
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.stats.state).toBe('error'));
+    expect(result.current.stats.state === 'error' && result.current.stats.message).toMatch(
+      /timed out/i
+    );
+    // Each read fails on its own: the list is unaffected.
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+  });
+
+  it('reloadStats asks for the counts again', async () => {
+    server.stats = () => json({}, 503);
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.stats.state).toBe('error'));
+
+    server.stats = () => json({ data: { total: 1, by_label: {}, by_source: {} } });
+    act(() => result.current.reloadStats());
+
+    await waitFor(() => expect(result.current.stats.state).toBe('ready'));
+  });
+
+  it('disables a candidate while its override is in flight and sends one POST', async () => {
+    let release!: (r: Response) => void;
+    server.override = () => new Promise<Response>((resolve) => (release = resolve));
+    const { result } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.override(1, 'not_dup');
+    });
+    await waitFor(() => expect(result.current.pending.has(1)).toBe(true));
+    await act(async () => {
+      await result.current.override(1, 'true_dup');
+    });
+    release(await json({ data: { label: 'not_dup', label_source: 'human' } }));
+    await act(async () => {
+      await first;
+    });
+
+    const posts = fetchMock.mock.calls.filter(([u]) => String(u).includes('/1/override'));
+    expect(posts).toHaveLength(1);
+    expect(result.current.pending.size).toBe(0);
+  });
+
+  it('shows a failed override only on the sub-view it happened on', async () => {
+    server.override = () => json({}, 500);
+    const { result, rerender } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    await act(async () => {
+      await result.current.override(1, 'not_dup');
+    });
+    expect(result.current.actionError).toBe('HTTP 500');
+
+    rerender({ view: 'suspicious' });
+    expect(result.current.actionError).toBeNull();
+    rerender({ view: 'labels' });
+    expect(result.current.actionError).toBe('HTTP 500');
+  });
+
+  it('lets an override finish after the view is left: the write is never aborted', async () => {
+    let release!: (r: Response) => void;
+    server.override = () => new Promise<Response>((resolve) => (release = resolve));
+    const { result, rerender } = mount('labels');
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.override(1, 'not_dup');
+    });
+    await waitFor(() => expect(result.current.pending.has(1)).toBe(true));
+
+    rerender({ view: 'queue' });
+    release(await json({ data: { label: 'not_dup', label_source: 'human' } }));
+    await act(async () => {
+      await done;
+    });
+
+    const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/1/override'));
+    expect((call![1] as RequestInit).signal).toBeFalsy();
+    expect(result.current.pending.size).toBe(0);
+    expect(result.current.actionError).toBeNull();
   });
 });

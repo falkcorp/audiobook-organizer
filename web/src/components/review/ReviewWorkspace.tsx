@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.21.0
+// version: 1.22.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-13
 //
@@ -64,7 +64,7 @@ import { coverFullSizeUrl } from '../../utils/coverUrl';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import { normalizeViewMode, type SpineViewMode } from './spine/viewMode';
 import { DupesPanel } from './DupesPanel';
-import { parseDupesSubView, type DupesSubView } from './lanes/useDupesLabels';
+import { parseDupesSubView, useDupesLabels, type DupesSubView } from './lanes/useDupesLabels';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
 import { MetadataPanel } from './MetadataPanel';
@@ -205,6 +205,10 @@ export function ReviewWorkspace() {
   );
   // The third view position is the dupes lane's Clusters view; the lane makes
   // its two extra fetches only while that is showing.
+  // Owned here, not in DupesPanel: the panel unmounts with its lane, and the
+  // Labels filters, page and any override in flight should outlive that. Fetches
+  // only while Labels or Suspicious is the visible sub-view of the dupes lane.
+  const dupesLabels = useDupesLabels(lane === 'dupes' ? dupesSubView : 'queue');
   // Active on the Queue sub-view only: Labels and Suspicious are not the pair
   // list, and the lane's keyboard shortcuts must not act on pairs that are not
   // on screen.
@@ -300,9 +304,21 @@ export function ReviewWorkspace() {
   const refreshDupes = dupes.refresh;
   const showDupes = useCallback(() => {
     setLane('dupes');
+    // The run's results are pairs: show the Queue, not whichever label view the
+    // reviewer last left the lane on.
+    setDupesSubView('queue');
     refreshDupes();
   }, [refreshDupes]);
   const dedupPipeline = useDedupPipeline({ toast, onFinished: showDupes });
+
+  // The export is of the pair Queue; on Labels and Suspicious it would export
+  // rows the reviewer is not looking at.
+  const dupesExportDisabledReason =
+    lane !== 'dupes'
+      ? 'Switch to the Dupes lane to export duplicates.'
+      : dupesSubView !== 'queue'
+        ? 'Switch to the Queue view to export duplicates.'
+        : undefined;
 
   const menus: CommandMenu[] = useMemo(
     () => [
@@ -615,16 +631,14 @@ export function ReviewWorkspace() {
             id: 'export-dupes-csv',
             label: 'Export duplicates (CSV)',
             scope: 'view',
-            disabledReason:
-              lane === 'dupes' ? undefined : 'Switch to the Dupes lane to export duplicates.',
+            disabledReason: dupesExportDisabledReason,
             run: () => exportDupes('csv'),
           },
           {
             id: 'export-dupes-json',
             label: 'Export duplicates (JSON)',
             scope: 'view',
-            disabledReason:
-              lane === 'dupes' ? undefined : 'Switch to the Dupes lane to export duplicates.',
+            disabledReason: dupesExportDisabledReason,
             run: () => exportDupes('json'),
           },
           {
@@ -654,6 +668,7 @@ export function ReviewWorkspace() {
       setDupesSubView,
       toast,
       lane,
+      dupesExportDisabledReason,
       exportDupes,
     ]
   );
@@ -734,6 +749,7 @@ export function ReviewWorkspace() {
           onToggleExpand={toggleDupesExpanded}
           subView={dupesSubView}
           onSubViewChange={setDupesSubView}
+          labels={dupesLabels}
         />
       ) : unported ? (
         <Box sx={{ p: 3 }} data-testid={`lane-unported-${lane}`}>

@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesLabelsView.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4e1c83-6d27-4b05-b3f8-2c7d0e5a6914
 // last-edited: 2026-10-13
 //
@@ -119,6 +119,9 @@ function BookCell({
   );
 }
 
+const evidenceId = (candidateId: number) => `dupes-label-evidence-${candidateId}`;
+const whyText = (r: LabeledExample) => (r.score ? `${Math.round(r.score)} · Why` : 'Why');
+
 // fmtDuration renders seconds as a compact h:mm label ("—" when unknown).
 function fmtDuration(sec?: number): string {
   if (!sec || sec <= 0) return '—';
@@ -133,6 +136,8 @@ function fmtDuration(sec?: number): string {
 // success, the row is removed from the queue by the hook.
 function SuspiciousQueue({
   rows,
+  total,
+  pending,
   status,
   error,
   pathVars,
@@ -141,6 +146,8 @@ function SuspiciousQueue({
   onRetry,
 }: {
   rows: SuspiciousExample[];
+  total: number;
+  pending: ReadonlySet<number>;
   status: DupesLabels['suspiciousStatus'];
   error: string | null;
   pathVars: PathVar[];
@@ -161,6 +168,11 @@ function SuspiciousQueue({
         ASIN/path, CERTAIN/HIGH band, cosine&nbsp;≥&nbsp;0.95, or the ms/sec duration-ratio
         signature). Each override becomes a permanent human gold label.
       </Typography>
+      {status === 'populated' && (
+        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
+          {rows.length} of {total} suspicious
+        </Typography>
+      )}
       {status === 'error' && (
         <Alert
           severity="error"
@@ -262,6 +274,7 @@ function SuspiciousQueue({
                         size="small"
                         color="success"
                         variant="outlined"
+                        disabled={pending.has(r.candidate_id)}
                         onClick={() => onOverride(r.candidate_id, 'true_dup')}
                       >
                         Mark true_dup
@@ -270,6 +283,7 @@ function SuspiciousQueue({
                         size="small"
                         color="error"
                         variant="outlined"
+                        disabled={pending.has(r.candidate_id)}
                         onClick={() => onOverride(r.candidate_id, 'not_dup')}
                       >
                         Confirm not_dup
@@ -299,7 +313,7 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
   const pathVars = usePathVars();
   const openBook = useCallback((bookId: string) => navigate(`/library/${bookId}`), [navigate]);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const { override } = labels;
+  const { override, pending } = labels;
 
   const columns = useMemo<ColumnDef<LabeledExample>[]>(
     () => [
@@ -356,10 +370,12 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
           <Button
             size="small"
             aria-expanded={expandedId === r.candidate_id}
-            aria-label={`Why pair ${r.candidate_id} was scored this way`}
+            aria-controls={expandedId === r.candidate_id ? evidenceId(r.candidate_id) : undefined}
+            // The accessible name starts with the visible text (WCAG 2.5.3).
+            aria-label={`${whyText(r)}, score breakdown for pair ${r.candidate_id}`}
             onClick={() => setExpandedId((cur) => (cur === r.candidate_id ? null : r.candidate_id))}
           >
-            {r.score ? `${Math.round(r.score)} · Why` : 'Why'}
+            {whyText(r)}
           </Button>
         ),
       },
@@ -400,11 +416,15 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
         defaultWidth: 220,
         sortValue: (r) => r.label,
         render: (r) => (
-          <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
+          <LabelToggle
+            value={r.label}
+            disabled={pending.has(r.candidate_id)}
+            onChange={(label) => void override(r.candidate_id, label)}
+          />
         ),
       },
     ],
-    [openBook, pathVars, override, expandedId]
+    [openBook, pathVars, override, pending, expandedId]
   );
 
   const {
@@ -420,12 +440,23 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
     sortRows,
     resetColumns,
   } = useConfigurableTable<LabeledExample>({
-    storageKey: 'dedup-labels',
+    // Not 'dedup-labels': the old Gold Labels page saves its visible-column list
+    // under that key, and a list saved without this view's Score column hides
+    // the column here (and one saved here would hide the page's own columns).
+    storageKey: 'review-dupes-labels',
     columns,
     defaultSortField: 'label',
   });
 
   const { stats, filters, offset, total } = labels;
+
+  // Which count (if any) the table is currently showing the rows of: the
+  // filters are exactly that one count's, and no band is narrowing them.
+  const onLabels = view === 'labels';
+  const noBand = !filters.band;
+  const totalApplied = onLabels && noBand && !filters.label && !filters.source;
+  const labelApplied = (k: string) => onLabels && noBand && filters.label === k && !filters.source;
+  const sourceApplied = (k: string) => onLabels && noBand && filters.source === k && !filters.label;
 
   // A count shows the rows it counts: exactly that filter, on the Labels view.
   const showCount = (patch: Parameters<DupesLabels['showOnly']>[0]) => {
@@ -434,7 +465,7 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
   };
 
   return (
-    <Box sx={{ p: 3, overflow: 'auto' }} data-testid="dupes-labels-view">
+    <Box sx={{ p: 3, overflow: 'auto', flex: 1, minHeight: 0 }} data-testid="dupes-labels-view">
       <Typography
         variant="body2"
         sx={{
@@ -452,7 +483,15 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
         </Typography>
       )}
       {stats.state === 'error' && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={labels.reloadStats}>
+              Retry counts
+            </Button>
+          }
+        >
           Label counts unavailable: {stats.message}
         </Alert>
       )}
@@ -463,14 +502,20 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
           sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}
           data-testid="dupes-labels-stats"
         >
-          <Chip label={`total ${stats.value.total}`} onClick={() => showCount({})} />
+          <Chip
+            label={`total ${stats.value.total}`}
+            variant={totalApplied ? 'filled' : 'outlined'}
+            aria-pressed={totalApplied}
+            onClick={() => showCount({})}
+          />
           {Object.entries(stats.value.by_label).map(([k, v]) => (
             <Chip
               key={k}
               size="small"
               color={labelColor(k)}
               label={`${k}: ${v}`}
-              variant="outlined"
+              variant={labelApplied(k) ? 'filled' : 'outlined'}
+              aria-pressed={labelApplied(k)}
               onClick={() => showCount({ label: k })}
             />
           ))}
@@ -482,6 +527,8 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
                 size="small"
                 color={sourceColor(k)}
                 label={`${k}: ${v}`}
+                variant={sourceApplied(k) ? 'filled' : 'outlined'}
+                aria-pressed={sourceApplied(k)}
                 onClick={() => showCount({ source: k })}
               />
             ))}
@@ -510,6 +557,7 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
                 <MenuItem value="true_dup">true_dup</MenuItem>
                 <MenuItem value="not_dup">not_dup</MenuItem>
                 <MenuItem value="unsure">unsure</MenuItem>
+                <MenuItem value="unlabeled">unlabeled</MenuItem>
               </Select>
             </FormControl>
             <FormControl size="small" sx={{ minWidth: 180 }}>
@@ -525,6 +573,7 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
                 <MenuItem value="human">human (gold)</MenuItem>
                 <MenuItem value="auto_high_conf">auto_high_conf</MenuItem>
                 <MenuItem value="rule">rule</MenuItem>
+                <MenuItem value="itunes_attr">itunes_attr</MenuItem>
                 <MenuItem value="llm_judge">llm_judge</MenuItem>
               </Select>
             </FormControl>
@@ -616,7 +665,10 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
                       </TableRow>
                       {expandedId === r.candidate_id && (
                         <TableRow>
-                          <TableCell colSpan={visibleColumns.length}>
+                          <TableCell
+                            colSpan={visibleColumns.length}
+                            id={evidenceId(r.candidate_id)}
+                          >
                             <EvidencePanel evidence={dedupEvidence(r.score_breakdown, r.layer)} />
                           </TableCell>
                         </TableRow>
@@ -659,6 +711,8 @@ export function DupesLabelsView({ view, labels, onSelectView }: DupesLabelsViewP
       {view === 'suspicious' && (
         <SuspiciousQueue
           rows={labels.suspiciousRows}
+          total={labels.suspiciousTotal}
+          pending={labels.pending}
           status={labels.suspiciousStatus}
           error={labels.suspiciousError}
           pathVars={pathVars}
