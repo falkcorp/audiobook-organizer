@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
 // last-edited: 2026-10-13
 
@@ -736,4 +736,117 @@ func TestLiveWriterNeedsHistory(t *testing.T) {
 	if row.Status != "failed" || row.ErrorMessage == nil || ran.Load() != 0 {
 		t.Fatalf("live run without a history recorder: %s ran=%d", row.Status, ran.Load())
 	}
+}
+
+// TestStopDecidesFinishLikeTheRegistry: the batch runner leaves Finish to the
+// resumed attempt exactly when the registry records the stop as a resumable
+// interruption (stopResumes). A shutdown of a ResumeContinue batch skips
+// Finish and the boot resume runs it once over all 40 items; a user cancel
+// of the same def runs Finish in the stopped attempt and is never resumed.
+func TestStopDecidesFinishLikeTheRegistry(t *testing.T) {
+	const size, n = 10, 40
+	type probe struct {
+		block    atomic.Bool
+		parked   atomic.Int32
+		finished atomic.Int32
+		lastDone atomic.Int64
+	}
+	cont := ops.ResumeContinue
+	mkDef := func(p *probe) ops.Definition {
+		return ops.Batch("test.stopper", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
+			Common: ops.Common{Title: "stopper", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, Resume: &cont},
+			Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
+				return ops.Source[int]{Items: seq(n), Key: itemKey}, nil
+			},
+			Item: func(rc *ops.ItemRC, _ ops.NoParams, i int) error {
+				if i >= 2*size && p.block.Load() {
+					p.parked.Add(1)
+					<-rc.Context().Done()
+					return rc.Context().Err()
+				}
+				return nil
+			},
+			Finish: func(_ *ops.RC, _ ops.NoParams, s ops.Summary) (ops.NoResult, error) {
+				p.finished.Add(1)
+				p.lastDone.Store(s.Done)
+				return ops.NoResult{}, nil
+			},
+			Concurrency: ops.Network(2, "two chunks finish, two park"),
+			ChunkSize:   size,
+		})
+	}
+	start := func(t *testing.T, store *database.PebbleStore, p *probe) *Registry {
+		r := NewWithOptions(store, slog.Default(), 2, Options{WatchdogInterval: time.Hour, SweepInterval: time.Hour})
+		if err := Register(r, "test", mkDef(p)); err != nil {
+			t.Fatal(err)
+		}
+		r.Start(context.Background())
+		return r
+	}
+	awaitParked := func(t *testing.T, p *probe) {
+		deadline := time.Now().Add(10 * time.Second)
+		for p.parked.Load() < 2 {
+			if time.Now().After(deadline) {
+				t.Fatal("workers never parked")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	shutdown := func(t *testing.T, r *Registry) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.Shutdown(ctx); err != nil {
+			t.Fatalf("shutdown: %v", err)
+		}
+	}
+
+	t.Run("shutdown resumes and finishes once", func(t *testing.T) {
+		store := newPebbleV3(t)
+		p := &probe{}
+		p.block.Store(true)
+		r1 := start(t, store, p)
+		opID, err := r1.EnqueueOp(context.Background(), "test.stopper", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		awaitParked(t, p)
+		shutdown(t, r1)
+		if p.finished.Load() != 0 {
+			t.Fatal("Finish ran in the attempt the shutdown stopped; the resume runs it again")
+		}
+		if row, _ := store.GetOperationV2(opID); row == nil || row.Status != "interrupted_quiesced" {
+			t.Fatalf("after shutdown: %+v", row)
+		}
+		p.block.Store(false)
+		r2 := start(t, store, p)
+		defer shutdown(t, r2)
+		if row := awaitTerminal(t, store, opID); row.Status != "completed" {
+			t.Fatalf("resumed run: %s %v", row.Status, row.ErrorMessage)
+		}
+		if p.finished.Load() != 1 || p.lastDone.Load() != n {
+			t.Fatalf("Finish ran %d times, last Done %d; want once over %d", p.finished.Load(), p.lastDone.Load(), n)
+		}
+	})
+
+	t.Run("user cancel finishes in the stopped attempt", func(t *testing.T) {
+		store := newPebbleV3(t)
+		p := &probe{}
+		p.block.Store(true)
+		r := start(t, store, p)
+		defer shutdown(t, r)
+		opID, err := r.EnqueueOp(context.Background(), "test.stopper", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		awaitParked(t, p)
+		if err := r.Cancel(opID); err != nil {
+			t.Fatal(err)
+		}
+		if row := awaitTerminal(t, store, opID); row.Status != "canceled" {
+			t.Fatalf("canceled run: %s", row.Status)
+		}
+		if p.finished.Load() != 1 {
+			t.Fatalf("Finish ran %d times after a user cancel, want 1", p.finished.Load())
+		}
+	})
 }

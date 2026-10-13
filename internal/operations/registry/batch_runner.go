@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -93,10 +93,15 @@ type batchConfig struct {
 	dirty dirtySetStore // required for a DirtySet source
 	rep   Reporter      // nil in unit tests
 	log   *slog.Logger
-	// resumable: a Shutdown resumes this run (ResumeRestart or ResumeAsk),
-	// so a shutdown-stopped attempt skips Finish; the resumed attempt runs it
-	// once, over every attempt's ledger.
-	resumable bool
+	// resumes reports, once the run's context is done, whether the registry
+	// will record this stop as an interrupted run that the next boot resumes
+	// under the same op id (Registry.stopResumes, the same classification
+	// finalStatusForCanceledRun writes). Such an attempt skips Finish; the
+	// resumed attempt runs it once, over every attempt's ledger. Asking the
+	// registry, rather than reading the cancel cause here, keeps the two
+	// decisions from disagreeing: a skipped Finish on a run that is never
+	// resumed, or a Finish here and again on the resume. nil: never resumes.
+	resumes func() bool
 	// stuckAfter is the heartbeat age at which a worker is reported stuck
 	// when the job has no ItemTimeout (the def Timeout/6).
 	stuckAfter  time.Duration
@@ -255,6 +260,9 @@ func runBatch(ctx context.Context, cfg batchConfig) (ops.Summary, json.RawMessag
 	if b.crashed.Load() {
 		return b.summary(), nil, errWorldStopped
 	}
+	b.settleStop()
+	// After settleStop, so Summary.Canceled (and rc.Canceled in Finish) sees
+	// a cancel that landed just after the fence was revoked.
 	sum := b.summary()
 	runErr := b.err()
 	if b.stoppedForResume() {
@@ -270,22 +278,30 @@ func runBatch(ctx context.Context, cfg batchConfig) (ops.Summary, json.RawMessag
 	return sum, result, errors.Join(runErr, ferr)
 }
 
-// stoppedForResume reports a resumable def stopped by Shutdown. Every
-// registry stop path revokes the fence and then cancels the context, so a
-// worker that saw the revoke can return before the cancel lands; give the
-// cancel a moment to say which stop this was. (A lost stand-down lease
-// revokes without canceling: that wait times out and the run fails.)
-func (b *batchRun) stoppedForResume() bool {
-	if !b.cfg.resumable {
-		return false
-	}
+// stopSettle bounds settleStop's wait. The registry's stop paths (cancel,
+// timeout, abandon, shutdown) revoke the fence and cancel the context back
+// to back on one goroutine, so the cancel follows the revoke within
+// microseconds; a second is generous for a loaded host. The only revoke with
+// no cancel behind it is a lost stand-down lease, where the wait runs out
+// once, at the end of a run that is failing anyway.
+const stopSettle = time.Second
+
+// settleStop waits, when the workers stopped on a revoked fence before the
+// run's context was canceled, for that cancel to land (or stopSettle), so
+// the summary and the resume decision see which stop this was.
+func (b *batchRun) settleStop() {
 	if b.ctx.Err() == nil && b.fence.Revoked() {
 		select {
 		case <-b.ctx.Done():
-		case <-time.After(time.Second):
+		case <-time.After(stopSettle):
 		}
 	}
-	return errors.Is(context.Cause(b.ctx), ErrShutdown)
+}
+
+// stoppedForResume reports a stopped run the registry will resume (see
+// batchConfig.resumes). Call it after settleStop.
+func (b *batchRun) stoppedForResume() bool {
+	return b.ctx.Err() != nil && b.cfg.resumes != nil && b.cfg.resumes()
 }
 
 // finish runs the job's Finish, after a cancel too (rc.Canceled() is then true).
@@ -720,10 +736,19 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		}
 		err := b.runItem(ch, j, itemTally, touch)
 		touch()
+		if err != nil && !errors.Is(err, ops.ErrPreview) && b.workCtx.Err() != nil {
+			return // the item was cut short by the stop; it did not settle
+		}
+		// After every item, not only after a failed one: an item may have
+		// swallowed a refused write and returned nil, and as a chunk's last
+		// item that would record the chunk done. A revoked fence means the
+		// item's writes cannot be trusted to have landed, so its chunk stays
+		// unfinished (a resume re-runs it) and the run ends.
+		if ferr := b.fence.Check(); ferr != nil {
+			b.fail(fmt.Errorf("%s: item %s: %w", b.cfg.opID, ch.keys[j], errors.Join(ferr, err)))
+			return
+		}
 		if err != nil && !errors.Is(err, ops.ErrPreview) {
-			if b.workCtx.Err() != nil {
-				return // the item was cut short by the stop; it did not settle
-			}
 			if stop := b.writeStopped(err); stop != nil {
 				// Fenced or lease lost: the item did not settle, and neither
 				// does its chunk. The run ends with this error.
@@ -773,12 +798,10 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 }
 
 // writeStopped reports why an item error stops the run rather than counting
-// as one failed item: the run's fence is revoked, or the error says a write
-// was refused for that reason.
+// as one failed item: the error says a write was refused because the run is
+// fenced or lost its stand-down lease. (A revoked fence itself is checked
+// after every item, before this.)
 func (b *batchRun) writeStopped(itemErr error) error {
-	if err := b.fence.Check(); err != nil {
-		return errors.Join(err, itemErr)
-	}
 	if errors.Is(itemErr, ops.ErrFenced) || errors.Is(itemErr, opswriter.ErrStandDownLost) ||
 		errors.Is(itemErr, ErrScanStandDownLost) {
 		return itemErr

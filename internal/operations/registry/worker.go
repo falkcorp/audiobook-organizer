@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.39.0
+// version: 2.40.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-13
 
@@ -1478,6 +1478,29 @@ func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandl
 		return status, &m, pauseOutcome(status)
 	}
 	return "canceled", nil, opsmetrics.OutcomeCanceled
+}
+
+// stopResumes reports whether a run of policy whose context runCtx is done
+// will be recorded interrupted and resumed under the same op id by the next
+// boot sweep: finalStatusForCanceledRun's precedence (stopReasonFor) says
+// quiesce or shutdown, and the policy resumes in place (ResumeRestart, or
+// ResumeAsk once a person retries it). The v3 batch runner asks this before
+// it decides to leave Finish to the resumed attempt, so the two never
+// disagree. Only called after the run's context is done, when the handle's
+// flags are already set (Shutdown, Cancel and the stand-down set them before
+// they cancel).
+func (r *Registry) stopResumes(runCtx context.Context, opID string, policy ResumePolicy) bool {
+	if policy != ResumeRestart && policy != ResumeAsk {
+		return false
+	}
+	r.mu.RLock()
+	h := r.running[opID]
+	r.mu.RUnlock()
+	switch r.stopReasonFor(runCtx, h) {
+	case state.StopQuiesce, state.StopShutdown:
+		return true
+	}
+	return false
 }
 
 // stopReasonFor names why a canceled run was stopped, in the v3 vocabulary,

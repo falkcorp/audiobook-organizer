@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-13
 
@@ -271,7 +271,7 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 		ds, _ := database.AsCapability[dirtySetStore](r.store)
 		_, result, err = runBatch(ctx, batchConfig{opID: opID, job: job, rc: rc, store: bs, dirty: ds, rep: rep,
 			log: env.Log, stuckAfter: effectiveProgressTimeout(od),
-			resumable: od.ResumePolicy == ResumeRestart || od.ResumePolicy == ResumeAsk})
+			resumes: func() bool { return r.stopResumes(ctx, opID, od.ResumePolicy) }})
 	case c.RunTask != nil:
 		result, err = c.RunTask(rc, params)
 	default:
