@@ -1,12 +1,13 @@
 #!/bin/bash
 # file: scripts/ci/cache_env.sh
-# version: 1.1.0
+# version: 1.2.0
 # guid: 6b0e7d3a-92c4-4f18-a5d7-1e8c3f40b9a2
 # last-edited: 2026-10-12
 # Source this from a Woodpecker step (`. scripts/ci/cache_env.sh`) as the
-# step's first command. It does two things: it unsets the paid-provider API
-# keys (below), and it points Go
-# and npm at the host-wide CI cache of whichever heavy agent runs the step.
+# step's first command. It does two things: it unsets the provider keys and
+# live-service URLs that would turn on a live external call (below), and it
+# points Go and npm at the host-wide CI cache of whichever heavy agent runs
+# the step.
 #
 # The workflows that run on any `heavy=true` agent (U1 or llm1) cannot name a
 # cache path in `environment:`: it is a literal, and the two hosts keep the
@@ -22,15 +23,20 @@
 # letting Go fall back to a per-run HOME cache that the agent cannot tear down.
 # Callers that must stop on that use `. scripts/ci/cache_env.sh || exit 1`.
 
-# CI never calls paid providers. A test that finds OPENAI_API_KEY set runs the
-# live OpenAI integration tests (internal/ai/openai_parser_test.go), and viper's
-# AutomaticEnv lets the provider keys reach config. On 2026-10-12 the steps on
-# a Mac agent saw OPENAI_API_KEY, so test-rest called OpenAI for real and
-# failed on 429 (pipelines 874 and 882). Unsetting here
-# holds whatever the host exports, because every Go step sources this file
-# first; it runs before the cache-root check so a step that continues past a
-# missing cache root (`|| true`) is scrubbed too.
-unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HARDCOVER_API_KEY
+# CI never calls paid providers or live services. internal/ai's integration
+# tests run when OPENAI_API_KEY is set (and the openai-go SDK reads it from env),
+# ACOUSTID_API_KEY reaches config through viper.BindEnv, AutomaticEnv
+# (cmd/root.go) maps the other provider keys when the binary runs, and
+# WHISPER_LIVE_URL turns on internal/transcribe's live capability probe. On
+# 2026-10-12 the steps on a Mac agent saw OPENAI_API_KEY, so test-rest called
+# OpenAI for real and failed on 429 (pipelines 874 and 882). Every step on the
+# heavy (local-backend) agents sources this file first, so unsetting here holds
+# whatever the host exports. It runs before the cache-root check, so a step
+# that continues past a missing cache root (`|| true`) is scrubbed too. U0's
+# checks-lint steps run in docker containers with a clean environment and run
+# no tests.
+unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HARDCOVER_API_TOKEN WHISPER_LIVE_URL
+
 
 CI_CACHE_ROOT=
 for _ci_cache_candidate in /tank/ci/cache /Users/jdfalk/ci/cache; do
