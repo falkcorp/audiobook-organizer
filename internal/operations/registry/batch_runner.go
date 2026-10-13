@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -102,6 +102,25 @@ type batchConfig struct {
 	// registry, rather than reading the cancel cause here, keeps the two
 	// decisions from disagreeing: a skipped Finish on a run that is never
 	// resumed, or a Finish here and again on the resume. nil: never resumes.
+	//
+	// Two later decisions can still keep a run recorded as resumable from
+	// ever resuming, and its Finish then never runs (05-PR5 decision, owner
+	// call pending in todo.d 05-PR5-FINISH-ON-DECLINE):
+	//   - the restart-strike guard (checkInfiniteRestart) force-drops a
+	//     ResumeRestart run only when high_water_progress is still 0, i.e.
+	//     no chunk ever completed, so the ledger holds no counts and no
+	//     marks: a Finish there would get an empty Summary and a Fixer's
+	//     AfterApply nothing to follow up on. Running it buys nothing.
+	//   - a ResumeAsk run (the Fixer default) waits in awaiting_decision for
+	//     a person, whose only choices today are Retry (the run resumes and
+	//     Finish runs once, at its end) or Discard (DeleteRunV3 deletes the
+	//     record, ledger and marks). After a Discard, rows applied before the
+	//     shutdown keep their writes but never get AfterApply. Running op
+	//     code from Discard would make a generic delete run a def's writes
+	//     outside any attempt (no fence, no reporter); the fitting design is
+	//     a third decision -- "finish without resuming" -- dispatched as an
+	//     attempt that leases nothing and runs Finish over the ledger, which
+	//     needs an API and UI choice, so it is left to the owner.
 	resumes func() bool
 	// stuckAfter is the heartbeat age at which a worker is reported stuck
 	// when the job has no ItemTimeout (the def Timeout/6).
