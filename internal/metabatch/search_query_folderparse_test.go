@@ -1,11 +1,12 @@
 // file: internal/metabatch/search_query_folderparse_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7e9d40-6a15-4c83-8f2e-d0a41c9b7e56
 // last-edited: 2026-10-12
 
 package metabatch
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,4 +120,40 @@ func TestFolderParseVariant_PartRowStillRefused(t *testing.T) {
 	q = ResolveCandidateSearchQuery(files, &title)
 	assert.False(t, q.Usable, "%+v", q)
 	assert.Equal(t, SkipKindSiblingPart, q.SkipKind)
+}
+
+// countingAuthors counts the author reads the resolver makes.
+type countingAuthors struct {
+	fakeBookFilesAuthors
+	reads *atomic.Int32
+}
+
+func (c countingAuthors) GetBookAuthors(id string) ([]database.BookAuthor, error) {
+	c.reads.Add(1)
+	return c.fakeBookFilesAuthors.GetBookAuthors(id)
+}
+func (c countingAuthors) GetAuthorByID(id int) (*database.Author, error) {
+	c.reads.Add(1)
+	return c.fakeBookFilesAuthors.GetAuthorByID(id)
+}
+
+// The candidate pass resolves every book, so the variant must cost a book it
+// cannot change nothing: no author is read unless a folder title differs from
+// the stored title, and none at all when the folder is the title's.
+func TestFolderParseVariant_ReadsAuthorsOnlyWhenAFolderTitleDiffers(t *testing.T) {
+	reads := &atomic.Int32{}
+	resolve := func(title, path string) CandidateSearchQuery {
+		files := countingAuthors{fakeBookFilesAuthors: liveAuthorFiles([]database.BookFile{{FilePath: path}}, nil), reads: reads}
+		book := database.Book{ID: "b1", Title: title, FilePath: path}
+		return ResolveCandidateSearchQuery(files, &book)
+	}
+
+	q := resolve("The Paper Garden", "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b")
+	assert.Equal(t, SearchQuerySourceTitle, q.Source)
+	assert.Zero(t, reads.Load(), "the folder is the title: no author read")
+
+	// A folder that differs does read them, once, to decide.
+	q = resolve("Mara Quill", "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b")
+	assert.Equal(t, SearchQuerySourceFolderTitle, q.Source)
+	assert.Positive(t, reads.Load())
 }
