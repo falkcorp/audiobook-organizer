@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 package deluge
 
@@ -25,6 +25,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
@@ -868,11 +869,7 @@ func TestLinkBackfill_DelugeUnavailableFails(t *testing.T) {
 // the decision changed: update the brief.
 func TestLinkedRowBecomesBulkImportCandidate(t *testing.T) {
 	f := newLinkFixture(t)
-	store, err := database.NewPebbleStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := dbtest.NewStore(t)
 
 	book, err := store.CreateBook(&database.Book{Title: "Example Book", FilePath: filepath.Join(f.root, "Example Author", "Example Book")})
 	if err != nil {
@@ -986,17 +983,55 @@ func TestLinkBackfill_Race(t *testing.T) {
 	}
 }
 
+// TestLinkBackfill_MemDBNotServingFailsClosed pins what the op does while the
+// store's memdb is not serving (the ~130s of boot warmup in production):
+// BookFilesWithHash refuses rather than answering from a possibly short list,
+// so the torrent is counted as an error, links nothing, and writes nothing.
+// It is the deterministic form of the state tests used to hit by accident when
+// they opened a store with database.NewPebbleStore and ran the op before the
+// async warmup finished (TestLinkedRowBecomesBulkImportCandidate flaked as
+// "linked = 0, want 1" under the full -race package run). Every test that
+// needs the memdb-backed lookup must build its store with dbtest.NewStore,
+// which waits for warmup.
+func TestLinkBackfill_MemDBNotServingFailsClosed(t *testing.T) {
+	f := newLinkFixture(t)
+	store := dbtest.NewStore(t, dbtest.WithoutMemDB())
+	book, err := store.CreateBook(&database.Book{Title: "Example Book", FilePath: filepath.Join(f.root, "Example Author", "Example Book")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := f.libraryRow("", "01.mp3", exampleAudio)
+	row.ID = ""
+	row.BookID = book.ID
+	if err := store.CreateBookFile(&row); err != nil {
+		t.Fatal(err)
+	}
+
+	tor := f.torrent(t, 1, f.downloads, tfile{"Example Book/01.mp3", exampleAudio})
+	_, client := newFakeDelugeClient(t, tor)
+	res, err := runLink(t, &Plugin{client: client, store: store}, `{"dry_run":false}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := linkedCount(t, res); got != 0 || res.Errors != 1 {
+		t.Fatalf("linked = %d errors = %d, want 0 and 1 (fail closed, reported)", got, res.Errors)
+	}
+	after, err := store.GetBookFilesNeedingDelugeImportCore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Errorf("a failed lookup linked %d row(s): %+v", len(after), after)
+	}
+}
+
 // TestLinkBackfill_PreviewSandboxPebble is the brief's sandbox preview: a real
 // Pebble store with linkable, conflicting and outside-library rows. The preview
 // reports its counts and changes no row (row count and every row compared
 // before and after).
 func TestLinkBackfill_PreviewSandboxPebble(t *testing.T) {
 	f := newLinkFixture(t)
-	store, err := database.NewPebbleStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := dbtest.NewStore(t)
 	book, err := store.CreateBook(&database.Book{Title: "Example Book", FilePath: filepath.Join(f.root, "Example Author", "Example Book")})
 	if err != nil {
 		t.Fatal(err)
