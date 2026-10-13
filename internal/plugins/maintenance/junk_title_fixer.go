@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-11
+// last-edited: 2026-10-12
 
 package maintenance
 
@@ -1490,6 +1490,13 @@ func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string
 	for _, raw := range entry.Candidates {
 		var c metafetch.MetadataCandidate
 		if json.Unmarshal(raw, &c) != nil || c.Score < junkCandidateMinScore || c.DurationMismatch {
+			continue
+		}
+		// An entry the local catalog tagged manual-only (Doctor Who / Big
+		// Finish / Torchwood, by fields the candidate's own title and
+		// publisher may not show) is never the source of a title this
+		// unattended fixer writes: those books are applied by hand.
+		if c.ManualOnly {
 			continue
 		}
 		if metafetch.CandidateIdentityStale(entry, b, &c) != nil || rejected.HasCandidate(&c) {
