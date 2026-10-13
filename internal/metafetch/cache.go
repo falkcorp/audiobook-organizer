@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-12
 //
@@ -624,19 +624,40 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// lane and every bulk apply read. Within a tier the search's own order
 	// stands (the ranking is the search's business); resp.Results, which
 	// callers still hold, is not reordered.
-	candidates := rankCandidatesByTier(resp.Results, resp.mergeRank)
+	//
+	// The local catalog stage's candidates are not a provider's answer: every
+	// decision below (replace, merge, carry a fallback's, preserve on empty)
+	// is made on the PROVIDERS' candidates alone, and the catalog's are merged
+	// into the row last, ranked after them. Otherwise a search whose providers
+	// all answered "nothing" would replace the book's earlier provider
+	// candidates with the catalog's and date the row fresh -- the 2026-09-08
+	// empty-refetch bug through a side door.
+	var providerResults, catalogResults []MetadataCandidate
+	for i := range resp.Results {
+		if resp.Results[i].Source == metadata.CatalogSourceName {
+			catalogResults = append(catalogResults, resp.Results[i])
+		} else {
+			providerResults = append(providerResults, resp.Results[i])
+		}
+	}
+	marshalRows := func(cands []MetadataCandidate) []json.RawMessage {
+		rows := make([]json.RawMessage, 0, len(cands))
+		for _, c := range cands {
+			b, jerr := json.Marshal(c)
+			if jerr != nil {
+				// Skip a single corrupt candidate rather than fail.
+				continue
+			}
+			rows = append(rows, b)
+		}
+		return rows
+	}
+	candidates := rankCandidatesByTier(providerResults, resp.mergeRank)
 	if len(candidates) > metadataCacheTopN {
 		candidates = candidates[:metadataCacheTopN]
 	}
-	raw := make([]json.RawMessage, 0, len(candidates))
-	for _, c := range candidates {
-		b, jerr := json.Marshal(c)
-		if jerr != nil {
-			// Skip a single corrupt candidate rather than fail.
-			continue
-		}
-		raw = append(raw, b)
-	}
+	raw := marshalRows(candidates)
+	catalogRaw := marshalRows(rankCandidatesByTier(catalogResults, resp.mergeRank))
 
 	sourceHash := hashSearchInputs(bookID, query, author, narrator, series)
 	entry := &MetadataCandidateCache{
@@ -755,6 +776,14 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 				}
 			}
 		}
+	}
+
+	// The catalog's candidates join last: after the providers' (and the ones
+	// carried), deduplicated, ranked with review-only candidates after usable
+	// ones and capped. They never move FetchedAt, which dates the providers'
+	// answer, and never clear LastEmptyFetchAt.
+	if len(catalogRaw) > 0 {
+		entry.Candidates = mergeCandidateRows(entry.Candidates, catalogRaw, resp.mergeRank)
 	}
 
 	if mfs.db != nil {

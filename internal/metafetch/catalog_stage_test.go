@@ -1,5 +1,5 @@
 // file: internal/metafetch/catalog_stage_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8a2d5f61-4c93-4e0b-b7d8-3f6a1e9c5207
 // last-edited: 2026-10-12
 
@@ -314,4 +314,69 @@ func TestRankCandidatesByTier_NilRankPutsReviewOnlyLast(t *testing.T) {
 	}
 	assert.Equal(t, []string{"B0PROV0001", "B0PROV0002", "B0CATA0002"}, order, "provider candidates first, in the search's own order")
 	assert.Equal(t, "B0CATA0002", in[0].ASIN, "the caller's slice is not reordered")
+}
+
+// Catalog candidates are not a provider's answer to the cache: when every
+// provider answers "nothing" and the catalog matches, the book's earlier
+// provider candidates are kept with their own age, the empty look is recorded,
+// and the catalog's candidates join after them (the 2026-09-08 empty-refetch
+// rule, through the catalog's side door).
+func TestCatalogStage_ProvidersEmptyKeepsEarlierProviderCandidates(t *testing.T) {
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: stageTitle, FilePath: "/lib/x/lantern.m4b"})
+	require.NoError(t, err)
+	a, err := f.store.CreateAuthor(stageAuthor)
+	require.NoError(t, err)
+	require.NoError(t, f.store.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: a.ID, Role: "author"}}))
+
+	src := &verdictSource{name: "SrcA", results: []metadata.BookMetadata{lanternAnswer("B0PROV0001")}}
+	f.mfs.SetOverrideSources([]metadata.MetadataSource{src})
+	first, err := f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, b.Title, "", "", "", SearchOptions{BypassFetchCache: true})
+	require.NoError(t, err)
+	require.Len(t, first.Candidates, 1)
+
+	src.results = nil // the provider now has nothing
+	fm := &fakeCatalogMatcher{answer: catalogAnswer()}
+	f.mfs.SetCatalogMatcher(fm)
+	withCatalogStage(t, true)
+	_, resp, err := f.mfs.FetchAndCacheWithResponse(context.Background(), nil, b.ID, b.Title, "", "", "", SearchOptions{BypassFetchCache: true})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, fm.calls.Load())
+	require.NotEmpty(t, resp.Results, "fixture: the catalog's candidates are in the response")
+
+	stored, gerr := f.store.GetMetadataCache(b.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, stored)
+	var sources []string
+	for _, raw := range stored.Candidates {
+		var c MetadataCandidate
+		require.NoError(t, json.Unmarshal(raw, &c))
+		sources = append(sources, c.Source+"/"+c.ASIN)
+	}
+	require.NotEmpty(t, sources)
+	assert.Equal(t, "SrcA/B0PROV0001", sources[0], "the earlier provider candidate stays in slot 0")
+	assert.Contains(t, sources, metadata.CatalogSourceName+"/B0CATA0002")
+	assert.True(t, stored.FetchedAt.Equal(first.FetchedAt), "FetchedAt dates the provider candidates (%v, was %v)", stored.FetchedAt, first.FetchedAt)
+	require.NotNil(t, stored.LastEmptyFetchAt, "the empty look is recorded")
+	assert.Contains(t, stored.EmptyAnswers, "SrcA")
+}
+
+// With no earlier row, a providers-empty search still records the empty look
+// and stores the catalog's candidates after nothing.
+func TestCatalogStage_ProvidersEmptyNoPriorRowStoresCatalogCandidates(t *testing.T) {
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: stageTitle, FilePath: "/lib/x/lantern.m4b"})
+	require.NoError(t, err)
+	a, err := f.store.CreateAuthor(stageAuthor)
+	require.NoError(t, err)
+	require.NoError(t, f.store.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: a.ID, Role: "author"}}))
+	f.mfs.SetOverrideSources([]metadata.MetadataSource{&verdictSource{name: "SrcA"}})
+	f.mfs.SetCatalogMatcher(&fakeCatalogMatcher{answer: catalogAnswer()})
+	withCatalogStage(t, true)
+
+	entry, err := f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, b.Title, "", "", "", SearchOptions{})
+	require.NoError(t, err)
+	require.NotEmpty(t, entry.Candidates)
+	require.NotNil(t, entry.LastEmptyFetchAt)
+	assert.Contains(t, entry.EmptyAnswers, "SrcA")
 }
