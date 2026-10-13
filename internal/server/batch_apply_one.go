@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-12
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -623,18 +624,22 @@ func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *me
 }
 
 // cachedFolderSearchExplains reports whether a cached row's stale identity is
-// explained by the book's work folder: the book still resolves to a
-// folder_title query (metabatch.ResolveCandidateSearchQuery) and the row was
-// fetched for exactly that query and the book's current author
+// explained by the folder-parse variant: the book still resolves to a
+// folder_person_title query (metabatch.ResolveCandidateSearchQuery: its stored
+// title is a person's name or its own author, and
+// metadata_fetch.folder_parse_person_title is on) and the row was fetched for
+// exactly that query and the book's current author
 // (svc.CachedQueryMatchesIdentity). It is the folder analogue of
-// cachedTranscribedSearch's proof, but it lifts nothing by itself: the
-// caller lets only an owner's single review row past identity_stale on it.
+// cachedTranscribedSearch's proof, but it lifts nothing by itself: the caller
+// lets only an owner's single review row past identity_stale on it. The stand-in
+// for a title with nothing to search by (folder_title) is NOT explained: it was
+// identity_stale on every path before the variant and stays so.
 func cachedFolderSearchExplains(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) bool {
-	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) {
+	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) || !config.Snapshot().MetadataFetch.FolderParsePersonTitle {
 		return false
 	}
 	cur := metabatch.ResolveCandidateSearchQuery(books, book)
-	if !cur.Usable || cur.Source != metabatch.SearchQuerySourceFolderTitle {
+	if !cur.Usable || cur.Source != metabatch.SearchQuerySourceFolderPersonTitle {
 		return false
 	}
 	return svc.CachedQueryMatchesIdentity(entry, book, authors, cur.Title)

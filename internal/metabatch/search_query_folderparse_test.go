@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_folderparse_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b7e9d40-6a15-4c83-8f2e-d0a41c9b7e56
 // last-edited: 2026-10-12
 
@@ -51,7 +51,7 @@ func TestFolderParseVariant_TitleEqualsAuthorFolderIsTheQuestion(t *testing.T) {
 		q := ResolveCandidateSearchQuery(files, &book)
 		require.True(t, q.Usable, title)
 		assert.Equal(t, "The Paper Garden", q.Title, title)
-		assert.Equal(t, SearchQuerySourceFolderTitle, q.Source, title)
+		assert.Equal(t, SearchQuerySourceFolderPersonTitle, q.Source, title)
 	}
 
 	// A title that merely resembles nothing about the author is untouched.
@@ -72,7 +72,7 @@ func TestFolderParseVariant_TitleIsADifferentPersonsName(t *testing.T) {
 	q := ResolveCandidateSearchQuery(files, &book)
 	require.True(t, q.Usable)
 	assert.Equal(t, "The Paper Garden", q.Title)
-	assert.Equal(t, SearchQuerySourceFolderTitle, q.Source)
+	assert.Equal(t, SearchQuerySourceFolderPersonTitle, q.Source)
 
 	// The subject's own folder is no better a title: the book stays searched
 	// by its stored title (the existing biography rule).
@@ -169,7 +169,7 @@ func TestFolderParseVariant_ReadsAuthorsOnlyWhenAFolderTitleDiffers(t *testing.T
 
 	// A folder that differs does read them, once, to decide.
 	q = resolve("Mara Quill", "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b")
-	assert.Equal(t, SearchQuerySourceFolderTitle, q.Source)
+	assert.Equal(t, SearchQuerySourceFolderPersonTitle, q.Source)
 	assert.Positive(t, reads.Load())
 }
 
