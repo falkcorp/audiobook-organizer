@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -491,10 +492,15 @@ func TestAppendOnlyChunkCountSurvivesResume(t *testing.T) {
 	}
 }
 
-// memTitles is a minimal ops.Writer over an in-memory title map.
+// memTitles is a minimal ops.Writer over an in-memory title map. It keeps
+// the history a real Writer would: the books each attempt wrote (wrote),
+// and, from nextAttempt on, the books every earlier attempt wrote (earlier),
+// which is what Wrote reports.
 type memTitles struct {
-	mu     sync.Mutex
-	titles map[string]string
+	mu      sync.Mutex
+	titles  map[string]string
+	wrote   map[string]bool
+	earlier map[string]bool
 }
 
 func (w *memTitles) ModifyBook(_ context.Context, id string, fn func(*database.Book) error) (ops.Changed, error) {
@@ -505,7 +511,41 @@ func (w *memTitles) ModifyBook(_ context.Context, id string, fn func(*database.B
 		return ops.Changed{}, err
 	}
 	w.titles[id] = b.Title
+	if w.wrote == nil {
+		w.wrote = map[string]bool{}
+	}
+	w.wrote[id] = true
 	return ops.Changed{Fields: []string{"title"}}, nil
+}
+
+// foreignWrite sets a title the way someone outside the run would: no
+// history under the run.
+func (w *memTitles) foreignWrite(id, title string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.titles[id] = title
+}
+
+// nextAttempt starts a new attempt: what the attempts so far wrote becomes
+// the earlier attempts' history.
+func (w *memTitles) nextAttempt() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.earlier = maps.Clone(w.wrote)
+}
+
+func (w *memTitles) Wrote(_ context.Context, subjects []ops.Subject) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(subjects) == 0 {
+		return false, nil
+	}
+	for _, s := range subjects {
+		if s.Type != ops.SubjectBook || !w.earlier[s.ID] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 func (w *memTitles) ModifyBookFile(context.Context, string, string, func(*database.BookFile) error) (ops.Changed, error) {
 	return ops.Changed{}, errors.New("unused")
@@ -525,36 +565,57 @@ func (w *memTitles) Effect(context.Context, ops.EffectSpec, func() ([]ops.Histor
 // finishes. blockAt 20 crashes on a chunk boundary (rows 0-19 are in two
 // completed chunks); blockAt 25 crashes inside chunk 2 after rows 20-24 were
 // written, so the resume re-runs rows whose fingerprint the write changed and
-// must report them applied, not changed since plan.
+// must report them applied (the run's history for them is there), not
+// changed since plan.
+//
+// The foreign cases (05-PR5b): between the attempts someone else sets rows
+// the run never wrote to exactly their Proposed values. Their fingerprint
+// moved and every Proposed value holds, but there is no history under the
+// run for them, so they are skipped as changed since plan: not in Applied,
+// not handed to AfterApply. In the blockAt 25 one, rows 20-24 (written by
+// the run) are still reported applied next to them.
 func TestFixerAppliedSurvivesResume(t *testing.T) {
-	for _, blockAt := range []int{20, 25} {
-		t.Run(fmt.Sprint("block_at_", blockAt), func(t *testing.T) { fixerResumeCase(t, blockAt) })
+	cases := []struct {
+		name    string
+		blockAt int
+		foreign []int
+	}{
+		{"block_at_20", 20, nil},
+		{"block_at_25", 25, nil},
+		{"block_at_20_foreign_20_24", 20, []int{20, 21, 22, 23, 24}},
+		{"block_at_25_foreign_25_27", 25, []int{25, 26, 27}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { fixerResumeCase(t, c.blockAt, c.foreign) })
 	}
 }
 
-func fixerResumeCase(t *testing.T, blockAt int) {
+func fixerResumeCase(t *testing.T, blockAt int, foreign []int) {
 	titles := map[string]string{}
 	var rows []ops.Row
 	for i := range 30 {
 		id := itemKey(i)
 		titles[id] = "l " + id
-		rows = append(rows, ops.Row{ID: id, Inputs: map[string]string{"title": "l " + id},
+		rows = append(rows, ops.Row{ID: id, Subjects: ops.Books(id), Inputs: map[string]string{"title": "l " + id},
 			Current: map[string]string{"title": "l " + id}, Proposed: map[string]string{"title": "1 " + id}})
 	}
 	var afterApply []string
 	block := true
 	blocked := make(chan struct{})
+	w := &memTitles{titles: titles}
 	def := ops.Fixer("test.fixer", ops.FixerSpec[ops.NoParams, string]{
 		Common:     ops.Common{Title: "f", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
 		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[string], error) { return ops.Source[string]{}, nil },
 		Load: func(_ *ops.RC, _ ops.NoParams, id string) (string, bool, error) {
+			w.mu.Lock()
+			defer w.mu.Unlock()
 			t, ok := titles[id]
 			return t, ok, nil
 		},
 		Evaluate: func(_ *ops.ItemRC, _ ops.NoParams, title string) (ops.Row, error) {
 			id := title[2:]
-			return ops.Row{ID: id, Inputs: map[string]string{"title": title}, Current: map[string]string{"title": title},
-				Proposed: map[string]string{"title": "1 " + id}}, nil
+			return ops.Row{ID: id, Subjects: ops.Books(id), Inputs: map[string]string{"title": title},
+				Current: map[string]string{"title": title}, Proposed: map[string]string{"title": "1 " + id}}, nil
 		},
 		Apply: func(irc *ops.ItemRC, w ops.Writer, _ ops.NoParams, row ops.Row) error {
 			if block && row.ID == itemKey(blockAt) {
@@ -568,7 +629,6 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 		AfterApply: func(_ *ops.RC, applied []string) error { afterApply = applied; return nil },
 	})
 	params, _ := json.Marshal(ops.FixerApply{Rows: rows})
-	w := &memTitles{titles: titles}
 	open := func(resumed bool) (*ops.BatchJob, *ops.RC, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(context.Background())
 		rc := ops.NewRC(ops.RunEnv{Context: ctx, OpID: "op", DefID: "test.fixer", Mode: ops.Live, Writer: w, Resumed: resumed})
@@ -601,6 +661,10 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 		t.Fatal("chunk 2 was recorded; the case does not test an unfinished chunk")
 	}
 	block = false
+	w.nextAttempt()
+	for _, i := range foreign {
+		w.foreignWrite(itemKey(i), "1 "+itemKey(i))
+	}
 	job2, rc2, cancel2 := open(true)
 	defer cancel2()
 	_, raw, err := runBatch(rc2.Context(), batchConfig{opID: "op", job: job2, rc: rc2, store: store, commitEvery: -1})
@@ -611,9 +675,11 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 	if err := json.Unmarshal(raw, &res); err != nil {
 		t.Fatal(err)
 	}
-	want := make([]string, 30)
-	for i := range want {
-		want[i] = itemKey(i)
+	var want []string
+	for i := range 30 {
+		if !slices.Contains(foreign, i) {
+			want = append(want, itemKey(i))
+		}
 	}
 	if !slices.Equal(res.Applied, want) || !slices.Equal(afterApply, want) {
 		var missing []string
@@ -622,8 +688,8 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 				missing = append(missing, id)
 			}
 		}
-		t.Fatalf("applied %d rows, AfterApply got %d; want all 30 across the resume; missing %v",
-			len(res.Applied), len(afterApply), missing)
+		t.Fatalf("applied %d rows, AfterApply got %d; want %d across the resume (foreign %v); missing %v; applied %v",
+			len(res.Applied), len(afterApply), len(want), foreign, missing, res.Applied)
 	}
 }
 

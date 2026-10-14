@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package opswriter
 
@@ -91,6 +91,18 @@ type Config struct {
 	// context that is neither an item's nor the run's is latched here, so
 	// the batch runner still fails the run closed. nil: no batch runner.
 	RunLatch *ops.RefusalLatch
+	// JournalReader and HistoryReader back Wrote, the read of this run's
+	// own history (evidence.go). Nil: Wrote finds no evidence of that kind.
+	// HistoryReader is read only when History's batch prefix names this
+	// run (the v3 registry's "op-<opID>-"): a prefix shared by other runs
+	// would make their batches look like this run's.
+	JournalReader JournalReader
+	HistoryReader BookHistoryReader
+	// AttemptStart separates this attempt from the earlier ones: history
+	// recorded at or after it is this attempt's own and is never evidence
+	// for Wrote. Zero: when New runs (the registry builds one Writer per
+	// attempt).
+	AttemptStart time.Time
 }
 
 // Writer is the fenced, journaling write path (ops.Writer). Safe for
@@ -105,6 +117,9 @@ type Writer struct {
 	leaseValid atomic.Pointer[func() bool]
 	leaseLost  atomic.Bool
 	writes     atomic.Int64
+	// journal is the lazily loaded index of the run's earlier-attempt
+	// operation journal rows (evidence.go).
+	journal journalEvidence
 }
 
 var _ ops.Writer = (*Writer)(nil)
@@ -119,6 +134,9 @@ func New(cfg Config) *Writer {
 	}
 	if cfg.History == nil {
 		cfg.History = NewBookHistory(nil, "", "", "", nil)
+	}
+	if cfg.AttemptStart.IsZero() {
+		cfg.AttemptStart = time.Now()
 	}
 	w := &Writer{cfg: cfg, intents: &intents{store: cfg.Intents, opID: cfg.OpID}}
 	if cfg.Fence != nil {

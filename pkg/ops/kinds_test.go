@@ -1,7 +1,7 @@
 // file: pkg/ops/kinds_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d3536389-9d87-4f21-b694-6ce022e230a8
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package ops
 
@@ -46,6 +46,9 @@ func (w *titleWriter) ModifyBookAuthors(context.Context, string, func([]database
 func (w *titleWriter) Effect(context.Context, EffectSpec, func() ([]HistoryRow, error)) error {
 	return errors.New("unused")
 }
+
+// Wrote: an in-memory title map keeps no history, so it is never evidence.
+func (w *titleWriter) Wrote(context.Context, []Subject) (bool, error) { return false, nil }
 
 // ordinalFixer is examples.md Example 3 against an in-memory title map:
 // rewrite a leading "l " ordinal to "1 ".
