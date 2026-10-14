@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-09-25
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -760,7 +760,9 @@ func (p *Plugin) authorIDMergeOne(
 		ch.Outcome, ch.StillCrediting = authorIDMergeHeld, still
 		log.Warn("author-id-repair: duplicate still credited after moves, NOT deleted",
 			"author_id", dup.ID, "name", dup.Name, "canonical_id", canonical.ID, "still", still)
-	} else if delErr := store.DeleteAuthor(dup.ID); delErr != nil {
+	} else if _, delErr := store.MergeDeleteAuthor(dup.ID, canonical.ID); delErr != nil {
+		// MergeDeleteAuthor: the duplicate's aliases move to the canonical row and
+		// the tombstone is written with the delete (DeleteAuthor dropped both).
 		ch.Outcome, ch.Error = authorIDMergeFailed, delErr.Error()
 	} else {
 		deleted, wrote = true, true

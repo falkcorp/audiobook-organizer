@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.34.2
+// version: 1.35.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-14
 //
@@ -300,6 +300,12 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
 		return verdictOf(CheckRestoreReferent(store, c))
+	case ChangeTypeAuthorMergeDelete, ChangeTypeAuthorReclassifyDelete:
+		// The revert recreates the author under its id (RestoreAuthor), refused
+		// only when another author took the name entry it held
+		// (database.AuthorNameIndexOnRestore). Its credit rows, reverted after it,
+		// depend on it: RevertPlan.Gate refuses them when this row is refused.
+		return preflightAuthorDelete(store, c)
 	case ChangeTypeFieldLock:
 		// The revert reads the book, then lifts the lock only while the
 		// field still carries exactly it (CheckFieldLockCurrent). A store
@@ -604,4 +610,49 @@ func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, hol
 		return refuse(ReasonChangedSince, "book_file %s changed since the operation", id)
 	}
 	return nil
+}
+
+// authorRestoreReader is what the preflight of an author delete row reads.
+type authorRestoreReader interface {
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+}
+
+// preflightAuthorDelete predicts revertAuthorMergeDelete /
+// revertAuthorReclassifyDelete. It fails closed on a store that cannot read
+// authors. The name holder is read through GetAuthorByName, which follows a
+// redirect: the restore reads the raw entry, and they differ only for an entry
+// left naming a deleted id, which the restore treats as free.
+func preflightAuthorDelete(store ConflictChecker, c *database.OperationChange) rowVerdict {
+	var snap AuthorSnapshot
+	into := 0
+	if c.ChangeType == ChangeTypeAuthorMergeDelete {
+		s, v, err := DecodeAuthorMergeDelete(c)
+		if err != nil {
+			return rowVerdict{refusal: err}
+		}
+		snap, into = s, v.IntoAuthorID
+	} else {
+		s, _, err := DecodeAuthorReclassifyDelete(c)
+		if err != nil {
+			return rowVerdict{refusal: err}
+		}
+		snap = s
+	}
+	r, ok := store.(authorRestoreReader)
+	if !ok {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot read author %d", snap.ID)}
+	}
+	cur, err := r.GetAuthorByID(snap.ID)
+	if err != nil {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author %d: %v", snap.ID, err)}
+	}
+	holder := 0
+	if h, herr := r.GetAuthorByName(snap.Name); herr != nil {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author name %q: %v", snap.Name, herr)}
+	} else if h != nil {
+		holder = h.ID
+	}
+	already, refusal := AuthorDeleteRestoreRefusal(snap, cur != nil && cur.ID == snap.ID, holder, into)
+	return rowVerdict{refusal: refusal, already: already}
 }

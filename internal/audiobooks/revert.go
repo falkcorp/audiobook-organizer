@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.69.1
+// version: 1.70.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-14
 
@@ -113,7 +113,6 @@ type revertAuthorStore interface {
 type revertAuthorRestoreStore interface {
 	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
-	DeleteAuthorAlias(id int) error
 	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 }
@@ -2258,16 +2257,18 @@ func (rs *RevertService) revertAuthorReclassifyCredits(c *database.OperationChan
 }
 
 // revertAuthorMergeDelete brings a merged-away author back under its own id and
-// name, with its aliases, and drops the redirect the merge left. The credits are
-// the older-in-the-journal, newer-in-the-revert rows that follow. It is refused
-// when another author holds the name now (a later rename or create); a live
-// author of the id already counts as restored.
+// name, moves back the aliases the merge moved onto the keep author, points back
+// the redirects that led to it, and drops the redirect the merge left. The credits
+// are the older-in-the-journal, newer-in-the-revert rows that follow. It is
+// refused when another author took the name entry it held
+// (database.AuthorNameIndexOnRestore); a live author of the id already counts as
+// restored, and what follows the row still runs.
 func (rs *RevertService) revertAuthorMergeDelete(c *database.OperationChange) error {
 	snap, v, err := undo.DecodeAuthorMergeDelete(c)
 	if err != nil {
 		return err
 	}
-	return rs.restoreAuthor(snap, true, v.IntoAuthorID)
+	return rs.restoreAuthor(snap, v.IntoAuthorID)
 }
 
 // revertAuthorReclassifyDelete is revertAuthorMergeDelete for a reclassified
@@ -2278,14 +2279,20 @@ func (rs *RevertService) revertAuthorReclassifyDelete(c *database.OperationChang
 	if err != nil {
 		return err
 	}
-	return rs.restoreAuthor(snap, false, 0)
+	return rs.restoreAuthor(snap, 0)
 }
 
-// restoreAuthor recreates the author snap names. carriedTo is the author a merge
-// recreated its aliases on (0 for a reclassify, which carries none): a copy there is
-// removed before the alias goes back, because an alias name belongs to one author at
-// a time.
-func (rs *RevertService) restoreAuthor(snap undo.AuthorSnapshot, dropTombstone bool, carriedTo int) error {
+// restoreAuthor recreates the author snap names, with everything its delete row
+// lists, through database.AuthorRestorer (one batch). mergedInto is the author a
+// merge folded it into (0 for a reclassify).
+//
+// A merge MOVED the aliases onto mergedInto (database.MergeDeleteAuthor) and the
+// restore moves exactly those rows back; a reclassify's delete dropped them, and
+// they are recreated by name here. The tail runs on a row already live too, so a
+// revert that stopped part way is finished by a retry, and an alias that does not
+// come back fails the row (it stays unreverted, and the result names it) instead
+// of counting restored.
+func (rs *RevertService) restoreAuthor(snap undo.AuthorSnapshot, mergedInto int) error {
 	restorer, ok := database.AsCapability[database.AuthorRestorer](rs.db)
 	if !ok {
 		return fmt.Errorf("this store cannot recreate a deleted author (author %d)", snap.ID)
@@ -2294,41 +2301,68 @@ func (rs *RevertService) restoreAuthor(snap undo.AuthorSnapshot, dropTombstone b
 	if !ok {
 		return fmt.Errorf("this store cannot restore an author's aliases (author %d)", snap.ID)
 	}
-	restored, err := restorer.RestoreAuthor(snap.ID, snap.Name)
+	opts := database.AuthorRestoreOptions{
+		MergedInto:        mergedInto,
+		OwnedNameIndex:    !snap.SharedNameIndex,
+		InboundTombstones: snap.InboundTombstones,
+		DropTombstone:     mergedInto > 0,
+	}
+	if mergedInto > 0 {
+		opts.AliasIDs = snap.AliasIDs()
+	}
+	res, err := restorer.RestoreAuthor(snap.ID, snap.Name, opts)
 	if errors.Is(err, database.ErrAuthorNameTaken) {
 		return driftRefusal("author %d %q cannot be restored: %v", snap.ID, snap.Name, err)
 	}
 	if err != nil {
 		return fmt.Errorf("restore author %d: %w", snap.ID, err)
 	}
-	if !restored {
-		return undo.ErrAlreadyRestored
+
+	// Aliases to recreate by name: a reclassify's (all of them), and a merge's
+	// that were deleted since. One the author already carries is not recreated.
+	byID := map[int]undo.AuthorAliasSnapshot{}
+	for _, al := range snap.Aliases {
+		byID[al.ID] = al
 	}
-	if carriedTo > 0 && len(snap.Aliases) > 0 {
-		theirs, gerr := aliasStore.GetAuthorAliases(carriedTo)
-		if gerr != nil {
-			revertLog.Warn("revert restored author %d but could not read author %d's aliases to take its copies back: %v", snap.ID, carriedTo, gerr)
+	var recreate []undo.AuthorAliasSnapshot
+	var problems []string
+	if mergedInto > 0 {
+		for _, nb := range res.AliasesNotBack {
+			al := byID[nb.AliasID]
+			if nb.HeldBy != 0 {
+				problems = append(problems, fmt.Sprintf("alias %q is on author %d now", al.Name, nb.HeldBy))
+				continue
+			}
+			recreate = append(recreate, al)
 		}
-		for _, have := range theirs {
-			for _, al := range snap.Aliases {
-				if have.AliasName == al.Name {
-					if derr := aliasStore.DeleteAuthorAlias(have.ID); derr != nil {
-						revertLog.Warn("revert could not remove author %d's copy of alias %q: %v", carriedTo, logger.SanitizeLogValue(al.Name), derr)
-					}
-				}
+	} else {
+		recreate = snap.Aliases
+	}
+	if len(recreate) > 0 {
+		have, gerr := aliasStore.GetAuthorAliases(snap.ID)
+		if gerr != nil {
+			return fmt.Errorf("author %d restored, but its aliases could not be read to put them back: %w", snap.ID, gerr)
+		}
+		carried := map[string]bool{}
+		for _, h := range have {
+			carried[h.AliasName] = true
+		}
+		for _, al := range recreate {
+			if carried[al.Name] {
+				continue
+			}
+			if _, aerr := aliasStore.CreateAuthorAlias(snap.ID, al.Name, al.Type); aerr != nil {
+				problems = append(problems, fmt.Sprintf("alias %q: %v", al.Name, aerr))
 			}
 		}
 	}
-	for _, al := range snap.Aliases {
-		if _, aerr := aliasStore.CreateAuthorAlias(snap.ID, al.Name, al.Type); aerr != nil {
-			// The author is back; a missing alias is the lesser loss and is named.
-			revertLog.Warn("revert restored author %d but not its alias %q: %v", snap.ID, logger.SanitizeLogValue(al.Name), aerr)
-		}
+	if len(problems) > 0 {
+		// The row fails (a retry finishes it), but the author is live, so its
+		// credits still go back (undo.RevertPlan.Record).
+		return &undo.AuthorPartlyRestoredError{AuthorID: snap.ID, Problems: problems}
 	}
-	if dropTombstone {
-		if terr := restorer.DeleteAuthorTombstone(snap.ID); terr != nil {
-			return fmt.Errorf("author %d restored but its redirect could not be removed: %w", snap.ID, terr)
-		}
+	if !res.Restored {
+		return undo.ErrAlreadyRestored
 	}
 	return nil
 }

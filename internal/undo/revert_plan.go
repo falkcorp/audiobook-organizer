@@ -1,11 +1,12 @@
 // file: internal/undo/revert_plan.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package undo
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -55,6 +56,11 @@ type RevertPlan struct {
 	// (the newest, voided ones left out), for the series_sequence pairing
 	// (SeriesLinkOf).
 	seriesLinks map[string]*database.OperationChange
+	// refusedAuthor: authors whose merge/reclassify delete row was refused, so
+	// the author is not coming back and none of its credits can go back onto it
+	// (Gate refuses them). A delete row that restored the author but not every
+	// alias (*AuthorPartlyRestoredError) does not count: the author is live.
+	refusedAuthor map[int]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -68,7 +74,8 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
-		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{}}
+		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
+		refusedAuthor: map[int]bool{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -138,6 +145,10 @@ func (p *RevertPlan) retiredRow(c *database.OperationChange) bool {
 // restored its merged-into pointer, path and ids onto a book that stayed
 // retired, and the demote revert ran against the wrong group state.
 func (p *RevertPlan) Gate(c *database.OperationChange) error {
+	if from, ok := creditsFromAuthor(c); ok && p.refusedAuthor[from] {
+		return &ReferentError{Reason: ReasonDependentNotReverted,
+			Detail: fmt.Sprintf("author %d was not restored, so its credit on book %s is not either", from, c.BookID)}
+	}
 	if !p.retiredRow(c) {
 		if p.refusedBook[c.BookID] {
 			return &ReferentError{Reason: ReasonDependentNotReverted,
@@ -169,6 +180,10 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 	if err == nil {
 		p.restored[c.ID] = true
 		return
+	}
+	var partly *AuthorPartlyRestoredError
+	if id, ok := deletedAuthor(c); ok && !errors.As(err, &partly) {
+		p.refusedAuthor[id] = true
 	}
 	if c.ChangeType == ChangeTypeBookSoftDelete {
 		p.refusedBook[c.BookID] = true
@@ -278,4 +293,31 @@ func RetireDependents(rows []*database.OperationChange, files func(bookID string
 		}
 	}
 	return out, nil
+}
+
+// creditsFromAuthor is the author an author_merge_credits /
+// author_reclassify_credits row moved the credit off, which its revert puts the
+// credit back onto. An unparsable row reports false (its own revert refuses it).
+func creditsFromAuthor(c *database.OperationChange) (int, bool) {
+	if c.ChangeType != ChangeTypeAuthorMergeCredits && c.ChangeType != ChangeTypeAuthorReclassifyCredits {
+		return 0, false
+	}
+	_, move, err := decodeCreditsMove(c)
+	if err != nil {
+		return 0, false
+	}
+	return move.FromAuthorID, true
+}
+
+// deletedAuthor is the author an author_merge_delete / author_reclassify_delete
+// row deleted.
+func deletedAuthor(c *database.OperationChange) (int, bool) {
+	if c.ChangeType != ChangeTypeAuthorMergeDelete && c.ChangeType != ChangeTypeAuthorReclassifyDelete {
+		return 0, false
+	}
+	snap, err := decodeSnapshot(c)
+	if err != nil {
+		return 0, false
+	}
+	return snap.ID, true
 }

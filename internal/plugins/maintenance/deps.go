@@ -356,6 +356,11 @@ type opsNarratorStore interface {
 type opsPeopleStore interface {
 	opsAuthorStore
 	opsNarratorStore
+	// MergeDeleteAuthor removes an author merged into another (mergeAuthorInto,
+	// author-id-repair): its aliases move to the survivor and the tombstone is
+	// written in the same batch. Its own leaf because opsAuthorStore is at
+	// interfacebloat's limit of 8.
+	database.AuthorMergeDeleter
 }
 
 // OpsStore is the 88 methods the maintenance ops need -- what they call directly

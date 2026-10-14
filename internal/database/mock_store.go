@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.144.0
+// version: 1.145.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-14
 
 package database
 
@@ -141,6 +141,9 @@ type MockStore struct {
 	CreateAuthorFunc    func(name string) (*Author, error)
 	MintAuthorFunc      func(name string) (*Author, bool, error)
 	DeleteAuthorFunc    func(id int) error
+	// MergeDeleteAuthorFunc overrides MergeDeleteAuthor; unset, it is DeleteAuthor
+	// then CreateAuthorTombstone (so a test that stubs those two sees the merge).
+	MergeDeleteAuthorFunc func(fromID, intoID int) (*AuthorMergeDeleteResult, error)
 	// Count overrides. Without these the getters below are hardcoded to empty
 	// maps, so a test asserting on "author has N books" cannot express its own
 	// fixture and silently exercises the zero case instead.
@@ -782,6 +785,19 @@ func (m *MockStore) MintAuthor(name string) (*Author, bool, error) {
 	}
 	a, err := m.CreateAuthor(name)
 	return a, a != nil && err == nil, err
+}
+
+func (m *MockStore) MergeDeleteAuthor(fromID, intoID int) (*AuthorMergeDeleteResult, error) {
+	if m.MergeDeleteAuthorFunc != nil {
+		return m.MergeDeleteAuthorFunc(fromID, intoID)
+	}
+	if err := m.DeleteAuthor(fromID); err != nil {
+		return nil, err
+	}
+	if err := m.CreateAuthorTombstone(fromID, intoID); err != nil {
+		return nil, err
+	}
+	return &AuthorMergeDeleteResult{OwnedNameIndex: true}, nil
 }
 
 func (m *MockStore) CreateAuthor(name string) (*Author, error) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
-// last-edited: 2026-09-13
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -163,6 +163,9 @@ func TestAuthorIDRepair_ApplyRepointsAndMergesOntoIndexResolvedID(t *testing.T) 
 	if err := s.UpdateAuthorName(y.ID, "JANE DOE"); err != nil {
 		t.Fatalf("UpdateAuthorName: %v", err)
 	}
+	if _, err := s.CreateAuthorAlias(x.ID, "J. Doe", "pen_name"); err != nil {
+		t.Fatalf("CreateAuthorAlias: %v", err)
+	}
 	if r, _ := s.GetAuthorByName("jane doe"); r == nil || r.ID != y.ID {
 		t.Fatalf("fixture: index must resolve to y=%d, got %+v", y.ID, r)
 	}
@@ -197,6 +200,14 @@ func TestAuthorIDRepair_ApplyRepointsAndMergesOntoIndexResolvedID(t *testing.T) 
 	}
 	if kept, _ := s.GetAuthorByID(y.ID); kept == nil {
 		t.Fatalf("canonical y=%d was deleted", y.ID)
+	}
+	// The duplicate is merge-deleted: its pen name moves to the canonical row and
+	// its id redirects there (DeleteAuthor dropped the alias and left no redirect).
+	if pen, _ := s.FindAuthorByAlias("J. Doe"); pen == nil || pen.ID != y.ID {
+		t.Fatalf("pen name of the merged duplicate must resolve to canonical y=%d, got %+v", y.ID, pen)
+	}
+	if via, _ := s.GetAuthorByID(x.ID); via == nil || via.ID != y.ID {
+		t.Fatalf("merged duplicate x=%d must redirect to y=%d, got %+v", x.ID, y.ID, via)
 	}
 	for _, id := range []string{"overlap", "xonly1", "xonly2"} {
 		if got := scalarOf(t, s, id); got != y.ID {

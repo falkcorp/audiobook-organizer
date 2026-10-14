@@ -1,7 +1,7 @@
 // file: internal/database/iface_author.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
-// last-edited: 2026-09-29
+// last-edited: 2026-10-14
 
 package database
 
@@ -99,10 +99,25 @@ type AuthorMinter interface {
 	MintAuthor(name string) (*Author, bool, error)
 }
 
+// AuthorMergeDeleter is the one way an author merged into another is removed.
+// Its own interface because AuthorWriter is at interfacebloat's limit of 8;
+// composed into the same parent as AuthorMinter.
+type AuthorMergeDeleter interface {
+	// MergeDeleteAuthor deletes fromID as DeleteAuthor does, except that its
+	// aliases are MOVED onto intoID (under their own ids) instead of deleted, and
+	// the tombstone redirecting fromID to intoID is written in the same batch.
+	// Both must be live rows of those ids (ErrAuthorNotLive). Callers move every
+	// credit first (VerifyAuthorUnlinked), as for DeleteAuthor. A merge that
+	// called DeleteAuthor and then CreateAuthorTombstone lost the merged author's
+	// pen names: DeleteAuthor cascades its aliases.
+	MergeDeleteAuthor(fromID, intoID int) (*AuthorMergeDeleteResult, error)
+}
+
 // AuthorStore combines both halves.
 type AuthorStore interface {
 	AuthorReader
 	AuthorWriter
 	BookAuthorModifier
 	AuthorMinter
+	AuthorMergeDeleter
 }

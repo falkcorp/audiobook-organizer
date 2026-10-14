@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-10-14
 
 package database
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -261,16 +262,31 @@ func (p *PebbleStore) MintAuthor(name string) (*Author, bool, error) {
 // (repointPrimaryScalarsBeforeDelete explains why that happens before, not
 // inside, the delete batch). If a book cannot be repointed the delete is
 // refused: the scalar is never cleared and never left dangling.
+//
+// An author being MERGED into another goes through MergeDeleteAuthor instead:
+// DeleteAuthor drops the aliases, and a merge must keep them on the survivor.
 func (p *PebbleStore) DeleteAuthor(id int) error {
+	_, err := p.deleteAuthor(id, 0)
+	return err
+}
+
+// deleteAuthor is DeleteAuthor (intoID 0) and MergeDeleteAuthor (intoID > 0).
+// A merge moves the aliases onto intoID instead of deleting them, and writes the
+// tombstone, in the same batch as the delete; it also reports what its undo needs.
+func (p *PebbleStore) deleteAuthor(id, intoID int) (*AuthorMergeDeleteResult, error) {
+	merge := intoID > 0
+	if merge && intoID == id {
+		return nil, fmt.Errorf("merge author %d into itself", id)
+	}
 	// Only a live row of THIS id has books to repoint. A tombstoned id
 	// resolves to its canonical row on read, so its scalars are not dangling
 	// and the cleanup below (which only ever touches keys of this id) runs
 	// exactly as before.
 	if existing, err := p.GetAuthorByID(id); err != nil {
-		return err
+		return nil, err
 	} else if existing != nil && existing.ID == id {
 		if err := p.repointPrimaryScalarsBeforeDelete(id); err != nil {
-			return fmt.Errorf("delete author %d: %w", id, err)
+			return nil, fmt.Errorf("delete author %d: %w", id, err)
 		}
 	}
 
@@ -286,16 +302,39 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	// Get the author to find name for index cleanup
 	author, err := p.GetAuthorByID(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if author == nil {
-		return nil
+		if merge {
+			return nil, fmt.Errorf("merge author %d into %d: %w", id, intoID, ErrAuthorNotLive)
+		}
+		return nil, nil
+	}
+	var res *AuthorMergeDeleteResult
+	if merge {
+		// GetAuthorByID follows the tombstone, so an answer under another id is an
+		// author merged away already: there is nothing of THIS id to merge.
+		if author.ID != id {
+			return nil, fmt.Errorf("merge author %d into %d: %w (it resolves to author %d)", id, intoID, ErrAuthorNotLive, author.ID)
+		}
+		into, err := p.GetAuthorByID(intoID)
+		if err != nil {
+			return nil, err
+		}
+		if into == nil || into.ID != intoID {
+			return nil, fmt.Errorf("merge author %d into %d: the target %w", id, intoID, ErrAuthorNotLive)
+		}
+		owner, err := p.nameIndexGet(authorNameIndexKey, author.Name)
+		if err != nil {
+			return nil, err
+		}
+		res = &AuthorMergeDeleteResult{OwnedNameIndex: bytes.Equal(owner, nameIndexOwner(id))}
 	}
 
 	batch := p.db.NewBatch()
 	if err := batch.Delete([]byte(fmt.Sprintf("author:%d", id)), nil); err != nil {
 		batch.Close()
-		return fmt.Errorf("pebble Delete author:%d: %w", id, err)
+		return nil, fmt.Errorf("pebble Delete author:%d: %w", id, err)
 	}
 	// Ownership-checked: another row whose name collapses to the same key may
 	// own the entry, and deleting it would make that row unfindable by name.
@@ -303,13 +342,33 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	// is held: no rename or create can take the key over in between.
 	if err := p.deleteNameIndexIfOwned(batch, nil, authorNameIndexKey, author.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
-		return fmt.Errorf("pebble Delete author:name: %w", err)
+		return nil, fmt.Errorf("pebble Delete author:name: %w", err)
 	}
 
-	// Delete aliases for this author (cascade)
-	if err := p.deleteAuthorAliases(batch, id); err != nil {
+	if merge {
+		// The aliases (pen names) go to the survivor under their own ids, so a
+		// name that resolved to the merged author through one resolves to the
+		// survivor now, and an undo can move exactly these rows back.
+		moved, err := p.moveAuthorAliases(batch, id, intoID)
+		if err != nil {
+			batch.Close()
+			return nil, fmt.Errorf("move author aliases: %w", err)
+		}
+		res.MovedAliases = moved
+		inbound, err := p.authorTombstonesPointingAt(id)
+		if err != nil {
+			batch.Close()
+			return nil, err
+		}
+		res.InboundTombstones = inbound
+		if err := batch.Set(authorTombstoneKey(id), []byte(strconv.Itoa(intoID)), nil); err != nil {
+			batch.Close()
+			return nil, fmt.Errorf("pebble Set author_tombstone:%d: %w", id, err)
+		}
+	} else if err := p.deleteAuthorAliases(batch, id); err != nil {
+		// Delete aliases for this author (cascade)
 		batch.Close()
-		return fmt.Errorf("delete author aliases: %w", err)
+		return nil, fmt.Errorf("delete author aliases: %w", err)
 	}
 
 	// Drop this author from the book_authors junction table.
@@ -328,22 +387,27 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	affected, sweepErr := p.sweepAuthorFromBookAuthors(batch, id)
 	if sweepErr != nil {
 		batch.Close()
-		return sweepErr
+		return nil, sweepErr
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return err
+		return nil, err
 	}
 	p.DeleteAuthorFromMemDB(id)
 	p.notifyAuthorRenamed(id)
 	p.DeleteAuthorAliasesByAuthorIDFromMemDB(id)
+	if res != nil {
+		for i := range res.MovedAliases {
+			p.UpsertAuthorAliasToMemDB(&res.MovedAliases[i])
+		}
+	}
 	// Mirror the junction rewrites into memdb. Pebble is the source of truth,
 	// but the query layer reads memdb when it is enabled, so skipping this
 	// leaves the orphaned association visible to every reader that matters.
 	for bookID, remaining := range affected {
 		p.ReplaceBookAuthorsInMemDB(bookID, remaining)
 	}
-	return nil
+	return res, nil
 }
 
 // sweepAuthorFromBookAuthors stages, on batch, the removal of authorID from
@@ -1337,10 +1401,16 @@ func (p *PebbleStore) sweepNarratorFromBookNarrators(batch *GatedBatch, narrator
 }
 
 // CreateAuthorTombstone writes a tombstone that redirects oldID to canonicalID.
+//
+// It is the redirect alone. A merge goes through MergeDeleteAuthor, which writes
+// the tombstone in the batch that deletes the author and keeps its aliases.
 func (p *PebbleStore) CreateAuthorTombstone(oldID, canonicalID int) error {
-	key := []byte(fmt.Sprintf("author_tombstone:%d", oldID))
-	value := []byte(strconv.Itoa(canonicalID))
-	return p.db.Set(key, value, pebble.Sync)
+	return p.db.Set(authorTombstoneKey(oldID), []byte(strconv.Itoa(canonicalID)), pebble.Sync)
+}
+
+// authorTombstoneKey is the redirect key of a merged-away author id.
+func authorTombstoneKey(oldID int) []byte {
+	return []byte(fmt.Sprintf("author_tombstone:%d", oldID))
 }
 
 // GetAuthorTombstone returns the canonical author ID for a tombstoned author.

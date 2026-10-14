@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-09-26
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -338,7 +338,11 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
 		return relinked, err
 	}
-	if err := store.DeleteAuthor(from.ID); err != nil {
+	// MergeDeleteAuthor, not DeleteAuthor: the merged author's aliases (pen
+	// names) move to the survivor and the tombstone redirecting the old id is
+	// written in the same batch. DeleteAuthor cascades the aliases away, so a pen
+	// name of a merged author resolved to nobody.
+	if _, err := store.MergeDeleteAuthor(from.ID, into.ID); err != nil {
 		return relinked, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
 	return relinked, nil
