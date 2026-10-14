@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -136,6 +136,9 @@ type batchConfig struct {
 	// returning true stops the world in the folded-but-not-committed state.
 	afterFold func() bool
 	onLease   func(chunk int)
+	// hooks are pkg/ops/opstest's injection points (RunnerHooks); nil in
+	// production, where each hook point is one nil check.
+	hooks *RunnerHooks
 }
 
 // errWorldStopped is what runBatch returns when afterCommit stopped it.
@@ -432,7 +435,11 @@ func (b *batchRun) planSnapshot(stored *database.Ledger, marks map[string][]stri
 				parts[i] = set.Partition(i)
 			}
 		}
-		order, starts := cutChunks(keys, parts, b.size)
+		cut := cutChunks
+		if h := b.cfg.hooks; h != nil && h.Chunker != nil {
+			cut = h.Chunker
+		}
+		order, starts := cut(keys, parts, b.size)
 		frozen := make([]string, len(order))
 		for i, o := range order {
 			frozen[i] = keys[o]
@@ -449,7 +456,11 @@ func (b *batchRun) planSnapshot(stored *database.Ledger, marks map[string][]stri
 	}
 	b.chunks = make(chan *leasedChunk, b.table.count())
 	for c := range b.table.count() {
-		if b.ledger.isDone(c) {
+		if h := b.cfg.hooks; h != nil && h.LeasePolicy != nil {
+			if c = h.LeasePolicy(b.ledger.isDone, c); c < 0 || c >= b.table.count() {
+				continue
+			}
+		} else if b.ledger.isDone(c) {
 			continue // never leased again
 		}
 		lo, hi := b.table.bounds(c)
@@ -705,7 +716,13 @@ func (b *batchRun) produceDirty() {
 
 func (b *batchRun) worker(w int) {
 	defer b.recoverCallback("worker")
+	if h := b.cfg.hooks; h != nil && h.WorkerExit != nil {
+		defer h.WorkerExit(w)
+	}
 	for {
+		if h := b.cfg.hooks; h != nil && h.WorkerReady != nil {
+			h.WorkerReady(w)
+		}
 		select {
 		case <-b.workCtx.Done():
 			return
@@ -731,6 +748,9 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 	defer b.leases.set(w, func(r *workerRow) { *r = workerRow{chunk: -1} })
 	if b.cfg.onLease != nil {
 		b.cfg.onLease(ch.idx)
+	}
+	if h := b.cfg.hooks; h != nil && h.ChunkLeased != nil {
+		h.ChunkLeased(w, ch.idx, ch.keys)
 	}
 	tally := &chunkTally{}
 	touch := func() {
@@ -774,9 +794,16 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		// A fresh Tally per item, sealed when the item returns: a write a
 		// goroutine the item left behind cannot flag the next item.
 		itemTally := &ops.Tally{}
-		err := b.runItem(ch, j, itemTally, touch)
+		err := b.runItem(w, ch, j, itemTally, touch)
 		itemTally.Seal()
 		touch()
+		if h := b.cfg.hooks; h != nil && h.ItemDone != nil && h.ItemDone(hookItemForTest(w, ch, j), err) {
+			// A test hook stopped the world right after this item returned:
+			// nothing of the chunk is delivered.
+			b.crashed.Store(true)
+			b.stop()
+			return
+		}
 		if err != nil && !errors.Is(err, ops.ErrPreview) && b.workCtx.Err() != nil {
 			return // the item was cut short by the stop; it did not settle
 		}
@@ -844,6 +871,9 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 	// Every item settled, so the chunk is complete even if the run is
 	// stopping now: deliver it. A plain send cannot block forever, because
 	// ledgerLoop drains b.done until it is closed, after every worker returned.
+	if h := b.cfg.hooks; h != nil && h.ChunkDone != nil {
+		h.ChunkDone(w, ch.idx)
+	}
 	b.done <- completion{chunk: ch, tally: tally}
 }
 
@@ -879,7 +909,7 @@ func (b *batchRun) recoverCallback(where string) {
 // A panic in Item is recovered here and returned as the item's error, with
 // the stack logged: a worker is a bare pool goroutine, and an unrecovered
 // panic there would take the whole server down.
-func (b *batchRun) runItem(ch *leasedChunk, j int, t *ops.Tally, touch func()) (err error) {
+func (b *batchRun) runItem(w int, ch *leasedChunk, j int, t *ops.Tally, touch func()) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			b.cfg.log.Error("batch runner: item panicked", "op_id", b.cfg.opID, "item", ch.keys[j],
@@ -901,7 +931,11 @@ func (b *batchRun) runItem(ch *leasedChunk, j int, t *ops.Tally, touch func()) (
 		cancel(ops.ErrItemReturned)
 		cancelTimeout()
 	}()
-	return ch.set.Run(ops.NewItemRC(b.cfg.rc, itemCtx, t, touch), ch.items[j])
+	irc := ops.NewItemRC(b.cfg.rc, itemCtx, t, touch)
+	if h := b.cfg.hooks; h != nil && h.ItemStart != nil {
+		h.ItemStart(hookItemForTest(w, ch, j), irc)
+	}
+	return ch.set.Run(irc, ch.items[j])
 }
 
 func (b *batchRun) addRow(t *chunkTally, row database.ItemOutcome) {
@@ -950,6 +984,11 @@ func (b *batchRun) ledgerLoop() {
 		led := b.ledger.snapshot()
 		led.UpdatedAt = now
 		led.ChunkCount = b.chunkTotal()
+		if h := b.cfg.hooks; h != nil && h.BeforeLedgerCommit != nil && h.BeforeLedgerCommit(led, final) {
+			b.crashed.Store(true)
+			b.stop()
+			return
+		}
 		if b.cfg.store != nil && !closed {
 			err := b.cfg.store.CommitLedgerV3(b.cfg.opID, database.LedgerBatch{
 				Ledger: led, Leases: b.leaseCopy(), Progress: prog, ItemRows: send, Marks: b.ledger.pendingMarks(),
@@ -977,6 +1016,9 @@ func (b *batchRun) ledgerLoop() {
 			if err := b.cfg.rep.UpdateProgress(int(prog.Done), total, prog.Current); err != nil {
 				b.cfg.log.Debug("batch runner: progress update failed", "op_id", b.cfg.opID, "error", err)
 			}
+		}
+		if h := b.cfg.hooks; h != nil && h.Progress != nil {
+			h.Progress(prog)
 		}
 		if b.cfg.afterCommit != nil && b.cfg.afterCommit(led, prog) {
 			b.crashed.Store(true)
