@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-14
 
@@ -8,6 +8,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,11 +33,14 @@ func (p *Plugin) llmReviewDef() sdk.OperationDef {
 		Description:  "Runs LLM review pass over ambiguous embedding-layer candidates.",
 		ResumePolicy: sdk.ResumeDrop,
 		// The retired scheduler def was cancellable; this one declared no value,
-		// which the registry reads as "reject Cancel" (04-P14b). RunLLMReview
+		// which the registry reads as "reject Cancel" (04-P14b). RunLLMReviewWithHooks
 		// checks ctx between listing pages, between the two listings, at the top
-		// of every build-loop iteration and before the batch is submitted. A
-		// cancel that arrives during the submit itself (job row, upload, batch
-		// create) takes effect when that call returns.
+		// of every build-loop iteration and before the batch is submitted. ctx
+		// also reaches the submit's HTTP calls: a cancel during the submit aborts
+		// the call in flight. During the file upload the aijob is marked failed;
+		// during the batch create it stays pending (the batch may already exist
+		// at OpenAI) until ReconcileOrphans / WriteOffUnlinked settles it. Only
+		// the aijob row write ignores ctx.
 		Cancellable: true,
 		// Same gate the retired scheduler def declared. Before 04-P14b this def
 		// declared none and fell back to settings.manage, so this line is the
@@ -74,7 +78,7 @@ func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter s
 	_ = reporter.UpdateProgress(0, 1, "Starting LLM review of ambiguous candidates...")
 
 	// H9 (2026-07 error-correction sweep): the total pair count isn't known
-	// until RunLLMReview lists ambiguous candidates internally, so the
+	// until RunLLMReviewWithHooks lists ambiguous candidates internally, so the
 	// sdk.Progress bar is constructed lazily on the first callback instead
 	// of up front with a placeholder n=0 (which made StepN a no-op). Without
 	// this, the op reported nothing between "starting" and "job submitted" --
@@ -98,7 +102,11 @@ func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter s
 	}
 
 	if err := p.engine.RunLLMReviewWithHooks(ctx, hooks); err != nil {
-		reporter.Logger().Error("LLM review error", "error", err)
+		if errors.Is(err, context.Canceled) {
+			reporter.Logger().Info("LLM review canceled", "error", err)
+		} else {
+			reporter.Logger().Error("LLM review error", "error", err)
+		}
 		return fmt.Errorf("LLM review: %w", err)
 	}
 	if prog != nil {
