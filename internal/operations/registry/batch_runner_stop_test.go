@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -88,23 +88,25 @@ func TestFenceRevokedBetweenItemsStopsRun(t *testing.T) {
 func TestRevokeBeforeCancelWindow(t *testing.T) {
 	store := newMemLedgerStore(t)
 	fence, revoke := opswriter.NewFence(1, nil)
+	w := previewWriter(fence)
 	var sum atomic.Pointer[ops.Summary]
 	var stopRun context.CancelFunc
 	job, rc, cancel := openJob(t, seq(20), batchOpts{size: 10, workers: 1,
 		finish: func(_ *ops.RC, s ops.Summary) { sum.Store(&s) }},
-		func(_ *ops.ItemRC, i int) error {
+		func(irc *ops.ItemRC, i int) error {
 			if i == 9 {
 				revoke()
 				go func() { time.Sleep(30 * time.Millisecond); stopRun() }()
+				_ = tryWrite(irc, w) // refused, and swallowed by the item
 			}
-			return nil // a refused write swallowed by the item
+			return nil
 		})
 	stopRun = cancel
 	defer cancel()
 	ctx := opswriter.WithFence(rc.Context(), fence)
 	_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
-	if err == nil {
-		t.Fatal("a fenced run returned nil")
+	if !errors.Is(err, ops.ErrFenced) {
+		t.Fatalf("err = %v, want ErrFenced", err)
 	}
 	if led, _ := store.GetLedgerV3("op"); led != nil && len(bitsSet(*led)) != 0 {
 		t.Fatalf("ledger %v: the chunk whose last item ran fenced was recorded", bitsSet(*led))
@@ -114,34 +116,67 @@ func TestRevokeBeforeCancelWindow(t *testing.T) {
 	}
 }
 
-// The fenced counterpart of TestCompletedChunkDeliveredWhenRunStops. Every
-// registry stop revokes the fence before it cancels, and the runner checks
-// the fence after every item (fail closed: an item may have swallowed a
-// refused write), so a chunk whose last item finished at a registry stop is
-// not recorded; a resume re-runs it. S1's delivery guarantee holds for an
-// unfenced stop only.
-func TestFencedStopDoesNotRecordTheChunkInHand(t *testing.T) {
-	for range 20 {
-		store := newMemLedgerStore(t)
-		fence, revoke := opswriter.NewFence(1, nil)
-		var stopRun context.CancelFunc
-		job, rc, cancel := openJob(t, seq(10), batchOpts{size: 5, workers: 1}, func(_ *ops.ItemRC, i int) error {
-			if i == 4 {
-				revoke() // the registry's order: revoke, then cancel
-				stopRun()
+// nopBooks is a book store nothing is ever written to: previewWriter's
+// writes stop at the fence check or the plan line.
+type nopBooks struct{}
+
+func (nopBooks) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, errors.New("nopBooks: unexpected write")
+}
+
+// previewWriter is a real opswriter.Writer on fence, in Preview mode: a write
+// is refused once the fence is revoked (and flagged on the item's outcome,
+// ops.Tally.Refused), and otherwise records a plan line and returns
+// ErrPreview.
+func previewWriter(f opswriter.Fence) *opswriter.Writer {
+	return opswriter.New(opswriter.Config{OpID: "op", Mode: ops.Preview, Books: nopBooks{}, Fence: f.Check})
+}
+
+// tryWrite makes one write through w with the item's context.
+func tryWrite(irc *ops.ItemRC, w *opswriter.Writer) error {
+	_, err := w.ModifyBook(irc.Context(), "b1", func(*database.Book) error { return nil })
+	return err
+}
+
+// The fenced counterpart of TestCompletedChunkDeliveredWhenRunStops, at a
+// registry stop (revoke, then cancel) during a chunk's last item:
+//   - the item finished without a refused write: it settled, so the chunk
+//     is recorded and a resume does not redo it (S1 holds under a fence);
+//   - the item's write was refused and the item swallowed the error: the
+//     Writer noted the refusal, so the chunk is dropped and the run fails.
+func TestFencedStopChunkDelivery(t *testing.T) {
+	for _, swallow := range []bool{false, true} {
+		t.Run(fmt.Sprint("swallowed_refusal=", swallow), func(t *testing.T) {
+			for range 20 {
+				store := newMemLedgerStore(t)
+				fence, revoke := opswriter.NewFence(1, nil)
+				w := previewWriter(fence)
+				var stopRun context.CancelFunc
+				job, rc, cancel := openJob(t, seq(10), batchOpts{size: 5, workers: 1}, func(irc *ops.ItemRC, i int) error {
+					if i == 4 {
+						revoke() // the registry's order: revoke, then cancel
+						stopRun()
+						if swallow {
+							_ = tryWrite(irc, w)
+						}
+					}
+					return nil
+				})
+				stopRun = cancel
+				ctx := opswriter.WithFence(rc.Context(), fence)
+				_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
+				cancel()
+				led, _ := store.GetLedgerV3("op")
+				recorded := led != nil && slices.Contains(bitsSet(*led), 0)
+				if swallow {
+					if !errors.Is(err, ops.ErrFenced) || recorded {
+						t.Fatalf("swallowed refusal: err %v, chunk recorded %v; want ErrFenced and dropped", err, recorded)
+					}
+				} else if err == nil || !recorded {
+					t.Fatalf("clean chunk at a fenced stop: err %v, chunk recorded %v; want a stop error and recorded", err, recorded)
+				}
 			}
-			return nil
 		})
-		stopRun = cancel
-		ctx := opswriter.WithFence(rc.Context(), fence)
-		_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
-		cancel()
-		if !errors.Is(err, ops.ErrFenced) {
-			t.Fatalf("err = %v, want ErrFenced", err)
-		}
-		if led, _ := store.GetLedgerV3("op"); led != nil && slices.Contains(bitsSet(*led), 0) {
-			t.Fatal("a chunk whose last item ran under a revoked fence was recorded")
-		}
 	}
 }
 

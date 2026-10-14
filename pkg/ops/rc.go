@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-13
 
@@ -247,6 +247,38 @@ type Tally struct {
 	counters map[string]int64
 	skip     string
 	marks    []string
+	refused  error
+}
+
+// Refused is the first write the Writer refused for this item because the
+// run is fenced or lost its stand-down lease (NoteRefusal), or nil. The
+// runner does not record the item's chunk done when it is set, even if the
+// item swallowed the error and returned nil.
+func (t *Tally) Refused() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.refused
+}
+
+type tallyKey struct{}
+
+// NoteRefusal flags, on the outcome of the item whose context ctx is (or
+// descends from), a write refused because the run is fenced or lost its
+// stand-down lease (Tally.Refused). The Writer calls it on every such
+// refusal; a write made with a context that does not descend from the
+// item's is not seen. Writer implementations only: an op reports its own
+// errors by returning them.
+func NoteRefusal(ctx context.Context, err error) {
+	if ctx == nil || err == nil {
+		return
+	}
+	if t, ok := ctx.Value(tallyKey{}).(*Tally); ok && t != nil {
+		t.mu.Lock()
+		if t.refused == nil {
+			t.refused = err
+		}
+		t.mu.Unlock()
+	}
 }
 
 // Counters returns a copy of the item's op-defined counters.
@@ -277,6 +309,7 @@ func (t *Tally) Reset() {
 	clear(t.counters)
 	t.skip = ""
 	t.marks = t.marks[:0]
+	t.refused = nil
 }
 
 // ItemRC is RC plus the item's own deadline and counters.
@@ -287,11 +320,14 @@ type ItemRC struct {
 }
 
 // NewItemRC builds an item's context. ctx carries the item's deadline; touch
-// heartbeats the worker's lease and the run's liveness. Executor only.
+// heartbeats the worker's lease and the run's liveness. The item's context
+// also carries t, so a Writer write made with it can flag a refusal on the
+// item's outcome (NoteRefusal). Executor only.
 func NewItemRC(rc *RC, ctx context.Context, t *Tally, touch func()) *ItemRC {
 	if t == nil {
 		t = &Tally{}
 	}
+	ctx = context.WithValue(ctx, tallyKey{}, t)
 	return &ItemRC{RC: rc.WithContext(ctx), tally: t, touch: touch}
 }
 

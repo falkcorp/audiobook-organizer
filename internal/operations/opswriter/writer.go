@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -193,6 +193,13 @@ func (w *Writer) Gate(what string) error {
 	return nil
 }
 
+// fenceRevoked reports whether the run's fence refuses, without renewing the
+// lease.
+func (w *Writer) fenceRevoked() bool {
+	f := w.fence.Load()
+	return f != nil && (*f)() != nil
+}
+
 // Writes is how many writes committed.
 func (w *Writer) Writes() int { return int(w.writes.Load()) }
 
@@ -217,9 +224,29 @@ func (w *Writer) begin(ctx context.Context, what, subject, kind, op, detail stri
 // ErrFenced, never a stale-read error such as ErrChangedSincePlan.
 func (w *Writer) check(ctx context.Context, what string) error {
 	if ctx != nil && ctx.Err() != nil {
-		return fmt.Errorf("%s not written: %w", what, context.Cause(ctx))
+		if w.fenceRevoked() {
+			// The run is being stopped: the registry revokes the fence before
+			// it cancels (a run timeout revokes it too). Report the fence, so
+			// the caller sees ErrFenced, and note it for the batch runner.
+			err := w.Gate(what)
+			ops.NoteRefusal(ctx, err)
+			return err
+		}
+		err := fmt.Errorf("%s not written: %w", what, context.Cause(ctx))
+		// Canceled outright (no fence to revoke): still a refusal the batch
+		// runner must hear of. An item's own deadline (ItemTimeout) is not.
+		if !errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+			ops.NoteRefusal(ctx, err)
+		}
+		return err
 	}
-	return w.Gate(what)
+	if err := w.Gate(what); err != nil {
+		// Fenced or lease lost: flag it on the item's outcome, through the
+		// item's context, even if the op swallows the error (ops.NoteRefusal).
+		ops.NoteRefusal(ctx, err)
+		return err
+	}
+	return nil
 }
 
 // intent is step 2: the plan line (Preview) or the write-ahead row (Live).
