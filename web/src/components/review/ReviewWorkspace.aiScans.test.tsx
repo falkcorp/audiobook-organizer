@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
 // last-edited: 2026-10-13
 
@@ -189,7 +189,7 @@ describe('the Authors & series menu', () => {
     await openMenu(user);
     expect(await screen.findByTestId('command-ai-author-scan-start-description')).toHaveTextContent('Realtime mode');
     await user.keyboard('{Escape}');
-    await user.click(screen.getByRole('switch', { name: 'Scan mode' }));
+    await user.click(screen.getByRole('button', { name: 'Batch (cheaper, hours)' }));
     await openMenu(user);
     expect(await screen.findByTestId('command-ai-author-scan-start-description')).toHaveTextContent('Batch mode');
   });
@@ -241,20 +241,38 @@ describe('the Authors & series menu', () => {
     vi.mocked(api.startAIScan).mockResolvedValue(scan(7, { status: 'pending', mode: 'batch' }));
     renderWorkspace('/review?lane=authors&view=ai');
     await screen.findByTestId('ai-history-list');
-    await user.click(screen.getByRole('switch', { name: 'Scan mode' }));
+    await user.click(screen.getByRole('button', { name: 'Batch (cheaper, hours)' }));
     await openMenu(user);
     await user.click(await start());
     await waitFor(() => expect(api.startAIScan).toHaveBeenCalledWith('batch'));
   });
 
-  it('Start that the server refuses is reported, not swallowed', async () => {
+  it('Start that the server refuses is reported with the server\'s reason', async () => {
     const user = userEvent.setup();
     vi.mocked(api.startAIScan).mockRejectedValue(new Error('AI scan pipeline not configured'));
     renderWorkspace('/review?lane=authors&view=ai');
     await screen.findByTestId('ai-history-list');
     await openMenu(user);
     await user.click(await start());
-    expect(await screen.findByText('Failed to start ai author scan.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Failed to start AI author scan: AI scan pipeline not configured')
+    ).toBeInTheDocument();
+  });
+
+  it('Start cannot be fired twice: once the POST has answered the scan is listed and the command is refused, even if the re-read never answers', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startAIScan).mockResolvedValue(scan(7, { status: 'pending' }));
+    renderWorkspace('/review?lane=authors&view=ai');
+    await screen.findByTestId('ai-history-list');
+    // The re-read after the start never answers.
+    vi.mocked(reads.fetchAIScans).mockImplementation(() => new Promise(() => {}));
+    await openMenu(user);
+    await user.click(await start());
+    await screen.findByTestId('ai-scan-7');
+
+    await openMenu(user);
+    expect(await start()).toHaveAttribute('aria-disabled', 'true');
+    expect(api.startAIScan).toHaveBeenCalledTimes(1);
   });
 
   it('Start is disabled while a scan is running, and says which', async () => {

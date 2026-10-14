@@ -1,5 +1,5 @@
 // file: web/src/components/review/AIScansPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: b84f1c2d-7e09-4a63-95d8-1f3a6c0e5b72
 // last-edited: 2026-10-13
 
@@ -23,7 +23,8 @@
  *
  * Starting and cancelling a scan are commands in the lane menu (ReviewWorkspace),
  * which report through the notification bell. This panel has the Realtime / Batch
- * switch they read, and a Refresh button, because nothing here polls.
+ * selector they read (two labelled buttons, so both options and their costs are
+ * on screen at once), and a Refresh button, because nothing here polls.
  *
  * There are no keyboard shortcuts in this sub-view. The Authors and Series
  * handlers are unbound while it shows, so `?` falls through to the app's own
@@ -39,14 +40,14 @@ import {
   Checkbox,
   Chip,
   CircularProgress,
-  FormControlLabel,
   IconButton,
   LinearProgress,
   List,
   ListItemButton,
   Paper,
   Stack,
-  Switch,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -110,16 +111,21 @@ function ScanEntry({ s, open, onOpen }: { s: AIScan; open: boolean; onOpen: () =
         </Typography>
         <Chip size="small" variant="outlined" label={s.mode} />
         {s.status === 'superseded' ? (
-          <Tooltip title={`Replaced by scan #${s.superseded_by ?? '?'} before anything was applied from it`}>
-            <Chip size="small" color="info" label="superseded" data-testid={`ai-scan-superseded-${s.id}`} />
-          </Tooltip>
+          <Chip size="small" color="info" label="superseded" data-testid={`ai-scan-superseded-${s.id}`} />
         ) : (
           <Chip size="small" color={STATUS_COLOR[s.status] ?? 'default'} label={s.status} />
         )}
       </Stack>
       <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-        {new Date(s.created_at).toLocaleString()} · {s.author_count} authors
+        {new Date(s.created_at).toLocaleString()} · scanned {s.author_count} authors
       </Typography>
+      {/* Visible text, not a tooltip: a chip is not focusable, so a hover-only
+          explanation is out of a keyboard user's reach. */}
+      {s.status === 'superseded' && (
+        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }} data-testid={`ai-scan-replaced-by-${s.id}`}>
+          Replaced by scan #{s.superseded_by ?? '?'} before anything was applied from it
+        </Typography>
+      )}
     </ListItemButton>
   );
 }
@@ -192,17 +198,22 @@ export function AIScansPanel({ authors, ai }: { authors: AuthorsLane; ai: AIScan
             AI author scans, including the nightly ones. Start or cancel a scan from the Authors &amp; series menu;
             progress shows in the notification bell.
           </Typography>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={ai.mode === 'batch'}
-                onChange={(_, v) => ai.setMode(v ? 'batch' : 'realtime')}
-                slotProps={{ input: { 'aria-label': 'Scan mode' } }}
-              />
-            }
-            label={ai.mode === 'batch' ? 'Batch (cheaper, hours)' : 'Realtime (faster, more expensive)'}
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={ai.mode}
+            // Clicking the selected button yields null; the selector always has one.
+            onChange={(_, v: AIScansLane['mode'] | null) => v && ai.setMode(v)}
+            aria-label="Scan mode"
             data-testid="ai-scan-mode"
-          />
+          >
+            <ToggleButton value="realtime" data-testid="ai-scan-mode-realtime">
+              Realtime (faster, more expensive)
+            </ToggleButton>
+            <ToggleButton value="batch" data-testid="ai-scan-mode-batch">
+              Batch (cheaper, hours)
+            </ToggleButton>
+          </ToggleButtonGroup>
           <Tooltip title="Refresh">
             <span>
               <IconButton onClick={ai.refresh} aria-label="Refresh">
@@ -283,7 +294,7 @@ export function AIScansPanel({ authors, ai }: { authors: AuthorsLane; ai: AIScan
 
           {scan && running && (
             <Alert severity="info" data-testid="ai-scan-running" sx={{ mb: 2 }}>
-              Scan #{scan.id} is {scan.status.replace('_', ' ')}. It has no results yet; its progress is in the
+              Scan #{scan.id} is {scan.status.replaceAll('_', ' ')}. It has no results yet; its progress is in the
               notification bell. Refresh when it finishes.
             </Alert>
           )}
@@ -372,9 +383,6 @@ export function AIScansPanel({ authors, ai }: { authors: AuthorsLane; ai: AIScan
                   <Button variant="outlined" size="small" onClick={selection.clear} disabled={ai.applying}>
                     Clear selection
                   </Button>
-                  <Typography variant="body2" sx={{ color: 'text.secondary', ml: 'auto' }}>
-                    {selection.selectedCount} of {ai.filtered.filter((r) => !r.applied).length} selected
-                  </Typography>
                 </Paper>
               )}
 

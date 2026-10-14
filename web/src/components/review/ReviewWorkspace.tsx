@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.25.1
+// version: 1.26.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-14
 //
@@ -271,14 +271,24 @@ export function ReviewWorkspace() {
 
   // Every command starts a background job and reports through the bell, so the
   // handler shape is uniform: fire, toast, let OperationsIndicator own progress.
-  const startJob = (label: string, fn: () => Promise<unknown>) => async () => {
-    try {
-      await fn();
-      toast(`${label} started — watch the bell for progress.`, 'success');
-    } catch {
-      toast(`Failed to start ${label.toLowerCase()}.`, 'error');
-    }
-  };
+  //
+  // `reason: true` puts the failure's own message in the error toast ("Failed to
+  // start AI author scan: <server text>"). The scan start is a paid call whose
+  // refusals are specific (not configured, already running), so a bare "failed"
+  // would leave the reviewer guessing; the older commands keep their short text.
+  const startJob =
+    (label: string, fn: () => Promise<unknown>, opts?: { reason?: boolean }) => async () => {
+      try {
+        await fn();
+        toast(`${label} started — watch the bell for progress.`, 'success');
+      } catch (e) {
+        if (opts?.reason) {
+          toast(`Failed to start ${label}${e instanceof Error && e.message ? `: ${e.message}` : '.'}`, 'error');
+        } else {
+          toast(`Failed to start ${label.toLowerCase()}.`, 'error');
+        }
+      }
+    };
 
   // POST /dedup/rescore is synchronous and returns counts, so it is not a
   // "started, watch the bell" job: the counts ARE the result.
@@ -615,7 +625,7 @@ export function ReviewWorkspace() {
             disabledReason: aiScansOpen
               ? aiScans.startDisabledReason
               : 'Open Authors & series, then AI scans, to see whether it will run in Realtime or Batch mode.',
-            run: startJob('AI author scan', () => aiScans.startScan()),
+            run: startJob('AI author scan', () => aiScans.startScan(), { reason: true }),
           },
           {
             id: 'ai-author-scan-cancel',
@@ -623,9 +633,7 @@ export function ReviewWorkspace() {
             scope: 'library',
             description: 'Stops the AI author scan that is running, including any batch already submitted.',
             disabledReason: aiScansOpen
-              ? aiScans.cancelTarget
-                ? undefined
-                : 'No AI author scan is running.'
+              ? aiScans.cancelDisabledReason
               : 'Open Authors & series, then AI scans, to see which scan is running.',
             run: () => void aiScans.cancelScan(),
           },
@@ -728,7 +736,7 @@ export function ReviewWorkspace() {
       aiScans.startScan,
       aiScans.startDisabledReason,
       aiScans.cancelScan,
-      aiScans.cancelTarget,
+      aiScans.cancelDisabledReason,
       setLane,
       setDupesSubView,
       toast,

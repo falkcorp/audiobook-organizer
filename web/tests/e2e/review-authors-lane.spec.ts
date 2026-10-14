@@ -1,5 +1,5 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
 // last-edited: 2026-10-13
 
@@ -1005,6 +1005,7 @@ test.describe('Dedup AI Review', () => {
     const list = page.getByTestId('ai-history-list');
     await expect(list.getByTestId(/^ai-scan-\d+$/)).toHaveCount(2);
     await expect(list.getByTestId('ai-scan-superseded-6')).toHaveText('superseded');
+    await expect(list.getByTestId('ai-scan-replaced-by-6')).toHaveText('Replaced by scan #12 before anything was applied from it');
     await expect(list.getByTestId('ai-scan-5')).toContainText('realtime');
     await expect(page.getByRole('dialog')).toHaveCount(0);
   });
@@ -1100,8 +1101,10 @@ test.describe('Dedup AI Review', () => {
 
   test('Start runs in Batch mode when the switch is on, and is unavailable outside AI scans', async ({ page }) => {
     await openAI(page);
-    await page.getByRole('switch', { name: 'Scan mode' }).check();
-    await expect(page.getByText('Batch (cheaper, hours)')).toBeVisible();
+    const mode = page.getByRole('group', { name: 'Scan mode' });
+    await expect(mode.getByRole('button', { name: 'Realtime (faster, more expensive)' })).toHaveAttribute('aria-pressed', 'true');
+    await mode.getByRole('button', { name: 'Batch (cheaper, hours)' }).click();
+    await expect(mode.getByRole('button', { name: 'Batch (cheaper, hours)' })).toHaveAttribute('aria-pressed', 'true');
     const posted = page.waitForRequest((req) => req.url().endsWith('/api/v1/ai/scans') && req.method() === 'POST');
     await page.getByTestId('command-menu-authors').click();
     await page.getByTestId('command-ai-author-scan-start').click();

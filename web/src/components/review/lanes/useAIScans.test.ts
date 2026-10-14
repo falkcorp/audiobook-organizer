@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAIScans.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a3d9f20-1b84-4e57-8c02-d5f7e19a4b63
 // last-edited: 2026-10-13
 
@@ -307,6 +307,218 @@ describe('apply', () => {
   });
 });
 
+/** A promise the test settles by hand. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('Start cannot queue two paid scans', () => {
+  it('while the POST is in flight Start is refused, and a second call sends nothing', async () => {
+    const post = deferred<AIScan>();
+    vi.mocked(api.startAIScan).mockReturnValue(post.promise);
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    expect(h.result.current.startDisabledReason).toBeUndefined();
+
+    let first: Promise<AIScan> = Promise.resolve(scan(0));
+    act(() => {
+      first = h.result.current.startScan();
+    });
+    expect(h.result.current.starting).toBe(true);
+    expect(h.result.current.startDisabledReason).toBe('A scan is being started.');
+    await expect(h.result.current.startScan()).rejects.toThrow('already being started');
+    expect(api.startAIScan).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      post.resolve(scan(7, { status: 'pending' }));
+      await first;
+    });
+    expect(h.result.current.starting).toBe(false);
+  });
+
+  it('after the POST answers but before the re-read does, the new scan is already in the list and Start stays refused', async () => {
+    vi.mocked(api.startAIScan).mockResolvedValue(scan(7, { status: 'pending' }));
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    // The re-read after the start never answers.
+    vi.mocked(reads.fetchAIScans).mockImplementation(() => new Promise(() => {}));
+    await act(async () => {
+      await h.result.current.startScan();
+    });
+    expect(h.result.current.starting).toBe(false);
+    expect(h.result.current.scans.map((s) => s.id)).toEqual([7, 6, 5]);
+    expect(h.result.current.scan?.id).toBe(7);
+    expect(h.result.current.startDisabledReason).toBe('Scan #7 is still running. Refresh if it has finished.');
+  });
+
+  it('and when that re-read fails, Start stays refused', async () => {
+    vi.mocked(api.startAIScan).mockResolvedValue(scan(7, { status: 'pending' }));
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    vi.mocked(reads.fetchAIScans).mockRejectedValue(new Error('history down'));
+    await act(async () => {
+      await h.result.current.startScan();
+    });
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('error'));
+    // The list still holds the scan we just started, so a running scan is not ruled out.
+    expect(h.result.current.scans.map((s) => s.id)).toContain(7);
+    expect(h.result.current.startDisabledReason).toBe('Scan #7 is still running. Refresh if it has finished.');
+  });
+
+  it('a POST the server refuses leaves the list as it was and Start available again', async () => {
+    vi.mocked(api.startAIScan).mockRejectedValue(new Error('AI scan pipeline not configured'));
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    await expect(h.result.current.startScan()).rejects.toThrow('not configured');
+    await waitFor(() => expect(h.result.current.starting).toBe(false));
+    expect(h.result.current.scans.map((s) => s.id)).toEqual([6, 5]);
+    expect(h.result.current.startDisabledReason).toBeUndefined();
+  });
+});
+
+describe('an apply that is still out when another scan is opened', () => {
+  it('reports by toast and touches nothing of the other scan: its notice, selection and rows', async () => {
+    const post = deferred<{ applied: number; errors: string[] }>();
+    vi.mocked(api.applyAIScanResults).mockReturnValue(post.promise);
+    const h = mount();
+    await open(h, 5);
+    act(() => h.result.current.selection.toggle(1));
+    let applying: Promise<void> = Promise.resolve();
+    act(() => {
+      applying = h.result.current.applySelected();
+    });
+    expect(h.result.current.applying).toBe(true);
+
+    // Open scan 6 and tick a row there while scan 5's apply is still out.
+    act(() => h.result.current.selectScan(6));
+    await waitFor(() => expect(h.result.current.scan?.id).toBe(6));
+    await waitFor(() => expect(h.result.current.resultsStatus).toBe('populated'));
+    act(() => h.result.current.selection.toggle(3));
+    const reads6 = vi.mocked(reads.fetchAIScanResults).mock.calls.length;
+
+    await act(async () => {
+      post.resolve({ applied: 1, errors: [] });
+      await applying;
+    });
+    expect(h.result.current.notice).toBeNull();
+    expect([...h.result.current.selection.selected]).toEqual([3]);
+    // Scan 6's rows were not re-read on scan 5's account.
+    expect(vi.mocked(reads.fetchAIScanResults).mock.calls.length).toBe(reads6);
+    expect(toast).toHaveBeenCalledWith('Scan #5: Applied 1 of 1 selected results.', 'success');
+  });
+
+  it('a 409 for the scan that was left still re-reads the history, but shows no error on the open scan', async () => {
+    const post = deferred<{ applied: number; errors: string[] }>();
+    vi.mocked(api.applyAIScanResults).mockReturnValue(post.promise);
+    const h = mount();
+    await open(h, 5);
+    act(() => h.result.current.selection.toggle(1));
+    let applying: Promise<void> = Promise.resolve();
+    act(() => {
+      applying = h.result.current.applySelected();
+    });
+    act(() => h.result.current.selectScan(6));
+    await waitFor(() => expect(h.result.current.resultsStatus).toBe('populated'));
+    act(() => h.result.current.selection.toggle(3));
+    const historyReads = vi.mocked(reads.fetchAIScans).mock.calls.length;
+
+    await act(async () => {
+      post.reject(new api.ApiError('scan 5 was superseded by scan 12; apply from scan 12 instead', 409));
+      await applying;
+    });
+    expect(h.result.current.notice).toBeNull();
+    expect([...h.result.current.selection.selected]).toEqual([3]);
+    await waitFor(() => expect(vi.mocked(reads.fetchAIScans).mock.calls.length).toBe(historyReads + 1));
+    expect(toast).toHaveBeenCalledWith(
+      'Scan #5: scan 5 was superseded by scan 12; apply from scan 12 instead',
+      'error'
+    );
+  });
+});
+
+describe('a late results answer', () => {
+  it('for a scan that was left never replaces the open scan\'s rows', async () => {
+    const slowA = deferred<AIScanResult[]>();
+    vi.mocked(reads.fetchAIScanResults).mockImplementation((id: number) =>
+      // A transport that ignores its signal: scan 5's answer arrives last.
+      id === 5 ? slowA.promise : Promise.resolve([result(11, 'agreed'), result(12, 'disagreed')])
+    );
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    act(() => h.result.current.selectScan(5));
+    await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledWith(5, expect.anything()));
+    act(() => h.result.current.selectScan(6));
+    await waitFor(() => expect(h.result.current.resultsStatus).toBe('populated'));
+    expect(h.result.current.results.map((r) => r.id)).toEqual([11, 12]);
+
+    await act(async () => {
+      slowA.resolve([result(1, 'agreed'), result(2, 'agreed')]);
+      await Promise.resolve();
+    });
+    expect(h.result.current.scan?.id).toBe(6);
+    expect(h.result.current.results.map((r) => r.id)).toEqual([11, 12]);
+    expect(h.result.current.counts.all).toBe(2);
+  });
+
+  it('a late failure for a scan that was left shows no error on the open scan', async () => {
+    const slowA = deferred<AIScanResult[]>();
+    vi.mocked(reads.fetchAIScanResults).mockImplementation((id: number) =>
+      id === 5 ? slowA.promise : Promise.resolve([result(11, 'agreed')])
+    );
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    act(() => h.result.current.selectScan(5));
+    await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledWith(5, expect.anything()));
+    act(() => h.result.current.selectScan(6));
+    await waitFor(() => expect(h.result.current.resultsStatus).toBe('populated'));
+    await act(async () => {
+      slowA.reject(new Error('late failure'));
+      await Promise.resolve();
+    });
+    expect(h.result.current.resultsStatus).toBe('populated');
+    expect(h.result.current.resultsError).toBeNull();
+  });
+});
+
+describe('Cancel', () => {
+  it('while the POST is in flight Cancel is refused and a second call sends nothing', async () => {
+    vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(7, { status: 'scanning' }), scan(5)]);
+    const post = deferred<void>();
+    vi.mocked(api.cancelAIScan).mockReturnValue(post.promise);
+    const h = mount();
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    expect(h.result.current.cancelDisabledReason).toBeUndefined();
+
+    let first: Promise<void> = Promise.resolve();
+    act(() => {
+      first = h.result.current.cancelScan();
+    });
+    expect(h.result.current.canceling).toBe(true);
+    expect(h.result.current.cancelDisabledReason).toBe('A cancel is in progress.');
+    await act(() => h.result.current.cancelScan());
+    expect(api.cancelAIScan).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      post.resolve();
+      await first;
+    });
+    expect(h.result.current.canceling).toBe(false);
+  });
+
+  it('with nothing running says so, and says to refresh if a scan was just started', async () => {
+    const h = mount();
+    expect(h.result.current.cancelDisabledReason).toBe('The scan history is still loading.');
+    await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
+    expect(h.result.current.cancelDisabledReason).toBe('No AI author scan is running. Refresh if one was just started.');
+  });
+});
+
 describe('start and cancel', () => {
   it('start scan uses startJob (no local polling): one start, one re-read of the list, and no timer', async () => {
     // The old tab re-read the active scan every 5 s. Any timer of 2 s or more that
@@ -368,7 +580,7 @@ describe('start and cancel', () => {
     const h = mount();
     expect(h.result.current.startDisabledReason).toMatch(/still loading/);
     await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
-    expect(h.result.current.startDisabledReason).toBe('Scan #7 is still running.');
+    expect(h.result.current.startDisabledReason).toBe('Scan #7 is still running. Refresh if it has finished.');
 
     const failing = mount();
     vi.mocked(reads.fetchAIScans).mockRejectedValue(new Error('down'));
