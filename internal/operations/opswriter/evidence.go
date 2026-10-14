@@ -26,8 +26,8 @@ import (
 // batch or operation journal row ids on the item, ops.NoteHistory). A marker
 // can only exist because this run applied that row, so the attempt that
 // wrote it does not matter. History is still read, but only to see whether
-// what the marker names still stands: not undone, and not overwritten by
-// a later write since (RowApplied).
+// what the marker names still stands: not undone, and not followed on what
+// it wrote by a later write recorded in either store (RowApplied).
 //
 // Why not per subject: a run's history for a book proves the run wrote SOME
 // row of that book, not this one. Two rows of one book (title, then
@@ -148,8 +148,9 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 //
 //   - each journal row it names is still there, neither voided nor reverted
 //     (journalRowsLive);
-//   - each batch it names is in its book's metadata history, with no undo of
-//     it, judged without the clock (batchesUndone);
+//   - each batch it names is in its book's metadata history and its run was
+//     not reverted there (batchesUndone), and no batch was undone by
+//     undo-last-apply (standsIn), both judged without the clock;
 //   - no write it names has been followed, on what it wrote, by a later
 //     write recorded in EITHER store -- a metadata history row or an
 //     operation journal row of the same book, of any operation and any
@@ -289,42 +290,32 @@ func (w *Writer) bookStands(ctx context.Context, bookID string, n *bookNamed) (b
 }
 
 // batchesUndone reports whether a wanted batch is missing from its book's
-// history or was undone, judged without the clock so a skewed timestamp
-// cannot hide an undo: undo-last-apply records its undo rows in the batch
-// itself, on the fields it puts back, so a batch with two rows on one
-// field was undone; an operation revert records its rows under the
-// reverted op's id, so any row under this run's op id (opID) means the run
-// was reverted on this book.
+// history (no write row of it there) or its run was reverted on this book:
+// an operation revert records its rows under the reverted op's id, so any
+// row under this run's op id (opID) means it, whatever its timestamp says.
+// undo-last-apply needs no check here: it records its undo rows in the
+// batch itself, on the fields it puts back, and standsIn makes two rows of
+// a wanted batch on one subject defeat each other whatever their stamps.
 func batchesUndone(hist []database.MetadataChangeRecord, want map[string]bool, opID string) bool {
-	wrote := map[string]map[subject]int{} // batch -> subject -> rows
+	found := map[string]bool{}
 	for _, r := range hist {
 		if opID != "" && r.BatchID == opID {
 			return true
 		}
-		if !want[r.BatchID] || !historyWrite(r) {
-			continue
-		}
-		if wrote[r.BatchID] == nil {
-			wrote[r.BatchID] = map[subject]int{}
-		}
-		s := subjectOf(r.Field, nil)
-		wrote[r.BatchID][s]++
-		if wrote[r.BatchID][s] > 1 {
-			return true
+		if want[r.BatchID] && historyWrite(r) {
+			found[r.BatchID] = true
 		}
 	}
-	return len(wrote) != len(want)
+	return len(found) != len(want)
 }
 
 // historyWrite reports whether a metadata history row records a write to
 // the library's rows. Left out: the undo markers undo-last-apply reads
-// (apply_op_journaled, apply_incomplete, both field "apply"), and two rows
-// that only describe work on files outside the database (write_back: tags
-// written to the audio files; cover_art: the previous cover archived).
+// (apply_op_journaled and apply_incomplete, which every writer records
+// under field "apply"), and two rows that only describe work on files
+// outside the database (write_back: tags written to the audio files;
+// cover_art: the previous cover archived).
 func historyWrite(r database.MetadataChangeRecord) bool {
-	if r.ChangeType == ChangeTypeApplyOpJournaled || r.ChangeType == ChangeTypeApplyIncomplete {
-		return false
-	}
 	switch r.Field {
 	case "apply", "write_back", "cover_art":
 		return false
@@ -343,7 +334,10 @@ type write struct {
 // standsIn reports whether no write it names on this book -- every write
 // row of a wanted batch, every named journal row -- was followed on what it
 // wrote (subject overlap) by ANOTHER write of either store stamped at or
-// after it. A tie counts against the named write. So does a later write of
+// after it. A tie counts against the named write. Two rows of wanted
+// batches on one subject therefore defeat each other whatever their
+// stamps: that is how an undo-last-apply (its undo rows go in the batch
+// itself) is seen without trusting the clock. So does a later write of
 // this same run (a row whose Apply wrote one field twice is not claimed),
 // one an operation revert has since reverted, and one that put the named
 // value back: the rule asks only whether the named write is still the
