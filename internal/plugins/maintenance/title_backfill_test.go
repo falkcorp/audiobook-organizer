@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.49.1
+// version: 1.50.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -71,6 +71,16 @@ type fakeDeps struct {
 	refreshCtx *context.Context
 	// splitCands backs SplitBookCandidates; nil means no embedding store.
 	splitCands SplitBookCandidateRows
+	// reconcileScan backs LatestReconcileScan; nil means no scan has run.
+	reconcileScan func() (ReconcileScan, error)
+}
+
+// LatestReconcileScan (ReconcileScanReader): the fixture's scan, or none.
+func (d fakeDeps) LatestReconcileScan() (ReconcileScan, error) {
+	if d.reconcileScan == nil {
+		return ReconcileScan{}, nil
+	}
+	return d.reconcileScan()
 }
 
 func (d fakeDeps) SplitBookCandidates() SplitBookCandidateRows { return d.splitCands }
