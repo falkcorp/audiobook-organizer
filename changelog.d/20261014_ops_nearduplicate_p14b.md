@@ -1,0 +1,3 @@
+### Changed
+
+- `scheduler.dedup-llm-review` is retired into `dedup.llm-review` (04-P14b, D54). The old id still resolves as an alias, so a stored row or script that names it runs the survivor. Access is unchanged: both require `settings.manage` (the survivor declared no permissions before and fell back to that gate; it now declares it). The timeout stays 2h and both use ResumeDrop, so an old-id run interrupted by the deploy is dropped, not re-run. The nightly `dedup_llm_review` task now enqueues `dedup.llm-review`. Unlike the retired copy, the survivor reports progress while it builds review inputs.
