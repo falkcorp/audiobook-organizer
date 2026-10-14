@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.14.2
+// version: 1.15.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-10-11
+// last-edited: 2026-10-13
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -32,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
@@ -75,7 +76,6 @@ type AIScanStore interface {
 	ListScans() ([]database.Scan, error)
 	GetScanResults(scanID int) ([]database.ScanResult, error)
 	GetPhases(scanID int) ([]database.ScanPhase, error)
-	MarkResultApplied(scanID, resultID int) error
 	DeleteScan(id int) error
 }
 
@@ -88,9 +88,14 @@ type AIScanStore interface {
 // immediately getAIScan(newScan.id) — so creating the scan cannot be deferred
 // into the op. RunScan (the work itself) is reached by the registry, not here.
 type AIPipeline interface {
+	// CreateScan refuses with an error wrapping *database.ScanAlreadyRunningError
+	// while another scan has not finished.
 	CreateScan(mode string) (*database.Scan, error)
 	LinkOperation(scanID int, opID string) error
 	CancelScan(scanID int) error
+	// EnsureKeepIDs fills the keep author on a scan's stored merge results that
+	// lack one (a scan stored before the field existed) and persists it.
+	EnsureKeepIDs(scanID int) error
 }
 
 // AudiobookUpdater is the narrow interface AIHandler requires from the
@@ -147,6 +152,19 @@ type AIMergeApplyOpParams struct {
 	Suggestions []AIMergeApplySuggestion `json:"suggestions"`
 }
 
+// AIScanApplyOpParams holds the serializable parameters for the
+// ai.author-scan-apply op: merge the authors of these results of one scan.
+//
+// DryRun follows the owner's preview-by-default rule (opmode.ResolveDryRun):
+// omitted means a preview that writes nothing. ApplyScanResults sets it to false
+// explicitly, because the person clicking Apply wants the merge.
+type AIScanApplyOpParams struct {
+	ScanID      int   `json:"scan_id"`
+	ResultIDs   []int `json:"result_ids"`
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
+}
+
 // aiStore is everything the AI handler needs from the store. Was
 // database.Store (398 methods) until 2026-08-19, on a comment reading "full
 // store for the author-review paths". Narrowed to the eight methods the
@@ -182,6 +200,8 @@ type aiReviewGroupsStore interface {
 const (
 	AIAuthorReviewDefID     = "ai.author-review"
 	AIAuthorMergeApplyDefID = "ai.author-merge-apply"
+	// AIScanApplyDefID merges the authors of an AI scan's selected results.
+	AIScanApplyDefID = "ai.author-scan-apply"
 )
 
 // SaveResultFunc persists an operation's result payload.
@@ -523,6 +543,15 @@ func (h *AIHandler) StartScan(c *gin.Context) {
 
 	scan, err := h.pipeline.CreateScan(req.Mode)
 	if err != nil {
+		// A scan that has not finished refuses a second one. This is the
+		// authoritative check (the store makes it and the create one step): the
+		// page's own "a scan is running" guard only knows what it last read, and
+		// the nightly ai-dedup-batch creates scans too.
+		var running *database.ScanAlreadyRunningError
+		if stderrors.As(err, &running) {
+			httputil.RespondWithConflict(c, running.Error())
+			return
+		}
 		httputil.InternalError(c, "failed to create AI scan", err)
 		return
 	}
@@ -530,6 +559,12 @@ func (h *AIHandler) StartScan(c *gin.Context) {
 	opID, err := h.registry.EnqueueOp(c.Request.Context(), "ai.author-scan",
 		aiAuthorScanOpParams{ScanID: scan.ID})
 	if err != nil {
+		// The scan row already exists and is not finished: left alone it would
+		// read as a running scan and refuse every later start. Cancel it.
+		if cerr := h.pipeline.CancelScan(scan.ID); cerr != nil {
+			logging.Warn(c.Request.Context(), "AI scan could not be canceled after its operation failed to enqueue",
+				"scan_id", scan.ID, "err", cerr)
+		}
 		httputil.InternalError(c, "failed to enqueue AI scan operation", err)
 		return
 	}
@@ -588,7 +623,40 @@ func (h *AIHandler) GetScan(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"scan": scan, "phases": phases})
 }
 
+// scanResultView is a stored result plus what the page needs to show it.
+type scanResultView struct {
+	database.ScanResult
+	// PairedWith is the other half of a disagreement: the two phases' answers are
+	// stored as two rows (groups first, then full), and this names the one that
+	// is not this. Zero for every other row.
+	PairedWith int `json:"paired_with,omitempty"`
+}
+
+// pairDisagreements links each disagreed groups_scan row to the full_scan row
+// stored right after it (CrossValidate appends them as a pair, and ids only grow).
+// The adjacency AND both sources are checked, so a row that merely sits next to
+// another disagreed row is not paired by accident.
+func pairDisagreements(results []database.ScanResult) []scanResultView {
+	views := make([]scanResultView, len(results))
+	for i := range results {
+		views[i].ScanResult = results[i]
+	}
+	for i := 0; i+1 < len(results); i++ {
+		a, b := results[i], results[i+1]
+		if a.Agreement == "disagreed" && b.Agreement == "disagreed" &&
+			a.Suggestion.Source == "groups_scan" && b.Suggestion.Source == "full_scan" &&
+			views[i].PairedWith == 0 && views[i+1].PairedWith == 0 {
+			views[i].PairedWith = b.ID
+			views[i+1].PairedWith = a.ID
+		}
+	}
+	return views
+}
+
 // GetScanResults returns results for a scan, with optional agreement filter.
+// Alongside them it returns author_names: the name of every author a merge row
+// names, by id (a merged-away author is absent), so the page can show
+// "keep X, merge Y, Z" without a request per author.
 func (h *AIHandler) GetScanResults(c *gin.Context) {
 	if h.scanStore == nil {
 		httputil.RespondWithNotFound(c, "scan store", "")
@@ -599,34 +667,85 @@ func (h *AIHandler) GetScanResults(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid scan ID")
 		return
 	}
+	// Scans stored before the keep author existed get it now, once; a failure
+	// leaves those rows without one (the page shows them as having no keep, and
+	// Apply refuses them) rather than failing the read.
+	if h.pipeline != nil {
+		if kerr := h.pipeline.EnsureKeepIDs(id); kerr != nil {
+			logging.Warn(c.Request.Context(), "ai scan results: could not fill in keep authors", "scan_id", id, "err", kerr)
+		}
+	}
 	results, err := h.scanStore.GetScanResults(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get AI scan results", err)
 		return
 	}
 
+	views := pairDisagreements(results)
+
 	// Optional agreement filter
 	agreement := c.Query("agreement")
 	if agreement != "" {
-		var filtered []database.ScanResult
-		for _, r := range results {
+		var filtered []scanResultView
+		for _, r := range views {
 			if r.Agreement == agreement {
 				filtered = append(filtered, r)
 			}
 		}
-		results = filtered
+		views = filtered
 	}
 
-	if results == nil {
-		results = []database.ScanResult{}
+	if views == nil {
+		views = []scanResultView{}
 	}
-	httputil.RespondWithOK(c, gin.H{"results": results})
+	httputil.RespondWithOK(c, gin.H{"results": views, "author_names": h.authorNames(views)})
 }
 
-// ApplyScanResults marks selected scan results as applied.
+// authorNames resolves every author id the results name. GetAuthorByID follows
+// the author tombstone, so an answer under a different id means the author was
+// merged away and is left out.
+func (h *AIHandler) authorNames(views []scanResultView) map[string]string {
+	names := map[string]string{}
+	if h.store == nil {
+		return names
+	}
+	seen := map[int]bool{}
+	look := func(id int) {
+		if id <= 0 || seen[id] {
+			return
+		}
+		seen[id] = true
+		if a, err := h.store.GetAuthorByID(id); err == nil && a != nil && a.ID == id {
+			names[strconv.Itoa(id)] = a.Name
+		}
+	}
+	for _, v := range views {
+		look(v.Suggestion.KeepID)
+		for _, aid := range v.Suggestion.AuthorIDs {
+			look(aid)
+		}
+	}
+	return names
+}
+
+// ApplyScanResults merges the authors of the selected results of a scan: it
+// validates the request and enqueues an ai.author-scan-apply operation, answering
+// 202 with the operation's id. The operation merges and marks each result that
+// succeeded; the page follows it through the bell and re-reads the results when
+// it finishes.
+//
+// Everything that can be refused is refused here, before anything is queued: a
+// superseded scan (409, naming the scan to apply from), a scan that has not
+// finished (409), a result that is not in the scan or is not a merge (400), and
+// a result already applied (409). The operation checks again, because the state
+// can change between the request and the run.
 func (h *AIHandler) ApplyScanResults(c *gin.Context) {
 	if h.scanStore == nil {
 		httputil.RespondWithNotFound(c, "scan store", "")
+		return
+	}
+	if h.registry == nil {
+		httputil.RespondWithInternalError(c, "operations registry not configured")
 		return
 	}
 	scanID, err := strconv.Atoi(c.Param("id"))
@@ -636,31 +755,101 @@ func (h *AIHandler) ApplyScanResults(c *gin.Context) {
 	}
 	var req struct {
 		ResultIDs []int `json:"result_ids"`
+		// DryRun is optional and absent means a LIVE apply: unlike the op's own
+		// default, the person pressing Apply asked for the merge.
+		DryRun *bool `json:"dry_run"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
 		return
 	}
-
-	applied := 0
-	var errors []string
-	for _, resultID := range req.ResultIDs {
-		if err := h.scanStore.MarkResultApplied(scanID, resultID); err != nil {
-			// A superseded scan's list was replaced by a newer run: refuse the
-			// whole request and point at the newer scan, rather than a 200
-			// with every result listed as an error.
-			var superseded *database.ScanSupersededError
-			if stderrors.As(err, &superseded) {
-				httputil.RespondWithConflict(c, superseded.Error())
-				return
-			}
-			errors = append(errors, fmt.Sprintf("result %d: %v", resultID, err))
-		} else {
-			applied++
-		}
+	if len(req.ResultIDs) == 0 {
+		httputil.RespondWithBadRequest(c, "result_ids must not be empty")
+		return
 	}
 
-	httputil.RespondWithOK(c, gin.H{"applied": applied, "errors": errors})
+	scan, err := h.scanStore.GetScan(scanID)
+	if err != nil {
+		httputil.InternalError(c, "failed to get AI scan", err)
+		return
+	}
+	if scan == nil {
+		httputil.RespondWithNotFound(c, "scan", "")
+		return
+	}
+	// A superseded scan's list was replaced by a newer run: refuse and point at it.
+	if scan.Status == "superseded" {
+		httputil.RespondWithConflict(c, (&database.ScanSupersededError{ScanID: scanID, By: scan.SupersededBy}).Error())
+		return
+	}
+	if scan.Status != "complete" {
+		httputil.RespondWithConflict(c, fmt.Sprintf("scan %d is %s; only a finished scan's results can be applied", scanID, scan.Status))
+		return
+	}
+
+	if h.pipeline != nil {
+		if kerr := h.pipeline.EnsureKeepIDs(scanID); kerr != nil {
+			logging.Warn(c.Request.Context(), "ai scan apply: could not fill in keep authors", "scan_id", scanID, "err", kerr)
+		}
+	}
+	results, err := h.scanStore.GetScanResults(scanID)
+	if err != nil {
+		httputil.InternalError(c, "failed to get AI scan results", err)
+		return
+	}
+	byID := make(map[int]database.ScanResult, len(results))
+	for _, r := range results {
+		byID[r.ID] = r
+	}
+
+	var invalid, conflicts []string
+	seen := make(map[int]bool, len(req.ResultIDs))
+	ids := make([]int, 0, len(req.ResultIDs))
+	for _, rid := range req.ResultIDs {
+		if seen[rid] {
+			continue
+		}
+		seen[rid] = true
+		ids = append(ids, rid)
+		r, ok := byID[rid]
+		switch {
+		case !ok:
+			invalid = append(invalid, fmt.Sprintf("result %d is not in scan %d", rid, scanID))
+		case r.Applied:
+			conflicts = append(conflicts, fmt.Sprintf("result %d is already applied", rid))
+		case r.Suggestion.Action != "merge":
+			invalid = append(invalid, fmt.Sprintf(
+				"result %d is a %q suggestion; only merge suggestions can be applied here, review the others in the Authors view",
+				rid, r.Suggestion.Action))
+		case r.Suggestion.KeepID <= 0 || len(r.Suggestion.AuthorIDs) < 2:
+			invalid = append(invalid, fmt.Sprintf("result %d has no keep author or no author to merge into it", rid))
+		}
+	}
+	if len(invalid) > 0 {
+		httputil.RespondWithBadRequest(c, strings.Join(append(invalid, conflicts...), "; "))
+		return
+	}
+	if len(conflicts) > 0 {
+		httputil.RespondWithConflict(c, strings.Join(conflicts, "; "))
+		return
+	}
+
+	params := AIScanApplyOpParams{ScanID: scanID, ResultIDs: ids, DryRun: req.DryRun}
+	if params.DryRun == nil {
+		params.DryRun = opmode.Live()
+	}
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), AIScanApplyDefID, params)
+	if err != nil {
+		httputil.InternalError(c, "failed to enqueue the AI scan apply operation", err)
+		return
+	}
+	httputil.RespondWithSuccess(c, 202, gin.H{
+		"id":      opID,
+		"type":    AIScanApplyDefID,
+		"status":  "queued",
+		"scan_id": scanID,
+		"results": len(ids),
+	})
 }
 
 // DeleteScan removes a scan and all its associated data.

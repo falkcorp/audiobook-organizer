@@ -160,6 +160,10 @@ type authorMergeSpec struct {
 	// lock is named in Errors. The zero value ignores locks; callers pass true
 	// unless the user chose otherwise.
 	HonorLocks bool
+	// DryRun reads and decides everything a merge would, writes nothing, and
+	// reports what it would have done in the outcome (Merged counts the authors
+	// it would delete; Errors names the locks that would hold an author back).
+	DryRun bool
 }
 
 // authorMergeOutcome is what a merge did.
@@ -262,6 +266,9 @@ func mergeAuthorsInto(
 					continue
 				}
 			}
+			if spec.DryRun {
+				continue
+			}
 			bookAuthors, err := store.GetBookAuthors(book.ID)
 			if err != nil {
 				continue
@@ -327,6 +334,11 @@ func mergeAuthorsInto(
 		if lockedBooks > 0 {
 			out.Errors = append(out.Errors, fmt.Sprintf(
 				"author %d NOT deleted: %d book(s) have a user-locked author name and keep it", mergeID, lockedBooks))
+		} else if spec.DryRun {
+			// Nothing was moved, so the unlinked re-check below would always refuse;
+			// the lock check above was the only thing that could hold this author.
+			out.Merged++
+			out.MergedIDs[mergeID] = true
 		} else if err := database.VerifyAuthorUnlinked(store, mergeID); err != nil {
 			out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: %v", mergeID, err))
 		} else if err := store.DeleteAuthor(mergeID); err != nil {
