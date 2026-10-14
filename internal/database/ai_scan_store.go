@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.17.0
-// last-edited: 2026-10-13
+// version: 2.18.0
+// last-edited: 2026-10-14
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -84,9 +84,15 @@ type Scan struct {
 	OperationID string            `json:"operation_id,omitempty"` // links to main operations store for visibility/cancel
 	// SupersededBy is the scan that replaced this one when Status is
 	// "superseded".
-	SupersededBy int        `json:"superseded_by,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	SupersededBy int `json:"superseded_by,omitempty"`
+	// ApplyingOpID and ApplyStartedAt are the claim an ai.author-scan-apply run
+	// holds on the scan while it merges (ClaimScanForApply). A claim blocks the
+	// scan being superseded: results a run is part way through are as good as
+	// applied. A claim older than AIScanApplyClaimTTL is a dead run's and ignored.
+	ApplyingOpID   string     `json:"applying_op_id,omitempty"`
+	ApplyStartedAt *time.Time `json:"apply_started_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 }
 
 // ScanPhase represents one phase of the pipeline.
@@ -427,6 +433,11 @@ func (s *AIScanStore) ListScans() ([]Scan, error) {
 
 // DeleteScan deletes a scan and all its associated phases and results.
 func (s *AIScanStore) DeleteScan(id int) error {
+	// applyMu, like every other writer of a result row: SetResultKeepIDs and
+	// MarkResultApplied read a row and write it back, and landing between this
+	// delete's listing and its commit they would resurrect a row it deleted.
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	batch := s.db.NewBatch()
 	defer batch.Close()
 
@@ -494,6 +505,84 @@ type ScanSupersededError struct {
 
 func (e *ScanSupersededError) Error() string {
 	return fmt.Sprintf("scan %d was superseded by scan %d; apply from scan %d instead", e.ScanID, e.By, e.By)
+}
+
+// AIScanApplyClaimTTL is how long a scan-apply claim stands without being released
+// before it counts as a dead run's. It is longer than the apply operation's own
+// timeout (two hours), so a live run's claim never expires under it, and a run that
+// died without releasing (a crash, a restart: the op is dropped, not resumed) frees
+// the scan on its own.
+const AIScanApplyClaimTTL = 3 * time.Hour
+
+// ScanApplyBusyError: another apply run holds the scan.
+type ScanApplyBusyError struct {
+	ScanID int
+	OpID   string
+}
+
+func (e *ScanApplyBusyError) Error() string {
+	return fmt.Sprintf("scan %d is being applied by operation %s", e.ScanID, e.OpID)
+}
+
+// claimLive reports whether the scan carries a claim that has not expired.
+func claimLive(scan *Scan) bool {
+	return scan.ApplyingOpID != "" && scan.ApplyStartedAt != nil && time.Since(*scan.ApplyStartedAt) < AIScanApplyClaimTTL
+}
+
+// ClaimScanForApply marks the scan as being applied by opID, under applyMu: the
+// same lock SupersedeIfUnapplied and MarkResultApplied take, so "claim" and
+// "supersede" are one decision each, and a supersede that lands first is seen here
+// (*ScanSupersededError) before the first merge. It refuses a scan that is not
+// complete, and one another run holds (*ScanApplyBusyError); the same op claiming
+// again refreshes its claim.
+func (s *AIScanStore) ClaimScanForApply(scanID int, opID string) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	s.stateMu.Lock() // lock order: applyMu, then stateMu
+	defer s.stateMu.Unlock()
+	scan, err := s.GetScan(scanID)
+	if err != nil {
+		return err
+	}
+	if scan == nil {
+		return fmt.Errorf("scan %d not found", scanID)
+	}
+	if scan.Status == "superseded" {
+		return &ScanSupersededError{ScanID: scanID, By: scan.SupersededBy}
+	}
+	if scan.Status != "complete" {
+		return fmt.Errorf("scan %d is %s; only a finished scan's results can be applied", scanID, scan.Status)
+	}
+	if claimLive(scan) && scan.ApplyingOpID != opID {
+		return &ScanApplyBusyError{ScanID: scanID, OpID: scan.ApplyingOpID}
+	}
+	now := time.Now()
+	scan.ApplyingOpID, scan.ApplyStartedAt = opID, &now
+	return s.writeScanLocked(scan)
+}
+
+// ReleaseScanApply drops opID's claim. A claim another run took since (this one
+// expired) is left alone.
+func (s *AIScanStore) ReleaseScanApply(scanID int, opID string) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	scan, err := s.GetScan(scanID)
+	if err != nil || scan == nil || scan.ApplyingOpID != opID {
+		return err
+	}
+	scan.ApplyingOpID, scan.ApplyStartedAt = "", nil
+	return s.writeScanLocked(scan)
+}
+
+// writeScanLocked stores scan. The caller holds stateMu.
+func (s *AIScanStore) writeScanLocked(scan *Scan) error {
+	data, err := json.Marshal(scan)
+	if err != nil {
+		return fmt.Errorf("marshal scan: %w", err)
+	}
+	return s.db.Set(s.k("scan:%d", scan.ID), data, pebble.Sync)
 }
 
 // isTerminalScanStatus reports whether a scan status admits no more phase
@@ -589,6 +678,11 @@ func (s *AIScanStore) SupersedeIfUnapplied(scanID, byID int) (bool, error) {
 	scan, err := s.GetScan(scanID)
 	if err != nil || scan == nil {
 		return false, fmt.Errorf("read scan %d: %v", scanID, err)
+	}
+	// A run that is merging this scan's results is as good as applied: hiding the
+	// scan under it would send the reviewer to a list the run is not working on.
+	if claimLive(scan) {
+		return false, nil
 	}
 	scan.Status = "superseded"
 	scan.SupersededBy = byID

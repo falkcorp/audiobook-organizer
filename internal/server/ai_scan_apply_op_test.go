@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b3d1e97-0c45-4a28-9f7e-d2a8c5416b03
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package server
 
@@ -24,6 +24,18 @@ type applyReporter struct {
 	relinkOpReporter
 	result   any
 	canceled bool
+	// onProgress, when set, runs on every progress update: the hook a test uses to
+	// make something happen while the run is part way through.
+	onProgress func()
+	id         string
+}
+
+func (r *applyReporter) OpID() string { return r.id }
+func (r *applyReporter) UpdateProgress(_, _ int, _ string) error {
+	if r.onProgress != nil {
+		r.onProgress()
+	}
+	return nil
 }
 
 func (r *applyReporter) SetResult(v any) error { r.result = v; return nil }
@@ -59,6 +71,10 @@ func newApplyFixture(t *testing.T) *applyFixture {
 	return &applyFixture{t: t, st: st, scanStore: scanStore, s: s, scan: scan}
 }
 
+func aiscanManagerFor(f *applyFixture) *aiscan.PipelineManager {
+	return aiscan.NewPipelineManager(f.scanStore, f.st, nil)
+}
+
 func (f *applyFixture) author(name string) *database.Author {
 	f.t.Helper()
 	a, err := f.st.CreateAuthor(name)
@@ -79,11 +95,15 @@ func (f *applyFixture) result(sug database.ScanSuggestion) int {
 
 func (f *applyFixture) run(dryRun *bool, ids ...int) (*applyReporter, error) {
 	f.t.Helper()
+	return f.runWith(&applyReporter{id: "op-apply-test"}, dryRun, ids...)
+}
+
+func (f *applyFixture) runWith(rep *applyReporter, dryRun *bool, ids ...int) (*applyReporter, error) {
+	f.t.Helper()
 	def := relinkOpDef(f.t, f.s.RegisterAIScanApplyOp, handlers.AIScanApplyDefID)
 	p := handlers.AIScanApplyOpParams{ScanID: f.scan.ID, ResultIDs: ids, DryRun: dryRun}
 	raw, err := json.Marshal(p)
 	require.NoError(f.t, err)
-	rep := &applyReporter{}
 	return rep, def.Run(context.Background(), raw, rep)
 }
 
@@ -170,6 +190,7 @@ func TestAIScanApplyOp_APreviewNamesTheLockThatWouldHoldAnAuthorBack(t *testing.
 	require.NoError(t, err, "a preview reports; it does not fail")
 	rpt := rep.report(t)
 	require.False(t, rpt.Results[0].Applied)
+	require.Empty(t, rpt.Results[0].Merged, "a preview does not call an author merged when a lock would hold it back")
 	require.NotEmpty(t, rpt.Results[0].Errors)
 	require.Contains(t, rpt.Results[0].Errors[0], "user-locked")
 }
@@ -490,4 +511,99 @@ func TestAIScanApplyOp_AnUnreadableStoredPhaseOutputFailsTheRunClosed(t *testing
 
 	require.Error(t, err)
 	require.Equal(t, []int{from.ID}, junctionIDs(t, f.st, book), "an unreadable answer is not 'nothing flagged'")
+}
+
+// A nightly run supersedes a scan whose results nobody has applied. If that lands
+// while an apply is part way through, the run's merges would be orphaned (the
+// results cannot be marked on a superseded scan). The run claims the scan first, so
+// the supersede is refused instead.
+func TestAIScanApplyOp_ASupersedeThatLandsMidRunIsRefusedByTheClaim(t *testing.T) {
+	f := newApplyFixture(t)
+	keepA, fromA := f.author("Claim Keep A"), f.author("Claim From A")
+	keepB, fromB := f.author("Claim Keep B"), f.author("Claim From B")
+	mkRelinkOpBook(t, f.st, "claim-a", fromA.ID, false)
+	mkRelinkOpBook(t, f.st, "claim-b", fromB.ID, false)
+	r1 := f.result(database.ScanSuggestion{CanonicalName: keepA.Name, KeepID: keepA.ID, AuthorIDs: []int{keepA.ID, fromA.ID}, Source: "groups_scan"})
+	r2 := f.result(database.ScanSuggestion{CanonicalName: keepB.Name, KeepID: keepB.ID, AuthorIDs: []int{keepB.ID, fromB.ID}, Source: "groups_scan"})
+	newer, err := f.scanStore.CreateScan("realtime", nil, 0)
+	require.NoError(t, err)
+
+	superseded := make([]bool, 0, 2)
+	rep := &applyReporter{id: "op-claim", onProgress: func() {
+		// The reporter is called at the start of each result, before its merge.
+		ok, serr := f.scanStore.SupersedeIfUnapplied(f.scan.ID, newer.ID)
+		require.NoError(t, serr)
+		superseded = append(superseded, ok)
+	}}
+	_, err = f.runWith(rep, live(), r1, r2)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, superseded)
+	for _, ok := range superseded {
+		require.False(t, ok, "the scan cannot be superseded while a run holds it")
+	}
+	require.True(t, f.applied(r1))
+	require.True(t, f.applied(r2))
+	got, err := f.scanStore.GetScan(f.scan.ID)
+	require.NoError(t, err)
+	require.Equal(t, "complete", got.Status)
+	require.Empty(t, got.ApplyingOpID, "the claim is released when the run ends")
+}
+
+func TestAIScanApplyOp_RefusesAScanThatIsNotComplete(t *testing.T) {
+	f := newApplyFixture(t)
+	keep, from := f.author("Status Keep"), f.author("Status From")
+	book := mkRelinkOpBook(t, f.st, "status-book", from.ID, false)
+	id := f.result(database.ScanSuggestion{CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, from.ID}, Source: "groups_scan"})
+
+	preview := true
+	for _, status := range []string{"scanning", "failed", "canceled", "pending"} {
+		require.NoError(t, f.scanStore.UpdateScanStatus(f.scan.ID, status))
+		// A live run is refused by the claim as well; a preview claims nothing, so the
+		// op's own check is the only thing that stops it.
+		for name, dry := range map[string]*bool{"live": live(), "preview": &preview} {
+			_, err := f.run(dry, id)
+			require.Error(t, err, "%s %s", status, name)
+			require.Contains(t, err.Error(), "only a finished scan's results can be applied", "%s %s", status, name)
+			require.Equal(t, []int{from.ID}, junctionIDs(t, f.st, book), "nothing merged for a %s scan (%s)", status, name)
+		}
+	}
+}
+
+func TestAIScanApplyOp_AnUnknownAuthorIsNotFoundAndTheResultIsNotMarked(t *testing.T) {
+	f := newApplyFixture(t)
+	keep := f.author("Unknown Keep")
+	id := f.result(database.ScanSuggestion{CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, 987654}, Source: "groups_scan"})
+
+	_, err := f.run(live(), id)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "author 987654 was not found")
+	require.False(t, f.applied(id), "an author that never existed is not 'already merged'")
+}
+
+func TestAIScanApplyOp_AFlaggedNarratorWithALockedNarratorKeepsItsBook(t *testing.T) {
+	f := newApplyFixture(t)
+	keep, voice := f.author("NarrLock Keep"), f.author("NarrLock Voice")
+	mkRelinkOpBook(t, f.st, "narrlock-keep", keep.ID, false)
+	voiceBook := mkRelinkOpBook(t, f.st, "narrlock-voice", voice.ID, false)
+	require.NoError(t, f.st.UpsertMetadataFieldState(&database.MetadataFieldState{
+		BookID: voiceBook, Field: database.FieldKeyNarrator, OverrideLocked: true,
+	}))
+	roles, err := json.Marshal(map[string]any{"narrator": map[string]any{"name": voice.Name, "ids": []int{voice.ID}}})
+	require.NoError(t, err)
+	id := f.result(database.ScanSuggestion{
+		CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, voice.ID},
+		Roles: roles, Source: "full_scan",
+	})
+
+	_, err = f.run(live(), id)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "narrator is user-locked")
+	require.Equal(t, []int{voice.ID}, junctionIDs(t, f.st, voiceBook), "the book keeps its author")
+	narrators, nerr := f.st.GetBookNarrators(voiceBook)
+	require.NoError(t, nerr)
+	require.Empty(t, narrators, "and gets no narrator the owner locked")
+	require.False(t, f.applied(id))
 }
