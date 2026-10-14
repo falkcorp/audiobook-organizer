@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -7,7 +7,9 @@ package opswriter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -761,4 +763,29 @@ func TestRowAppliedUndecodableHistory(t *testing.T) {
 	s.undecodable = map[string]int{"book-001": 1}
 	mustRowApplied(t, w, "bad-book", false)
 	mustRowApplied(t, w, "good-book", true)
+}
+
+// TestRowAppliedUndecodableJournal (05-PR5b re-review, N3's journal
+// side): a named journal row that does not decode, or a book journal read
+// that fails on an undecodable row, is not counted as standing -- the row
+// is skipped as changed since plan, not failed. Any other read failure is
+// still the caller's error (TestRowMarkerReadAndWriteFailures).
+func TestRowAppliedUndecodableJournal(t *testing.T) {
+	s := newEvidenceStore()
+	w := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, w, "credits", func(ctx context.Context) error {
+		_, err := w.ModifyBookAuthors(ctx, "book-001", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+			return []database.BookAuthor{{BookID: "book-001", AuthorID: 5}}, nil
+		})
+		return err
+	})
+	mustRowApplied(t, w, "credits", true)
+	s.bookChangesErr = fmt.Errorf("opchange op9:c9: %w", json.Unmarshal([]byte("{not json"), &struct{}{}))
+	mustRowApplied(t, w, "credits", false)
+	s.bookChangesErr = nil
+	var row database.OperationChange
+	s.changeErr = json.Unmarshal([]byte(`{"id": 7}`), &row) // a real *json.UnmarshalTypeError
+	mustRowApplied(t, w, "credits", false)
+	s.changeErr = nil
+	mustRowApplied(t, w, "credits", true)
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_rowmarks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 01d04b73-654b-4085-a8d5-1ad63d2ca6c7
 // last-edited: 2026-10-14
 
@@ -30,8 +30,9 @@ func opv3RowMarkKey(id, rowID string) []byte { return []byte(opv3RowMarkPrefix +
 // RowMarkV3 records that one Fixer row's Apply, in some attempt of the run,
 // returned nil, and names the history that Apply's writes recorded. A
 // resumed run counts the row as applied by that attempt only while the mark
-// exists and none of the history it names has been undone
-// (internal/operations/opswriter, Writer.RowApplied).
+// exists and all of the history it names still stands: none of it undone,
+// and none of it overwritten by a later write (internal/operations/opswriter,
+// Writer.RowApplied).
 type RowMarkV3 struct {
 	RowID    string    `json:"row_id"`
 	MarkedAt time.Time `json:"marked_at"`
