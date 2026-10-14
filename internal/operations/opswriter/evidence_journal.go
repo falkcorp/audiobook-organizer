@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_journal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d79460b-a54c-4691-ba04-dc81be729043
 // last-edited: 2026-10-14
 
@@ -47,6 +47,14 @@ type journalMemo struct {
 	scans  int // scans run, for tests
 }
 
+// reset drops a kept scan, so the next read while the index is not usable
+// scans again.
+func (m *journalMemo) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.built, m.err, m.byBook = false, nil, nil
+}
+
 // journalScanCtxEvery is how many rows the scan reads between checks of the
 // caller's context.
 const journalScanCtxEvery = 4096
@@ -56,7 +64,7 @@ const journalScanCtxEvery = 4096
 // reads, fresh every call). While it is not, and the store has a
 // ChangeScanner, the first call scans the whole journal once and every
 // later call of this Writer reuses that scan, until the index becomes
-// usable. The memo does not see journal rows recorded after its scan; a
+// usable, when it is dropped. The memo does not see journal rows recorded after its scan; a
 // write the run itself makes in the meantime only matters to rows whose
 // fresh values it already changed, and a foreign one is missed until the
 // index is trusted -- the price of not scanning 300k rows per row checked.
@@ -65,6 +73,11 @@ const journalScanCtxEvery = 4096
 func (w *Writer) bookJournal(ctx context.Context, bookID string) ([]journalRow, error) {
 	sc := w.cfg.ChangeScan
 	if sc == nil || sc.OpChangeByBookIndexUsable() {
+		if sc != nil {
+			// The index is usable now: drop the scan (tens of MB on a
+			// large journal) rather than hold it for the rest of the run.
+			w.journalMemo.reset()
+		}
 		rows, err := w.cfg.Changes.GetBookChanges(bookID)
 		if err != nil {
 			return nil, err

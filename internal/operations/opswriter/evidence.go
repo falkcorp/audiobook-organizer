@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -348,17 +348,36 @@ type write struct {
 // history row's ChangedAt in RecordDiff, a journal row's CreatedAt in
 // CreateOperationChange), which leaves a narrow window: a foreign write
 // that commits after the named one but stamps its row first reads as
-// older. The clock-free undo checks (batchesUndone) do not have this
-// window; this rule does.
+// older. The clock-free cases (batchesUndone, and two rows of a wanted
+// batch on one subject, which defeat each other either way) do not have
+// this window; every other comparison here does.
+//
+// Nor can it see a write recorded in NEITHER store: many book_file writers
+// outside the Writer (the scanner, the AcoustID and tag backfills, the
+// Deluge link backfill) record nothing, and seeing those needs a
+// per-book_file history this store does not keep (todo.d,
+// 2026-10-14-bookfile-change-history-for-fixer-resume).
 func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *bookNamed) bool {
-	// files: the book_file ids the marker's journal rows wrote on this book,
-	// so a foreign journal row named by the bare file id reads as a write
-	// to that whole file.
+	// files: every book_file id a recognised file name of this book's rows
+	// (either store) names, so a journal row named by the bare file id
+	// reads as a write to that whole file. Taken from the store, never from
+	// what the marker names: a note on the item must not be able to change
+	// how a foreign row is read (ops.NoteHistory can only make the check
+	// stricter).
 	files := map[string]bool{}
-	for _, c := range n.changes {
-		if s := subjectOf(c.FieldName, nil); s.file != "" && s.file != everyFile && s.file != anything {
+	addFile := func(name string) {
+		if s := subjectOf(name, nil); s.file != "" && s.file != everyFile && s.file != anything {
 			files[s.file] = true
 		}
+	}
+	for _, r := range hist {
+		addFile(r.Field)
+	}
+	for _, r := range journal {
+		addFile(r.field)
+	}
+	for _, c := range n.changes {
+		addFile(c.FieldName)
 	}
 	var all, named []write
 	for i, r := range hist {
