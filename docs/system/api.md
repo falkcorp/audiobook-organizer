@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -143,6 +143,7 @@ Remove finished runs one at a time with `DELETE /api/v1/operations/v2/:id/record
 | `POST` | `/api/v1/operations/v2` `{"def_id":"library.scan"}` | Trigger a library scan (there is no separate scan route) |
 | `POST` | `/api/v1/admin/recompact-digests` | Enqueue `maintenance.recompact-activity-digests` (re-derives legacy digest items on every activity backend); 202 with the op id |
 | `POST` | `/api/v1/diagnostics/export` | Diagnostic ZIP export (`GET /diagnostics/export/:operationId/download`; `/diagnostics/db-health`) |
+| `GET` | `/api/v1/diagnostics/traces` · `/diagnostics/traces/:name` | Admin-only (`settings.manage`): list the runtime flight recorder's snapshot files (`{"data": {"traces": [{name, size, modified}]}}`, newest first; each snapshot is a `.trace` plus a `.goroutines.txt`) and download one as an attachment; an unknown name is a 404 `trace not found` |
 | `POST` | `/api/v1/backup/create` | Create PebbleDB backup (checkpoint) |
 | `POST` | `/api/v1/system/reset` · `/system/factory-reset` | Admin-only resets |
 

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/watchdog_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d5e6f7a-8b9c-0123-def0-1234567890ab
 // last-edited: 2026-10-14
 
@@ -233,14 +233,33 @@ func (h *strikeHookRecorder) got() []string {
 	return slices.Clone(h.kinds)
 }
 
-// newHookedRegistry is newSteppedRegistry with the strike hook set through
-// Options, the path a test-built registry takes.
+// newHookedRegistry is newSteppedRegistry with the strike hook installed
+// through SetWatchdogStrikeHook, the path production takes (the container
+// builds the registry without Options).
 func newHookedRegistry(store *fakeStore, clk *stepClock, h *strikeHookRecorder) *registry.Registry {
-	return registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
-		WatchdogInterval: time.Hour, // the ticker never fires during a test
-		LivenessNow:      clk.Now,
-		OnWatchdogStrike: h.hook,
+	r := newSteppedRegistry(store, clk)
+	r.SetWatchdogStrikeHook(h.hook)
+	return r
+}
+
+// Options.OnWatchdogStrike installs the same hook as the setter, and the setter
+// with nil removes it. NotifyWatchdogStrikeForTest calls the hook the way the
+// watchdog does on a strike.
+func TestWatchdogStrikeHookOptionsAndNil(t *testing.T) {
+	hooks := &strikeHookRecorder{}
+	r := registry.NewWithOptions(newFakeStore(), slog.Default(), 2, registry.Options{
+		WatchdogInterval: time.Hour,
+		OnWatchdogStrike: hooks.hook,
 	})
+	r.NotifyWatchdogStrikeForTest("stuck")
+	if got := hooks.got(); !slices.Equal(got, []string{"stuck"}) {
+		t.Fatalf("hook from Options: calls = %v, want [stuck]", got)
+	}
+	r.SetWatchdogStrikeHook(nil)
+	r.NotifyWatchdogStrikeForTest("stuck") // no hook: must be a no-op
+	if got := hooks.got(); len(got) != 1 {
+		t.Fatalf("hook called after being removed: %v", got)
+	}
 }
 
 // A stuck strike (the op reported once, then went quiet) calls the hook once

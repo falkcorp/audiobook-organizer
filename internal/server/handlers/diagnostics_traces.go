@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics_traces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3400e7bc-d8d4-41c4-a13a-2f173b0fb736
 // last-edited: 2026-10-14
 
@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"strings"
 
 	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -37,7 +38,8 @@ func NewDiagnosticsTracesHandler(traces TraceStore) *DiagnosticsTracesHandler {
 	return &DiagnosticsTracesHandler{traces: traces}
 }
 
-// List answers {"traces": [{name, size, modified}]}, newest first.
+// List answers {"data": {"traces": [{name, size, modified}]}}, newest first.
+// A snapshot is two entries: the runtime trace and its goroutine dump.
 func (h *DiagnosticsTracesHandler) List(c *gin.Context) {
 	items := []diagflight.FileInfo{}
 	if h.traces != nil {
@@ -48,19 +50,20 @@ func (h *DiagnosticsTracesHandler) List(c *gin.Context) {
 		}
 		items = append(items, got...)
 	}
-	c.JSON(http.StatusOK, gin.H{"traces": items})
+	httputil.RespondWithOK(c, gin.H{"traces": items})
 }
 
-// Download streams one snapshot as an attachment. An unknown or malformed
-// name is a 404 whose message never repeats the name.
+// Download streams one snapshot file as an attachment: the runtime trace as
+// application/octet-stream, the goroutine dump as text. An unknown or
+// malformed name is a 404 whose message never repeats the name.
 func (h *DiagnosticsTracesHandler) Download(c *gin.Context) {
 	if h.traces == nil {
-		traceNotFound(c)
+		httputil.RespondWithNotFound(c, "trace", "")
 		return
 	}
 	f, err := h.traces.Open(c.Param("name"))
 	if errors.Is(err, fs.ErrNotExist) {
-		traceNotFound(c)
+		httputil.RespondWithNotFound(c, "trace", "")
 		return
 	}
 	if err != nil {
@@ -76,11 +79,11 @@ func (h *DiagnosticsTracesHandler) Download(c *gin.Context) {
 	// FormatMediaType quotes the name; the store only opens snapshot names,
 	// so there is nothing to escape in practice, but the header does not
 	// depend on that.
-	c.DataFromReader(http.StatusOK, info.Size(), "application/octet-stream", f, map[string]string{
+	contentType := "application/octet-stream" // a runtime trace
+	if strings.HasSuffix(info.Name(), ".goroutines.txt") {
+		contentType = "text/plain; charset=utf-8"
+	}
+	c.DataFromReader(http.StatusOK, info.Size(), contentType, f, map[string]string{
 		"Content-Disposition": mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}),
 	})
-}
-
-func traceNotFound(c *gin.Context) {
-	httputil.RespondWithError(c, http.StatusNotFound, "trace not found", "NOT_FOUND")
 }

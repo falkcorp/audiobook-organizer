@@ -1,5 +1,5 @@
 // file: internal/server/flight_recorder_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2871ad47-cc1c-48ee-a8a8-51b2ac987666
 // last-edited: 2026-10-14
 
@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
+	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +41,45 @@ func TestWatchdogStrikeHookReasons(t *testing.T) {
 
 	s.requestWatchdogTrace("stuck")
 	s.requestWatchdogTrace("never_reported")
+}
+
+// The production strike hook is installed by wireServerFromContainer, on the
+// registry the container builds, not by anything a test sets up. This builds a
+// server through NewServer (setupTestServer), swaps only the snapshot target
+// for a mock, and fires the registry's strike hook the way its watchdog does:
+// the mock must see the request. Deleting the SetWatchdogStrikeHook call in
+// registry_wire.go makes this fail; the registry's own tests cannot see that,
+// because they install their own hook.
+func TestNewServerInstallsWatchdogStrikeHook(t *testing.T) {
+	srv, cleanup := setupTestServer(t)
+	defer cleanup()
+	require.NotNil(t, srv.opRegistry, "the container must have built the ops registry")
+
+	snap := newMockTraceSnapshotter(t)
+	snap.EXPECT().Snapshot("watchdog-stuck").Return().Once()
+	snap.EXPECT().Snapshot("watchdog-never-reported").Return().Once()
+	srv.traceSnap = snap
+
+	srv.opRegistry.NotifyWatchdogStrikeForTest("stuck")
+	srv.opRegistry.NotifyWatchdogStrikeForTest("never_reported")
+}
+
+// A Start that fails after the recorder is up must not leave the runtime
+// recorder tracing: only one may be active per process, so a recorder that can
+// start afterwards proves the first one was stopped.
+func TestStartErrorStopsFlightRecorder(t *testing.T) {
+	t.Setenv(diagflight.EnvSwitch, "")
+	dir := t.TempDir()
+	rec := diagflight.New(diagflight.Config{Dir: filepath.Join(dir, "traces")})
+	// An unbuilt container: Start fails at "container.Start", after the
+	// recorder has been started.
+	s := &Server{flight: rec, container: serviceregistry.NewContainer(), bgCtx: t.Context()}
+
+	require.Error(t, s.Start(ServerConfig{}))
+
+	next := diagflight.New(diagflight.Config{Dir: filepath.Join(dir, "next")})
+	require.NoError(t, next.Start(), "the failed Start left its flight recorder running")
+	next.Stop()
 }
 
 // A Server with no recorder (built without NewServer) must not panic on
@@ -82,14 +123,16 @@ func TestDiagnosticsTracesRoutes_Permissions(t *testing.T) {
 	w := get("/api/v1/diagnostics/traces", adminToken)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var body struct {
-		Traces []struct {
-			Name string `json:"name"`
-			Size int64  `json:"size"`
-		} `json:"traces"`
+		Data struct {
+			Traces []struct {
+				Name string `json:"name"`
+				Size int64  `json:"size"`
+			} `json:"traces"`
+		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	require.Len(t, body.Traces, 1)
-	require.Equal(t, name, body.Traces[0].Name)
+	require.Len(t, body.Data.Traces, 1)
+	require.Equal(t, name, body.Data.Traces[0].Name)
 
 	w = get("/api/v1/diagnostics/traces/"+name, adminToken)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

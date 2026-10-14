@@ -1,5 +1,5 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
 // last-edited: 2026-10-14
 
@@ -119,6 +119,13 @@ func (r *Registry) notifyWatchdogStrike(kind string) {
 	}()
 	(*fn)(kind)
 }
+
+// NotifyWatchdogStrikeForTest calls the installed strike hook for kind exactly
+// as the watchdog does after writing a stuck or never_reported strike. It lets
+// a test outside this package (the server, which installs the production hook)
+// prove the hook is wired and reaches its target without running a real op
+// past its ProgressTimeout. Production code must not call it.
+func (r *Registry) NotifyWatchdogStrikeForTest(kind string) { r.notifyWatchdogStrike(kind) }
 
 // watchdogCycle inspects all running ops once.
 func (r *Registry) watchdogCycle() {
