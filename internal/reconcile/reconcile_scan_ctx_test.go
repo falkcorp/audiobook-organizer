@@ -9,10 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -74,6 +76,28 @@ func TestFindUntrackedFiles_HeartbeatsPerWalkedEntry(t *testing.T) {
 	}
 }
 
+// Canceling mid-walk must stop the walk at the next entry, not let it run to the
+// end of a library-sized tree before the post-walk check notices.
+func TestFindUntrackedFiles_CancelMidWalkStopsAtTheNextEntry(t *testing.T) {
+	root := withEmptyExtensionConfig(t, nil)
+	names := make([]string, 60)
+	for i := range names {
+		names[i] = fmt.Sprintf("f%02d.m4b", i)
+	}
+	writeAudio(t, root, names...)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var beats atomic.Int64
+	got, err := FindUntrackedFiles(ctx, appDirStore{}, map[string]bool{}, countingHooks(&beats, 3, cancel))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v (files %d)", err, len(got))
+	}
+	if beats.Load() != 3 {
+		t.Errorf("walk visited %d entries after cancel on the 3rd; it must stop at the next entry", beats.Load())
+	}
+}
+
 func TestFindUntrackedFiles_CanceledContextStopsTheWalk(t *testing.T) {
 	root := withEmptyExtensionConfig(t, nil)
 	writeAudio(t, root, "a.m4b", "b.m4b")
@@ -111,12 +135,23 @@ func TestBuildReconcilePreviewCtx_UncanceledRunCompletes(t *testing.T) {
 // leave their broken flag false, so without the check after the pool drains the
 // unchecked tail reads as "all paths valid" and the scan returns a clean, wrong
 // result.
+//
+// No library root is configured here, so nothing after the stat pass looks at
+// ctx; only the check that follows the pool can notice. A few thousand missing
+// paths make it certain that later stats are still queued when the first
+// heartbeat cancels.
 func TestBuildReconcilePreviewCtx_CancelDuringStatPassFailsTheScan(t *testing.T) {
-	store := scanFixture(t)
+	_ = withEmptyExtensionConfig(t, nil)
+	config.Mutate(func(c *config.Config) { c.RootDir = "" })
+	store := newFakeStore()
+	missing := t.TempDir()
+	for i := range 3000 {
+		id := fmt.Sprintf("m%04d", i)
+		store.books = append(store.books, database.BookCore{ID: id, Title: id, FilePath: filepath.Join(missing, id+".m4b")})
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var beats atomic.Int64
-	// The first beats are the stat workers' (one per book with a path).
 	res, err := BuildReconcilePreviewCtx(ctx, store, nil, countingHooks(&beats, 1, cancel))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("a scan canceled during the stat pass must return context.Canceled, got err=%v res=%v", err, res)

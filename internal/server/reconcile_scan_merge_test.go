@@ -148,6 +148,14 @@ func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	assert.Equal(t, reconcileScanDefIDV2, viaAlias.ID)
 }
 
+// touchCountingReporter counts liveness stamps separately from progress frames.
+type touchCountingReporter struct {
+	opsregistry.Reporter
+	touch func()
+}
+
+func (r touchCountingReporter) TouchLiveness() { r.touch() }
+
 // Drives the registered Run end to end: the heartbeat hook must reach the
 // reporter's liveness clock (TouchLiveness), Cancel must be honored with no
 // preview saved (the strict store mock fails on any unexpected write), and a call with no params at all (what the retired op was
@@ -168,11 +176,16 @@ func TestReconcileScanOp_RunStampsLivenessAndHonorsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var touches atomic.Int64
-	rep := opsregistry.NewDBReporterForTestWithTouch(ctx, "op-scan", reconcileScanDefIDV2, "reconcile", "", "", store, nil,
-		slog.New(slog.DiscardHandler), func() {
+	// The wrapper's TouchLiveness is reached only through the op's Heartbeat hook
+	// (opsregistry.TouchLiveness): UpdateProgress goes to the embedded reporter,
+	// so progress frames cannot be mistaken for the heartbeat.
+	rep := touchCountingReporter{
+		Reporter: opsregistry.NewDBReporterForTest(ctx, "op-scan", reconcileScanDefIDV2, "reconcile", "", "", store, nil, slog.New(slog.DiscardHandler)),
+		touch: func() {
 			touches.Add(1)
 			cancel() // the first heartbeat is the stat worker's; cancel from there
-		})
+		},
+	}
 
 	err := def.Run(ctx, nil, rep)
 	require.ErrorIs(t, err, context.Canceled, "empty params must decode and Cancel must stop the scan")
