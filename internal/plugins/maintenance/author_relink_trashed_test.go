@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-09-25
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -81,12 +81,16 @@ func requireAuthorGone(t *testing.T, s *database.PebbleStore, id int) {
 }
 
 // mergeAuthorInto is the primitive behind author-conjunction-repair,
-// author-duplicate-merge and author-strip-merge's merge branch.
+// author-duplicate-merge and author-strip-merge's merge branch. It removes the
+// merged row with MergeDeleteAuthor: the old id redirects to the survivor, and the
+// merged author's pen name resolves to the survivor (DeleteAuthor dropped it).
 func TestMergeAuthorInto_MovesTrashedBookCredit(t *testing.T) {
 	s := newRelinkTrashedStore(t)
 	from, err := s.CreateAuthor("Relink From")
 	require.NoError(t, err)
 	into, err := s.CreateAuthor("Relink Into")
+	require.NoError(t, err)
+	_, err = s.CreateAuthorAlias(from.ID, "R. From", "pen_name")
 	require.NoError(t, err)
 
 	live := mkRelinkTrashedBook(t, s, "merge-live", from.ID, false)
@@ -97,7 +101,14 @@ func TestMergeAuthorInto_MovesTrashedBookCredit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "both the live and the trashed book must be relinked")
 
-	requireAuthorGone(t, s, from.ID)
+	redirected, err := s.GetAuthorByID(from.ID)
+	require.NoError(t, err)
+	require.NotNil(t, redirected)
+	require.Equal(t, into.ID, redirected.ID, "author %d is merged away: its id redirects to the survivor", from.ID)
+	penName, err := s.FindAuthorByAlias("R. From")
+	require.NoError(t, err)
+	require.NotNil(t, penName, "the merged author's pen name still resolves")
+	require.Equal(t, into.ID, penName.ID)
 	assertCreditedTo(t, s, live, into.ID, false)
 	assertCreditedTo(t, s, trashed, into.ID, true)
 }

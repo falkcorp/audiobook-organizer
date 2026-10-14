@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-10-14
 
@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -145,16 +146,19 @@ type authorMergeStore interface {
 	database.MetadataFieldStateReader
 	authorMergeJournalStore
 	GetAuthorByID(id int) (*database.Author, error)
-	DeleteAuthor(id int) error
-	CreateAuthorTombstone(oldID, newID int) error
+	// GetAuthorByName: whether the merged author holds its own name entry, read
+	// for the delete row journaled before the merge-delete.
+	GetAuthorByName(name string) (*database.Author, error)
+	// MergeDeleteAuthor deletes the merged author, moves its aliases onto the keep
+	// author and writes the tombstone, in one batch.
+	database.AuthorMergeDeleter
 }
 
-// authorMergeJournalStore: the undo ledger rows, and the aliases a delete cascades
-// (read to be journaled and restored, and recreated on the keep author).
+// authorMergeJournalStore: the undo ledger rows, and the aliases the merge moves
+// (read to be journaled before the delete).
 type authorMergeJournalStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
-	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
 }
 
 // authorMergeSpec is one merge: fold MergeIDs into KeepID.
@@ -203,7 +207,7 @@ func journalStep(store authorMergeJournalStore, opID string, row *database.Opera
 	}, nil
 }
 
-// aliasSnapshots lists an author's aliases for its delete row.
+// aliasSnapshots lists an author's aliases, with their ids, for its delete row.
 func aliasSnapshots(store authorMergeJournalStore, authorID int) ([]undo.AuthorAliasSnapshot, error) {
 	aliases, err := store.GetAuthorAliases(authorID)
 	if err != nil {
@@ -211,7 +215,7 @@ func aliasSnapshots(store authorMergeJournalStore, authorID int) ([]undo.AuthorA
 	}
 	out := make([]undo.AuthorAliasSnapshot, 0, len(aliases))
 	for _, al := range aliases {
-		out = append(out, undo.AuthorAliasSnapshot{Name: al.AliasName, Type: al.AliasType})
+		out = append(out, undo.AuthorAliasSnapshot{ID: al.ID, Name: al.AliasName, Type: al.AliasType})
 	}
 	return out, nil
 }
@@ -460,17 +464,31 @@ func mergeAuthorsInto(
 	return out, false
 }
 
-// mergeFinish journals, deletes and tombstones one author whose books are all
-// moved, and reports whether the author is gone. Its failures are appended to out.
+// mergeFinish journals and merge-deletes one author whose books are all moved,
+// and reports whether the author is gone. Its failures are appended to out.
+//
+// database.MergeDeleteAuthor deletes the author, moves its aliases (pen names)
+// onto the keep author under their own ids, and writes the tombstone, in one
+// batch: every merge path goes through it, so a pen name of a merged author keeps
+// resolving, to the keep author. The row is journaled BEFORE the delete from a
+// read of the same facts, then rewritten with what the delete reported under its
+// locks (the stored-credits pattern above), so the undo moves back exactly the
+// aliases that moved and treats the name entry as the delete found it.
 func mergeFinish(ctx context.Context, store authorMergeStore, opID string, from, keep *database.Author, out *authorMergeOutcome) bool {
 	aliases, err := aliasSnapshots(store, from.ID)
 	if err != nil {
 		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: its aliases could not be read for the undo row: %v", from.ID, err))
 		return false
 	}
-	row, err := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete,
-		undo.AuthorSnapshot{ID: from.ID, Name: from.Name, Aliases: aliases},
-		undo.AuthorMergeDelete{IntoAuthorID: keep.ID, IntoName: keep.Name})
+	snap := undo.AuthorSnapshot{ID: from.ID, Name: from.Name, Aliases: aliases}
+	if holder, herr := store.GetAuthorByName(from.Name); herr != nil {
+		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: its name entry could not be read for the undo row: %v", from.ID, herr))
+		return false
+	} else if holder != nil && holder.ID != from.ID {
+		snap.SharedNameIndex = true
+	}
+	value := undo.AuthorMergeDelete{IntoAuthorID: keep.ID, IntoName: keep.Name}
+	row, err := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete, snap, value)
 	if err != nil {
 		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: undo row not built: %v", from.ID, err))
 		return false
@@ -481,34 +499,31 @@ func mergeFinish(ctx context.Context, store authorMergeStore, opID string, from,
 		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: undo row not recorded: %v", from.ID, err))
 		return false
 	}
-	if err := store.DeleteAuthor(from.ID); err != nil {
+	res, err := store.MergeDeleteAuthor(from.ID, keep.ID)
+	if err != nil {
 		if verr := void(); verr != nil {
 			logging.Warn(ctx, "author merge: could not void the undo row of a refused delete", "author", from.ID, "err", verr)
 		}
 		out.Errors = append(out.Errors, fmt.Sprintf("failed to delete author %d: %v", from.ID, err))
 		return false
 	}
-	if err := store.CreateAuthorTombstone(from.ID, keep.ID); err != nil {
-		// Reported, and the author still counts merged: its books are moved and it
-		// is deleted. What is lost is the redirect for legacy references to the old id.
-		logging.Warn(ctx, "author merge: tombstone not written", "author", from.ID, "into", keep.ID, "err", err)
-		out.Errors = append(out.Errors, fmt.Sprintf(
-			"author %d was merged, but its redirect to author %d could not be written: %v", from.ID, keep.ID, err))
-	}
-	// The author's aliases (pen names) go with it: DeleteAuthor removes them, and
-	// without this a name that resolved to the merged author through one would stop
-	// resolving to anyone. They are recreated on the keep author. The undo row
-	// already lists them, and the revert removes the copies before it gives the
-	// aliases back (audiobooks.RevertService.restoreAuthor). One that cannot be
-	// created (the keep author or another author already has that name) is logged:
-	// the merge itself is done.
-	for _, al := range aliases {
-		if _, err := store.CreateAuthorAlias(keep.ID, al.Name, al.Type); err != nil {
-			logging.Warn(ctx, "author merge: alias not carried to the keep author",
-				"alias", al.Name, "from", from.ID, "into", keep.ID, "err", err)
+	if exact := undo.MergeSnapshotFrom(*from, res); !sameAuthorSnapshot(exact, snap) {
+		if fixed, ferr := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete, exact, value); ferr != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("author %d: undo row not updated to what the delete moved: %v", from.ID, ferr))
+		} else {
+			row.OldValue = fixed.OldValue
+			if uerr := store.CreateOperationChange(row); uerr != nil {
+				out.Errors = append(out.Errors, fmt.Sprintf("author %d: undo row not updated to what the delete moved: %v", from.ID, uerr))
+			}
 		}
 	}
 	return true
+}
+
+// sameAuthorSnapshot compares two delete snapshots field by field.
+func sameAuthorSnapshot(a, b undo.AuthorSnapshot) bool {
+	return a.ID == b.ID && a.Name == b.Name && a.SharedNameIndex == b.SharedNameIndex &&
+		slices.Equal(a.Aliases, b.Aliases) && slices.Equal(a.InboundTombstones, b.InboundTombstones)
 }
 
 // AuthorMergeFailedIDsPrefix opens the list of author ids a failed

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-10-05
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -545,7 +545,6 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	// rows refused a merge because their target is one. Both are relink
 	// sources below.
 	var titleRows, twins []database.Author
-	tombstoneWarned := false
 
 	// The canonical placeholder, resolved the same way author-id-repair
 	// resolves its fallback so both ops agree on which row it is. A lookup
@@ -801,27 +800,9 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 					"from_id", pl.from.ID, "from", pl.from.Name, "into", pl.into.Name, "err", err)
 				continue
 			}
-			// Redirect any reference that still names the old id. Without this
-			// a stale AuthorID resolves to nothing; with it, reads self-heal.
-			// Resolved through a capability assertion rather than widened onto
-			// OpsStore: the tombstone is a nice-to-have on top of a merge that
-			// has already succeeded, and one extra method on a store interface
-			// is a cost the whole codebase pays.
-			if ts, tsOK := any(store).(interface {
-				CreateAuthorTombstone(oldID, canonicalID int) error
-			}); tsOK {
-				if err := ts.CreateAuthorTombstone(pl.from.ID, pl.into.ID); err != nil {
-					log.Warn("author-strip-merge: tombstone write failed; merge stands but stale refs will not self-heal",
-						"from_id", pl.from.ID, "into_id", pl.into.ID, "err", err)
-				}
-			} else if !tombstoneWarned {
-				// Say so once. A type assertion that never matches because a
-				// decorator in the chain does not forward the method looks
-				// exactly like one that had nothing to do, and the merges would
-				// still be reported as complete.
-				tombstoneWarned = true
-				log.Warn("author-strip-merge: store does not expose CreateAuthorTombstone; merges will not leave a redirect for stale author ids")
-			}
+			// mergeAuthorInto removed the row with MergeDeleteAuthor, which
+			// writes the redirect for the old id (stale references self-heal)
+			// and moves the row's aliases to the survivor, in the delete's batch.
 			report.Merged++
 			continue
 		}
