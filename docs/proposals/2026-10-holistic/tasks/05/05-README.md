@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/05/05-README.md -->
-<!-- version: 1.0.4 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d3e9b14-5c2a-4f68-a1e0-9b4c6d8f2a73 -->
-<!-- last-edited: 2026-10-12 -->
+<!-- last-edited: 2026-10-14 -->
 
 # 05 Ops v3 platform: task briefs (wave 1)
 
@@ -18,12 +18,13 @@ briefs were verified at repo HEAD `93a9b745f`; re-grep before editing.
 | [05-PR4](05-PR4.md) | `OpsV3Store`, `opv3:` keys, migration 065, v2 dual-write | 1 | opus | L | PR1, PR3 |
 | [05-PR2](05-PR2.md) | OTel ops instruments, outcome set, zombie gauge | 1 | sonnet | S | PR1, PR4, 11 PR4, PR3 |
 | [05-PR5](05-PR5.md) | `pkg/ops` SDK, chunk-leased runner and ledger, Writer, v2 adapter | 1 | opus | L | PR3, PR4, 08 X2, 07 R2-R4 |
+| [05-PR5b](05-PR5b.md) | Fixer resume proof: already applied only with this run's own history evidence | 1 | opus | S | PR5 |
 | [05-PR6](05-PR6.md) | `opstest` harness, fault injection, conformance, mutation tests | 1 | opus | M | PR5 |
-| [05-PR7](05-PR7.md) | `opscatalog`, `oplint` as go/analysis, startup gate, ledger embed | 1 | opus | M | PR5, PR6, 07 S3 |
+| [05-PR7](05-PR7.md) | `opscatalog`, `oplint` as go/analysis, startup gate, ledger embed | 1 | opus | M | PR5, PR5b, PR6, 07 S3 |
 | [05-PR8](05-PR8.md) | `ops.Schedule` in TaskScheduler plus cron evaluator | 1 | sonnet | M | PR5, PR7, 04 P1 (and 04 P4a-P4f, P9, P12; 02 PR14 is a `tasks.go` rebase note only, this PR does not edit that file) |
 | [05-PR9](05-PR9.md) | `/api/v3/ops/*` census, timeline, SSE | 1 | sonnet | M | PR4, PR5, PR8 |
 
-Model split: opus 6 (PR1, 3, 4, 5, 6, 7), sonnet 4 (PR0, 2, 8, 9). PR7 was moved from the
+Model split: opus 7 (PR1, 3, 4, 5, 5b, 6, 7), sonnet 4 (PR0, 2, 8, 9). PR7 was moved from the
 requested sonnet to opus: the `go/analysis` writer-bypass rule needs cross-package judgment.
 
 ## Not briefed here (see `implementation-briefs.md`)
@@ -39,7 +40,7 @@ requested sonnet to opus: the `go/analysis` writer-bypass rule needs cross-packa
 | PR 16 (drop `opv2:` mirror) | at least 30 days after the last wave (D25) | "PR 16". **Must delete the boot `ReconcileOpsV3WithV2` call in `InitializeStore` (added by 05-PR4) in the same change that turns the mirror off**: the mirror switch is in memory and reads "on" at every boot, so a surviving reconcile would rebuild runs from stale v2 rows (for example a run discarded natively with the mirror off, whose v2 row stays). It also adds the production mirror setter (05-PR4 keeps `setOpsV2MirrorEnabled` test-only) |
 
 ## Landing order
-PR0, PR1, PR3 (parallel-safe), PR4, PR2 (after 11 PR4), PR5, PR6, PR7, PR8, PR9. `go.mod`
+PR0, PR1, PR3 (parallel-safe), PR4, PR2 (after 11 PR4), PR5, PR5b, PR6, PR7, PR8, PR9. `go.mod`
 order: 01 P2, 11 PR 2, PR7 (x/tools), PR8 (if any dependency), 01 P75, 07 F1. `tasks.go`
 order: 04 P1, P4a, P9, P12, 02 PR14, PR8, 12B, PR15.
 
