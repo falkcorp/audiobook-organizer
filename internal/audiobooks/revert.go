@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.68.2
+// version: 1.69.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package audiobooks
 
@@ -103,6 +103,17 @@ type revertAuthorStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	DeleteAuthor(id int) error
+}
+
+// revertAuthorRestoreStore is what the revert of an author merge or reclassify
+// needs beyond revertAuthorStore: the aliases a restored author gets back and the
+// narrator link a reclassify added. It is resolved as a capability at use (with
+// database.AuthorRestorer, which brings the row back), so the many stores that
+// implement revertServiceStore for the other row types are not widened.
+type revertAuthorRestoreStore interface {
+	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 }
 
 // revertSeriesStore is needed by undo.CheckRestoreReferent
@@ -698,6 +709,14 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertJunkAuthorCredits(c)
 	case undo.ChangeTypeJunkAuthorCreate:
 		return rs.revertJunkAuthorCreate(c)
+	case undo.ChangeTypeAuthorMergeCredits:
+		return rs.revertAuthorMergeCredits(c)
+	case undo.ChangeTypeAuthorMergeDelete:
+		return rs.revertAuthorMergeDelete(c)
+	case undo.ChangeTypeAuthorReclassifyCredits:
+		return rs.revertAuthorReclassifyCredits(c)
+	case undo.ChangeTypeAuthorReclassifyDelete:
+		return rs.revertAuthorReclassifyDelete(c)
 	case undo.ChangeTypeRepairBookCreate:
 		return rs.revertRepairBookCreate(c)
 	case undo.ChangeTypeFieldLock:
@@ -2104,6 +2123,20 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 	if err != nil {
 		return err
 	}
+	return rs.revertCreditsMove(c, snap, move.CreditsAfter, move.PrimaryChanged, move.PrimaryAfter, "junk-author repair")
+}
+
+// revertCreditsMove puts back the junction and primary a journaled credit move
+// replaced (the junk-author repair, an author merge, an author reclassify). Both
+// are compare-and-set against EXACTLY what the move wrote (after, primaryAfter):
+// a credit fixed by hand, a co-author added or a removed author re-added since is
+// a later change, and the row is refused with nothing written. The primary is
+// checked BEFORE the junction is touched, so a changed primary never leaves a
+// half-reverted book; both writes then re-check under their own locks. A book
+// already back at the snapshot counts as restored. what names the writer in a
+// refusal.
+func (rs *RevertService) revertCreditsMove(c *database.OperationChange, snap undo.TitleRelinkCreditsSnapshot,
+	after *[]database.BookAuthor, primaryChanged bool, primaryAfter *int, what string) error {
 	book, err := rs.loadBook(c.BookID)
 	if err != nil {
 		return err
@@ -2117,24 +2150,24 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 		primary = a
 	}
 	primaryDone := false
-	if perr := undo.CheckJunkAuthorPrimaryCurrent(c.BookID, book.AuthorID, snap, move); perr != nil {
+	if perr := undo.CheckPrimaryAfterWrite(c.BookID, book.AuthorID, snap.AuthorID, primaryAfter, primaryChanged, what); perr != nil {
 		if !errors.Is(perr, undo.ErrAlreadyRestored) {
 			return perr
 		}
 		primaryDone = true
 	}
-	// The junction: exactly the repair's (or already the snapshot's), under
+	// The junction: exactly the move's (or already the snapshot's), under
 	// the author lock. A primary already back with the junction still the
-	// repair's is a hand edit, not the revert's to finish.
+	// move's is a hand edit, not the revert's to finish.
 	if _, err := rs.db.ModifyBookAuthors(c.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
 		if undo.SameJunction(cur, snap.Credits) {
 			return nil, database.ErrSkipBookAuthorsWrite
 		}
-		if err := undo.CheckJunkAuthorCreditsCurrent(c.BookID, cur, move); err != nil {
+		if err := undo.CheckJunctionIs(c.BookID, cur, after, what); err != nil {
 			return nil, err
 		}
 		if primaryDone {
-			return nil, driftRefusal("book %s primary author changed since the junk-author repair", c.BookID)
+			return nil, driftRefusal("book %s primary author changed since the %s", c.BookID, what)
 		}
 		out := make([]database.BookAuthor, len(snap.Credits))
 		copy(out, snap.Credits)
@@ -2142,11 +2175,11 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 	}); err != nil && !errors.Is(err, database.ErrSkipBookAuthorsWrite) {
 		return err
 	}
-	if !move.PrimaryChanged || primaryDone {
+	if !primaryChanged || primaryDone {
 		return nil
 	}
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
-		if perr := undo.CheckJunkAuthorPrimaryCurrent(c.BookID, book.AuthorID, snap, move); perr != nil {
+		if perr := undo.CheckPrimaryAfterWrite(c.BookID, book.AuthorID, snap.AuthorID, primaryAfter, primaryChanged, what); perr != nil {
 			if errors.Is(perr, undo.ErrAlreadyRestored) {
 				return database.ErrSkipBookWrite
 			}
@@ -2161,6 +2194,122 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 		}
 		return nil
 	})
+}
+
+// revertAuthorMergeCredits puts one book's credit back on the author a merge
+// folded away: the junction and primary as they were, only while the book still
+// holds exactly what the merge wrote. The merged-away author must be live again
+// (its author_merge_delete row, newer, is reverted first): a credit restored to a
+// row that does not exist would dangle, so a refused author refuses its credits.
+func (rs *RevertService) revertAuthorMergeCredits(c *database.OperationChange) error {
+	snap, move, err := undo.DecodeAuthorMergeCredits(c)
+	if err != nil {
+		return err
+	}
+	if err := undo.CheckAuthorLive(rs.db.GetAuthorByID, move.FromAuthorID, "author merge"); err != nil {
+		return err
+	}
+	return rs.revertCreditsMove(c, snap, move.CreditsAfter, move.PrimaryChanged, move.PrimaryAfter, "author merge")
+}
+
+// revertAuthorReclassifyCredits puts one book's author credit back and drops the
+// narrator link the reclassify added (only a link THIS write added, and only
+// the entry for that narrator: other narrators are untouched).
+func (rs *RevertService) revertAuthorReclassifyCredits(c *database.OperationChange) error {
+	snap, move, err := undo.DecodeAuthorReclassifyCredits(c)
+	if err != nil {
+		return err
+	}
+	if err := undo.CheckAuthorLive(rs.db.GetAuthorByID, move.FromAuthorID, "author reclassify"); err != nil {
+		return err
+	}
+	if err := rs.revertCreditsMove(c, snap, move.CreditsAfter, move.PrimaryChanged, move.PrimaryAfter, "author reclassify"); err != nil {
+		return err
+	}
+	if !move.NarratorAdded {
+		return nil
+	}
+	ns, ok := database.AsCapability[revertAuthorRestoreStore](rs.db)
+	if !ok {
+		return fmt.Errorf("this store cannot edit a book's narrators (book %s)", c.BookID)
+	}
+	narrators, err := ns.GetBookNarrators(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read narrators of book %s: %w", c.BookID, err)
+	}
+	var kept []database.BookNarrator
+	for _, bn := range narrators {
+		if bn.NarratorID != move.NarratorID {
+			kept = append(kept, bn)
+		}
+	}
+	if len(kept) == len(narrators) {
+		return nil // already removed
+	}
+	for i := range kept {
+		kept[i].Position = i
+	}
+	if err := ns.SetBookNarrators(c.BookID, kept); err != nil {
+		return fmt.Errorf("remove narrator %d from book %s: %w", move.NarratorID, c.BookID, err)
+	}
+	return nil
+}
+
+// revertAuthorMergeDelete brings a merged-away author back under its own id and
+// name, with its aliases, and drops the redirect the merge left. The credits are
+// the older-in-the-journal, newer-in-the-revert rows that follow. It is refused
+// when another author holds the name now (a later rename or create); a live
+// author of the id already counts as restored.
+func (rs *RevertService) revertAuthorMergeDelete(c *database.OperationChange) error {
+	snap, _, err := undo.DecodeAuthorMergeDelete(c)
+	if err != nil {
+		return err
+	}
+	return rs.restoreAuthor(snap, true)
+}
+
+// revertAuthorReclassifyDelete is revertAuthorMergeDelete for a reclassified
+// author. The narrator row the reclassify created or reused is left in place:
+// it may name other books by now, and an empty one is the purge job's.
+func (rs *RevertService) revertAuthorReclassifyDelete(c *database.OperationChange) error {
+	snap, _, err := undo.DecodeAuthorReclassifyDelete(c)
+	if err != nil {
+		return err
+	}
+	return rs.restoreAuthor(snap, false)
+}
+
+func (rs *RevertService) restoreAuthor(snap undo.AuthorSnapshot, dropTombstone bool) error {
+	restorer, ok := database.AsCapability[database.AuthorRestorer](rs.db)
+	if !ok {
+		return fmt.Errorf("this store cannot recreate a deleted author (author %d)", snap.ID)
+	}
+	aliasStore, ok := database.AsCapability[revertAuthorRestoreStore](rs.db)
+	if !ok {
+		return fmt.Errorf("this store cannot restore an author's aliases (author %d)", snap.ID)
+	}
+	restored, err := restorer.RestoreAuthor(snap.ID, snap.Name)
+	if errors.Is(err, database.ErrAuthorNameTaken) {
+		return driftRefusal("author %d %q cannot be restored: %v", snap.ID, snap.Name, err)
+	}
+	if err != nil {
+		return fmt.Errorf("restore author %d: %w", snap.ID, err)
+	}
+	if !restored {
+		return undo.ErrAlreadyRestored
+	}
+	for _, al := range snap.Aliases {
+		if _, aerr := aliasStore.CreateAuthorAlias(snap.ID, al.Name, al.Type); aerr != nil {
+			// The author is back; a missing alias is the lesser loss and is named.
+			revertLog.Warn("revert restored author %d but not its alias %q: %v", snap.ID, logger.SanitizeLogValue(al.Name), aerr)
+		}
+	}
+	if dropTombstone {
+		if terr := restorer.DeleteAuthorTombstone(snap.ID); terr != nil {
+			return fmt.Errorf("author %d restored but its redirect could not be removed: %w", snap.ID, terr)
+		}
+	}
+	return nil
 }
 
 // revertJunkAuthorCreate removes the author row a junk-author repair created,

@@ -1,7 +1,7 @@
 // file: internal/undo/junk_author.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: afd8a648-29e9-471a-aa53-2dbf60224fdf
-// last-edited: 2026-09-29
+// last-edited: 2026-10-14
 
 package undo
 
@@ -70,34 +70,6 @@ func SameJunction(a, b []database.BookAuthor) bool {
 		}
 	}
 	return true
-}
-
-// CheckJunkAuthorCreditsCurrent is the revert's compare-and-set on the
-// junction: the book must hold EXACTLY the junction the fixer wrote. Anything
-// else -- a credit fixed by hand, a co-author added, the junk row re-added --
-// is a later change, which the revert must not overwrite.
-func CheckJunkAuthorCreditsCurrent(bookID string, current []database.BookAuthor, move JunkAuthorCreditsMove) error {
-	if move.CreditsAfter == nil || !SameJunction(current, *move.CreditsAfter) {
-		return refuse(ReasonChangedSince, "book %s credits changed since the junk-author repair", bookID)
-	}
-	return nil
-}
-
-// CheckJunkAuthorPrimaryCurrent is the compare-and-set on the primary, run
-// BEFORE the junction is touched so a refused primary never leaves a
-// half-reverted book. It returns ErrAlreadyRestored when the primary already
-// holds the snapshot's value.
-func CheckJunkAuthorPrimaryCurrent(bookID string, current *int, snap TitleRelinkCreditsSnapshot, move JunkAuthorCreditsMove) error {
-	if !move.PrimaryChanged {
-		return nil
-	}
-	switch {
-	case sameIntPointer(current, move.PrimaryAfter):
-		return nil
-	case sameIntPointer(current, snap.AuthorID):
-		return ErrAlreadyRestored
-	}
-	return refuse(ReasonChangedSince, "book %s primary author changed since the junk-author repair", bookID)
 }
 
 // ChangeTypeJunkAuthorCreate: an author row the junk-author fixer created as

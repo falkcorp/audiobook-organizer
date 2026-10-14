@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package server
 
@@ -172,6 +172,8 @@ type serverAuthorReader interface {
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorsByIDs(ids []int) (map[int]*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
+	// GetAuthorAliases: an author merge journals the aliases a delete cascades.
+	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 }
 
 // serverAuthorWriter: Author rows: create, alias, tombstone, rename, delete.

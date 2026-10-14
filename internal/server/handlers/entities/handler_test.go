@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package entities_test
 
@@ -1055,6 +1055,19 @@ func TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone(t *testing.T) {
 //
 // Like TestSplitCompositeAuthor, the pre-existing TestReclassifyAuthorAsNarrator
 // passes an EMPTY book list and so cannot observe any of this.
+// GetAuthorByID follows the author tombstone: asked for a merged-away id it
+// answers with the author it was merged into. Reclassifying that answer would
+// turn the WRONG author into a narrator, so the route answers 404 for a
+// tombstoned id and touches nothing.
+func TestReclassifyAuthorAsNarrator_TombstonedIDIs404AndTouchesNothing(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 9, Name: "The Survivor"}, nil)
+	// No other store call is expected: the mock fails the test on any.
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 	h, d := newHandler(t)
 	reclassified := 5

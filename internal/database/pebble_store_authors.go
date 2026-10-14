@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 package database
 
@@ -671,7 +671,14 @@ func (p *PebbleStore) deleteAuthorAliases(batch *GatedBatch, authorID int) error
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		aliasID, _ := strconv.Atoi(string(iter.Value()))
+		// The alias id is the key's last segment (author_alias:author:<author>:<alias>).
+		// It used to be read from the VALUE, which CreateAuthorAlias writes as the
+		// alias's JSON, so Atoi gave 0 and the cascade deleted only the by-author
+		// index key: the alias row and its name index survived the author, and the
+		// name stayed claimed (an author brought back under the same id could not
+		// get its aliases back).
+		key := iter.Key()
+		aliasID, _ := strconv.Atoi(string(key[strings.LastIndexByte(string(key), ':')+1:]))
 		alias, err := p.getAuthorAliasByID(aliasID)
 		if err != nil {
 			return err

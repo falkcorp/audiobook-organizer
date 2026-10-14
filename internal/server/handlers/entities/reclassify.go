@@ -1,15 +1,19 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package entities
 
 import (
 	"errors"
 	"fmt"
+	"time"
+
+	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // ReclassifyStore is what moving an author's credits over to a narrator reads and
@@ -63,8 +67,40 @@ type ReclassifyError struct {
 func (e *ReclassifyError) Error() string { return e.Msg + ": " + e.Err.Error() }
 func (e *ReclassifyError) Unwrap() error { return e.Err }
 
+// ReclassifyJournalStore is what journaling a reclassify for undo needs.
+type ReclassifyJournalStore interface {
+	CreateOperationChange(change *database.OperationChange) error
+	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
+}
+
+// ReclassifyJournal makes a reclassify undoable: each write is journaled under
+// OperationID BEFORE it is made (undo/author_merge.go), and voided when it is
+// refused. A book whose row cannot be journaled is not moved. The HTTP route has no
+// operation to journal under and passes none.
+type ReclassifyJournal struct {
+	OperationID string
+	Store       ReclassifyJournalStore
+}
+
+// step stamps and stores a row and returns the function that voids it.
+func (j *ReclassifyJournal) step(row *database.OperationChange) (void func() error, err error) {
+	row.ID = ulid.Make().String()
+	row.OperationID = j.OperationID
+	if err := j.Store.CreateOperationChange(row); err != nil {
+		return nil, err
+	}
+	return func() error {
+		voided := *row
+		now := time.Now()
+		voided.RevertedAt, voided.Voided = &now, true
+		return j.Store.CreateOperationChange(&voided)
+	}, nil
+}
+
 // ReclassifyOptions are the knobs a caller other than the HTTP handler turns.
 type ReclassifyOptions struct {
+	// Journal, when set, records the reclassify for undo.
+	Journal *ReclassifyJournal
 	// SkipBook, when set, is asked about each book before its author credit is
 	// removed; a true answer leaves that book credited to the author (and the
 	// reason is reported in ReclassifyOutcome.Skipped). An error leaves the book
@@ -129,8 +165,13 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 				continue
 			}
 		}
-		// Remove author link
+		// Everything the move reads is read BEFORE anything is written: a read that
+		// fails after the credit was removed left a book with neither credit.
 		bookAuthors, err := store.GetBookAuthors(book.ID)
+		if err != nil {
+			continue
+		}
+		bookNarrators, err := store.GetBookNarrators(book.ID)
 		if err != nil {
 			continue
 		}
@@ -139,9 +180,6 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 			if ba.AuthorID != authorID {
 				newAuthors = append(newAuthors, ba)
 			}
-		}
-		if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
-			continue
 		}
 
 		// The reclassified person is a NARRATOR now, so unlike the split there
@@ -169,13 +207,6 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 			}
 			successor = unknown
 		}
-		repointPrimaryAuthor(store, &book, authorID, successor)
-
-		// Add narrator link if not already present
-		bookNarrators, err := store.GetBookNarrators(book.ID)
-		if err != nil {
-			continue
-		}
 		hasNarrator := false
 		for _, bn := range bookNarrators {
 			if bn.NarratorID == narrator.ID {
@@ -183,6 +214,45 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 				break
 			}
 		}
+
+		var void func() error
+		if opts.Journal != nil {
+			primaryChanged := book.AuthorID != nil && *book.AuthorID == authorID
+			after := append([]database.BookAuthor{}, newAuthors...)
+			move := undo.AuthorCreditsMove{
+				FromAuthorID: authorID, CreditsAfter: &after, PrimaryChanged: primaryChanged,
+				NarratorID: narrator.ID, NarratorAdded: !hasNarrator,
+			}
+			if primaryChanged {
+				sid := successor.ID
+				move.PrimaryAfter = &sid
+			}
+			var primaryBefore *int
+			if book.AuthorID != nil {
+				v := *book.AuthorID
+				primaryBefore = &v
+			}
+			row, rerr := undo.NewAuthorCreditsRow(undo.ChangeTypeAuthorReclassifyCredits, book.ID,
+				undo.TitleRelinkCreditsSnapshot{AuthorID: primaryBefore, Credits: append([]database.BookAuthor{}, bookAuthors...)}, move)
+			if rerr == nil {
+				void, rerr = opts.Journal.step(row)
+			}
+			if rerr != nil {
+				// An unjournaled reclassify cannot be undone, so it does not happen.
+				skipped = append(skipped, fmt.Sprintf("book %s: undo row not recorded: %v", book.ID, rerr))
+				continue
+			}
+		}
+
+		if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
+			if void != nil {
+				_ = void()
+			}
+			continue
+		}
+		repointPrimaryAuthor(store, &book, authorID, successor)
+
+		// Add narrator link if not already present
 		if !hasNarrator {
 			bookNarrators = append(bookNarrators, database.BookNarrator{
 				BookID:     book.ID,
@@ -205,7 +275,31 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 		}
 		return ReclassifyOutcome{}, &ReclassifyError{Msg: "failed to re-check author links before delete", Err: err}
 	}
+	var voidDelete func() error
+	if opts.Journal != nil {
+		aliases, aerr := opts.Journal.Store.GetAuthorAliases(authorID)
+		if aerr != nil {
+			return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped},
+				&ReclassifyError{Msg: "author not deleted: its aliases could not be read for the undo row", Err: aerr}
+		}
+		snap := undo.AuthorSnapshot{ID: authorID, Name: author.Name}
+		for _, al := range aliases {
+			snap.Aliases = append(snap.Aliases, undo.AuthorAliasSnapshot{Name: al.AliasName, Type: al.AliasType})
+		}
+		row, rerr := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorReclassifyDelete, snap,
+			undo.AuthorReclassifyDelete{NarratorID: narrator.ID, NarratorName: narrator.Name})
+		if rerr == nil {
+			voidDelete, rerr = opts.Journal.step(row)
+		}
+		if rerr != nil {
+			return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped},
+				&ReclassifyError{Msg: "author not deleted: undo row not recorded", Err: rerr}
+		}
+	}
 	if err := store.DeleteAuthor(authorID); err != nil {
+		if voidDelete != nil {
+			_ = voidDelete()
+		}
 		return ReclassifyOutcome{}, &ReclassifyError{Msg: "failed to delete author", Err: err}
 	}
 	return ReclassifyOutcome{NarratorID: narrator.ID, BooksUpdated: booksUpdated, Skipped: skipped}, nil

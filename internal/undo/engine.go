@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.34.1
+// version: 1.34.2
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -279,7 +279,8 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// The revert reads the book before it touches the file.
 		_, refusal := CheckRestoreBook(store, c.BookID)
 		return rowVerdict{refusal: refusal}
-	case ChangeTypeTitleRelinkCredits, ChangeTypeJunkAuthorCredits:
+	case ChangeTypeTitleRelinkCredits, ChangeTypeJunkAuthorCredits,
+		ChangeTypeAuthorMergeCredits, ChangeTypeAuthorReclassifyCredits:
 		// The preflight only proves the book is restorable: the credit
 		// compare-and-set needs the junction, which the preflight store
 		// does not read, so a row counted Safe here can still be refused
@@ -288,6 +289,8 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// repair wrote (any later credit change is refused, nothing
 		// written); title_relink_credits checks only that its source
 		// credit is absent and its target present (revertTitleRelinkCredits).
+		// author_merge_credits / author_reclassify_credits are exact like
+		// junk_author_credits, and also need their author restored first.
 		_, refusal := CheckRestoreBook(store, c.BookID)
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
