@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAIScans.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d71b3e9-6a25-4c84-b9f0-c4e82a5d1736
 // last-edited: 2026-10-13
 
@@ -118,12 +118,18 @@ export interface AIScansLane {
   dismissNotice: () => void;
   /** Starts a scan in the current mode and resolves with it. Rejects if the server refuses. */
   startScan: () => Promise<AIScan>;
+  /** A start is in flight (the POST has not answered). */
+  starting: boolean;
   /** Why Start is unavailable, or undefined when it is available. */
   startDisabledReason: string | undefined;
   /** Cancels the running scan (the open one if it is running, else the newest running one). */
   cancelScan: () => Promise<void>;
   /** The scan Cancel would act on. */
   cancelTarget: AIScan | null;
+  /** A cancel is in flight (the POST has not answered). */
+  canceling: boolean;
+  /** Why Cancel is unavailable, or undefined when it is available. */
+  cancelDisabledReason: string | undefined;
 }
 
 const EMPTY_COUNTS: Record<AgreementFilter, number> = {
@@ -206,16 +212,28 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
 
   // ---- the open scan ----
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // The scan open RIGHT NOW, for continuations that outlive a render: an apply
+  // that is still in flight when the reviewer opens another scan must not write
+  // its outcome, clear a selection or re-read rows that now belong to that other
+  // scan. Set in the same call that sets the state, never during render.
+  const openIdRef = useRef<number | null>(null);
+  const openScanId = useCallback((id: number | null) => {
+    openIdRef.current = id;
+    setSelectedId(id);
+  }, []);
   const scan = useMemo(
     () => (selectedId === null ? null : (history.scans.find((s) => s.id === selectedId) ?? null)),
     [history.scans, selectedId]
   );
   const [notice, setNotice] = useState<AIScanNotice | null>(null);
 
-  const selectScan = useCallback((id: number) => {
-    setSelectedId(id);
-    setNotice(null);
-  }, []);
+  const selectScan = useCallback(
+    (id: number) => {
+      openScanId(id);
+      setNotice(null);
+    },
+    [openScanId]
+  );
 
   // ---- results ----
   // `forId` says which scan the held rows belong to, so a newly opened scan never
@@ -228,17 +246,26 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
     error: string | null;
   }>({ forId: null, rows: [], answered: null, error: null });
   const loadableId = scan && hasResults(scan) ? scan.id : null;
+  // The scan whose results should be on screen. A second guard beside the abort:
+  // an answer for any other id is dropped even if its request was somehow not
+  // aborted (a mocked or non-cooperating transport), so a late answer for scan A
+  // can never replace scan B's rows.
+  const loadableIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    loadableIdRef.current = loadableId;
+  }, [loadableId]);
 
   useEffect(() => {
     if (!active || loadableId === null) return;
     const ctl = new AbortController();
+    const stale = () => ctl.signal.aborted || loadableIdRef.current !== loadableId;
     fetchAIScanResults(loadableId, ctl.signal)
       .then((rows) => {
-        if (ctl.signal.aborted) return;
+        if (stale()) return;
         setRes({ forId: loadableId, rows, answered: resultsNonce, error: null });
       })
       .catch((e: unknown) => {
-        if (ctl.signal.aborted || isAbortError(e)) return;
+        if (stale() || isAbortError(e)) return;
         setRes((r) => ({
           forId: loadableId,
           rows: r.forId === loadableId ? r.rows : [],
@@ -305,40 +332,54 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
 
   const applySelected = useCallback(async () => {
     if (!scan || applyingRef.current) return;
+    const forId = scan.id;
     const sel = selection;
     const ids = [...sel.selected];
     if (ids.length === 0) return;
     applyingRef.current = true;
     setApplying(true);
     setNotice(null);
+    // Whether the scan applied from is still the one on screen. If the reviewer
+    // opened another while the request was out, the outcome is reported by toast
+    // (naming the scan) and nothing else is touched: the notice, the selection
+    // and the rows now belong to the other scan.
+    const stillOpen = () => openIdRef.current === forId;
     try {
-      const out = await api.applyAIScanResults(scan.id, ids);
+      const out = await api.applyAIScanResults(forId, ids);
       const failed = out.errors ?? [];
-      setNotice(
+      const text =
         failed.length === 0
-          ? { severity: 'success', text: `Applied ${out.applied} of ${ids.length} selected results.` }
-          : {
-              severity: 'warning',
-              text: `Applied ${out.applied} of ${ids.length} selected results. ${failed.length} could not be applied: ${failed.join('; ')}`,
-            }
-      );
-      sel.clear();
-      setResultsNonce((n) => n + 1);
+          ? `Applied ${out.applied} of ${ids.length} selected results.`
+          : `Applied ${out.applied} of ${ids.length} selected results. ${failed.length} could not be applied: ${failed.join('; ')}`;
+      if (stillOpen()) {
+        setNotice({ severity: failed.length === 0 ? 'success' : 'warning', text });
+        sel.clear();
+        setResultsNonce((n) => n + 1);
+      } else {
+        toast(`Scan #${forId}: ${text}`, failed.length === 0 ? 'success' : 'warning');
+      }
     } catch (e: unknown) {
       // The server's own words: a superseded scan names the scan to apply from.
-      setNotice({ severity: 'error', text: messageOf(e, 'Failed to apply the selected results') });
-      // 409: the scan was superseded after it was loaded. Re-read it so it shows
-      // as superseded and read-only, instead of leaving an Apply button that can
-      // only fail again.
-      if (e instanceof api.ApiError && e.status === 409) {
-        sel.clear();
-        refresh();
+      const text = messageOf(e, 'Failed to apply the selected results');
+      // 409: the scan was superseded after it was loaded. Re-read the history so it
+      // shows as superseded and read-only, instead of leaving an Apply button that
+      // can only fail again.
+      const superseded409 = e instanceof api.ApiError && e.status === 409;
+      if (stillOpen()) {
+        setNotice({ severity: 'error', text });
+        if (superseded409) {
+          sel.clear();
+          refresh();
+        }
+      } else {
+        toast(`Scan #${forId}: ${text}`, 'error');
+        if (superseded409) setHistoryNonce((n) => n + 1);
       }
     } finally {
       applyingRef.current = false;
       setApplying(false);
     }
-  }, [scan, selection, refresh]);
+  }, [scan, selection, refresh, toast]);
 
   // Newest-first, so the first running scan is the newest one.
   const runningScan = useMemo(() => history.scans.find((s) => !isTerminalScan(s.status)) ?? null, [history.scans]);
@@ -346,38 +387,66 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
+  // Start. `starting` is state (the menu's disabled reason reads it) and the ref
+  // is the synchronous guard for a second call in the same tick.
+  const [starting, setStarting] = useState(false);
   const startingRef = useRef(false);
-  const startDisabledReason = !history.loaded
-    ? historyError
-      ? 'The scan history could not be loaded, so a running scan cannot be ruled out. Refresh it first.'
-      : 'The scan history is still loading.'
-    : runningScan
-      ? `Scan #${runningScan.id} is still running.`
-      : undefined;
+  const startDisabledReason = starting
+    ? 'A scan is being started.'
+    : !history.loaded
+      ? historyError
+        ? 'The scan history could not be loaded, so a running scan cannot be ruled out. Refresh it first.'
+        : 'The scan history is still loading.'
+      : runningScan
+        ? `Scan #${runningScan.id} is still running. Refresh if it has finished.`
+        : undefined;
 
   const startScan = useCallback(async () => {
     if (startingRef.current) throw new Error('A scan is already being started.');
     startingRef.current = true;
+    setStarting(true);
     try {
       const started = await api.startAIScan(mode);
-      // The new scan is the one to watch: open it, and re-read the list so it appears.
-      setSelectedId(started.id);
+      // Put the new scan in the list NOW. Until the re-read answers (or if it
+      // fails) the list would show nothing running and Start would be live again,
+      // so a second click would queue a second paid scan. Opening it is the
+      // reviewer's next step anyway.
+      setHistory((h) => ({
+        ...h,
+        scans: [started, ...h.scans.filter((s) => s.id !== started.id)].sort((a, b) => b.id - a.id),
+      }));
+      openScanId(started.id);
       setNotice(null);
       reloadHistory();
       return started;
     } finally {
       startingRef.current = false;
+      setStarting(false);
     }
-  }, [mode, reloadHistory]);
+  }, [mode, reloadHistory, openScanId]);
+
+  const [canceling, setCanceling] = useState(false);
+  const cancelingRef = useRef(false);
+  const cancelDisabledReason = canceling
+    ? 'A cancel is in progress.'
+    : !history.loaded
+      ? 'The scan history is still loading.'
+      : cancelTarget
+        ? undefined
+        : 'No AI author scan is running. Refresh if one was just started.';
 
   const cancelScan = useCallback(async () => {
-    if (!cancelTarget) return;
+    if (!cancelTarget || cancelingRef.current) return;
+    cancelingRef.current = true;
+    setCanceling(true);
     try {
       await api.cancelAIScan(cancelTarget.id);
       toast(`Scan #${cancelTarget.id} canceled.`, 'success');
     } catch (e: unknown) {
       toast(`Could not cancel scan #${cancelTarget.id}: ${messageOf(e, 'the server refused')}`, 'error');
     } finally {
+      cancelingRef.current = false;
+      setCanceling(false);
       // Whatever the answer, the list is now stale.
       reloadHistory();
     }
@@ -408,9 +477,12 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
     applySelected,
     notice,
     dismissNotice,
+    starting,
     startScan,
     startDisabledReason,
     cancelScan,
     cancelTarget,
+    canceling,
+    cancelDisabledReason,
   };
 }

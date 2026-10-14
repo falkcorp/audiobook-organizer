@@ -1,5 +1,5 @@
 // file: web/src/components/review/AIScansPanel.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e18d73-9f02-4b6a-a5d1-7e30b82f6c19
 // last-edited: 2026-10-13
 
@@ -112,12 +112,20 @@ describe('the sub-view control', () => {
     expect(authorsReads.fetchSeriesGroups).not.toHaveBeenCalled();
   });
 
-  it('keeps the two mode labels', async () => {
+  it('the Scan mode selector shows both options and their costs at once, and picks one', async () => {
     const user = userEvent.setup();
     renderPanel();
-    expect(await screen.findByText('Realtime (faster, more expensive)')).toBeInTheDocument();
-    await user.click(screen.getByRole('switch', { name: 'Scan mode' }));
-    expect(screen.getByText('Batch (cheaper, hours)')).toBeInTheDocument();
+    const group = await screen.findByRole('group', { name: 'Scan mode' });
+    const realtime = within(group).getByRole('button', { name: 'Realtime (faster, more expensive)' });
+    const batch = within(group).getByRole('button', { name: 'Batch (cheaper, hours)' });
+    expect(realtime).toHaveAttribute('aria-pressed', 'true');
+    expect(batch).toHaveAttribute('aria-pressed', 'false');
+    await user.click(batch);
+    expect(batch).toHaveAttribute('aria-pressed', 'true');
+    expect(realtime).toHaveAttribute('aria-pressed', 'false');
+    // Clicking the chosen one again keeps it chosen.
+    await user.click(batch);
+    expect(batch).toHaveAttribute('aria-pressed', 'true');
   });
 });
 
@@ -129,6 +137,7 @@ describe('the history', () => {
     const first = within(list).getByTestId('ai-scan-6');
     expect(first).toHaveTextContent('Scan #6');
     expect(first).toHaveTextContent('realtime');
+    expect(first).toHaveTextContent('scanned 3 authors');
     expect(within(list).getByTestId('ai-scan-5')).toHaveTextContent('batch');
     // Newest first.
     expect(within(list).getAllByTestId(/^ai-scan-\d+$/).map((e) => e.getAttribute('data-testid'))).toEqual([
@@ -142,6 +151,8 @@ describe('the history', () => {
     vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(9, { status: 'superseded', superseded_by: 12, mode: 'batch' })]);
     renderPanel();
     expect(await screen.findByTestId('ai-scan-superseded-9')).toHaveTextContent('superseded');
+    // The explanation is text on the page, not a hover tooltip a keyboard cannot reach.
+    expect(screen.getByTestId('ai-scan-replaced-by-9')).toHaveTextContent('Replaced by scan #12');
     await openScan(user, 9);
 
     // Readable, but read-only, and it names the scan that replaced it.
@@ -263,6 +274,8 @@ describe('selection and apply', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Select result 3' }));
     await user.keyboard('{/Shift}');
     expect(screen.getByRole('button', { name: 'Apply selected (2)' })).toBeInTheDocument();
+    // The count lives on the button; there is no second number that opens nothing.
+    expect(screen.queryByText(/\d+ of \d+ selected/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('checkbox', { name: 'Select all 4 results shown' }));
     await user.click(screen.getByRole('button', { name: 'Apply selected (3)' }));
