@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-14
 
@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -91,18 +93,17 @@ type Config struct {
 	// context that is neither an item's nor the run's is latched here, so
 	// the batch runner still fails the run closed. nil: no batch runner.
 	RunLatch *ops.RefusalLatch
-	// JournalReader and HistoryReader back Wrote, the read of this run's
-	// own history (evidence.go). Nil: Wrote finds no evidence of that kind.
-	// HistoryReader is read only when History's batch prefix names this
-	// run (the v3 registry's "op-<opID>-"): a prefix shared by other runs
-	// would make their batches look like this run's.
-	JournalReader JournalReader
+	// RowMarks stores a Fixer row's apply marker (MarkRowApplied) and reads
+	// it back on a resume (RowApplied, evidence.go). Nil: no markers, so a
+	// resumed Fixer never reports a row applied by an earlier attempt; it
+	// skips the row as changed since plan instead.
+	RowMarks RowMarkStore
+	// Changes and HistoryReader let RowApplied check that the history a
+	// marker names still stands: its operation journal rows (one point read
+	// each) and the metadata history of its batches' books. Nil while a
+	// marker names history of that kind: the marker is not evidence.
+	Changes       ChangeReader
 	HistoryReader BookHistoryReader
-	// AttemptStart separates this attempt from the earlier ones: history
-	// recorded at or after it is this attempt's own and is never evidence
-	// for Wrote. Zero: when New runs (the registry builds one Writer per
-	// attempt).
-	AttemptStart time.Time
 }
 
 // Writer is the fenced, journaling write path (ops.Writer). Safe for
@@ -117,9 +118,6 @@ type Writer struct {
 	leaseValid atomic.Pointer[func() bool]
 	leaseLost  atomic.Bool
 	writes     atomic.Int64
-	// journal is the lazily loaded index of the run's earlier-attempt
-	// operation journal rows (evidence.go).
-	journal journalEvidence
 }
 
 var _ ops.Writer = (*Writer)(nil)
@@ -134,9 +132,6 @@ func New(cfg Config) *Writer {
 	}
 	if cfg.History == nil {
 		cfg.History = NewBookHistory(nil, "", "", "", nil)
-	}
-	if cfg.AttemptStart.IsZero() {
-		cfg.AttemptStart = time.Now()
 	}
 	w := &Writer{cfg: cfg, intents: &intents{store: cfg.Intents, opID: cfg.OpID}}
 	if cfg.Fence != nil {
@@ -190,7 +185,16 @@ func storeFunc(p *atomic.Pointer[func() bool], fn func() bool) {
 // retrying must not keep the scan parked. Once a renewal fails the lease is
 // gone for good, so every later write is refused without trying again; that
 // error wraps Config.LeaseLostErr. Either way the write is not made.
-func (w *Writer) Gate(what string) error {
+func (w *Writer) Gate(what string) error { return w.gate(what, refusedWrite) }
+
+// refusedWrite and refusedRead finish a refusal's "<what> not ..." text.
+const (
+	refusedWrite = "not written"
+	refusedRead  = "not read"
+)
+
+// gate is Gate, its refusals saying "<what> <refused>".
+func (w *Writer) gate(what, refused string) error {
 	renew := w.leaseRenew.Load()
 	if f := w.fence.Load(); f != nil {
 		if err := (*f)(); err != nil {
@@ -201,9 +205,9 @@ func (w *Writer) Gate(what string) error {
 			valid := w.leaseValid.Load()
 			if renew != nil && (w.leaseLost.Load() || (valid != nil && !(*valid)())) {
 				w.leaseLost.Store(true)
-				return fmt.Errorf("%w: %s not written: %w", w.cfg.LeaseLostErr, what, err)
+				return fmt.Errorf("%w: %s %s: %w", w.cfg.LeaseLostErr, what, refused, err)
 			}
-			return fmt.Errorf("%s not written: %w", what, err)
+			return fmt.Errorf("%s %s: %w", what, refused, err)
 		}
 	}
 	if renew == nil {
@@ -211,7 +215,7 @@ func (w *Writer) Gate(what string) error {
 	}
 	if w.leaseLost.Load() || !(*renew)() {
 		w.leaseLost.Store(true)
-		return fmt.Errorf("%w: %s not written", w.cfg.LeaseLostErr, what)
+		return fmt.Errorf("%w: %s %s", w.cfg.LeaseLostErr, what, refused)
 	}
 	return nil
 }
@@ -246,18 +250,24 @@ func (w *Writer) begin(ctx context.Context, what, subject, kind, op, detail stri
 // Every method runs it before it reads anything, so a fenced run gets
 // ErrFenced, never a stale-read error such as ErrChangedSincePlan.
 func (w *Writer) check(ctx context.Context, what string) error {
+	return w.checkAs(ctx, what, refusedWrite)
+}
+
+// checkAs is check, its refusals saying "<what> <refused>" (refusedRead for
+// RowApplied, which reads).
+func (w *Writer) checkAs(ctx context.Context, what, refused string) error {
 	if ctx != nil && ctx.Err() != nil {
 		if w.fenceRevoked() {
 			// The run is being stopped: the registry revokes the fence before
 			// it cancels, and binds the fence to the run context's Done, so a
 			// run timeout revokes it too. Report the fence, so the caller
 			// sees ErrFenced, and record the refusal for the batch runner.
-			err := w.Gate(what)
+			err := w.gate(what, refused)
 			w.noteRefusal(ctx, err)
 			return err
 		}
 		cause := context.Cause(ctx)
-		err := fmt.Errorf("%s not written: %w", what, cause)
+		err := fmt.Errorf("%s %s: %w", what, refused, cause)
 		// Only the runner's item-scoped causes are the item's own business
 		// (its ItemTimeout ran out, or it already returned). Anything else
 		// -- a cancel with no fence to revoke, a deadline that is not the
@@ -269,7 +279,7 @@ func (w *Writer) check(ctx context.Context, what string) error {
 		}
 		return err
 	}
-	if err := w.Gate(what); err != nil {
+	if err := w.gate(what, refused); err != nil {
 		// Fenced or lease lost: record it even if the op swallows the error.
 		w.noteRefusal(ctx, err)
 		return err
@@ -376,7 +386,11 @@ func (w *Writer) ModifyBook(ctx context.Context, bookID string, fn func(*databas
 	}
 	w.writes.Add(1)
 	journaled := w.cfg.JournaledBook != nil && w.cfg.JournaledBook(bookID)
-	fields, recorded := w.cfg.History.RecordDiff(bookID, before, after, journaled)
+	batchID := w.cfg.History.NewBatchID()
+	fields, recorded := w.cfg.History.RecordDiff(bookID, batchID, before, after, journaled)
+	if len(fields) > 0 && w.cfg.History.recording() {
+		noteBatch(ctx, bookID, batchID)
+	}
 	w.finish(seq, recorded)
 	return ops.Changed{Fields: fields}, nil
 }
@@ -425,7 +439,7 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 		rows = append(rows, ops.HistoryRow{BookID: bookID, Field: "file." + k + ":" + fileID,
 			Old: string(before[k]), New: string(after[k])})
 	}
-	w.finish(seq, w.journalRows(ChangeTypeBookFileModify, rows))
+	w.finish(seq, w.journalRows(ctx, ChangeTypeBookFileModify, rows))
 	return ops.Changed{Fields: fields}, nil
 }
 
@@ -487,7 +501,7 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 		return fmt.Errorf("%w: book_file %s vanished", ops.ErrChangedSincePlan, fileID)
 	}
 	w.writes.Add(1)
-	w.finish(seq, w.journalRows(database.ChangeTypeBookFileRepoint, []ops.HistoryRow{{BookID: bookID,
+	w.finish(seq, w.journalRows(ctx, database.ChangeTypeBookFileRepoint, []ops.HistoryRow{{BookID: bookID,
 		Field: "book_file:" + fileID, Old: was.Encode(), New: to.Encode()}}))
 	return nil
 }
@@ -524,7 +538,7 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 	if oerr != nil || nerr != nil {
 		return ops.Changed{Fields: []string{"authors"}}, errors.Join(oerr, nerr)
 	}
-	w.finish(seq, w.journalRows(ChangeTypeBookAuthorsModify, []ops.HistoryRow{{BookID: bookID, Field: "authors",
+	w.finish(seq, w.journalRows(ctx, ChangeTypeBookAuthorsModify, []ops.HistoryRow{{BookID: bookID, Field: "authors",
 		Old: string(oldJSON), New: string(newJSON)}}))
 	return ops.Changed{Fields: []string{"authors"}}, nil
 }
@@ -540,7 +554,7 @@ func (w *Writer) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.
 		return err
 	}
 	rows, ferr := fn()
-	recorded := w.journalRows(ChangeTypeEffectPrefix+e.Name, rows)
+	recorded := w.journalRows(ctx, ChangeTypeEffectPrefix+e.Name, rows)
 	if ferr != nil {
 		return ferr
 	}
@@ -550,10 +564,11 @@ func (w *Writer) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.
 }
 
 // journalRows records history rows as operation changes under the run's op
-// id (step 4, after the write). A row that cannot be recorded is logged and
-// counted failed; the write it describes already committed. It reports
-// whether every row was recorded.
-func (w *Writer) journalRows(changeType string, rows []ops.HistoryRow) bool {
+// id (step 4, after the write), each with an id minted here and noted on
+// ctx's item (noteChange), so a Fixer row's apply marker can name it. A row
+// that cannot be recorded is logged and counted failed; the write it
+// describes already committed. It reports whether every row was recorded.
+func (w *Writer) journalRows(ctx context.Context, changeType string, rows []ops.HistoryRow) bool {
 	if len(rows) == 0 {
 		return true
 	}
@@ -567,8 +582,9 @@ func (w *Writer) journalRows(changeType string, rows []ops.HistoryRow) bool {
 	now := time.Now().UTC()
 	all := true
 	for _, r := range rows {
+		id := ulid.Make().String()
 		err := w.cfg.Journal.CreateOperationChange(&database.OperationChange{
-			OperationID: w.cfg.OpID, BookID: r.BookID, ChangeType: changeType, FieldName: r.Field,
+			ID: id, OperationID: w.cfg.OpID, BookID: r.BookID, ChangeType: changeType, FieldName: r.Field,
 			OldValue: r.Old, NewValue: r.New, CreatedAt: now, Source: h.source,
 		})
 		if err != nil {
@@ -580,6 +596,7 @@ func (w *Writer) journalRows(changeType string, rows []ops.HistoryRow) bool {
 			continue
 		}
 		h.rows.Add(1)
+		noteChange(ctx, id)
 	}
 	return all
 }

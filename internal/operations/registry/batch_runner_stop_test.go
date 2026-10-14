@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-14
 
@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -493,14 +492,12 @@ func TestAppendOnlyChunkCountSurvivesResume(t *testing.T) {
 }
 
 // memTitles is a minimal ops.Writer over an in-memory title map. It keeps
-// the history a real Writer would: the books each attempt wrote (wrote),
-// and, from nextAttempt on, the books every earlier attempt wrote (earlier),
-// which is what Wrote reports.
+// the apply markers a real Writer would (marked: the rows whose Apply
+// returned nil, in any attempt), which is what RowApplied reports.
 type memTitles struct {
-	mu      sync.Mutex
-	titles  map[string]string
-	wrote   map[string]bool
-	earlier map[string]bool
+	mu     sync.Mutex
+	titles map[string]string
+	marked map[string]bool
 }
 
 func (w *memTitles) ModifyBook(_ context.Context, id string, fn func(*database.Book) error) (ops.Changed, error) {
@@ -511,42 +508,32 @@ func (w *memTitles) ModifyBook(_ context.Context, id string, fn func(*database.B
 		return ops.Changed{}, err
 	}
 	w.titles[id] = b.Title
-	if w.wrote == nil {
-		w.wrote = map[string]bool{}
-	}
-	w.wrote[id] = true
 	return ops.Changed{Fields: []string{"title"}}, nil
 }
 
 // foreignWrite sets a title the way someone outside the run would: no
-// history under the run.
+// apply marker under the run.
 func (w *memTitles) foreignWrite(id, title string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.titles[id] = title
 }
 
-// nextAttempt starts a new attempt: what the attempts so far wrote becomes
-// the earlier attempts' history.
-func (w *memTitles) nextAttempt() {
+func (w *memTitles) MarkRowApplied(_ context.Context, rowID string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.earlier = maps.Clone(w.wrote)
+	if w.marked == nil {
+		w.marked = map[string]bool{}
+	}
+	w.marked[rowID] = true
 }
 
-func (w *memTitles) Wrote(_ context.Context, subjects []ops.Subject) (bool, error) {
+func (w *memTitles) RowApplied(_ context.Context, rowID string) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(subjects) == 0 {
-		return false, nil
-	}
-	for _, s := range subjects {
-		if s.Type != ops.SubjectBook || !w.earlier[s.ID] {
-			return false, nil
-		}
-	}
-	return true, nil
+	return w.marked[rowID], nil
 }
+
 func (w *memTitles) ModifyBookFile(context.Context, string, string, func(*database.BookFile) error) (ops.Changed, error) {
 	return ops.Changed{}, errors.New("unused")
 }
@@ -565,13 +552,13 @@ func (w *memTitles) Effect(context.Context, ops.EffectSpec, func() ([]ops.Histor
 // finishes. blockAt 20 crashes on a chunk boundary (rows 0-19 are in two
 // completed chunks); blockAt 25 crashes inside chunk 2 after rows 20-24 were
 // written, so the resume re-runs rows whose fingerprint the write changed and
-// must report them applied (the run's history for them is there), not
-// changed since plan.
+// must report them applied (their apply markers are there), not changed
+// since plan.
 //
 // The foreign cases (05-PR5b): between the attempts someone else sets rows
 // the run never wrote to exactly their Proposed values. Their fingerprint
-// moved and every Proposed value holds, but there is no history under the
-// run for them, so they are skipped as changed since plan: not in Applied,
+// moved and every Proposed value holds, but the run never marked them
+// applied, so they are skipped as changed since plan: not in Applied,
 // not handed to AfterApply. In the blockAt 25 one, rows 20-24 (written by
 // the run) are still reported applied next to them.
 func TestFixerAppliedSurvivesResume(t *testing.T) {
@@ -661,7 +648,6 @@ func fixerResumeCase(t *testing.T, blockAt int, foreign []int) {
 		t.Fatal("chunk 2 was recorded; the case does not test an unfinished chunk")
 	}
 	block = false
-	w.nextAttempt()
 	for _, i := range foreign {
 		w.foreignWrite(itemKey(i), "1 "+itemKey(i))
 	}

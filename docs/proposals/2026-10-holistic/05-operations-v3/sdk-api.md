@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/sdk-api.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: b4575f26-f7c3-4fb6-a442-b74a31581e88 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-14 -->
 
 # Operations v3 — SDK API sketch (`pkg/ops`)
 
@@ -428,6 +428,15 @@ type Writer interface {
 	// the Writer applies steps 1, 2 and 5 around fn, and the op returns the
 	// history rows fn produced so the Writer records them after fn returns.
 	Effect(ctx context.Context, e EffectSpec, fn func() ([]HistoryRow, error)) error
+	// MarkRowApplied / RowApplied are a Fixer apply's per-ROW resume evidence
+	// (05-PR5b): applyRow marks a row (opv3:rowmark:<op>:<row>) once its own
+	// Apply returned nil, naming the history Apply's writes recorded; a
+	// resumed apply counts a row whose values already equal Proposed as
+	// applied only by that row's own marker, with nothing it names undone
+	// since. The run's history for the row's book is never enough: another
+	// row of the same book may have written it.
+	MarkRowApplied(ctx context.Context, rowID string)
+	RowApplied(ctx context.Context, rowID string) (bool, error)
 }
 
 // There is deliberately no DeleteBook / DeleteBookFile. Deleting requires a

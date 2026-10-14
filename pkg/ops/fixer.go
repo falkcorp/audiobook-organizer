@@ -1,5 +1,5 @@
 // file: pkg/ops/fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
 // last-edited: 2026-10-14
 
@@ -33,12 +33,13 @@ type FixerSpec[P any, C any] struct {
 	// drift.
 	Evaluate func(rc *ItemRC, p P, c C) (Row, error)
 	// Apply writes one approved, freshly re-evaluated row through w. Its
-	// complete end state must be what row.Proposed says (see Row.Proposed),
-	// and it must leave history for every one of row.Subjects (see
-	// Row.Subjects): a resumed run treats a row whose fresh Current already
-	// equals Proposed, and whose every subject has history from this run's
-	// earlier attempt (Writer.Wrote), as applied by that attempt and does
-	// not call Apply again.
+	// complete end state must be what row.Proposed says (see Row.Proposed):
+	// a resumed run treats a row whose fresh Current already equals
+	// Proposed, and which an earlier attempt marked applied when this Apply
+	// returned nil (Writer.MarkRowApplied, Writer.RowApplied), as applied by
+	// that attempt and does not call Apply again. Its writes must use w and
+	// the item's context (rc.Context() or one derived from it), so the
+	// marker names their history.
 	Apply func(rc *ItemRC, w Writer, p P, row Row) error
 	// PartitionBy: rows sharing a key apply in order on one worker. Default
 	// Row.ID.
@@ -57,24 +58,21 @@ type Guard func(row Row) (skipReason string)
 // Row is what a person approves. Inputs is what the fingerprint hashes.
 type Row struct {
 	ID string `json:"id"`
-	// Subjects names the books and book files the row is about. A resumed
-	// apply counts a row as already applied only when this run's earlier
-	// attempt recorded history for EVERY subject (Writer.Wrote), so a row
-	// that lists a subject Apply only reads, or whose Apply writes a subject
-	// in a way that records no history (a ModifyBook that changes only
-	// untracked fields), is never recognized: on resume it is skipped as
-	// changed since plan, never written twice. A row with no Subjects is
-	// never already applied.
+	// Subjects names the books and book files the row is about. It plays
+	// no part in recognizing a row a resumed apply already wrote: that
+	// evidence is per row, the marker this run recorded when the row's own
+	// Apply returned nil (Writer.RowApplied). History another row recorded
+	// for the same book or book_file is never evidence for this one.
 	Subjects []Subject         `json:"subjects,omitempty"`
 	Title    string            `json:"title,omitempty"`
 	Current  map[string]string `json:"current,omitempty"`
 	// Proposed must describe Apply's complete end state, in the same keys
 	// and rendering as Current: once Apply has run, a fresh Evaluate of the
 	// row returns Current equal to Proposed on every key. A resumed apply
-	// relies on it, with the run's own history for every subject, to
-	// recognize a row its earlier attempt already wrote in a chunk that
-	// never completed (applyRow); a Proposed that leaves out part of what
-	// Apply writes would let that part be skipped.
+	// relies on it, with the row's own apply marker, to recognize a row its
+	// earlier attempt already wrote in a chunk that never completed
+	// (applyRow); a Proposed that leaves out part of what Apply writes
+	// would let that part be skipped.
 	Proposed  map[string]string `json:"proposed,omitempty"`
 	Reason    string            `json:"reason,omitempty"`
 	Risk      Risk              `json:"risk,omitempty"`
@@ -299,6 +297,12 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 		}
 		return false, err
 	}
+	// The row's writes committed. The marker is the per-row evidence a
+	// resume needs if this chunk never completes (appliedByEarlierAttempt).
+	// A crash between Apply's last write and the marker loses only that
+	// evidence: the resume then skips the row as changed since plan (it is
+	// missing from Applied and AfterApply) and never writes it twice.
+	w.MarkRowApplied(irc.Context(), planned.ID)
 	return true, nil
 }
 
@@ -312,25 +316,26 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 // Every condition is required: a resumed attempt; a row still free of a
 // hold, an owner-only flag and every guard (refusal ""); every Proposed value
 // now holding (Row.Proposed is Apply's complete end state); and evidence that
-// THIS run wrote it -- history its earlier attempt recorded for every one of
-// the planned row's Subjects (Writer.Wrote; none means no evidence). A row
-// someone else changed to the same values between the attempts has no such
-// history and is skipped as changed since plan. The store read comes last,
-// so a first attempt never pays for it; its error fails the item rather than
-// guessing either way.
+// THIS run wrote THIS row -- the marker applyRow recorded when the row's own
+// Apply returned nil, with none of the history it names undone since
+// (Writer.RowApplied). A row someone else changed to the same values between
+// the attempts has no marker, even when the run wrote another row of the
+// same book, and is skipped as changed since plan. The store read comes
+// last, so a first attempt never pays for it; its error fails the item
+// rather than guessing either way.
 func appliedByEarlierAttempt(irc *ItemRC, planned, fresh Row, refusal string) (bool, error) {
-	if !irc.Resumed() || refusal != "" || len(planned.Subjects) == 0 || !alreadyApplied(planned, fresh) {
+	if !irc.Resumed() || refusal != "" || !alreadyApplied(planned, fresh) {
 		return false, nil
 	}
 	w := irc.Writer()
 	if w == nil {
-		return false, fmt.Errorf("fixer apply of %s has no Writer to read this run's history", planned.ID)
+		return false, fmt.Errorf("fixer apply of %s has no Writer to read its apply marker", planned.ID)
 	}
-	wrote, err := w.Wrote(irc.Context(), planned.Subjects)
+	applied, err := w.RowApplied(irc.Context(), planned.ID)
 	if err != nil {
-		return false, fmt.Errorf("fixer apply of %s: read this run's history: %w", planned.ID, err)
+		return false, fmt.Errorf("fixer apply of %s: read its apply marker: %w", planned.ID, err)
 	}
-	return wrote, nil
+	return applied, nil
 }
 
 // admissible returns why fresh may not be applied now -- a hold, an

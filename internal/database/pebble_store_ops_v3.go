@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
@@ -21,6 +21,7 @@
 //	opv3:intent:{op_id}:{seq:010d}                 → JSON(Intent)
 //	opv3:item:{op_id}:{outcome}:{key}              → JSON(ItemOutcome)
 //	opv3:log:{op_id}:{ts_ns:020d}:{seq:010d}       → JSON(LogLine)
+//	opv3:rowmark:{op_id}:{row_id}                → JSON(RowMarkV3)  (pebble_store_ops_v3_rowmarks.go)
 //	opv3:sched:{def_id}                            → JSON(SchedState)  (written by 05-PR8)
 //	opv3:def:{def_id}                              → JSON(DefSnapshot)
 //	opv3:meta:counts                               → JSON(OpCounts)
@@ -176,6 +177,7 @@ func opv3RunScopedPrefixes(id string) [][]byte {
 		[]byte(opv3ItemPrefix + id + ":"),
 		[]byte(opv3LogPrefix + id + ":"),
 		opv3MarkRunPrefix(id),
+		opv3RowMarkRunPrefix(id),
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
 // last-edited: 2026-10-14
 
@@ -8,7 +8,6 @@ package opswriter
 import (
 	"encoding/json"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +45,14 @@ const (
 	// ChangeTypeEffectPrefix prefixes an Effect's rows: "effect:<name>".
 	ChangeTypeEffectPrefix = "effect:"
 )
+
+// ChangeTypeUndo is the metadata history change type of a row that put a
+// field back: undo-last-apply (under the undone batch's id), a single-field
+// undo (no batch id) and an operation revert (under the reverted op's id).
+// Same value as metafetch.ChangeTypeApplyUndo (pinned by metafetch's
+// TestOpsWriterUndoChangeTypeMatches); a Fixer row's apply marker stops
+// being evidence once such a row covers its batch (evidence.go).
+const ChangeTypeUndo = "undo"
 
 // HistoryRecorder records metadata-history rows.
 type HistoryRecorder interface {
@@ -88,32 +95,16 @@ func (h *BookHistory) Failed() int { return int(h.failed.Load()) }
 // NewBatchID returns a fresh batch id.
 func (h *BookHistory) NewBatchID() string { return h.batchPrefix + ulid.Make().String() }
 
-// ownsBatch reports whether batchID is one NewBatchID could have returned:
-// h's prefix followed by exactly one ULID. The ULID check keeps a prefix
-// from matching a longer one ("op-A-" is a prefix of "op-A-B-<ulid>"). An
-// empty prefix owns nothing: every bare ULID would match it.
-func (h *BookHistory) ownsBatch(batchID string) bool {
-	if h == nil || h.batchPrefix == "" {
-		return false
-	}
-	rest, ok := strings.CutPrefix(batchID, h.batchPrefix)
-	if !ok {
-		return false
-	}
-	_, err := ulid.ParseStrict(rest)
-	return err == nil
-}
-
 // RecordDiff records one row per tracked field that differs between before
-// and after and returns the changed field names in database.TrackedBookFields
-// order. journaled marks a book that also has operation change rows (its
+// and after, all in batchID (NewBatchID; the caller mints it so it can name
+// the batch), and returns the changed field names in
+// database.TrackedBookFields order. journaled marks a book that also has operation change rows (its
 // batch gets the apply_op_journaled marker). A row that cannot be recorded
 // makes the batch apply_incomplete. With no recorder it records nothing but
 // still reports the changes. complete is false when a changed field (or the
 // journaled marker) was not recorded, including when there is no recorder:
 // the Writer then leaves the write's intent in place.
-func (h *BookHistory) RecordDiff(bookID string, before, after *database.Book, journaled bool) (changed []string, complete bool) {
-	batchID := h.NewBatchID()
+func (h *BookHistory) RecordDiff(bookID, batchID string, before, after *database.Book, journaled bool) (changed []string, complete bool) {
 	now := time.Now()
 	failed := 0
 	for _, field := range database.TrackedBookFields() {

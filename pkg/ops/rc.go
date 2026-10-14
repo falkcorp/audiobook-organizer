@@ -1,7 +1,7 @@
 // file: pkg/ops/rc.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package ops
 
@@ -258,6 +258,10 @@ type Tally struct {
 	skip     string
 	marks    []string
 	refused  error
+	// history: the references NoteHistory recorded for the history the
+	// item's writes recorded, in order (opaque to ops; the Writer names
+	// them in a Fixer row's apply marker).
+	history []string
 	// sealed: the item returned. A refusal noted after that is a late write
 	// (a goroutine the item left behind) and goes to the run's latch, never
 	// to this item's outcome.
@@ -284,6 +288,44 @@ func (t *Tally) Refused() error {
 }
 
 type tallyKey struct{}
+
+// NoteHistory records ref, the Writer's own reference to history a write
+// made with ctx recorded (a metadata history batch, an operation journal
+// row), on the live item whose context ctx is or derives from. A Fixer's
+// apply hands what the item noted to Writer.MarkRowApplied, which names it
+// in the row's apply marker so a resume can tell whether that history was
+// undone. With no live item in ctx (the run's context, an unrelated one, or
+// a sealed item's) it is dropped: no row marker can name it. Writer
+// implementations only.
+func NoteHistory(ctx context.Context, ref string) {
+	if ctx == nil || ref == "" {
+		return
+	}
+	t, ok := ctx.Value(tallyKey{}).(*Tally)
+	if !ok || t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.sealed {
+		t.history = append(t.history, ref)
+	}
+}
+
+// NotedHistory returns the references NoteHistory recorded on the item
+// whose context ctx is, in order, or nil. Writer implementations only.
+func NotedHistory(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	t, ok := ctx.Value(tallyKey{}).(*Tally)
+	if !ok || t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.history)
+}
 
 // RefusalLatch is a run's record of a write the Writer refused (fenced or
 // lost stand-down lease) that it could not pin on a live item: one made with
@@ -395,6 +437,7 @@ func (t *Tally) Reset() {
 	t.skip = ""
 	t.marks = t.marks[:0]
 	t.refused = nil
+	t.history = nil
 	t.sealed = false
 }
 
