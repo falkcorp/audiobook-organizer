@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -942,6 +942,14 @@ func TestRowAppliedSeesLaterWritesInEitherStore(t *testing.T) {
 		mustRowApplied(t, w, r, true)
 	}
 
+	// A bare id that only another, unnamed row names as a file reads as
+	// that file too: the id set comes from the store, not from the marker.
+	s.foreignJournal("o4", "book-001", "book_file:file-777")
+	s.foreignJournal("o5", "book-001", "file-777")
+	for _, r := range rows {
+		mustRowApplied(t, w, r, true)
+	}
+
 	s.foreignJournal("f1", "book-001", "title")
 	s.foreignJournal("f2", "book-002", "file-002")
 	s.foreignHistory("book-003", "book_file:file-003:track_number")
@@ -994,6 +1002,11 @@ func TestRowAppliedScansTheJournalOncePerRun(t *testing.T) {
 		t.Fatalf("index usable: %d scans, %d book reads; want 1, 1", s.scans.Load(), s.bookReads.Load())
 	}
 	s.indexUsable.Store(false)
+	// The usable read dropped the scan: the next unusable read scans again.
+	mustRowApplied(t, w, "row-book-001", true)
+	if s.scans.Load() != 2 {
+		t.Fatalf("after the index was usable once: %d scans; want 2 (the scan is dropped)", s.scans.Load())
+	}
 
 	// A canceled scan: an error, not kept.
 	s.changes = append(s.changes, make([]database.OperationChange, journalScanCtxEvery)...)
