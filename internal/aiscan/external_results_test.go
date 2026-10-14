@@ -1,14 +1,17 @@
 // file: internal/aiscan/external_results_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f4ecec1d-b082-499e-8c29-8fe9a8f99043
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package aiscan
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,3 +118,94 @@ func TestRecordFullScanResultsSupersedesUnreviewedPrevious(t *testing.T) {
 	require.Equal(t, "complete", status(latest))
 	require.Equal(t, "complete", status(pipelineScan.ID), "only ai-dedup-batch scans are ever superseded")
 }
+
+// faultyRecorder is the scan store with one named write made to fail. Marking the
+// scan "failed" always works: that is the write the failure path depends on.
+type faultyRecorder struct {
+	*database.AIScanStore
+	failOn string
+}
+
+var errInjected = errors.New("injected store failure")
+
+func (f *faultyRecorder) CreatePhase(scanID int, phaseType, model string) (*database.ScanPhase, error) {
+	if f.failOn == "CreatePhase" {
+		return nil, errInjected
+	}
+	return f.AIScanStore.CreatePhase(scanID, phaseType, model)
+}
+
+func (f *faultyRecorder) SavePhaseData(scanID int, phaseType string, in, out, sug json.RawMessage) error {
+	if f.failOn == "SavePhaseData" {
+		return errInjected
+	}
+	return f.AIScanStore.SavePhaseData(scanID, phaseType, in, out, sug)
+}
+
+func (f *faultyRecorder) UpdatePhaseStatus(scanID int, phaseType, status, batchID string) error {
+	if f.failOn == "UpdatePhaseStatus" {
+		return errInjected
+	}
+	return f.AIScanStore.UpdatePhaseStatus(scanID, phaseType, status, batchID)
+}
+
+func (f *faultyRecorder) ReplaceScanResultsIfUnapplied(scanID int, results []database.ScanResult) (bool, error) {
+	if f.failOn == "ReplaceScanResultsIfUnapplied" {
+		return false, errInjected
+	}
+	return f.AIScanStore.ReplaceScanResultsIfUnapplied(scanID, results)
+}
+
+func (f *faultyRecorder) UpdateScanStatus(id int, status string) error {
+	if f.failOn == "UpdateScanStatus" && status == "complete" {
+		return errInjected
+	}
+	return f.AIScanStore.UpdateScanStatus(id, status)
+}
+
+// A recording that fails part way must not leave its scan pending: a pending scan
+// counts as running, so it blocked every AI scan start. It ends "failed", the start
+// guard clears, and a replay still finishes the very same scan.
+func TestRecordFullScanResults_AFailedRecordingEndsItsScanAndDoesNotBlockAStart(t *testing.T) {
+	sugg := []ai.AuthorDiscoverySuggestion{{AuthorIDs: []int{1, 2}, Action: "merge", CanonicalName: "A. B. Smith", Confidence: "high"}}
+	for _, failOn := range []string{"CreatePhase", "SavePhaseData", "UpdatePhaseStatus", "ReplaceScanResultsIfUnapplied", "UpdateScanStatus"} {
+		t.Run(failOn, func(t *testing.T) {
+			store := newScanStore(t)
+
+			_, _, _, err := recordFullScan(&faultyRecorder{AIScanStore: store, failOn: failOn}, "run-1", sugg, nil)
+			require.ErrorIs(t, err, errInjected)
+
+			scans, lerr := store.ListScans()
+			require.NoError(t, lerr)
+			require.Len(t, scans, 1)
+			require.Equal(t, "failed", scans[0].Status, "the half-recorded scan must be terminal")
+			started, serr := store.CreateScanIfNoneActive("realtime", nil, 0)
+			require.NoError(t, serr, "a failed recording must not block a scan start")
+			require.NotNil(t, started)
+			require.NoError(t, store.UpdateScanStatus(started.ID, "canceled"))
+
+			// The retry finishes the scan the failed attempt began.
+			id, rerr := RecordFullScanResults(store, "run-1", sugg, nil)
+			require.NoError(t, rerr)
+			require.Equal(t, scans[0].ID, id)
+			got, gerr := store.GetScan(id)
+			require.NoError(t, gerr)
+			require.Equal(t, "complete", got.Status)
+			require.Len(t, resultKeys(t, store, id), 1)
+		})
+	}
+}
+
+// A listing failure happens before any scan exists: there is nothing to end.
+func TestRecordFullScanResults_AFailureBeforeTheScanExistsLeavesNothingBehind(t *testing.T) {
+	store := newScanStore(t)
+	_, _, _, err := recordFullScan(&listFails{AIScanStore: store}, "run-1", nil, nil)
+	require.Error(t, err)
+	scans, lerr := store.ListScans()
+	require.NoError(t, lerr)
+	require.Empty(t, scans)
+}
+
+type listFails struct{ *database.AIScanStore }
+
+func (listFails) ListScans() ([]database.Scan, error) { return nil, errInjected }
