@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.17 -->
+<!-- version: 10.76.18 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-13 -->
+<!-- last-edited: 2026-10-14 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,26 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] Owner: read the `catalog.coverage-report` number, then decide whether to turn on `metadata_fetch.catalog_stage` (shipped off with 02-PR7b). With it on, a book whose only usable candidate is a catalog (review-only) candidate counts as having a usable candidate, so the Open Library / Google Books fallback is not asked for it (metabatch.NoUsableCandidate); confirm that is wanted, or the calibration for B2-origin precision (spec 02 Q3) says to stop catalog candidates counting as usable.
+
+- [ ] **AUTHORS-LANE-READS-SIGNAL** Give the three author reads in `web/src/services/api.ts` an `opts?: { signal?: AbortSignal; timeoutMs?: number }` parameter: `getAuthorDuplicates`, `getBooksByAuthor` (it pages with a signal-less `apiFetch` per page) and `validateDedupEntry`. Then delete `web/src/components/review/lanes/authorsReads.ts` and its test and point `useAuthorsLane.ts` and `AuthorsPanel.tsx` at the wrappers. The Authors lane (03-PR7a) copied their wire shapes into `authorsReads.ts` only because that PR was told not to edit `api.ts` (a hotspot file) and every lane read needs a signal and a deadline; `fetchBooksByAuthor` duplicates the paging loop in `getBooksByAuthor`, so the two must move together until this is done. While there, give the author write wrappers (`mergeAuthors`, `renameAuthor`, `splitCompositeAuthor`, `reclassifyAuthorAsNarrator`, `resolveProductionAuthor`, `refreshAuthorDuplicates`) a `timeoutMs`: the lane now bounds each with its own 60s deadline (`WRITE_DEADLINE_MS` in `useAuthorsLane.ts`), which can then go.
+
+- [ ] **BACKUP-SUFFIX-CLEANUP-OPTIN** Owner decision: should the dropped
+      `.backup` / `.bak` suffix cleanup come back, and how? The manual
+      `maintenance.cleanup-backups` job (retired in 04-P3b) deleted every file
+      ending in `.backup` or `.bak` under the library root, with no age test
+      (preview by default, no recorded prod run). It was NOT folded into the
+      nightly `maintenance.cleanup-old-backups`, because that job runs on a
+      schedule and would start age-deleting every `*.bak` file the library
+      holds, while it deliberately deletes only the `.bak-<unix>[-N]` names
+      `fileops` writes. Option: an opt-in, age-gated, preview-default param on
+      the survivor, so an operator can ask for the suffix sweep explicitly.
+      Otherwise leave it dropped. Also: after the 2-week soak of
+      the op-id retirement, check prod logs for
+      `unknown defID "maintenance.cleanup-backups"` and check for
+      `operations_v2` rows with that def_id (the alias deprecation metric
+      cannot fire for a retired, unaliased ID).
 
 - [ ] **AI-AUTHOR-REVIEW-GROUPS-EMPTY** The `ai.author-review` op's "groups"
       mode now runs against an empty group list when started generically (via
