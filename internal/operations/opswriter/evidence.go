@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -375,9 +375,6 @@ func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *boo
 	}
 	for _, r := range journal {
 		addFile(r.field)
-	}
-	for _, c := range n.changes {
-		addFile(c.FieldName)
 	}
 	var all, named []write
 	for i, r := range hist {
