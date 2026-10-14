@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.11.1
+// version: 2.12.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-10-11
+// last-edited: 2026-10-14
 
 package dedup
 
@@ -787,7 +787,7 @@ func TestListAmbiguousCandidates_FiltersByRange(t *testing.T) {
 	// Same-range authors should be ignored when we query for books.
 	seedCandidate(t, es, "author", "1", "2", 0.85)
 
-	got, err := engine.listAmbiguousCandidates("book", 0.80, 0.92)
+	got, err := engine.listAmbiguousCandidates(context.Background(), "book", 0.80, 0.92, func(string) {})
 	if err != nil {
 		t.Fatalf("listAmbiguousCandidates: %v", err)
 	}

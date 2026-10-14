@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.93.0
+// version: 2.94.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-14
 
@@ -380,8 +380,8 @@ type Server struct {
 	// if needed (rare — most access is via the typed fields above).
 	container *serviceregistry.Container
 
-	// extraOpsRegistrar holds the ExtraOpsRegistrar for the 3 scheduler ops
-	// that were extracted from scheduler_extra_ops.go (SERVER-THIN-RESIDUAL).
+	// extraOpsRegistrar holds the ExtraOpsRegistrar for the one scheduler op
+	// (scheduler.metadata-upgrade) that was extracted from scheduler_extra_ops.go (SERVER-THIN-RESIDUAL).
 	// Constructed early (before opRegistrars loop) with empty deps; deps are
 	// filled in after all services are wired so closures see correct values
 	// at run time.
@@ -795,10 +795,9 @@ func NewServer(store database.Store) *Server {
 	// available — same lifecycle as before.
 
 	// SERVER-THIN-RESIDUAL: build the ExtraOpsRegistrar before the opRegistrars
-	// loop so the 3 scheduler ops (scheduler_extra_ops.go shim) can delegate
+	// loop so the scheduler op (scheduler_extra_ops.go shim) can delegate
 	// to it. Fields available from wireServerFromContainer are set now;
-	// dedupEngine is back-filled below after its lazy
-	// initialisation. Closures see the updated values at op run time.
+	// closures see the updated values at op run time.
 	server.extraOpsRegistrar = scheduler.NewExtraOpsRegistrar(store, scheduler.ExtraOpsDeps{
 		MetadataFetchService: server.metadataFetchService,
 		ScanStandDown:        server,

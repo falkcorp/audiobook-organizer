@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -203,7 +203,7 @@ sequenceDiagram
 | `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
 | `maintenance.reconcile-scan` | Reconcile library paths vs. filesystem |
 | `dedup.author-scan` | Scan for author near-duplicates (former ID `maintenance.author-dedup-scan` still resolves) |
-| `dedup.llm-review` | LLM review of ambiguous dedup candidates; needs `settings.manage` (former IDs `maintenance.dedup-llm-review` and `scheduler.dedup-llm-review` still resolve) |
+| `dedup.llm-review` | LLM review of ambiguous dedup candidates. The generic operations endpoint requires `settings.manage`; `POST /api/v1/dedup/scan-llm` still admits `scan.trigger`. Former IDs `maintenance.dedup-llm-review` and `scheduler.dedup-llm-review` still resolve |
 | `maintenance.window` | Nightly maintenance window (dispatches sub-ops) |
 | `library.bulk-write-back` | Bulk tag write-back to audio files |
 | `ai.author-review` | AI-assisted author dedup review |

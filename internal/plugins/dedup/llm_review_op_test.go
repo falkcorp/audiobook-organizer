@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/llm_review_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8a1c64-7d02-4b95-a1f6-5c9d2e07b831
 // last-edited: 2026-10-14
 
@@ -20,13 +20,24 @@ import (
 // 04-P14b merged scheduler.dedup-llm-review into this op. The retired copy had
 // no tests, so these cover the survivor's success and failure paths.
 
-// With no ambiguous candidates (and no parser) the review has nothing to do:
-// it succeeds and says so on the reporter. Mutation check: delete the final
-// UpdateProgress in the prog == nil branch of runLLMReview and this fails.
-func TestLLMReviewOp_SucceedsWhenNothingToReview(t *testing.T) {
+// llmReviewPlugin is newCalibratePlugin with an enabled LLM parser (never
+// called: the tests below never reach a submit).
+func llmReviewPlugin(t *testing.T) (*Plugin, *database.EmbeddingStore) {
+	t.Helper()
 	pebble := newPebbleForISBNIndexTest(t)
 	es := database.NewEmbeddingStore(pebble.DB())
-	p := newCalibratePlugin(t, pebble, es)
+	eng, err := dedupengine.NewEngine(es, pebble, nil, ai.NewOpenAIParser(nil, "synthetic-key", true), nil, unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	return &Plugin{engine: eng, store: pebble, embeddingStore: es}, es
+}
+
+// With a parser and no ambiguous candidates the review has nothing to do: it
+// succeeds and says so on the reporter. Mutation check: delete the final
+// UpdateProgress in the prog == nil branch of runLLMReview and this fails.
+func TestLLMReviewOp_SucceedsWhenNothingToReview(t *testing.T) {
+	p, _ := llmReviewPlugin(t)
 	rep := &runAllReporter{}
 
 	if err := p.llmReviewDef().Run(context.Background(), nil, rep); err != nil {
@@ -36,8 +47,57 @@ func TestLLMReviewOp_SucceedsWhenNothingToReview(t *testing.T) {
 		t.Fatal("the op reported no progress")
 	}
 	last := rep.progress[len(rep.progress)-1]
-	if !strings.Contains(last.msg, "LLM review complete") || last.cur != 1 || last.total != 1 {
-		t.Errorf("final progress = %+v, want the 1/1 completion message", last)
+	if last.msg != "LLM review complete (no ambiguous candidates)" || last.cur != 1 || last.total != 1 {
+		t.Errorf("final progress = %+v, want the 1/1 no-candidates message", last)
+	}
+}
+
+// With no enabled parser the op does nothing, and says that rather than
+// "complete". Mutation check: delete the LLMReviewConfigured guard in
+// runLLMReview and this fails.
+func TestLLMReviewOp_SaysSkippedWhenParserNotConfigured(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+	p := newCalibratePlugin(t, pebble, es) // no parser
+	rep := &runAllReporter{}
+
+	if err := p.llmReviewDef().Run(context.Background(), nil, rep); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	last := rep.progress[len(rep.progress)-1]
+	if last.msg != "LLM review skipped: LLM parser not configured" {
+		t.Errorf("final progress = %+v, want the skipped message", last)
+	}
+}
+
+// liveReporter is a runAllReporter that also counts liveness stamps, the way the
+// registry's real reporter does.
+type liveReporter struct {
+	runAllReporter
+	touches int
+}
+
+func (r *liveReporter) TouchLiveness() { r.touches++ }
+
+// The engine's listing frames reach the registry's liveness clock. They have no
+// total, so they must not go through the progress bar. Mutation check: delete
+// the Heartbeat line in runLLMReview and this fails.
+func TestLLMReviewOp_ListingFramesTouchLiveness(t *testing.T) {
+	p, es := llmReviewPlugin(t)
+	sim := 0.85
+	if err := es.UpsertCandidate(database.DedupCandidate{
+		EntityType: "book", EntityAID: "A1", EntityBID: "B1", Layer: "embedding",
+		Similarity: &sim, Status: "pending",
+	}); err != nil {
+		t.Fatalf("UpsertCandidate: %v", err)
+	}
+	rep := &liveReporter{}
+
+	if err := p.llmReviewDef().Run(context.Background(), nil, rep); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rep.touches == 0 {
+		t.Error("no liveness stamps: the candidate listing is silent to the watchdog")
 	}
 }
 
