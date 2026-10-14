@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -125,8 +125,8 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 
 // RowApplied reports whether some attempt of this run marked row rowID
 // applied and nothing the marker names has been undone since (ops.Writer):
-// every journal row it names is still under the op id, neither voided nor
-// reverted, and no batch it names is covered by an undo (undoneBatches). A
+// every journal row it names is still there, neither voided nor reverted,
+// and no batch it names is covered by an undo (batchesStand). A
 // read is gated like a write, so a fenced or canceled run reads nothing and
 // a resumed run that is only recognizing rows still renews its stand-down
 // lease. One point read for the marker, one per journal row it names, one
@@ -142,7 +142,7 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read the apply marker of row %s: %w", rowID, err)
 	}
-	if m == nil || m.RowID != rowID {
+	if m == nil {
 		return false, nil
 	}
 	ok, err := w.changesStand(m.Changes)
@@ -152,9 +152,10 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	return w.batchesStand(m.Batches)
 }
 
-// changesStand reports whether every journal row of ids is still this op's
-// and neither voided nor reverted. A row that cannot be found cannot be
-// shown to stand.
+// changesStand reports whether every journal row of ids (under this op id)
+// is still there and neither voided nor reverted. A row that cannot be
+// found cannot be shown to stand. Voided is checked on its own: a voided
+// row normally has RevertedAt set too, but nothing older guarantees it.
 func (w *Writer) changesStand(ids []string) (bool, error) {
 	if len(ids) == 0 {
 		return true, nil
@@ -167,7 +168,7 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("read journal row %s of op %s: %w", id, w.cfg.OpID, err)
 		}
-		if c == nil || c.OperationID != w.cfg.OpID || c.Voided || c.RevertedAt != nil {
+		if c == nil || c.Voided || c.RevertedAt != nil {
 			return false, nil
 		}
 	}
@@ -175,12 +176,13 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 }
 
 // batchesStand reports whether every batch still stands: its rows are in
-// its book's history and no undo row covers it -- one in the batch itself
-// (undo-last-apply), or one recorded at or after the batch on a field the
-// batch wrote (a single-field undo, which carries no batch id, or an
-// operation revert, which carries its op's). The field rule can see an
-// undo of a later write to the same field and refuse a batch that still
-// stands; that only skips the row as changed since plan.
+// its book's history and no undo row (ChangeTypeUndo) was recorded at or
+// after it on a field it wrote. That covers every undo there is:
+// undo-last-apply (undo rows in the batch, one per field it put back), a
+// single-field undo (no batch id) and an operation revert (its op's id as
+// the batch). It can also see an undo of a later write to the same field
+// and refuse a batch that still stands; that only skips the row as changed
+// since plan.
 func (w *Writer) batchesStand(batches []database.RowMarkBatch) (bool, error) {
 	if len(batches) == 0 {
 		return true, nil
@@ -209,7 +211,7 @@ func (w *Writer) batchesStand(batches []database.RowMarkBatch) (bool, error) {
 
 // batchesStandIn applies batchesStand's rule to one book's history rows.
 func batchesStandIn(rows []database.MetadataChangeRecord, want map[string]bool) bool {
-	// fields: per wanted batch, the fields it wrote and when.
+	// found: per wanted batch, the fields it wrote and when.
 	type wrote struct {
 		at     time.Time
 		fields map[string]bool
@@ -235,9 +237,6 @@ func batchesStandIn(rows []database.MetadataChangeRecord, want map[string]bool) 
 	for _, r := range rows {
 		if r.ChangeType != ChangeTypeUndo {
 			continue
-		}
-		if want[r.BatchID] {
-			return false
 		}
 		for _, f := range found {
 			if f.fields[r.Field] && !r.ChangedAt.Before(f.at) {
