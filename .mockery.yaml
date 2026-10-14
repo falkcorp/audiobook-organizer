@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.28.0
+# version: 1.29.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-10-12
+# last-edited: 2026-10-14
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -140,6 +140,15 @@ packages:
           pkgname: server
           filename: mock_warmup_waiter_test.go
           structname: mockWarmupWaiter
+      # traceSnapshotter is the flight recorder seam the two watchdogs call
+      # (search-index stall tick, ops registry strike hook); the test counts
+      # the snapshot requests and their reasons.
+      traceSnapshotter:
+        config:
+          dir: internal/server
+          pkgname: server
+          filename: mock_trace_snapshotter_test.go
+          structname: mockTraceSnapshotter
   github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs:
     interfaces:
       aggregatesBackfillMarker:

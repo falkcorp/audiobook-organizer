@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-10-11
+// last-edited: 2026-10-14
 
 package server
 
@@ -23,6 +23,7 @@ func (s *Server) wireMediaRoutes(
 	itunesH *handlers.ITunesHandler,
 	aiH *handlers.AIHandler,
 	diagH *handlers.DiagnosticsHandler,
+	tracesH *handlers.DiagnosticsTracesHandler,
 	toolsH *toolshandler.Handler,
 	aiBackendsH *aibackendshandler.Handler,
 	pluginsH *handlers.PluginsHandler,
@@ -70,6 +71,9 @@ func (s *Server) wireMediaRoutes(
 	protected.POST("/diagnostics/submit-ai", s.perm(auth.PermSettingsManage), diagH.SubmitAI)
 	protected.GET("/diagnostics/ai-results/:operationId", s.perm(auth.PermSettingsManage), diagH.GetAIResults)
 	protected.POST("/diagnostics/apply-suggestions", s.perm(auth.PermSettingsManage), diagH.ApplySuggestions)
+	// Runtime flight recorder snapshots (internal/diag/flight).
+	protected.GET("/diagnostics/traces", s.perm(auth.PermSettingsManage), tracesH.List)
+	protected.GET("/diagnostics/traces/:name", s.perm(auth.PermSettingsManage), tracesH.Download)
 
 	// Tools lifecycle
 	protected.GET("/tools", s.perm(auth.PermSettingsManage), toolsH.List)
