@@ -1,11 +1,12 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
 // last-edited: 2026-10-14
 
 package entities
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -216,6 +217,8 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 		}
 
 		var void func() error
+		var journaled *database.OperationChange
+		var journaledMove undo.AuthorCreditsMove
 		if opts.Journal != nil {
 			primaryChanged := book.AuthorID != nil && *book.AuthorID == authorID
 			after := append([]database.BookAuthor{}, newAuthors...)
@@ -236,6 +239,7 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 				undo.TitleRelinkCreditsSnapshot{AuthorID: primaryBefore, Credits: append([]database.BookAuthor{}, bookAuthors...)}, move)
 			if rerr == nil {
 				void, rerr = opts.Journal.step(row)
+				journaled, journaledMove = row, move
 			}
 			if rerr != nil {
 				// An unjournaled reclassify cannot be undone, so it does not happen.
@@ -250,7 +254,19 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 			}
 			continue
 		}
-		repointPrimaryAuthor(store, &book, authorID, successor)
+		if !repointPrimaryAuthor(store, &book, authorID, successor) && journaled != nil && journaledMove.PrimaryChanged {
+			// The credit moved but the primary did not (the write failed, or another
+			// writer repointed it meanwhile). A row that still claimed the repoint
+			// made the revert read the untouched primary as "already back", then
+			// refuse the junction as changed since: the credit could never go back.
+			journaledMove.PrimaryChanged, journaledMove.PrimaryAfter = false, nil
+			if nv, merr := json.Marshal(journaledMove); merr == nil {
+				journaled.NewValue = string(nv)
+				if uerr := opts.Journal.Store.CreateOperationChange(journaled); uerr != nil {
+					skipped = append(skipped, fmt.Sprintf("book %s: undo row not updated after its primary author was not repointed: %v", book.ID, uerr))
+				}
+			}
+		}
 
 		// Add narrator link if not already present
 		if !hasNarrator {
@@ -284,8 +300,17 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 		}
 		snap := undo.AuthorSnapshot{ID: authorID, Name: author.Name}
 		for _, al := range aliases {
-			snap.Aliases = append(snap.Aliases, undo.AuthorAliasSnapshot{Name: al.AliasName, Type: al.AliasType})
+			snap.Aliases = append(snap.Aliases, undo.AuthorAliasSnapshot{ID: al.ID, Name: al.AliasName, Type: al.AliasType})
 		}
+		// Whether the author holds its own name entry (a case or whitespace
+		// variant may hold it instead): DeleteAuthor leaves an entry it does not
+		// hold, and the restore must neither take it nor read it as "taken since".
+		holder, herr := store.GetAuthorByName(author.Name)
+		if herr != nil {
+			return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped},
+				&ReclassifyError{Msg: "author not deleted: its name entry could not be read for the undo row", Err: herr}
+		}
+		snap.SharedNameIndex = holder != nil && holder.ID != authorID
 		row, rerr := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorReclassifyDelete, snap,
 			undo.AuthorReclassifyDelete{NarratorID: narrator.ID, NarratorName: narrator.Name})
 		if rerr == nil {
@@ -360,19 +385,23 @@ func unknownAuthor(store unknownAuthorStore) (*database.Author, error) {
 // internal/plugins/maintenance/author.go:221-246. Those two agree; this handler
 // was the one that had drifted, which is what the "keep in sync" comment on the
 // scheduler copy was meant to prevent and did not.
-func repointPrimaryAuthor(store bookModifier, book *database.BookCore, deletedAuthorID int, newPrimary *database.Author) {
+//
+// It reports whether it wrote the primary: false for a book whose primary is not
+// the deleted author, a refused or failed write, and a row another writer
+// repointed meanwhile.
+func repointPrimaryAuthor(store bookModifier, book *database.BookCore, deletedAuthorID int, newPrimary *database.Author) (wrote bool) {
 	if book == nil {
-		return
+		return false
 	}
 	// Only the books whose PRIMARY author is the doomed one need repointing;
 	// for the rest the junction rewrite was the whole job.
 	if book.AuthorID == nil || *book.AuthorID != deletedAuthorID {
-		return
+		return false
 	}
 	if newPrimary == nil {
 		entitiesLog.Warn("author repoint: no successor given, refusing to clear AuthorID book=%s author=%d",
 			book.ID, deletedAuthorID)
-		return
+		return false
 	}
 	id := newPrimary.ID
 	newID := &id
@@ -391,18 +420,23 @@ func repointPrimaryAuthor(store bookModifier, book *database.BookCore, deletedAu
 	// (another writer repointed it meanwhile) is left as it is.
 	updated, err := store.ModifyBook(book.ID, func(b *database.Book) error {
 		if b.AuthorID == nil || *b.AuthorID != deletedAuthorID {
+			wrote = false
 			return database.ErrSkipBookWrite
 		}
 		b.AuthorID = newID
 		b.Author = newPrimary
+		wrote = true
 		return nil
 	})
 	switch {
 	case err != nil:
 		entitiesLog.Warn("author repoint: failed to update book %s to author %d: %s",
 			book.ID, id, err.Error())
+		return false
 	case updated == nil:
 		entitiesLog.Warn("author repoint: book %s no longer exists, nothing to repoint from author %d",
 			book.ID, deletedAuthorID)
+		return false
 	}
+	return wrote
 }

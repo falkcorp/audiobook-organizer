@@ -1,4 +1,4 @@
-// file: internal/server/author_merge_undo_collision_test.go
+// file: internal/server/author_merge_undo_review_test.go
 // version: 1.0.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
@@ -8,10 +8,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -217,4 +220,113 @@ func TestAIAuthorMergeApplyOp_PenNameOfAMergedAuthorResolvesToTheKeep(t *testing
 			require.Equal(t, keep.ID, got.ID)
 		})
 	}
+}
+
+// failModifyBookStore fails the primary-author write for one book: the credits
+// move, the primary does not.
+type failModifyBookStore struct {
+	*database.PebbleStore
+	failBook string
+}
+
+func (f failModifyBookStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id == f.failBook {
+		return nil, errors.New("injected primary write failure")
+	}
+	return f.PebbleStore.ModifyBook(id, fn)
+}
+
+// The credits of a book moved but its primary author could not be repointed. The
+// row used to still claim the repoint, so the revert read the untouched primary as
+// "already back", refused the junction as changed since, and the credits could
+// never go back. It now journals what happened, and the undo puts them back.
+func TestAuthorMergeOp_APrimaryThatWasNotRepointedDoesNotBlockTheUndo(t *testing.T) {
+	w := newUndoWorld(t)
+	s := newRelinkOpServer(failModifyBookStore{PebbleStore: w.st, failBook: w.soloBook})
+	def := relinkOpDef(t, s.RegisterAuthorMergeOp, "entities.author-merge")
+	raw, err := json.Marshal(entities.AuthorMergeOpParams{KeepID: w.keep.ID, MergeIDs: []int{w.from.ID}, KeepName: w.keep.Name})
+	require.NoError(t, err)
+	require.Error(t, def.Run(context.Background(), raw, &opReporter{id: "op-primary-stuck"}))
+	moved, err := w.st.GetBookAuthors(w.soloBook)
+	require.NoError(t, err)
+	require.Equal(t, w.keep.ID, moved[0].AuthorID, "the credit moved")
+	book, err := w.st.GetBookByID(w.soloBook)
+	require.NoError(t, err)
+	require.Equal(t, w.from.ID, *book.AuthorID, "the primary did not")
+
+	res, err := revertOp(t, w.st, "op-primary-stuck")
+	require.NoError(t, err)
+	require.Zero(t, res.Failed)
+	for id, want := range w.before {
+		got, gerr := w.st.GetBookAuthors(id)
+		require.NoError(t, gerr)
+		require.Equal(t, want, got, "book %s credits", id)
+	}
+}
+
+// The reclassify journals the same way when its primary write fails.
+func TestReclassify_APrimaryThatWasNotRepointedDoesNotBlockTheUndo(t *testing.T) {
+	w := newUndoWorld(t)
+	store := failModifyBookStore{PebbleStore: w.st, failBook: w.soloBook}
+	_, err := entities.ReclassifyAuthorAsNarrator(store, w.from.ID, entities.ReclassifyOptions{
+		Journal: &entities.ReclassifyJournal{OperationID: "op-reclass-stuck", Store: store},
+	})
+	require.Error(t, err, "the author is kept: the solo book's primary still names it")
+
+	res, err := revertOp(t, w.st, "op-reclass-stuck")
+	require.NoError(t, err)
+	require.Zero(t, res.Failed)
+	for id, want := range w.before {
+		got, gerr := w.st.GetBookAuthors(id)
+		require.NoError(t, gerr)
+		require.Equal(t, want, got, "book %s credits", id)
+	}
+}
+
+// newUndoApplyFixture is an AI scan whose one result merges w.from into w.keep,
+// on w's store, applied under opID.
+func newUndoApplyFixture(t *testing.T, w *undoWorld, opID string) (*applyFixture, int) {
+	t.Helper()
+	f := newApplyFixture(t)
+	f.st, f.s = w.st, newRelinkOpServer(w.st)
+	f.s.aiScanStore = f.scanStore
+	f.s.pipelineManager = aiscanManagerFor(f)
+	id := f.result(database.ScanSuggestion{CanonicalName: w.keep.Name, KeepID: w.keep.ID, AuthorIDs: []int{w.keep.ID, w.from.ID}, Source: "groups_scan"})
+	def := relinkOpDef(t, f.s.RegisterAIScanApplyOp, handlers.AIScanApplyDefID)
+	raw, err := json.Marshal(handlers.AIScanApplyOpParams{ScanID: f.scan.ID, ResultIDs: []int{id}, DryRun: live()})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: opID}))
+	require.True(t, f.applied(id))
+	return f, id
+}
+
+// A revert that finds every row reverted already still reopens the results: an
+// earlier run may have marked the notes reverted and stopped before reopening.
+func TestRevertOperation_ASecondRunReopensTheResultsTheFirstDidNot(t *testing.T) {
+	w := newUndoWorld(t)
+	f, id := newUndoApplyFixture(t, w, "op-reopen-second")
+	// The first run: everything reverted, the results not reopened (the revert
+	// service alone, standing in for a run that stopped before the reopen).
+	_, err := revertOp(t, w.st, "op-reopen-second")
+	require.NoError(t, err)
+	require.True(t, f.applied(id))
+
+	res, err := f.s.revertOperation("op-reopen-second")
+	require.Error(t, err, "already reverted")
+	require.Nil(t, res)
+	require.False(t, f.applied(id), "the second run reopens the result")
+}
+
+// Undoing an author merge drops the author list and dedup caches, as the merge
+// does, so the restored author is listed again at once.
+func TestRevertOperation_AnUndoneAuthorMergeDropsTheAuthorCaches(t *testing.T) {
+	w := newUndoWorld(t)
+	f, _ := newUndoApplyFixture(t, w, "op-undo-caches")
+	f.s.authorsCache.Set("authors-list", nil)
+	f.s.dedupCache.Set("author-duplicates", gin.H{"stale": true})
+
+	_, err := f.s.revertOperation("op-undo-caches")
+	require.NoError(t, err)
+	require.Zero(t, f.s.authorsCache.Len(), "author list cache dropped")
+	require.Zero(t, f.s.dedupCache.Len(), "dedup cache dropped")
 }

@@ -420,17 +420,35 @@ func mergeAuthorsInto(
 			// sets only AuthorID, so a column another writer commits in the
 			// meantime is not reverted (audit A1#15). A vanished book is
 			// (nil, nil): nothing to sync, as before.
-			if _, upErr := store.ModifyBook(book.ID, func(current *database.Book) error {
+			wrotePrimary := false
+			_, upErr := store.ModifyBook(book.ID, func(current *database.Book) error {
 				if current.AuthorID == nil || *current.AuthorID != mergeID {
+					wrotePrimary = false
 					return database.ErrSkipBookWrite
 				}
 				newID := keepID
 				current.AuthorID = &newID
+				wrotePrimary = true
 				return nil
-			}); upErr != nil {
+			})
+			if upErr != nil {
 				moveFailures++
 				logging.Warn(ctx, "author merge failed to sync denormalized AuthorID on book", "book", book.ID, "err", upErr)
 				out.Errors = append(out.Errors, fmt.Sprintf("book %s: credits moved but its primary author could not be repointed: %v", book.ID, upErr))
+			}
+			if move.PrimaryChanged && (upErr != nil || !wrotePrimary) {
+				// The credits moved but the primary did not (the write failed, the
+				// book is gone, or another writer repointed it meanwhile). A row that
+				// still claimed the repoint made the revert read the untouched
+				// primary as "already back" and then refuse the junction as changed
+				// since, so the credits could never go back. Journal what happened.
+				move.PrimaryChanged, move.PrimaryAfter = false, nil
+				if nv, merr := json.Marshal(move); merr == nil {
+					row.NewValue = string(nv)
+					if uerr := store.CreateOperationChange(row); uerr != nil {
+						out.Errors = append(out.Errors, fmt.Sprintf("book %s: undo row not updated after its primary author was not repointed: %v", book.ID, uerr))
+					}
+				}
 			}
 		}
 
