@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.220.1",
+    "version": "0.220.2",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -7550,7 +7550,6 @@
               "dedup-books",
               "enrich-book-files",
               "fix-author-narrator-swap",
-              "fix-book-file-paths",
               "fix-file-modes",
               "fix-read-by-narrator",
               "fix-version-groups",

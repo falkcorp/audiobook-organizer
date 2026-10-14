@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -32,6 +33,12 @@ type markFakeStore struct {
 	// batches counts UpdateBookFiles CALLS, so a test can prove the op pays one
 	// batched write per book rather than one per row. Guarded by mu.
 	batches int
+	// getFilesCalls counts GetBookFiles calls: the apply phase makes one per book
+	// whose pre-write stat pass was not aborted, so a cancel test can prove the
+	// pass stopped. onBooksPage, when set, runs on each GetAllBooksCore call with
+	// the page offset. Both are only for the cancel/heartbeat tests.
+	getFilesCalls atomic.Int64
+	onBooksPage   func(offset int)
 }
 
 func (f *markFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
@@ -39,6 +46,9 @@ func (f *markFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 }
 
 func (f *markFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	if f.onBooksPage != nil {
+		f.onBooksPage(offset)
+	}
 	books := f.books
 	if books == nil {
 		seen := map[string]struct{}{}
@@ -61,6 +71,7 @@ func (f *markFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore,
 	return books[offset:end], nil
 }
 func (f *markFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	f.getFilesCalls.Add(1)
 	return f.full[bookID], nil
 }
 

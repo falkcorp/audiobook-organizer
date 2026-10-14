@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-14
 
@@ -82,6 +82,13 @@ var retiredOpIDs = map[string]string{
 	// suffix cleanup is dropped; whether it returns as an opt-in, age-gated,
 	// preview-default param is an open owner question (todo.d).
 	"maintenance.cleanup-backups": "retired; maintenance.cleanup-old-backups is a different, age-gated deleter, so no alias",
+	// Retired 2026-10-14 (04-P14d). The manual job only ever set Missing=true
+	// (dry_run default true); maintenance.mark-missing-files reconciles the flag
+	// both ways, takes {apply} instead of {dry_run}, and writes through a scan
+	// stand-down. Not aliased: an old enqueue would run a different contract
+	// (it also CLEARS flags) under params it never sent, so a loud unknown-op
+	// error is safer than a silent reinterpretation.
+	"maintenance.fix-book-file-paths": "retired; maintenance.mark-missing-files takes {apply} and also clears stale flags, so no alias",
 }
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir
