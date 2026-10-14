@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_ops_dry_run_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5c1e4571-8bcf-4190-ac2d-ae141026d139
 // last-edited: 2026-10-13
 
@@ -353,9 +353,37 @@ func TestResolveProductionAuthors_ApplyRefusesWhenScanDoesNotStandDown(t *testin
 // A lapsed lease means the scanner may be running again: the pool stops before
 // the next fetch. Only the first renewal succeeds, so exactly one book is
 // fetched; the dedup cache is still invalidated for that one.
+//
+// "Exactly one" holds only because the test orders the renewals. RunItems'
+// per-item checkpoint is Beat() followed by a read of the hold's ctx, and those
+// two steps are not atomic: a worker whose renewal succeeded (call 1) can have
+// the hold cancelled under it by another worker's failed renewal (call 2)
+// before it reads the ctx, and then it correctly skips its fetch. That is the
+// safe direction (no fetch starts once any worker has seen the lease lost), so
+// the code does not promise that a successful renewal is followed by a fetch.
+// Left unordered, the outcome is 0 or 1 fetches depending on the scheduler
+// (seen as 0 on a loaded CI runner). So every failing renewal here waits until
+// the first fetch has started; call 1 is then guaranteed to reach its fetch,
+// and every other worker is stopped by a lost lease, never by a race.
 func TestResolveProductionAuthors_ApplyStopsWhenLeaseIsLost(t *testing.T) {
 	d := newResolveFixture().withBooks(12)
-	d.renewOK = func(call int) bool { return call == 1 }
+	realID := 30
+	fetchStarted := make(chan struct{})
+	var startedOnce sync.Once
+	d.fetch = func(context.Context, string) (*int, error) {
+		startedOnce.Do(func() { close(fetchStarted) })
+		return &realID, nil
+	}
+	d.renewOK = func(call int) bool {
+		if call == 1 {
+			return true
+		}
+		select {
+		case <-fetchStarted:
+		case <-t.Context().Done():
+		}
+		return false
+	}
 	p := &Plugin{deps: d}
 	err := runGuarded(t, p, context.Background(), json.RawMessage(`{"dry_run":false}`), &opIDReporter{id: "op-x"})
 	require.ErrorIs(t, err, registry.ErrScanStandDownLost)
