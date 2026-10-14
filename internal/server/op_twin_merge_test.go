@@ -1,7 +1,7 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package server
 
@@ -25,12 +25,16 @@ import (
 
 // twinMergeRows lists every pair of ops merged into one survivor. The loser's ID
 // stays resolvable as a FormerIDs alias, so a stored row, a script or an old
-// schedule that still names it must land on a def that is at least as strict as
-// the one it replaced. Each merge PR appends its own rows.
+// schedule that still names it lands on the survivor's gate. Each merge PR
+// appends its own rows.
 //
-// The series pair keeps library.edit_metadata (the survivor's own, stricter
-// gate) rather than the settings.manage the loser's absent Permissions implied;
-// the survivors are not downgraded.
+// The survivor's gate is not always at least as strict as the loser's. The
+// series pair and the author-scan pair had a loser with no Permissions, which
+// fell back to settings.manage (admin only); their survivors require
+// library.edit_metadata (editor), so the alias WIDENS from admin to editor. That
+// is accepted because an editor could already run the same body under the
+// survivor's own id; no row may add a permission the survivor does not already
+// require.
 var twinMergeRows = []struct {
 	loser, survivor string
 	perms           []auth.Permission
@@ -53,7 +57,9 @@ var twinMergeRows = []struct {
 	{"scheduler.author-split-scan", "maintenance.author-split-scan", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
 	// 04-P4f: scheduler.cleanup-old-backups merged into maintenance.cleanup-old-backups.
 	{"scheduler.cleanup-old-backups", "maintenance.cleanup-old-backups", []auth.Permission{auth.PermSettingsManage}, 1 * time.Hour},
-	// 04-P14a: maintenance.author-dedup-scan (no Permissions) merged into dedup.author-scan.
+	// 04-P14a: maintenance.author-dedup-scan merged into dedup.author-scan. The alias moves from
+	// admin-only (settings.manage fallback) to library.edit_metadata (editor); same body editors
+	// could already run as dedup.author-scan.
 	{"maintenance.author-dedup-scan", "dedup.author-scan", []auth.Permission{auth.PermLibraryEditMetadata}, 1 * time.Hour},
 }
 
