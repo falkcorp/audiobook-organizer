@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/fakes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e2a9c71-4d08-4f3b-8a6e-1b9d7c3f2a54
 // last-edited: 2026-10-14
 
@@ -25,6 +25,18 @@ import (
 
 // errWorldStopped refuses every write after a simulated crash.
 var errWorldStopped = errors.New("opstest: the world stopped (simulated crash); write refused")
+
+// errWorldReset refuses a write that came after the World was Reset: it is
+// from a goroutine a def left behind by an earlier run or case, writing
+// after that run ended, and it would otherwise land in the next case's fresh
+// store.
+var errWorldReset = errors.New("opstest: the World was reset since this run; write refused (a goroutine the def " +
+	"left behind is writing after its run ended)")
+
+// errWorldClosed refuses a write or read made after the World's test
+// finished: the store is closed.
+var errWorldClosed = errors.New("opstest: the World is closed (its test finished); write refused (a goroutine the " +
+	"def left behind is still using it)")
 
 // ── books ───────────────────────────────────────────────────────────────────
 
@@ -59,18 +71,28 @@ func (b *FakeBooks) reset() {
 }
 
 // GetBookByID reads one book; nil when it does not exist.
-func (b *FakeBooks) GetBookByID(id string) (*database.Book, error) { return b.w.st().GetBookByID(id) }
+func (b *FakeBooks) GetBookByID(id string) (*database.Book, error) {
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookByID(id)
+}
 
 // AllBooks returns every book, sorted by id.
 func (b *FakeBooks) AllBooks() ([]database.Book, error) {
-	ids, err := b.w.st().ListBookIDs()
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
+	ids, err := st.ListBookIDs()
 	if err != nil {
 		return nil, err
 	}
 	sort.Strings(ids)
 	out := make([]database.Book, 0, len(ids))
 	for _, id := range ids {
-		book, err := b.w.st().GetBookByID(id)
+		book, err := st.GetBookByID(id)
 		if err != nil {
 			return nil, err
 		}
@@ -100,7 +122,11 @@ func (b *FakeBooks) Page(after string, limit int) ([]database.Book, string, erro
 
 // GetBookFiles returns a book's files.
 func (b *FakeBooks) GetBookFiles(bookID string) ([]database.BookFile, error) {
-	return b.w.st().GetBookFiles(bookID)
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookFiles(bookID)
 }
 
 // AllBookFiles returns every file of every book, sorted by file id.
@@ -109,9 +135,13 @@ func (b *FakeBooks) AllBookFiles() ([]database.BookFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
 	var out []database.BookFile
 	for _, book := range books {
-		fs, err := b.w.st().GetBookFiles(book.ID)
+		fs, err := st.GetBookFiles(book.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -123,17 +153,29 @@ func (b *FakeBooks) AllBookFiles() ([]database.BookFile, error) {
 
 // GetBookFileByID implements opswriter.BookFileStore.
 func (b *FakeBooks) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
-	return b.w.st().GetBookFileByID(bookID, fileID)
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookFileByID(bookID, fileID)
 }
 
 // GetBookFileByPath implements opswriter.BookFileStore.
 func (b *FakeBooks) GetBookFileByPath(path string) (*database.BookFile, error) {
-	return b.w.st().GetBookFileByPath(path)
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookFileByPath(path)
 }
 
 // GetBookAuthors returns a book's credit list.
 func (b *FakeBooks) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
-	return b.w.st().GetBookAuthors(bookID)
+	st, err := b.w.read()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookAuthors(bookID)
 }
 
 // ModifyBook implements opswriter.BookStore: the store's own ModifyBook,

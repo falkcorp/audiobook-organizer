@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/conformance.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d8e4b17-5f3a-4c69-a1b8-6e9d2c7f4a35
 // last-edited: 2026-10-14
 
@@ -181,7 +181,13 @@ func taskConformance(tt tester, w *World, def ops.Definition, raw json.RawMessag
 		checkOK(tt, "the second live run", second)
 		checkUnchanged(tt, second)
 	})
-	for _, name := range []string{AssertNoWriteAfterFence, AssertCrashResumeAtLeastOnce, AssertCrashMidChunkNoRerun,
+	tt.Run(AssertNoWriteAfterFence, func(tt tester) {
+		tt.Logf("no fence fault applies to a Task: it has no items to cancel between")
+		for _, o := range []*Outcome{preview, live, second} {
+			checkWritesInsideWriter(tt, o)
+		}
+	})
+	for _, name := range []string{AssertCrashResumeAtLeastOnce, AssertCrashMidChunkNoRerun,
 		AssertPartitionOneWorkerInOrder, AssertAppendOnlyClaim, AssertProgressMonotone} {
 		tt.Run(name, func(tt tester) { tt.Logf("not applicable to a Task: it has no items, chunks or ledger") })
 	}
@@ -305,7 +311,12 @@ func (s *suite) run(tt tester) {
 			checkHistory(tt, o)
 		}
 	})
-	tt.Run(AssertNoWriteAfterFence, func(tt tester) { s.checkFence(tt) })
+	tt.Run(AssertNoWriteAfterFence, func(tt tester) {
+		s.checkFence(tt)
+		for _, o := range s.windowOutcomes() {
+			checkWritesInsideWriter(tt, o)
+		}
+	})
 	tt.Run(AssertCrashResumeAtLeastOnce, func(tt tester) {
 		for _, p := range s.crashAt {
 			s.checkCrash(tt, p, false)
@@ -376,6 +387,20 @@ func (s *suite) liveOutcomes() []*Outcome {
 		}
 	}
 	return out
+}
+
+// windowOutcomes are the attempts checkWritesInsideWriter reads: every
+// attempt the suite ran, the preview, the fault runs and AbandonAt's second
+// run included.
+func (s *suite) windowOutcomes() []*Outcome {
+	out := append([]*Outcome{s.preview}, s.liveOutcomes()...)
+	for _, o := range s.fence {
+		out = append(out, o)
+		if o.Abandon != nil && o.Abandon.Second != nil {
+			out = append(out, o.Abandon.Second)
+		}
+	}
+	return append(out, s.appendRun...)
 }
 
 func uniq(xs ...int) []int {
@@ -540,6 +565,44 @@ func (s *suite) checkFence(tt tester) {
 			if o.State == state.V3Succeeded {
 				tt.Errorf("LoseLeaseAt: the run succeeded after losing its stand-down lease")
 			}
+		}
+	}
+}
+
+// checkWritesInsideWriter: every write and history row a def makes in an
+// attempt's window is made inside one of that attempt's Writer calls, on the
+// book the call writes (a book-less write, or a call that names no book,
+// matches any). A def writes through rc.Writer(); a write made outside every
+// call went around it, or came from a goroutine the def left behind by an
+// earlier attempt or case, which wrote during this one, where the
+// per-attempt window and the orphan report (a write outside every attempt)
+// cannot tell it from the attempt's own.
+//
+// It cannot prove whose write it was: a goroutine left behind that writes a
+// book while a Writer call on the same book is in flight is indistinguishable
+// from that call's own write (a write carries no goroutine identity).
+func checkWritesInsideWriter(tt tester, o *Outcome) {
+	tt.Helper()
+	inside := func(seq int64, book string) bool {
+		for _, sp := range o.spans {
+			if sp.Start < seq && seq < sp.End && (book == "" || sp.Book == "" || sp.Book == book) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, wr := range o.Writes {
+		if !wr.harness && !inside(wr.Seq, wr.BookID) {
+			tt.Errorf("op %s attempt %d: %s %s:%s (seq %d) was committed outside every Writer call of the "+
+				"attempt: the def wrote around rc.Writer(), or a goroutine it left behind from an earlier "+
+				"attempt wrote during this one", o.OpID, o.Attempt, wr.Op, wr.Subject.Type, wr.Subject.ID, wr.Seq)
+		}
+	}
+	for _, h := range o.History {
+		if !inside(h.Seq, h.BookID) {
+			tt.Errorf("op %s attempt %d: a history row (book %s, field %s, seq %d) was recorded outside every "+
+				"Writer call of the attempt: the def journaled around rc.Writer(), or a goroutine it left behind "+
+				"from an earlier attempt recorded it during this one", o.OpID, o.Attempt, h.BookID, h.Field, h.Seq)
 		}
 	}
 }
