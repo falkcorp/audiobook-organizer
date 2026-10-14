@@ -17,7 +17,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -288,7 +287,7 @@ func TestFixerResumeRealWriter(t *testing.T) {
 				}
 				old, applied := `"orig bk-`+itemKey(10)+`"`, `"new `+itemKey(10)+`"`
 				if err := p.RecordMetadataChange(&database.MetadataChangeRecord{BookID: m.BookBatches[0].BookID,
-					Field: "title", PreviousValue: &applied, NewValue: &old, ChangeType: opswriter.ChangeTypeUndo,
+					Field: "title", PreviousValue: &applied, NewValue: &old, ChangeType: "undo", // metafetch.ChangeTypeApplyUndo
 					Source: "undo-last-apply", ChangedAt: time.Now(), BatchID: m.BookBatches[0].BatchID}); err != nil {
 					t.Fatal(err)
 				}

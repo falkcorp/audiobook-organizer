@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: aa5896b5-07dd-4825-ba04-5b2dac36a0f3
-// last-edited: 2026-07-03
+// last-edited: 2026-10-14
 
 package database
 
@@ -118,32 +118,61 @@ func (p *PebbleStore) GetBookChangeHistory(bookID string, limit int) ([]Metadata
 	if limit <= 0 {
 		limit = 100
 	}
+	all, _, err := p.bookChangeHistory(bookID)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// ReadBookChangeHistory returns every metadata history row of bookID,
+// uncapped, in GetBookChangeHistory's order (key order reversed: field by
+// field, newest first within a field), and how many of the book's rows did
+// not decode. GetBookChangeHistory drops such rows silently; a caller that
+// must not draw a conclusion from a partial history (the Fixer resume
+// evidence check, internal/operations/opswriter) reads this instead and
+// fails closed when undecodable > 0. Resolve it with database.AsCapability;
+// it is not on Store.
+func (p *PebbleStore) ReadBookChangeHistory(bookID string) (rows []MetadataChangeRecord, undecodable int, err error) {
+	return p.bookChangeHistory(bookID)
+}
+
+// bookChangeHistory reads every metadata_change:<bookID>: row, newest key
+// first, counting the rows that do not decode instead of returning them.
+func (p *PebbleStore) bookChangeHistory(bookID string) ([]MetadataChangeRecord, int, error) {
 	prefix := fmt.Sprintf("metadata_change:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte(prefix),
 		UpperBound: []byte(prefix + "\xff"),
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer iter.Close()
 
 	var all []MetadataChangeRecord
+	undecodable := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		var r MetadataChangeRecord
 		if err := json.Unmarshal(iter.Value(), &r); err != nil {
+			undecodable++
 			continue
 		}
 		all = append(all, r)
+	}
+	// An iterator that stopped early would hand back part of the history
+	// as if it were all of it.
+	if err := iter.Error(); err != nil {
+		return nil, 0, err
 	}
 	// Reverse for newest-first
 	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
 		all[i], all[j] = all[j], all[i]
 	}
-	if len(all) > limit {
-		all = all[:limit]
-	}
-	return all, nil
+	return all, undecodable, nil
 }
 
 // AddMetadataRejection is not supported on PebbleStore.

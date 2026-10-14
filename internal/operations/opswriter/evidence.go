@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -39,36 +39,42 @@ type RowMarkStore interface {
 	GetRowMarkV3(id, rowID string) (*database.RowMarkV3, error)
 }
 
-// ChangeReader reads one operation change row by id (a point read).
+// ChangeReader reads operation change rows: one by id (a point read), and a
+// book's whole journal across every operation (the opchange_by_book index
+// once it is trusted, a full journal scan until then).
 type ChangeReader interface {
 	GetOperationChange(operationID, changeID string) (*database.OperationChange, error)
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
 
-// BookHistoryReader reads a book's metadata history rows.
+// BookHistoryReader reads a book's whole metadata history, uncapped, and
+// counts the rows that did not decode (database.PebbleStore
+// ReadBookChangeHistory). GetBookChangeHistory is not enough: it drops an
+// undecodable row silently, and the row it drops could be the one that
+// overwrote a batch.
 type BookHistoryReader interface {
-	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+	ReadBookChangeHistory(bookID string) (rows []database.MetadataChangeRecord, undecodable int, err error)
 }
-
-// completeHistory is the limit RowApplied passes to GetBookChangeHistory.
-// The store reads every row of the book before it truncates at limit, and
-// the truncation is by key (metadata_change:<book>:<field>:<nanos>), so a
-// smaller limit drops rows by field name, not by age: a book with more rows
-// than the limit could lose exactly the batch's rows or its undo.
-const completeHistory = math.MaxInt
 
 // historyRef is what a write notes on its item (ops.NoteHistory): one
-// metadata history batch of a book, or one operation journal row.
+// metadata history batch of a book, one operation journal row, or that some
+// of a write's history could not be recorded (Incomplete).
 type historyRef struct {
 	Book   string `json:"book,omitempty"`
 	Batch  string `json:"batch,omitempty"`
 	Change string `json:"change,omitempty"`
+	// Incomplete: a write of the item committed but part of its history
+	// was not recorded. A marker naming only the rest could outlive an
+	// overwrite or undo of the part it leaves out, so MarkRowApplied
+	// records none.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 func noteRef(ctx context.Context, r historyRef) {
 	b, err := json.Marshal(r)
 	if err != nil {
-		// Three strings cannot fail to marshal; dropping the reference
-		// would only make a later marker name less history.
+		// Three strings and a bool cannot fail to marshal; dropping the
+		// reference would only make a later marker name less history.
 		return
 	}
 	ops.NoteHistory(ctx, string(b))
@@ -84,13 +90,21 @@ func noteChange(ctx context.Context, changeID string) {
 	noteRef(ctx, historyRef{Change: changeID})
 }
 
+// noteIncomplete notes that a committed write's history was not all
+// recorded (historyRef.Incomplete).
+func noteIncomplete(ctx context.Context) {
+	noteRef(ctx, historyRef{Incomplete: true})
+}
+
 // MarkRowApplied records the apply marker of row rowID (ops.Writer): the
 // row, and every batch and journal row its Apply's writes noted on ctx's
 // item. Preview, a Writer without a marker store, or an empty rowID records
 // nothing. Gated like a write: a fenced run or a canceled ctx records
-// nothing. Nothing is returned: the row's writes committed, so a marker that
-// cannot be recorded is logged, and costs only the evidence (a resume skips
-// the row as changed since plan; it never writes it twice).
+// nothing. So does an item one of whose writes could not record all of its
+// history (noteIncomplete). Nothing is returned: the row's writes
+// committed, so a marker that cannot be recorded is logged, and costs only
+// the evidence (a resume skips the row as changed since plan; it never
+// writes it twice).
 func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 	if w.cfg.Mode == ops.Preview || w.cfg.RowMarks == nil || rowID == "" {
 		return
@@ -111,6 +125,10 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 			return
 		}
 		switch {
+		case r.Incomplete:
+			pkgLog.Warn("op %s: %s not written: part of the row's history was not recorded (a resume will skip the row)",
+				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(what))
+			return
 		case r.Change != "":
 			m.Changes = append(m.Changes, r.Change)
 		case r.Book != "" && r.Batch != "":
@@ -124,12 +142,14 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 }
 
 // RowApplied reports whether some attempt of this run marked row rowID
-// applied and nothing the marker names has been undone since (ops.Writer):
-// every journal row it names is still there, neither voided nor reverted,
-// and no batch it names is covered by an undo (batchesStand). A
-// read is gated like a write, so a fenced or canceled run reads nothing and
-// a resumed run that is only recognizing rows still renews its stand-down
-// lease. One point read for the marker, one per journal row it names, one
+// applied and everything the marker names still stands (ops.Writer): each
+// journal row is still there, neither voided nor reverted, and still the
+// newest journal row on what it wrote (changesStand); each batch is still
+// the newest history on every field it wrote, with no undo of it
+// (batchesStand). A read is gated like a write, so a fenced or canceled run
+// reads nothing and a resumed run that is only recognizing rows still
+// renews its stand-down lease. One point read for the marker, one per
+// journal row it names, one journal read per book those rows name, one
 // history read per book its batches touch.
 func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	if err := w.checkAs(ctx, "apply marker of resumed row "+rowID, refusedRead); err != nil {
@@ -153,9 +173,18 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 }
 
 // changesStand reports whether every journal row of ids (under this op id)
-// is still there and neither voided nor reverted. A row that cannot be
-// found cannot be shown to stand. Voided is checked on its own: a voided
-// row normally has RevertedAt set too, but nothing older guarantees it.
+// still stands: it is still there, neither voided nor reverted (Voided is
+// checked on its own: a voided row normally has RevertedAt set too, but
+// nothing older guarantees it), and no other journal row of its book, of
+// any operation and any change type, was recorded at or after it on what it
+// wrote (journalRowsNewest). A row that cannot be found cannot be shown to
+// stand.
+//
+// A row with no book id has no per-book journal to look in, so only the
+// first two checks apply to it. Nor can any check see a write that recorded
+// no journal row at all: most book_file writers outside the Writer (the
+// scanner, the AcoustID and tag backfills) record none, and seeing those
+// needs a per-book_file history this store does not keep.
 func (w *Writer) changesStand(ids []string) (bool, error) {
 	if len(ids) == 0 {
 		return true, nil
@@ -163,6 +192,7 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 	if w.cfg.Changes == nil {
 		return false, nil
 	}
+	byBook := map[string][]*database.OperationChange{}
 	for _, id := range ids {
 		c, err := w.cfg.Changes.GetOperationChange(w.cfg.OpID, id)
 		if err != nil {
@@ -171,18 +201,84 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 		if c == nil || c.Voided || c.RevertedAt != nil {
 			return false, nil
 		}
+		if c.BookID != "" {
+			byBook[c.BookID] = append(byBook[c.BookID], c)
+		}
+	}
+	for bookID, named := range byBook {
+		rows, err := w.cfg.Changes.GetBookChanges(bookID)
+		if err != nil {
+			return false, fmt.Errorf("read the operation journal of book %s: %w", bookID, err)
+		}
+		if !journalRowsNewest(rows, named) {
+			return false, nil
+		}
 	}
 	return true, nil
 }
 
-// batchesStand reports whether every batch still stands: its rows are in
-// its book's history and no undo row (ChangeTypeUndo) was recorded at or
-// after it on a field it wrote. That covers every undo there is:
-// undo-last-apply (undo rows in the batch, one per field it put back), a
-// single-field undo (no batch id) and an operation revert (its op's id as
-// the batch). It can also see an undo of a later write to the same field
-// and refuse a batch that still stands; that only skips the row as changed
-// since plan.
+// journalRowsNewest reports whether no row of rows other than c itself was
+// recorded at or after c on what c wrote (journalOverlap), for every c of
+// named. A tie counts against c. So does a later row of this same run, or
+// one an operation revert has since reverted: the rule only asks whether c
+// is still the newest, never whether a later write restored its value.
+func journalRowsNewest(rows, named []*database.OperationChange) bool {
+	for _, c := range named {
+		for _, r := range rows {
+			if r.OperationID == c.OperationID && r.ID == c.ID {
+				continue
+			}
+			if journalOverlap(c.FieldName, r.FieldName) && !r.CreatedAt.Before(c.CreatedAt) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// journalSubject splits an operation journal FieldName into the book_file it
+// names (file, "" for none) and what of it (part). "book_file:<id>" is a
+// write to the file row as a whole (a repoint, a move, a reassign, a track
+// change: every book_file journal row outside the Writer is named this way),
+// part "". "file.<field>:<id>" is one field of it (Writer.ModifyBookFile).
+// "file_path", the organizer's and the reconciler's book-level row, names
+// no single file but moves the book's files, so it is every file of the
+// book: file "*". Anything else (credits, an Effect's own field) is itself.
+func journalSubject(field string) (file, part string) {
+	if field == "file_path" {
+		return "*", ""
+	}
+	if id, ok := strings.CutPrefix(field, "book_file:"); ok {
+		return id, ""
+	}
+	if rest, ok := strings.CutPrefix(field, "file."); ok {
+		if i := strings.LastIndexByte(rest, ':'); i > 0 {
+			return rest[i+1:], rest[:i]
+		}
+	}
+	return "", field
+}
+
+// journalOverlap reports whether journal rows named a and b can write the
+// same thing: the same field of the same file, a file and any field of it,
+// any file of the book and any file, or the same non-file field.
+func journalOverlap(a, b string) bool {
+	fa, pa := journalSubject(a)
+	fb, pb := journalSubject(b)
+	switch {
+	case fa == "" || fb == "":
+		return fa == fb && pa == pb
+	case fa == "*" || fb == "*":
+		return true
+	default:
+		return fa == fb && (pa == "" || pb == "" || pa == pb)
+	}
+}
+
+// batchesStand reports whether every batch still stands in its book's
+// metadata history (batchesStandIn). A book whose history has a row that
+// does not decode cannot be shown to stand: the unreadable row could be the
+// one that overwrote or undid the batch.
 func (w *Writer) batchesStand(batches []database.RowMarkBatch) (bool, error) {
 	if len(batches) == 0 {
 		return true, nil
@@ -198,48 +294,81 @@ func (w *Writer) batchesStand(batches []database.RowMarkBatch) (bool, error) {
 		byBook[b.BookID][b.BatchID] = true
 	}
 	for bookID, want := range byBook {
-		rows, err := w.cfg.HistoryReader.GetBookChangeHistory(bookID, completeHistory)
+		rows, undecodable, err := w.cfg.HistoryReader.ReadBookChangeHistory(bookID)
 		if err != nil {
 			return false, fmt.Errorf("read the metadata history of book %s: %w", bookID, err)
 		}
-		if !batchesStandIn(rows, want) {
+		if undecodable > 0 {
+			pkgLog.Warn("op %s: %d metadata history rows of book %s do not decode; its batches are not counted as standing",
+				logger.SanitizeLogValue(w.cfg.OpID), undecodable, logger.SanitizeLogValue(bookID))
+			return false, nil
+		}
+		if !batchesStandIn(rows, want, w.cfg.OpID) {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// batchesStandIn applies batchesStand's rule to one book's history rows.
-func batchesStandIn(rows []database.MetadataChangeRecord, want map[string]bool) bool {
-	// found: per wanted batch, the fields it wrote and when.
-	type wrote struct {
-		at     time.Time
-		fields map[string]bool
+// batchesStandIn applies batchesStand's rule to one book's history rows. A
+// wanted batch stands only while all of this holds:
+//
+//   - Its rows are there.
+//   - It is the NEWEST history on every field it wrote, whatever the change
+//     type of any later row: a manual edit, another apply, a scan, a
+//     single-field undo (which carries no batch id) all make it stop
+//     standing, even one that put the batch's own value back. Fields are
+//     compared by Book JSON name, since other writers record some under
+//     their history names (database.HistoryFieldToJSON).
+//   - No undo of it was recorded, judged without the clock, so a skewed
+//     timestamp cannot hide one: undo-last-apply records its undo rows in
+//     the batch itself, on the fields it puts back, so a batch with two rows
+//     on one field was undone; an operation revert records its rows under
+//     the reverted op's id, so any row under this run's op id (opID) means
+//     the run was reverted on this book.
+//
+// The undo markers undo-last-apply reads (apply_op_journaled,
+// apply_incomplete) are not field writes and are left out. A row whose
+// Apply wrote one field twice, in two batches, is not claimed: its first
+// batch is no longer the newest. That only skips the row as changed since
+// plan.
+func batchesStandIn(rows []database.MetadataChangeRecord, want map[string]bool, opID string) bool {
+	type newestRow struct {
+		at    time.Time
+		batch string // "" when two batches tie
 	}
-	found := map[string]*wrote{}
+	newest := map[string]newestRow{}
+	wrote := map[string]map[string]int{} // batch -> field -> rows
 	for _, r := range rows {
-		if !want[r.BatchID] || r.ChangeType == ChangeTypeUndo {
+		if opID != "" && r.BatchID == opID {
+			return false
+		}
+		if r.ChangeType == ChangeTypeApplyOpJournaled || r.ChangeType == ChangeTypeApplyIncomplete {
 			continue
 		}
-		f := found[r.BatchID]
-		if f == nil {
-			f = &wrote{at: r.ChangedAt, fields: map[string]bool{}}
-			found[r.BatchID] = f
+		field := r.Field
+		if j, ok := database.HistoryFieldToJSON[field]; ok {
+			field = j
 		}
-		if r.ChangedAt.Before(f.at) {
-			f.at = r.ChangedAt
+		switch n, ok := newest[field]; {
+		case !ok || r.ChangedAt.After(n.at):
+			newest[field] = newestRow{at: r.ChangedAt, batch: r.BatchID}
+		case r.ChangedAt.Equal(n.at) && r.BatchID != n.batch:
+			newest[field] = newestRow{at: n.at}
 		}
-		f.fields[r.Field] = true
+		if want[r.BatchID] {
+			if wrote[r.BatchID] == nil {
+				wrote[r.BatchID] = map[string]int{}
+			}
+			wrote[r.BatchID][field]++
+		}
 	}
-	if len(found) != len(want) {
+	if len(wrote) != len(want) {
 		return false
 	}
-	for _, r := range rows {
-		if r.ChangeType != ChangeTypeUndo {
-			continue
-		}
-		for _, f := range found {
-			if f.fields[r.Field] && !r.ChangedAt.Before(f.at) {
+	for batch, fields := range wrote {
+		for field, n := range fields {
+			if n > 1 || newest[field].batch != batch {
 				return false
 			}
 		}
