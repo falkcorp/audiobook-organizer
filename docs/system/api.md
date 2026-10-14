@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.5.4 -->
+<!-- version: 1.6.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-13 -->
 
 # HTTP API
 
@@ -202,7 +202,7 @@ sequenceDiagram
 | `library.scan` | Library scan (per-book scan lock since #3635, so repairs may apply during a scan) |
 | `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
 | `maintenance.reconcile-scan` | Reconcile library paths vs. filesystem |
-| `maintenance.author-dedup-scan` | Scan for author near-duplicates |
+| `dedup.author-scan` | Scan for author near-duplicates (former ID `maintenance.author-dedup-scan` still resolves) |
 | `maintenance.window` | Nightly maintenance window (dispatches sub-ops) |
 | `library.bulk-write-back` | Bulk tag write-back to audio files |
 | `ai.author-review` | AI-assisted author dedup review |

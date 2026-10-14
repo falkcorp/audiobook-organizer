@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-13
 
@@ -53,6 +53,8 @@ var twinMergeRows = []struct {
 	{"scheduler.author-split-scan", "maintenance.author-split-scan", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
 	// 04-P4f: scheduler.cleanup-old-backups merged into maintenance.cleanup-old-backups.
 	{"scheduler.cleanup-old-backups", "maintenance.cleanup-old-backups", []auth.Permission{auth.PermSettingsManage}, 1 * time.Hour},
+	// 04-P14a: maintenance.author-dedup-scan (no Permissions) merged into dedup.author-scan.
+	{"maintenance.author-dedup-scan", "dedup.author-scan", []auth.Permission{auth.PermLibraryEditMetadata}, 1 * time.Hour},
 }
 
 func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {

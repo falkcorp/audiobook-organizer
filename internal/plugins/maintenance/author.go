@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-10-13
 
@@ -25,75 +25,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// --- author-dedup-scan ---
-
-func (p *Plugin) authorDedupScanDef() sdk.OperationDef {
-	sched := "0 1 * * *" // 01:00 daily
-	return sdk.OperationDef{
-		ID:              "maintenance.author-dedup-scan",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "maintenance",
-		DisplayName:     "Author dedup scan",
-		Description:     "Refreshes author duplicate-group cache using fuzzy name matching.",
-		ResumePolicy:    sdk.ResumeRequeue,
-		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.author-dedup-scan",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         60 * time.Minute,
-		Schedule:        &sched,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
-		Run:             p.runAuthorDedupScan,
-	}
-}
-
-func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	_ = reporter.Log(slog.LevelInfo, "Starting author dedup scan")
-	loadProg := sdk.NewProgress(reporter, 0)
-	loadProg.Start("Fetching authors...")
-
-	authors, err := store.GetAllAuthors()
-	if err != nil {
-		return fmt.Errorf("failed to get authors: %w", err)
-	}
-
-	bookCounts, err := store.GetAllAuthorBookCounts()
-	if err != nil {
-		// Fail rather than rank duplicates against an empty count map: every
-		// author would tie at zero books and the scan would still report
-		// success. This is also where ErrMemdbIncomplete surfaces once that
-		// getter is guarded.
-		return fmt.Errorf("failed to get author book counts: %w", err)
-	}
-	booksWithCounts := 0
-	for _, cnt := range bookCounts {
-		if cnt > 0 {
-			booksWithCounts++
-		}
-	}
-	msg := fmt.Sprintf("Fetched %d authors (%d with book counts), running duplicate comparison...",
-		len(authors), booksWithCounts)
-	_ = reporter.Log(slog.LevelInfo, msg)
-
-	total := len(authors)
-	prog := sdk.NewProgress(reporter, total)
-	prog.Start(msg)
-	groups := dedup.FindDuplicateAuthors(authors, 0.85, func(id int) int { return bookCounts[id] },
-		func(current, t int, message string) {
-			prog.StepN(current, message)
-		},
-	)
-
-	resultMsg := fmt.Sprintf("Dedup scan complete: %d duplicate groups found across %d authors",
-		len(groups), total)
-	_ = reporter.Log(slog.LevelInfo, resultMsg)
-	prog.Done(resultMsg)
-	return nil
-}
+// maintenance.author-dedup-scan was retired into dedup.author-scan (04-P14a); it
+// resolves there as a FormerID. See the survivor in internal/server/duplicates_ops.go.
 
 // author-split-scan and resolve-production-authors take only a mode. Both
 // ignored their params until 2026-09-25 and wrote on every run, including the

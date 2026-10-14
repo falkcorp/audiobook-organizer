@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.28.1
+// version: 2.29.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-13
 
@@ -287,12 +287,19 @@ func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) 
 }
 
 // RegisterAuthorDedupScanOp registers the "dedup.author-scan" v2 OperationDef.
+//
+// maintenance.author-dedup-scan ran a second copy until 2026-10-13 (04-P14a); it
+// resolves here as a FormerID and the dedup_refresh scheduler task enqueues this
+// def. The retired copy computed the groups and threw them away (no cache, no
+// reviewed-group filter), at threshold 0.85 against this one's 0.9, so nothing was
+// ported. Its cron (0 1 * * *) was never driven by a task, so no schedule moves.
 // NOTE: The author-scan logic is not extracted because the only server-side
 // step beyond calling dedup.FindDuplicateAuthors is s.filterReviewedAuthorGroups,
 // which depends on server-owned state that cannot be cleanly injected.
 func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.author-scan",
+		FormerIDs:       []string{"maintenance.author-dedup-scan"},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Author Duplicate Scan",
