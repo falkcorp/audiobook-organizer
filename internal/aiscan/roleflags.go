@@ -1,5 +1,5 @@
 // file: internal/aiscan/roleflags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c4e7b2-6d38-4a05-b8f1-3e2a7d5c9046
 // last-edited: 2026-10-14
 
@@ -114,8 +114,28 @@ func (f RawRoleFlags) Unaccounted(source string, groupIndex int, authorIDs []int
 			}
 		}
 	}
-	if (source == "groups_scan" || source == "cross_validate") && f.Groups[groupIndex] && len(carried) == 0 {
+	// A positional flag is refused whatever the row carries: a row whose Roles
+	// came from the full scan names author ids, which say nothing about WHICH
+	// author the groups answer meant, and a row carrying the positions is refused
+	// by the apply anyway.
+	if (source == "groups_scan" || source == "cross_validate") && f.Groups[groupIndex] {
 		return "the scan's stored answer flags a narrator or publisher in this group by position, so which author is meant is unknown"
 	}
 	return ""
+}
+
+// RolesNameAuthorIDs reports whether the ids in a suggestion's Roles are author
+// ids. A full-scan answer names authors by id; a groups-scan answer names them
+// by position in its group, which the apply cannot map to an author. A
+// cross_validate row carries one or the other (RolesSource); one stored before
+// RolesSource existed cannot tell and is read as positions, so a narrator flag
+// on it is refused rather than guessed at.
+func RolesNameAuthorIDs(s database.ScanSuggestion) bool {
+	switch s.Source {
+	case "full_scan":
+		return true
+	case "cross_validate":
+		return s.RolesSource == "full_scan"
+	}
+	return false
 }

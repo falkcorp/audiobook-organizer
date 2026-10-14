@@ -1,13 +1,11 @@
 // file: internal/aiscan/cross_validation.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d0e6f2a4-7b8c-9d0e-1f2a-3b4c5d6e7f8a
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package aiscan
 
 import (
-	"encoding/json"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -34,7 +32,16 @@ func CrossValidate(scanID int, groupsSuggestions, fullSuggestions []database.Sca
 			fs := fullSuggestions[matchIdx]
 
 			if gs.Action == fs.Action {
-				// Same action -> agreed
+				// Same action -> agreed. The groups scan's roles win; its ids
+				// are positions in the group and the full scan's are author
+				// ids, so the row records which one it carries.
+				roles, rolesSource := gs.Roles, "groups_scan"
+				if len(roles) == 0 {
+					roles, rolesSource = fs.Roles, "full_scan"
+				}
+				if len(roles) == 0 {
+					rolesSource = ""
+				}
 				result := database.ScanResult{
 					ScanID:    scanID,
 					Agreement: "agreed",
@@ -47,10 +54,11 @@ func CrossValidate(scanID int, groupsSuggestions, fullSuggestions []database.Sca
 						// The groups scan drives an agreed row, so its heuristic
 						// canonical is the keep; the full scan's choice covers a
 						// groups row that carried no ids.
-						KeepID:     firstNonZero(gs.KeepID, fs.KeepID),
-						GroupIndex: gs.GroupIndex,
-						Roles:      coalesce(gs.Roles, fs.Roles),
-						Source:     "cross_validate",
+						KeepID:      firstNonZero(gs.KeepID, fs.KeepID),
+						GroupIndex:  gs.GroupIndex,
+						Roles:       roles,
+						RolesSource: rolesSource,
+						Source:      "cross_validate",
 					},
 				}
 				results = append(results, result)
@@ -177,14 +185,6 @@ func idSet(ids []int) map[int]bool {
 		s[id] = true
 	}
 	return s
-}
-
-// coalesce returns the first non-nil json.RawMessage.
-func coalesce(a, b json.RawMessage) json.RawMessage {
-	if len(a) > 0 {
-		return a
-	}
-	return b
 }
 
 // firstNonZero returns a, or b when a is zero.
