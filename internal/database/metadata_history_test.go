@@ -1,5 +1,5 @@
 // file: internal/database/metadata_history_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-14
 
@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // setupTestDBWithMigrations creates a temp SQLite DB and runs migrations.
@@ -223,14 +225,21 @@ func TestGetBookChangeHistory_LimitRespected(t *testing.T) {
 	}
 }
 
-// 05-PR5b: opswriter.Writer.Wrote looks for a run's batch in a book's
-// WHOLE metadata history, so it calls GetBookChangeHistory with math.MaxInt.
-// That must return every row, however many there are and however their
-// fields sort (the "author_id" row sorts before every "title" one). A capped
-// read keeps only limit rows; which ones it keeps is not pinned here.
-func TestGetBookChangeHistory_MaxIntLimitIsComplete(t *testing.T) {
+// 05-PR5b: the Fixer resume evidence check (opswriter.Writer.RowApplied)
+// reads a book's WHOLE metadata history through ReadBookChangeHistory. It
+// must return every row, however many there are and however their fields
+// sort (the "author_id" row sorts before every "title" one), where a capped
+// GetBookChangeHistory keeps only limit rows; which ones it keeps is not
+// pinned here. A row that does not decode is counted, not returned, so the
+// caller can refuse to judge a partial history; GetBookChangeHistory still
+// drops it silently.
+func TestReadBookChangeHistory_CompleteAndCountsUndecodable(t *testing.T) {
 	store, cleanup := setupTestDBWithMigrations(t)
 	defer cleanup()
+	p, ok := store.(*PebbleStore)
+	if !ok {
+		t.Fatalf("store is %T, not *PebbleStore", store)
+	}
 
 	base := time.Now().Add(-time.Hour)
 	const titles = 149
@@ -259,12 +268,26 @@ func TestGetBookChangeHistory_MaxIntLimitIsComplete(t *testing.T) {
 	if len(capped) != 100 {
 		t.Fatalf("limit 100 returned %d rows", len(capped))
 	}
-	all, err := store.GetBookChangeHistory("book-many", math.MaxInt)
-	if err != nil {
-		t.Fatal(err)
+	all, bad, err := p.ReadBookChangeHistory("book-many")
+	if err != nil || bad != 0 {
+		t.Fatalf("ReadBookChangeHistory: %d undecodable, %v", bad, err)
 	}
 	if len(all) != titles+1 || !hasRunBatch(all) {
-		t.Fatalf("limit MaxInt: %d rows (want %d), run batch present=%v", len(all), titles+1, hasRunBatch(all))
+		t.Fatalf("ReadBookChangeHistory: %d rows (want %d), run batch present=%v", len(all), titles+1, hasRunBatch(all))
+	}
+
+	// One undecodable row of the book, and one of another book.
+	for _, k := range []string{"metadata_change:book-many:publisher:1", "metadata_change:book-other:title:1"} {
+		if err := p.db.Set([]byte(k), []byte("{not json"), pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, bad, err = p.ReadBookChangeHistory("book-many")
+	if err != nil || bad != 1 || len(all) != titles+1 {
+		t.Fatalf("with a bad row: %d rows, %d undecodable, %v; want %d, 1, nil", len(all), bad, err, titles+1)
+	}
+	if got, err := store.GetBookChangeHistory("book-many", math.MaxInt); err != nil || len(got) != titles+1 {
+		t.Fatalf("GetBookChangeHistory with a bad row: %d rows, %v; want %d (dropped silently)", len(got), err, titles+1)
 	}
 }
 

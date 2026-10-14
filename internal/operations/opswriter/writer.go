@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-14
 
@@ -388,7 +388,13 @@ func (w *Writer) ModifyBook(ctx context.Context, bookID string, fn func(*databas
 	journaled := w.cfg.JournaledBook != nil && w.cfg.JournaledBook(bookID)
 	batchID := w.cfg.History.NewBatchID()
 	fields, recorded := w.cfg.History.RecordDiff(bookID, batchID, before, after, journaled)
-	if len(fields) > 0 && w.cfg.History.recording() {
+	switch {
+	case !recorded:
+		// Part of the batch (or its op-journaled marker) is missing: a
+		// Fixer row marker naming it could outlive an undo of the part
+		// that is not there.
+		noteIncomplete(ctx)
+	case len(fields) > 0:
 		noteBatch(ctx, bookID, batchID)
 	}
 	w.finish(seq, recorded)
@@ -536,6 +542,7 @@ func (w *Writer) ModifyBookAuthors(ctx context.Context, bookID string, fn func([
 	oldJSON, oerr := json.Marshal(before)
 	newJSON, nerr := json.Marshal(after)
 	if oerr != nil || nerr != nil {
+		noteIncomplete(ctx)
 		return ops.Changed{Fields: []string{"authors"}}, errors.Join(oerr, nerr)
 	}
 	w.finish(seq, w.journalRows(ctx, ChangeTypeBookAuthorsModify, []ops.HistoryRow{{BookID: bookID, Field: "authors",
@@ -566,14 +573,17 @@ func (w *Writer) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.
 // journalRows records history rows as operation changes under the run's op
 // id (step 4, after the write), each with an id minted here and noted on
 // ctx's item (noteChange), so a Fixer row's apply marker can name it. A row
-// that cannot be recorded is logged and counted failed; the write it
-// describes already committed. It reports whether every row was recorded.
+// that cannot be recorded is logged and counted failed, and the item is
+// noted incomplete (noteIncomplete), so no marker names the rest; the
+// write it describes already committed. It reports whether every row was
+// recorded.
 func (w *Writer) journalRows(ctx context.Context, changeType string, rows []ops.HistoryRow) bool {
 	if len(rows) == 0 {
 		return true
 	}
 	h := w.cfg.History
 	if w.cfg.Journal == nil {
+		noteIncomplete(ctx)
 		h.failed.Add(int64(len(rows)))
 		pkgLog.Warn("op %s: %d %s history rows not recorded: no change journal wired",
 			logger.SanitizeLogValue(w.cfg.OpID), len(rows), changeType)
@@ -588,6 +598,7 @@ func (w *Writer) journalRows(ctx context.Context, changeType string, rows []ops.
 			OldValue: r.Old, NewValue: r.New, CreatedAt: now, Source: h.source,
 		})
 		if err != nil {
+			noteIncomplete(ctx)
 			h.failed.Add(1)
 			pkgLog.Warn("op %s: history row not recorded (the write committed): book_id=%s field=%s err=%s",
 				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(r.BookID),

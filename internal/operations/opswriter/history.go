@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
 // last-edited: 2026-10-14
 
@@ -45,14 +45,6 @@ const (
 	// ChangeTypeEffectPrefix prefixes an Effect's rows: "effect:<name>".
 	ChangeTypeEffectPrefix = "effect:"
 )
-
-// ChangeTypeUndo is the metadata history change type of a row that put a
-// field back: undo-last-apply (under the undone batch's id), a single-field
-// undo (no batch id) and an operation revert (under the reverted op's id).
-// Same value as metafetch.ChangeTypeApplyUndo (pinned by metafetch's
-// TestOpsWriterUndoChangeTypeMatches); a Fixer row's apply marker stops
-// being evidence once such a row covers its batch (evidence.go).
-const ChangeTypeUndo = "undo"
 
 // HistoryRecorder records metadata-history rows.
 type HistoryRecorder interface {
