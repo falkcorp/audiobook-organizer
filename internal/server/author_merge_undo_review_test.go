@@ -9,12 +9,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -329,4 +332,23 @@ func TestRevertOperation_AnUndoneAuthorMergeDropsTheAuthorCaches(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, f.s.authorsCache.Len(), "author list cache dropped")
 	require.Zero(t, f.s.dedupCache.Len(), "dedup cache dropped")
+}
+
+// The server wires the scan-apply claim to the operations registry: a claim left
+// by a run that is not running (the previous process, a crashed run) is cleared at
+// startup and does not hold the scan, where it used to refuse every apply of it
+// for three hours.
+func TestWireScanApplyClaims_AClaimOfARunThatIsNotRunningDoesNotHoldTheScan(t *testing.T) {
+	f := newApplyFixture(t)
+	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-previous-process"))
+	m := dbmocks.NewMockStore(t)
+	reg := opsregistry.New(m, slog.New(slog.DiscardHandler), 1, nil)
+
+	wireScanApplyClaims(f.scanStore, reg)
+
+	got, err := f.scanStore.GetScan(f.scan.ID)
+	require.NoError(t, err)
+	require.Empty(t, got.ApplyingOpID, "cleared at startup")
+	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-crashed"))
+	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-next"), "op-crashed is not running, so it holds nothing")
 }

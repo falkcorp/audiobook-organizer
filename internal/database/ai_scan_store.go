@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.18.1
+// version: 2.19.0
 // last-edited: 2026-10-14
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -72,6 +72,11 @@ type AIScanStore struct {
 	// landing between its check and its write. It is held across nothing else:
 	// take it first, before applyMu, stateMu or idMu.
 	createMu sync.Mutex
+	// applyRunLive, when set (SetApplyRunLiveness), answers whether the
+	// operation holding a scan-apply claim is still running in this process. A
+	// claim whose operation is not running is a dead run's and holds nothing,
+	// whatever its age. Read under applyMu.
+	applyRunLive func(opID string) bool
 }
 
 // Scan represents a full pipeline run.
@@ -524,9 +529,67 @@ func (e *ScanApplyBusyError) Error() string {
 	return fmt.Sprintf("scan %d is being applied by operation %s", e.ScanID, e.OpID)
 }
 
-// claimLive reports whether the scan carries a claim that has not expired.
-func claimLive(scan *Scan) bool {
-	return scan.ApplyingOpID != "" && scan.ApplyStartedAt != nil && time.Since(*scan.ApplyStartedAt) < AIScanApplyClaimTTL
+// UnattributedApplyClaimPrefix opens the claim id of an apply run that has no
+// operation id (it is not in the operations registry). Such a claim is judged
+// by AIScanApplyClaimTTL alone: no registry can say whether its run is alive.
+const UnattributedApplyClaimPrefix = "unattributed-"
+
+// SetApplyRunLiveness installs the check that tells a live scan-apply claim from
+// a dead run's: running reports whether the operation is running in this process
+// (the operations registry's IsRunning). The server wires it at startup; unset,
+// a claim is judged by AIScanApplyClaimTTL alone.
+//
+// Without it a run that died without releasing (a crash, a restart: the apply op
+// is dropped, not resumed) held its scan for the whole three-hour TTL, refusing
+// every apply and every supersede of it.
+func (s *AIScanStore) SetApplyRunLiveness(running func(opID string) bool) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	s.applyRunLive = running
+}
+
+// claimLive reports whether the scan carries a claim that still holds it: set,
+// not expired, and, when the store can ask, made by an operation that is still
+// running. The caller holds applyMu.
+func (s *AIScanStore) claimLive(scan *Scan) bool {
+	if scan.ApplyingOpID == "" || scan.ApplyStartedAt == nil || time.Since(*scan.ApplyStartedAt) >= AIScanApplyClaimTTL {
+		return false
+	}
+	if s.applyRunLive == nil || strings.HasPrefix(scan.ApplyingOpID, UnattributedApplyClaimPrefix) {
+		return true
+	}
+	return s.applyRunLive(scan.ApplyingOpID)
+}
+
+// ClearDeadApplyClaims drops every scan-apply claim that no longer holds its
+// scan (claimLive), and reports how many it dropped. The server runs it once at
+// startup: a claim left by the previous process names an operation that is not
+// running, and nothing else would clear it before its TTL. A claim that still
+// holds (an unattributed one inside its TTL, or a run already started in this
+// process) is left alone, so the order against the start of dispatch does not
+// matter.
+func (s *AIScanStore) ClearDeadApplyClaims() (int, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	s.stateMu.Lock() // lock order: applyMu, then stateMu
+	defer s.stateMu.Unlock()
+	scans, err := s.ListScans()
+	if err != nil {
+		return 0, err
+	}
+	cleared := 0
+	for i := range scans {
+		scan := &scans[i]
+		if scan.ApplyingOpID == "" || s.claimLive(scan) {
+			continue
+		}
+		scan.ApplyingOpID, scan.ApplyStartedAt = "", nil
+		if err := s.writeScanLocked(scan); err != nil {
+			return cleared, fmt.Errorf("clear the dead apply claim on scan %d: %w", scan.ID, err)
+		}
+		cleared++
+	}
+	return cleared, nil
 }
 
 // ClaimScanForApply marks the scan as being applied by opID, under applyMu: the
@@ -553,7 +616,7 @@ func (s *AIScanStore) ClaimScanForApply(scanID int, opID string) error {
 	if scan.Status != "complete" {
 		return fmt.Errorf("scan %d is %s; only a finished scan's results can be applied", scanID, scan.Status)
 	}
-	if claimLive(scan) && scan.ApplyingOpID != opID {
+	if s.claimLive(scan) && scan.ApplyingOpID != opID {
 		return &ScanApplyBusyError{ScanID: scanID, OpID: scan.ApplyingOpID}
 	}
 	now := time.Now()
@@ -681,7 +744,7 @@ func (s *AIScanStore) SupersedeIfUnapplied(scanID, byID int) (bool, error) {
 	}
 	// A run that is merging this scan's results is as good as applied: hiding the
 	// scan under it would send the reviewer to a list the run is not working on.
-	if claimLive(scan) {
+	if s.claimLive(scan) {
 		return false, nil
 	}
 	scan.Status = "superseded"

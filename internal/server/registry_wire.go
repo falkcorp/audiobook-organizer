@@ -461,6 +461,7 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	}
 	if scanStore, ok := serviceregistry.TryGet[*database.AIScanStore](c, "aiscanstore"); ok && scanStore != nil {
 		s.aiScanStore = scanStore
+		wireScanApplyClaims(scanStore, s.opRegistry)
 	}
 	// WHY MetricsStorer interface: the metricsstore is a PebbleMetricsStore, but
 	// callers depend only on the MetricsStorer interface.
@@ -496,4 +497,21 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 type itunesWireStore interface {
 	itunesservice.Store
 	organizer.OrganizerStore
+}
+
+// wireScanApplyClaims makes an ai.author-scan-apply claim hold its scan only
+// while the claiming operation runs in this process, and drops the claims the
+// previous process left: a run that died without releasing used to hold its scan
+// for the whole three-hour TTL (database.AIScanApplyClaimTTL), refusing every
+// apply and supersede of it. Without a registry the TTL alone still applies.
+func wireScanApplyClaims(store *database.AIScanStore, reg *opsregistry.Registry) {
+	if reg == nil {
+		return
+	}
+	store.SetApplyRunLiveness(reg.IsRunning)
+	if n, err := store.ClearDeadApplyClaims(); err != nil {
+		logger.New("aiscan").Warn("could not clear the scan-apply claims of runs that are not running: %v", err)
+	} else if n > 0 {
+		logger.New("aiscan").Info("cleared %d scan-apply claim(s) of runs that are not running", n)
+	}
 }
