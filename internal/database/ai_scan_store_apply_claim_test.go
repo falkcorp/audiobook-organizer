@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store_apply_claim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e7c2a-91d4-4f68-a3c5-e8172d4b9a60
 // last-edited: 2026-10-14
 
@@ -150,4 +150,57 @@ func TestDeleteScan_HoldsTheApplyLock(t *testing.T) {
 	got, err := s.GetScan(scan.ID)
 	require.NoError(t, err)
 	require.Nil(t, got)
+}
+
+// A claim whose operation is no longer running (the registry says so) holds
+// nothing: it no longer blocks another apply or a supersede for the rest of its
+// three-hour TTL. A live run's claim still does, and an unattributed claim (no
+// operation id, nothing to ask) is judged by the TTL alone.
+func TestClaimScanForApply_AClaimOfARunThatIsNotRunningDoesNotHoldTheScan(t *testing.T) {
+	s := newGuardStore(t)
+	running := map[string]bool{"op-live": true}
+	s.SetApplyRunLiveness(func(opID string) bool { return running[opID] })
+
+	dead := completeScan(t, s)
+	require.NoError(t, s.ClaimScanForApply(dead.ID, "op-dead"))
+	require.NoError(t, s.ClaimScanForApply(dead.ID, "op-next"), "a dead run's claim does not make the scan busy")
+	require.NoError(t, s.ReleaseScanApply(dead.ID, "op-next"))
+	require.NoError(t, s.ClaimScanForApply(dead.ID, "op-dead"))
+	ok, err := s.SupersedeIfUnapplied(dead.ID, dead.ID+100)
+	require.NoError(t, err)
+	require.True(t, ok, "a dead run's claim does not hold off a supersede")
+
+	live := completeScan(t, s)
+	require.NoError(t, s.ClaimScanForApply(live.ID, "op-live"))
+	var busy *ScanApplyBusyError
+	require.ErrorAs(t, s.ClaimScanForApply(live.ID, "op-other"), &busy)
+
+	anon := completeScan(t, s)
+	require.NoError(t, s.ClaimScanForApply(anon.ID, UnattributedApplyClaimPrefix+"x"))
+	require.ErrorAs(t, s.ClaimScanForApply(anon.ID, "op-other"), &busy, "an unattributed claim is held until its TTL")
+}
+
+// The startup sweep drops the claims that no longer hold and leaves the rest.
+func TestClearDeadApplyClaims_DropsOnlyTheClaimsThatNoLongerHold(t *testing.T) {
+	s := newGuardStore(t)
+	running := map[string]bool{"op-live": true}
+	s.SetApplyRunLiveness(func(opID string) bool { return running[opID] })
+	dead, live, anon, expired := completeScan(t, s), completeScan(t, s), completeScan(t, s), completeScan(t, s)
+	require.NoError(t, s.ClaimScanForApply(dead.ID, "op-dead"))
+	require.NoError(t, s.ClaimScanForApply(live.ID, "op-live"))
+	require.NoError(t, s.ClaimScanForApply(anon.ID, UnattributedApplyClaimPrefix+"y"))
+	require.NoError(t, s.ClaimScanForApply(expired.ID, UnattributedApplyClaimPrefix+"z"))
+	backdateClaim(t, s, expired.ID, AIScanApplyClaimTTL+time.Minute)
+
+	n, err := s.ClearDeadApplyClaims()
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	for _, c := range []struct {
+		id   int
+		held bool
+	}{{dead.ID, false}, {live.ID, true}, {anon.ID, true}, {expired.ID, false}} {
+		got, err := s.GetScan(c.id)
+		require.NoError(t, err)
+		require.Equal(t, c.held, got.ApplyingOpID != "", "scan %d claim kept", c.id)
+	}
 }

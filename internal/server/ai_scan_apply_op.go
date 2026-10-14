@@ -360,13 +360,15 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 	if !dryRun {
 		claimID := opID
 		if claimID == "" {
-			claimID = "unattributed-" + ulid.Make().String()
+			claimID = database.UnattributedApplyClaimPrefix + ulid.Make().String()
 		}
 		if err := s.aiScanStore.ClaimScanForApply(p.ScanID, claimID); err != nil {
 			return fmt.Errorf("ai.author-scan-apply: %w", err)
 		}
-		// Released on every exit; a run that dies without reaching here leaves a
-		// claim that expires (database.AIScanApplyClaimTTL).
+		// Released on every exit. A run that dies without reaching here leaves a
+		// claim that stops holding the scan as soon as the registry no longer runs
+		// this op (AIScanStore.SetApplyRunLiveness), is cleared at the next
+		// startup, and expires anyway (database.AIScanApplyClaimTTL).
 		defer func() {
 			if err := s.aiScanStore.ReleaseScanApply(p.ScanID, claimID); err != nil {
 				logging.Warn(ctx, "ai scan apply: could not release the scan claim", "scan_id", p.ScanID, "err", err)
