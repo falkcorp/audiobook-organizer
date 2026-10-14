@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.24.0
+// version: 1.24.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, author and series merges, and library repairs.
@@ -456,7 +456,7 @@ export function ReviewWorkspace() {
                 label: 'Match missing files',
                 scope: 'library',
                 description:
-                  'Looks for books whose files have gone missing and matches them to untracked files on disk. Review the matches on the Dedup page under Reconcile.',
+                  'Looks for books whose files have gone missing and matches them to untracked files on disk. Review the matches in Repairs, under Missing files.',
                 run: startJob('Reconcile scan', api.startReconcileScan),
               },
               {

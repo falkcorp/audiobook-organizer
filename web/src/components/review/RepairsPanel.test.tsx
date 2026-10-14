@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.13.1
+// version: 1.14.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -1159,5 +1159,94 @@ describe('RepairsPanel — split books', () => {
     expect(within(skipped).getByText('iTunes')).toBeInTheDocument();
     expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByTestId('repairs-skip-kind-skipped_itunes')).toHaveTextContent('iTunes library (hands-off) (1)');
+  });
+});
+
+// The missing-files fixer (reconcile.missing-files), which takes over from the
+// old Reconcile tab (retired in 03-PR10): a match row names the book, its
+// missing path, the matched file, the match type and the confidence; a book
+// the scan found no file for is a skipped row with the reason "no candidate
+// file", counted under its own skip kind.
+describe('RepairsPanel — missing files', () => {
+  const MISSING_FIXER: RepairFixer = {
+    id: 'reconcile.missing-files',
+    title: 'Missing files',
+    description: 'Books whose file has gone missing, from the latest reconcile scan.',
+    last_plan: {
+      operation_id: 'plan-missing',
+      status: 'completed',
+      queued_at: '2026-10-14T10:00:00Z',
+      completed_at: '2026-10-14T10:01:00Z',
+      total: 2,
+      applicable: 1,
+    },
+  };
+  const MATCH = row('missing:B1', {
+    class: 'hash',
+    book_ids: ['B1'],
+    title: 'Book One',
+    current: { path: '/library/old/Book One.m4b (missing)' },
+    proposed: { path: '/library/new/Book One.m4b', match_type: 'hash', confidence: 'high' },
+    members: [{ book_id: 'B1', title: 'Book One', role: 'missing', files: 1, missing_files: 1 }],
+  });
+  const NO_CANDIDATE = row('missing:B2', {
+    class: 'no_candidate',
+    book_ids: ['B2'],
+    title: 'Book Two',
+    current: { path: '/library/old/Book Two.m4b (missing)' },
+    proposed: undefined,
+    skipped: 'no_candidate',
+    skip_reason: 'no candidate file',
+  });
+
+  beforeEach(() => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([MISSING_FIXER]);
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+        const all = q.filter === 'applicable' ? [MATCH] : q.filter.startsWith('skipped') ? [NO_CANDIDATE] : [];
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-10-14T10:01:00Z',
+          filter: q.filter,
+          offset: q.offset,
+          limit: q.limit,
+          total: all.length,
+          applicable: 1,
+          skipped_by_kind: { no_candidate: 1 },
+          rows: all.slice(q.offset, q.offset + q.limit),
+        };
+      }
+    );
+  });
+
+  it('lists the fixer titled Missing files and shows book, file, match type and confidence', async () => {
+    renderPanel();
+    const fixer = await screen.findByTestId('repairs-fixer-reconcile.missing-files');
+    expect(within(fixer).getByText('Missing files')).toBeInTheDocument();
+    const r = await screen.findByTestId('repairs-row-missing:B1');
+    expect(within(r).getByText('Book One')).toBeInTheDocument();
+    expect(screen.getByTestId('repairs-row-summary-missing:B1')).toHaveTextContent(
+      'confidence: (none) → high; match_type: (none) → hash; path: /library/old/Book One.m4b (missing) → /library/new/Book One.m4b'
+    );
+  });
+
+  it('lists a book with no candidate file as a skipped row with that reason and a clickable count', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-missing:B1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    const skipped = await screen.findByTestId('repairs-row-missing:B2');
+    expect(within(skipped).getByText('no candidate file')).toBeInTheDocument();
+    expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
+    const chip = screen.getByTestId('repairs-skip-kind-no_candidate');
+    expect(chip).toHaveTextContent('no_candidate (1)');
+    await user.click(chip);
+    expect(vi.mocked(api.getRepairPlanRows)).toHaveBeenLastCalledWith(
+      'reconcile.missing-files',
+      'plan-missing',
+      expect.objectContaining({ filter: 'skipped:no_candidate' }),
+      expect.anything()
+    );
   });
 });
