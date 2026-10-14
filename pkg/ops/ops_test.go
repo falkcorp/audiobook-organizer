@@ -1,7 +1,7 @@
 // file: pkg/ops/ops_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package ops
 
@@ -424,12 +424,65 @@ func TestNoteRefusal(t *testing.T) {
 	}
 }
 
+// evidenceWriter is a Writer whose only working method is Wrote: it reports
+// the subjects in have as written by an earlier attempt (all: every subject
+// set), or fails with err. Its writes fail, so a test sees any Apply.
+type evidenceWriter struct {
+	mu    sync.Mutex
+	have  map[Subject]bool
+	all   bool
+	err   error
+	calls int
+}
+
+func (w *evidenceWriter) ModifyBook(context.Context, string, func(*database.Book) error) (Changed, error) {
+	return Changed{}, errors.New("evidenceWriter writes nothing")
+}
+func (w *evidenceWriter) ModifyBookFile(context.Context, string, string, func(*database.BookFile) error) (Changed, error) {
+	return Changed{}, errors.New("evidenceWriter writes nothing")
+}
+func (w *evidenceWriter) RepointBookFile(context.Context, string, string, database.BookFileLocation, database.BookFileLocation) error {
+	return errors.New("evidenceWriter writes nothing")
+}
+func (w *evidenceWriter) ModifyBookAuthors(context.Context, string, func([]database.BookAuthor) ([]database.BookAuthor, error)) (Changed, error) {
+	return Changed{}, errors.New("evidenceWriter writes nothing")
+}
+func (w *evidenceWriter) Effect(context.Context, EffectSpec, func() ([]HistoryRow, error)) error {
+	return errors.New("evidenceWriter writes nothing")
+}
+func (w *evidenceWriter) Wrote(_ context.Context, subjects []Subject) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.calls++
+	if w.err != nil {
+		return false, w.err
+	}
+	if len(subjects) == 0 {
+		return w.all, nil
+	}
+	for _, s := range subjects {
+		if !w.all && !w.have[s] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (w *evidenceWriter) wroteCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.calls
+}
+
 // S-C (final review): a row whose fresh Current equals the plan's Proposed is
 // reported applied without a write only on a resumed attempt, only when its
 // fingerprint moved, and only when no hold, owner-only flag or guard objects.
 // Otherwise it takes the ordinary path: changed since plan, or the refusal.
+// The Writer has this run's history for the row's subject throughout, so
+// only the conditions under test decide (TestAlreadyAppliedNeedsEvidence
+// covers the evidence).
 func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
-	planned := Row{ID: "r1", Inputs: map[string]string{"title": "old"},
+	planned := Row{ID: "r1", Subjects: Books("book-001"), Inputs: map[string]string{"title": "old"},
 		Current: map[string]string{"title": "old"}, Proposed: map[string]string{"title": "new"}}
 	applied := Row{ID: "r1", Inputs: map[string]string{"title": "new"}, Current: map[string]string{"title": "new"}}
 	cases := []struct {
@@ -457,7 +510,8 @@ func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
 				Apply:    func(*ItemRC, Writer, NoParams, Row) error { applyCalled = true; return nil },
 				Guards:   c.guards,
 			}
-			rc := NewRC(RunEnv{Context: context.Background(), Resumed: c.resumed})
+			w := &evidenceWriter{have: map[Subject]bool{{Type: SubjectBook, ID: "book-001"}: true}}
+			rc := NewRC(RunEnv{Context: context.Background(), Resumed: c.resumed, Writer: w})
 			tally := &Tally{}
 			irc := NewItemRC(rc, context.Background(), tally, nil)
 			ok, err := applyRow(irc, spec, NoParams{}, planned)
@@ -468,6 +522,78 @@ func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
 		})
 	}
 }
+
+// 05-PR5b: on a resumed attempt, a row that is admissible and whose every
+// Proposed value now holds is reported applied only when the Writer has this
+// run's history (Writer.Wrote) for EVERY subject of the planned row. The
+// foreign actor -- someone who made the same change between the attempts,
+// leaving no history under this run -- is skipped as changed since plan, as
+// is a row with evidence for only some subjects or with no subjects at all.
+// A failed read fails the item: it is neither applied nor skipped.
+func TestAlreadyAppliedNeedsEvidence(t *testing.T) {
+	subjects := append(Books("book-001"), BookFiles("file-001")...)
+	planned := Row{ID: "r1", Subjects: subjects, Inputs: map[string]string{"title": "old"},
+		Current: map[string]string{"title": "old"}, Proposed: map[string]string{"title": "new"}}
+	fresh := Row{ID: "r1", Subjects: subjects, Inputs: map[string]string{"title": "new"},
+		Current: map[string]string{"title": "new"}}
+	readFailed := errors.New("journal unreadable")
+	both := map[Subject]bool{subjects[0]: true, subjects[1]: true}
+	cases := []struct {
+		name      string
+		planned   Row
+		w         *evidenceWriter
+		noWriter  bool
+		resumed   bool
+		want      bool
+		skip      string
+		wantErr   error
+		wantCalls int
+	}{
+		{"evidence for every subject", planned, &evidenceWriter{have: both}, false, true, true, "", nil, 1},
+		{"no evidence: a foreign actor between the attempts", planned, &evidenceWriter{}, false, true, false,
+			SkipChangedSincePlan, nil, 1},
+		{"evidence for only some subjects", planned, &evidenceWriter{have: map[Subject]bool{subjects[0]: true}},
+			false, true, false, SkipChangedSincePlan, nil, 1},
+		{"a row with no subjects", Row{ID: "r1", Inputs: planned.Inputs, Current: planned.Current,
+			Proposed: planned.Proposed}, &evidenceWriter{all: true}, false, true, false, SkipChangedSincePlan, nil, 0},
+		{"the evidence read fails", planned, &evidenceWriter{err: readFailed}, false, true, false, "", readFailed, 1},
+		{"no Writer to read with", planned, nil, true, true, false, "", errAny, 0},
+		{"first attempt: the store is not read", planned, &evidenceWriter{have: both}, false, false, false,
+			SkipChangedSincePlan, nil, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			applyCalled := false
+			spec := FixerSpec[NoParams, string]{
+				Load:     func(*RC, NoParams, string) (string, bool, error) { return "c", true, nil },
+				Evaluate: func(*ItemRC, NoParams, string) (Row, error) { return fresh, nil },
+				Apply:    func(*ItemRC, Writer, NoParams, Row) error { applyCalled = true; return nil },
+			}
+			env := RunEnv{Context: context.Background(), Resumed: c.resumed}
+			if !c.noWriter {
+				env.Writer = c.w
+			}
+			tally := &Tally{}
+			irc := NewItemRC(NewRC(env), context.Background(), tally, nil)
+			ok, err := applyRow(irc, spec, NoParams{}, c.planned)
+			switch {
+			case c.wantErr == errAny && err == nil, c.wantErr != errAny && !errors.Is(err, c.wantErr):
+				t.Fatalf("err = %v, want %v", err, c.wantErr)
+			}
+			if ok != c.want || applyCalled || tally.SkipReason() != c.skip {
+				t.Fatalf("applied=%v applyCalled=%v skip=%q; want applied=%v skip=%q",
+					ok, applyCalled, tally.SkipReason(), c.want, c.skip)
+			}
+			if c.w != nil && c.w.wroteCalls() != c.wantCalls {
+				t.Fatalf("Wrote called %d times, want %d", c.w.wroteCalls(), c.wantCalls)
+			}
+		})
+	}
+}
+
+// errAny stands for "some error" in a table that otherwise matches with
+// errors.Is.
+var errAny = errors.New("any error")
 
 func withHold(r Row, hold string) Row { r.Hold = hold; return r }
 

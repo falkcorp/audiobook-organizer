@@ -307,6 +307,12 @@ type v3WriterStores struct {
 	history opswriter.HistoryRecorder
 	journal opswriter.ChangeJournal
 	intents opswriter.IntentStore
+	// The reads behind Writer.Wrote, the evidence a resumed Fixer apply
+	// needs before it reports a row as applied by an earlier attempt.
+	// Optional: without them Wrote finds no evidence, so a resumed run
+	// skips such a row as changed since plan instead of claiming it.
+	journalReader opswriter.JournalReader
+	historyReader opswriter.BookHistoryReader
 }
 
 // historyChangeTypeV3 is the metadata-history change type of v3 Writer rows.
@@ -326,13 +332,18 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	s.history, _ = database.AsCapability[opswriter.HistoryRecorder](r.store)
 	s.journal, _ = database.AsCapability[opswriter.ChangeJournal](r.store)
 	s.intents, _ = database.AsCapability[opswriter.IntentStore](r.store)
+	s.journalReader, _ = database.AsCapability[opswriter.JournalReader](r.store)
+	s.historyReader, _ = database.AsCapability[opswriter.BookHistoryReader](r.store)
 	if mode == ops.Live && (s.intents == nil || s.journal == nil || s.history == nil) {
 		return nil, fmt.Errorf("%s: %w", defID, ErrWriterUnavailable)
 	}
 	return opswriter.New(opswriter.Config{
 		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check, RunLatch: ops.RefusalLatchFrom(ctx),
 		Intents: s.intents, Books: s.books, Files: s.files, Authors: s.authors, Journal: s.journal,
-		History: opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
+		// The batch prefix names this run, so Wrote may read the run's
+		// batches out of a book's whole metadata history.
+		History:       opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
+		JournalReader: s.journalReader, HistoryReader: s.historyReader,
 	}), nil
 }
 

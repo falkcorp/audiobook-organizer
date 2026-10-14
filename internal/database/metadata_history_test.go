@@ -1,11 +1,13 @@
 // file: internal/database/metadata_history_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-02
+// last-edited: 2026-10-14
 
 package database
 
 import (
+	"math"
+	"slices"
 	"testing"
 	"time"
 )
@@ -218,6 +220,54 @@ func TestGetBookChangeHistory_LimitRespected(t *testing.T) {
 	}
 	if len(records) != 3 {
 		t.Errorf("expected 3 records with limit=3, got %d", len(records))
+	}
+}
+
+// 05-PR5b: GetBookChangeHistory truncates at limit by KEY order
+// (metadata_change:<book>:<field>:<nanos>, reversed), not by age, so with more
+// rows than the limit it drops whole fields -- here the one "author_id" row,
+// which sorts before every "title" row, is the row lost at limit 100. It
+// reads every row before it truncates, so math.MaxInt returns them all:
+// opswriter.Writer.Wrote relies on that to find a run's batch in a book's
+// whole history.
+func TestGetBookChangeHistory_MaxIntLimitIsComplete(t *testing.T) {
+	store, cleanup := setupTestDBWithMigrations(t)
+	defer cleanup()
+
+	base := time.Now().Add(-time.Hour)
+	const titles = 149
+	for i := range titles {
+		val := `"t"`
+		if err := store.RecordMetadataChange(&MetadataChangeRecord{BookID: "book-many", Field: "title",
+			NewValue: &val, ChangeType: "override", BatchID: "other-batch",
+			ChangedAt: base.Add(time.Duration(i) * time.Second)}); err != nil {
+			t.Fatalf("RecordMetadataChange #%d: %v", i, err)
+		}
+	}
+	val := `"7"`
+	if err := store.RecordMetadataChange(&MetadataChangeRecord{BookID: "book-many", Field: "author_id",
+		NewValue: &val, ChangeType: "ops_v3", BatchID: "op-run-batch",
+		ChangedAt: base.Add(time.Duration(titles) * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	hasRunBatch := func(rows []MetadataChangeRecord) bool {
+		return slices.ContainsFunc(rows, func(r MetadataChangeRecord) bool { return r.BatchID == "op-run-batch" })
+	}
+
+	capped, err := store.GetBookChangeHistory("book-many", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 100 || hasRunBatch(capped) {
+		t.Fatalf("limit 100: %d rows, run batch present=%v; the truncation this test documents changed",
+			len(capped), hasRunBatch(capped))
+	}
+	all, err := store.GetBookChangeHistory("book-many", math.MaxInt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != titles+1 || !hasRunBatch(all) {
+		t.Fatalf("limit MaxInt: %d rows (want %d), run batch present=%v", len(all), titles+1, hasRunBatch(all))
 	}
 }
 

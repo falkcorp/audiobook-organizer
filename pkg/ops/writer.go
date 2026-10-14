@@ -1,7 +1,7 @@
 // file: pkg/ops/writer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: dc4d264d-6ac3-4ecd-bd11-247d5300dd3c
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package ops
 
@@ -12,7 +12,7 @@ import (
 )
 
 // Writer is the only write path an op gets (internal/operations/opswriter
-// implements it). Every method, in order:
+// implements it). Every write method, in order:
 //  1. checks the run's fence (canceled, abandoned or lost stand-down lease
 //     -> ErrFenced);
 //  2. in Live mode writes an INTENT row before touching the store; in
@@ -24,6 +24,9 @@ import (
 //
 // A crash between 2 and 5 leaves an intent: recovery lists that subject as
 // "may be partially applied".
+//
+// Wrote is the one read: it writes nothing, takes no intent and records no
+// history.
 //
 // ctx, on every method, must be the item's context (ItemRC.Context()) or one
 // derived from it, from inside the item, before the item returns. A write
@@ -56,6 +59,19 @@ type Writer interface {
 	// 1, 2 and 5 around fn and records the history rows fn returns after it
 	// returns. ctx: the item's context or derived from it.
 	Effect(ctx context.Context, e EffectSpec, fn func() ([]HistoryRow, error)) error
+	// Wrote reports whether an EARLIER attempt of this run (the same op id;
+	// never the current attempt) recorded history for every one of
+	// subjects: an operation journal row under the op id naming the book
+	// (its BookID) or the book_file (its field), or, for a book, a metadata
+	// history row in one of the run's own batches. A Fixer's resumed apply
+	// requires it before it reports a row as applied by that earlier
+	// attempt (applyRow). It is false for no subjects, on a Preview
+	// Writer, and when the store cannot read that history -- never an
+	// error for those. Evidence is per subject, not per row: history
+	// another row of the same run recorded for a shared subject counts.
+	// ctx: the item's context or derived from it; a canceled context or a
+	// revoked fence is an error.
+	Wrote(ctx context.Context, subjects []Subject) (bool, error)
 }
 
 // Changed lists the tracked fields a write changed, in

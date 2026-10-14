@@ -1,13 +1,14 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package opswriter
 
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -86,6 +87,22 @@ func (h *BookHistory) Failed() int { return int(h.failed.Load()) }
 
 // NewBatchID returns a fresh batch id.
 func (h *BookHistory) NewBatchID() string { return h.batchPrefix + ulid.Make().String() }
+
+// ownsBatch reports whether batchID is one NewBatchID could have returned:
+// h's prefix followed by exactly one ULID. The ULID check keeps a prefix
+// from matching a longer one ("op-A-" is a prefix of "op-A-B-<ulid>"). An
+// empty prefix owns nothing: every bare ULID would match it.
+func (h *BookHistory) ownsBatch(batchID string) bool {
+	if h == nil || h.batchPrefix == "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(batchID, h.batchPrefix)
+	if !ok {
+		return false
+	}
+	_, err := ulid.ParseStrict(rest)
+	return err == nil
+}
 
 // RecordDiff records one row per tracked field that differs between before
 // and after and returns the changed field names in database.TrackedBookFields
