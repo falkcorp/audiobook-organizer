@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-09-14
+// last-edited: 2026-10-13
 
 package entities_test
 
@@ -388,6 +388,30 @@ func TestMergeAuthors(t *testing.T) {
 	// anything else 404s there and surfaces as "Failed to merge" for a merge
 	// that actually succeeded.
 	assert.Contains(t, w.Body.String(), `"id":"v2op1"`)
+}
+
+// honor_locks is optional and passed through as sent: absent stays absent (the op
+// reads that as TRUE), an explicit false reaches the op as false.
+func TestMergeAuthors_PassesHonorLocksThrough(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want func(*bool) bool
+	}{
+		"absent":   {`{"keep_id":1,"merge_ids":[2]}`, func(b *bool) bool { return b == nil }},
+		"explicit": {`{"keep_id":1,"merge_ids":[2],"honor_locks":false}`, func(b *bool) bool { return b != nil && !*b }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.store.EXPECT().GetAuthorByID(1).Return(&database.Author{ID: 1, Name: "Keep"}, nil)
+			d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.author-merge",
+				mock.MatchedBy(func(p entities.AuthorMergeOpParams) bool {
+					return p.KeepID == 1 && len(p.MergeIDs) == 1 && p.KeepName == "Keep" && tc.want(p.HonorLocks)
+				})).Return("v2op1", nil)
+			c, w := newCtx(http.MethodPost, "/authors/merge", tc.body, nil)
+			h.MergeAuthors(c)
+			assert.Equal(t, http.StatusAccepted, w.Code)
+		})
+	}
 }
 
 func TestMergeAuthors_EmptyMergeIDs(t *testing.T) {
