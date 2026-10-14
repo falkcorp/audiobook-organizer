@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -206,14 +206,14 @@ func TestRowAppliedIsPerRow(t *testing.T) {
 	applyItem(t, other, "other-op", setTitle(other, "book-003", "op2"))
 
 	// Each marker names exactly its own row's history.
-	if m, ok := s.mark("op1", "title-shared"); !ok || len(m.Batches) != 1 || m.Batches[0].BookID != "book-shared" ||
-		!strings.HasPrefix(m.Batches[0].BatchID, "op-op1-") || len(m.Changes) != 0 {
+	if m, ok := s.mark("op1", "title-shared"); !ok || len(m.BookBatches) != 1 || m.BookBatches[0].BookID != "book-shared" ||
+		!strings.HasPrefix(m.BookBatches[0].BatchID, "op-op1-") || len(m.Changes) != 0 {
 		t.Fatalf("title-shared marker = %+v, %v; want its one book-shared batch", m, ok)
 	}
-	if m, ok := s.mark("op1", "repoint-002"); !ok || len(m.Changes) != 1 || len(m.Batches) != 0 {
+	if m, ok := s.mark("op1", "repoint-002"); !ok || len(m.Changes) != 1 || len(m.BookBatches) != 0 {
 		t.Fatalf("repoint-002 marker = %+v, %v; want its one journal row", m, ok)
 	}
-	if m, ok := s.mark("op1", "noop-004"); !ok || len(m.Changes)+len(m.Batches) != 0 {
+	if m, ok := s.mark("op1", "noop-004"); !ok || len(m.Changes)+len(m.BookBatches) != 0 {
 		t.Fatalf("noop-004 marker = %+v, %v; want a marker naming nothing", m, ok)
 	}
 
@@ -308,7 +308,7 @@ func TestRowAppliedUndoneHistory(t *testing.T) {
 	later := time.Now().Add(time.Second)
 	s.history = append(s.history,
 		database.MetadataChangeRecord{BookID: "book-001", Field: "title", ChangeType: ChangeTypeUndo,
-			BatchID: m.Batches[0].BatchID, ChangedAt: later},
+			BatchID: m.BookBatches[0].BatchID, ChangedAt: later},
 		database.MetadataChangeRecord{BookID: "book-002", Field: "title", ChangeType: ChangeTypeUndo, ChangedAt: later},
 		database.MetadataChangeRecord{BookID: "book-003", Field: "publisher", ChangeType: ChangeTypeUndo, ChangedAt: later},
 		database.MetadataChangeRecord{BookID: "book-003", Field: "title", ChangeType: ChangeTypeUndo,

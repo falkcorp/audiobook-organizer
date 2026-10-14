@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -114,7 +114,7 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 		case r.Change != "":
 			m.Changes = append(m.Changes, r.Change)
 		case r.Book != "" && r.Batch != "":
-			m.Batches = append(m.Batches, database.RowMarkBatch{BookID: r.Book, BatchID: r.Batch})
+			m.BookBatches = append(m.BookBatches, database.RowMarkBatch{BookID: r.Book, BatchID: r.Batch})
 		}
 	}
 	if err := w.cfg.RowMarks.PutRowMarkV3(w.cfg.OpID, m); err != nil {
@@ -149,7 +149,7 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	if err != nil || !ok {
 		return false, err
 	}
-	return w.batchesStand(m.Batches)
+	return w.batchesStand(m.BookBatches)
 }
 
 // changesStand reports whether every journal row of ids (under this op id)
