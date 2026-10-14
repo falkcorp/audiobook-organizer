@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/run.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4f6b2d-1c83-4e57-b0d9-3e8a5f7c2b61
 // last-edited: 2026-10-14
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"runtime"
 	"slices"
@@ -405,7 +406,10 @@ func (w *World) newGeneration(def ops.Definition, cfg runCfg) *generation {
 	if cfg.abandonAt >= 0 {
 		opts.AbandonGrace = abandonGrace
 	}
-	g.reg = registry.NewWithOptions(&worldStore{w: w, g: g}, nil, registryWorkers, opts)
+	// The registry's own lines (starting run, run finished, progress) go
+	// nowhere: a Conformance run starts hundreds of registries. A writer to
+	// t.Logf would be unsafe, as registry goroutines can outlive the test.
+	g.reg = registry.NewWithOptions(&worldStore{w: w, g: g}, slog.New(slog.DiscardHandler), registryWorkers, opts)
 	if !g.reg.HasRunStateV3() {
 		w.t.Fatalf("opstest: the registry did not resolve the v3 run state from the World's store")
 	}
