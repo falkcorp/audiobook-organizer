@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/run.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9a4f6b2d-1c83-4e57-b0d9-3e8a5f7c2b61
 // last-edited: 2026-10-14
 
@@ -589,6 +589,7 @@ type attempt struct {
 	notes     []string
 	spans     []span
 	late      []string
+	marks     map[string]int // row id -> marks the store took (guarded by mu)
 	second    *AbandonReport
 	secondAt  *attempt
 }
@@ -603,6 +604,22 @@ func (a *attempt) addSpan(s span) {
 	a.mu.Lock()
 	a.spans = append(a.spans, s)
 	a.mu.Unlock()
+}
+
+// markTaken counts a row mark the store accepted.
+func (a *attempt) markTaken(rowID string) {
+	a.mu.Lock()
+	if a.marks == nil {
+		a.marks = map[string]int{}
+	}
+	a.marks[rowID]++
+	a.mu.Unlock()
+}
+
+func (a *attempt) marksTaken(rowID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.marks[rowID]
 }
 
 func (a *attempt) lateWrite(what string) {
