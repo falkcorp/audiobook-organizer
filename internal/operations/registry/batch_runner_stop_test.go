@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -702,5 +703,64 @@ func TestStartOverDropsOldMarks(t *testing.T) {
 	}
 	if len(second.Marked("first")) != 0 {
 		t.Fatalf("the new run's Finish saw the old marks: %v", second.Marks)
+	}
+}
+
+// N-4 (final review): FixerResult.Applied and AfterApply's list are sorted by
+// row id, whatever order four workers finish the rows in (here the reverse
+// of id order).
+func TestFixerAppliedSortedByRowID(t *testing.T) {
+	const n = 12
+	titles := map[string]string{}
+	var mu sync.Mutex
+	var rows []ops.Row
+	for i := range n {
+		id := itemKey(i)
+		titles[id] = "l " + id
+		rows = append(rows, ops.Row{ID: id, Inputs: map[string]string{"title": "l " + id},
+			Current: map[string]string{"title": "l " + id}, Proposed: map[string]string{"title": "1 " + id}})
+	}
+	var afterApply []string
+	def := ops.Fixer("test.fixer", ops.FixerSpec[ops.NoParams, string]{
+		Common:     ops.Common{Title: "f", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[string], error) { return ops.Source[string]{}, nil },
+		Load: func(_ *ops.RC, _ ops.NoParams, id string) (string, bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			t, ok := titles[id]
+			return t, ok, nil
+		},
+		Evaluate: func(_ *ops.ItemRC, _ ops.NoParams, title string) (ops.Row, error) {
+			id := title[2:]
+			return ops.Row{ID: id, Inputs: map[string]string{"title": title}, Current: map[string]string{"title": title},
+				Proposed: map[string]string{"title": "1 " + id}}, nil
+		},
+		Apply: func(_ *ops.ItemRC, _ ops.Writer, _ ops.NoParams, row ops.Row) error {
+			i, _ := strconv.Atoi(row.ID)
+			time.Sleep(time.Duration(n-i) * 2 * time.Millisecond) // low ids finish last
+			mu.Lock()
+			titles[row.ID] = row.Proposed["title"]
+			mu.Unlock()
+			return nil
+		},
+		AfterApply: func(_ *ops.RC, applied []string) error { afterApply = applied; return nil },
+	})
+	params, _ := json.Marshal(ops.FixerApply{Rows: rows})
+	rc := ops.NewRC(ops.RunEnv{Context: context.Background(), OpID: "op", DefID: "test.fixer", Mode: ops.Live, Writer: &memTitles{titles: map[string]string{}}})
+	job, err := ops.Compile(def).OpenBatch(rc, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.ChunkSize, job.Workers = 1, 4
+	_, raw, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: newMemLedgerStore(t), commitEvery: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res ops.FixerResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != n || !slices.IsSorted(res.Applied) || !slices.Equal(afterApply, res.Applied) {
+		t.Fatalf("Applied %v, AfterApply %v: want all %d, sorted by row id", res.Applied, afterApply, n)
 	}
 }

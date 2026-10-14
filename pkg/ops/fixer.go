@@ -1,5 +1,5 @@
 // file: pkg/ops/fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
 // last-edited: 2026-10-13
 
@@ -40,8 +40,9 @@ type FixerSpec[P any, C any] struct {
 	// PartitionBy: rows sharing a key apply in order on one worker. Default
 	// Row.ID.
 	PartitionBy func(Row) string
-	// AfterApply runs once with every applied row id, on a context that a
-	// cancel does not end.
+	// AfterApply runs once with every applied row id, sorted by row id (the
+	// same order with or without a resume), on a context that a cancel does
+	// not end.
 	AfterApply func(rc *RC, applied []string) error
 	// Guards add to the framework guards. Each returns a skip reason or "".
 	Guards []Guard
@@ -112,7 +113,9 @@ type FixerApply struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// FixerResult is a Fixer's Live result.
+// FixerResult is a Fixer's Live result. Applied is sorted by row id, so it
+// is the same whatever order the workers finished in and whether or not the
+// run resumed.
 type FixerResult struct {
 	Applied []string `json:"applied"`
 }
@@ -228,6 +231,7 @@ func fixerApplyJob[P any, C any](id string, s FixerSpec[P, C], rc *RC, params js
 		return nil, err
 	}
 	job.Finish = func(rc *RC, sum Summary) (json.RawMessage, error) {
+		// Marked sorts: row ids are the item keys, so this is row-id order.
 		applied := sum.Marked(MarkApplied)
 		if applied == nil {
 			applied = []string{}
