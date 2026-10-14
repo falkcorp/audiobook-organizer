@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-13-ai-scan-apply-merges-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3c8e5b71-9a24-4d06-b7f3-6e1d2a94c850 -->
-<!-- last-edited: 2026-10-13 -->
+<!-- last-edited: 2026-10-14 -->
 
 # The AI scan's "Apply selected" button now merges authors, and merges respect locked authors
 
@@ -32,10 +32,31 @@ Branch `task/03-pr8` (03-PR8, PR #4013).
 - **Two scans cannot run at once.** Starting an AI scan while another is still
   running is now refused by the server itself, with a plain message. Before,
   two quick clicks could queue two paid scans.
+- **Merges can be undone.** A merge used to be one-way: the merged-away author
+  was deleted and nothing recorded how to bring it back. Now each step is
+  written to the undo history before it happens. Undoing the operation brings
+  the author back under the same name with its aliases, and puts every book's
+  author credits back as they were. A book you edited after the merge is left
+  alone and reported, and the undo is refused if another author has taken the
+  name since. If the history entry cannot be written, that book is simply not
+  moved. This covers the AI scan's Apply and the Authors view's Merge. Merges
+  made before this change stay unrecoverable.
+- **A narrator is no longer merged into the author.** The AI scan flags some
+  names as narrators. One of the two ways it reports that was being dropped, so
+  the apply merged the narrator's books into the author. The flag is now kept,
+  and a result it cannot be matched to is refused instead of guessed at.
+- **A scan being applied cannot be replaced under you.** A newer scan (the
+  nightly one, for instance) could hide the scan you were applying part way
+  through, leaving merged results unticked. The scan is now held while the
+  apply runs.
+- **A failed scan no longer blocks the next one.** A scan that failed to start
+  stayed "running" and refused every new scan until someone cancelled it. It is
+  now ended, and any paid batch it had started is cancelled.
 - **Verification.** The new behaviour is covered by tests against a real
   library store: locked books stay put, only successful merges are ticked off,
-  a second Apply of the same suggestions changes nothing, and simultaneous scan
-  starts produce exactly one scan.
+  a second Apply of the same suggestions changes nothing, simultaneous scan
+  starts produce exactly one scan, and a merge followed by its undo restores the
+  author, its books' credits and their primary author.
 
 ## A button that recorded work it never did
 
