@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
 // last-edited: 2026-10-13
 
@@ -750,6 +750,7 @@ func TestStopDecidesFinishLikeTheRegistry(t *testing.T) {
 		parked   atomic.Int32
 		finished atomic.Int32
 		lastDone atomic.Int64
+		resumed  atomic.Bool // rc.Resumed() in the last Finish
 	}
 	cont := ops.ResumeContinue
 	mkDef := func(p *probe) ops.Definition {
@@ -766,9 +767,10 @@ func TestStopDecidesFinishLikeTheRegistry(t *testing.T) {
 				}
 				return nil
 			},
-			Finish: func(_ *ops.RC, _ ops.NoParams, s ops.Summary) (ops.NoResult, error) {
+			Finish: func(rc *ops.RC, _ ops.NoParams, s ops.Summary) (ops.NoResult, error) {
 				p.finished.Add(1)
 				p.lastDone.Store(s.Done)
+				p.resumed.Store(rc.Resumed())
 				return ops.NoResult{}, nil
 			},
 			Concurrency: ops.Network(2, "two chunks finish, two park"),
@@ -826,6 +828,9 @@ func TestStopDecidesFinishLikeTheRegistry(t *testing.T) {
 		if p.finished.Load() != 1 || p.lastDone.Load() != n {
 			t.Fatalf("Finish ran %d times, last Done %d; want once over %d", p.finished.Load(), p.lastDone.Load(), n)
 		}
+		if !p.resumed.Load() {
+			t.Fatal("the resumed attempt's rc.Resumed() is false")
+		}
 	})
 
 	t.Run("user cancel finishes in the stopped attempt", func(t *testing.T) {
@@ -847,6 +852,9 @@ func TestStopDecidesFinishLikeTheRegistry(t *testing.T) {
 		}
 		if p.finished.Load() != 1 {
 			t.Fatalf("Finish ran %d times after a user cancel, want 1", p.finished.Load())
+		}
+		if p.resumed.Load() {
+			t.Fatal("a first attempt's rc.Resumed() is true")
 		}
 	})
 }

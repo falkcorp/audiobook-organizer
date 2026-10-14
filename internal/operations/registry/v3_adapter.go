@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-13
 
@@ -247,6 +247,11 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 		if row.ParentID != nil && *row.ParentID != "" {
 			env.Trigger = ops.TriggerChild
 		}
+	}
+	// Attempt counts every move into running; above 1, an earlier attempt of
+	// this op id ran (a resume or a retry), so writes under it may exist.
+	if rec, err := r.getRunV3(opID); err == nil && rec != nil {
+		env.Resumed = rec.Attempt > 1
 	}
 	var w *opswriter.Writer
 	if !c.Common.Effects.IsReadOnly() {

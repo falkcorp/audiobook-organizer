@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-13
 
@@ -423,3 +423,52 @@ func TestNoteRefusal(t *testing.T) {
 		t.Fatal("Reset kept the refusal")
 	}
 }
+
+// S-C (final review): a row whose fresh Current equals the plan's Proposed is
+// reported applied without a write only on a resumed attempt, only when its
+// fingerprint moved, and only when no hold, owner-only flag or guard objects.
+// Otherwise it takes the ordinary path: changed since plan, or the refusal.
+func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
+	planned := Row{ID: "r1", Inputs: map[string]string{"title": "old"},
+		Current: map[string]string{"title": "old"}, Proposed: map[string]string{"title": "new"}}
+	applied := Row{ID: "r1", Inputs: map[string]string{"title": "new"}, Current: map[string]string{"title": "new"}}
+	cases := []struct {
+		name    string
+		fresh   Row
+		guards  []Guard
+		resumed bool
+		want    bool
+		skip    string
+	}{
+		{"resumed, applied by the earlier attempt", applied, nil, true, true, ""},
+		{"first attempt (a foreign actor made the same change)", applied, nil, false, false, SkipChangedSincePlan},
+		{"resumed but now held", withHold(applied, "owner hold"), nil, true, false, SkipChangedSincePlan},
+		{"resumed but now owner-only", withOwnerOnly(applied), nil, true, false, SkipChangedSincePlan},
+		{"resumed but guarded", applied, []Guard{func(Row) string { return "guarded" }}, true, false, SkipChangedSincePlan},
+		{"resumed, values differ", Row{ID: "r1", Inputs: map[string]string{"title": "other"},
+			Current: map[string]string{"title": "other"}}, nil, true, false, SkipChangedSincePlan},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			applyCalled := false
+			spec := FixerSpec[NoParams, string]{
+				Load:     func(*RC, NoParams, string) (string, bool, error) { return "c", true, nil },
+				Evaluate: func(*ItemRC, NoParams, string) (Row, error) { return c.fresh, nil },
+				Apply:    func(*ItemRC, Writer, NoParams, Row) error { applyCalled = true; return nil },
+				Guards:   c.guards,
+			}
+			rc := NewRC(RunEnv{Context: context.Background(), Resumed: c.resumed})
+			tally := &Tally{}
+			irc := NewItemRC(rc, context.Background(), tally, nil)
+			ok, err := applyRow(irc, spec, NoParams{}, planned)
+			if err != nil || ok != c.want || applyCalled || tally.SkipReason() != c.skip {
+				t.Fatalf("applied=%v err=%v applyCalled=%v skip=%q; want applied=%v skip=%q",
+					ok, err, applyCalled, tally.SkipReason(), c.want, c.skip)
+			}
+		})
+	}
+}
+
+func withHold(r Row, hold string) Row { r.Hold = hold; return r }
+
+func withOwnerOnly(r Row) Row { r.OwnerOnly = true; return r }
