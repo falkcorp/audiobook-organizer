@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3c5a17-2f94-4b6d-a0c8-71d4e9b25f36
 // last-edited: 2026-10-14
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
@@ -357,8 +358,12 @@ func (s *worldStore) ListIntentsV3(id string) ([]database.Intent, error) {
 	return s.p().ListIntentsV3(id)
 }
 
-// GetBookChangeHistory reads a book's metadata history rows (a read; the
-// Writer's evidence reader once 05-PR5b wires it).
+// GetBookChangeHistory reads a book's metadata history rows (a read). No
+// capability the registry resolves on this branch needs it. The Writer's
+// evidence reader that 05-PR5b (#4017) adds is opswriter.BookHistoryReader,
+// whose ReadBookChangeHistory also counts the rows that did not decode, which
+// this method drops silently; the PR that merges second replaces this
+// forwarder with ReadBookChangeHistory.
 func (s *worldStore) GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error) {
 	return s.p().GetBookChangeHistory(bookID, limit)
 }
@@ -375,8 +380,9 @@ func (s *worldStore) GetBookChangeHistory(bookID string, limit int) ([]database.
 type generation struct {
 	w *World
 
-	gate sync.RWMutex
-	dead bool
+	gate    sync.RWMutex
+	dead    bool
+	deadErr error // what a write after death gets: errWorldStopped for a crash, errWorldReset or errWorldClosed after a retire
 
 	mu       sync.Mutex
 	cond     *sync.Cond
@@ -397,21 +403,35 @@ func newGeneration(w *World) *generation {
 }
 
 // admit is taken by every write of the generation for its duration; it
-// refuses once the generation is dead.
+// refuses once the generation is dead. A refusal after a retire (the World
+// was Reset, or its test finished) is a goroutine a def left behind, and is
+// recorded: it is logged, as the World's testing.TB can no longer be used.
 func (g *generation) admit() (release func(), err error) {
 	g.gate.RLock()
 	if g.dead {
+		err := g.deadErr
 		g.gate.RUnlock()
-		return nil, errWorldStopped
+		if err != errWorldStopped {
+			logger.New("opstest").Warn("a write was refused and dropped: %v", err)
+		}
+		return nil, err
 	}
 	return g.gate.RUnlock, nil
 }
 
 // kill is the crash: it waits for the writes in flight, then refuses every
 // later one. Never call it while holding the gate (from inside a write).
-func (g *generation) kill() {
+func (g *generation) kill() { g.retire(errWorldStopped) }
+
+// retire is kill with the reason a later write is refused for. The World
+// retires the generation it replaces (Reset) and the one it ends with
+// (cleanup) before it closes the store under them, so a write that outlives
+// its run gets an error, never a closed or missing store. A retire overrides
+// an earlier crash's reason.
+func (g *generation) retire(reason error) {
 	g.gate.Lock()
 	g.dead = true
+	g.deadErr = reason
 	g.gate.Unlock()
 }
 

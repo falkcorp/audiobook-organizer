@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/conformance_mutation_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a4f2c63-1e8b-4d57-b0a9-5c3e7f1d2b86
 // last-edited: 2026-10-14
 
@@ -7,6 +7,7 @@ package opstest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -335,6 +336,145 @@ func TestCatches_WriteAfterRunEnds(t *testing.T) {
 			t.Fatalf("the correct twin was reported: %v", twin)
 		}
 	})
+}
+
+// TestCatches_LeakedWriteInLaterAttempt: a fenced item hands its write to a
+// goroutine that waits, and the goroutine commits it during a later run of
+// the same World: inside that attempt's window, so the per-attempt fence
+// check does not see it, and not after every attempt, so the orphan report
+// does not either. The def releases the goroutines from the Finish of a run
+// that was not canceled (the run AbandonAt queues behind the abandoned one),
+// after that run's items are done, so the write lands in its window outside
+// every one of its Writer calls, deterministically. The twin leaks nothing.
+func TestCatches_LeakedWriteInLaterAttempt(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, leak bool) *recorder {
+		tb := &tbRecorder{T: t} // the leaked goroutines outlive the suite and may land after the last run
+		w := NewWorld(tb)
+		books := w.Books()
+		// held are the leaked goroutines waiting to commit; release lets them
+		// go and waits for them, and a goroutine leaked after that waits for
+		// the next release.
+		type held struct {
+			release chan struct{}
+			wg      sync.WaitGroup
+		}
+		var mu sync.Mutex
+		var pending *held
+		hold := func() *held {
+			mu.Lock()
+			defer mu.Unlock()
+			if pending == nil {
+				pending = &held{release: make(chan struct{})}
+			}
+			pending.wg.Add(1)
+			return pending
+		}
+		release := func() {
+			mu.Lock()
+			h := pending
+			pending = nil
+			mu.Unlock()
+			if h != nil {
+				close(h.release)
+				h.wg.Wait()
+			}
+		}
+		def := ops.Batch("opstest.leak-into-later-attempt", ops.BatchSpec[struct{}, database.Book, titleResult]{
+			Common: common("Leak a write into the next run", ops.Writes(ops.ResBooks)),
+			Source: bookSource(books),
+			Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+				_, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle)
+				if leak && fenced(err) { // the bug: the write outlives the run
+					sub := ops.Subject{Type: ops.SubjectBook, ID: b.ID}
+					h := hold()
+					go func() {
+						defer h.wg.Done()
+						<-h.release
+						_ = books.PutValue(sub, "leaked", "yes")
+					}()
+				}
+				return err
+			},
+			Finish: func(rc *ops.RC, p struct{}, s ops.Summary) (titleResult, error) {
+				if !s.Canceled {
+					release() // the writes commit now, in this attempt's window
+				}
+				return titleFinish(rc, p, s)
+			},
+		})
+		r := newRecorder(t)
+		conformance(r, tb, def, nil, InWorld(w))
+		release()
+		return r
+	}
+	expectCaught(t, run(t, true), run(t, false), AssertNoWriteAfterFence, false)
+}
+
+// TestCatches_TaskWriteAroundWriter: a Task that, in a Live run, writes a
+// side value straight to the store instead of through rc.Writer(). A Task has
+// no items and so no fence fault, but its run is still one attempt whose
+// every write must be made inside a Writer call. The twin writes through the
+// Writer's Effect.
+func TestCatches_TaskWriteAroundWriter(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books := w.Books()
+	taskDef := func(id string, around bool) ops.Definition {
+		return ops.Task(id, ops.TaskSpec[ops.NoParams, titleResult]{
+			Common: common("Tag the first book", ops.Writes(ops.ResBooks)),
+			Run: func(rc *ops.RC, _ ops.NoParams) (titleResult, error) {
+				sub := ops.Subject{Type: ops.SubjectBook, ID: "book-001"}
+				if around { // the bug: a write the Writer never saw
+					if rc.Mode() == ops.Live {
+						return titleResult{}, books.PutValue(sub, "tag", "tagged")
+					}
+					return titleResult{}, nil
+				}
+				err := rc.Writer().Effect(rc.Context(), ops.EffectSpec{Name: "opstest.tag", Subject: sub},
+					func() ([]ops.HistoryRow, error) { return nil, books.PutValue(sub, "tag", "tagged") })
+				if errors.Is(err, ops.ErrPreview) { // a Task records the plan line and goes on
+					err = nil
+				}
+				return titleResult{}, err
+			},
+		})
+	}
+	expectCaught(t, conform(t, w, taskDef("opstest.broken.task-write-around", true)),
+		conform(t, w, taskDef("opstest.task-tag", false)), AssertNoWriteAfterFence, true)
+}
+
+func bookSubject(id string) ops.Subject { return ops.Subject{Type: ops.SubjectBook, ID: id} }
+
+// TestCheckWritesInsideWriter pins checkWritesInsideWriter on synthetic
+// outcomes: a write or history row passes only inside a Writer call on its
+// book (a book-less write, and a call that names no book, match any); the
+// harness's own writes are exempt.
+func TestCheckWritesInsideWriter(t *testing.T) {
+	t.Parallel()
+	o := &Outcome{OpID: "op-1", Attempt: 1,
+		spans: []span{{Start: 10, End: 20, Book: "book-001", Call: "ModifyBook"}, {Start: 40, End: 50, Call: "Effect x"}},
+		Writes: []WriteRecord{
+			{Seq: 15, BookID: "book-001", Subject: bookSubject("book-001"), Op: "modify_book"},                // inside, same book
+			{Seq: 15, Subject: ops.Subject{Type: "log", ID: "seen"}, Op: "append_log"},                        // inside, book-less write
+			{Seq: 45, BookID: "book-002", Subject: bookSubject("book-002"), Op: "put_value"},                  // inside a call that names no book
+			{Seq: 15, BookID: "book-002", Subject: bookSubject("book-002"), Op: "put_value"},                  // a call on another book
+			{Seq: 30, BookID: "book-001", Subject: bookSubject("book-001"), Op: "put_value"},                  // between calls
+			{Seq: 30, BookID: "book-003", Subject: bookSubject("book-003"), Op: "insert_book", harness: true}, // the harness's own
+		},
+		History: []HistoryRow{{Seq: 16, BookID: "book-001", Field: "title"}, {Seq: 60, BookID: "book-001", Field: "title"}}}
+	rec := newRecorder(t)
+	rec.Run(AssertNoWriteAfterFence, func(tt tester) { checkWritesInsideWriter(tt, o) })
+	msgs := rec.messages(AssertNoWriteAfterFence)
+	if len(msgs) != 3 {
+		t.Fatalf("checkWritesInsideWriter reported %d messages, want 3 (the other-book write, the write between "+
+			"calls, the late history row): %v", len(msgs), msgs)
+	}
+	for i, want := range []string{"put_value book:book-002 (seq 15)", "put_value book:book-001 (seq 30)", "history row (book book-001"} {
+		if !strings.Contains(msgs[i], want) {
+			t.Errorf("message %d = %q, want it to name %q", i, msgs[i], want)
+		}
+	}
 }
 
 // TestCrashResumeCountsCommittedItems: crash_resume_at_least_once asks for

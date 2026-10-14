@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/world.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c6d1f8e-2b47-4a95-b3e1-7d5c9a2f4e18
 // last-edited: 2026-10-14
 
@@ -48,6 +48,18 @@
 //   - A write committed outside every attempt (a goroutine a def leaked,
 //     writing after its run ended) is reported through the World's
 //     testing.TB at the next Reset and at cleanup, as no_write_after_fence.
+//   - One that lands inside a later attempt's window (a leaked goroutine
+//     committing during the next run or case) is caught by Conformance's
+//     no_write_after_fence too: every write and history row of an attempt
+//     must be made inside one of that attempt's Writer calls, on the book the
+//     call writes. It cannot tell a leaked write from the attempt's own when
+//     it commits inside a Writer call on the same book (a write carries no
+//     goroutine identity).
+//   - Reset retires the generation it replaces and cleanup the one it ends
+//     with: a write through them is refused with errWorldReset or
+//     errWorldClosed and logged, never committed to the next case's store or
+//     to a closed one, and a read through Books() after cleanup returns
+//     errWorldClosed.
 //
 // Only tests import this package (internal/arch guards it).
 package opstest
@@ -160,6 +172,10 @@ func NewWorld(t testing.TB, opts ...WorldOpt) *World {
 	w.journal = &Journal{w: w}
 	w.Reset()
 	t.Cleanup(func() {
+		// Retire the generation now running first: it waits for the writes in
+		// flight, then refuses every later one, so a goroutine a def left
+		// behind gets errWorldClosed instead of a store that is gone.
+		w.retireCurrent(errWorldClosed)
 		w.checkOrphans()
 		if s := w.store.Swap(nil); s != nil {
 			_ = s.Close()
@@ -217,6 +233,7 @@ func (w *World) Dirty(prefix string) []string {
 // accounts for (see checkOrphans).
 func (w *World) Reset() {
 	w.t.Helper()
+	w.retireCurrent(errWorldReset)
 	w.checkOrphans()
 	s, err := database.NewPebbleStoreInMemory("/opstest")
 	if err != nil {
@@ -250,6 +267,23 @@ func (w *World) Reset() {
 }
 
 func (w *World) st() *database.PebbleStore { return w.store.Load() }
+
+// retireCurrent refuses every later write of the generation now running
+// (see generation.retire); a World not yet reset has none.
+func (w *World) retireCurrent(reason error) {
+	if g := w.cur.Load(); g != nil {
+		g.retire(reason)
+	}
+}
+
+// read is the store for a read a def makes through Books(): errWorldClosed
+// once the World's test finished and the store is gone.
+func (w *World) read() (*database.PebbleStore, error) {
+	if s := w.st(); s != nil {
+		return s, nil
+	}
+	return nil, errWorldClosed
+}
 
 // State is a canonical dump of the World's data: every book, its files and
 // credits, and every side value and log. Two runs that left the same effects
