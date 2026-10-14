@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/fakes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e2a9c71-4d08-4f3b-8a6e-1b9d7c3f2a54
 // last-edited: 2026-10-14
 
@@ -245,6 +245,7 @@ func (b *FakeBooks) PutValue(sub ops.Subject, field, value string) error {
 	}
 	defer release()
 	key := string(sub.Type) + ":" + sub.ID
+	bookID := b.bookOf(sub)
 	b.mu.Lock()
 	m := b.values[key]
 	if m == nil {
@@ -257,7 +258,7 @@ func (b *FakeBooks) PutValue(sub ops.Subject, field, value string) error {
 	if !had || old != value {
 		changed = []string{field}
 	}
-	r := WriteRecord{Subject: sub, BookID: b.bookOf(sub), Op: "put_value", Changed: changed}
+	r := WriteRecord{Subject: sub, BookID: bookID, Op: "put_value", Changed: changed}
 	b.w.log.addWrite(r) // inside b.mu: two writes of one value are numbered in commit order
 	b.mu.Unlock()
 	return nil
@@ -294,14 +295,24 @@ func (b *FakeBooks) Log(name string) []string {
 	return slices.Clone(b.logs[name])
 }
 
-// bookOf is the book a subject belongs to ("" when unknown).
+// bookOf is the book a subject belongs to ("" when unknown): a book
+// subject is its own book, and a book_file subject's book is looked up among
+// the World's files (a scan; Worlds are small). Callers resolve it before
+// taking the side-data lock.
 func (b *FakeBooks) bookOf(sub ops.Subject) string {
 	switch sub.Type {
 	case ops.SubjectBook:
 		return sub.ID
 	case ops.SubjectBookFile:
-		// A book_file subject names only the file; its book is not looked up
-		// here (no store read inside the side-data lock).
+		files, err := b.AllBookFiles()
+		if err != nil {
+			return ""
+		}
+		for _, f := range files {
+			if f.ID == sub.ID {
+				return f.BookID
+			}
+		}
 		return ""
 	default:
 		return ""

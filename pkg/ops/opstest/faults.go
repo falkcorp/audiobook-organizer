@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/faults.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f7b1d94-6a25-4c08-9e3f-8d2b6a4c1e73
 // last-edited: 2026-10-14
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
@@ -124,16 +125,41 @@ func (a *attempt) crash() {
 // done, waits until every other worker has exited and the ledger has
 // committed every chunk they completed. The world then stops with chunk c the
 // only unrecorded chunk, so a correct resume leases c and only c.
+//
+// The wait is bounded by quiesceLimit, a deadline and not an ordering device:
+// if the other workers have not all exited and been committed by then (a def
+// whose Item blocks, a runner that never commits), the test fails saying so
+// and the world stops where it is, instead of the test hanging.
 func (a *attempt) quiesce(w int) {
 	if a.sched != nil {
 		a.sched.exit(w) // let the others run while this worker holds its chunk
 	}
+	expired := false
+	deadline := time.AfterFunc(quiesceLimit, func() {
+		a.mu.Lock()
+		expired = true
+		a.mu.Unlock()
+		a.cond.Broadcast()
+	})
+	defer deadline.Stop()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for a.exited < a.workers-1 || a.firstDone == nil || a.lastDone != *a.firstDone+a.delivered {
+	for !expired && (a.exited < a.workers-1 || a.firstDone == nil || a.lastDone != *a.firstDone+a.delivered) {
 		a.cond.Wait()
 	}
+	if expired {
+		committed := "none"
+		if a.firstDone != nil {
+			committed = fmt.Sprint(a.lastDone - *a.firstDone)
+		}
+		a.w.t.Errorf("opstest: %s: CrashMidChunk waited %s for the other workers: %d of %d exited, %d chunks "+
+			"delivered, %s committed; the world stops here", a.opID, quiesceLimit, a.exited, a.workers-1,
+			a.delivered, committed)
+	}
 }
+
+// quiesceLimit bounds CrashMidChunk's wait for the other workers.
+const quiesceLimit = 30 * time.Second
 
 // stop requests a stop the way the registry does: the run record moves to
 // stopping, the fence is revoked (after the Writer calls in flight drain),
