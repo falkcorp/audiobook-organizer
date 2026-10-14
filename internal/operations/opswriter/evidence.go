@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -144,15 +144,22 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 }
 
 // RowApplied reports whether some attempt of this run marked row rowID
-// applied and everything the marker names still stands (ops.Writer): each
-// journal row is still there, neither voided nor reverted, and still the
-// newest journal row on what it wrote (changesStand); each batch is still
-// the newest history on every field it wrote, with no undo of it
-// (batchesStand). A read is gated like a write, so a fenced or canceled run
-// reads nothing and a resumed run that is only recognizing rows still
-// renews its stand-down lease. One point read for the marker, one per
-// journal row it names, one journal read per book those rows name, one
-// history read per book its batches touch.
+// applied and everything the marker names still stands (ops.Writer):
+//
+//   - each journal row it names is still there, neither voided nor reverted
+//     (journalRowsLive);
+//   - each batch it names is in its book's metadata history, with no undo of
+//     it, judged without the clock (batchesUndone);
+//   - no write it names has been followed, on what it wrote, by a later
+//     write recorded in EITHER store -- a metadata history row or an
+//     operation journal row of the same book, of any operation and any
+//     change type (standsIn, subjectOf).
+//
+// A read is gated like a write, so a fenced or canceled run reads nothing
+// and a resumed run that is only recognizing rows still renews its
+// stand-down lease. One point read for the marker, one per journal row it
+// names, then per book it names: one metadata history read and one journal
+// read (bookJournal).
 func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	if err := w.checkAs(ctx, "apply marker of resumed row "+rowID, refusedRead); err != nil {
 		return false, err
@@ -167,72 +174,80 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	if m == nil {
 		return false, nil
 	}
-	ok, err := w.changesStand(m.Changes)
+	named, ok, err := w.journalRowsLive(m.Changes)
 	if err != nil || !ok {
 		return false, err
 	}
-	return w.batchesStand(m.BookBatches)
-}
-
-// changesStand reports whether every journal row of ids (under this op id)
-// still stands: it is still there, neither voided nor reverted (Voided is
-// checked on its own: a voided row normally has RevertedAt set too, but
-// nothing older guarantees it), and no other journal row of its book, of
-// any operation and any change type, was recorded at or after it on what it
-// wrote (journalRowsNewest). A row that cannot be found cannot be shown to
-// stand, and neither can one that does not decode, nor any row of a book
-// whose journal holds an undecodable row (fail closed, not an error).
-//
-// A row with no book id has no per-book journal to look in, so only the
-// first two checks apply to it. Nor can any check see a write that recorded
-// no journal row at all: many book_file writers outside the Writer (the
-// scanner, the AcoustID and tag backfills) record none, and seeing those
-// needs a per-book_file history this store does not keep (todo.d,
-// 2026-10-14-bookfile-change-history-for-fixer-resume).
-func (w *Writer) changesStand(ids []string) (bool, error) {
-	if len(ids) == 0 {
+	books := map[string]*bookNamed{}
+	book := func(id string) *bookNamed {
+		if books[id] == nil {
+			books[id] = &bookNamed{batches: map[string]bool{}}
+		}
+		return books[id]
+	}
+	for _, b := range m.BookBatches {
+		book(b.BookID).batches[b.BatchID] = true
+	}
+	for _, c := range named {
+		// A journal row with no book id has no book to look in: only
+		// journalRowsLive's checks apply to it.
+		if c.BookID != "" {
+			book(c.BookID).changes = append(book(c.BookID).changes, c)
+		}
+	}
+	if len(books) == 0 {
 		return true, nil
 	}
-	if w.cfg.Changes == nil {
+	if w.cfg.HistoryReader == nil || w.cfg.Changes == nil {
+		// Either store can hold the later write: without both reads the
+		// marker cannot be shown to stand.
 		return false, nil
 	}
-	byBook := map[string][]*database.OperationChange{}
+	for bookID, n := range books {
+		ok, err := w.bookStands(ctx, bookID, n)
+		if err != nil || !ok {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// bookNamed is what a marker names on one book: its batches there and its
+// journal rows there.
+type bookNamed struct {
+	batches map[string]bool
+	changes []*database.OperationChange
+}
+
+// journalRowsLive point-reads every journal row of ids (under this op id)
+// and reports whether each is still there and neither voided nor reverted
+// (Voided is checked on its own: a voided row normally has RevertedAt set
+// too, but nothing older guarantees it). A row that cannot be found, or
+// that does not decode, cannot be shown to stand (false, not an error).
+func (w *Writer) journalRowsLive(ids []string) ([]*database.OperationChange, bool, error) {
+	if len(ids) == 0 {
+		return nil, true, nil
+	}
+	if w.cfg.Changes == nil {
+		return nil, false, nil
+	}
+	out := make([]*database.OperationChange, 0, len(ids))
 	for _, id := range ids {
 		c, err := w.cfg.Changes.GetOperationChange(w.cfg.OpID, id)
 		if undecodable(err) {
 			pkgLog.Warn("op %s: journal row %s does not decode; it is not counted as standing: %s",
 				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
-			return false, nil
+			return nil, false, nil
 		}
 		if err != nil {
-			return false, fmt.Errorf("read journal row %s of op %s: %w", id, w.cfg.OpID, err)
+			return nil, false, fmt.Errorf("read journal row %s of op %s: %w", id, w.cfg.OpID, err)
 		}
 		if c == nil || c.Voided || c.RevertedAt != nil {
-			return false, nil
+			return nil, false, nil
 		}
-		if c.BookID != "" {
-			byBook[c.BookID] = append(byBook[c.BookID], c)
-		}
+		out = append(out, c)
 	}
-	for bookID, named := range byBook {
-		rows, err := w.cfg.Changes.GetBookChanges(bookID)
-		if undecodable(err) {
-			// GetBookChanges fails on an undecodable journal row (once its
-			// index is trusted, on one anywhere in the journal). The row it
-			// could not read could be the later write: fail closed, as for
-			// metadata history, rather than fail the item.
-			pkgLog.Warn("op %s: the operation journal of book %s has a row that does not decode; its journal rows are not counted as standing: %s",
-				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("read the operation journal of book %s: %w", bookID, err)
-		}
-		if !journalRowsNewest(rows, named) {
-			return false, nil
-		}
-	}
-	return true, nil
+	return out, true, nil
 }
 
 // undecodable reports whether err is a JSON decode failure of a stored row
@@ -243,161 +258,231 @@ func undecodable(err error) bool {
 	return errors.As(err, &syntax) || errors.As(err, &typ)
 }
 
-// journalRowsNewest reports whether no row of rows other than c itself was
-// recorded at or after c on what c wrote (journalOverlap), for every c of
-// named. A tie counts against c. So does a later row of this same run, or
-// one an operation revert has since reverted: the rule only asks whether c
-// is still the newest, never whether a later write restored its value.
-func journalRowsNewest(rows, named []*database.OperationChange) bool {
-	for _, c := range named {
-		for _, r := range rows {
-			if r.OperationID == c.OperationID && r.ID == c.ID {
-				continue
-			}
-			if journalOverlap(c.FieldName, r.FieldName) && !r.CreatedAt.Before(c.CreatedAt) {
-				return false
-			}
-		}
+// bookStands reads one book's metadata history and operation journal and
+// applies batchesUndone and standsIn to what the marker names there. A book
+// whose history or journal has a row that does not decode cannot be shown
+// to stand: the unreadable row could be the later write (fail closed, not
+// an error).
+func (w *Writer) bookStands(ctx context.Context, bookID string, n *bookNamed) (bool, error) {
+	hist, bad, err := w.cfg.HistoryReader.ReadBookChangeHistory(bookID)
+	if err != nil {
+		return false, fmt.Errorf("read the metadata history of book %s: %w", bookID, err)
 	}
-	return true
-}
-
-// journalSubject splits an operation journal FieldName into the book_file it
-// names (file, "" for none) and what of it (part). "book_file:<id>" is a
-// write to the file row as a whole (a repoint, a move, a reassign, a track
-// change: every book_file journal row outside the Writer is named this way),
-// part "". "file.<field>:<id>" is one field of it (Writer.ModifyBookFile).
-// "file_path", the organizer's and the reconciler's book-level row, names
-// no single file but moves the book's files, so it is every file of the
-// book: file "*". Anything else (credits, an Effect's own field) is itself.
-func journalSubject(field string) (file, part string) {
-	if field == "file_path" {
-		return "*", ""
-	}
-	if id, ok := strings.CutPrefix(field, "book_file:"); ok {
-		return id, ""
-	}
-	if rest, ok := strings.CutPrefix(field, "file."); ok {
-		if i := strings.LastIndexByte(rest, ':'); i > 0 {
-			return rest[i+1:], rest[:i]
-		}
-	}
-	return "", field
-}
-
-// journalOverlap reports whether journal rows named a and b can write the
-// same thing: the same field of the same file, a file and any field of it,
-// any file of the book and any file, or the same non-file field.
-func journalOverlap(a, b string) bool {
-	fa, pa := journalSubject(a)
-	fb, pb := journalSubject(b)
-	switch {
-	case fa == "" || fb == "":
-		return fa == fb && pa == pb
-	case fa == "*" || fb == "*":
-		return true
-	default:
-		return fa == fb && (pa == "" || pb == "" || pa == pb)
-	}
-}
-
-// batchesStand reports whether every batch still stands in its book's
-// metadata history (batchesStandIn). A book whose history has a row that
-// does not decode cannot be shown to stand: the unreadable row could be the
-// one that overwrote or undid the batch.
-func (w *Writer) batchesStand(batches []database.RowMarkBatch) (bool, error) {
-	if len(batches) == 0 {
-		return true, nil
-	}
-	if w.cfg.HistoryReader == nil {
+	if bad > 0 {
+		pkgLog.Warn("op %s: %d metadata history rows of book %s do not decode; what the marker names there is not counted as standing",
+			logger.SanitizeLogValue(w.cfg.OpID), bad, logger.SanitizeLogValue(bookID))
 		return false, nil
 	}
-	byBook := map[string]map[string]bool{}
-	for _, b := range batches {
-		if byBook[b.BookID] == nil {
-			byBook[b.BookID] = map[string]bool{}
-		}
-		byBook[b.BookID][b.BatchID] = true
+	journal, err := w.bookJournal(ctx, bookID)
+	if undecodable(err) {
+		pkgLog.Warn("op %s: the operation journal of book %s has a row that does not decode; what the marker names there is not counted as standing: %s",
+			logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+		return false, nil
 	}
-	for bookID, want := range byBook {
-		rows, undecodable, err := w.cfg.HistoryReader.ReadBookChangeHistory(bookID)
-		if err != nil {
-			return false, fmt.Errorf("read the metadata history of book %s: %w", bookID, err)
-		}
-		if undecodable > 0 {
-			pkgLog.Warn("op %s: %d metadata history rows of book %s do not decode; its batches are not counted as standing",
-				logger.SanitizeLogValue(w.cfg.OpID), undecodable, logger.SanitizeLogValue(bookID))
-			return false, nil
-		}
-		if !batchesStandIn(rows, want, w.cfg.OpID) {
-			return false, nil
-		}
+	if err != nil {
+		return false, fmt.Errorf("read the operation journal of book %s: %w", bookID, err)
 	}
-	return true, nil
+	if len(n.batches) > 0 && batchesUndone(hist, n.batches, w.cfg.OpID) {
+		return false, nil
+	}
+	return standsIn(hist, journal, n), nil
 }
 
-// batchesStandIn applies batchesStand's rule to one book's history rows. A
-// wanted batch stands only while all of this holds:
-//
-//   - Its rows are there.
-//   - It is the NEWEST history on every field it wrote, whatever the change
-//     type of any later row: a manual edit, another apply, a scan, a
-//     single-field undo (which carries no batch id) all make it stop
-//     standing, even one that put the batch's own value back. Fields are
-//     compared by Book JSON name, since other writers record some under
-//     their history names (database.HistoryFieldToJSON).
-//   - No undo of it was recorded, judged without the clock, so a skewed
-//     timestamp cannot hide one: undo-last-apply records its undo rows in
-//     the batch itself, on the fields it puts back, so a batch with two rows
-//     on one field was undone; an operation revert records its rows under
-//     the reverted op's id, so any row under this run's op id (opID) means
-//     the run was reverted on this book.
-//
-// The undo markers undo-last-apply reads (apply_op_journaled,
-// apply_incomplete) are not field writes and are left out. A row whose
-// Apply wrote one field twice, in two batches, is not claimed: its first
-// batch is no longer the newest. That only skips the row as changed since
-// plan.
-func batchesStandIn(rows []database.MetadataChangeRecord, want map[string]bool, opID string) bool {
-	type newestRow struct {
-		at    time.Time
-		batch string // "" when two batches tie
-	}
-	newest := map[string]newestRow{}
-	wrote := map[string]map[string]int{} // batch -> field -> rows
-	for _, r := range rows {
+// batchesUndone reports whether a wanted batch is missing from its book's
+// history or was undone, judged without the clock so a skewed timestamp
+// cannot hide an undo: undo-last-apply records its undo rows in the batch
+// itself, on the fields it puts back, so a batch with two rows on one
+// field was undone; an operation revert records its rows under the
+// reverted op's id, so any row under this run's op id (opID) means the run
+// was reverted on this book.
+func batchesUndone(hist []database.MetadataChangeRecord, want map[string]bool, opID string) bool {
+	wrote := map[string]map[subject]int{} // batch -> subject -> rows
+	for _, r := range hist {
 		if opID != "" && r.BatchID == opID {
-			return false
+			return true
 		}
-		if r.ChangeType == ChangeTypeApplyOpJournaled || r.ChangeType == ChangeTypeApplyIncomplete {
+		if !want[r.BatchID] || !historyWrite(r) {
 			continue
 		}
-		field := r.Field
-		if j, ok := database.HistoryFieldToJSON[field]; ok {
-			field = j
+		if wrote[r.BatchID] == nil {
+			wrote[r.BatchID] = map[subject]int{}
 		}
-		switch n, ok := newest[field]; {
-		case !ok || r.ChangedAt.After(n.at):
-			newest[field] = newestRow{at: r.ChangedAt, batch: r.BatchID}
-		case r.ChangedAt.Equal(n.at) && r.BatchID != n.batch:
-			newest[field] = newestRow{at: n.at}
-		}
-		if want[r.BatchID] {
-			if wrote[r.BatchID] == nil {
-				wrote[r.BatchID] = map[string]int{}
-			}
-			wrote[r.BatchID][field]++
+		s := subjectOf(r.Field, nil)
+		wrote[r.BatchID][s]++
+		if wrote[r.BatchID][s] > 1 {
+			return true
 		}
 	}
-	if len(wrote) != len(want) {
+	return len(wrote) != len(want)
+}
+
+// historyWrite reports whether a metadata history row records a write to
+// the library's rows. Left out: the undo markers undo-last-apply reads
+// (apply_op_journaled, apply_incomplete, both field "apply"), and two rows
+// that only describe work on files outside the database (write_back: tags
+// written to the audio files; cover_art: the previous cover archived).
+func historyWrite(r database.MetadataChangeRecord) bool {
+	if r.ChangeType == ChangeTypeApplyOpJournaled || r.ChangeType == ChangeTypeApplyIncomplete {
 		return false
 	}
-	for batch, fields := range wrote {
-		for field, n := range fields {
-			if n > 1 || newest[field].batch != batch {
+	switch r.Field {
+	case "apply", "write_back", "cover_art":
+		return false
+	}
+	return true
+}
+
+// write is one recorded write on a book, from either store, as standsIn
+// compares them: what it wrote (subject) and when it was stamped.
+type write struct {
+	subj subject
+	at   time.Time
+	self string // identity: "h<index>" for a history row, "j<op>\x00<id>" for a journal row
+}
+
+// standsIn reports whether no write it names on this book -- every write
+// row of a wanted batch, every named journal row -- was followed on what it
+// wrote (subject overlap) by ANOTHER write of either store stamped at or
+// after it. A tie counts against the named write. So does a later write of
+// this same run (a row whose Apply wrote one field twice is not claimed),
+// one an operation revert has since reverted, and one that put the named
+// value back: the rule asks only whether the named write is still the
+// newest, never whether a later one restored its value.
+//
+// The comparison is by timestamp across two stores, so it is only as good
+// as the clock. Both stamps are taken after their write committed (a
+// history row's ChangedAt in RecordDiff, a journal row's CreatedAt in
+// CreateOperationChange), which leaves a narrow window: a foreign write
+// that commits after the named one but stamps its row first reads as
+// older. The clock-free undo checks (batchesUndone) do not have this
+// window; this rule does.
+func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *bookNamed) bool {
+	// files: the book_file ids the marker's journal rows wrote on this book,
+	// so a foreign journal row named by the bare file id reads as a write
+	// to that whole file.
+	files := map[string]bool{}
+	for _, c := range n.changes {
+		if s := subjectOf(c.FieldName, nil); s.file != "" && s.file != everyFile && s.file != anything {
+			files[s.file] = true
+		}
+	}
+	var all, named []write
+	for i, r := range hist {
+		if !historyWrite(r) {
+			continue
+		}
+		wr := write{subj: subjectOf(r.Field, files), at: r.ChangedAt, self: fmt.Sprintf("h%d", i)}
+		all = append(all, wr)
+		if n.batches[r.BatchID] {
+			named = append(named, wr)
+		}
+	}
+	for _, r := range journal {
+		all = append(all, write{subj: subjectOf(r.field, files), at: r.at, self: "j" + r.op + "\x00" + r.id})
+	}
+	for _, c := range n.changes {
+		named = append(named, write{subj: subjectOf(c.FieldName, nil), at: c.CreatedAt,
+			self: "j" + c.OperationID + "\x00" + c.ID})
+	}
+	for _, nw := range named {
+		for _, r := range all {
+			if r.self != nw.self && overlap(nw.subj, r.subj) && !r.at.Before(nw.at) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// subject is what one recorded write wrote, as both stores name it.
+//
+//   - file "": the book field part (a Book JSON name, or "authors" for the
+//     credit list).
+//   - file <id>: book_file <id>; part is one of its fields (BookFile JSON
+//     name), or "" for the file row as a whole.
+//   - file everyFile: every book_file of the book.
+//   - file anything: a name this check does not know; it overlaps every
+//     write on the book, so an unknown name fails closed.
+type subject struct{ file, part string }
+
+const (
+	everyFile = "*"
+	anything  = "?"
+)
+
+// bookFieldAliases maps names other writers record for a book field onto
+// the name the Writer records (the Book JSON name), beyond
+// database.HistoryFieldToJSON (author_name, series, series_position). Kept
+// here, not in HistoryFieldToJSON: database.HistoryFieldName reverses that
+// map, and series_name is not the history name of series_id.
+var bookFieldAliases = map[string]string{
+	"author":        "author_id", // journal rows of author merges and purges
+	"series_name":   "series_id", // a manual edit's series override (its lock key)
+	"series_object": "series_id", // database.HistoryFieldSeriesObject
+	"book_authors":  "authors",   // credit-list rewrites (author merge, relink, series dedup)
+}
+
+// knownBookFields: every name subjectOf reads as a book field.
+var knownBookFields = func() map[string]bool {
+	m := map[string]bool{"authors": true}
+	for _, f := range database.TrackedBookFields() {
+		m[f] = true
+	}
+	return m
+}()
+
+// subjectOf reads a metadata history Field or an operation journal
+// FieldName as a subject. files, when set, are book_file ids a bare name
+// may stand for (a repoint or a deletion journaled with FieldName = the
+// file id).
+func subjectOf(name string, files map[string]bool) subject {
+	switch name {
+	case "file_path":
+		// The book's path: the organizer, the reconciler, fs-regroup and
+		// a book field write all move the book's files with it.
+		return subject{file: everyFile}
+	case "track_number", "disc_number":
+		// A manual track or disc edit recorded without its file id.
+		return subject{file: everyFile}
+	}
+	if rest, ok := strings.CutPrefix(name, "book_file:"); ok {
+		if id, part, ok := strings.Cut(rest, ":"); ok {
+			return subject{file: id, part: part} // book_file:<id>:<field>, a manual file edit
+		}
+		return subject{file: rest} // book_file:<id>, a repoint, move, reassign, track change
+	}
+	if rest, ok := strings.CutPrefix(name, "file."); ok {
+		if i := strings.LastIndexByte(rest, ':'); i > 0 {
+			return subject{file: rest[i+1:], part: rest[:i]} // Writer.ModifyBookFile
+		}
+	}
+	if files[name] {
+		return subject{file: name}
+	}
+	if j, ok := database.HistoryFieldToJSON[name]; ok {
+		name = j
+	}
+	if j, ok := bookFieldAliases[name]; ok {
+		name = j
+	}
+	if knownBookFields[name] {
+		return subject{part: name}
+	}
+	return subject{file: anything}
+}
+
+// overlap reports whether writes to a and b can write the same thing: an
+// unknown name and anything, the same book field, every file and any file,
+// a whole file and any field of it, or the same field of the same file.
+func overlap(a, b subject) bool {
+	switch {
+	case a.file == anything || b.file == anything:
+		return true
+	case a.file == "" || b.file == "":
+		return a.file == b.file && a.part == b.part
+	case a.file == everyFile || b.file == everyFile:
+		return true
+	default:
+		return a.file == b.file && (a.part == "" || b.part == "" || a.part == b.part)
+	}
 }

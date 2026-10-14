@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_writer_evidence_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3ebbf9a7-49e9-4226-b8b5-535c23956b47
 // last-edited: 2026-10-14
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
@@ -23,6 +24,7 @@ var (
 	_ opswriter.RowMarkStore      = (*database.PebbleStore)(nil)
 	_ opswriter.ChangeReader      = (*database.PebbleStore)(nil)
 	_ opswriter.BookHistoryReader = (*database.PebbleStore)(nil)
+	_ opswriter.ChangeScanner     = (*database.PebbleStore)(nil)
 )
 
 // noMarkerStore is a v3-capable store whose marker methods are shadowed by
@@ -38,8 +40,11 @@ type noMarkerStore struct {
 // op's marker, never another op's. A store without the marker methods
 // still gets a Live Writer (no error); no row is ever recognized, so a
 // resumed Fixer skips such a row as changed since plan instead of claiming
-// it.
+// it, and the Registry says so in one warning, however many Writers it
+// builds (round 3 N3). A store with every read says nothing.
 func TestV3WriterRowMarkers(t *testing.T) {
+	logs := logtest.Capture(t, slog.LevelWarn)
+	const warning = "lacks the Fixer resume evidence reads"
 	p := newPebbleV3(t)
 	ctx := context.Background()
 	for _, op := range []string{"op-a", "op-b"} {
@@ -77,13 +82,22 @@ func TestV3WriterRowMarkers(t *testing.T) {
 		}
 	}
 
+	if n := len(logs.Lines(warning)); n != 0 {
+		t.Fatalf("a store with every evidence read logged %d warnings", n)
+	}
 	bare := NewWithOptions(noMarkerStore{PebbleStore: p}, slog.Default(), 1,
 		Options{WatchdogInterval: time.Hour, SweepInterval: time.Hour})
+	if _, err := bare.newV3Writer(ctx, "op-b", "test.fixer", ops.Live); err != nil {
+		t.Fatal(err)
+	}
 	w2, err := bare.newV3Writer(ctx, "op-a", "test.fixer", ops.Live)
 	if err != nil {
 		t.Fatalf("a store without the marker methods must still back a Live Writer: %v", err)
 	}
 	if got, err := w2.RowApplied(ctx, "row-1"); err != nil || got {
 		t.Fatalf("RowApplied without the marker store = %v, %v; want false, nil", got, err)
+	}
+	if n := len(logs.Lines(warning)); n != 1 {
+		t.Fatalf("two Writers without the marker store logged %d warnings; want 1", n)
 	}
 }
