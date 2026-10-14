@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
-// last-edited: 2026-10-05
+// last-edited: 2026-10-13
 
 package aiscan
 
@@ -215,14 +215,14 @@ func TestSlowCollectionKeepsHeartbeat(t *testing.T) {
 func TestRecordFullScanResultsReplayOfSupersededScanIsDone(t *testing.T) {
 	store := newScanStore(t)
 	sugg := []ai.AuthorDiscoverySuggestion{{AuthorIDs: []int{1, 2}, Action: "merge", CanonicalName: "A", Confidence: "high"}}
-	first, err := RecordFullScanResults(store, "night-1", sugg)
+	first, err := RecordFullScanResults(store, "night-1", sugg, nil)
 	require.NoError(t, err)
-	_, err = RecordFullScanResults(store, "night-2", sugg)
+	_, err = RecordFullScanResults(store, "night-2", sugg, nil)
 	require.NoError(t, err)
 	before, err := store.GetScanResults(first)
 	require.NoError(t, err)
 
-	id, err := RecordFullScanResults(store, "night-1", sugg)
+	id, err := RecordFullScanResults(store, "night-1", sugg, nil)
 	require.NoError(t, err)
 	require.Equal(t, first, id)
 	got, err := store.GetScan(first)
