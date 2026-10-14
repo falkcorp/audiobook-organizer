@@ -1,5 +1,5 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-10-14
 
@@ -16,8 +16,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"strconv"
 	"strings"
@@ -65,19 +67,57 @@ func heapOverCeiling(liveMB uint64, ok bool, ceilingMB uint64) bool {
 }
 
 // warmerMemoryDeltaMB is how many MB of live heap above the baseline the
-// warmers are allowed to add before they back off. The baseline is the live
-// heap read right after the single GC taken once memdb is published, so the
-// delta is growth of retained memory, not transient garbage: a trickle query
-// allocates ~1.8GB of transient garbage that the runtime reclaims on its own
-// schedule and that the live-heap metric never counts. Default 4096 (4GB).
+// warmers are allowed to add before they back off. Default 4096 (4GB).
 // Tunable via config.AppConfig.ListWarmerHeapDeltaMB
 // (LIST_WARMER_HEAP_DELTA_MB env var, with LIST_WARMER_MAX_HEAP_MB accepted
 // as a legacy alias -- see viper.BindEnv in InitConfig).
+//
+// The baseline is the live heap (/gc/heap/live:bytes: bytes the last GC cycle
+// marked reachable) read right after memdb is published, so the delta measures
+// growth of RETAINED memory. Transient garbage never moves that metric: the
+// trickle's list queries allocate only a few MB each (measured 2026-10-14:
+// 0.77GB of allocation across ~180 queries, ~4MB apiece, and the runtime
+// reclaims it on its own schedule), so the 4GB default is headroom for other
+// work growing the retained heap -- chromem hydrate, dedup, embedding caches --
+// not an estimate of what the warmer itself allocates.
+//
+// The delta alone cannot be trusted as the ceiling. Production's settled
+// baseline is ~5.9GiB, so baseline+4096MB is ~10GiB, above its 9GiB GOMEMLIMIT:
+// the runtime would be thrashing GC against its own limit long before the guard
+// tripped, which made the guard inert. heapCeilingMB therefore clamps the
+// ceiling to warmerMemLimitCapPercent of the memory limit.
 func warmerMemoryDeltaMB() uint64 {
 	if n := config.AppConfig.ListWarmerHeapDeltaMB; n > 0 {
 		return uint64(n)
 	}
 	return 4096
+}
+
+// warmerMemLimitCapPercent is the share of the process memory limit
+// (GOMEMLIMIT / debug.SetMemoryLimit) the warmers' live-heap ceiling may reach.
+// Above it the collector is already working hard to stay under the limit, and a
+// warm-up query is not worth adding to that.
+const warmerMemLimitCapPercent = 80
+
+// currentMemoryLimitBytes reports the process memory limit. A negative argument
+// to debug.SetMemoryLimit reads the limit without changing it. With no limit
+// configured it returns math.MaxInt64.
+func currentMemoryLimitBytes() int64 {
+	return debug.SetMemoryLimit(-1)
+}
+
+// heapCeilingMB is the live-heap ceiling both warmer guards (eager and trickle)
+// enforce: min(baseline+delta, warmerMemLimitCapPercent of the memory limit).
+// The clamp is skipped when no limit is set (math.MaxInt64, or a non-positive
+// value the runtime never reports as a real limit), leaving baseline+delta.
+// memLimitBytes is a parameter so tests can script it.
+func heapCeilingMB(baselineMB, deltaMB uint64, memLimitBytes int64) uint64 {
+	ceiling := baselineMB + deltaMB
+	if memLimitBytes <= 0 || memLimitBytes == math.MaxInt64 {
+		return ceiling
+	}
+	limitCapMB := uint64(memLimitBytes) / (1024 * 1024) * warmerMemLimitCapPercent / 100
+	return min(ceiling, limitCapMB)
 }
 
 // warmerTrickleInterval is the gap between trickle ticks. Default 10s
@@ -213,11 +253,17 @@ var warmupWaitLog = logger.New("server.warmup-wait")
 // wait is bounded by memdbWarmupWaitBound; on the bound the caller warms anyway,
 // as it did before it waited at all.
 func (s *Server) waitForMemdbWarmup(warmer string) bool {
+	return s.waitForMemdbWarmupBounded(warmer, memdbWarmupWaitBound)
+}
+
+// waitForMemdbWarmupBounded is waitForMemdbWarmup with the bound as a
+// parameter, so a test can exercise the bound-hit branch in milliseconds.
+func (s *Server) waitForMemdbWarmupBounded(warmer string, bound time.Duration) bool {
 	waiter, ok := database.AsCapability[memdbWarmupWaiter](s.Ops())
 	if !ok {
 		return true
 	}
-	ctx, cancel := context.WithTimeout(s.bgCtx, memdbWarmupWaitBound)
+	ctx, cancel := context.WithTimeout(s.bgCtx, bound)
 	defer cancel()
 	err := waiter.WaitForWarmupCtx(ctx)
 	switch {
@@ -226,7 +272,7 @@ func (s *Server) waitForMemdbWarmup(warmer string) bool {
 	case s.bgCtx.Err() != nil:
 		return false // server shutting down
 	default:
-		warmupWaitLog.Warn("%s warm-up: memdb warmup not finished after %s; warming from the Pebble fallback anyway", warmer, memdbWarmupWaitBound)
+		warmupWaitLog.Warn("%s warm-up: memdb warmup not finished after %s; warming from the Pebble fallback anyway", warmer, bound)
 		return true
 	}
 }
@@ -591,80 +637,19 @@ func (s *Server) warmAudiobookListCache() {
 		}
 	}
 
-	// F1: heap-pressure guard for the eager phase. Sample the live-heap
-	// baseline ONCE, right after memdb publish, from the GC cycle the runtime
-	// last completed (no GC is forced for it: every forced cycle re-marks the
-	// whole ~6GiB memdb heap). If concurrent work (chromem hydrate, etc.) has
-	// already grown the retained heap above baseline+delta, skip the rest of
-	// eager rather than piling on. Uses the same warmerMemoryDeltaMB() ceiling
-	// concept as the trickle warmer. When no GC has completed yet there is no
-	// baseline and the guard does not apply.
-	eagerBaselineMB, eagerBaselineOK := readLiveHeapMB()
-	eagerDeltaMB := warmerMemoryDeltaMB()
-	eagerCeilingMB := eagerBaselineMB + eagerDeltaMB
-	slog.Info("library list warm-up eager starting",
+	slog.Info("library list warm-up backlog split",
 		"eager_queries", len(eagerQueries),
 		"trickle_queries", len(trickleQueries),
-		"eager_baseline_mb", eagerBaselineMB,
-		"eager_delta_mb", eagerDeltaMB,
-		"eager_ceiling_mb", eagerCeilingMB,
 	)
-	hits, misses, cached, eagerSkipped := 0, 0, 0, 0
-	// Pre-flight heap check BEFORE the first eager query, in case
-	// concurrent hydrate has already pushed us over the line.
-	if heap, ok := readLiveHeapMB(); eagerBaselineOK && heapOverCeiling(heap, ok, eagerCeilingMB) {
-		slog.Warn("library list warm-up eager: heap above ceiling before first query, skipping eager phase",
-			"heap_mb", heap, "ceiling_mb", eagerCeilingMB, "baseline_mb", eagerBaselineMB)
-		eagerSkipped = len(eagerQueries)
-		eagerQueries = nil
-	}
-	for i, q := range eagerQueries {
-		// Abort between queries once shutdown begins — the store is about
-		// to close and any further read panics "pebble: closed".
-		if ctx.Err() != nil {
-			slog.Info("library list warm-up eager: aborting, server shutting down",
-				"completed", i, "remaining", len(eagerQueries)-i)
-			return
-		}
-		// Heap-pressure guard BETWEEN eager queries (skip for i==0;
-		// already covered by the pre-flight check above).
-		if i > 0 {
-			if heap, ok := readLiveHeapMB(); eagerBaselineOK && heapOverCeiling(heap, ok, eagerCeilingMB) {
-				eagerSkipped = len(eagerQueries) - i
-				slog.Warn("library list warm-up eager: heap above ceiling, skipping remaining eager queries",
-					"heap_mb", heap, "ceiling_mb", eagerCeilingMB,
-					"baseline_mb", eagerBaselineMB, "skipped", eagerSkipped)
-				break
-			}
-		}
-		qStart := time.Now()
-		// Snapshot the key BEFORE the query, as the trickle phase does: a
-		// book write that lands mid-query bumps the generation, and a key
-		// taken afterwards would publish this already-stale response under
-		// the new generation as if it were fresh.
-		raw := buildListCacheRawQuery(q.limit, q.offset, q.filters)
-		cacheKey := s.libraryGeneration().Key("list:", raw)
-		resp, err := s.buildAudiobookListResponse(ctx, q.limit, q.offset, "", nil, nil, q.filters, false)
-		if err != nil {
-			misses++
-			slog.Warn("library list warm-up eager query failed",
-				"name", q.name, "offset", q.offset, "err", err)
-			continue
-		}
-		hits++
-		if len(q.filters.PerUserFilters) == 0 {
-			s.listCache.Set(cacheKey, resp)
-			cached++
-		}
-		slog.Debug("library list warm-up query ok",
-			"name", q.name, "offset", q.offset,
-			"duration_ms", time.Since(qStart).Milliseconds())
+	res, completed := s.runEager(ctx, eagerQueries, defaultHeapGuardEnv())
+	if !completed {
+		return
 	}
 	slog.Info("library list warm-up eager complete",
-		"queries_warmed", hits,
-		"cache_entries_populated", cached,
-		"failures", misses,
-		"skipped_pressure", eagerSkipped,
+		"queries_warmed", res.hits,
+		"cache_entries_populated", res.cached,
+		"failures", res.misses,
+		"skipped_pressure", res.skipped,
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
 
@@ -681,22 +666,119 @@ func (s *Server) warmAudiobookListCache() {
 	})
 }
 
-// trickleEnv is what the trickle loop takes from outside itself: its pacing,
-// the width of its live-heap ceiling, and where it reads the live heap from.
-// Production fills it from config and runtime/metrics (defaultTrickleEnv);
-// the tests fill it with a millisecond interval and a scripted heap so the
-// loop runs in milliseconds without touching the runtime's GC state.
+// eagerResult is what the eager phase did: queries that ran, failed, populated
+// a cache entry, and were skipped by the heap guard.
+type eagerResult struct {
+	hits, misses, cached, skipped int
+}
+
+// runEager runs the eager queries sequentially under the heap-pressure guard.
+// completed is false only when shutdown aborted it, in which case the caller
+// must not go on to the trickle phase.
+//
+// Guard: the live-heap baseline is sampled ONCE, here, from the GC cycle the
+// runtime last completed (no GC is forced for it: every forced cycle re-marks
+// the whole ~6GiB memdb heap). The ceiling is heapCeilingMB(baseline, delta,
+// limit), the same one the trickle uses. It is checked before EVERY query,
+// including the first. If concurrent work (chromem hydrate, etc.) has grown the
+// retained heap past the ceiling, the rest of the phase is skipped rather than
+// piled on.
+//
+// The check before the first query used to be a separate pre-flight comparing a
+// second read of the same GC cycle's value against baseline+delta, which cannot
+// trip, so it only looked like protection. It is meaningful now because the
+// ceiling is clamped to the memory-limit cap: when the settled heap already
+// sits above that cap (ceiling below baseline), the eager phase is skipped
+// before it allocates anything. When no GC has completed yet there is no
+// baseline and the guard does not apply.
+func (s *Server) runEager(ctx context.Context, eagerQueries []qry, env heapGuardEnv) (res eagerResult, completed bool) {
+	baselineMB, baselineOK := env.liveHeapMB()
+	ceilingMB := env.ceilingMB(baselineMB)
+	slog.Info("library list warm-up eager starting",
+		"eager_queries", len(eagerQueries),
+		"eager_baseline_mb", baselineMB,
+		"eager_baseline_known", baselineOK,
+		"eager_delta_mb", env.deltaMB,
+		"mem_limit_bytes", env.memLimitBytes(),
+		"eager_ceiling_mb", ceilingMB,
+	)
+	for i, q := range eagerQueries {
+		// Abort between queries once shutdown begins -- the store is about
+		// to close and any further read panics "pebble: closed".
+		if ctx.Err() != nil {
+			slog.Info("library list warm-up eager: aborting, server shutting down",
+				"completed", i, "remaining", len(eagerQueries)-i)
+			return res, false
+		}
+		if heap, ok := env.liveHeapMB(); baselineOK && heapOverCeiling(heap, ok, ceilingMB) {
+			res.skipped = len(eagerQueries) - i
+			slog.Warn("library list warm-up eager: heap above ceiling, skipping remaining eager queries",
+				"heap_mb", heap, "ceiling_mb", ceilingMB,
+				"baseline_mb", baselineMB, "completed", i, "skipped", res.skipped)
+			break
+		}
+		qStart := time.Now()
+		// Snapshot the key BEFORE the query, as the trickle phase does: a
+		// book write that lands mid-query bumps the generation, and a key
+		// taken afterwards would publish this already-stale response under
+		// the new generation as if it were fresh.
+		raw := buildListCacheRawQuery(q.limit, q.offset, q.filters)
+		cacheKey := s.libraryGeneration().Key("list:", raw)
+		resp, err := s.buildAudiobookListResponse(ctx, q.limit, q.offset, "", nil, nil, q.filters, false)
+		if err != nil {
+			res.misses++
+			slog.Warn("library list warm-up eager query failed",
+				"name", q.name, "offset", q.offset, "err", err)
+			continue
+		}
+		res.hits++
+		if len(q.filters.PerUserFilters) == 0 {
+			s.listCache.Set(cacheKey, resp)
+			res.cached++
+		}
+		slog.Debug("library list warm-up query ok",
+			"name", q.name, "offset", q.offset,
+			"duration_ms", time.Since(qStart).Milliseconds())
+	}
+	return res, true
+}
+
+// heapGuardEnv is what both warmer guards (eager and trickle) take from outside
+// themselves: the width of their live-heap ceiling, where they read the live
+// heap from, and where they read the process memory limit from. Production
+// fills it from config and the runtime (defaultHeapGuardEnv); the tests script
+// all three so the guards run without touching the runtime's GC state or
+// GOMEMLIMIT.
+type heapGuardEnv struct {
+	deltaMB       uint64
+	liveHeapMB    func() (mb uint64, ok bool)
+	memLimitBytes func() int64
+}
+
+func defaultHeapGuardEnv() heapGuardEnv {
+	return heapGuardEnv{
+		deltaMB:       warmerMemoryDeltaMB(),
+		liveHeapMB:    readLiveHeapMB,
+		memLimitBytes: currentMemoryLimitBytes,
+	}
+}
+
+// ceilingMB is heapCeilingMB for this env's delta and memory limit.
+func (e heapGuardEnv) ceilingMB(baselineMB uint64) uint64 {
+	return heapCeilingMB(baselineMB, e.deltaMB, e.memLimitBytes())
+}
+
+// trickleEnv is heapGuardEnv plus the trickle loop's pacing. The tests fill the
+// interval with a millisecond so the loop runs in milliseconds.
 type trickleEnv struct {
-	interval   time.Duration
-	deltaMB    uint64
-	liveHeapMB func() (mb uint64, ok bool)
+	heapGuardEnv
+	interval time.Duration
 }
 
 func defaultTrickleEnv() trickleEnv {
 	return trickleEnv{
-		interval:   warmerTrickleInterval(),
-		deltaMB:    warmerMemoryDeltaMB(),
-		liveHeapMB: readLiveHeapMB,
+		heapGuardEnv: defaultHeapGuardEnv(),
+		interval:     warmerTrickleInterval(),
 	}
 }
 
@@ -706,7 +788,8 @@ func defaultTrickleEnv() trickleEnv {
 // the whole memdb heap (~6GiB, ~60M objects), which kept the process at 3.5-4
 // cores for the ~30 minutes the trickle ran. Memory guard: if the live heap
 // (the last GC cycle's marked bytes) exceeds the baseline by more than
-// ListWarmerHeapDeltaMB at tick start, skip and back off. Already-cached
+// ListWarmerHeapDeltaMB, or exceeds warmerMemLimitCapPercent of the memory
+// limit (heapCeilingMB), at tick start, skip and back off. Already-cached
 // entries are skipped (the user may have beat us to it). Total time at default
 // 10s interval is ~30 min for ~180 queries.
 //
@@ -733,7 +816,7 @@ func (s *Server) runTrickle(backlog []qry, env trickleEnv) {
 	// have to guess at deploy time.
 	runtime.GC()
 	baselineMB, baselineOK := env.liveHeapMB()
-	ceilingMB := baselineMB + deltaMB
+	ceilingMB := env.ceilingMB(baselineMB)
 	// Trickle queries run under bgCtx so Stop()'s bgCancel aborts the
 	// warmer before the store closes. This loop runs ~30 min at the
 	// default 10s interval; with context.Background() it outlived test
@@ -759,6 +842,7 @@ func (s *Server) runTrickle(backlog []qry, env trickleEnv) {
 		"baseline_mb", baselineMB,
 		"baseline_known", baselineOK,
 		"delta_mb", deltaMB,
+		"mem_limit_bytes", env.memLimitBytes(),
 		"effective_ceiling_mb", ceilingMB,
 		"resample_interval_ms", resampleInterval.Milliseconds(),
 	)
@@ -804,7 +888,7 @@ func (s *Server) runTrickle(backlog []qry, env trickleEnv) {
 					baselineSamples = baselineSamples[len(baselineSamples)-3:]
 				}
 				newBaseline := medianUint64(baselineSamples)
-				newCeiling := newBaseline + deltaMB
+				newCeiling := env.ceilingMB(newBaseline)
 				oldCeiling := ceilingMB
 				oldBaseline := baselineMB
 				changeRatio := 0.0
@@ -839,7 +923,7 @@ func (s *Server) runTrickle(backlog []qry, env trickleEnv) {
 		}
 
 		// Memory-pressure guard: skip this tick if the live heap is above
-		// baseline+delta. Double the backoff (capped 60s); reset on
+		// min(baseline+delta, the memory-limit cap). Double the backoff (capped 60s); reset on
 		// successful tick. Live heap (what the last GC cycle marked), not RSS
 		// or the allocation counter -- we care about retained objects, not
 		// garbage awaiting collection or memory already returned to the OS.

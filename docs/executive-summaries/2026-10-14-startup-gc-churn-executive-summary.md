@@ -1,11 +1,12 @@
 <!-- file: docs/executive-summaries/2026-10-14-startup-gc-churn-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d2f4a91-3c68-4e05-b8a7-1f9e6c0d5b24 -->
 <!-- last-edited: 2026-10-14 -->
 
 # The server stops spending its first half hour cleaning up after itself
 
-Branch `task/06-p13` (06-P13).
+**Pull request:** [#4020](https://github.com/falkcorp/audiobook-organizer/pull/4020)
+(branch `task/06-p13`, task 06-P13; merge commit to be added when it merges).
 
 ## Executive Summary
 
@@ -41,10 +42,12 @@ restart, the job ran a full memory clean-up and handed freed memory back to
 the operating system after each query. The server holds a very large number
 of small objects in memory, so each clean-up had to walk all of them.
 
-**Why it mattered.** A profile taken after a restart showed the memory
-manager using most of four processor cores for roughly 30 minutes. That
-slowed every other startup task, kept the interface sluggish, and pushed the
-memory ceiling closer than it needed to be.
+**Why it mattered.** The forced clean-ups did what they were meant to do:
+they kept memory use lower. The price was processor time. A profile taken
+after a restart showed the memory manager using most of four processor cores
+for roughly 30 minutes, which slowed every other startup task and kept the
+interface sluggish. Memory was never the cost; the program's own memory
+limit already makes the manager clean up when it gets close.
 
 **The fix.** The per-query and eager clean-ups, and the hand-back of memory,
 were removed. One clean-up remains, taken once to record a baseline just
@@ -65,9 +68,14 @@ removing the clean-ups would have made the check trip falsely or never trip.
 after the last natural clean-up. If that figure is not available yet, the
 check stays off rather than guessing. The setting that controls the allowed
 growth keeps its name and default; its description now says what it measures.
-One thing to know: with the current memory limit on the live server, the
-default allowed growth is larger than the headroom, so this check is unlikely
-to trigger in practice. Lowering the setting is the owner's decision.
+Review found that with the live server's numbers the check still could not
+fire: the settled memory in use is about 5.9 GiB, the default allowed growth
+is 4 GiB, and the memory limit is 9 GiB, so the line sat above the limit. The
+line is now the lower of "baseline plus allowed growth" and 80% of the
+memory limit (about 7.2 GiB on the live server), for both the first quick
+pass and the slow background pass. The first pass now checks before every
+query, including the first, which it previously could not do usefully. Where
+no memory limit is set, only the allowed growth applies.
 
 ## The primary-book count, the author and series lists, and file records
 

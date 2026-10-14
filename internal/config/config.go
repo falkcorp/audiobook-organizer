@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.157.1
+// version: 1.157.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-14
 
@@ -1306,7 +1306,8 @@ type Config struct {
 	// ListWarmerHeapDeltaMB caps how many MB of live heap (the bytes the last
 	// GC cycle kept, runtime/metrics /gc/heap/live:bytes) above the baseline
 	// taken once memdb is published the library-list cache warmer's trickle
-	// phase may add before backing off. Also read from the legacy
+	// phase may add before backing off. The ceiling is clamped to 80% of the
+	// process memory limit (GOMEMLIMIT) when one is set. Also read from the legacy
 	// LIST_WARMER_MAX_HEAP_MB env var name for back-compat (same setting,
 	// old name — see internal/server/library_list_warmer.go).
 	ListWarmerHeapDeltaMB int `json:"list_warmer_heap_delta_mb" mapstructure:"list_warmer_heap_delta_mb"`

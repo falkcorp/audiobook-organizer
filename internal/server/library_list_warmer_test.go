@@ -1,5 +1,5 @@
 // file: internal/server/library_list_warmer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0c8f4e-2d7a-4c1e-9a63-7e1f0b3d8a52
 // last-edited: 2026-10-14
 
@@ -7,8 +7,11 @@ package server
 
 import (
 	"context"
+	"log/slog"
+	"math"
 	"runtime"
 	"runtime/metrics"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +22,7 @@ import (
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // trickleTestBacklog returns n distinct list queries, each its own cache entry.
@@ -59,11 +63,18 @@ func forcedGCCycles(t *testing.T) uint64 {
 	return sample[0].Value.Uint64()
 }
 
+// noMemoryLimit is what debug.SetMemoryLimit(-1) reports when GOMEMLIMIT is
+// unset.
+const noMemoryLimit = int64(math.MaxInt64)
+
 // fastTrickleEnv is the production env with the pacing collapsed to a
-// millisecond and the live-heap read left real.
+// millisecond and the live-heap read left real. The memory limit is scripted to
+// "none" so the result does not depend on the GOMEMLIMIT of whoever runs the
+// tests.
 func fastTrickleEnv() trickleEnv {
 	env := defaultTrickleEnv()
 	env.interval = time.Millisecond
+	env.memLimitBytes = func() int64 { return noMemoryLimit }
 	return env
 }
 
@@ -83,7 +94,9 @@ func TestTrickleWarmerForcesAtMostOneGC(t *testing.T) {
 	server.runTrickle(backlog, fastTrickleEnv())
 	forced := forcedGCCycles(t) - before
 
-	assert.LessOrEqual(t, forced, uint64(1),
+	// Exactly one: the baseline. Equal rather than LessOrEqual so that dropping
+	// the baseline collection (and with it the settled-heap reading) fails too.
+	assert.Equal(t, uint64(1), forced,
 		"%d queries must not force a collection each; only the baseline may", len(backlog))
 
 	// Anti-over-suppression: removing the forced collections must not have
@@ -103,10 +116,15 @@ func TestTrickleHeapGuardUsesLiveHeapMetric(t *testing.T) {
 		deltaMB    = uint64(100)
 		queries    = 5
 	)
+	// limit is the scripted process memory limit in bytes; zero means none set.
+	// The warmers clamp their ceiling to 80% of it, so 1000MiB gives an 800MB cap.
+	const limit1000MiB = int64(1000) << 20
 	tests := []struct {
 		name         string
 		baseline     func() (uint64, bool)
 		tick         func() (uint64, bool)
+		deltaMB      uint64 // zero: the table default
+		limitBytes   int64  // zero: no memory limit
 		wantAllRun   bool
 		wantNoneRuns bool
 	}{
@@ -148,6 +166,53 @@ func TestTrickleHeapGuardUsesLiveHeapMetric(t *testing.T) {
 			tick:       func() (uint64, bool) { return 0, false },
 			wantAllRun: true,
 		},
+		{
+			// Production's shape: baseline + a 4GB delta lands far above the
+			// memory limit, so without the clamp this would run.
+			name:         "clamp active: live heap above the memory-limit cap stops the trickle though under baseline+delta",
+			baseline:     func() (uint64, bool) { return 700, true },
+			tick:         func() (uint64, bool) { return 801, true },
+			deltaMB:      4096,
+			limitBytes:   limit1000MiB,
+			wantNoneRuns: true,
+		},
+		{
+			name:       "clamp active: live heap exactly at the memory-limit cap continues",
+			baseline:   func() (uint64, bool) { return 700, true },
+			tick:       func() (uint64, bool) { return 800, true },
+			deltaMB:    4096,
+			limitBytes: limit1000MiB,
+			wantAllRun: true,
+		},
+		{
+			name:         "clamp active: a baseline already above the cap holds every query back",
+			baseline:     func() (uint64, bool) { return 900, true },
+			tick:         func() (uint64, bool) { return 900, true },
+			deltaMB:      4096,
+			limitBytes:   limit1000MiB,
+			wantNoneRuns: true,
+		},
+		{
+			name:         "limit looser than the delta: the delta is the binding ceiling",
+			baseline:     func() (uint64, bool) { return baselineMB, true },
+			tick:         func() (uint64, bool) { return baselineMB + deltaMB + 1, true },
+			limitBytes:   int64(100_000) << 20,
+			wantNoneRuns: true,
+		},
+		{
+			// No GOMEMLIMIT: nothing to clamp to. A huge settled heap must not
+			// be mistaken for a tripped cap.
+			name:       "no limit set: a huge baseline is not clamped",
+			baseline:   func() (uint64, bool) { return 100_000, true },
+			tick:       func() (uint64, bool) { return 100_000 + deltaMB, true },
+			wantAllRun: true,
+		},
+		{
+			name:         "no limit set: the delta still applies",
+			baseline:     func() (uint64, bool) { return 100_000, true },
+			tick:         func() (uint64, bool) { return 100_000 + deltaMB + 1, true },
+			wantNoneRuns: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,6 +227,12 @@ func TestTrickleHeapGuardUsesLiveHeapMetric(t *testing.T) {
 			var calls atomic.Int64
 			env := fastTrickleEnv()
 			env.deltaMB = deltaMB
+			if tc.deltaMB != 0 {
+				env.deltaMB = tc.deltaMB
+			}
+			if tc.limitBytes != 0 {
+				env.memLimitBytes = func() int64 { return tc.limitBytes }
+			}
 			env.liveHeapMB = func() (uint64, bool) {
 				n := calls.Add(1)
 				if n == 1 {
@@ -211,6 +282,153 @@ func TestReadLiveHeapMBReportsAfterGC(t *testing.T) {
 	assert.True(t, heapOverCeiling(mb+2, ok, mb+1))
 	assert.False(t, heapOverCeiling(mb+2, false, mb+1), "an unusable reading never trips the ceiling")
 	_ = ballast[0]
+}
+
+// TestHeapCeilingMB pins the ceiling both guards share: min(baseline+delta,
+// 80% of the memory limit), with no clamp when no limit is set.
+func TestHeapCeilingMB(t *testing.T) {
+	tests := []struct {
+		name       string
+		baseline   uint64
+		delta      uint64
+		limitBytes int64
+		want       uint64
+	}{
+		{"no limit: baseline+delta", 5900, 4096, math.MaxInt64, 9996},
+		{"production shape: clamped to 80% of 9GiB", 5900, 4096, 9 << 30, 7372},
+		{"delta binds when the cap is looser", 1000, 100, 9 << 30, 1100},
+		{"baseline above the cap yields a ceiling below the baseline", 8000, 4096, 9 << 30, 7372},
+		{"a non-positive limit is not a limit", 1000, 100, 0, 1100},
+		{"cap rounds down to a whole MB", 0, 4096, 10<<20 + 1, 8},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, heapCeilingMB(tc.baseline, tc.delta, tc.limitBytes))
+		})
+	}
+}
+
+// TestCurrentMemoryLimitBytesIsReadOnly: the production limit reader must not
+// change the limit it reads.
+func TestCurrentMemoryLimitBytesIsReadOnly(t *testing.T) {
+	first := currentMemoryLimitBytes()
+	second := currentMemoryLimitBytes()
+	assert.Equal(t, first, second)
+	assert.Positive(t, first)
+}
+
+// TestEagerHeapGuard drives the eager phase with a scripted live heap. The
+// first reading is the baseline; the n-th later reading is the guard check
+// before the (n-1)-th query (0-based), including the first.
+func TestEagerHeapGuard(t *testing.T) {
+	const (
+		queries      = 3
+		limit1000MiB = int64(1000) << 20 // 800MB cap
+	)
+	steady := func(mb uint64) func(n int64) (uint64, bool) {
+		return func(int64) (uint64, bool) { return mb, true }
+	}
+	// from returns the reading after the baseline: low for the checks before
+	// the first query, high from the check before the second one on.
+	from := func(low, high uint64) func(n int64) (uint64, bool) {
+		return func(n int64) (uint64, bool) {
+			if n >= 3 {
+				return high, true
+			}
+			return low, true
+		}
+	}
+	tests := []struct {
+		name        string
+		reading     func(n int64) (uint64, bool) // n is 1-based; 1 is the baseline
+		deltaMB     uint64
+		limitBytes  int64 // zero: no limit
+		wantRan     int
+		wantSkipped int
+	}{
+		{
+			name:    "steady heap: every query runs",
+			reading: steady(1000), deltaMB: 100, wantRan: queries,
+		},
+		{
+			name: "no baseline: the guard stays off whatever later readings say",
+			reading: func(n int64) (uint64, bool) {
+				if n == 1 {
+					return 0, false
+				}
+				return 1 << 30, true
+			},
+			deltaMB: 100, wantRan: queries,
+		},
+		{
+			// The pre-flight the old code had compared a second read of the same
+			// GC cycle against baseline+delta and could never trip. With the
+			// clamp, a settled heap already above the cap skips the phase before
+			// it allocates anything.
+			name:    "clamp active: a baseline already above the cap skips every query",
+			reading: steady(900), deltaMB: 4096, limitBytes: limit1000MiB,
+			wantRan: 0, wantSkipped: queries,
+		},
+		{
+			name:    "clamp active: baseline under the cap runs",
+			reading: steady(700), deltaMB: 4096, limitBytes: limit1000MiB, wantRan: queries,
+		},
+		{
+			name:    "clamp active: growth past the cap mid-run skips the rest",
+			reading: from(700, 801), deltaMB: 4096, limitBytes: limit1000MiB,
+			wantRan: 1, wantSkipped: queries - 1,
+		},
+		{
+			name:    "no limit: growth past baseline+delta mid-run skips the rest",
+			reading: from(1000, 1101), deltaMB: 100, wantRan: 1, wantSkipped: queries - 1,
+		},
+		{
+			name:    "no limit: growth exactly to the ceiling continues",
+			reading: from(1000, 1100), deltaMB: 100, wantRan: queries,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			var calls atomic.Int64
+			env := heapGuardEnv{
+				deltaMB:       tc.deltaMB,
+				liveHeapMB:    func() (uint64, bool) { return tc.reading(calls.Add(1)) },
+				memLimitBytes: func() int64 { return noMemoryLimit },
+			}
+			if tc.limitBytes != 0 {
+				env.memLimitBytes = func() int64 { return tc.limitBytes }
+			}
+
+			backlog := trickleTestBacklog(queries)
+			res, completed := server.runEager(server.bgCtx, backlog, env)
+			require.True(t, completed)
+
+			assert.Equal(t, tc.wantRan, res.hits)
+			assert.Equal(t, tc.wantSkipped, res.skipped)
+			ran := 0
+			for _, q := range backlog {
+				if trickleQueryCached(server, q) {
+					ran++
+				}
+			}
+			assert.Equal(t, tc.wantRan, ran, "cache entries published must match the queries that ran")
+		})
+	}
+}
+
+// TestEagerStopsOnShutdown: a canceled server aborts the eager phase and
+// reports it, so the caller does not start the trickle against a closing store.
+func TestEagerStopsOnShutdown(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.bgCancel()
+
+	res, completed := server.runEager(server.bgCtx, trickleTestBacklog(2), fastTrickleEnv().heapGuardEnv)
+	assert.False(t, completed)
+	assert.Zero(t, res.hits)
 }
 
 // memdbProbeStore wraps a store and reports a scripted memdb warmup, counting
@@ -334,4 +552,36 @@ func TestEntityWarmersSkipWhenShutdownDuringWait(t *testing.T) {
 	authors, series := probe.reads()
 	assert.Zero(t, authors)
 	assert.Zero(t, series)
+}
+
+// TestWaitForMemdbWarmupBoundHit covers the bound-hit branch: a warmup that
+// never finishes must not hold the warmer forever. After the bound it logs a
+// warning and reports true, so the caller warms from the Pebble fallback as it
+// did before it waited at all. (Shutdown is the separate case above.)
+func TestWaitForMemdbWarmupBoundHit(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := logtest.CaptureRecords(t) // not parallel: swaps slog.Default
+
+	probe := &memdbProbeStore{Store: server.store, release: make(chan struct{})} // never released
+	server.store = probe
+
+	const bound = 10 * time.Millisecond
+	start := time.Now()
+	proceed := server.waitForMemdbWarmupBounded("bound-test", bound)
+	elapsed := time.Since(start)
+
+	assert.True(t, proceed, "on the bound the caller warms anyway")
+	assert.GreaterOrEqual(t, elapsed, bound, "it must actually have waited for the bound")
+	assert.Less(t, elapsed, 5*time.Second, "and not for much longer than it")
+	assert.Equal(t, int64(1), probe.waits.Load())
+	assert.NoError(t, server.bgCtx.Err(), "the bound is not a shutdown")
+
+	var warned bool
+	for _, r := range rec.Records() {
+		if r.Level == slog.LevelWarn && strings.Contains(r.Message, "bound-test warm-up: memdb warmup not finished after 10ms") {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "the bound-hit must be logged at Warn")
 }

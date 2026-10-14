@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.45.0
+// version: 1.45.1
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-14
 
@@ -979,9 +979,11 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 }
 
 // decodeBookFileCore decodes one stored book_file row into its BookFileCore
-// projection without ever decoding the fields Core omits. BookFileCore carries
-// BookFile's json tags verbatim (see its doc comment), so the result equals
-// BookFile.Core() of the same row; TestDecodeBookFileCoreMatchesCore pins that.
+// projection without ever decoding the fields Core omits. The result equals
+// BookFile.Core() of the same row only because every BookFileCore field has
+// BookFile's json tag and Go type: TestBookFileCoreIsBookFileMinusHeavyFields
+// pins that for every field. TestDecodeBookFileCoreMatchesCore is a spot check
+// on one populated fixture, not proof of equivalence for a field it leaves unset.
 func decodeBookFileCore(value []byte) (BookFileCore, error) {
 	var c BookFileCore
 	if err := json.Unmarshal(value, &c); err != nil {

@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
 // last-edited: 2026-10-14
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -21,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // seed inserts the given objects into the appropriate memdb tables.
@@ -752,4 +755,62 @@ func TestCountPrimaryBooksFallsBackWhenMemdbShort(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, got, "a short memdb must be answered by the Pebble scan")
 	require.True(t, strings.HasSuffix(scrape(), " 1"), "the short-memdb fall-through must be recorded, got %q", scrape())
+}
+
+// shortMemdbLogRecords returns the "memdb is missing rows" records, by level.
+func shortMemdbLogRecords(rec *logtest.Recorder) (errors, debugs int) {
+	for _, r := range rec.Records() {
+		if !strings.Contains(r.Message, "memdb is missing rows") {
+			continue
+		}
+		switch r.Level {
+		case slog.LevelError:
+			errors++
+		case slog.LevelDebug:
+			debugs++
+		}
+	}
+	return errors, debugs
+}
+
+// The short-memdb condition lasts until restart and CountPrimaryBooks recomputes
+// every TTL window (the 5s metrics tick), so only the first occurrence may be
+// an ERROR. When memdb answers again the next episode must log at ERROR once
+// more, not stay muted forever.
+func TestCountPrimaryBooksShortMemdbLogsErrorOnce(t *testing.T) {
+	p := openWarmedCountStore(t)
+	rec := logtest.CaptureRecords(t) // not parallel: swaps slog.Default
+
+	recompute := func() {
+		t.Helper()
+		invalidatePrimaryCount(p)
+		_, err := p.CountPrimaryBooks()
+		require.NoError(t, err)
+	}
+	clearLostRows := func() {
+		p.mem().lostMu.Lock()
+		p.mem().lostRows = nil
+		p.mem().lostMu.Unlock()
+	}
+
+	p.mem().recordLostRows(memTableBooks, 1)
+	for range 3 {
+		recompute()
+	}
+	errs, debugs := shortMemdbLogRecords(rec)
+	require.Equal(t, 1, errs, "three recomputes against a short memdb must log ERROR once")
+	require.Equal(t, 2, debugs, "the repeats must still be recorded, at Debug")
+
+	// memdb complete again: no short log, and the flag resets.
+	clearLostRows()
+	recompute()
+	errs, debugs = shortMemdbLogRecords(rec)
+	require.Equal(t, 1, errs)
+	require.Equal(t, 2, debugs)
+
+	// A second episode is a new ERROR.
+	p.mem().recordLostRows(memTableBooks, 1)
+	recompute()
+	errs, _ = shortMemdbLogRecords(rec)
+	require.Equal(t, 2, errs, "a new short episode after memdb recovered must log ERROR again")
 }

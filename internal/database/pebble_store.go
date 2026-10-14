@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.219.0
+// version: 1.219.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-14
 
@@ -261,6 +261,11 @@ type PebbleStore struct {
 	primaryCount            int
 	primaryCountComputedAt  time.Time
 	primaryCountValid       bool
+	// primaryCountShortLogged is set once countPrimaryBooksUncached has logged
+	// that memdb is short of rows, so the 5s metrics tick does not repeat the
+	// same ERROR every recompute for as long as the condition lasts. Cleared
+	// when memdb answers again, so a later episode logs at ERROR once more.
+	primaryCountShortLogged atomic.Bool
 
 	// warmupCancel cancels the async memdb warmup goroutine; warmupDone is
 	// closed when that goroutine exits. Close() cancels and waits on these
@@ -4603,13 +4608,22 @@ func (p *PebbleStore) countPrimaryBooksUncached() (count, numberLeading int, err
 	if m := p.memOrFallback("CountPrimaryBooks"); m != nil {
 		count, numberLeading, err = m.CountPrimaryBooks()
 		if err == nil {
+			p.primaryCountShortLogged.Store(false)
 			return count, numberLeading, nil
 		}
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return 0, 0, err
 		}
 		p.recordMemdbFallback("CountPrimaryBooks", memdbOutcomeFallback)
-		primaryCountLog.Error("primary book count: memdb is missing rows and will stay short until restart; scanning Pebble instead: err=%v lost_rows=%v", err, m.LostRows())
+		// The condition lasts until restart and this runs on every cache
+		// recompute (the 5s metrics tick), so only the first occurrence is an
+		// ERROR; the fallback counter above carries the per-call rate.
+		const shortMsg = "primary book count: memdb is missing rows and will stay short until restart; scanning Pebble instead: err=%v lost_rows=%v"
+		if p.primaryCountShortLogged.CompareAndSwap(false, true) {
+			primaryCountLog.Error(shortMsg, err, m.LostRows())
+		} else {
+			primaryCountLog.Debug(shortMsg, err, m.LostRows())
+		}
 	}
 	return p.countPrimaryBooksScan()
 }
