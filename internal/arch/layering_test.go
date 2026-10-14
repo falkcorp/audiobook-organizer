@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.1.9
+// version: 1.1.10
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-14
 
@@ -206,7 +206,6 @@ var layerOf = map[string]int{
 	"internal/maintenance/jobs":         4, // family: jobs
 	"internal/metabatch":                4, // computed: max of imports=4, floored at 3
 	"internal/operations/registry":      4, // table: jobs
-	"pkg/ops/opstest":                   4, // computed: max of imports=4 (registry); a test harness, imported by tests only
 	"internal/plugins":                  4, // family: internal/plugins/* is jobs
 	"internal/plugins/acoustid":         4, // family: internal/plugins/* is jobs
 	"internal/plugins/dedup":            4, // family: internal/plugins/* is jobs
@@ -216,6 +215,7 @@ var layerOf = map[string]int{
 	"internal/plugins/metafetch":        4, // family: internal/plugins/* is jobs
 	"internal/plugins/webhook":          4, // family: internal/plugins/* is jobs
 	"internal/scheduler":                4, // table: jobs
+	"pkg/ops/opstest":                   4, // computed: max of imports=4 (registry); a test harness, imported by tests only
 	"pkg/plugin/sdk":                    4, // computed: max of imports=4, floored at 3
 
 	// Layer 5: transport

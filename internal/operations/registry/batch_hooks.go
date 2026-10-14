@@ -1,29 +1,49 @@
 // file: internal/operations/registry/batch_hooks.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0f3c52-8e47-4d1a-9f2b-3c7a5e91d846
 // last-edited: 2026-10-14
 
 package registry
 
 import (
-	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
-// RunnerHooks are the batch runner's injection points for the operations
-// test harness (pkg/ops/opstest, 05-PR6). Production never sets them: runV3
-// leaves batchConfig.hooks nil, so every hook point below costs one nil
-// check. A hook runs on the runner goroutine that reaches its point and may
-// block it; the harness's seeded scheduler and its CrashMidChunk fault both
-// do.
+// RunnerHooks are the executor's and the batch runner's injection points for
+// the operations test harness (pkg/ops/opstest, 05-PR6). Production never
+// sets them: a registry built without Options.RunnerHooksForTest gives every
+// run nil hooks, so each hook point below costs one nil check. A hook runs on
+// the goroutine that reaches its point and may block it; the harness's
+// seeded scheduler and its fault injectors do.
 //
-// It is a struct of optional funcs rather than an interface so a harness sets
-// only the points it needs and production pays for nothing it does not use.
+// They are per run: Options.RunnerHooksForTest is asked for each op id, so
+// two runs live in one registry (a stopped run and the run queued behind its
+// key) are told apart. It is a struct of optional funcs rather than an
+// interface so a harness sets only the points it needs.
 type RunnerHooks struct {
+	// Job runs once per attempt, after the def's OpenBatch built the job and
+	// before the runner reads it: the harness reads the job's facts and may
+	// override its Workers and ChunkSize.
+	Job func(job *ops.BatchJob)
+	// WrapWriter wraps the run's Writer (the one newV3Writer built) before
+	// the run context is made, so every write an item makes goes through
+	// the wrapper and then the production Writer.
+	WrapWriter func(w ops.Writer) ops.Writer
+	// Now is the runner's clock (batchConfig.now); nil is time.Now. The
+	// ledger's commit throttle reads it, so a harness that advances it
+	// decides when a folded completion is committed.
+	Now func() time.Time
+	// Summary receives the Summary the runner handed Finish (on a crash, the
+	// one it had folded when the world stopped).
+	Summary func(s ops.Summary)
+	// Abandoned runs once, on the executor's goroutine, when the run's
+	// goroutine outlived the abandon grace and the run became a zombie: its
+	// worker slot is released and its key is still held.
+	Abandoned func()
 	// WorkerReady runs each time worker w is about to take its next chunk.
 	WorkerReady func(w int)
 	// WorkerExit runs once when worker w returns.
@@ -61,6 +81,51 @@ type RunnerHooks struct {
 	LeasePolicy func(done func(chunk int) bool, chunk int) int
 }
 
+// runnerHooksFor is the hooks of run opID: nil in production.
+func (r *Registry) runnerHooksFor(opID string) *RunnerHooks {
+	if r.runnerHooksForTest == nil {
+		return nil
+	}
+	return r.runnerHooksForTest(opID)
+}
+
+// jobForTest hands an opened job to the Job hook. Nil-safe.
+func (h *RunnerHooks) jobForTest(job *ops.BatchJob) {
+	if h != nil && h.Job != nil {
+		h.Job(job)
+	}
+}
+
+// writerForTest is the run's Writer as items see it: w, or the WrapWriter of it.
+func (h *RunnerHooks) writerForTest(w *opswriter.Writer) ops.Writer {
+	if h != nil && h.WrapWriter != nil {
+		return h.WrapWriter(w)
+	}
+	return w
+}
+
+// clockForTest is the runner clock the hooks set, or nil (time.Now).
+func (h *RunnerHooks) clockForTest() func() time.Time {
+	if h == nil {
+		return nil
+	}
+	return h.Now
+}
+
+// summaryForTest hands the run's Summary to the Summary hook. Nil-safe.
+func (h *RunnerHooks) summaryForTest(s ops.Summary) {
+	if h != nil && h.Summary != nil {
+		h.Summary(s)
+	}
+}
+
+// abandonedForTest tells the Abandoned hook its run became a zombie. Nil-safe.
+func (h *RunnerHooks) abandonedForTest() {
+	if h != nil && h.Abandoned != nil {
+		h.Abandoned()
+	}
+}
+
 // ItemInfo names one item for the hooks.
 type ItemInfo struct {
 	Worker    int    // the worker running it
@@ -74,32 +139,4 @@ type ItemInfo struct {
 // called when a hook is set.
 func hookItemForTest(w int, ch *leasedChunk, j int) ItemInfo {
 	return ItemInfo{Worker: w, Chunk: ch.idx, Index: j, Key: ch.keys[j], Partition: ch.set.Partition(ch.items[j])}
-}
-
-// BatchRunForTest is one attempt of a batch job as pkg/ops/opstest drives
-// it: the production runner (runBatch) with the persistence, clock and hooks
-// the harness injects. Never used by the executor.
-type BatchRunForTest struct {
-	OpID string
-	Job  *ops.BatchJob
-	// RC is the run context; its Context carries the run's refusal latch
-	// (ops.NewRC installs one).
-	RC *ops.RC
-	// Store persists the snapshot, the ledger and the marks. nil runs with
-	// no persistence (and so no resume).
-	Store database.OpsV3ChunkStore
-	// Now is the runner's clock; nil is time.Now.
-	Now   func() time.Time
-	Hooks *RunnerHooks
-}
-
-// RunBatchForTest runs one attempt of c.Job and returns the Summary its
-// Finish saw, the Finish result and the run error. ctx is the run context:
-// it carries the run's fence (opswriter.WithFence) as executeRun's does. The
-// ledger commits after every chunk completion instead of throttling, so a
-// stop-the-world hook sees each completion on the store at once. A hook that
-// stopped the world makes it return errWorldStopped.
-func RunBatchForTest(ctx context.Context, c BatchRunForTest) (ops.Summary, json.RawMessage, error) {
-	return runBatch(ctx, batchConfig{opID: c.OpID, job: c.Job, rc: c.RC, store: c.Store, now: c.Now,
-		commitEvery: -1, hooks: c.Hooks})
 }

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -253,13 +253,14 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 	if rec, err := r.getRunV3(opID); err == nil && rec != nil {
 		env.Resumed = rec.Attempt > 1
 	}
+	hooks := r.runnerHooksFor(opID) // nil in production
 	var w *opswriter.Writer
 	if !c.Common.Effects.IsReadOnly() {
 		var err error
 		if w, err = r.newV3Writer(ctx, opID, c.ID, mode); err != nil {
 			return err
 		}
-		env.Writer = w
+		env.Writer = hooks.writerForTest(w)
 	}
 	host := &v3Host{r: r, ctx: ctx, opID: opID, defID: c.ID, rep: rep, params: params, writer: w}
 	defer host.releaseHolds()
@@ -275,11 +276,15 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 		if err != nil {
 			return err
 		}
+		hooks.jobForTest(job)
 		bs, _ := database.AsCapability[batchStore](r.store)
 		ds, _ := database.AsCapability[dirtySetStore](r.store)
-		_, result, err = runBatch(ctx, batchConfig{opID: opID, job: job, rc: rc, store: bs, dirty: ds, rep: rep,
+		var sum ops.Summary
+		sum, result, err = runBatch(ctx, batchConfig{opID: opID, job: job, rc: rc, store: bs, dirty: ds, rep: rep,
 			log: env.Log, stuckAfter: effectiveProgressTimeout(od),
-			resumes: func() bool { return r.stopResumes(ctx, opID, od.ResumePolicy) }})
+			resumes: func() bool { return r.stopResumes(ctx, opID, od.ResumePolicy) },
+			now:     hooks.clockForTest(), hooks: hooks})
+		hooks.summaryForTest(sum)
 	case c.RunTask != nil:
 		result, err = c.RunTask(rc, params)
 	default:

@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/conformance.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d8e4b17-5f3a-4c69-a1b8-6e9d2c7f4a35
 // last-edited: 2026-10-14
 
@@ -63,13 +63,19 @@ func BelowCursor(item any) ConformanceOpt { return func(c *confCfg) { c.below = 
 // assertions for free, one subtest each, for ChunkSize 1, 3 and the def's
 // default, with Workers = max(4, GOMAXPROCS):
 //
-//   - preview_writes_nothing: a Preview run commits no write and no history row;
-//   - history_follows_write: every history row follows a write of its book;
-//   - no_write_after_fence: no write commits after the fence is revoked
-//     (CancelAt, AbandonAt, LoseLeaseAt); a canceled run's Finish sees
-//     Canceled and the ledger's folded counts; an abandoned run keeps its key;
-//   - crash_resume_at_least_once: CrashAt at 3 positions, then Resume: every
-//     item ran at least once, no chunk the ledger recorded ran again;
+//   - preview_writes_nothing: a Preview run commits no write and no history
+//     row, and deletes no DirtySet entry;
+//   - history_follows_write: every history row follows a write of its book,
+//     made inside the same Writer call when the row was made inside one;
+//   - no_write_after_fence: no write or history row commits after the fence
+//     is revoked (CancelAt, AbandonAt, LoseLeaseAt), and none outside every
+//     attempt (a goroutine left writing after its run ended, reported at the
+//     World's next Reset); a canceled run's Finish sees Canceled and the
+//     ledger's folded counts; an abandoned run keeps its key;
+//   - crash_resume_at_least_once: CrashAt at 3 positions and ShutdownAt (a
+//     graceful stop for resume) in the middle, then Resume: every item
+//     completed with its completion committed, no chunk the ledger recorded
+//     ran again, and the resumed Finish counts every item once;
 //   - crash_mid_chunk_no_completed_chunk_twice: CrashMidChunk in the first, a
 //     middle and the last chunk: the resume re-runs that chunk from its first
 //     item and nothing the ledger recorded;
@@ -78,10 +84,11 @@ func BelowCursor(item any) ConformanceOpt { return func(c *confCfg) { c.below = 
 //   - append_only_claim (AppendOnly only): InsertBelowCursor fails the claim
 //     when the item is never processed;
 //   - progress_monotone: Done, Failed and every counter never decrease,
-//     across a resume too, and end at Total (and Chunks.Done at
-//     Chunks.Total);
+//     across a resume that continues too (a resume from zero restarts by
+//     design), and end at Total (and Chunks.Done at Chunks.Total);
 //   - idempotent_item: a second run over the first one's end state changes
-//     nothing, and a crash plus resume leaves the same World as a clean run.
+//     nothing, and every crash plus resume leaves the same World as a clean
+//     run.
 //
 // A Fixer is planned in Preview and its plan applied in Live; a Task gets
 // the assertions that do not need items.
@@ -258,6 +265,17 @@ func (s *suite) run(tt tester) {
 		}
 		s.crashAt = append(s.crashAt, pair)
 	}
+	// A graceful stop (a server restart) between the crashes: the run stops
+	// for resume, skipping Finish, and the next boot resumes it.
+	w.Reset()
+	if pre := w.Run(s.def, liveParams, s.live(ShutdownAt(mid))...); true {
+		pair := crashPair{label: fmt.Sprintf("ShutdownAt(%d)", mid), chunk: -1, pre: pre}
+		if pre.Crashed {
+			pair.post = pre.Resume()
+			pair.state = w.State()
+		}
+		s.crashAt = append(s.crashAt, pair)
+	}
 	for _, cand := range midChunkCandidates(s.clean) {
 		w.Reset()
 		pre := w.Run(s.def, liveParams, s.live(CrashMidChunk(cand[0], cand[1]))...)
@@ -306,22 +324,31 @@ func (s *suite) run(tt tester) {
 	tt.Run(AssertProgressMonotone, func(tt tester) {
 		checkMonotone(tt, "the clean run", s.clean.Progress)
 		if p, ok := s.resumePair(); ok {
-			checkMonotone(tt, p.label+" + Resume", append(slices.Clone(p.pre.Progress), p.post.Progress...))
+			if p.post.ResumePolicy == ops.ResumeContinue {
+				checkMonotone(tt, p.label+" + Resume", append(slices.Clone(p.pre.Progress), p.post.Progress...))
+			} else {
+				tt.Logf("%s: the job resumes from zero, so its progress restarts by design; the resume alone "+
+					"is checked", p.label)
+				checkMonotone(tt, p.label+"'s Resume", p.post.Progress)
+			}
 		}
 	})
 	tt.Run(AssertIdempotentItem, func(tt tester) {
 		checkOK(tt, "the second live run", s.second)
 		checkUnchanged(tt, s.second)
-		if p, ok := s.resumePair(); ok && p.state != s.cleanState {
-			tt.Errorf("%s + Resume left a different World than a clean run: an item that ran twice did not "+
-				"leave the effect of running once\n%s", p.label, stateDiff(s.cleanState, p.state))
+		for _, set := range [][]crashPair{s.crashAt, s.crashMid} {
+			for _, p := range set {
+				if p.post != nil && p.state != s.cleanState {
+					tt.Errorf("%s + Resume left a different World than a clean run: an item that ran twice did "+
+						"not leave the effect of running once\n%s", p.label, stateDiff(s.cleanState, p.state))
+				}
+			}
 		}
 	})
 }
 
-// resumePair is the crash + resume the progress and idempotence assertions
-// use: the middle CrashMidChunk, or the middle CrashAt when no chunk can
-// crash mid-way.
+// resumePair is the crash + resume progress_monotone uses: the middle
+// CrashMidChunk, or the middle CrashAt when no chunk can crash mid-way.
 func (s *suite) resumePair() (crashPair, bool) {
 	for _, set := range [][]crashPair{s.crashMid, s.crashAt} {
 		var ok []crashPair
@@ -404,21 +431,41 @@ func checkPreview(tt tester, o *Outcome) {
 	for _, h := range o.History {
 		tt.Errorf("preview recorded a history row: book %s field %s (seq %d)", h.BookID, h.Field, h.Seq)
 	}
+	for _, k := range o.DirtyCleared {
+		tt.Errorf("preview deleted the DirtySet entry %s: the live run that follows would find it gone", k)
+	}
 }
 
-// checkHistory: every history row follows, in commit order, a write of the
-// same book in the same attempt.
+// checkHistory: every history row follows, in commit order, the write it
+// records. A row made inside a Writer call on its book (ModifyBook's own
+// history, an Effect's rows or a journal entry its fn makes) pairs with that
+// call: a write of the book must commit after the call starts and before the
+// row, so a write made earlier in the item (another field of the same book)
+// does not count. A row made outside every Writer call falls back to a write
+// of its book anywhere earlier in the attempt.
 func checkHistory(tt tester, o *Outcome) {
 	tt.Helper()
 	for _, h := range o.History {
+		from, call := int64(0), ""
+		for _, sp := range o.spans {
+			if sp.Book == h.BookID && sp.Start < h.Seq && h.Seq < sp.End && sp.Start >= from {
+				from, call = sp.Start, sp.Call
+			}
+		}
 		ok := false
 		for _, wr := range o.Writes {
-			if wr.Seq < h.Seq && wr.BookID != "" && wr.BookID == h.BookID {
+			if from < wr.Seq && wr.Seq < h.Seq && wr.BookID != "" && wr.BookID == h.BookID {
 				ok = true
 				break
 			}
 		}
-		if !ok {
+		switch {
+		case ok:
+		case call != "":
+			tt.Errorf("op %s attempt %d: history row (book %s, field %s, seq %d) was made inside %s (from seq "+
+				"%d) before that call wrote its book: history was recorded ahead of the write", o.OpID, o.Attempt,
+				h.BookID, h.Field, h.Seq, call, from)
+		default:
 			tt.Errorf("op %s attempt %d: history row (book %s, field %s, seq %d) has no write of its book "+
 				"committed before it: history was recorded ahead of the write", o.OpID, o.Attempt, h.BookID, h.Field, h.Seq)
 		}
@@ -454,6 +501,15 @@ func (s *suite) checkFence(tt tester) {
 				tt.Errorf("%s: a write committed after the fence was revoked: %s %s:%s (seq %d > revoke %d)",
 					name, wr.Op, wr.Subject.Type, wr.Subject.ID, wr.Seq, o.FenceRevokedAt)
 			}
+		}
+		for _, h := range o.History {
+			if h.Seq > o.FenceRevokedAt {
+				tt.Errorf("%s: a history row was recorded after the fence was revoked: book %s field %s (seq %d > "+
+					"revoke %d)", name, h.BookID, h.Field, h.Seq, o.FenceRevokedAt)
+			}
+		}
+		for _, l := range o.LateWrites {
+			tt.Errorf("%s: the Writer accepted a call that started after the fence was revoked: %s", name, l)
 		}
 		switch name {
 		case "CancelAt":
@@ -542,19 +598,28 @@ func (s *suite) checkCrash(tt tester, p crashPair, mid bool) {
 	}
 	checkOK(tt, p.label+" + Resume", post)
 	runs := map[string]int{}
+	committed := map[string]bool{}
 	for _, o := range []*Outcome{pre, post} {
 		for _, it := range o.Items {
 			runs[it.Key]++
+			if it.Committed {
+				committed[it.Key] = true
+			}
 		}
 	}
+	if pre.UncommittedAtCrash > 0 {
+		tt.Logf("%s: the crash lost %d folded but uncommitted chunk completion(s)", p.label, pre.UncommittedAtCrash)
+	}
 	for _, it := range s.clean.Items {
-		if runs[it.Key] < 1 {
-			tt.Errorf("%s: item %s never ran across the crash and the resume", p.label, it.Key)
+		if !committed[it.Key] {
+			tt.Errorf("%s: item %s never completed with its completion committed across the crash and the "+
+				"resume (it started %d time(s))", p.label, it.Key, runs[it.Key])
 		}
 	}
 	continued := post.ResumePolicy == ops.ResumeContinue
 	if !continued {
-		tt.Logf("%s: the job resumes from zero (%s source): every item runs again by design", p.label, post.Order)
+		tt.Logf("%s: the job resumes from zero (%s source): every item whose completion was not durable runs "+
+			"again by design", p.label, post.Order)
 	}
 	recorded := recordedChunks(pre.Ledger)
 	if continued {
@@ -606,6 +671,13 @@ func (s *suite) checkCrash(tt tester, p crashPair, mid bool) {
 			tt.Errorf("%s: the resume's progress starts at %d, not at the ledger's folded %d", p.label,
 				post.Progress[0].Done, pre.Ledger.Items.Done)
 		}
+	}
+	// Done counts each settled item once, whatever its outcome; an item run
+	// again after the crash may settle differently (an idempotent re-run
+	// often skips), so only Done is compared.
+	if got, want := post.Summary.Done, s.clean.Summary.Done; continued && got != want {
+		tt.Errorf("%s: the resumed attempt's Finish got Done %d, a clean run's %d: it must see every attempt's "+
+			"ledger, each item once", p.label, got, want)
 	}
 	checkEnd(tt, p.label+" + Resume", post.Progress)
 }

@@ -1,18 +1,17 @@
 // file: pkg/ops/opstest/faults.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f7b1d94-6a25-4c08-9e3f-8d2b6a4c1e73
 // last-edited: 2026-10-14
 
 package opstest
 
 import (
+	"context"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -33,16 +32,28 @@ func ChunkSize(n int) RunOpt {
 	}
 }
 
-// CancelAt cancels the run when item n starts, the way the registry does: the
-// run record moves to stopping, the fence is revoked, then the context is
-// canceled. Item n still runs, on a canceled context. Finish runs with
-// Canceled true and the partial Summary the ledger folded.
+// CancelAt cancels the run when item n starts, through the registry's
+// Cancel: the run record moves to stopping, the fence is revoked, then the
+// context is canceled. Item n still runs, on a canceled context. Finish runs
+// with Canceled true and the partial Summary the ledger folded.
 func CancelAt(item int) RunOpt { return func(c *runCfg) { c.cancelAt = item } }
 
+// ShutdownAt shuts the registry down gracefully when item n starts, as a
+// server restart does (Registry.Shutdown): the run's context is canceled with
+// ErrShutdown, so the runner stops for resume (it skips Finish, leaving it to
+// the resumed attempt) and the registry records the run interrupted. Unlike
+// CrashAt nothing the stopping run commits is lost. Outcome.Resume() boots a
+// new registry over the same store, which resumes the run under the same op
+// id.
+func ShutdownAt(item int) RunOpt { return func(c *runCfg) { c.shutdownAt = item } }
+
 // CrashAt stops the world immediately after the item with global start index
-// n returns: every goroutine is released, no further store write is accepted
-// and the chunk counters buffered in memory are lost. Outcome.Resume()
-// continues with a new attempt of the same op id over the surviving store.
+// n returns: no further store write is accepted, from the registry or from
+// anything it started, and the completions the ledger folded but had not
+// committed yet are lost (the production commit throttle runs, so in a small
+// run that is usually every completion so far). Outcome.Resume() boots a new
+// registry, whose boot sweep resumes the same op id over the surviving
+// store.
 func CrashAt(item int) RunOpt { return func(c *runCfg) { c.crashAt = item } }
 
 // CrashMidChunk stops the world while chunk c is leased and item i of it is
@@ -76,17 +87,19 @@ func InsertBelowCursor(item any) RunOpt {
 }
 
 // AbandonAt makes item n's goroutine ignore its context: when it starts, the
-// run is canceled (stopping, zombie), and the goroutine keeps trying to write
-// through the run's Writer instead of returning. While it does, a second run
-// of the same def is started; it must stay queued on the def's exclusive key
-// until the abandoned goroutine returns (Outcome.Abandon). Every write the
-// abandoned goroutine tries must be refused by the fence.
+// run is canceled and the goroutine keeps trying to write through the run's
+// Writer, with a context that is never canceled, instead of returning, until
+// the registry makes the run a zombie (stopping; it keeps its key). A second
+// run of the same def is then queued; it must stay queued on the def's
+// exclusive key until the abandoned goroutine returns (Outcome.Abandon).
+// Every write the abandoned goroutine tries must be refused by the fence.
 func AbandonAt(item int) RunOpt { return func(c *runCfg) { c.abandonAt = item } }
 
-// LoseLeaseAt makes the fake scan stand-down report the holder's lease lost
+// LoseLeaseAt makes the registry's scan stand-down lease of the run lapse
 // when item n starts (the stand-down lease, not a chunk lease: chunk leases
-// are never reassigned while the owner lives). As the registry does, the
-// run's fence is revoked with no cancel behind it; no later write may
+// are never reassigned while the owner lives). The registry's stand-down
+// clock jumps past the lease, so the next renewal fails and the registry
+// revokes the run's fence with no cancel behind it; no later write may
 // commit. A run that holds no stand-down notes the fault as not tested.
 func LoseLeaseAt(item int) RunOpt { return func(c *runCfg) { c.loseLeaseAt = item } }
 
@@ -98,13 +111,13 @@ func LoseLeaseAt(item int) RunOpt { return func(c *runCfg) { c.loseLeaseAt = ite
 // its AppendOnly claim returns the item above them all, one that does not
 // returns it inside a recorded range, where the resume skips it.
 func (a *attempt) beforeCommit(l database.Ledger, final bool) bool {
-	if !final || a.cfg.insert == nil || a.order != ops.AppendOnly {
+	if !final || a.cfg.insert == nil {
 		return false
 	}
 	a.mu.Lock()
-	done := a.inserted != ""
+	skip := a.inserted != "" || a.order != ops.AppendOnly
 	a.mu.Unlock()
-	if done {
+	if skip {
 		return false
 	}
 	if a.insertInside(l.Ranges) {
@@ -115,27 +128,70 @@ func (a *attempt) beforeCommit(l database.Ledger, final bool) bool {
 	return false
 }
 
-// crash stops the world: no write in flight, none accepted after.
+// crash stops the world: the generation is killed (no write in flight,
+// none accepted after, from the dying registry or anything it leaked), the
+// attempt's window closes and the op waits for Resume.
 func (a *attempt) crash() {
-	a.w.freeze()
-	a.crashed.Store(true)
+	a.g.kill()
+	if !a.crashed.CompareAndSwap(false, true) {
+		return
+	}
+	a.w.mu.Lock()
+	a.w.crashed[a.opID] = true
+	a.w.mu.Unlock()
+	a.close()
+}
+
+// shutdownRegistry is ShutdownAt: it marks the attempt stopped (so the op
+// waits for Resume) and shuts the registry down off the item's goroutine,
+// which Shutdown waits for. The item is held until Shutdown has canceled the
+// run's context, so the stop lands mid-run rather than after the last item.
+// Once the drain is over the generation is killed, so nothing the shut-down
+// registry leaked can write, and the attempt's window closes.
+func (a *attempt) shutdownRegistry(irc *ops.ItemRC) {
+	if !a.crashed.CompareAndSwap(false, true) {
+		return
+	}
+	a.w.mu.Lock()
+	a.w.crashed[a.opID] = true
+	a.w.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), runLimit)
+		defer cancel()
+		if err := a.g.reg.Shutdown(ctx); err != nil {
+			a.note("ShutdownAt: the registry shutdown did not drain: %v", err)
+		}
+		a.g.kill()
+		a.close()
+	}()
+	select {
+	case <-irc.Context().Done():
+	case <-time.After(runLimit):
+		a.w.t.Errorf("opstest: %s: ShutdownAt: the registry shutdown did not cancel the run within %s", a.opID,
+			runLimit)
+	}
 }
 
 // quiesce is CrashMidChunk's strong form: the worker holding chunk c, item i
 // done, waits until every other worker has exited and the ledger has
 // committed every chunk they completed. The world then stops with chunk c the
-// only unrecorded chunk, so a correct resume leases c and only c.
+// only unrecorded chunk, so a correct resume leases c and only c. (The
+// attempt's runner clock steps past the commit throttle on every reading,
+// so each completion commits as it is folded.)
 //
-// The wait is bounded by quiesceLimit, a deadline and not an ordering device:
+// The wait is bounded by runLimit, a deadline and not an ordering device:
 // if the other workers have not all exited and been committed by then (a def
 // whose Item blocks, a runner that never commits), the test fails saying so
 // and the world stops where it is, instead of the test hanging.
 func (a *attempt) quiesce(w int) {
-	if a.sched != nil {
-		a.sched.exit(w) // let the others run while this worker holds its chunk
+	a.mu.Lock()
+	s := a.sched
+	a.mu.Unlock()
+	if s != nil {
+		s.exit(w) // let the others run while this worker holds its chunk
 	}
 	expired := false
-	deadline := time.AfterFunc(quiesceLimit, func() {
+	deadline := time.AfterFunc(runLimit, func() {
 		a.mu.Lock()
 		expired = true
 		a.mu.Unlock()
@@ -153,41 +209,22 @@ func (a *attempt) quiesce(w int) {
 			committed = fmt.Sprint(a.lastDone - *a.firstDone)
 		}
 		a.w.t.Errorf("opstest: %s: CrashMidChunk waited %s for the other workers: %d of %d exited, %d chunks "+
-			"delivered, %s committed; the world stops here", a.opID, quiesceLimit, a.exited, a.workers-1,
+			"delivered, %s committed; the world stops here", a.opID, runLimit, a.exited, a.workers-1,
 			a.delivered, committed)
 	}
 }
 
-// quiesceLimit bounds CrashMidChunk's wait for the other workers.
-const quiesceLimit = 30 * time.Second
-
-// stop requests a stop the way the registry does: the run record moves to
-// stopping, the fence is revoked (after the Writer calls in flight drain),
-// then the context is canceled.
-func (a *attempt) stop(reason string, zombie bool) {
-	a.mu.Lock()
-	if a.stopped {
-		a.mu.Unlock()
-		return
+// revokeWith runs revoke (the registry call that stops the run's writes)
+// once the Writer calls in flight have returned, and logs the revoke in the
+// commit sequence: a write logged after it can only be one that started
+// after it. Every later Writer call that succeeds is a late write.
+func (a *attempt) revokeWith(revoke func()) {
+	if t := a.tracked; t != nil {
+		t.drain.Lock()
+		defer t.drain.Unlock()
+		defer t.revoked.Store(true)
 	}
-	a.stopped = true
-	a.mu.Unlock()
-	if _, err := a.w.transition(a.opID, database.TransitionRequest{Event: state.EvStopRequested, StopReason: reason,
-		Zombie: zombie}); err != nil {
-		a.w.t.Errorf("opstest: stop %s: %v", a.opID, err)
-	}
-	a.revokeFence()
-	a.cancel()
-}
-
-// revokeFence revokes the run's fence once the Writer calls in flight have
-// returned, and logs the revoke in the commit sequence.
-func (a *attempt) revokeFence() {
-	if a.tracked != nil {
-		a.tracked.drain.Lock()
-		defer a.tracked.drain.Unlock()
-	}
-	a.revoke()
+	revoke()
 	seq := a.w.log.next()
 	a.mu.Lock()
 	if a.revokedAt == 0 {
@@ -196,67 +233,96 @@ func (a *attempt) revokeFence() {
 	a.mu.Unlock()
 }
 
+// cancelRun is CancelAt: the registry's own Cancel, which moves the run to
+// stopping, revokes its fence and cancels its context.
+func (a *attempt) cancelRun() {
+	a.revokeWith(func() {
+		if err := a.g.reg.Cancel(a.opID); err != nil {
+			a.w.t.Errorf("opstest: cancel %s: %v", a.opID, err)
+		}
+	})
+}
+
 // abandonProbe is the subject AbandonAt's ignored-context writes target.
 var abandonProbe = ops.Subject{Type: ops.SubjectBook, ID: "opstest-abandon-probe"}
 
-// abandon is AbandonAt: on the item's own goroutine, the run is canceled and
-// the goroutine keeps trying to write through the run's Writer instead of
-// returning. While it does, a second run of the same def is started and must
-// wait queued for the exclusive key.
+// abandon is AbandonAt, on the item's own goroutine: the run is canceled
+// and the goroutine, ignoring its context, keeps trying to write through
+// the run's Writer instead of returning, until the registry gives up on it
+// (the abandon grace) and makes the run a zombie that keeps its key. A
+// second run of the same def is then queued; a whole dispatch cycle must
+// see it and leave it queued while the goroutine is still here. Then the
+// goroutine writes once more and returns, the zombie ends, the key frees
+// and the second run starts (Outcome.Abandon).
 func (a *attempt) abandon(irc *ops.ItemRC) {
-	a.stop(state.StopUser, true)
-	a.probeWrites(irc)
-	rep := &secondRun{done: make(chan secondResult, 1)}
+	a.cancelRun()
+	// The goroutine ignores its context: its writes carry a context that
+	// is never canceled, so the fence alone stands between them and the
+	// store.
+	ctx := context.WithoutCancel(irc.Context())
+	a.probeWrites(irc, ctx)
+	select {
+	case <-a.zombie:
+	case <-time.After(runLimit):
+		a.w.t.Errorf("opstest: %s: the registry never made the abandoned run a zombie within %s", a.opID, runLimit)
+		return
+	}
+	sec := a.g.newAttempt(a.def, a.c, a.params, newRunCfg(a.cfg.carry()))
+	a.g.expectAttempt(sec)
+	rep := &AbandonReport{}
+	id, err := a.g.reg.EnqueueOp(context.Background(), a.c.ID, a.params)
+	switch {
+	case err != nil:
+		a.w.t.Errorf("opstest: %s: enqueue the second run: %v", a.opID, err)
+		return
+	case id == a.opID:
+		a.w.t.Errorf("opstest: %s: the second run was deduplicated onto the abandoned run", a.opID)
+		return
+	}
+	if err := a.g.bind(id, sec); err != nil {
+		a.w.t.Errorf("%v", err)
+		return
+	}
+	rep.SecondQueued = a.g.waitListed(id)
+	rep.SecondStartedWhileHeld = a.g.reg.IsRunning(id) || sec.started()
 	a.mu.Lock()
-	a.second = rep
+	a.second, a.secondAt = rep, sec
 	a.mu.Unlock()
-	queued, started := make(chan struct{}), make(chan struct{})
-	var qOnce, sOnce sync.Once
-	def, params := a.def, a.params
-	opID := fmt.Sprintf("opstest-%04d", a.w.opSeq.Add(1))
-	go func() {
-		out, err := a.w.attempt(def, params, opID, false, newRunCfg(a.cfg.carry()),
-			func() { rep.queued.Store(true); qOnce.Do(func() { close(queued) }) },
-			func() { sOnce.Do(func() { close(started) }) })
-		rep.done <- secondResult{o: out, err: err}
-	}()
-	select {
-	case <-queued:
-	case <-started:
-	}
-	select {
-	case <-started:
-		rep.startedWhileHeld = true
-	default:
-	}
-	a.probeWrites(irc) // still ignoring ctx, still refused
+	a.probeWrites(irc, ctx) // still ignoring ctx, still refused
+}
+
+// started reports whether the registry started the attempt.
+func (a *attempt) started() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.startSeq != 0
 }
 
 // probeWrites is the abandoned goroutine writing after the cancel: an Effect
 // whose fn would record a write. The fence must refuse every one.
-func (a *attempt) probeWrites(irc *ops.ItemRC) {
+func (a *attempt) probeWrites(irc *ops.ItemRC, ctx context.Context) {
 	wr := irc.Writer()
 	if wr == nil {
 		return
 	}
 	for range 2 {
-		_ = wr.Effect(irc.Context(), ops.EffectSpec{Name: "opstest.abandon-probe", Subject: abandonProbe},
+		_ = wr.Effect(ctx, ops.EffectSpec{Name: "opstest.abandon-probe", Subject: abandonProbe},
 			func() ([]ops.HistoryRow, error) {
 				return nil, a.w.books.PutValue(abandonProbe, "written", "after-cancel")
 			})
 	}
 }
 
-// loseLease is LoseLeaseAt: the fake stand-down reports the lease lost and,
-// as the registry does on a lost stand-down lease, the run's fence is revoked
-// (with no cancel behind it).
+// loseLease is LoseLeaseAt: the registry's stand-down clock jumps past the
+// lease, so the holder's next renewal (the Writer renews on every write)
+// finds it lapsed, and the registry revokes the run's fence, as it does on
+// a lost stand-down lease, with no cancel behind it.
 func (a *attempt) loseLease() {
-	if !a.sd.isHeld() {
+	if !a.g.reg.ScanStandDownValid(a.opID) {
 		a.note("LoseLeaseAt not tested: the run holds no scan stand-down")
 		return
 	}
-	a.sd.lose()
-	a.revokeFence()
+	a.revokeWith(func() { a.g.sdSkew.Add(int64(2 * standDownLease)) })
 }
 
 // insertBelowCommitted is InsertBelowCursor while items run: once a range the

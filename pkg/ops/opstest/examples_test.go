@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/examples_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4b6d8e21-7c3f-4a95-9e12-0f5a3b7c8d64
 // last-edited: 2026-10-14
 
@@ -7,6 +7,7 @@ package opstest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -318,5 +319,195 @@ func TestLoseLeaseAt(t *testing.T) {
 	conformance(r, t, def, nil, InWorld(w))
 	if got := r.failedSet(); len(got) > 0 {
 		t.Errorf("Conformance failed %v for a stand-down def", got)
+	}
+}
+
+// dirtyPrefix is the DirtySet the dirty-title example drains.
+const dirtyPrefix = "opstest-dirty:"
+
+// dirtyTitleDef upper-cases the title of every book marked dirty: a DirtySet
+// source, drained a page per chunk, each entry deleted once its item
+// succeeds.
+func dirtyTitleDef(books *FakeBooks) ops.Definition {
+	return ops.Batch("opstest.dirty-title", ops.BatchSpec[struct{}, database.Book, titleResult]{
+		Common: common("Upper-case dirty titles", ops.Writes(ops.ResBooks)),
+		Source: func(*ops.RC, struct{}) (ops.Source[database.Book], error) {
+			return ops.DirtySet(dirtyPrefix, func(_ context.Context, ids []string) ([]database.Book, error) {
+				out := make([]database.Book, 0, len(ids))
+				for _, id := range ids {
+					b, err := books.GetBookByID(id)
+					if err != nil {
+						return nil, err
+					}
+					if b == nil {
+						return nil, fmt.Errorf("dirty book %s does not exist", id)
+					}
+					out = append(out, *b)
+				}
+				return out, nil
+			}), nil
+		},
+		Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+			_, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle)
+			return err
+		},
+		Finish: titleFinish,
+	})
+}
+
+// TestDirtySetConforms: a DirtySet def runs through the production registry
+// and passes Conformance (preview leaves the set alone; a crash resumes from
+// zero over the entries still dirty), and a live run drains the set.
+func TestDirtySetConforms(t *testing.T) {
+	t.Parallel()
+	var ids []string
+	for i := 1; i <= 12; i++ {
+		ids = append(ids, fmt.Sprintf("book-%03d", i))
+	}
+	w := NewWorld(t, SyntheticBooks(12), WithDirty(dirtyPrefix, ids...))
+	def := dirtyTitleDef(w.Books())
+	Conformance(t, def, nil, InWorld(w))
+	w.Reset()
+	o := w.Run(def, nil, Live())
+	if o.Err != nil || o.State != state.V3Succeeded {
+		t.Fatalf("live run: %s %v", o.State, o.Err)
+	}
+	if left := w.Dirty(dirtyPrefix); len(left) > 0 {
+		t.Errorf("the live run left %v dirty", left)
+	}
+	if len(o.DirtyCleared) != len(ids) {
+		t.Errorf("the live run cleared %d entries, want %d", len(o.DirtyCleared), len(ids))
+	}
+	for _, id := range ids {
+		if b, err := w.Books().GetBookByID(id); err != nil || b == nil || b.Title != strings.ToUpper(b.Title) {
+			t.Errorf("book %s after the live run = %+v (%v), want its title upper-cased", id, b, err)
+		}
+	}
+}
+
+// TestCrashWithUncommittedCompletionsResumes: under the production commit
+// cadence (the runner commits at most every 2s of its clock, which the
+// harness steps 1ms a reading) the crash lands with chunk completions folded
+// into the ledger but not committed. Those chunks are lost with the crash;
+// the resume runs them again and the World ends as a clean run leaves it.
+func TestCrashWithUncommittedCompletionsResumes(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	pre := w.Run(titleDef(w.Books()), nil, Live(), ChunkSize(2), Seed(7), CrashAt(11))
+	if !pre.Crashed {
+		t.Fatalf("CrashAt(11) did not crash: %v", pre.Notes)
+	}
+	if pre.UncommittedAtCrash == 0 {
+		t.Fatalf("the crash left no folded but uncommitted completion; the production commit cadence did not apply")
+	}
+	recorded := recordedChunks(pre.Ledger)
+	post := pre.Resume()
+	if post.Err != nil || post.State != state.V3Succeeded {
+		t.Fatalf("resume: %s %v", post.State, post.Err)
+	}
+	rerun := map[int]bool{}
+	for _, c := range post.Chunks {
+		if recorded[c.Chunk] {
+			t.Errorf("the resume leased chunk %d, which the crash's ledger recorded", c.Chunk)
+		}
+		rerun[c.Chunk] = true
+	}
+	lost := 0
+	for _, it := range pre.Items {
+		if it.Done && !it.Committed && !rerun[it.Chunk] {
+			t.Errorf("item %s finished before the crash without its completion committed, and the resume "+
+				"did not run its chunk %d again", it.Key, it.Chunk)
+		}
+		if it.Done && !it.Committed {
+			lost++
+		}
+	}
+	clean := NewWorld(t)
+	if o := clean.Run(titleDef(clean.Books()), nil, Live(), ChunkSize(2)); o.Err != nil {
+		t.Fatalf("clean run: %v", o.Err)
+	}
+	if got, want := w.State(), clean.State(); got != want {
+		t.Errorf("crash + resume left a different World than a clean run\n%s", stateDiff(want, got))
+	}
+	t.Logf("CrashAt(11): %d chunk completion(s) uncommitted at the crash, %d finished item(s) re-run",
+		pre.UncommittedAtCrash, lost)
+}
+
+// TestShutdownStopsForResume: a registry shutdown mid-run (a server restart)
+// stops the run for resume. The stopped attempt does not run Finish, the
+// resumed one runs it exactly once with every item counted, and the World
+// ends as a clean run leaves it.
+func TestShutdownStopsForResume(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books := w.Books()
+	def := finishLogDef(books)
+	pre := w.Run(def, nil, Live(), ChunkSize(2), ShutdownAt(5))
+	if !pre.Crashed {
+		t.Fatalf("ShutdownAt(5) did not stop the run: %s %v %v", pre.State, pre.Err, pre.Notes)
+	}
+	if n := len(books.Log("finish")); n != 0 {
+		t.Fatalf("the attempt stopped for resume ran Finish %d time(s); the resumed attempt runs it", n)
+	}
+	t.Logf("ShutdownAt(5): the stopped attempt ended %s with %d item(s) started", pre.State, len(pre.Items))
+	post := pre.Resume()
+	if post.Err != nil || post.State != state.V3Succeeded {
+		t.Fatalf("resume: %s %v", post.State, post.Err)
+	}
+	if n := len(books.Log("finish")); n != 1 {
+		t.Errorf("Finish ran %d time(s) across the stop and the resume, want exactly 1", n)
+	}
+	if got := post.Summary.Done + post.Summary.Failed + post.Summary.Skipped; got != 12 {
+		t.Errorf("the resumed Finish saw %d items, want all 12 across both attempts", got)
+	}
+	for _, it := range post.Items {
+		for _, p := range pre.Items {
+			if p.Key == it.Key && p.Committed {
+				t.Errorf("the resume ran %s again, which the stopped attempt committed", it.Key)
+			}
+		}
+	}
+	for i := 1; i <= 12; i++ {
+		id := fmt.Sprintf("book-%03d", i)
+		if b, err := books.GetBookByID(id); err != nil || b == nil || b.Title != strings.ToUpper(b.Title) {
+			t.Errorf("book %s after the resume = %+v (%v), want its title upper-cased", id, b, err)
+		}
+	}
+}
+
+// finishLogDef is titleDef whose Finish appends the op id to the World's
+// "finish" log, so a test can count how many times Finish ran.
+func finishLogDef(books *FakeBooks) ops.Definition {
+	return ops.Batch("opstest.upper-title-finish-log", ops.BatchSpec[struct{}, database.Book, titleResult]{
+		Common: common("Upper-case titles, logging Finish", ops.Writes(ops.ResBooks)),
+		Source: bookSource(books),
+		Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+			_, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle)
+			return err
+		},
+		Finish: func(rc *ops.RC, _ struct{}, s ops.Summary) (titleResult, error) {
+			if err := books.AppendLog("finish", rc.OpID()); err != nil {
+				return titleResult{}, err
+			}
+			return titleResult{Done: s.Done}, nil
+		},
+	})
+}
+
+// TestCancelRunsFinish: a canceled run is not resumed, so its own attempt
+// runs Finish, once, with Canceled set.
+func TestCancelRunsFinish(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books := w.Books()
+	o := w.Run(finishLogDef(books), nil, Live(), ChunkSize(2), CancelAt(5))
+	if o.State != state.V3Canceled {
+		t.Fatalf("CancelAt(5): the run ended %s, not canceled (%v)", o.State, o.Notes)
+	}
+	if n := len(books.Log("finish")); n != 1 {
+		t.Errorf("a canceled run ran Finish %d time(s), want exactly 1", n)
+	}
+	if !o.Summary.Canceled {
+		t.Errorf("Finish's Summary does not say Canceled")
 	}
 }
