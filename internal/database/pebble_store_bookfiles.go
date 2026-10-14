@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.44.3
+// version: 1.45.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-14
 
 package database
 
@@ -930,6 +930,14 @@ func (s *PebbleStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]Boo
 // before memdb publishes paid a full scan per batch.
 const perBookRangeMaxIDs = 4096
 
+// getBookFilesForIDsPebbleScan is the Pebble arm of GetBookFilesForIDsCore.
+// Its callers get BookFileCore, which has no AcoustIDFingerprint or segment
+// fields, so every row is decoded straight into BookFileCore (decodeBookFileCore)
+// instead of into a BookFile that is then projected: encoding/json skips the
+// fields Core lacks without materialising them. The base64 AcoustIDFingerprint
+// blob is the heavy one -- decoding it for rows whose fingerprint was thrown
+// away one line later cost about 2.4GB of base64 output on the authors warmer's
+// scan of the whole library before memdb published.
 func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string][]BookFileCore, error) {
 	result := make(map[string][]BookFileCore)
 	if len(bookIDs) == 0 {
@@ -940,16 +948,12 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 			if _, done := result[id]; done || id == "" {
 				continue
 			}
-			files, err := s.GetBookFiles(id)
+			cores, err := s.getBookFilesCoreForBook(id)
 			if err != nil {
 				return nil, err
 			}
-			if len(files) == 0 {
+			if len(cores) == 0 {
 				continue
-			}
-			cores := make([]BookFileCore, len(files))
-			for i := range files {
-				cores[i] = files[i].Core()
 			}
 			result[id] = cores
 		}
@@ -960,18 +964,59 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 		idSet[id] = true
 	}
 	if err := forEachKeyInRange(s.db, []byte("book_file:"), []byte("book_file;"), func(_, value []byte) error {
-		var f BookFile
-		if err := json.Unmarshal(value, &f); err != nil {
+		f, err := decodeBookFileCore(value)
+		if err != nil {
 			return err
 		}
 		if idSet[f.BookID] {
-			result[f.BookID] = append(result[f.BookID], f.Core())
+			result[f.BookID] = append(result[f.BookID], f)
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+// decodeBookFileCore decodes one stored book_file row into its BookFileCore
+// projection without ever decoding the fields Core omits. BookFileCore carries
+// BookFile's json tags verbatim (see its doc comment), so the result equals
+// BookFile.Core() of the same row; TestDecodeBookFileCoreMatchesCore pins that.
+func decodeBookFileCore(value []byte) (BookFileCore, error) {
+	var c BookFileCore
+	if err := json.Unmarshal(value, &c); err != nil {
+		return BookFileCore{}, err
+	}
+	return c, nil
+}
+
+// getBookFilesCoreForBook is GetBookFiles(bookID) projected to BookFileCore
+// with the narrow decode: the same book_file:<id>: range and the same
+// disc, track, file_path order, minus the fingerprint decode.
+func (s *PebbleStore) getBookFilesCoreForBook(bookID string) ([]BookFileCore, error) {
+	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
+	var files []BookFileCore
+	if err := forEachKeyInRange(s.db, prefix, append(append([]byte(nil), prefix...), 0xFF), func(_, value []byte) error {
+		f, err := decodeBookFileCore(value)
+		if err != nil {
+			return err
+		}
+		files = append(files, f)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	// Sort: disc ASC, track ASC, file_path ASC -- the order GetBookFiles uses.
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].DiscNumber != files[j].DiscNumber {
+			return files[i].DiscNumber < files[j].DiscNumber
+		}
+		if files[i].TrackNumber != files[j].TrackNumber {
+			return files[i].TrackNumber < files[j].TrackNumber
+		}
+		return files[i].FilePath < files[j].FilePath
+	})
+	return files, nil
 }
 
 // GetAllBookFilesCore returns the BookFileCore projection of every BookFile

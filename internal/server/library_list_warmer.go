@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -12,12 +12,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"runtime"
-	"runtime/debug"
+	"runtime/metrics"
 	"strconv"
 	"strings"
 	"time"
@@ -28,23 +29,50 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
-// readHeapAllocMB returns the process's current heap allocation in MB.
-// Used as a guard before each warmer query — skip the tick if we're
-// already pressuring memory rather than pile on. HeapAlloc is what GC
-// sees as "live"; RSS includes returned-to-OS memory that doesn't matter.
-func readHeapAllocMB() uint64 {
-	var ms runtime.MemStats
-	runtime.ReadMemStats(&ms)
-	return ms.HeapAlloc / (1024 * 1024)
+// liveHeapMetric is the runtime/metrics sample the warmer guards read: the
+// bytes of heap the most recent GC cycle marked live. Reading it does not stop
+// the world (the old HeapAlloc read did, on every tick) and costs the process
+// nothing: it is a counter the runtime already keeps.
+const liveHeapMetric = "/gc/heap/live:bytes"
+
+// readLiveHeapMB returns the live heap, in MB, as of the last GC cycle, and
+// whether that number is usable. ok is false when the runtime does not export
+// the metric or reports zero (no GC cycle has completed yet): a zero is "no
+// measurement", never "an empty heap", so callers must skip their ceiling check
+// rather than compare against it.
+//
+// The value only changes when a GC cycle finishes, so between cycles it is
+// constant. That is intended: the guards ask "has the retained heap grown past
+// the baseline", and garbage that is merely waiting to be collected does not
+// answer that.
+func readLiveHeapMB() (mb uint64, ok bool) {
+	sample := []metrics.Sample{{Name: liveHeapMetric}}
+	metrics.Read(sample)
+	if sample[0].Value.Kind() != metrics.KindUint64 {
+		return 0, false
+	}
+	b := sample[0].Value.Uint64()
+	if b == 0 {
+		return 0, false
+	}
+	return b / (1024 * 1024), true
 }
 
-// warmerMemoryDeltaMB is how many MB above the post-eager baseline the
-// trickle is allowed to grow heap by. Production measurement (full-library
-// library, ~13GB baseline): a single trickle query allocates ~1.8GB
-// transient before GC. Default 4096 (4GB) gives one-query headroom +
-// GC reclaim buffer. Tunable via config.AppConfig.ListWarmerHeapDeltaMB
+// heapOverCeiling is the one comparison every warmer guard makes. An unusable
+// reading (ok false) never trips the ceiling.
+func heapOverCeiling(liveMB uint64, ok bool, ceilingMB uint64) bool {
+	return ok && liveMB > ceilingMB
+}
+
+// warmerMemoryDeltaMB is how many MB of live heap above the baseline the
+// warmers are allowed to add before they back off. The baseline is the live
+// heap read right after the single GC taken once memdb is published, so the
+// delta is growth of retained memory, not transient garbage: a trickle query
+// allocates ~1.8GB of transient garbage that the runtime reclaims on its own
+// schedule and that the live-heap metric never counts. Default 4096 (4GB).
+// Tunable via config.AppConfig.ListWarmerHeapDeltaMB
 // (LIST_WARMER_HEAP_DELTA_MB env var, with LIST_WARMER_MAX_HEAP_MB accepted
-// as a legacy alias — see viper.BindEnv in InitConfig).
+// as a legacy alias -- see viper.BindEnv in InitConfig).
 func warmerMemoryDeltaMB() uint64 {
 	if n := config.AppConfig.ListWarmerHeapDeltaMB; n > 0 {
 		return uint64(n)
@@ -158,6 +186,49 @@ func (s *Server) resolveDefaultUserID() string {
 		return users[0].ID
 	}
 	return ""
+}
+
+// memdbWarmupWaiter is satisfied by *database.PebbleStore.
+type memdbWarmupWaiter interface {
+	WaitForWarmupCtx(ctx context.Context) error
+}
+
+// memdbWarmupWaitBound caps waitForMemdbWarmup. Memdb warmup on a 50K-book DB
+// typically takes ~2.5 min, so 5 min is comfortable headroom.
+const memdbWarmupWaitBound = 5 * time.Minute
+
+var warmupWaitLog = logger.New("server.warmup-wait")
+
+// waitForMemdbWarmup blocks until the store's async memdb warmup goroutine has
+// finished, so a startup warmer reads through memdb instead of running a Pebble
+// full scan against a store that is about to answer the same question from RAM.
+// It reports whether the caller should go on and warm.
+//
+// A nil wait (warmup finished) means there is nothing left to wait for: memdb
+// is published, OR the warmup failed and the store fell back to Pebble reads.
+// Either way the caller warms as before -- memdb path when published, Pebble
+// path when not -- so a failed warmup never skips a warm. A store with no
+// warmup to wait for (a mock, an in-memory test double) returns true at once.
+// Shutdown (bgCtx canceled) returns false: never touch the store again. The
+// wait is bounded by memdbWarmupWaitBound; on the bound the caller warms anyway,
+// as it did before it waited at all.
+func (s *Server) waitForMemdbWarmup(warmer string) bool {
+	waiter, ok := database.AsCapability[memdbWarmupWaiter](s.Ops())
+	if !ok {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(s.bgCtx, memdbWarmupWaitBound)
+	defer cancel()
+	err := waiter.WaitForWarmupCtx(ctx)
+	switch {
+	case err == nil:
+		return true
+	case s.bgCtx.Err() != nil:
+		return false // server shutting down
+	default:
+		warmupWaitLog.Warn("%s warm-up: memdb warmup not finished after %s; warming from the Pebble fallback anyway", warmer, memdbWarmupWaitBound)
+		return true
+	}
 }
 
 // warmAudiobookListCache waits for memdb to publish, then fires the
@@ -506,10 +577,10 @@ func (s *Server) warmAudiobookListCache() {
 	})
 
 	// Split the backlog into EAGER (run immediately, sequential, small) and
-	// TRICKLE (run one-per-tick in background, paced, with GC between).
-	// Eager covers the default UI load so the first "All Books" click after
-	// restart is instant. Trickle fills in everything else over ~30 min so
-	// peak memory never trampolines.
+	// TRICKLE (run one-per-tick in background, paced, guarded by the live
+	// heap). Eager covers the default UI load so the first "All Books" click
+	// after restart is instant. Trickle fills in everything else over ~30 min
+	// so peak memory never trampolines.
 	eagerQueries := make([]qry, 0, 2)
 	trickleQueries := make([]qry, 0, len(queries))
 	for _, q := range queries {
@@ -520,14 +591,15 @@ func (s *Server) warmAudiobookListCache() {
 		}
 	}
 
-	// F1: heap-pressure guard for the eager phase. Sample baseline ONCE,
-	// post-GC, right after memdb publish. If concurrent work (chromem
-	// hydrate, etc.) has already pressured the heap above baseline+delta,
-	// skip the rest of eager rather than piling on. Uses the same
-	// warmerMemoryDeltaMB() ceiling concept as the trickle warmer.
-	runtime.GC()
-	debug.FreeOSMemory()
-	eagerBaselineMB := readHeapAllocMB()
+	// F1: heap-pressure guard for the eager phase. Sample the live-heap
+	// baseline ONCE, right after memdb publish, from the GC cycle the runtime
+	// last completed (no GC is forced for it: every forced cycle re-marks the
+	// whole ~6GiB memdb heap). If concurrent work (chromem hydrate, etc.) has
+	// already grown the retained heap above baseline+delta, skip the rest of
+	// eager rather than piling on. Uses the same warmerMemoryDeltaMB() ceiling
+	// concept as the trickle warmer. When no GC has completed yet there is no
+	// baseline and the guard does not apply.
+	eagerBaselineMB, eagerBaselineOK := readLiveHeapMB()
 	eagerDeltaMB := warmerMemoryDeltaMB()
 	eagerCeilingMB := eagerBaselineMB + eagerDeltaMB
 	slog.Info("library list warm-up eager starting",
@@ -540,7 +612,7 @@ func (s *Server) warmAudiobookListCache() {
 	hits, misses, cached, eagerSkipped := 0, 0, 0, 0
 	// Pre-flight heap check BEFORE the first eager query, in case
 	// concurrent hydrate has already pushed us over the line.
-	if heap := readHeapAllocMB(); heap > eagerCeilingMB {
+	if heap, ok := readLiveHeapMB(); eagerBaselineOK && heapOverCeiling(heap, ok, eagerCeilingMB) {
 		slog.Warn("library list warm-up eager: heap above ceiling before first query, skipping eager phase",
 			"heap_mb", heap, "ceiling_mb", eagerCeilingMB, "baseline_mb", eagerBaselineMB)
 		eagerSkipped = len(eagerQueries)
@@ -557,7 +629,7 @@ func (s *Server) warmAudiobookListCache() {
 		// Heap-pressure guard BETWEEN eager queries (skip for i==0;
 		// already covered by the pre-flight check above).
 		if i > 0 {
-			if heap := readHeapAllocMB(); heap > eagerCeilingMB {
+			if heap, ok := readLiveHeapMB(); eagerBaselineOK && heapOverCeiling(heap, ok, eagerCeilingMB) {
 				eagerSkipped = len(eagerQueries) - i
 				slog.Warn("library list warm-up eager: heap above ceiling, skipping remaining eager queries",
 					"heap_mb", heap, "ceiling_mb", eagerCeilingMB,
@@ -609,26 +681,58 @@ func (s *Server) warmAudiobookListCache() {
 	})
 }
 
-// runTrickleWarmer pops one query per tick from the backlog, runs it,
-// caches the result, and forces a GC before the next tick. Memory-guard:
-// if HeapAlloc > LIST_WARMER_MAX_HEAP_MB (default 1GB) at tick start,
-// skip and back off. Already-cached entries are skipped (the user may
-// have beat us to it). Total time at default 10s interval ≈ 30 min for
-// ~180 queries.
+// trickleEnv is what the trickle loop takes from outside itself: its pacing,
+// the width of its live-heap ceiling, and where it reads the live heap from.
+// Production fills it from config and runtime/metrics (defaultTrickleEnv);
+// the tests fill it with a millisecond interval and a scripted heap so the
+// loop runs in milliseconds without touching the runtime's GC state.
+type trickleEnv struct {
+	interval   time.Duration
+	deltaMB    uint64
+	liveHeapMB func() (mb uint64, ok bool)
+}
+
+func defaultTrickleEnv() trickleEnv {
+	return trickleEnv{
+		interval:   warmerTrickleInterval(),
+		deltaMB:    warmerMemoryDeltaMB(),
+		liveHeapMB: readLiveHeapMB,
+	}
+}
+
+// runTrickleWarmer pops one query per tick from the backlog, runs it and
+// caches the result. It never forces a GC between queries: the runtime paces
+// collection, GOMEMLIMIT is the safety net, and every forced cycle re-marks
+// the whole memdb heap (~6GiB, ~60M objects), which kept the process at 3.5-4
+// cores for the ~30 minutes the trickle ran. Memory guard: if the live heap
+// (the last GC cycle's marked bytes) exceeds the baseline by more than
+// ListWarmerHeapDeltaMB at tick start, skip and back off. Already-cached
+// entries are skipped (the user may have beat us to it). Total time at default
+// 10s interval is ~30 min for ~180 queries.
+//
+// Only started from warmAudiobookListCache, after it saw memdb published; the
+// baseline below relies on that.
 func (s *Server) runTrickleWarmer(backlog []qry) {
+	s.runTrickle(backlog, defaultTrickleEnv())
+}
+
+func (s *Server) runTrickle(backlog []qry, env trickleEnv) {
 	if len(backlog) == 0 {
 		return
 	}
-	interval := warmerTrickleInterval()
-	deltaMB := warmerMemoryDeltaMB()
-	// Establish the baseline heap RIGHT NOW (post-eager, post-GC).
-	// Anything above baseline+delta means our own queries are pressuring
-	// memory; back off. Below means there's headroom — proceed. This
-	// adapts to the process's actual steady-state heap (memdb + caches)
-	// instead of an absolute ceiling we have to guess at deploy time.
+	interval := env.interval
+	deltaMB := env.deltaMB
+	// Establish the baseline RIGHT NOW, once memdb is published: this is the
+	// ONE collection the trickle warmer forces, so the live-heap reading below
+	// describes the settled heap rather than whatever cycle happened to finish
+	// last during the memdb load (a baseline taken mid-load is stale-low and
+	// the ceiling would then skip every remaining query). Anything above
+	// baseline+delta means retained memory has grown; back off. Below means
+	// there is headroom -- proceed. This adapts to the process's actual
+	// steady-state heap (memdb + caches) instead of an absolute ceiling we
+	// have to guess at deploy time.
 	runtime.GC()
-	debug.FreeOSMemory()
-	baselineMB := readHeapAllocMB()
+	baselineMB, baselineOK := env.liveHeapMB()
 	ceilingMB := baselineMB + deltaMB
 	// Trickle queries run under bgCtx so Stop()'s bgCancel aborts the
 	// warmer before the store closes. This loop runs ~30 min at the
@@ -637,18 +741,23 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 	ctx := s.bgCtx
 	started := time.Now()
 	// F2: re-sample the baseline every 5 minutes inside the trickle loop
-	// to track real heap drift from concurrent workloads (dedup,
+	// to track real live-heap drift from concurrent workloads (dedup,
 	// embedding, chromem hydrate release). Median of last 3 samples
 	// dampens jitter so one transient spike/drop doesn't move the
-	// ceiling.
+	// ceiling. With no baseline yet (the metric read zero) the ring starts
+	// empty and the guard stays off until a sample arrives.
 	const resampleInterval = 5 * time.Minute
 	const ceilingChangeLogThreshold = 0.10 // log if |delta| > 10%
-	baselineSamples := []uint64{baselineMB, baselineMB, baselineMB}
+	var baselineSamples []uint64
+	if baselineOK {
+		baselineSamples = []uint64{baselineMB, baselineMB, baselineMB}
+	}
 	lastResample := time.Now()
 	slog.Info("library list trickle warmer starting",
 		"queries", len(backlog),
 		"interval_ms", interval.Milliseconds(),
 		"baseline_mb", baselineMB,
+		"baseline_known", baselineOK,
 		"delta_mb", deltaMB,
 		"effective_ceiling_mb", ceilingMB,
 		"resample_interval_ms", resampleInterval.Milliseconds(),
@@ -683,50 +792,60 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 			}
 		}
 
-		// F2: periodically re-sample baseline + recompute ceiling.
+		// F2: periodically re-sample baseline + recompute ceiling. An unusable
+		// reading (no GC cycle completed yet) leaves the baseline and ceiling
+		// exactly as they were.
 		if time.Since(lastResample) >= resampleInterval {
 			lastResample = time.Now()
-			newSample := readHeapAllocMB()
-			// shift ring buffer (oldest out, newest in)
-			baselineSamples = append(baselineSamples[1:], newSample)
-			newBaseline := medianUint64(baselineSamples)
-			newCeiling := newBaseline + deltaMB
-			oldCeiling := ceilingMB
-			oldBaseline := baselineMB
-			changeRatio := 0.0
-			if oldCeiling > 0 {
-				diff := float64(newCeiling) - float64(oldCeiling)
-				if diff < 0 {
-					diff = -diff
+			if newSample, ok := env.liveHeapMB(); ok {
+				// shift ring buffer (oldest out, newest in)
+				baselineSamples = append(baselineSamples, newSample)
+				if len(baselineSamples) > 3 {
+					baselineSamples = baselineSamples[len(baselineSamples)-3:]
 				}
-				changeRatio = diff / float64(oldCeiling)
-			}
-			baselineMB = newBaseline
-			ceilingMB = newCeiling
-			resampled++
-			if changeRatio > ceilingChangeLogThreshold {
-				slog.Info("library list trickle warmer ceiling resampled",
-					"old_baseline_mb", oldBaseline,
-					"new_baseline_mb", newBaseline,
-					"old_ceiling_mb", oldCeiling,
-					"new_ceiling_mb", newCeiling,
-					"sample_mb", newSample,
-					"change_pct", int(changeRatio*100),
-				)
-			} else {
-				slog.Debug("library list trickle warmer ceiling resampled (small change)",
-					"old_ceiling_mb", oldCeiling,
-					"new_ceiling_mb", newCeiling,
-					"sample_mb", newSample,
-				)
+				newBaseline := medianUint64(baselineSamples)
+				newCeiling := newBaseline + deltaMB
+				oldCeiling := ceilingMB
+				oldBaseline := baselineMB
+				changeRatio := 0.0
+				if oldCeiling > 0 {
+					diff := float64(newCeiling) - float64(oldCeiling)
+					if diff < 0 {
+						diff = -diff
+					}
+					changeRatio = diff / float64(oldCeiling)
+				}
+				baselineMB = newBaseline
+				ceilingMB = newCeiling
+				baselineOK = true
+				resampled++
+				if changeRatio > ceilingChangeLogThreshold {
+					slog.Info("library list trickle warmer ceiling resampled",
+						"old_baseline_mb", oldBaseline,
+						"new_baseline_mb", newBaseline,
+						"old_ceiling_mb", oldCeiling,
+						"new_ceiling_mb", newCeiling,
+						"sample_mb", newSample,
+						"change_pct", int(changeRatio*100),
+					)
+				} else {
+					slog.Debug("library list trickle warmer ceiling resampled (small change)",
+						"old_ceiling_mb", oldCeiling,
+						"new_ceiling_mb", newCeiling,
+						"sample_mb", newSample,
+					)
+				}
 			}
 		}
 
-		// Memory-pressure guard: skip this tick if heap is above
+		// Memory-pressure guard: skip this tick if the live heap is above
 		// baseline+delta. Double the backoff (capped 60s); reset on
-		// successful tick. HeapAlloc, not RSS — we care about live
-		// objects, not returned-to-OS memory.
-		if heap := readHeapAllocMB(); heap > ceilingMB {
+		// successful tick. Live heap (what the last GC cycle marked), not RSS
+		// or the allocation counter -- we care about retained objects, not
+		// garbage awaiting collection or memory already returned to the OS.
+		// An unusable reading never trips it, and neither does the lack of a
+		// baseline to compare against.
+		if heap, ok := env.liveHeapMB(); baselineOK && heapOverCeiling(heap, ok, ceilingMB) {
 			skipped++
 			if backoff == 0 {
 				backoff = interval
@@ -782,12 +901,6 @@ func (s *Server) runTrickleWarmer(backlog []qry) {
 				"progress", fmt.Sprintf("%d/%d", idx, len(backlog)),
 			)
 		}
-
-		// Force GC + return-to-OS so the next tick starts from a clean
-		// allocation baseline. The cost (~5-20ms on a 1GB heap) is
-		// negligible against the interval.
-		runtime.GC()
-		debug.FreeOSMemory()
 	}
 
 	slog.Info("library list trickle warmer complete",

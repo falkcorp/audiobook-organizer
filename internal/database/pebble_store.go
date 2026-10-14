@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.218.1
+// version: 1.219.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 package database
 
@@ -4535,12 +4535,17 @@ func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummar
 
 // CountPrimaryBooks returns the number of primary, non-deleted books.
 //
-// The underlying scan (countPrimaryBooksScan) iterates every book: key and
-// json.Unmarshal's each Book — ~5.6s on a ~44K-book library. The 5s metrics/status
-// ticker (server_lifecycle.go) and GET /health both call this, so an uncached scan
-// pinned ~2 cores continuously on an idle server. The result is cached for
-// primaryCountCacheTTL; the count may lag a write by up to that window, which is
-// fine for a metrics gauge / health probe.
+// Once memdb is published the count comes from a pointer walk of its books
+// table (MemStore.CountPrimaryBooks), which decodes nothing and allocates
+// nothing per row. Before that -- and whenever memdb is known to be short of
+// rows -- it falls back to the Pebble scan (countPrimaryBooksScan), which
+// iterates every book: key and json.Unmarshal's each Book -- ~5.6s and ~322MB
+// on a ~44K-book library. That scan used to be the only path, and the 5s
+// metrics/status ticker (server_lifecycle.go) plus GET /health both call this:
+// uncached it pinned ~2 cores continuously on an idle server, and cached it
+// still cost 7GB of allocation per 25 minutes on the production heap. The
+// result is cached for primaryCountCacheTTL; the count may lag a write by up
+// to that window, which is fine for a metrics gauge / health probe.
 func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 	// Fast path: fresh cached value.
 	p.primaryCountMu.Lock()
@@ -4566,11 +4571,11 @@ func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 	}
 	p.primaryCountMu.Unlock()
 
-	count, numberLeading, err := p.countPrimaryBooksScan()
+	count, numberLeading, err := p.countPrimaryBooksUncached()
 	if err != nil {
 		return 0, err
 	}
-	// Same scan, same rows, same instant as books_total: the gauge is set
+	// Same pass, same rows, same instant as books_total: the gauge is set
 	// here, where the one full pass that produces the primary count refreshes,
 	// so the two never describe different snapshots of the library.
 	metrics.SetNumberLeadingTitles(numberLeading)
@@ -4582,6 +4587,31 @@ func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 	p.primaryCountMu.Unlock()
 
 	return count, nil
+}
+
+var primaryCountLog = logger.New("database.primary-count")
+
+// countPrimaryBooksUncached is the recompute behind CountPrimaryBooks: memdb
+// when it is published and complete, the Pebble scan otherwise. Both return the
+// primary count and, from the same rows, the number-leading-title count.
+//
+// ErrMemdbIncomplete falls through to the scan rather than failing: a short
+// count would be served as a fact for primaryCountCacheTTL, and the scan is the
+// authority. Any other memdb error is propagated unchanged -- falling back on
+// an unrecognized failure would be guessing at its cause.
+func (p *PebbleStore) countPrimaryBooksUncached() (count, numberLeading int, err error) {
+	if m := p.memOrFallback("CountPrimaryBooks"); m != nil {
+		count, numberLeading, err = m.CountPrimaryBooks()
+		if err == nil {
+			return count, numberLeading, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return 0, 0, err
+		}
+		p.recordMemdbFallback("CountPrimaryBooks", memdbOutcomeFallback)
+		primaryCountLog.Error("primary book count: memdb is missing rows and will stay short until restart; scanning Pebble instead: err=%v lost_rows=%v", err, m.LostRows())
+	}
+	return p.countPrimaryBooksScan()
 }
 
 // countPrimaryBooksScan is the uncached full scan behind CountPrimaryBooks. It
