@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.37.0
+// version: 1.37.2
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-14
 
@@ -30,8 +30,10 @@ import (
 // Rows that are NOT restorable are ledger records of a step with no automatic
 // reversal:
 //
-//   - author_delete: maintenance.purge-empty-authors, author-duplicate-merge
-//     (journalAuthorMerge) and the API author merge (server/entities_ops.go).
+//   - author_delete: maintenance.purge-empty-authors and author-duplicate-merge
+//     (journalAuthorMerge). The API author merge and the AI scan apply
+//     (server/entities_ops.go) journal restorable author_merge_credits /
+//     author_merge_delete rows instead (undo/author_merge.go).
 //   - narrator_delete: maintenance.purge-empty-narrators.
 //   - series_delete / series_merge: series dedup and the duplicates-handler
 //     series merge. Nothing can recreate a deleted series row under its old
@@ -744,6 +746,26 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	case ChangeTypeRepairBookCreate:
 		if _, _, ok := ParseRepairBookCreateValue(c.BookID, c.NewValue); !ok {
 			return ChangeTypeRepairBookCreate + ":(no book)"
+		}
+		return ""
+	case ChangeTypeAuthorMergeCredits:
+		if _, _, err := DecodeAuthorMergeCredits(c); err != nil {
+			return ChangeTypeAuthorMergeCredits + ":(unparsable)"
+		}
+		return ""
+	case ChangeTypeAuthorMergeDelete:
+		if _, _, err := DecodeAuthorMergeDelete(c); err != nil {
+			return ChangeTypeAuthorMergeDelete + ":(unparsable)"
+		}
+		return ""
+	case ChangeTypeAuthorReclassifyCredits:
+		if _, _, err := DecodeAuthorReclassifyCredits(c); err != nil {
+			return ChangeTypeAuthorReclassifyCredits + ":(unparsable)"
+		}
+		return ""
+	case ChangeTypeAuthorReclassifyDelete:
+		if _, _, err := DecodeAuthorReclassifyDelete(c); err != nil {
+			return ChangeTypeAuthorReclassifyDelete + ":(unparsable)"
 		}
 		return ""
 	case ChangeTypeJunkAuthorCreate:
