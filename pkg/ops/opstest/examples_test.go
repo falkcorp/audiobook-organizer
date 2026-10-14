@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/examples_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b6d8e21-7c3f-4a95-9e12-0f5a3b7c8d64
 // last-edited: 2026-10-14
 
@@ -241,12 +241,13 @@ func TestExamplesDoTheirWork(t *testing.T) {
 
 // TestSeedDeterminism: the same Seed gives the same interleaving, so two
 // Worlds running one def with one seed commit the same writes in the same
-// order.
+// order on the same workers; and the seed really drives it, since another
+// seed gives another interleaving.
 func TestSeedDeterminism(t *testing.T) {
 	t.Parallel()
-	writes := func() []byte {
+	run := func(seed int64) (writes, steps []byte) {
 		w := NewWorld(t)
-		o := w.Run(titleDef(w.Books()), nil, Live(), ChunkSize(2), Seed(7))
+		o := w.Run(titleDef(w.Books()), nil, Live(), ChunkSize(2), Seed(seed))
 		if o.Err != nil {
 			t.Fatalf("run: %v", o.Err)
 		}
@@ -255,22 +256,27 @@ func TestSeedDeterminism(t *testing.T) {
 			Worker int
 			Chunk  int
 		}
-		var steps []step
+		var ss []step
 		for _, it := range o.Items {
-			steps = append(steps, step{it.Key, it.Worker, it.Chunk})
+			ss = append(ss, step{it.Key, it.Worker, it.Chunk})
 		}
-		raw, err := json.Marshal(struct {
-			Writes []WriteRecord
-			Steps  []step
-		}{o.Writes, steps})
+		wr, err := json.Marshal(o.Writes)
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		return raw
+		st, err := json.Marshal(ss)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return wr, st
 	}
-	a, b := writes(), writes()
-	if !bytes.Equal(a, b) {
-		t.Fatalf("Seed(7) gave two different runs:\n%s\n%s", a, b)
+	w1, s1 := run(7)
+	w2, s2 := run(7)
+	if !bytes.Equal(w1, w2) || !bytes.Equal(s1, s2) {
+		t.Fatalf("Seed(7) gave two different runs:\n%s\n%s\n%s\n%s", w1, s1, w2, s2)
+	}
+	if _, s3 := run(8); bytes.Equal(s1, s3) {
+		t.Errorf("Seed(7) and Seed(8) gave the same interleaving %s: the seed does not drive the schedule", s1)
 	}
 }
 

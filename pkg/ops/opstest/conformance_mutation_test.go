@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/conformance_mutation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4f2c63-1e8b-4d57-b0a9-5c3e7f1d2b86
 // last-edited: 2026-10-14
 
@@ -373,6 +373,41 @@ func TestAppendOnlyClaimHolds(t *testing.T) {
 			for _, m := range r.messages(name) {
 				t.Errorf("%s", m)
 			}
+		}
+	}
+}
+
+// TestFileEffectHistoryConforms: an Effect on a book_file subject whose
+// history row names the file's book passes history_follows_write; the write
+// is matched to the row through the file's book, not missed for want of a
+// book id on a file subject.
+func TestFileEffectHistoryConforms(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books := w.Books()
+	def := ops.Batch("opstest.tag-files", ops.BatchSpec[struct{}, database.BookFile, titleResult]{
+		Common: common("Tag every book file", ops.Writes(ops.ResBookFiles)),
+		Source: func(*ops.RC, struct{}) (ops.Source[database.BookFile], error) {
+			files, err := books.AllBookFiles()
+			return ops.Source[database.BookFile]{Items: files, Key: func(f database.BookFile) string { return f.ID },
+				Order: ops.Snapshot}, err
+		},
+		Item: func(rc *ops.ItemRC, _ struct{}, f database.BookFile) error {
+			sub := ops.Subject{Type: ops.SubjectBookFile, ID: f.ID}
+			return rc.Writer().Effect(rc.Context(), ops.EffectSpec{Name: "opstest.tag-file", Subject: sub},
+				func() ([]ops.HistoryRow, error) {
+					if err := books.PutValue(sub, "tag", "tagged"); err != nil {
+						return nil, err
+					}
+					return []ops.HistoryRow{{BookID: f.BookID, Field: "file.tag:" + f.ID, New: "tagged"}}, nil
+				})
+		},
+		Finish: titleFinish,
+	})
+	r := conform(t, w, def)
+	for _, name := range r.failedSet() {
+		for _, m := range r.messages(name) {
+			t.Errorf("%s", m)
 		}
 	}
 }
