@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-13
 
@@ -86,6 +86,11 @@ type Config struct {
 	// LeaseLostErr is the error a write wraps once the stand-down lease is
 	// gone. Default ErrStandDownLost.
 	LeaseLostErr error
+	// RunLatch is the run's ops.RefusalLatch (ops.RefusalLatchFrom on the
+	// run context): a fenced or lease-lost refusal of a write made with a
+	// context that is neither an item's nor the run's is latched here, so
+	// the batch runner still fails the run closed. nil: no batch runner.
+	RunLatch *ops.RefusalLatch
 }
 
 // Writer is the fenced, journaling write path (ops.Writer). Safe for
@@ -226,27 +231,42 @@ func (w *Writer) check(ctx context.Context, what string) error {
 	if ctx != nil && ctx.Err() != nil {
 		if w.fenceRevoked() {
 			// The run is being stopped: the registry revokes the fence before
-			// it cancels (a run timeout revokes it too). Report the fence, so
-			// the caller sees ErrFenced, and note it for the batch runner.
+			// it cancels, and binds the fence to the run context's Done, so a
+			// run timeout revokes it too. Report the fence, so the caller
+			// sees ErrFenced, and record the refusal for the batch runner.
 			err := w.Gate(what)
-			ops.NoteRefusal(ctx, err)
+			w.noteRefusal(ctx, err)
 			return err
 		}
-		err := fmt.Errorf("%s not written: %w", what, context.Cause(ctx))
-		// Canceled outright (no fence to revoke): still a refusal the batch
-		// runner must hear of. An item's own deadline (ItemTimeout) is not.
-		if !errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
-			ops.NoteRefusal(ctx, err)
+		cause := context.Cause(ctx)
+		err := fmt.Errorf("%s not written: %w", what, cause)
+		// Only the runner's item-scoped causes are the item's own business
+		// (its ItemTimeout ran out, or it already returned). Anything else
+		// -- a cancel with no fence to revoke, a deadline that is not the
+		// item's -- is recorded as a refusal. This relies on the registry
+		// binding the fence to runCtx.Done() (worker.go): a run timeout is
+		// seen above as a revoked fence, not here as a bare deadline.
+		if !errors.Is(cause, ops.ErrItemTimedOut) && !errors.Is(cause, ops.ErrItemReturned) {
+			w.noteRefusal(ctx, err)
 		}
 		return err
 	}
 	if err := w.Gate(what); err != nil {
-		// Fenced or lease lost: flag it on the item's outcome, through the
-		// item's context, even if the op swallows the error (ops.NoteRefusal).
-		ops.NoteRefusal(ctx, err)
+		// Fenced or lease lost: record it even if the op swallows the error.
+		w.noteRefusal(ctx, err)
 		return err
 	}
 	return nil
+}
+
+// noteRefusal records a fenced or lease-lost refusal on the item whose
+// context ctx is (ops.NoteRefusal), or else on the run's latch: through ctx
+// when it carries one, or the latch the executor gave this Writer
+// (Config.RunLatch) for a write made with an unrelated context.
+func (w *Writer) noteRefusal(ctx context.Context, err error) {
+	if !ops.NoteRefusal(ctx, err) {
+		w.cfg.RunLatch.Note(err)
+	}
 }
 
 // intent is step 2: the plan line (Preview) or the write-ahead row (Live).

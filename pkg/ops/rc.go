@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-13
 
@@ -119,6 +119,9 @@ type RC struct {
 func NewRC(env RunEnv) *RC {
 	if env.Context == nil {
 		env.Context = context.Background()
+	}
+	if RefusalLatchFrom(env.Context) == nil {
+		env.Context = WithRefusalLatch(env.Context, &RefusalLatch{})
 	}
 	if env.Log == nil {
 		env.Log = slog.New(slog.DiscardHandler)
@@ -248,6 +251,19 @@ type Tally struct {
 	skip     string
 	marks    []string
 	refused  error
+	// sealed: the item returned. A refusal noted after that is a late write
+	// (a goroutine the item left behind) and goes to the run's latch, never
+	// to this item's outcome.
+	sealed bool
+}
+
+// Seal marks the item returned: NoteRefusal no longer flags this Tally.
+// The runner gives each item a fresh Tally and seals it when the item
+// returns. Executor only.
+func (t *Tally) Seal() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sealed = true
 }
 
 // Refused is the first write the Writer refused for this item because the
@@ -262,23 +278,85 @@ func (t *Tally) Refused() error {
 
 type tallyKey struct{}
 
-// NoteRefusal flags, on the outcome of the item whose context ctx is (or
-// descends from), a write refused because the run is fenced or lost its
-// stand-down lease (Tally.Refused). The Writer calls it on every such
-// refusal; a write made with a context that does not descend from the
-// item's is not seen. Writer implementations only: an op reports its own
-// errors by returning them.
-func NoteRefusal(ctx context.Context, err error) {
-	if ctx == nil || err == nil {
+// RefusalLatch is a run's record of a write the Writer refused (fenced or
+// lost stand-down lease) that it could not pin on a live item: one made with
+// the run's own context, with an unrelated context such as
+// context.Background(), or after its item returned. The runner checks it
+// after every item and fails the run closed once it is set, since it cannot
+// tell which chunk the refused write belonged to. NewRC installs one on the
+// run's context; the executor hands the same latch to the run's Writer
+// (opswriter.Config.RunLatch) so a write on an unrelated context still
+// reaches it. Executor only.
+type RefusalLatch struct {
+	mu  sync.Mutex
+	err error
+}
+
+// Err is the first refusal latched, or nil.
+func (l *RefusalLatch) Err() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
+}
+
+// Note latches err (the first one is kept).
+func (l *RefusalLatch) Note(err error) {
+	if l == nil || err == nil {
 		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.err == nil {
+		l.err = err
+	}
+}
+
+type latchKey struct{}
+
+// WithRefusalLatch returns ctx carrying l. Executor only.
+func WithRefusalLatch(ctx context.Context, l *RefusalLatch) context.Context {
+	return context.WithValue(ctx, latchKey{}, l)
+}
+
+// RefusalLatchFrom returns the run latch ctx carries, or nil.
+func RefusalLatchFrom(ctx context.Context) *RefusalLatch {
+	if ctx == nil {
+		return nil
+	}
+	l, _ := ctx.Value(latchKey{}).(*RefusalLatch)
+	return l
+}
+
+// NoteRefusal records a write refused because the run is fenced or lost its
+// stand-down lease. On a live item's context (or one derived from it) it is
+// flagged on that item's outcome (Tally.Refused); otherwise, when ctx
+// carries the run's RefusalLatch, it is latched there. It reports whether
+// either took it; a Writer that gets false latches its own Config.RunLatch.
+// Writer implementations only: an op reports its own errors by returning
+// them.
+func NoteRefusal(ctx context.Context, err error) bool {
+	if ctx == nil || err == nil {
+		return false
 	}
 	if t, ok := ctx.Value(tallyKey{}).(*Tally); ok && t != nil {
 		t.mu.Lock()
-		if t.refused == nil {
+		live := !t.sealed
+		if live && t.refused == nil {
 			t.refused = err
 		}
 		t.mu.Unlock()
+		if live {
+			return true
+		}
 	}
+	if l := RefusalLatchFrom(ctx); l != nil {
+		l.Note(err)
+		return true
+	}
+	return false
 }
 
 // Counters returns a copy of the item's op-defined counters.
@@ -310,9 +388,13 @@ func (t *Tally) Reset() {
 	t.skip = ""
 	t.marks = t.marks[:0]
 	t.refused = nil
+	t.sealed = false
 }
 
-// ItemRC is RC plus the item's own deadline and counters.
+// ItemRC is RC plus the item's own deadline and counters. An item must not
+// write after it returns: its context is canceled then (ErrItemReturned),
+// so a write a goroutine it left behind makes is refused and, when the run
+// is fenced, fails the run closed through the run's RefusalLatch.
 type ItemRC struct {
 	*RC
 	tally *Tally

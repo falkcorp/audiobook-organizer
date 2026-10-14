@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-13
 
@@ -688,13 +688,45 @@ func TestRefusalFlaggedOnTheItem(t *testing.T) {
 			t.Fatalf("err %v refused %v", err, refused)
 		}
 	})
-	t.Run("item deadline is not a refusal", func(t *testing.T) {
+	t.Run("item timeout is not a refusal", func(t *testing.T) {
 		w, _ := setup()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Nanosecond, ops.ErrItemTimedOut)
 		defer cancel()
 		<-ctx.Done()
 		if err, refused := write(w, ctx); err == nil || refused != nil {
 			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
+	t.Run("item returned is not a refusal", func(t *testing.T) {
+		w, _ := setup()
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(ops.ErrItemReturned)
+		if err, refused := write(w, ctx); !errors.Is(err, ops.ErrItemReturned) || refused != nil {
+			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
+	t.Run("a bare deadline is a refusal", func(t *testing.T) {
+		// N-1: only the runner's item-scoped causes are exempt.
+		w, _ := setup()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+		<-ctx.Done()
+		if err, refused := write(w, ctx); err == nil || refused == nil {
+			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
+	t.Run("an unrelated context goes to the run latch", func(t *testing.T) {
+		s := newRecStore()
+		s.books["b1"] = &database.Book{ID: "b1"}
+		f, revoke := NewFence(1, nil)
+		latch := &ops.RefusalLatch{}
+		w := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Journal: s, RunLatch: latch,
+			History: NewBookHistory(s, "test", "bulk_update", "rp-", nil)})
+		w.SetFence(f.Check)
+		revoke()
+		_, err := w.ModifyBook(context.Background(), "b1", func(b *database.Book) error { return nil })
+		if !errors.Is(err, ErrFenced) || !errors.Is(latch.Err(), ErrFenced) {
+			t.Fatalf("err %v latch %v", err, latch.Err())
 		}
 	})
 }

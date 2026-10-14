@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -130,6 +130,96 @@ func (nopBooks) ModifyBook(string, func(*database.Book) error) (*database.Book, 
 // ErrPreview.
 func previewWriter(f opswriter.Fence) *opswriter.Writer {
 	return opswriter.New(opswriter.Config{OpID: "op", Mode: ops.Preview, Books: nopBooks{}, Fence: f.Check})
+}
+
+// runPreviewWriter is previewWriter built the way runV3 builds the run's
+// Writer: with the run's refusal latch, so a refused write made with a
+// context that is not the item's still reaches the runner.
+func runPreviewWriter(rc *ops.RC, f opswriter.Fence) *opswriter.Writer {
+	return opswriter.New(opswriter.Config{OpID: "op", Mode: ops.Preview, Books: nopBooks{}, Fence: f.Check,
+		RunLatch: ops.RefusalLatchFrom(rc.Context())})
+}
+
+// S-A (final review): a refused write made with a context that does not
+// descend from the item's -- the run-level rc an op closure captured, or
+// context.Background() -- cannot be flagged on the item, so it is latched on
+// the run and the runner fails closed after the item: the chunk whose last
+// item swallowed it at a registry stop is not recorded.
+func TestUnattributedRefusalFailsRun(t *testing.T) {
+	for _, name := range []string{"run_rc", "background"} {
+		t.Run(name, func(t *testing.T) {
+			for range 20 {
+				store := newMemLedgerStore(t)
+				fence, revoke := opswriter.NewFence(1, nil)
+				var w atomic.Pointer[opswriter.Writer]
+				var runRC atomic.Pointer[ops.RC]
+				var stopRun context.CancelFunc
+				var refused atomic.Bool
+				job, rc, cancel := openJob(t, seq(10), batchOpts{size: 5, workers: 1}, func(_ *ops.ItemRC, i int) error {
+					if i == 4 {
+						revoke()
+						stopRun()
+						ctx := context.Background()
+						if name == "run_rc" {
+							ctx = runRC.Load().Context()
+						}
+						_, err := w.Load().ModifyBook(ctx, "b1", func(*database.Book) error { return nil })
+						refused.Store(errors.Is(err, ops.ErrFenced))
+					}
+					return nil // swallowed
+				})
+				stopRun = cancel
+				runRC.Store(rc)
+				w.Store(runPreviewWriter(rc, fence))
+				ctx := opswriter.WithFence(rc.Context(), fence)
+				_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
+				cancel()
+				if !refused.Load() {
+					t.Fatal("setup: the write was not refused")
+				}
+				if !errors.Is(err, ops.ErrFenced) {
+					t.Fatalf("err = %v, want ErrFenced", err)
+				}
+				if led, _ := store.GetLedgerV3("op"); led != nil && slices.Contains(bitsSet(*led), 0) {
+					t.Fatal("a chunk whose item swallowed a refused write on a non-item context was recorded")
+				}
+			}
+		})
+	}
+}
+
+// N-B (final review): a write a goroutine makes on its item's context after
+// the item returned is refused (ErrItemReturned), and with the run not
+// stopped it neither fails the run nor lands on the next item's outcome.
+func TestLateWriteDoesNotFlagNextItem(t *testing.T) {
+	store := newMemLedgerStore(t)
+	fence, _ := opswriter.NewFence(1, nil)
+	var w atomic.Pointer[opswriter.Writer]
+	lateErr := make(chan error, 1)
+	job, rc, cancel := openJob(t, seq(4), batchOpts{size: 4, workers: 1, timeout: time.Minute}, func(irc *ops.ItemRC, i int) error {
+		switch i {
+		case 0:
+			ictx := irc.Context()
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				_, err := w.Load().ModifyBook(ictx, "b1", func(*database.Book) error { return nil })
+				lateErr <- err
+			}()
+		case 1:
+			time.Sleep(80 * time.Millisecond)
+		}
+		return nil
+	})
+	defer cancel()
+	w.Store(runPreviewWriter(rc, fence))
+	ctx := opswriter.WithFence(rc.Context(), fence)
+	_, _, err := runBatch(ctx, batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1})
+	if err != nil {
+		t.Fatalf("a late write on a returned item's context failed the run: %v", err)
+	}
+	if le := <-lateErr; !errors.Is(le, ops.ErrItemReturned) {
+		t.Fatalf("late write err = %v, want ErrItemReturned", le)
+	}
 }
 
 // tryWrite makes one write through w with the item's context.
