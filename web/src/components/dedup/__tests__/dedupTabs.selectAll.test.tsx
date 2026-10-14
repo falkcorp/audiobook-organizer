@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/dedupTabs.selectAll.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e1a9c40-2b7d-4f58-8c13-9d0e5f2a7b64
 // last-edited: 2026-10-13
 //
@@ -203,7 +203,10 @@ describe('AIReviewTab', () => {
       res(3),
       res(4, false, 'disagreed'),
     ]);
-    vi.mocked(api.applyAIScanResults).mockResolvedValue(undefined as never);
+    vi.mocked(api.applyAIScanResults).mockResolvedValue({
+      id: 'op-apply', type: 'ai.author-scan-apply', status: 'queued', scan_id: 5, results: 3,
+    });
+    vi.mocked(api.pollOperationV2).mockResolvedValue({ id: 'op-apply', status: 'completed' } as api.OperationV2);
     renderIn(<AIReviewTab />);
     await user.click(screen.getByRole('button', { name: /scan history/i }));
     await user.click(await screen.findByText(/Scan #5/));
@@ -220,6 +223,8 @@ describe('AIReviewTab', () => {
     await user.click(screen.getByRole('button', { name: 'Apply Selected (3)' }));
     await waitFor(() => expect(api.applyAIScanResults).toHaveBeenCalledTimes(1));
     expect([...vi.mocked(api.applyAIScanResults).mock.calls[0][1]].sort()).toEqual([1, 3, 4]);
+    // The apply is an operation now: the tab waits for it before it re-reads the rows.
+    await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledWith('op-apply'));
   });
 });
 

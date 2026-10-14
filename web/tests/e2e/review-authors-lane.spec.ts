@@ -1,5 +1,5 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
 // last-edited: 2026-10-13
 
@@ -938,12 +938,21 @@ const aiScan = (id: number, over: Partial<AIScanFixture> = {}): AIScanFixture =>
   ...over,
 });
 
-const aiResult = (id: number, agreement: string, canonical: string, applied = false) => ({
+/** A merge row keeping author id*10 and folding in id*10+1. */
+const aiResult = (id: number, agreement: string, canonical: string, applied = false, action = 'merge') => ({
   id,
   scan_id: 5,
   agreement,
   applied,
-  suggestion: { action: 'merge', canonical_name: canonical, reason: 'same person', confidence: 'high', author_ids: [id], source: 'full_scan' },
+  suggestion: {
+    action,
+    canonical_name: canonical,
+    reason: 'same person',
+    confidence: 'high',
+    author_ids: [id * 10, id * 10 + 1],
+    ...(action === 'merge' ? { keep_id: id * 10 } : {}),
+    source: 'full_scan',
+  },
 });
 
 const aiResults = [
@@ -951,8 +960,11 @@ const aiResults = [
   aiResult(2, 'agreed', 'Author B', true),
   aiResult(3, 'groups_only', 'Author C'),
   aiResult(4, 'disagreed', 'Author D'),
-  aiResult(5, 'disagreed', 'Author E'),
+  // A rename: read-only here, whatever its agreement.
+  aiResult(5, 'disagreed', 'Author E', false, 'rename'),
 ];
+
+const AI_AUTHOR_NAMES = { 10: 'Author A', 11: 'A. Author', 40: 'Author D', 41: 'D. Author' };
 
 /** Mocks the AI scan endpoints this sub-view calls. A route registered here beats setupMockApi's. */
 async function openAI(
@@ -978,10 +990,16 @@ async function openAI(
     await route.fulfill(json({ scans }, 200));
   });
   await page.route('**/api/v1/ai/scans/*/results', async (route) => {
-    await route.fulfill(json({ results: opts.results ?? aiResults }, 200));
+    await route.fulfill(json({ results: opts.results ?? aiResults, author_names: AI_AUTHOR_NAMES }, 200));
   });
+  // Apply queues an operation (202); the page follows it to the end.
   await page.route('**/api/v1/ai/scans/*/apply', async (route) => {
-    await route.fulfill(json({ applied: 1, errors: [] }, 200));
+    await route.fulfill(json({ id: 'ai-apply-op', type: 'ai.author-scan-apply', status: 'queued', scan_id: 5, results: 2 }, 202));
+  });
+  await page.route('**/api/v1/operations/v2/ai-apply-op', async (route) => {
+    await route.fulfill(
+      json({ operation: { id: 'ai-apply-op', def_id: 'ai.author-scan-apply', status: 'completed', error_message: null }, logs: [] }, 200)
+    );
   });
   await page.route('**/api/v1/ai/scans/*/cancel', async (route) => {
     await route.fulfill(json({ status: 'canceled' }, 200));
@@ -1027,7 +1045,24 @@ test.describe('Dedup AI Review', () => {
     await expect(page.getByTestId(/^ai-result-\d+$/)).toHaveCount(0);
   });
 
-  test('selecting results and clicking Apply selected (N) sends exactly those ids', async ({ page }) => {
+  test('a merge row says which author it keeps and which it folds in, by name', async ({ page }) => {
+    await openAI(page);
+    await page.getByTestId('ai-scan-5').click();
+    await expect(page.getByTestId('ai-result-plan-1')).toHaveText('keep Author A, merge A. Author');
+    // Author 30 was merged away since the scan: named by id, not blank.
+    await expect(page.getByTestId('ai-result-plan-3')).toContainText('author #30 (no longer exists)');
+  });
+
+  test('a rename row is read-only, with a link to the Authors view; a disagreed merge row stays selectable', async ({ page }) => {
+    await openAI(page);
+    await page.getByTestId('ai-scan-5').click();
+    await expect(page.getByRole('checkbox', { name: 'Select result 5' })).toBeDisabled();
+    await expect(page.getByTestId('ai-result-readonly-5')).toContainText('Read-only here');
+    await expect(page.getByTestId('ai-result-authors-link-5')).toHaveAttribute('href', '/review?lane=authors&author=50');
+    await expect(page.getByRole('checkbox', { name: 'Select result 4' })).toBeEnabled();
+  });
+
+  test('selecting results and clicking Apply selected (N) sends exactly those ids, then follows the operation and re-reads', async ({ page }) => {
     await openAI(page);
     await page.getByTestId('ai-scan-5').click();
     await expect(page.getByTestId('ai-result-1')).toBeVisible();
@@ -1036,9 +1071,13 @@ test.describe('Dedup AI Review', () => {
     await page.getByRole('checkbox', { name: 'Select result 1' }).check();
     await page.getByRole('checkbox', { name: 'Select result 4' }).check();
     const applied = page.waitForRequest((req) => /\/ai\/scans\/5\/apply$/.test(req.url()) && req.method() === 'POST');
+    const reread = page.waitForRequest((req) => /\/ai\/scans\/5\/results$/.test(req.url()), { timeout: 15_000 });
     await page.getByRole('button', { name: 'Apply selected (2)' }).click();
     expect((await applied).postDataJSON()).toEqual({ result_ids: [1, 4] });
-    await expect(page.getByTestId('ai-scans-notice')).toContainText('Applied 1 of 2 selected results.');
+    // Not the old "Applied N of M": the merges ran in an operation.
+    await expect(page.getByText('AI scan apply started — watch the bell for progress.')).toBeVisible();
+    await expect(page.getByTestId('ai-scans-notice')).toContainText('Merged the authors of 2 selected results.');
+    await reread;
   });
 
   test('a superseded scan\'s results are read-only, and an apply the server refuses shows its message', async ({ page }) => {

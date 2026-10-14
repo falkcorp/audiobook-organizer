@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAIScans.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d71b3e9-6a25-4c84-b9f0-c4e82a5d1736
 // last-edited: 2026-10-13
 
@@ -11,18 +11,23 @@
  * Ported from DedupAIReviewTab.tsx (the old /dedup page), with three differences
  * that are the point of the port:
  *
- *   - NO PAGE-LOCAL POLL LOOP. The old tab ran a 5 s `setInterval` against the
- *     active scan. Starting a scan here enqueues an operation, and the
+ *   - NO PAGE-LOCAL POLL OF THE SCAN. The old tab ran a 5 s `setInterval` against
+ *     the active scan. Starting a scan here enqueues an operation, and the
  *     notification bell already follows operations, so progress is shown there.
- *     The history is re-read when the sub-view opens, after a start or a cancel,
- *     and from the Refresh button; nothing here re-reads on a timer.
+ *     The history is re-read when the sub-view opens, after a start, a cancel or
+ *     an apply finishing, and from the Refresh button; nothing re-reads on a timer.
+ *     (The only poll is the apply operation's own, below.)
  *   - EVERY READ IS ABORTABLE AND HAS A DEADLINE (`aiScanReads.ts`), and the list
  *     and the results each have four distinct states: loading, error, empty,
  *     populated. A failed read used to be swallowed (`.catch(() => {})`), which
  *     rendered the same as "no scans yet".
- *   - APPLY REPORTS WHAT HAPPENED. The server answers 200 with
- *     `{applied, errors}` when some results could not be marked; the old tab
- *     dropped `errors` and looked like a clean apply.
+ *   - APPLY REALLY MERGES, AND SAYS WHAT HAPPENED. The old tab's Apply only marked
+ *     the rows applied. It now queues an ai.author-scan-apply operation (202),
+ *     which merges each selected result's authors (keeping locked author names
+ *     where they are) and marks only the results whose merge succeeded. The
+ *     operation is followed with a bounded, abortable poll of THAT operation (the
+ *     rows cannot be re-read until it has ended, and a toast cannot say what it
+ *     did until then); its failure text names each result that was not applied.
  *
  * Owned by ReviewWorkspace, not by the panel: the lane menu's Start / Cancel
  * commands need this state (the mode switch, which scan is running), and the panel
@@ -40,6 +45,10 @@ import type { AIScan, AIScanResult } from '../../../services/api';
 import { isAbortError } from '../../../utils/apiFetch';
 import { useRowSelection, type RowSelection } from '../../../hooks/useRowSelection';
 import { fetchAIScanResults, fetchAIScans } from './aiScanReads';
+
+/** How often the apply operation is polled, and how long one poll may take. */
+export const AI_APPLY_POLL_MS = 1500;
+const AI_APPLY_REQUEST_TIMEOUT_MS = 15_000;
 
 type Toast = (message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void;
 
@@ -102,6 +111,16 @@ export interface AIScansLane {
   resultsError: string | null;
   retryResults: () => void;
   results: AIScanResult[];
+  /** Author names by id for the open scan's rows. A merged-away author is absent. */
+  authorNames: Readonly<Record<number, string>>;
+  /**
+   * Whether a row can be selected and applied: a merge that has a keep author, is
+   * not applied yet, in a scan that is not superseded. Every other action
+   * (rename, alias, split, reclassify, skip) is read-only here.
+   */
+  isApplicable: (r: AIScanResult) => boolean;
+  /** The other half of a disagreement (the other phase's answer), or null. */
+  pairOf: (r: AIScanResult) => AIScanResult | null;
 
   // ---- filter, counts, rows ----
   filter: AgreementFilter;
@@ -112,7 +131,15 @@ export interface AIScansLane {
   selection: RowSelection<number>;
 
   // ---- verbs ----
+  /** An apply is in flight: the POST, or the operation it queued. */
   applying: boolean;
+  /**
+   * Queues the merge of the selected results and resolves once the server has
+   * accepted it. REJECTS when the server refuses (the message is the server's own),
+   * so a caller can show it. The operation is then followed in the background; its
+   * outcome arrives as `notice` (or a toast, when another scan has been opened),
+   * and the history and rows are re-read when it ends.
+   */
   applySelected: () => Promise<void>;
   notice: AIScanNotice | null;
   dismissNotice: () => void;
@@ -242,9 +269,10 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
   const [res, setRes] = useState<{
     forId: number | null;
     rows: AIScanResult[];
+    names: Record<number, string>;
     answered: number | null;
     error: string | null;
-  }>({ forId: null, rows: [], answered: null, error: null });
+  }>({ forId: null, rows: [], names: {}, answered: null, error: null });
   const loadableId = scan && hasResults(scan) ? scan.id : null;
   // The scan whose results should be on screen. A second guard beside the abort:
   // an answer for any other id is dropped even if its request was somehow not
@@ -260,15 +288,16 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
     const ctl = new AbortController();
     const stale = () => ctl.signal.aborted || loadableIdRef.current !== loadableId;
     fetchAIScanResults(loadableId, ctl.signal)
-      .then((rows) => {
+      .then(({ results: rows, authorNames }) => {
         if (stale()) return;
-        setRes({ forId: loadableId, rows, answered: resultsNonce, error: null });
+        setRes({ forId: loadableId, rows, names: authorNames, answered: resultsNonce, error: null });
       })
       .catch((e: unknown) => {
         if (stale() || isAbortError(e)) return;
         setRes((r) => ({
           forId: loadableId,
           rows: r.forId === loadableId ? r.rows : [],
+          names: r.forId === loadableId ? r.names : {},
           answered: resultsNonce,
           error: messageOf(e, 'Could not load the scan results'),
         }));
@@ -285,6 +314,12 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
   const mine = loadableId !== null && res.forId === loadableId;
   const settled = mine && res.answered === resultsNonce;
   const results = useMemo(() => (mine ? res.rows : []), [mine, res.rows]);
+  const authorNames = useMemo(() => (mine ? res.names : {}), [mine, res.names]);
+  const byId = useMemo(() => new Map(results.map((r) => [r.id, r])), [results]);
+  const pairOf = useCallback(
+    (r: AIScanResult): AIScanResult | null => (r.paired_with ? (byId.get(r.paired_with) ?? null) : null),
+    [byId]
+  );
   const resultsError = settled ? res.error : null;
   const resultsStatus: AIResultsStatus =
     loadableId === null
@@ -311,13 +346,18 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
     [results, filter]
   );
 
-  // One list, no paging. Applied results and a superseded scan are not
-  // selectable. Switching scan or filter clears the selection (the key changes
+  // One list, no paging. Only merge rows can be selected, and not an applied one or a
+  // superseded scan's. Switching scan or filter clears the selection (the key changes
   // during render, not in an effect), so an apply never reaches rows the
   // reviewer can no longer see.
   const superseded = scan?.status === 'superseded';
-  const appliedIds = useMemo(() => new Set(results.filter((r) => r.applied).map((r) => r.id)), [results]);
-  const isDisabled = useCallback((id: number) => superseded || appliedIds.has(id), [superseded, appliedIds]);
+  const isApplicable = useCallback(
+    (r: AIScanResult) =>
+      !superseded && !r.applied && r.suggestion.action === 'merge' && (r.suggestion.keep_id ?? 0) > 0,
+    [superseded]
+  );
+  const applicableIds = useMemo(() => new Set(results.filter(isApplicable).map((r) => r.id)), [results, isApplicable]);
+  const isDisabled = useCallback((id: number) => !applicableIds.has(id), [applicableIds]);
   const keys = useMemo(() => filtered.map((r) => r.id), [filtered]);
   const selection = useRowSelection<number>({
     pageKeys: keys,
@@ -329,6 +369,15 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
   // ---- verbs ----
   const [applying, setApplying] = useState(false);
   const applyingRef = useRef(false);
+
+  // The apply operation being followed, so leaving the sub-view stops the poll.
+  const applyWatchRef = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      applyWatchRef.current?.abort();
+    },
+    []
+  );
 
   const applySelected = useCallback(async () => {
     if (!scan || applyingRef.current) return;
@@ -344,41 +393,68 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
     // (naming the scan) and nothing else is touched: the notice, the selection
     // and the rows now belong to the other scan.
     const stillOpen = () => openIdRef.current === forId;
+
+    let started: api.AIScanApplyStarted;
     try {
-      const out = await api.applyAIScanResults(forId, ids);
-      const failed = out.errors ?? [];
-      const text =
-        failed.length === 0
-          ? `Applied ${out.applied} of ${ids.length} selected results.`
-          : `Applied ${out.applied} of ${ids.length} selected results. ${failed.length} could not be applied: ${failed.join('; ')}`;
-      if (stillOpen()) {
-        setNotice({ severity: failed.length === 0 ? 'success' : 'warning', text });
-        sel.clear();
-        setResultsNonce((n) => n + 1);
-      } else {
-        toast(`Scan #${forId}: ${text}`, failed.length === 0 ? 'success' : 'warning');
-      }
+      started = await api.applyAIScanResults(forId, ids);
     } catch (e: unknown) {
-      // The server's own words: a superseded scan names the scan to apply from.
+      // The server's own words: a superseded scan names the scan to apply from, a
+      // row that is not a merge names itself.
       const text = messageOf(e, 'Failed to apply the selected results');
-      // 409: the scan was superseded after it was loaded. Re-read the history so it
-      // shows as superseded and read-only, instead of leaving an Apply button that
-      // can only fail again.
-      const superseded409 = e instanceof api.ApiError && e.status === 409;
+      // 409: the scan was superseded (or a row applied) after it was loaded.
+      // Re-read the history and rows so they show as they are now, instead of
+      // leaving an Apply button that can only fail again.
+      const conflict = e instanceof api.ApiError && e.status === 409;
       if (stillOpen()) {
         setNotice({ severity: 'error', text });
-        if (superseded409) {
+        if (conflict) {
           sel.clear();
           refresh();
         }
       } else {
         toast(`Scan #${forId}: ${text}`, 'error');
-        if (superseded409) setHistoryNonce((n) => n + 1);
+        if (conflict) setHistoryNonce((n) => n + 1);
       }
-    } finally {
       applyingRef.current = false;
       setApplying(false);
+      // Rethrown so the caller (startJob) can report the refusal as a toast too.
+      throw e;
     }
+
+    // Accepted. The merges happen in the operation; its progress is in the bell.
+    if (stillOpen()) sel.clear();
+    const ctl = new AbortController();
+    applyWatchRef.current = ctl;
+    void (async () => {
+      try {
+        const final = await api.pollOperationV2(started.id, undefined, AI_APPLY_POLL_MS, {
+          signal: ctl.signal,
+          requestTimeoutMs: AI_APPLY_REQUEST_TIMEOUT_MS,
+        });
+        const ok = final.status === 'completed';
+        const noun = ids.length === 1 ? 'result' : 'results';
+        const text = ok
+          ? `Merged the authors of ${ids.length} selected ${noun}.`
+          : final.error_message || `The apply ended ${final.status.replaceAll('_', ' ')}. Refresh to see which results were applied.`;
+        // A failed run still merged some results; the rows say which.
+        if (stillOpen()) {
+          setNotice({ severity: ok ? 'success' : 'warning', text });
+        } else {
+          toast(`Scan #${forId}: ${text}`, ok ? 'success' : 'warning');
+        }
+        if (stillOpen()) setResultsNonce((n) => n + 1);
+        setHistoryNonce((n) => n + 1);
+      } catch (e: unknown) {
+        if (ctl.signal.aborted || isAbortError(e)) return;
+        const text = `Could not follow the apply: ${messageOf(e, 'the server did not answer')}. Refresh to see which results were applied.`;
+        if (stillOpen()) setNotice({ severity: 'warning', text });
+        else toast(`Scan #${forId}: ${text}`, 'warning');
+      } finally {
+        if (applyWatchRef.current === ctl) applyWatchRef.current = null;
+        applyingRef.current = false;
+        setApplying(false);
+      }
+    })();
   }, [scan, selection, refresh, toast]);
 
   // Newest-first, so the first running scan is the newest one.
@@ -468,6 +544,9 @@ export function useAIScans(toast: Toast, active: boolean): AIScansLane {
     resultsError,
     retryResults,
     results,
+    authorNames,
+    isApplicable,
+    pairOf,
     filter,
     setFilter,
     counts,
