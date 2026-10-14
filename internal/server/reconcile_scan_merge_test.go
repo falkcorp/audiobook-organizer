@@ -1,5 +1,5 @@
 // file: internal/server/reconcile_scan_merge_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b2e4f61-9d03-4a75-b6c8-1e7f3a5d9c02
 // last-edited: 2026-10-14
 
@@ -383,4 +383,58 @@ func TestReconcileScanOp_RunReturnsAFailureWithASinglePrefix(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "reconcile.scan: failed to list books: boom", err.Error())
 	assert.Equal(t, []string{"Reconcile scan failed: failed to list books: boom"}, scanSummaries(srv.activityWriter, "op-fail"))
+}
+
+// The Repairs fixer reconcile.missing-files reads the latest scan through
+// Server.LatestReconcileScan (03-PR9b). It must pick the scan the endpoint
+// shows, by the same rule over the same rows: the former-id nightly row, the
+// newest good scan beside a newer attempt, and no usable scan at all.
+func TestLatestReconcileScan_FixerDepPicksTheEndpointsScan(t *testing.T) {
+	now := time.Now()
+	good := scanPayload(t, "book-good")
+	nightly := scanPayload(t, "book-nightly")
+	cases := []struct {
+		name              string
+		rows              []database.OperationV2Row
+		wantOp, wantTry   string
+		wantTryStatus     string
+		wantPreviewBookID string
+	}{
+		{"nightly row under the former id", []database.OperationV2Row{
+			{ID: "nightly-run", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now, ResultData: &nightly},
+		}, "nightly-run", "", "", "book-nightly"},
+		{"newer canceled run beside the good scan", []database.OperationV2Row{
+			{ID: "good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour), ResultData: &good},
+			{ID: "canceled", DefID: formerReconcileScanID, Status: "canceled", QueuedAt: now},
+		}, "good", "canceled", "canceled", "book-good"},
+		{"only a running scan", []database.OperationV2Row{
+			{ID: "live", DefID: reconcileScanDefIDV2, Status: "running", QueuedAt: now},
+		}, "", "live", "running", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _, _ := bootRegisteredOpIDs(t)
+			store, ok := srv.store.(*mocks.MockStore)
+			require.True(t, ok)
+			store.EXPECT().ListOperationsV2Since(mock.Anything, mock.Anything).Return(tc.rows, nil).Maybe()
+
+			got, err := srv.LatestReconcileScan()
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantOp, got.OpID)
+			assert.Equal(t, tc.wantTry, got.AttemptOpID)
+			assert.Equal(t, tc.wantTryStatus, got.AttemptStatus)
+			if tc.wantPreviewBookID == "" {
+				assert.Nil(t, got.Preview)
+				return
+			}
+			require.NotNil(t, got.Preview)
+			require.Len(t, got.Preview.UnmatchedBooks, 1)
+			assert.Equal(t, tc.wantPreviewBookID, got.Preview.UnmatchedBooks[0].BookID)
+
+			// The endpoint answers the same scan from the same rows.
+			body := latestScanBody(t, tc.rows)
+			assert.Equal(t, tc.wantOp, opID(t, body))
+			assert.Equal(t, tc.wantTry, attemptID(t, body))
+		})
+	}
 }
