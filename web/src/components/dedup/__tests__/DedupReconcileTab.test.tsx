@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/DedupReconcileTab.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8b2e17-6a39-4c05-9f71-3e5a0c8d2b46
 // last-edited: 2026-10-14
 //
@@ -95,12 +95,12 @@ describe('ReconcileTab newer attempt', () => {
     expect(screen.queryByTestId('reconcile-newer-attempt')).not.toBeInTheDocument();
   });
 
-  it('polls a run that is still in flight, beside the last good scan', async () => {
+  it.each(['running', 'queued'])('polls a %s run beside the last good scan', async (status) => {
     vi.mocked(api.getLatestReconcileScan)
       .mockResolvedValueOnce({
         operation: goodScan,
         preview,
-        latest_attempt: op({ id: 'live', status: 'running' }),
+        latest_attempt: op({ id: 'live', status }),
       })
       .mockResolvedValue({
         operation: op({ id: 'live', completed_at: ATTEMPT_AT }),
