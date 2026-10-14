@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-14
 
@@ -62,9 +62,11 @@ var twinMergeRows = []struct {
 	// could already run as dedup.author-scan.
 	{"maintenance.author-dedup-scan", "dedup.author-scan", []auth.Permission{auth.PermLibraryEditMetadata}, 1 * time.Hour},
 	// 04-P14b: scheduler.dedup-llm-review (settings.manage) merged into dedup.llm-review (D54).
-	// The survivor declared no Permissions and fell back to settings.manage, so the
-	// alias neither widens nor narrows the gate; the explicit declaration only
-	// pins it. Timeout stays 2h (120m equals the loser's 2h).
+	// The survivor declared no Permissions and fell back to settings.manage, so
+	// through the generic operations endpoint (what this test drives) the alias
+	// neither widens nor narrows the gate; the explicit declaration only pins it.
+	// POST /dedup/scan-llm (scan.trigger) enqueues the survivor directly and is
+	// outside this table. Timeout stays 2h (120m equals the loser's 2h).
 	{"scheduler.dedup-llm-review", "dedup.llm-review", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
 }
 

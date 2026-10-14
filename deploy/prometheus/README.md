@@ -1,7 +1,7 @@
 <!-- file: deploy/prometheus/README.md -->
-<!-- version: 1.3.3 -->
+<!-- version: 1.4.0 -->
 <!-- guid: e3f4a5b6-c7d8-4e9f-0a1b-2c3d4e5f6a7b -->
-<!-- last-edited: 2026-10-13 -->
+<!-- last-edited: 2026-10-14 -->
 
 # Prometheus scrape config + alert rules (OPS-4, OPS-5)
 
@@ -60,13 +60,12 @@ for longer than that def's own silence budget
 30-minute floor, and a heartbeat that repeats the same value counts as
 progress. So V2 asks "did the watchdog fail to stop this run?": a 5-minute
 default def pages after 30 minutes of silence, while a LivenessNone def that
-declares 2 hours (`scheduler.dedup-llm-review`) stays quiet for those 2 hours. V2 is therefore expected to stay quiet where the old rule fires on
+declares 65 minutes (`maintenance.library-optimize`) stays quiet for those 65 minutes. V2 is therefore expected to stay quiet where the old rule fires on
 phases that report a constant value, such as the pre-organize database backup
 at 0/0 or the iTunes hash pass pinned at total/total. Both rules are
 pre-empted by the registry watchdog, which cancels a run that is silent for
-longer than its def's `ProgressTimeout` (5 minutes by default, up to 2 hours
-for the LivenessNone defs: `scheduler.dedup-llm-review` 2h;
-`maintenance.trash-cleanup`, `maintenance.cleanup-old-backups`,
+longer than its def's `ProgressTimeout` (5 minutes by default, up to 65 minutes
+for the LivenessNone defs: `maintenance.trash-cleanup`, `maintenance.cleanup-old-backups`,
 `maintenance.temp-file-cleanup`, AI journal prune and recompact activity digests
 1h; `maintenance.library-optimize` 65m, the temp-file-cleanup child's 1h plus
 5m; `maintenance.activity-reclaim` and `maintenance.optimize-activity-db`
@@ -74,8 +73,8 @@ for the LivenessNone defs: `scheduler.dedup-llm-review` 2h;
 marker and then goes quiet; V2 does not, which is an expected soak
 difference.
 
-`alert-rules.test.yml` holds `promtool test rules` cases for V2 (a 2h-budget
-def silent 60 minutes stays quiet; a default def silent 40 minutes fires). Run
+`alert-rules.test.yml` holds `promtool test rules` cases for V2 (a synthetic
+`example.2h-def` with a 2h budget, longer than any real def declares now, silent 60 minutes stays quiet; a default def silent 40 minutes fires). Run
 `promtool test rules alert-rules.test.yml` from this directory; the Go test
 `internal/opsmetrics` `TestPromRules_Promtool` runs it when `promtool` is on
 `PATH`.

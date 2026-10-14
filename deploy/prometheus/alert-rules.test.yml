@@ -1,7 +1,7 @@
 # file: deploy/prometheus/alert-rules.test.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 5f1c8e3a-2b7d-4c96-a0e4-8d3b6f2a9c71
-# last-edited: 2026-10-10
+# last-edited: 2026-10-14
 #
 # promtool unit tests for alert-rules.yml:
 #   promtool test rules deploy/prometheus/alert-rules.test.yml
@@ -22,9 +22,9 @@ tests:
   - interval: 1m
     input_series:
       # A LivenessNone def with a 2h budget, silent for the whole window.
-      - series: 'audiobook_organizer_ops_progress_age_seconds{def_id="scheduler.dedup-llm-review",plugin="scheduler"}'
+      - series: 'audiobook_organizer_ops_progress_age_seconds{def_id="example.2h-def",plugin="example"}'
         values: '0+60x150'
-      - series: 'audiobook_organizer_ops_progress_timeout_seconds{def_id="scheduler.dedup-llm-review",plugin="scheduler"}'
+      - series: 'audiobook_organizer_ops_progress_timeout_seconds{def_id="example.2h-def",plugin="example"}'
         values: '7200+0x150'
       # A def on the default 5m budget, silent for the whole window.
       - series: 'audiobook_organizer_ops_progress_age_seconds{def_id="library.scan",plugin="scanner"}'
@@ -70,10 +70,10 @@ tests:
               description: "Operation library.scan has a run in flight that has not reported progress for 2h 10m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
           - exp_labels:
               severity: warning
-              def_id: scheduler.dedup-llm-review
+              def_id: example.2h-def
             exp_annotations:
               summary: "audiobook-organizer operation appears stalled"
-              description: "Operation scheduler.dedup-llm-review has a run in flight that has not reported progress for 2h 10m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
+              description: "Operation example.2h-def has a run in flight that has not reported progress for 2h 10m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
 
   # AudiobookOrganizerAIFailureRatioHigh: 5 requests a minute for the
   # filename_parse task. From minute 0 half of them fail with a rate limit

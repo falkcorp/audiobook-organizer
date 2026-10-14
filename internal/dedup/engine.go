@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package dedup
 
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -3896,19 +3897,57 @@ func (de *Engine) getAllPrimaryBooksWithFullFields() ([]database.Book, error) {
 // callback is supplied it is invoked every 100 pairs (and once at the end)
 // with (built-so-far, total-candidates).
 func (de *Engine) RunLLMReview(ctx context.Context, progressFn ...ProgressCallback) error {
-	if de.llmParser == nil || !de.llmParser.IsEnabled() {
+	var hooks LLMReviewHooks
+	if len(progressFn) > 0 {
+		hooks.Progress = progressFn[0]
+	}
+	return de.RunLLMReviewWithHooks(ctx, hooks)
+}
+
+// LLMReviewHooks are the optional callbacks RunLLMReviewWithHooks reports
+// through. Both may be nil.
+type LLMReviewHooks struct {
+	// Progress is invoked while building review inputs: every 100 pairs and once
+	// at the end, with (built-so-far, total-candidates).
+	Progress ProgressCallback
+	// Heartbeat is invoked at every point the run is still alive but has no
+	// countable progress: after each page of a candidate listing and right
+	// before the batch is submitted. The op maps it to the registry's liveness
+	// clock. It is separate from Progress because a plugin builds its progress
+	// bar from the first Progress total, and a phase frame has no total yet.
+	Heartbeat func(message string)
+}
+
+// LLMReviewConfigured reports whether RunLLMReview will do any work: it returns
+// immediately, without error, when no enabled LLM parser is wired.
+func (de *Engine) LLMReviewConfigured() bool {
+	return de.llmParser != nil && de.llmParser.IsEnabled()
+}
+
+// RunLLMReviewWithHooks is RunLLMReview with liveness reporting and
+// cancellation. Cancellation is checked between listing pages, between the
+// book and author listings, at the top of every build-loop iteration and
+// before the batch is submitted; the submit itself (job row, file upload,
+// batch create) is not interruptible once started.
+func (de *Engine) RunLLMReviewWithHooks(ctx context.Context, hooks LLMReviewHooks) error {
+	if !de.LLMReviewConfigured() {
 		logging.Info(ctx, "dedup LLM review skipped — llmParser not configured")
 		return nil
 	}
 	if de.embedStore == nil {
 		return fmt.Errorf("dedup: LLM review requires embedStore")
 	}
+	heartbeat := func(msg string) {
+		if hooks.Heartbeat != nil {
+			hooks.Heartbeat(msg)
+		}
+	}
 
-	bookCandidates, err := de.listAmbiguousCandidates("book", de.LLMBookLow, de.LLMBookHigh)
+	bookCandidates, err := de.listAmbiguousCandidates(ctx, "book", de.LLMBookLow, de.LLMBookHigh, heartbeat)
 	if err != nil {
 		return fmt.Errorf("list ambiguous book candidates: %w", err)
 	}
-	authorCandidates, err := de.listAmbiguousCandidates("author", de.LLMAuthorLow, de.LLMAuthorHigh)
+	authorCandidates, err := de.listAmbiguousCandidates(ctx, "author", de.LLMAuthorLow, de.LLMAuthorHigh, heartbeat)
 	if err != nil {
 		return fmt.Errorf("list ambiguous author candidates: %w", err)
 	}
@@ -3923,16 +3962,16 @@ func (de *Engine) RunLLMReview(ctx context.Context, progressFn ...ProgressCallba
 	}
 	logging.Info(ctx, "dedup LLM review starting — pair(s) queued", "allCandidates_count", len(allCandidates))
 
-	var reportProgress ProgressCallback
-	if len(progressFn) > 0 && progressFn[0] != nil {
-		reportProgress = progressFn[0]
-	}
+	reportProgress := hooks.Progress
 
 	// Build inputs alongside an index→candidate map for verdict routing.
 	total := len(allCandidates)
 	inputs := make([]ai.DedupPairInput, 0, total)
 	byIndex := make(map[int]database.DedupCandidate, total)
 	for i, c := range allCandidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		input, ok := de.buildPairInput(i, c)
 		if !ok {
 			logging.Info(ctx, "dedup skipping candidate — could not load entities", "c", c.ID)
@@ -3954,6 +3993,13 @@ func (de *Engine) RunLLMReview(ctx context.Context, progressFn ...ProgressCallba
 		byIndexIDs[idx] = c.ID
 	}
 
+	// Marshalling the inputs, the job row, the batch file upload and the batch
+	// create all follow with no countable progress: say we are alive, and stop
+	// here if the run was canceled while the inputs were being built.
+	heartbeat(fmt.Sprintf("submitting LLM review batch: %d pairs", len(inputs)))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if de.aiJobsStore == nil {
 		return fmt.Errorf("dedup: aiJobsStore not configured; cannot submit async batch")
 	}
@@ -3975,24 +4021,53 @@ func (de *Engine) RunLLMReview(ctx context.Context, progressFn ...ProgressCallba
 	return nil
 }
 
+// ambiguousListPageSize is the keyset page size of listAmbiguousCandidates. One
+// page is one heartbeat and one cancellation check, so it bounds the silent
+// window of the listing however large the pending backlog is.
+const ambiguousListPageSize = 500
+
+// ambiguousListCap bounds how many ambiguous candidates of one entity type a
+// run considers, taking the most similar first.
+const ambiguousListCap = 10000
+
 // listAmbiguousCandidates returns pending embedding-layer candidates whose
-// similarity falls inside [low, high].
-func (de *Engine) listAmbiguousCandidates(entityType string, low, high float64) ([]database.DedupCandidate, error) {
+// similarity falls inside [low, high], most similar first, at most
+// ambiguousListCap of them. It walks the backlog in keyset pages
+// (ListCandidatesAfterID), calling heartbeat and checking ctx after each page.
+func (de *Engine) listAmbiguousCandidates(ctx context.Context, entityType string, low, high float64, heartbeat func(string)) ([]database.DedupCandidate, error) {
 	filter := database.CandidateFilter{
 		EntityType:    entityType,
 		Status:        "pending",
 		Layer:         "embedding",
 		MinSimilarity: &low,
 		MaxSimilarity: &high,
-		// Intentionally bounded (NOT wholeBacklogCandidateLimit): this feeds
-		// RunLLMReview, a paid per-pair external LLM batch that is further
-		// capped by LLMMaxPairsPerRun. Each run consumes from the top of the
-		// similarity-sorted ambiguous window; subsequent runs drain the rest.
-		Limit: 10000,
 	}
-	candidates, _, err := de.embedStore.ListCandidates(filter)
-	if err != nil {
-		return nil, err
+	var candidates []database.DedupCandidate
+	var cursor int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page, err := de.embedStore.ListCandidatesAfterID(filter, cursor, ambiguousListPageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		candidates = append(candidates, page...)
+		cursor = page[len(page)-1].ID
+		heartbeat(fmt.Sprintf("listing ambiguous %s candidates: %d so far", entityType, len(candidates)))
+	}
+	// The whole matching window is read (it is narrow), then the most similar
+	// are kept: this run is a paid per-pair external LLM batch that is further
+	// capped by LLMMaxPairsPerRun, each run consumes from the top of the
+	// similarity-sorted window, and later runs drain the rest.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidateSimilarity(candidates[i]) > candidateSimilarity(candidates[j])
+	})
+	if len(candidates) > ambiguousListCap {
+		candidates = candidates[:ambiguousListCap]
 	}
 	// A manual candidate that pins a scanner embedding row keeps the
 	// "embedding" layer, so the filter above can return it. The LLM review
@@ -4005,6 +4080,13 @@ func (de *Engine) listAmbiguousCandidates(entityType string, low, high float64) 
 		}
 	}
 	return kept, nil
+}
+
+func candidateSimilarity(c database.DedupCandidate) float64 {
+	if c.Similarity == nil {
+		return 0
+	}
+	return *c.Similarity
 }
 
 // buildPairInput enriches a stored candidate with entity details suitable for

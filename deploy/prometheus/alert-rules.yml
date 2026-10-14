@@ -1,7 +1,7 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.5.1
+# version: 1.6.0
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
-# last-edited: 2026-10-13
+# last-edited: 2026-10-14
 #
 # TEMPLATE / SNIPPET — Prometheus alerting rules for audiobook-organizer
 # (OPS-4/OPS-5). This is NOT installed or evaluated by this repo; it must be
@@ -205,8 +205,8 @@ groups:
       # up by a worker has no age and cannot fire this rule.
       # audiobook_organizer_ops_progress_timeout_seconds is the def's
       # effective ProgressTimeout, the budget after which the watchdog cancels
-      # a silent run: 5m by default, and 45m to 2h for the LivenessNone defs
-      # that declare long silences (scheduler.dedup-llm-review is 2h). Judging
+      # a silent run: 5m by default, and 45m to 65m for the LivenessNone defs
+      # that declare long silences (maintenance.library-optimize is 65m). Judging
       # every def against a flat 30m paged on healthy runs of those defs inside
       # their own budgets. With the budget as the threshold the rule asks "did
       # the watchdog fail to stop this run?"; clamp_min keeps the 30m floor for

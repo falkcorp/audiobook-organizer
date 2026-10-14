@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-14
 
@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -30,12 +32,17 @@ func (p *Plugin) llmReviewDef() sdk.OperationDef {
 		Description:  "Runs LLM review pass over ambiguous embedding-layer candidates.",
 		ResumePolicy: sdk.ResumeDrop,
 		// The retired scheduler def was cancellable; this one declared no value,
-		// which the registry reads as "reject Cancel". RunLLMReview takes the
-		// run's ctx, so a cancel is honored (04-P14b).
+		// which the registry reads as "reject Cancel" (04-P14b). RunLLMReview
+		// checks ctx between listing pages, between the two listings, at the top
+		// of every build-loop iteration and before the batch is submitted. A
+		// cancel that arrives during the submit itself (job row, upload, batch
+		// create) takes effect when that call returns.
 		Cancellable: true,
 		// Same gate the retired scheduler def declared. Before 04-P14b this def
 		// declared none and fell back to settings.manage, so this line is the
-		// explicit form of the effective gate; it changes nobody's access.
+		// explicit form of the effective gate. Through the generic operations
+		// endpoint it changes nobody's access; POST /dedup/scan-llm is gated by
+		// scan.trigger and enqueues this op directly, and that gate is unchanged.
 		Permissions: []auth.Permission{auth.PermSettingsManage},
 		// Serialize against itself like every other write-declaring dedup op.
 		// Without a key the scheduler can start a second review while the
@@ -59,24 +66,38 @@ func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter s
 		return fmt.Errorf("dedup engine not available")
 	}
 
+	if !p.engine.LLMReviewConfigured() {
+		_ = reporter.UpdateProgress(1, 1, "LLM review skipped: LLM parser not configured")
+		return nil
+	}
+
 	_ = reporter.UpdateProgress(0, 1, "Starting LLM review of ambiguous candidates...")
 
 	// H9 (2026-07 error-correction sweep): the total pair count isn't known
 	// until RunLLMReview lists ambiguous candidates internally, so the
 	// sdk.Progress bar is constructed lazily on the first callback instead
 	// of up front with a placeholder n=0 (which made StepN a no-op). Without
-	// this, the op reported nothing between "starting" and "job submitted"
-	// while building up to 10K pair inputs — indistinguishable from a hang.
+	// this, the op reported nothing between "starting" and "job submitted" --
+	// indistinguishable from a hang.
+	//
+	// Only the build loop calls onProgress, and always with the real total. The
+	// listing pages and the pre-submit window have no total, so they go through
+	// Heartbeat, which stamps the liveness clock and never touches the bar: the
+	// watchdog budget is the 5-minute default, not the retired 2h one, and a
+	// (0, 0) phase frame through onProgress would pin the bar at n=0.
 	var prog *sdk.Progress
-	onProgress := func(current, total int, message string) {
-		if prog == nil {
-			prog = sdk.NewProgress(reporter, total)
-			prog.Start(message)
-		}
-		prog.StepN(current, message)
+	hooks := dedupengine.LLMReviewHooks{
+		Progress: func(current, total int, message string) {
+			if prog == nil {
+				prog = sdk.NewProgress(reporter, total)
+				prog.Start(message)
+			}
+			prog.StepN(current, message)
+		},
+		Heartbeat: func(string) { registry.TouchLiveness(reporter) },
 	}
 
-	if err := p.engine.RunLLMReview(ctx, onProgress); err != nil {
+	if err := p.engine.RunLLMReviewWithHooks(ctx, hooks); err != nil {
 		reporter.Logger().Error("LLM review error", "error", err)
 		return fmt.Errorf("LLM review: %w", err)
 	}
