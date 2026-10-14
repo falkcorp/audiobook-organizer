@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.37.0
+// version: 4.38.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-14
 
@@ -223,6 +223,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Start the runtime flight recorder before the container starts the ops
 	// registry's watchdog, so its first strike already has a trace to save.
 	s.startFlightRecorder()
+	// Every return below that is not the normal shutdown (a failed container
+	// start, a failed step) must not leave the runtime recorder tracing in
+	// the process. Stop is idempotent; the shutdown path still stops it
+	// explicitly, ahead of the background-goroutine wait.
+	defer s.flight.Stop()
 
 	s.externalURL = strings.TrimRight(cfg.ExternalURL, "/")
 
