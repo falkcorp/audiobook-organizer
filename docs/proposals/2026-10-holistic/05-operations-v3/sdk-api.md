@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/sdk-api.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: b4575f26-f7c3-4fb6-a442-b74a31581e88 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -432,9 +432,12 @@ type Writer interface {
 	// (05-PR5b): applyRow marks a row (opv3:rowmark:<op>:<row>) once its own
 	// Apply returned nil, naming the history Apply's writes recorded; a
 	// resumed apply counts a row whose values already equal Proposed as
-	// applied only by that row's own marker, with nothing it names undone
-	// since. The run's history for the row's book is never enough: another
-	// row of the same book may have written it.
+	// applied only by that row's own marker, with everything it names
+	// still standing: each metadata batch still the newest history on the
+	// fields it wrote and never undone, each journal row neither voided nor
+	// reverted nor followed by a later journal row on what it wrote. The
+	// run's history for the row's book is never enough: another row of the
+	// same book may have written it.
 	MarkRowApplied(ctx context.Context, rowID string)
 	RowApplied(ctx context.Context, rowID string) (bool, error)
 }

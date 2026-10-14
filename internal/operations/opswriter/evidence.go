@@ -182,9 +182,10 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 //
 // A row with no book id has no per-book journal to look in, so only the
 // first two checks apply to it. Nor can any check see a write that recorded
-// no journal row at all: most book_file writers outside the Writer (the
+// no journal row at all: many book_file writers outside the Writer (the
 // scanner, the AcoustID and tag backfills) record none, and seeing those
-// needs a per-book_file history this store does not keep.
+// needs a per-book_file history this store does not keep (todo.d,
+// 2026-10-14-bookfile-change-history-for-fixer-resume).
 func (w *Writer) changesStand(ids []string) (bool, error) {
 	if len(ids) == 0 {
 		return true, nil
