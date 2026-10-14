@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
 // last-edited: 2026-10-14
 
@@ -153,7 +153,10 @@ func (s *Server) invalidateBookDuplicateCaches() {
 // operation's change ledger and, when any series_rename row was restored,
 // drops the series caches so GET /series shows the restored name at once;
 // when any merge_combine_journal row was restored (a Repairs merge undone),
-// it drops the book duplicate caches, as the merge-undo route does.
+// it drops the book duplicate caches, as the merge-undo route does; when any
+// author merge or reclassify row was restored, it drops the author list and
+// dedup caches, as the merge itself does (entities.author-merge), so the
+// restored author is listed again at once.
 // A partial revert still invalidates, since its restored rows did land.
 func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error) {
 	res, err := audiobookspkg.NewRevertService(s.storeForWiring()).RevertOperation(id)
@@ -163,10 +166,37 @@ func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error)
 	if res != nil && res.RestoredTypes[undo.ChangeTypeMergeCombineJournal] > 0 {
 		s.invalidateBookDuplicateCaches()
 	}
-	if res != nil {
-		s.reopenAppliedScanResults(id)
+	if res != nil && restoredAuthorRows(res) {
+		s.invalidateAuthorCaches()
 	}
+	// Whatever the result: a run that finds every row reverted already ("has
+	// already been reverted", no result) may follow a run that marked the notes
+	// but stopped before reopening the results. It is idempotent.
+	s.reopenAppliedScanResults(id)
 	return res, err
+}
+
+// restoredAuthorRows reports whether a revert restored any author merge or
+// reclassify row.
+func restoredAuthorRows(res *audiobookspkg.RevertResult) bool {
+	for _, t := range []string{undo.ChangeTypeAuthorMergeCredits, undo.ChangeTypeAuthorMergeDelete,
+		undo.ChangeTypeAuthorReclassifyCredits, undo.ChangeTypeAuthorReclassifyDelete} {
+		if res.RestoredTypes[t] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// invalidateAuthorCaches drops the caches an undone author merge or reclassify
+// makes stale: the author list and every dedup tab (the merge drops the same two).
+func (s *Server) invalidateAuthorCaches() {
+	if s.dedupCache != nil {
+		s.dedupCache.InvalidateAll()
+	}
+	if s.authorsCache != nil {
+		s.authorsCache.InvalidateAll()
+	}
 }
 
 // reopenAppliedScanResults marks the AI scan results an undone ai.author-scan-apply

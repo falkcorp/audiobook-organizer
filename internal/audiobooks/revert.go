@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-14
 
@@ -430,6 +430,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// hold that keeps the run's leftover books from regrouping around
 	// another survivor (review 8). They count in neither total.
 	var ledger []string
+	// scanNotesOnly: every ledger row is an AI scan apply's "result applied"
+	// note, none a Repairs plan record.
+	scanNotesOnly := true
 	restorableTotal := 0
 	for _, c := range changes {
 		if c.Voided {
@@ -439,6 +442,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			result.Total--
 			if c.RevertedAt == nil {
 				ledger = append(ledger, c.ID)
+				scanNotesOnly = scanNotesOnly && c.ChangeType == undo.ChangeTypeAIScanResultApplied
 			}
 			continue
 		}
@@ -461,6 +465,13 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// undo.OperationRevertible is the same rule the Repairs fragment fixer
 	// asks before it offers this revert on a held row; restorableTotal
 	// counts exactly its rows.
+	if !undo.OperationRevertible(changes) && len(ledger) > 0 && scanNotesOnly {
+		// An AI scan apply whose results were all merged already (by an earlier
+		// apply or by hand): it changed no author, and only marked the results
+		// applied. There is nothing to put back, and no hold to clear.
+		return nil, fmt.Errorf("operation %s changed nothing that can be undone: every result it applied was already merged, so it only marked them applied",
+			operationID)
+	}
 	if !undo.OperationRevertible(changes) && len(ledger) > 0 {
 		// Only the plan record is left (the run's other rows were pruned,
 		// or the op wrote nothing else): nothing here can be restored, and
