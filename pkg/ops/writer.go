@@ -1,5 +1,5 @@
 // file: pkg/ops/writer.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: dc4d264d-6ac3-4ecd-bd11-247d5300dd3c
 // last-edited: 2026-10-14
 
@@ -75,7 +75,8 @@ type Writer interface {
 	// RowApplied reports whether some attempt of this run marked the row
 	// rowID applied (MarkRowApplied) and all of the history that marker
 	// names still stands: no operation journal row of it voided or
-	// reverted, no metadata history batch of it missing or undone, and no
+	// reverted, no metadata history batch of it missing or undone, no
+	// book_file it wrote moved off (or deleted from) its book, and no
 	// write it names followed, on what it wrote, by a later write of its
 	// book recorded in either store (metadata history or the operation
 	// journal), whatever wrote it and whatever it is named there; a name

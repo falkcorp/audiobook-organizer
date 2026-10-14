@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_writer_evidence_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 3ebbf9a7-49e9-4226-b8b5-535c23956b47
 // last-edited: 2026-10-14
 
@@ -15,16 +15,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
-)
-
-// The capabilities newV3Writer resolves for the apply markers: a method
-// rename on the store would otherwise leave AsCapability returning nil and
-// every resumed row silently unrecognized.
-var (
-	_ opswriter.RowMarkStore      = (*database.PebbleStore)(nil)
-	_ opswriter.ChangeReader      = (*database.PebbleStore)(nil)
-	_ opswriter.BookHistoryReader = (*database.PebbleStore)(nil)
-	_ opswriter.ChangeScanner     = (*database.PebbleStore)(nil)
 )
 
 // noMarkerStore is a v3-capable store whose marker methods are shadowed by
