@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -210,6 +210,9 @@ type batchRun struct {
 	priorChunks int
 	total       *int64
 	fence       opswriter.Fence
+	// latch is the run's ops.RefusalLatch: a fenced or lease-lost refusal of
+	// a write no live item owns. Checked after every item.
+	latch *ops.RefusalLatch
 }
 
 func (b *batchRun) fail(err error) {
@@ -245,7 +248,14 @@ func runBatch(ctx context.Context, cfg batchConfig) (ops.Summary, json.RawMessag
 	workers := max(job.Workers, 1)
 	b := &batchRun{cfg: cfg, job: job, now: cfg.now, size: max(job.ChunkSize, 1), ctx: ctx,
 		leases: &leaseTable{rows: make([]workerRow, workers)}, done: make(chan completion, workers)}
-	b.workCtx, b.stop = context.WithCancel(ctx)
+	// The run's refusal latch: the one NewRC (or runV3, before building the
+	// Writer) installed on the run context. Item contexts carry it too, so a
+	// refusal a sealed item's late write makes still reaches it.
+	b.latch = ops.RefusalLatchFrom(cfg.rc.Context())
+	if b.latch == nil {
+		b.latch = &ops.RefusalLatch{}
+	}
+	b.workCtx, b.stop = context.WithCancel(ops.WithRefusalLatch(ctx, b.latch))
 	defer b.stop()
 	b.fence = opswriter.FenceFromContext(ctx)
 	for i := range b.leases.rows {
@@ -723,7 +733,6 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		b.cfg.onLease(ch.idx)
 	}
 	tally := &chunkTally{}
-	itemTally := &ops.Tally{}
 	touch := func() {
 		t := b.now()
 		b.leases.set(w, func(r *workerRow) { r.heartbeat = t })
@@ -762,7 +771,11 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		if b.cfg.rep != nil {
 			b.cfg.rep.SetCurrentItem(label)
 		}
+		// A fresh Tally per item, sealed when the item returns: a write a
+		// goroutine the item left behind cannot flag the next item.
+		itemTally := &ops.Tally{}
 		err := b.runItem(ch, j, itemTally, touch)
+		itemTally.Seal()
 		touch()
 		if err != nil && !errors.Is(err, ops.ErrPreview) && b.workCtx.Err() != nil {
 			return // the item was cut short by the stop; it did not settle
@@ -776,6 +789,13 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		// chunk whose items all finished cleanly is still delivered below.
 		if refused := itemTally.Refused(); refused != nil {
 			b.fail(fmt.Errorf("%s: item %s: %w", b.cfg.opID, ch.keys[j], errors.Join(refused, err)))
+			return
+		}
+		// A refused write no live item owned (made on the run's context, an
+		// unrelated one, or after its item returned) cannot be pinned on a
+		// chunk, so this chunk is not recorded either: fail closed.
+		if latched := b.latch.Err(); latched != nil {
+			b.fail(fmt.Errorf("%s: a write was refused outside its item (ctx not the item's): %w", b.cfg.opID, latched))
 			return
 		}
 		if err != nil && !errors.Is(err, ops.ErrPreview) {
@@ -867,13 +887,20 @@ func (b *batchRun) runItem(ch *leasedChunk, j int, t *ops.Tally, touch func()) (
 			err = fmt.Errorf("item panicked: %v", p)
 		}
 	}()
-	itemCtx := b.workCtx
+	// The item's context is canceled with item-scoped causes the Writer
+	// recognizes (ops.ErrItemTimedOut, ops.ErrItemReturned): a write refused
+	// for them is the item's business, not a stopped run's.
+	itemCtx, cancel := context.WithCancelCause(b.workCtx)
+	cancelTimeout := context.CancelFunc(func() {})
 	if b.job.ItemTimeout > 0 {
-		var cancel context.CancelFunc
-		itemCtx, cancel = context.WithTimeout(b.workCtx, b.job.ItemTimeout)
-		defer cancel()
+		itemCtx, cancelTimeout = context.WithTimeoutCause(itemCtx, b.job.ItemTimeout, ops.ErrItemTimedOut)
 	}
-	t.Reset()
+	// The outer cancel first, so the timeout child inherits ErrItemReturned
+	// as its cause; the child's own cancel would record context.Canceled.
+	defer func() {
+		cancel(ops.ErrItemReturned)
+		cancelTimeout()
+	}()
 	return ch.set.Run(ops.NewItemRC(b.cfg.rc, itemCtx, t, touch), ch.items[j])
 }
 

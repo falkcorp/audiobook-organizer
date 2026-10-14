@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-13
 
@@ -387,20 +387,36 @@ func TestMarkRefusesBadNames(t *testing.T) {
 	}
 }
 
-// NoteRefusal flags the item whose context it is given (or a context derived
-// from it), keeps the first refusal, ignores a context with no item, and
-// Reset clears it for the next item.
+// NoteRefusal flags the live item whose context it is given (or a context
+// derived from it) and keeps the first refusal; once the item is sealed (it
+// returned), or with no item in the context, the refusal goes to the run's
+// latch NewRC installed; with neither it reports false. Reset clears it.
 func TestNoteRefusal(t *testing.T) {
+	rc := NewRC(RunEnv{Context: context.Background()})
+	latch := RefusalLatchFrom(rc.Context())
+	if latch == nil {
+		t.Fatal("NewRC installed no refusal latch")
+	}
 	tally := &Tally{}
-	irc := NewItemRC(NewRC(RunEnv{Context: context.Background()}), context.Background(), tally, nil)
+	irc := NewItemRC(rc, rc.Context(), tally, nil)
 	first, second := errors.New("fenced"), errors.New("lease lost")
 	child, cancel := context.WithCancel(irc.Context())
 	defer cancel()
-	NoteRefusal(child, first)
-	NoteRefusal(irc.Context(), second)
-	NoteRefusal(context.Background(), second) // no item: nothing to flag
-	if !errors.Is(tally.Refused(), first) {
-		t.Fatalf("Refused = %v, want the first refusal", tally.Refused())
+	if !NoteRefusal(child, first) || !NoteRefusal(irc.Context(), second) {
+		t.Fatal("a live item did not take the refusal")
+	}
+	if !errors.Is(tally.Refused(), first) || latch.Err() != nil {
+		t.Fatalf("Refused = %v, latch = %v; want the first refusal on the item only", tally.Refused(), latch.Err())
+	}
+	tally.Seal()
+	if !NoteRefusal(irc.Context(), second) || !errors.Is(latch.Err(), second) {
+		t.Fatalf("a sealed item's late refusal: latch = %v, want it latched on the run", latch.Err())
+	}
+	if !NoteRefusal(rc.Context(), first) || !errors.Is(latch.Err(), second) {
+		t.Fatal("the run context lost its latch, or the latch did not keep the first refusal")
+	}
+	if NoteRefusal(context.Background(), first) {
+		t.Fatal("a context with no item and no latch took a refusal")
 	}
 	tally.Reset()
 	if tally.Refused() != nil {

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-13
 
@@ -232,6 +232,9 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 			mode = ops.Preview
 		}
 	}
+	// The run's refusal latch, installed before the Writer is built so the
+	// Writer and the batch runner share it (ops.RefusalLatch).
+	ctx = ops.WithRefusalLatch(ctx, &ops.RefusalLatch{})
 	env := ops.RunEnv{Context: ctx, OpID: opID, DefID: c.ID, Mode: mode, Trigger: ops.Trigger(operations.TriggerSourceFromContext(ctx))}
 	if rep != nil {
 		env.Log = rep.Logger()
@@ -317,7 +320,7 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 		return nil, fmt.Errorf("%s: %w", defID, ErrWriterUnavailable)
 	}
 	return opswriter.New(opswriter.Config{
-		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check,
+		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check, RunLatch: ops.RefusalLatchFrom(ctx),
 		Intents: s.intents, Books: s.books, Files: s.files, Authors: s.authors, Journal: s.journal,
 		History: opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
 	}), nil
