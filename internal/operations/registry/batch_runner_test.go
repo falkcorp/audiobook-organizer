@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -1076,5 +1076,39 @@ func TestDirtySetCompareAndDelete(t *testing.T) {
 	left := slices.Sorted(maps.Keys(fd.entries))
 	if !slices.Equal(left, []string{prefix + itemKey(7), prefix + itemKey(9)}) {
 		t.Fatalf("left dirty = %v, want the re-marked and the failed entry", left)
+	}
+}
+
+// TestDirtySetPreviewKeepsEntries: a Preview run of a DirtySet source
+// performs no write, so it deletes no entry; the live run that follows still
+// finds every subject dirty.
+func TestDirtySetPreviewKeepsEntries(t *testing.T) {
+	const prefix = "idx:test:dirty:"
+	fd := &fakeDirty{entries: map[string][]byte{}}
+	for i := range 10 {
+		fd.entries[prefix+itemKey(i)] = []byte{0, 0, 0, 0, 0, 0, 0, 1}
+	}
+	var ran atomic.Int64
+	def := ops.Batch("d", ops.BatchSpec[ops.NoParams, string, ops.NoResult]{
+		Common: ops.Common{Title: "d", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermLibraryEditMetadata},
+		Source: func(*ops.RC, ops.NoParams) (ops.Source[string], error) {
+			return ops.DirtySet(prefix, func(_ context.Context, ids []string) ([]string, error) { return ids, nil }), nil
+		},
+		Item: func(_ *ops.ItemRC, _ ops.NoParams, _ string) error {
+			ran.Add(1)
+			return ops.ErrPreview
+		},
+	})
+	rc := ops.NewRC(ops.RunEnv{Context: context.Background(), OpID: "op", Mode: ops.Preview})
+	job, err := ops.Compile(def).OpenBatch(rc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, dirty: fd, commitEvery: -1}); err != nil {
+		t.Fatalf("preview run: %v", err)
+	}
+	if ran.Load() != 10 || len(fd.entries) != 10 {
+		t.Fatalf("preview ran %d items and left %d of 10 entries dirty; it must run all and keep all", ran.Load(),
+			len(fd.entries))
 	}
 }

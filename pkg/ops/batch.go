@@ -1,7 +1,7 @@
 // file: pkg/ops/batch.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d9e5b5a9-3c58-4d74-aac9-55d6b89b6410
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package ops
 
@@ -249,8 +249,9 @@ type dirtySpec[T any] struct {
 // DirtySet is a Source over a durable per-subject dirty set (keys
 // <prefix><subjectID>, whose value begins with an 8-byte big-endian mark
 // epoch written by the marker, 02 PR 14). The runner drains it 256 keys at a
-// time, one page per chunk, and after an item succeeds deletes its entry only
-// if the epoch is unchanged, so a re-mark during the item is not lost. Order
+// time, one page per chunk, and after an item succeeds in a Live run deletes
+// its entry only if the epoch is unchanged, so a re-mark during the item is
+// not lost; a Preview run leaves every entry dirty. Order
 // is Unordered (resume restarts from zero, which is cheap: processed entries
 // are gone). load must return exactly one item per id, in the order given.
 func DirtySet[T any](prefix string, load func(ctx context.Context, ids []string) ([]T, error)) Source[T] {

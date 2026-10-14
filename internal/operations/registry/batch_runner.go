@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-14
 
@@ -855,7 +855,10 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 			for k, v := range itemTally.Counters() {
 				tally.add(k, v)
 			}
-			if ch.vals != nil && !b.clearDirty(ch.keys[j], ch.vals[j]) {
+			// A preview performs no write, so the entry stays dirty for the
+			// live run that follows; deleting it here would drop the subject
+			// from that run unprocessed.
+			if ch.vals != nil && b.cfg.rc.Mode() != ops.Preview && !b.clearDirty(ch.keys[j], ch.vals[j]) {
 				return
 			}
 		default:
@@ -943,7 +946,8 @@ func (b *batchRun) addRow(t *chunkTally, row database.ItemOutcome) {
 }
 
 // clearDirty deletes a processed DirtySet entry only if its value (mark
-// epoch) is unchanged; a re-mark during the item keeps the entry dirty.
+// epoch) is unchanged; a re-mark during the item keeps the entry dirty. A
+// preview run never calls it.
 func (b *batchRun) clearDirty(id string, val []byte) bool {
 	if _, err := b.cfg.dirty.CompareAndDeleteRaw(b.job.Dirty.Prefix+id, val); err != nil {
 		b.fail(fmt.Errorf("%s: clear dirty entry %s: %w", b.cfg.opID, id, err))
