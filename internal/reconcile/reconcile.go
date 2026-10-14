@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-14
 
 package reconcile
 
@@ -251,7 +251,6 @@ type AssignVGResult struct {
 	SkippedConcurrentAssignment int `json:"skipped_concurrent_assignment"`
 }
 
-// RunReconcileScan executes the reconcile preview build and persists results.
 // SaveResultFunc persists a run's output payload.
 //
 // It replaces a store method that wrote onto the v1 operations row. Taking a
@@ -264,11 +263,36 @@ type AssignVGResult struct {
 // found nothing.
 type SaveResultFunc func(payload any) error
 
-func RunReconcileScan(store Store, ctx context.Context, saveResult SaveResultFunc, progress operations.ProgressReporter) error {
+// ScanHooks carries the signals a long reconcile scan sends to whoever runs it.
+//
+// The scan is one op on the registry's 5-minute silence watchdog, and it has
+// stretches that make no progress report of their own: the directory walk over
+// the library, import and iTunes trees, and the title-in-filename match, which
+// compares every broken record against every untracked file. Heartbeat is how
+// those stretches stay visibly alive.
+type ScanHooks struct {
+	// Heartbeat stamps the run's liveness clock without touching the progress
+	// bar. It is called per walked entry, per stat, per hashed file and per
+	// matched record, from several goroutines at once, so it must be cheap and
+	// safe for concurrent use. nil is allowed.
+	Heartbeat func()
+}
+
+func (h ScanHooks) beat() {
+	if h.Heartbeat != nil {
+		h.Heartbeat()
+	}
+}
+
+// RunReconcileScan builds the reconcile preview and persists it through
+// saveResult. ctx is honored at every phase boundary and inside each phase's
+// per-item loop; a canceled scan returns an error wrapping ctx.Err() and saves
+// nothing, so a partial preview is never mistaken for a finished one.
+func RunReconcileScan(ctx context.Context, store Store, saveResult SaveResultFunc, progress operations.ProgressReporter, hooks ScanHooks) error {
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	result, err := BuildReconcilePreviewWithProgress(store, operations.LoggerFromReporter(progress))
+	result, err := BuildReconcilePreviewCtx(ctx, store, operations.LoggerFromReporter(progress), hooks)
 	if err != nil {
 		return fmt.Errorf("reconcile scan failed: %w", err)
 	}
@@ -284,7 +308,7 @@ func RunReconcileScan(store Store, ctx context.Context, saveResult SaveResultFun
 
 // BuildReconcilePreview builds the full reconciliation preview (sync, no progress).
 func BuildReconcilePreview(store Store) (*ReconcilePreviewResult, error) {
-	return BuildReconcilePreviewWithProgress(store, nil)
+	return BuildReconcilePreviewCtx(context.Background(), store, nil, ScanHooks{})
 }
 
 // hashFilesConcurrent computes a segment hash for every file across a bounded
@@ -297,14 +321,20 @@ func BuildReconcilePreview(store Store) (*ReconcilePreviewResult, error) {
 // slot and the map is folded serially afterwards, so on a hash collision the
 // highest-indexed file still wins (as the sequential map-build did). Files that
 // fail to hash are skipped. report, if non-nil, is called ~every 100 files with
-// the running completed count.
-func hashFilesConcurrent(files []string, report func(done int)) map[string]string {
+// the running completed count. ctx stops the pool from starting further hashes
+// once canceled; the caller must check ctx.Err() before trusting the partial
+// index. hooks.Heartbeat is stamped per file.
+func hashFilesConcurrent(ctx context.Context, files []string, report func(done int), hooks ScanHooks) map[string]string {
 	hashes := make([]string, len(files))
 	var done atomic.Int64
 	var g errgroup.Group
 	g.SetLimit(max(runtime.NumCPU(), 1))
 	for i, fp := range files {
 		g.Go(func() error {
+			if ctx.Err() != nil {
+				return nil
+			}
+			hooks.beat()
 			if h, err := scanner.ComputeSegmentFileHash(fp); err == nil {
 				hashes[i] = h // sha256 hex is never empty; "" == unhashed
 			}
@@ -325,9 +355,19 @@ func hashFilesConcurrent(files []string, report func(done int)) map[string]strin
 	return idx
 }
 
-// BuildReconcilePreviewWithProgress builds the full reconciliation preview with
-// progress reporting for background operations. log may be nil.
-func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*ReconcilePreviewResult, error) {
+// BuildReconcilePreviewCtx builds the full reconciliation preview with progress
+// reporting for background operations. log may be nil. A canceled ctx stops the
+// build at the next check and returns an error wrapping ctx.Err().
+func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logger, hooks ScanHooks) (*ReconcilePreviewResult, error) {
+	canceled := func(phase string) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("reconcile scan canceled %s: %w", phase, err)
+		}
+		return nil
+	}
+	if err := canceled("before start"); err != nil {
+		return nil, err
+	}
 	if log == nil {
 		log = logger.New("reconcile")
 	}
@@ -406,6 +446,10 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 			continue
 		}
 		g.Go(func() error {
+			if ctx.Err() != nil {
+				return nil
+			}
+			hooks.beat()
 			if _, err := os.Stat(books[i].FilePath); err != nil {
 				brokenFlag[i] = true
 			}
@@ -416,6 +460,11 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 		})
 	}
 	_ = g.Wait() // os.Stat errors are the signal (broken), never fatal here
+	// A canceled pool skipped stats, leaving their brokenFlag false: without this
+	// the unchecked tail would read as "all valid" instead of "not checked".
+	if err := canceled("while checking book paths"); err != nil {
+		return nil, err
+	}
 
 	for i := range books {
 		if brokenFlag[i] {
@@ -440,7 +489,7 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 	// Step 2: Scan directories for untracked audio files
 	report(0, 1, "Scanning directories for untracked audio files...")
 	logMsg("info", "Scanning library, import paths, and iTunes directories for untracked files")
-	untrackedFiles, err := FindUntrackedFiles(store, knownPaths)
+	untrackedFiles, err := FindUntrackedFiles(ctx, store, knownPaths, hooks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan for untracked files: %w", err)
 	}
@@ -456,9 +505,9 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 	// Step 3: Hash untracked files for matching
 	totalUntracked := len(untrackedFiles)
 	report(0, totalUntracked, fmt.Sprintf("Hashing %d untracked files...", totalUntracked))
-	hashIndex := hashFilesConcurrent(untrackedFiles, func(done int) {
+	hashIndex := hashFilesConcurrent(ctx, untrackedFiles, func(done int) {
 		report(done, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", done, totalUntracked))
-	})
+	}, hooks)
 	report(totalUntracked, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", totalUntracked, totalUntracked))
 	logMsg("info", fmt.Sprintf("Computed hashes for %d untracked files", len(hashIndex)))
 
@@ -509,6 +558,10 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 	}
 	logMsg("info", fmt.Sprintf("Hash matching found %d matches", len(result.Matches)))
 
+	if err := canceled("after hashing, before filename matching"); err != nil {
+		return nil, err
+	}
+
 	// Step 4: Match by filename pattern
 	report(0, totalBroken, fmt.Sprintf("Matching %d broken records by filename patterns...", totalBroken))
 	filenameIndex := make(map[string][]string)
@@ -547,7 +600,14 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 
 	// Step 4b: Try matching by title contained in filename
 	report(0, totalBroken, fmt.Sprintf("Matching %d broken records by title in filename...", totalBroken))
+	// Every broken record is compared against every untracked file here, with
+	// NormalizeFilename re-run in the inner loop, so this is the longest phase
+	// that reports nothing of its own: one beat and one cancel check per record.
 	for _, book := range brokenBooks {
+		if err := canceled("while matching titles"); err != nil {
+			return nil, err
+		}
+		hooks.beat()
 		if matchedBooks[book.ID] {
 			continue
 		}
@@ -604,7 +664,10 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 
 // FindUntrackedFiles walks directories in priority order (library root first,
 // then import paths, then iTunes paths), collecting audio files not in the DB.
-func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, error) {
+// The walk is the longest silent stretch of a reconcile scan on network or ZFS
+// storage, so it stamps hooks.Heartbeat per entry and stops with ctx.Err() as
+// soon as ctx is canceled.
+func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]bool, hooks ScanHooks) ([]string, error) {
 	var dirs []string
 
 	// Priority 1: Library root (our organized folder — always preferred)
@@ -661,6 +724,10 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 			continue
 		}
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if cerr := ctx.Err(); cerr != nil {
+				return cerr
+			}
+			hooks.beat()
 			if err != nil {
 				return nil // skip errors
 			}
@@ -686,6 +753,9 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 			}
 			return nil
 		})
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, cerr
+		}
 		if err != nil {
 			slog.Warn("reconcile error walking", "dir", dir, "err", err)
 		}

@@ -1,11 +1,12 @@
 // file: internal/reconcile/app_dir_guard_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d5c3e78-1b46-4a02-8f95-7c2e60b3d417
-// last-edited: 2026-09-14
+// last-edited: 2026-10-14
 
 package reconcile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -166,7 +167,7 @@ func TestFindUntrackedFiles_SkipsAppDirs(t *testing.T) {
 				}
 			}
 
-			got, err := FindUntrackedFiles(appDirStore{}, map[string]bool{})
+			got, err := FindUntrackedFiles(context.Background(), appDirStore{}, map[string]bool{}, ScanHooks{})
 			if err != nil {
 				t.Fatalf("FindUntrackedFiles: %v", err)
 			}

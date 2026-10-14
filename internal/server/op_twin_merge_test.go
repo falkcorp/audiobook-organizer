@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-14
 
@@ -68,6 +68,11 @@ var twinMergeRows = []struct {
 	// POST /dedup/scan-llm (scan.trigger) enqueues the survivor directly and is
 	// outside this table. Timeout stays 2h (120m equals the loser's 2h).
 	{"scheduler.dedup-llm-review", "dedup.llm-review", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
+	// 04-P14c: maintenance.reconcile-scan (no Permissions, so the settings.manage fallback;
+	// 180m) merged into reconcile.scan (settings.manage; 2h before the merge, 3h now). The
+	// alias neither widens nor narrows the gate. The survivor also takes the loser's
+	// CapFilesRead (pinned in TestReconcileScanOp_CarriesLoserBehaviour).
+	{"maintenance.reconcile-scan", "reconcile.scan", []auth.Permission{auth.PermSettingsManage}, 3 * time.Hour},
 }
 
 func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {

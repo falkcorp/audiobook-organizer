@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.1 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -202,7 +202,7 @@ sequenceDiagram
 | `maintenance.purge-empty-authors` / `maintenance.purge-empty-narrators` | Purge author/narrator rows with no books (fail-closed ref counts) |
 | `library.scan` | Library scan (per-book scan lock since #3635, so repairs may apply during a scan) |
 | `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
-| `maintenance.reconcile-scan` | Reconcile library paths vs. filesystem |
+| `reconcile.scan` | Reconcile library paths vs. filesystem; also the nightly `reconcile_scan` task. The generic operations endpoint requires `settings.manage`; `POST /api/v1/operations/reconcile/scan` still admits `scan.trigger`. `GET /api/v1/operations/reconcile/scan/latest` returns the newest run whichever ID it was stored under. Former ID `maintenance.reconcile-scan` still resolves |
 | `dedup.author-scan` | Scan for author near-duplicates (former ID `maintenance.author-dedup-scan` still resolves) |
 | `dedup.llm-review` | LLM review of ambiguous dedup candidates. The generic operations endpoint requires `settings.manage`; `POST /api/v1/dedup/scan-llm` still admits `scan.trigger`. Former IDs `maintenance.dedup-llm-review` and `scheduler.dedup-llm-review` still resolve |
 | `maintenance.window` | Nightly maintenance window (dispatches sub-ops) |
@@ -220,7 +220,7 @@ how often each old ID is still used. The 2026-09-25 renames are
 `itunes.{regroup,playlist-import,heal,clone-into-library}`, `library.optimize`
 → `maintenance.library-optimize`, and `maintenance.dedup-llm-review` →
 `dedup.llm-review`. `scheduler.dedup-llm-review` → `dedup.llm-review` followed on
-2026-10-14 (04-P14b).
+2026-10-14 (04-P14b), and `maintenance.reconcile-scan` → `reconcile.scan` the same day (04-P14c).
 
 ## Response Conventions
 

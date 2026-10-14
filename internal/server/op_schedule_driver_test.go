@@ -1,7 +1,7 @@
 // file: internal/server/op_schedule_driver_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c47e92b1-5d08-4a3f-9e61-1b2f8d0a7c34
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package server
 
@@ -84,10 +84,10 @@ func TestScheduledOpsHaveADriver_NotOverSuppressed(t *testing.T) {
 	for _, defID := range scheduler.TaskV2DefIDs() {
 		driven[defID] = true
 	}
-	if _, ok := scheduleDriverAllowList["maintenance.reconcile-scan"]; ok {
-		t.Error("maintenance.reconcile-scan is driven and must not be allow-listed")
+	if _, ok := scheduleDriverAllowList["reconcile.scan"]; ok {
+		t.Error("reconcile.scan is driven and must not be allow-listed")
 	}
-	for _, id := range []string{"maintenance.file-integrity-check", "maintenance.orphan-book-files-cleanup", "maintenance.reconcile-scan"} {
+	for _, id := range []string{"maintenance.file-integrity-check", "maintenance.orphan-book-files-cleanup", "reconcile.scan"} {
 		if !driven[id] {
 			t.Errorf("%s should be driven by a scheduler task", id)
 		}

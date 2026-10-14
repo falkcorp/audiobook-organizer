@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8f5b91-7a34-4e60-b9d2-1f6e0a83c574
-// last-edited: 2026-09-07
+// last-edited: 2026-10-14
 
 package server
 
@@ -97,7 +97,17 @@ func reconcileOperationView(store reconcileOpLister, opID, legacyType string) *d
 // DefID, so passing a small limit through would drop QUEUED rows first — they
 // have no StartedAt and sort last. A scan that had just been enqueued would be
 // the first thing to disappear from a view whose whole job is to show it.
-func recentReconcileScans(store reconcileOpLister, limit int) []*database.Operation {
+//
+// canonical maps a stored def id to its current one (the registry's
+// CanonicalDefID). Rows are matched on the canonical id, not on a literal, so
+// the nightly runs recorded under the def id this scan absorbed (04-P14c) and any
+// later rename keep appearing; a literal compare would hide every one of them
+// the moment the old def stopped being registered. nil means ids are compared
+// as stored.
+func recentReconcileScans(store reconcileOpLister, limit int, canonical func(string) string) []*database.Operation {
+	if canonical == nil {
+		canonical = func(id string) string { return id }
+	}
 	if limit <= 0 {
 		limit = 200
 	}
@@ -109,7 +119,7 @@ func recentReconcileScans(store reconcileOpLister, limit int) []*database.Operat
 	if rows, err := store.ListOperationsV2Since(time.Time{}, storeScanBound); err == nil {
 		for i := range rows {
 			row := rows[i]
-			if row.DefID != reconcileScanDefIDV2 || seen[row.ID] {
+			if canonical(row.DefID) != reconcileScanDefIDV2 || seen[row.ID] {
 				continue
 			}
 			seen[row.ID] = true

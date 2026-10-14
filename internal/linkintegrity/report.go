@@ -1,7 +1,7 @@
 // file: internal/linkintegrity/report.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e0b9d63-27af-4c81-95b2-8f16a30c7d2e
-// last-edited: 2026-08-05
+// last-edited: 2026-10-14
 
 // Package linkintegrity holds the shared vocabulary for the "First Aid" library
 // validation + repair pass: the shapes a broken book/file link can take, and a
@@ -51,7 +51,7 @@ const (
 	ShapeDirectory Shape = "directory"
 
 	// ShapeMissing — FilePath resolves to nothing. Not this package's problem to
-	// fix: maintenance.reconcile-scan already owns "book points at vanished
+	// fix: reconcile.scan already owns "book points at vanished
 	// file", and an offline mount looks identical to deleted audio. Report only
 	// (owner decision D4). 93 of 17,149 (0.5%).
 	ShapeMissing Shape = "missing"

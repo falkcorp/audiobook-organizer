@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6d0a3c84-1b57-4e92-8f36-9c2e5a710db4
-// last-edited: 2026-09-07
+// last-edited: 2026-10-14
 
 package server
 
@@ -173,7 +173,7 @@ func TestRecentReconcileScans_QueuedScanSurvivesACrowdedOpsTable(t *testing.T) {
 		ID: "queued-scan", DefID: reconcileScanDefIDV2, Status: "queued", QueuedAt: now,
 	})
 
-	got := recentReconcileScans(&reconcileIndexStore{v2: rows}, 50)
+	got := recentReconcileScans(&reconcileIndexStore{v2: rows}, 50, nil)
 	if len(got) != 1 || got[0].ID != "queued-scan" {
 		t.Fatalf("a queued reconcile scan must survive a crowded ops table, got %d rows", len(got))
 	}
@@ -188,7 +188,7 @@ func TestRecentReconcileScans_ListsScansNewestFirstExcludingOtherDefs(t *testing
 			{ID: "old", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour)},
 		},
 	}
-	got := recentReconcileScans(store, 50)
+	got := recentReconcileScans(store, 50, nil)
 	if len(got) != 2 {
 		t.Fatalf("want exactly the 2 reconcile SCANS (apply excluded), got %d", len(got))
 	}

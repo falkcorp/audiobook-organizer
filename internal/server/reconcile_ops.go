@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-14
 
 // reconcile_ops registers the v2 OperationDefs for the reconcile scan and
 // reconcile apply operations. The HTTP handlers in reconcile.go enqueue these
@@ -39,7 +39,12 @@ type reconcileApplyOpParams struct {
 // RegisterReconcileScanOpV2 registers the "reconcile.scan" v2 OperationDef.
 func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "reconcile.scan",
+		ID: "reconcile.scan",
+		// Merged 2026-10-14 (04-P14c, D27): the nightly maintenance op of the other
+		// name did the same scan and is gone; its id resolves here. Rows recorded
+		// under it are read back through the registry's canonical id (see
+		// recentReconcileScans).
+		FormerIDs:       []string{"maintenance.reconcile-scan"},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Scan",
@@ -47,15 +52,25 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "reconcile.scan",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
+		// 3h is the retired nightly op's budget, the larger of the two: the scan
+		// stats every book path and hashes every untracked file, which on a large
+		// library over network storage outran the survivor's old 2h.
+		Timeout:        3 * time.Hour,
+		ResumePolicy:   opsregistry.ResumeDrop,
+		ConcurrencyKey: "reconcile.scan",
+		Permissions:    []auth.Permission{auth.PermSettingsManage},
+		// CapFilesRead: the scan stats book paths, walks the library, import and
+		// iTunes trees, and reads files to hash them. The retired op declared it;
+		// this def did not.
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapFilesRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			// The retired nightly op was enqueued with no params at all, and its id
+			// still resolves here, so an empty payload is a valid call.
 			var p reconcileScanOpParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("reconcile.scan: decode params: %w", err)
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("reconcile.scan: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -66,7 +81,12 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 			saveResult := func(payload any) error {
 				return opsregistry.ReporterSetResult(reporter, payload)
 			}
-			runErr := reconcile.RunReconcileScan(store, ctx, saveResult, progress)
+			// Heartbeat covers the stretches with no progress report of their own
+			// (the directory walk, the title match) on the 5-minute watchdog, and
+			// ctx makes Cancel real: the retired nightly op had the same
+			// Cancellable flag, but this body used to ignore ctx entirely.
+			hooks := reconcile.ScanHooks{Heartbeat: func() { opsregistry.TouchLiveness(reporter) }}
+			runErr := reconcile.RunReconcileScan(ctx, store, saveResult, progress, hooks)
 			// Activity tags on this run's own id. It used to tag on the legacy id,
 			// so dropping the stamp without repointing would leave the entries
 			// written but orphaned from the operation that produced them.

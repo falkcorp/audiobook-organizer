@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-09-25
+// last-edited: 2026-10-14
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -10,7 +10,7 @@
 // rows. A whole-library survey on 2026-08-05 found 17,149 of 44,886 books
 // (38.2%) in this state.
 //
-// WHY NO EXISTING OP CATCHES THIS. maintenance.reconcile-scan flags a book only
+// WHY NO EXISTING OP CATCHES THIS. reconcile.scan flags a book only
 // when os.Stat on its path FAILS (reconcile.go). These all stat fine, so it
 // walks past every one of them and reports the library healthy.
 // maintenance.orphan-book-files-cleanup handles the opposite direction
@@ -75,7 +75,7 @@ func (p *Plugin) relinkUnlinkedBooksDef() sdk.OperationDef {
 		DisplayName: "Relink unlinked books (detect · repair)",
 		Description: "Finds Book rows that own ZERO book_file rows but whose file_path still resolves on disk, " +
 			"and creates the missing book_file row. These books are unlinked, not orphaned — they are unplayable " +
-			"and invisible to every duration-dependent check until relinked. reconcile-scan cannot see them because " +
+			"and invisible to every duration-dependent check until relinked. reconcile.scan cannot see them because " +
 			"it only flags books whose path FAILS to stat. DRY RUN unless {\"apply\": true}.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
@@ -239,10 +239,10 @@ func classifyUnlinked(b *database.Book, path string) linkintegrity.Finding {
 	switch {
 	case err != nil:
 		// Owner decision D4: report only. An offline mount is indistinguishable
-		// from deleted audio, and reconcile-scan already owns this case.
+		// from deleted audio, and reconcile.scan already owns this case.
 		f.Shape = linkintegrity.ShapeMissing
 		f.Action = linkintegrity.DispositionReportOnly
-		f.Reason = "file_path does not resolve on disk — could be deleted audio or an offline mount; reconcile-scan owns this case"
+		f.Reason = "file_path does not resolve on disk — could be deleted audio or an offline mount; reconcile.scan owns this case"
 		return f
 
 	case st.IsDir():

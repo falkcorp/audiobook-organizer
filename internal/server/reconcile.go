@@ -1,7 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-09-24
+// last-edited: 2026-10-14
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -65,6 +65,16 @@ func (s *Server) startReconcileScan(c *gin.Context) {
 	httputil.RespondWithSuccess(c, http.StatusAccepted, op)
 }
 
+// canonicalDefIDFunc returns the registry's def-id canonicalizer, or the identity
+// function before the registry exists, so list helpers can take one nil-safe
+// argument.
+func (s *Server) canonicalDefIDFunc() func(string) string {
+	if s.opRegistry == nil {
+		return func(id string) string { return id }
+	}
+	return s.opRegistry.CanonicalDefID
+}
+
 func (s *Server) latestReconcileScan(c *gin.Context) {
 	store := s.Ops()
 	if store == nil {
@@ -76,7 +86,7 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 	// A v2-only scan would hide every reconcile run from before the v1 row was
 	// retired; a v1-only scan (what this did) now finds nothing at all, because
 	// new runs no longer write one.
-	ops := recentReconcileScans(store, 200)
+	ops := recentReconcileScans(store, 200, s.canonicalDefIDFunc())
 
 	// Only the newest op is ever considered. This was written as a loop over all
 	// 200, but every path through the body returned on the first iteration, so

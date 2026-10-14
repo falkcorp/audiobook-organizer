@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-14
 
@@ -269,6 +269,7 @@ var renamedOpIDs = map[string]string{
 	"scheduler.cleanup-old-backups":         "maintenance.cleanup-old-backups",
 	"maintenance.author-dedup-scan":         "dedup.author-scan",
 	"scheduler.dedup-llm-review":            "dedup.llm-review",
+	"maintenance.reconcile-scan":            "reconcile.scan",
 }
 
 func TestOpIDs_EveryAliasResolves(t *testing.T) {
