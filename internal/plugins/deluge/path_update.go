@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-13
 
@@ -115,7 +115,7 @@ func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, repo
 
 	var updated atomic.Int64
 
-	// runitems:sequential one book's versions; the store allows at most one active, so there is nothing to fan out
+	// runitems:sequential one book's versions (a handful); sequential by design
 	if err := registry.RunItems(ctx, reporter, versions, func(ctx context.Context, v database.BookVersion) error {
 		if v.TorrentHash == "" || v.Status != database.BookVersionStatusActive {
 			return nil // skip non-Deluge or inactive versions
