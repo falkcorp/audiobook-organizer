@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-14
 
@@ -322,6 +322,17 @@ type v3WriterStores struct {
 }
 
 // v3WriterLog is the subsystem logger of the v3 Writer wiring.
+// The capabilities newV3Writer resolves for the Fixer resume evidence,
+// pinned on the production store in production code (not a test), so the
+// binary itself fails to build if a method rename on the store would leave
+// AsCapability returning nil and every resumed row silently unrecognized.
+var (
+	_ opswriter.RowMarkStore      = (*database.PebbleStore)(nil)
+	_ opswriter.ChangeReader      = (*database.PebbleStore)(nil)
+	_ opswriter.BookHistoryReader = (*database.PebbleStore)(nil)
+	_ opswriter.ChangeScanner     = (*database.PebbleStore)(nil)
+)
+
 var v3WriterLog = logger.New("registry.v3writer")
 
 // historyChangeTypeV3 is the metadata-history change type of v3 Writer rows.
@@ -362,7 +373,7 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	return opswriter.New(opswriter.Config{
 		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check, RunLatch: ops.RefusalLatchFrom(ctx),
 		Intents: s.intents, Books: s.books, Files: s.files, Authors: s.authors, Journal: s.journal,
-		History:  opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
+		History:  opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, opswriter.BatchPrefix(opID), nil),
 		RowMarks: s.rowMarks, Changes: s.changes, HistoryReader: s.historyReader, ChangeScan: s.changeScan,
 	}), nil
 }

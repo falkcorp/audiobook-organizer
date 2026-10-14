@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
 // last-edited: 2026-10-14
 
@@ -83,6 +83,11 @@ func (h *BookHistory) Rows() int { return int(h.rows.Load()) }
 
 // Failed is how many history rows could not be recorded.
 func (h *BookHistory) Failed() int { return int(h.failed.Load()) }
+
+// BatchPrefix is the batch prefix of every metadata history batch a v3
+// run's Writer records (registry newV3Writer). RowApplied trusts a batch as
+// the run's own only by this prefix (standsIn), so the two must not drift.
+func BatchPrefix(opID string) string { return "op-" + opID + "-" }
 
 // NewBatchID returns a fresh batch id.
 func (h *BookHistory) NewBatchID() string { return h.batchPrefix + ulid.Make().String() }

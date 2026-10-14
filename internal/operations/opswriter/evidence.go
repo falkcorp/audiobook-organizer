@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.3.2
+// version: 2.4.0
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -151,16 +151,18 @@ func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
 //   - each batch it names is in its book's metadata history and its run was
 //     not reverted there (batchesUndone), and no batch was undone by
 //     undo-last-apply (standsIn), both judged without the clock;
+//   - each book_file a journal row it names wrote is still a file of that
+//     book (filesStillOwned), judged without the clock;
 //   - no write it names has been followed, on what it wrote, by a later
 //     write recorded in EITHER store -- a metadata history row or an
 //     operation journal row of the same book, of any operation and any
-//     change type (standsIn, subjectOf).
+//     change type (standsIn, subjectOf), judged by the rows' stamps.
 //
 // A read is gated like a write, so a fenced or canceled run reads nothing
 // and a resumed run that is only recognizing rows still renews its
 // stand-down lease. One point read for the marker, one per journal row it
-// names, then per book it names: one metadata history read and one journal
-// read (bookJournal).
+// names, then per book it names: one metadata history read, one journal
+// read (bookJournal), and one book_file point read per file it names.
 func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 	if err := w.checkAs(ctx, "apply marker of resumed row "+rowID, refusedRead); err != nil {
 		return false, err
@@ -286,7 +288,43 @@ func (w *Writer) bookStands(ctx context.Context, bookID string, n *bookNamed) (b
 	if len(n.batches) > 0 && batchesUndone(hist, n.batches, w.cfg.OpID) {
 		return false, nil
 	}
-	return standsIn(hist, journal, n), nil
+	if ok, err := w.filesStillOwned(bookID, n.changes); err != nil || !ok {
+		return false, err
+	}
+	return standsIn(hist, journal, n, BatchPrefix(w.cfg.OpID)), nil
+}
+
+// filesStillOwned reports whether every book_file a named journal row of
+// this book wrote is still a file of this book. A book_file row is keyed by
+// its book, and a reassignment (a merge, a regroup, a version split) moves
+// it under another book's key -- journaled, when it is, on the TARGET book,
+// whose journal this check never reads, and by several movers not at all.
+// A file no longer under the book it was written on (moved, or deleted)
+// means the write cannot be shown to stand, whatever either store says, so
+// this is decided without the clock. Without a book_file store it fails
+// closed. One point read per file.
+func (w *Writer) filesStillOwned(bookID string, named []*database.OperationChange) (bool, error) {
+	seen := map[string]bool{}
+	for _, c := range named {
+		s := subjectOf(c.FieldName, nil)
+		if s.file == "" || s.file == everyFile || s.file == anything || seen[s.file] {
+			continue
+		}
+		seen[s.file] = true
+		if w.cfg.Files == nil {
+			return false, nil
+		}
+		f, err := w.cfg.Files.GetBookFileByID(bookID, s.file)
+		if err != nil {
+			return false, fmt.Errorf("read book_file %s of book %s: %w", s.file, bookID, err)
+		}
+		if f == nil {
+			pkgLog.Debug("op %s: book_file %s is no longer a file of book %s; the write the marker names there does not stand",
+				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(s.file), logger.SanitizeLogValue(bookID))
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // batchesUndone reports whether a wanted batch is missing from its book's
@@ -324,46 +362,77 @@ func historyWrite(r database.MetadataChangeRecord) bool {
 }
 
 // write is one recorded write on a book, from either store, as standsIn
-// compares them: what it wrote (subject) and when it was stamped.
+// compares them: what it wrote (subject, and the name it was recorded
+// under), when it was stamped, and whether the marker names it.
 type write struct {
 	subj subject
+	raw  string
 	at   time.Time
-	self string // identity: "h<index>" for a history row, "j<op>\x00<id>" for a journal row
+	self string // identity: "h<index>" for a history row, "j<id>" for a journal row of this run
+	// named: the marker names it. trusted: it is provably this run's own
+	// write -- a journal row read under the run's op id, or a history row
+	// whose batch id carries the run's batch prefix (BatchPrefix), which
+	// no other writer mints.
+	named, trusted bool
 }
 
 // standsIn reports whether no write it names on this book -- every write
 // row of a wanted batch, every named journal row -- was followed on what it
 // wrote (subject overlap) by ANOTHER write of either store stamped at or
 // after it. A tie counts against the named write. Two rows of wanted
-// batches on one subject therefore defeat each other whatever their
-// stamps: that is how an undo-last-apply (its undo rows go in the batch
-// itself) is seen without trusting the clock. So does a later write of
-// this same run (a row whose Apply wrote one field twice is not claimed),
-// one an operation revert has since reverted, and one that put the named
-// value back: the rule asks only whether the named write is still the
-// newest, never whether a later one restored its value.
+// batches on one subject under ONE name therefore defeat each other
+// whatever their stamps: that is how an undo-last-apply (it records its
+// undo row in the batch itself, under the field name of the row it puts
+// back) is seen without trusting the clock. So does a later write of this
+// same run under the same name (a row whose Apply wrote one field twice is
+// not claimed), one an operation revert has since reverted, and one that
+// put the named value back: the rule asks only whether the named write is
+// still the newest, never whether a later one restored its value.
+//
+// One exemption: two named writes the run provably made itself (write
+// trusted) that share a subject under DIFFERENT names do not defeat each
+// other. The credit list and the author_id column are one subject (other
+// writers record either change under either name), and an Apply that sets
+// both records author_id in its batch and "authors" in the journal;
+// without the exemption such a row could never be claimed. A foreign write
+// is never trusted, so a note naming one cannot exempt it; a note naming
+// another write of this same run can (ops.NoteHistory).
 //
 // The comparison is by timestamp across two stores, so it is only as good
-// as the clock. Both stamps are taken after their write committed (a
-// history row's ChangedAt in RecordDiff, a journal row's CreatedAt in
-// CreateOperationChange), which leaves a narrow window: a foreign write
-// that commits after the named one but stamps its row first reads as
-// older. The clock-free cases (batchesUndone, and two rows of a wanted
-// batch on one subject, which defeat each other either way) do not have
-// this window; every other comparison here does.
+// as the order of the stamps. The Writer stamps its rows after its write
+// committed (a history row's ChangedAt in RecordDiff, a journal row's
+// CreatedAt in CreateOperationChange, called after the write). Other
+// writers do not all do so, and a foreign write F is missed whenever F
+// commits after the named write N but F's row carries the earlier stamp:
+//
+//   - CreateOperationChange stamps CreatedAt before its own batch commits,
+//     and stageSeriesObjectDrop stamps a series-object drop with the book
+//     write's time before that batch commits: a window of the commit's
+//     duration;
+//   - a journal-first writer (internal/repairs.Writer, Step and the
+//     book_file and credit methods) journals a change BEFORE making it, so
+//     its stamp precedes its write by however long the write takes; and
+//     when a resumed operation finds its earlier row it records nothing
+//     new, so a write made today can carry a stamp from the first attempt.
+//     That window has no bound.
+//
+// Closing it needs journal-first writers to re-stamp their row after the
+// write, or a commit sequence compared instead of a clock; neither exists.
+// The clock-free cases (batchesUndone, filesStillOwned, and two rows of a
+// wanted batch on one subject under one name) do not have this window;
+// every other comparison here does.
 //
 // Nor can it see a write recorded in NEITHER store: many book_file writers
 // outside the Writer (the scanner, the AcoustID and tag backfills, the
 // Deluge link backfill) record nothing, and seeing those needs a
 // per-book_file history this store does not keep (todo.d,
 // 2026-10-14-bookfile-change-history-for-fixer-resume).
-func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *bookNamed) bool {
+func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *bookNamed, batchPrefix string) bool {
 	// files: every book_file id a recognised file name of this book's rows
 	// (either store) names, so a journal row named by the bare file id
 	// reads as a write to that whole file. Taken from the store, never from
-	// what the marker names: a note on the item must not be able to change
-	// how a foreign row is read (ops.NoteHistory can only make the check
-	// stricter).
+	// what the marker names: a note on the item cannot change how a
+	// foreign row is read.
 	files := map[string]bool{}
 	addFile := func(name string) {
 		if s := subjectOf(name, nil); s.file != "" && s.file != everyFile && s.file != anything {
@@ -376,29 +445,46 @@ func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *boo
 	for _, r := range journal {
 		addFile(r.field)
 	}
+	namedChange := make(map[string]bool, len(n.changes))
+	for _, c := range n.changes {
+		namedChange[c.ID] = true
+	}
 	var all, named []write
 	for i, r := range hist {
 		if !historyWrite(r) {
 			continue
 		}
-		wr := write{subj: subjectOf(r.Field, files), at: r.ChangedAt, self: fmt.Sprintf("h%d", i)}
+		mine := n.batches[r.BatchID]
+		wr := write{subj: subjectOf(r.Field, files), raw: r.Field, at: r.ChangedAt, self: fmt.Sprintf("h%d", i),
+			named: mine, trusted: mine && batchPrefix != "" && strings.HasPrefix(r.BatchID, batchPrefix)}
 		all = append(all, wr)
-		if n.batches[r.BatchID] {
+		if mine {
 			named = append(named, wr)
 		}
 	}
 	for _, r := range journal {
-		all = append(all, write{subj: subjectOf(r.field, files), at: r.at, self: "j" + r.op + "\x00" + r.id})
+		wr := write{subj: subjectOf(r.field, files), raw: r.field, at: r.stamp()}
+		if r.own {
+			wr.self = "j" + r.id
+			wr.named = namedChange[r.id]
+			wr.trusted = wr.named
+		}
+		all = append(all, wr)
 	}
 	for _, c := range n.changes {
-		named = append(named, write{subj: subjectOf(c.FieldName, nil), at: c.CreatedAt,
-			self: "j" + c.OperationID + "\x00" + c.ID})
+		// Read by id under the run's op id (journalRowsLive): trusted.
+		named = append(named, write{subj: subjectOf(c.FieldName, nil), raw: c.FieldName, at: c.CreatedAt,
+			self: "j" + c.ID, named: true, trusted: true})
 	}
 	for _, nw := range named {
 		for _, r := range all {
-			if r.self != nw.self && overlap(nw.subj, r.subj) && !r.at.Before(nw.at) {
-				return false
+			if r.self == nw.self || !overlap(nw.subj, r.subj) || r.at.Before(nw.at) {
+				continue
 			}
+			if nw.trusted && r.trusted && r.raw != nw.raw {
+				continue // the run's own writes to one subject under two names
+			}
+			return false
 		}
 	}
 	return true
@@ -425,11 +511,19 @@ const (
 // database.HistoryFieldToJSON (author_name, series, series_position). Kept
 // here, not in HistoryFieldToJSON: database.HistoryFieldName reverses that
 // map, and series_name is not the history name of series_id.
+//
+// The author_id column and the credit list ("authors", the book_authors
+// join) are ONE subject: writers record a credit-list rewrite as author_id
+// or author_name (the author id repair, the duplicate merge, the path
+// link, metafetch's apply history, a manual edit) and a column change as
+// book_authors (the entities author ops), so a write under any of these
+// names may have changed either.
 var bookFieldAliases = map[string]string{
-	"author":        "author_id", // journal rows of author merges and purges
+	"author":        "authors",   // journal rows of author merges and purges
+	"author_id":     "authors",   // the column; also credit rewrites journaled under it
+	"book_authors":  "authors",   // credit-list rewrites (author merge, relink, series dedup)
 	"series_name":   "series_id", // a manual edit's series override (its lock key)
 	"series_object": "series_id", // database.HistoryFieldSeriesObject
-	"book_authors":  "authors",   // credit-list rewrites (author merge, relink, series dedup)
 }
 
 // knownBookFields: every name subjectOf reads as a book field.

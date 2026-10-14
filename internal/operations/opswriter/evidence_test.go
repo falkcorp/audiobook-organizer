@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -733,7 +733,9 @@ func TestSubjectOverlap(t *testing.T) {
 		{"file.format:f2", "f9", true}, // an unknown bare name: anything
 		{"authors", "authors", true},
 		{"authors", "book_authors", true},
-		{"authors", "author_id", false},
+		{"authors", "author_id", true}, // one subject: the column and the credit list
+		{"authors", "author_name", true},
+		{"author", "book_authors", true},
 		{"author_id", "author", true},
 		{"author_id", "author_name", true},
 		{"series_id", "series", true},
@@ -743,6 +745,11 @@ func TestSubjectOverlap(t *testing.T) {
 		{"title", "title", true},
 		{"title", "publisher", false},
 		{"title", "file.format:f1", false},
+		// A book field and a file field of the same JSON name are different
+		// subjects (Book and BookFile share title, format, duration, ...).
+		{"format", "file.format:f1", false},
+		{"title", "file.title:f1", false},
+		{"duration", "book_file:f1:duration", false},
 		{"authors", "file_path", false},
 		// Every alias and special name is known, so it does NOT overlap an
 		// unrelated book field (an unknown name would).
@@ -936,7 +943,7 @@ func TestRowAppliedSeesLaterWritesInEitherStore(t *testing.T) {
 	s.foreignHistory("book-001", "apply")
 	s.foreignJournal("o2", "book-002", "title")
 	s.foreignHistory("book-003", "book_file:file-003:disc_count")
-	s.foreignJournal("o3", "book-shared", "author_id")
+	s.foreignJournal("o3", "book-shared", "series_id")
 	s.foreignHistory("book-005", "title")
 	for _, r := range rows {
 		mustRowApplied(t, w, r, true)
@@ -944,8 +951,15 @@ func TestRowAppliedSeesLaterWritesInEitherStore(t *testing.T) {
 
 	// A bare id that only another, unnamed row names as a file reads as
 	// that file too: the id set comes from the store, not from the marker.
+	// Each recognised file name of either store adds its id: a journal
+	// book_file:<id>, a history book_file:<id>:<field>, and a journal
+	// file.<field>:<id> (the shape the Writer itself records).
 	s.foreignJournal("o4", "book-001", "book_file:file-777")
 	s.foreignJournal("o5", "book-001", "file-777")
+	s.foreignHistory("book-001", "book_file:file-778:track_number")
+	s.foreignJournal("o6", "book-001", "file-778")
+	s.foreignJournal("o7", "book-001", "file.format:file-779")
+	s.foreignJournal("o8", "book-001", "file-779")
 	for _, r := range rows {
 		mustRowApplied(t, w, r, true)
 	}
@@ -1038,5 +1052,267 @@ func TestRowAppliedScansTheJournalOncePerRun(t *testing.T) {
 	mustRowApplied(t, evidenceWriter(s, "op1", ops.Live), "row-book-001", true)
 	if s.bookReads.Load() != reads+1 {
 		t.Fatal("a Writer without ChangeScan did not read the book's journal")
+	}
+}
+
+// TestRowAppliedAuthorIsOneSubject (05-PR5b round 4 B1): the author_id
+// column and the credit list are one subject, because real writers record
+// a credit rewrite as author_id or author_name and a column change as
+// book_authors. So a later write under any of those names defeats a row
+// that wrote either. A row whose Apply writes BOTH (author_id in its batch,
+// "authors" in the journal) is still claimed: the run's own two writes
+// under two names do not defeat each other -- but only writes provably the
+// run's own (a batch with the run's prefix), so a marker naming a foreign
+// batch cannot use that, and undo-last-apply, which records its undo row
+// in the batch under the same name, is still seen without the clock.
+func TestRowAppliedAuthorIsOneSubject(t *testing.T) {
+	s := newEvidenceStore()
+	for _, id := range []string{"book-005", "book-006", "book-007"} {
+		s.books[id] = &database.Book{ID: id, Title: "t " + id}
+	}
+	w := evidenceWriter(s, "op1", ops.Live)
+	credits := func(bookID string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := w.ModifyBookAuthors(ctx, bookID, func([]database.BookAuthor) ([]database.BookAuthor, error) {
+				return []database.BookAuthor{{BookID: bookID, AuthorID: 4}}, nil
+			})
+			return err
+		}
+	}
+	aid := 4
+	column := func(bookID string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := w.ModifyBook(ctx, bookID, func(b *database.Book) error { b.AuthorID = &aid; return nil })
+			return err
+		}
+	}
+	both := func(first, second func(string) func(context.Context) error, bookID string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			if err := first(bookID)(ctx); err != nil {
+				return err
+			}
+			return second(bookID)(ctx)
+		}
+	}
+	applyItem(t, w, "credits-1", credits("book-001"))
+	applyItem(t, w, "credits-2", credits("book-002"))
+	applyItem(t, w, "column-3", column("book-003"))
+	applyItem(t, w, "column-then-credits", both(column, credits, "book-004"))
+	applyItem(t, w, "credits-then-column", both(credits, column, "book-005"))
+	applyItem(t, w, "both-undone", both(column, credits, "book-006"))
+	applyItem(t, w, "column-7", column("book-007"))
+	rows := []string{"credits-1", "credits-2", "column-3", "column-then-credits", "credits-then-column",
+		"both-undone", "column-7"}
+	for _, r := range rows {
+		mustRowApplied(t, w, r, true) // P7: a row writing both is claimed, in either order
+	}
+
+	// undo-last-apply of the both-row's batch, stamped BEFORE it: seen.
+	m, _ := s.mark("op1", "both-undone")
+	if len(m.BookBatches) != 1 {
+		t.Fatalf("both-undone marker names %d batches; want 1", len(m.BookBatches))
+	}
+	undoBatch := m.BookBatches[0].BatchID
+	nv := "null"
+	s.mu.Lock()
+	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-006", Field: "author_id", NewValue: &nv,
+		ChangeType: changeTypeUndo, Source: "undo-last-apply", BatchID: undoBatch, ChangedAt: time.Now().Add(-time.Hour)})
+	s.mu.Unlock()
+	mustRowApplied(t, w, "both-undone", false)
+
+	// A forged marker naming the run's column batch plus a FOREIGN batch
+	// that wrote author_name later: the foreign batch is not the run's, so
+	// it is not exempt and defeats the column write.
+	m7, _ := s.mark("op1", "column-7")
+	nv2 := `"Someone Else"`
+	s.mu.Lock()
+	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-007", Field: database.HistoryFieldAuthor,
+		NewValue: &nv2, ChangeType: database.ChangeTypeManual, Source: "user_edit", BatchID: "manual-7",
+		ChangedAt: time.Now().Add(time.Second)})
+	s.mu.Unlock()
+	m7.RowID = "forged-7"
+	m7.BookBatches = append(m7.BookBatches, database.RowMarkBatch{BookID: "book-007", BatchID: "manual-7"})
+	if err := s.PutRowMarkV3("op1", m7); err != nil {
+		t.Fatal(err)
+	}
+	mustRowApplied(t, w, "forged-7", false)
+	mustRowApplied(t, w, "column-7", false)
+
+	// Later foreign writes under each other name of the subject.
+	s.foreignJournal("p1", "book-001", "author_id")           // P1: a credit rewrite journaled as author_id
+	s.foreignHistory("book-002", database.HistoryFieldAuthor) // P2: a credits change in history as author_name
+	s.foreignJournal("p2b", "book-003", "book_authors")       // P2b: a column write's book_authors row
+	s.foreignHistory("book-004", database.HistoryFieldAuthor) // the both-row, overwritten
+	for _, r := range []string{"credits-1", "credits-2", "column-3", "column-then-credits"} {
+		mustRowApplied(t, w, r, false)
+	}
+	mustRowApplied(t, w, "credits-then-column", true)
+}
+
+// TestRowAppliedFileMovedToAnotherBook (05-PR5b round 4 N3): a book_file a
+// row wrote that is no longer a file of that book (reassigned to another
+// book, whose journal the check does not read, or deleted) means the row
+// does not stand, without consulting any clock. A Writer with no book_file
+// store cannot check it and fails closed.
+func TestRowAppliedFileMovedToAnotherBook(t *testing.T) {
+	s := newEvidenceStore()
+	w := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, w, "track", func(ctx context.Context) error {
+		_, err := w.ModifyBookFile(ctx, "book-001", "file-001", func(f *database.BookFile) error { f.TrackNumber = 3; return nil })
+		return err
+	})
+	applyItem(t, w, "title", setTitle(w, "book-001", "mine"))
+	mustRowApplied(t, w, "track", true)
+	noFiles := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s})
+	mustRowApplied(t, noFiles, "track", false)
+	mustRowApplied(t, noFiles, "title", true) // no file named: no file store needed
+
+	// Reassigned to book-002 and journaled there, as MoveBookFiles does: the
+	// fixer's book no longer has the file.
+	s.mu.Lock()
+	s.files["file-001"].BookID = "book-002"
+	s.mu.Unlock()
+	s.foreignJournal("r1", "book-002", "book_file:file-001")
+	mustRowApplied(t, w, "track", false)
+	mustRowApplied(t, w, "title", true)
+
+	// Moved back and journaled on its target, book-001: a later write.
+	s.mu.Lock()
+	s.files["file-001"].BookID = "book-001"
+	s.mu.Unlock()
+	s.foreignJournal("r2", "book-001", "book_file:file-001")
+	mustRowApplied(t, w, "track", false)
+}
+
+// TestRowAppliedJournalMemoAges (05-PR5b round 4 S2): a scan serves the
+// Writer for journalMemoMaxAge, so a foreign write recorded after it is
+// missed only until the scan ages out; the next read then scans again.
+func TestRowAppliedJournalMemoAges(t *testing.T) {
+	s := newEvidenceStore()
+	first := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, first, "r1", setTitle(first, "book-001", "mine"))
+	applyItem(t, first, "r2", setTitle(first, "book-002", "mine"))
+	w := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s, ChangeScan: s})
+	now := time.Now()
+	w.journalMemo.now = func() time.Time { return now }
+	mustRowApplied(t, w, "r1", true) // the scan
+	s.foreignJournal("f1", "book-002", "title")
+	now = now.Add(journalMemoMaxAge - time.Second)
+	mustRowApplied(t, w, "r2", true) // served from the scan: the write is not in it yet
+	if s.scans.Load() != 1 {
+		t.Fatalf("%d scans inside the age; want 1", s.scans.Load())
+	}
+	now = now.Add(time.Second)
+	mustRowApplied(t, w, "r2", false)
+	if s.scans.Load() != 2 {
+		t.Fatalf("%d scans after the age; want 2", s.scans.Load())
+	}
+}
+
+// TestRowAppliedJournalMemoWaitersHonourTheirContext (05-PR5b round 4 N1):
+// while one reader scans, another waits for that scan or for its OWN
+// context, whichever ends first; and when the scan it waited for was
+// stopped by the scanning reader's context, it scans itself rather than
+// returning that reader's error.
+func TestRowAppliedJournalMemoWaitersHonourTheirContext(t *testing.T) {
+	s := newEvidenceStore()
+	first := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, first, "r1", setTitle(first, "book-001", "mine"))
+	s.changes = append(s.changes, make([]database.OperationChange, journalScanCtxEvery)...)
+	w := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s, ChangeScan: s})
+
+	started, release := make(chan struct{}), make(chan struct{})
+	var once atomic.Bool
+	s.onScanRow = func() {
+		if once.CompareAndSwap(false, true) {
+			close(started)
+			<-release
+		}
+	}
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leader := make(chan error, 1)
+	go func() {
+		_, err := w.RowApplied(leaderCtx, "r1")
+		leader <- err
+	}()
+	<-started
+
+	// A waiter with a short deadline returns at its deadline, not the scan's end.
+	short, cancelShort := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelShort()
+	t0 := time.Now()
+	if ok, err := w.RowApplied(short, "r1"); ok || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiter with a 20ms deadline: RowApplied = %v, %v; want its deadline", ok, err)
+	}
+	if el := time.Since(t0); el > time.Second {
+		t.Fatalf("waiter returned after %v; it waited for the scan, not its context", el)
+	}
+
+	// A patient waiter, then the leader's context stops the scan: the
+	// waiter scans itself and answers.
+	waiter := make(chan bool, 1)
+	go func() {
+		ok, err := w.RowApplied(context.Background(), "r1")
+		waiter <- ok && err == nil
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancelLeader()
+	close(release)
+	if err := <-leader; err == nil {
+		t.Fatal("the leader's canceled scan returned no error")
+	}
+	if !<-waiter {
+		t.Fatal("the waiter took the leader's canceled scan as its answer")
+	}
+}
+
+// TestRowAppliedJournalMemoConcurrent: many readers on one Writer while the
+// index flips between usable and not, under -race.
+func TestRowAppliedJournalMemoConcurrent(t *testing.T) {
+	s := newEvidenceStore()
+	first := evidenceWriter(s, "op1", ops.Live)
+	ids := []string{"book-001", "book-002", "book-003", "book-004"}
+	for _, id := range ids {
+		applyItem(t, first, "row-"+id, setTitle(first, id, "n "+id))
+	}
+	w := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s, ChangeScan: s})
+	stop := make(chan struct{})
+	flipped := make(chan struct{})
+	go func() {
+		defer close(flipped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				s.indexUsable.Store(!s.indexUsable.Load())
+			}
+		}
+	}()
+	errs := make(chan error, 16)
+	done := make(chan struct{})
+	for g := range 16 {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for i := range 200 {
+				id := ids[(g+i)%len(ids)]
+				if ok, err := w.RowApplied(context.Background(), "row-"+id); err != nil || !ok {
+					select {
+					case errs <- fmt.Errorf("%s: %v, %v", id, ok, err):
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+	for range 16 {
+		<-done
+	}
+	close(stop)
+	<-flipped
+	close(errs)
+	for e := range errs {
+		t.Error(e)
 	}
 }

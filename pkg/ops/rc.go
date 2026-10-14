@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-14
 
@@ -297,11 +297,16 @@ type tallyKey struct{}
 // undone. With no live item in ctx (the run's context, an unrelated one, or
 // a sealed item's) it is dropped: no row marker can name it. Writer
 // implementations only. It is exported only because the Writer lives in
-// another package; a plugin that calls it (or NotedHistory) anyway can only
-// make the resume check stricter, never looser: a reference the Writer
+// another package. A plugin that calls it (or NotedHistory) anyway cannot
+// make the resume check excuse anyone else's write: a reference the Writer
 // cannot read, or one saying history went unrecorded, makes MarkRowApplied
-// record no marker at all, and any other reference only adds history that
-// must still stand before RowApplied claims the row.
+// record no marker at all, and a reference to another writer's history
+// only adds history that must still stand before RowApplied claims the
+// row. It CAN loosen the check for this run's own writes: two writes the
+// run itself recorded, on one subject under two names (the author_id
+// column and the credit list), do not defeat each other when the marker
+// names both, so noting another row's write of this run can hide that the
+// other row wrote the same subject later.
 func NoteHistory(ctx context.Context, ref string) {
 	if ctx == nil || ref == "" {
 		return
