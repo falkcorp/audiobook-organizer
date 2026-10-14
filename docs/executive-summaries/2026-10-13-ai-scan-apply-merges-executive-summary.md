@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-13-ai-scan-apply-merges-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3c8e5b71-9a24-4d06-b7f3-6e1d2a94c850 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -22,11 +22,9 @@ There is no separate spec.
 - **Each suggestion says what it will do.** A merge row reads "keep X, merge Y,
   Z" with names. Only merge suggestions can be applied here. Renames, splits and
   the like are shown read-only, with a link to the Authors view.
-- **Author merges can be undone, and pen names survive them.** A merge used to
-  delete the merged author for good and leave its pen names attached to an
-  author that no longer existed. Now every merge moves the pen names to the
-  surviving author, and each step is recorded first, so undoing the operation
-  brings the author, its pen names and its books' credits back. The undo still
+- **Author merges can be undone.** A merge used to delete the merged author
+  for good. Now each step is recorded first, so undoing the operation brings
+  the author, its pen names and its books' credits back. The undo still
   refuses, and reports, the cases where putting things back would overwrite
   something that changed since. Merges made before this change cannot be undone.
 - **A narrator is no longer merged into the author.** The AI has two ways of
@@ -73,24 +71,21 @@ books stay with their author, that author is kept while they do, and the report
 lists each one. An owner who really wants the old behaviour can ask for it
 explicitly.
 
-## Merges that could not be undone, and lost pen names
+## Merges that could not be undone
 
 **What it was.** Merging author B into author A moved B's books to A and deleted
 B. Nothing recorded how to reverse that. B's aliases (alternate names, such as
-pen names, that the library uses to recognise an author) were left attached to
-the deleted B. The first version of this change made deleting an author remove
-its aliases too, which review caught: every way the library merges authors,
-including the background clean-up jobs, would then have thrown B's pen names
-away.
+pen names, that the library uses to recognise an author) stayed attached to the
+deleted B, reachable only through the redirect the merge left from B to A.
 
 **Why it mattered.** A wrong merge, which one click on a bulk Apply can produce
-many of, could only be repaired by hand, book by book. A pen name that is lost,
-or attached to an author that no longer exists, cannot connect a book tagged
-with it to the surviving author.
+many of, could only be repaired by hand, book by book, and B's pen names could
+not be handed back to a re-created B.
 
-**The fix.** Every merge now moves the merged author's aliases to the surviving
-author, and every step is written to the undo history
-before it happens (a book whose history entry cannot be written is not moved).
+**The fix.** Every way the library merges authors, including the background
+clean-up jobs, now moves the merged author's aliases to the surviving author,
+and every step is written to the undo history before it happens (a book whose
+history entry cannot be written is not moved).
 Undoing the operation recreates the author under its old identity, moves its
 aliases back, and puts each book's credits and main author back as they were.
 It does not overwrite later work: a book edited since the merge is left alone

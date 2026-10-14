@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.11.0
+// version: 4.12.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-10-14
 
@@ -105,6 +105,10 @@ type PipelineManager struct {
 	polling map[int]bool
 	// heartbeat overrides heartbeatInterval when non-zero (tests).
 	heartbeat time.Duration
+	// retryDelays overrides storeRetryDelays when non-nil (tests). A field, not
+	// a package var a test reassigns: a RunScan another test left running
+	// would read that var while it is being written.
+	retryDelays []time.Duration
 }
 
 // clock returns the current time from pm.now (time.Now when unset).
@@ -547,6 +551,17 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 		phases, gerr = pm.scanStore.GetPhases(scanID)
 		return gerr
 	}); err != nil {
+		if ctx.Err() != nil {
+			// Canceled or shut down during the retries: that is not a failed
+			// scan. Nothing is attached yet, so end it the way waitForScan
+			// ends an attached one.
+			if !lifecycle.IsShutdown(ctx) {
+				if cerr := pm.CancelScan(scanID); cerr != nil {
+					plog.Warn("scan %d: cancel on context done failed: %v", scanID, cerr)
+				}
+			}
+			return ctx.Err()
+		}
 		err = fmt.Errorf("get phases for scan %d: %w", scanID, err)
 		pm.abortScan(ctx, scanID, err)
 		return err
@@ -578,9 +593,12 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	pm.mu.Unlock()
 
 	if fresh {
-		if err := pm.retryStore(ctx, scanID, "marking it scanning", func() error {
+		if err := pm.retryStore(scanCtx, scanID, "marking it scanning", func() error {
 			return pm.scanStore.UpdateScanStatus(scanID, "scanning")
 		}); err != nil {
+			if scanCtx.Err() != nil {
+				return pm.waitForScan(ctx, scanID, scan.Mode, done) // canceled: as for drive below
+			}
 			err = fmt.Errorf("update scan status: %w", err)
 			pm.abortScan(ctx, scanID, err)
 			return err
@@ -600,6 +618,14 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	if err := pm.retryStore(scanCtx, scanID, "starting its phases", func() error {
 		return pm.drive(scanCtx, scanID, scan.Mode, resumed)
 	}); err != nil {
+		if scanCtx.Err() != nil {
+			// The scan was canceled (CancelScan, which marks it canceled and
+			// delivers the outcome) or its op's context ended while the start
+			// was being retried. Aborting would race CancelScan and could mark
+			// a canceled scan failed; waitForScan settles both cases the way a
+			// running scan's are settled.
+			return pm.waitForScan(ctx, scanID, scan.Mode, done)
+		}
 		pm.abortScan(ctx, scanID, err)
 		return err
 	}
@@ -727,7 +753,7 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, r
 }
 
 // storeRetryDelays are the waits between the attempts retryStore makes: four
-// attempts over about twenty seconds. A var so tests can shorten it.
+// attempts over about twenty seconds (PipelineManager.retryDelays overrides it).
 var storeRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
 
 // retryStore runs fn, and again after each of storeRetryDelays while it fails,
@@ -739,8 +765,12 @@ var storeRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second, 15 * ti
 // billing for. A retry is safe because each step is idempotent (a read, a status
 // write, and drive, which fails only before it launches anything).
 func (pm *PipelineManager) retryStore(ctx context.Context, scanID int, what string, fn func() error) error {
+	delays := storeRetryDelays
+	if pm.retryDelays != nil {
+		delays = pm.retryDelays
+	}
 	err := fn()
-	for _, wait := range storeRetryDelays {
+	for _, wait := range delays {
 		if err == nil {
 			return nil
 		}
