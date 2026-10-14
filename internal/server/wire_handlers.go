@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.48.3
+// version: 2.49.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 package server
 
@@ -519,6 +519,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.aiScanStore,
 		opReg,
 	)
+	// Runtime flight recorder snapshots (list + download). Guard typed-nil
+	// boxing so a Server built without NewServer lists nothing.
+	var traceStore handlers.TraceStore
+	if s.flight != nil {
+		traceStore = s.flight
+	}
+	tracesH := handlers.NewDiagnosticsTracesHandler(traceStore)
 
 	// Audiobooks domain handler (main library list / CRUD: list, count, facets,
 	// soft-delete listing / restore / purge, rescan, cover, get, segments,
@@ -705,7 +712,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 
 	// ── Register protected routes via per-domain methods ─────────────────────
 	s.wireLibraryRoutes(protected, cacheH, activityH, activityCompactH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, collectionH, userH, versionsH)
-	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, aiBackendsH, pluginsH)
+	s.wireMediaRoutes(protected, itunesH, aiH, diagH, tracesH, toolsH, aiBackendsH, pluginsH)
 	s.wireEntitiesRoutes(protected, entitiesH)
 	s.wireOperationsRoutes(protected, opsV2H, operationsH, schedulerH)
 	s.wireSystemRoutes(protected, systemH)

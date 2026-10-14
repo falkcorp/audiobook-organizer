@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -483,8 +483,20 @@ func (s *Server) runSearchIndexWatchdog() {
 		case <-s.bgCtx.Done():
 			return
 		case <-ticker.C:
-			s.checkSearchIndexStall()
+			s.searchIndexWatchdogTick(s.checkSearchIndexStall)
 		}
+	}
+}
+
+// searchIndexWatchdogTick is one watchdog pass: run the stall check, and when
+// it reports a stall ask the flight recorder for the runtime trace of the
+// moment. The request returns at once (the snapshot is written on its own
+// goroutine), so a wedged disk cannot stall this goroutine too. The check is
+// a parameter only so a test can stand in for a bleve write that never
+// returns, which nothing outside internal/search can produce.
+func (s *Server) searchIndexWatchdogTick(stalled func() bool) {
+	if stalled() {
+		s.requestTrace("search-index-stall")
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.94.0
+// version: 2.94.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-14
 
@@ -33,6 +33,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
+	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/flight"
@@ -362,6 +363,14 @@ type Server struct {
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 
+	// flight is the runtime flight recorder (internal/diag/flight): built in
+	// NewServer, started in Start, stopped in Shutdown next to bgCancel. Never
+	// nil after NewServer. traceSnap is what the two watchdogs (the ops
+	// registry's strike hook and the search-index stall check) call; it is
+	// flight in production and a test double in tests.
+	flight    *diagflight.Recorder
+	traceSnap traceSnapshotter
+
 	// shutdownArmed is closed by Start once every subsystem is up and the
 	// signal handler is the only thing left to wait on. Tests use it as the
 	// readiness signal before sending SIGTERM (TASK-205) instead of a fixed
@@ -636,10 +645,13 @@ func NewServer(store database.Store) *Server {
 	// the server's database.ChangeObserver on it, which sees every write the
 	// store commits, whoever made it.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
+	flightRec := newFlightRecorder()
 	server := &Server{
 		store:                  store,
 		bgCtx:                  bgCtx,
 		bgCancel:               bgCancel,
+		flight:                 flightRec,
+		traceSnap:              flightRec,
 		shutdownArmed:          make(chan struct{}),
 		router:                 router,
 		audiobookUpdateService: NewAudiobookUpdateService(store),

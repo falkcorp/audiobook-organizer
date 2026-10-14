@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.36.0
+// version: 4.37.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package server
 
@@ -219,6 +219,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	if err := steps.Run("opRegistrationGate", s.opRegistrationGate); err != nil {
 		return err
 	}
+
+	// Start the runtime flight recorder before the container starts the ops
+	// registry's watchdog, so its first strike already has a trace to save.
+	s.startFlightRecorder()
 
 	s.externalURL = strings.TrimRight(cfg.ExternalURL, "/")
 
@@ -602,6 +606,9 @@ func (s *Server) Start(cfg ServerConfig) error {
 		slog.Info("Canceling background goroutines...")
 		s.bgCancel()
 	}
+	// Stop the flight recorder with the rest of the background work. Waits at
+	// most 5s for a snapshot being written; later Snapshot calls are no-ops.
+	s.flight.Stop()
 	// Close the index queue so the index worker goroutine can
 	// finish its range loop and decrement bgWG. Leaving it open
 	// would deadlock the wait below because the worker doesn't
