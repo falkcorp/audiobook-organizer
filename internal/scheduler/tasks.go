@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-14
 
@@ -1240,7 +1240,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.reconcile-scan", nil)
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "reconcile.scan", struct{}{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue reconcile scan: %w", enqErr)
 			}

@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-10-14
 
@@ -180,7 +180,7 @@ var taskV2DefIDs = map[string]string{
 	"tombstone_cleanup":           "maintenance.tombstone-cleanup",
 	"resolve_production_authors":  "maintenance.resolve-production-authors",
 	"metadata_refresh":            "maintenance.metadata-refresh",
-	"reconcile_scan":              "maintenance.reconcile-scan",
+	"reconcile_scan":              "reconcile.scan",
 	"ai_dedup_batch":              "maintenance.ai-dedup-batch",
 	"purge_old_logs":              "maintenance.purge-old-logs",
 	"cleanup_activity_log":        "maintenance.cleanup-activity-log",

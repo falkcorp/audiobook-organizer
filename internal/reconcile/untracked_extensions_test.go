@@ -1,11 +1,12 @@
 // file: internal/reconcile/untracked_extensions_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d5dc58db-5747-4bec-a312-7673efd9e2a3
-// last-edited: 2026-09-01
+// last-edited: 2026-10-14
 
 package reconcile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,7 +57,7 @@ func TestFindUntrackedFilesFailsOpenOnNilExtensionConfig(t *testing.T) {
 	root := withEmptyExtensionConfig(t, nil)
 	writeAudio(t, root, "one.m4b", "two.aax", "three.aiff", "cover.jpg")
 
-	got, err := FindUntrackedFiles(appDirStore{}, map[string]bool{})
+	got, err := FindUntrackedFiles(context.Background(), appDirStore{}, map[string]bool{}, ScanHooks{})
 	if err != nil {
 		t.Fatalf("FindUntrackedFiles: %v", err)
 	}
@@ -70,7 +71,7 @@ func TestFindUntrackedFilesFailsOpenOnEmptyExtensionConfig(t *testing.T) {
 	root := withEmptyExtensionConfig(t, []string{})
 	writeAudio(t, root, "one.m4b", "two.aaxc")
 
-	got, err := FindUntrackedFiles(appDirStore{}, map[string]bool{})
+	got, err := FindUntrackedFiles(context.Background(), appDirStore{}, map[string]bool{}, ScanHooks{})
 	if err != nil {
 		t.Fatalf("FindUntrackedFiles: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestFindUntrackedFilesCoversTheLongTailExtensions(t *testing.T) {
 	root := withEmptyExtensionConfig(t, nil)
 	writeAudio(t, root, "a.aax", "b.aaxc", "c.aiff", "d.aif", "e.mka", "f.oga", "g.wav", "h.wma")
 
-	got, err := FindUntrackedFiles(appDirStore{}, map[string]bool{})
+	got, err := FindUntrackedFiles(context.Background(), appDirStore{}, map[string]bool{}, ScanHooks{})
 	if err != nil {
 		t.Fatalf("FindUntrackedFiles: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestFindUntrackedFilesNarrowsWithTheConfig(t *testing.T) {
 	root := withEmptyExtensionConfig(t, []string{".m4b"})
 	writeAudio(t, root, "keep.m4b", "drop.aax")
 
-	got, err := FindUntrackedFiles(appDirStore{}, map[string]bool{})
+	got, err := FindUntrackedFiles(context.Background(), appDirStore{}, map[string]bool{}, ScanHooks{})
 	if err != nil {
 		t.Fatalf("FindUntrackedFiles: %v", err)
 	}

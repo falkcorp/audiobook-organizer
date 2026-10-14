@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-10-05
+// last-edited: 2026-10-14
 
 package reconcile
 
@@ -233,7 +233,7 @@ func TestFindBrokenSegmentBooks_ParallelOrderAndCounts(t *testing.T) {
 }
 
 // TestBuildReconcilePreview_ParallelBrokenOrder verifies the parallelized
-// path-check loop in BuildReconcilePreviewWithProgress: BrokenRecords must list
+// path-check loop in BuildReconcilePreviewCtx: BrokenRecords must list
 // exactly the books whose FilePath is missing on disk, in book order, even
 // though the stats run concurrently. With no import paths/root/iTunes dirs,
 // FindUntrackedFiles returns nothing and the preview returns the broken records

@@ -1,11 +1,12 @@
 // file: internal/reconcile/reconcile_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a9c2e74-8b13-4d6f-9027-1e4c8a35d9b2
-// last-edited: 2026-07-16
+// last-edited: 2026-10-14
 
 package reconcile
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ func TestHashFilesConcurrent(t *testing.T) {
 	missing := filepath.Join(dir, "does-not-exist.m4b") // hash error → skipped
 
 	files := []string{a, b, c1, c2, missing}
-	idx := hashFilesConcurrent(files, nil)
+	idx := hashFilesConcurrent(context.Background(), files, nil, ScanHooks{})
 
 	ha, _ := scanner.ComputeSegmentFileHash(a)
 	hb, _ := scanner.ComputeSegmentFileHash(b)
@@ -61,7 +62,7 @@ func TestHashFilesConcurrent(t *testing.T) {
 }
 
 func TestHashFilesConcurrent_Empty(t *testing.T) {
-	if idx := hashFilesConcurrent(nil, nil); len(idx) != 0 {
+	if idx := hashFilesConcurrent(context.Background(), nil, nil, ScanHooks{}); len(idx) != 0 {
 		t.Fatalf("empty input → %d entries, want 0", len(idx))
 	}
 }
@@ -74,14 +75,14 @@ func TestHashFilesConcurrent_ProgressReported(t *testing.T) {
 		files = append(files, writeFile(t, dir, fmt.Sprintf("f%03d.m4b", i), fmt.Sprintf("content-%d", i)))
 	}
 	var maxDone int64
-	idx := hashFilesConcurrent(files, func(done int) {
+	idx := hashFilesConcurrent(context.Background(), files, func(done int) {
 		for {
 			cur := atomic.LoadInt64(&maxDone)
 			if int64(done) <= cur || atomic.CompareAndSwapInt64(&maxDone, cur, int64(done)) {
 				break
 			}
 		}
-	})
+	}, ScanHooks{})
 	if len(idx) != 250 {
 		t.Errorf("index size = %d, want 250", len(idx))
 	}
