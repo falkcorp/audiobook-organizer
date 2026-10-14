@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/fakes.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5e2a9c71-4d08-4f3b-8a6e-1b9d7c3f2a54
 // last-edited: 2026-10-14
 
@@ -444,6 +444,25 @@ func (t *trackedWriter) ModifyBookAuthors(ctx context.Context, bookID string, fn
 	})
 	return ch, err
 }
+
+// MarkRowApplied returns nothing and records nothing when the Writer is
+// fenced, in preview, without a row-mark store or with an incomplete history,
+// so call's "returned nil after the revoke" cannot tell a late mark from a
+// dropped one: it is late only when the store took a mark for this row
+// during the call (worldStore.PutRowMarkV3 counts them, per row id).
+func (t *trackedWriter) MarkRowApplied(ctx context.Context, rowID string) {
+	before := t.a.marksTaken(rowID)
+	_ = t.call("MarkRowApplied", "", func() error {
+		t.Writer.MarkRowApplied(ctx, rowID)
+		if t.a.marksTaken(rowID) == before {
+			return errMarkDropped
+		}
+		return nil
+	})
+}
+
+// errMarkDropped is call's "not accepted" for a mark the store never took.
+var errMarkDropped = errors.New("opstest: row mark not taken by the store")
 
 func (t *trackedWriter) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.HistoryRow, error)) error {
 	return t.call("Effect "+e.Name, t.a.w.books.bookOf(e.Subject), func() error { return t.Writer.Effect(ctx, e, fn) })

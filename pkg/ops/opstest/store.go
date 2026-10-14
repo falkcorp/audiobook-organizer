@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/store.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8e3c5a17-2f94-4b6d-a0c8-71d4e9b25f36
 // last-edited: 2026-10-14
 
@@ -43,6 +43,11 @@ var (
 	_ opswriter.HistoryRecorder = (*worldStore)(nil)
 	_ opswriter.ChangeJournal   = (*worldStore)(nil)
 	_ opswriter.IntentStore     = (*worldStore)(nil)
+
+	_ opswriter.RowMarkStore      = (*worldStore)(nil)
+	_ opswriter.ChangeReader      = (*worldStore)(nil)
+	_ opswriter.BookHistoryReader = (*worldStore)(nil)
+	_ opswriter.ChangeScanner     = (*worldStore)(nil)
 )
 
 func (s *worldStore) p() *database.PebbleStore { return s.w.st() }
@@ -358,14 +363,47 @@ func (s *worldStore) ListIntentsV3(id string) ([]database.Intent, error) {
 	return s.p().ListIntentsV3(id)
 }
 
-// GetBookChangeHistory reads a book's metadata history rows (a read). No
-// capability the registry resolves on this branch needs it. The Writer's
-// evidence reader that 05-PR5b (#4017) adds is opswriter.BookHistoryReader,
-// whose ReadBookChangeHistory also counts the rows that did not decode, which
-// this method drops silently; the PR that merges second replaces this
-// forwarder with ReadBookChangeHistory.
-func (s *worldStore) GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error) {
-	return s.p().GetBookChangeHistory(bookID, limit)
+// ReadBookChangeHistory reads a book's metadata history rows and counts the
+// rows that did not decode (opswriter.BookHistoryReader), a read.
+func (s *worldStore) ReadBookChangeHistory(bookID string) ([]database.MetadataChangeRecord, int, error) {
+	return s.p().ReadBookChangeHistory(bookID)
+}
+
+// ── Fixer row evidence (opswriter.RowMarkStore, ChangeReader) ──────────────
+
+// PutRowMarkV3 writes a row's mark under the generation's gate and records,
+// on the attempt, that the store took it: trackedWriter.MarkRowApplied
+// returns nothing, so this is the only way to tell a mark the production
+// Writer wrote from one it dropped (fenced, preview, no history).
+func (s *worldStore) PutRowMarkV3(id string, m database.RowMarkV3) error {
+	err := s.write(func(p *database.PebbleStore) error { return p.PutRowMarkV3(id, m) })
+	if err == nil {
+		if a := s.g.attemptOf(id); a != nil {
+			a.markTaken(m.RowID)
+		}
+	}
+	return err
+}
+
+func (s *worldStore) GetRowMarkV3(id, rowID string) (*database.RowMarkV3, error) {
+	return s.p().GetRowMarkV3(id, rowID)
+}
+
+func (s *worldStore) GetOperationChange(operationID, changeID string) (*database.OperationChange, error) {
+	return s.p().GetOperationChange(operationID, changeID)
+}
+
+func (s *worldStore) GetBookChanges(bookID string) ([]*database.OperationChange, error) {
+	return s.p().GetBookChanges(bookID)
+}
+
+// OpChangeByBookIndexUsable and ScanOperationChanges are the whole-journal
+// read RowApplied falls back to while the per-book index is not trusted
+// (opswriter.ChangeScanner), both reads.
+func (s *worldStore) OpChangeByBookIndexUsable() bool { return s.p().OpChangeByBookIndexUsable() }
+
+func (s *worldStore) ScanOperationChanges(fn func(*database.OperationChange) error) error {
+	return s.p().ScanOperationChanges(fn)
 }
 
 // ── generations ─────────────────────────────────────────────────────────────
