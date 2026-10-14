@@ -1,10 +1,10 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
-// extra_ops registers OperationDefs for 2 scheduler tasks that previously
-// used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
+// extra_ops registers the OperationDef for the scheduler task that previously
+// used the legacy triggerOperation / triggerOperationWithID helpers.  The def
 // extracts the closure logic into a typed Run func so the UOS v2 dispatcher
 // can manage lifecycle, cancellation, and concurrency without the old
 // BridgeQueue.
@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -32,7 +31,6 @@ import (
 // ExtraOpsDeps holds the typed dependencies needed by ExtraOpsRegistrar.
 // All fields are optional (nil-safe) to match the server's lazy-init pattern.
 type ExtraOpsDeps struct {
-	DedupEngine          *dedup.Engine
 	MetadataFetchService *metafetch.Service
 	// ScanStandDown is the scan stand-down gate the metadata upgrade op
 	// holds while it applies (metadata is never applied during a library scan).
@@ -40,8 +38,8 @@ type ExtraOpsDeps struct {
 	ScanStandDown opsregistry.ScanStandDownGate
 }
 
-// ExtraOpsRegistrar holds a Store reference and typed Deps so the 2 scheduler
-// OperationDefs can be registered without a *Server pointer.
+// ExtraOpsRegistrar holds a Store reference and typed Deps so the scheduler
+// OperationDef can be registered without a *Server pointer.
 type ExtraOpsRegistrar struct {
 	Deps  ExtraOpsDeps
 	Store metabatch.Store
@@ -76,37 +74,6 @@ func (a extraOpsProgressAdapter) Log(level, message string, details *string) err
 	return a.r.Log(l, message, attrs...)
 }
 func (a extraOpsProgressAdapter) IsCanceled() bool { return a.r.IsCanceled() }
-
-// --- dedup-llm-review ---
-
-// RegisterDedupLLMReviewOp registers the scheduler.dedup-llm-review OperationDef.
-func (r *ExtraOpsRegistrar) RegisterDedupLLMReviewOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.dedup-llm-review",
-		Liveness:        opsregistry.LivenessNone,
-		ProgressTimeout: 2 * time.Hour, // LivenessNone requires an explicit budget
-		Plugin:          "scheduler",
-		DisplayName:     "Dedup LLM Review",
-		Description:     "Run LLM review on ambiguous dedup candidates.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.dedup-llm-review",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			progress := extraOpsProgressAdapter{r: reporter}
-			if r.Deps.DedupEngine == nil {
-				_ = progress.Log("info", "Dedup engine not initialized, skipping LLM review", nil)
-				return nil
-			}
-			_ = progress.Log("info", "Starting LLM review of ambiguous dedup candidates", nil)
-			return r.Deps.DedupEngine.RunLLMReview(ctx)
-		},
-	})
-}
 
 // --- metadata-upgrade ---
 

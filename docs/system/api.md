@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-13 -->
+<!-- last-edited: 2026-10-14 -->
 
 # HTTP API
 
@@ -203,6 +203,7 @@ sequenceDiagram
 | `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
 | `maintenance.reconcile-scan` | Reconcile library paths vs. filesystem |
 | `dedup.author-scan` | Scan for author near-duplicates (former ID `maintenance.author-dedup-scan` still resolves) |
+| `dedup.llm-review` | LLM review of ambiguous dedup candidates; needs `settings.manage` (former IDs `maintenance.dedup-llm-review` and `scheduler.dedup-llm-review` still resolve) |
 | `maintenance.window` | Nightly maintenance window (dispatches sub-ops) |
 | `library.bulk-write-back` | Bulk tag write-back to audio files |
 | `ai.author-review` | AI-assisted author dedup review |
@@ -217,7 +218,8 @@ how often each old ID is still used. The 2026-09-25 renames are
 `maintenance.itunes-{regroup,playlist-import,heal,clone-into-library}` →
 `itunes.{regroup,playlist-import,heal,clone-into-library}`, `library.optimize`
 → `maintenance.library-optimize`, and `maintenance.dedup-llm-review` →
-`dedup.llm-review`.
+`dedup.llm-review`. `scheduler.dedup-llm-review` → `dedup.llm-review` followed on
+2026-10-14 (04-P14b).
 
 ## Response Conventions
 

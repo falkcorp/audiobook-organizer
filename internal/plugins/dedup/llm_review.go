@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-10-14
 
 package dedup
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -19,13 +20,23 @@ func (p *Plugin) llmReviewDef() sdk.OperationDef {
 		ID: "dedup.llm-review",
 		// maintenance.dedup-llm-review was a second registration of this same
 		// engine review in the maintenance namespace, removed 2026-09-25
-		// (naming audit class 8); its ID resolves here.
-		FormerIDs:    []string{"maintenance.dedup-llm-review"},
+		// (naming audit class 8). scheduler.dedup-llm-review was a third, the
+		// scheduler task's copy, retired 2026-10-14 (04-P14b, D54); both IDs
+		// resolve here. Soak: todo.d/2026-10-14-p14b-alias-soak.md.
+		FormerIDs:    []string{"maintenance.dedup-llm-review", "scheduler.dedup-llm-review"},
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "LLM review of candidates",
 		Description:  "Runs LLM review pass over ambiguous embedding-layer candidates.",
 		ResumePolicy: sdk.ResumeDrop,
+		// The retired scheduler def was cancellable; this one declared no value,
+		// which the registry reads as "reject Cancel". RunLLMReview takes the
+		// run's ctx, so a cancel is honored (04-P14b).
+		Cancellable: true,
+		// Same gate the retired scheduler def declared. Before 04-P14b this def
+		// declared none and fell back to settings.manage, so this line is the
+		// explicit form of the effective gate; it changes nobody's access.
+		Permissions: []auth.Permission{auth.PermSettingsManage},
 		// Serialize against itself like every other write-declaring dedup op.
 		// Without a key the scheduler can start a second review while the
 		// first is mid-flight, both holding CapLibraryWrite over the same
