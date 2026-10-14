@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.16.1
-// last-edited: 2026-10-11
+// version: 2.17.0
+// last-edited: 2026-10-13
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -66,6 +66,12 @@ type AIScanStore struct {
 	// *AIScanStore. Production builds exactly one per process (the
 	// "aiscanstore" service in internal/server/registry_wire.go).
 	idMu sync.Mutex
+	// createMu makes "is a scan running?" and "create a scan" one decision for
+	// CreateScanIfNoneActive, and makes every other creation (CreateScanTagged,
+	// the nightly ai-dedup-batch recording) wait out that decision instead of
+	// landing between its check and its write. It is held across nothing else:
+	// take it first, before applyMu, stateMu or idMu.
+	createMu sync.Mutex
 }
 
 // Scan represents a full pipeline run.
@@ -100,14 +106,21 @@ type ScanPhase struct {
 // ScanSuggestion is the normalized suggestion from any phase.
 // Note: Roles uses json.RawMessage to avoid importing the ai package (the actual SuggestionRoles struct is in internal/ai).
 type ScanSuggestion struct {
-	Action        string          `json:"action"`
-	CanonicalName string          `json:"canonical_name"`
-	Reason        string          `json:"reason"`
-	Confidence    string          `json:"confidence"`
-	AuthorIDs     []int           `json:"author_ids,omitempty"`
-	GroupIndex    int             `json:"group_index,omitempty"`
-	Roles         json.RawMessage `json:"roles,omitempty"`
-	Source        string          `json:"source"` // groups_scan, full_scan, groups_enrich, full_enrich
+	Action        string `json:"action"`
+	CanonicalName string `json:"canonical_name"`
+	Reason        string `json:"reason"`
+	Confidence    string `json:"confidence"`
+	AuthorIDs     []int  `json:"author_ids,omitempty"`
+	// KeepID is the author a merge keeps: the other AuthorIDs are folded into it.
+	// Written by the pipeline when the suggestion is built (the heuristic
+	// canonical for a groups scan; the author named canonical_name, else the
+	// one with the most books, for a full scan). Zero on a scan stored before
+	// the field existed or one whose authors could not be resolved; the read
+	// path fills it in lazily (aiscan.PipelineManager.EnsureKeepIDs).
+	KeepID     int             `json:"keep_id,omitempty"`
+	GroupIndex int             `json:"group_index,omitempty"`
+	Roles      json.RawMessage `json:"roles,omitempty"`
+	Source     string          `json:"source"` // groups_scan, full_scan, groups_enrich, full_enrich
 }
 
 // ScanResult is the final cross-validated output.
@@ -244,6 +257,49 @@ func (s *AIScanStore) CreateScan(mode string, models map[string]string, authorCo
 // a separate tag write leaves a scan no replay can find, and each replay then
 // creates another.
 func (s *AIScanStore) CreateScanTagged(mode string, models map[string]string, authorCount int, operationID string) (*Scan, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	return s.createScanLocked(mode, models, authorCount, operationID)
+}
+
+// ScanAlreadyRunningError is CreateScanIfNoneActive's refusal: ScanID is a scan
+// that has not reached a terminal status.
+type ScanAlreadyRunningError struct {
+	ScanID int
+	Status string
+}
+
+func (e *ScanAlreadyRunningError) Error() string {
+	return fmt.Sprintf("an AI author scan is already running (scan #%d, %s); wait for it to finish or cancel it first", e.ScanID, e.Status)
+}
+
+// CreateScanIfNoneActive is CreateScan that refuses, with *ScanAlreadyRunningError,
+// when any scan is still pending, scanning, enriching or cross-validating. The
+// check and the create are one step under createMu, so two concurrent starts
+// produce one scan and one refusal.
+//
+// Only this path refuses. CreateScanTagged (the nightly ai-dedup-batch recording
+// a batch it already paid for) never does: it takes the same lock, so it cannot
+// land inside the decision, but it always creates. A recording that is part way
+// through is a scan with a non-terminal status for a few milliseconds, which a
+// concurrent start counts as running.
+func (s *AIScanStore) CreateScanIfNoneActive(mode string, models map[string]string, authorCount int) (*Scan, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	scans, err := s.ListScans()
+	if err != nil {
+		return nil, fmt.Errorf("list scans: %w", err)
+	}
+	for _, sc := range scans {
+		if !isTerminalScanStatus(sc.Status) {
+			return nil, &ScanAlreadyRunningError{ScanID: sc.ID, Status: sc.Status}
+		}
+	}
+	return s.createScanLocked(mode, models, authorCount, "")
+}
+
+// createScanLocked writes a new pending scan. The caller holds createMu.
+func (s *AIScanStore) createScanLocked(mode string, models map[string]string, authorCount int, operationID string) (*Scan, error) {
 	id, err := s.nextID("scan")
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate scan ID: %w", err)
@@ -811,6 +867,49 @@ func (s *AIScanStore) GetScanResults(scanID int) ([]ScanResult, error) {
 	}
 
 	return results, nil
+}
+
+// SetResultKeepIDs fills in KeepID on stored results that have none: keep maps a
+// result id to the author it keeps. A result that already has a KeepID, is not
+// in keep, or no longer exists is left alone, so a concurrent apply's Applied
+// flag and a KeepID the pipeline wrote are never overwritten. It holds applyMu
+// like every other writer of a result row.
+func (s *AIScanStore) SetResultKeepIDs(scanID int, keep map[int]int) error {
+	if len(keep) == 0 {
+		return nil
+	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for resultID, keepID := range keep {
+		key := s.k("scan_result:%d:%06d", scanID, resultID)
+		value, closer, err := s.db.Get(key)
+		if err == pebble.ErrNotFound {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to get result %d: %w", resultID, err)
+		}
+		var result ScanResult
+		uerr := json.Unmarshal(value, &result)
+		closer.Close()
+		if uerr != nil {
+			return fmt.Errorf("failed to unmarshal result %d: %w", resultID, uerr)
+		}
+		if result.Suggestion.KeepID != 0 {
+			continue
+		}
+		result.Suggestion.KeepID = keepID
+		data, err := json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("failed to marshal result %d: %w", resultID, err)
+		}
+		if err := batch.Set(key, data, pebble.Sync); err != nil {
+			return fmt.Errorf("queue result %d: %w", resultID, err)
+		}
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 // MarkResultApplied marks a scan result as applied with the current timestamp.

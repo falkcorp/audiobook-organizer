@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.7.0
+// version: 4.8.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 package aiscan
 
@@ -373,6 +373,9 @@ func isTerminalPhase(status string) bool {
 // synchronously — DedupAIReviewTab.tsx:47-48 calls startAIScan() and then
 // immediately getAIScan(newScan.id), so the id cannot wait on an async op.
 // The caller enqueues an ai.author-scan operation whose Run calls RunScan.
+//
+// It returns an error wrapping *database.ScanAlreadyRunningError when another
+// scan has not finished; errors.As finds it.
 func (pm *PipelineManager) CreateScan(mode string) (*database.Scan, error) {
 	models := map[string]string{"groups": "gpt-5-mini", "full": "o4-mini"}
 
@@ -381,7 +384,11 @@ func (pm *PipelineManager) CreateScan(mode string) (*database.Scan, error) {
 		return nil, fmt.Errorf("get authors: %w", err)
 	}
 
-	scan, err := pm.scanStore.CreateScan(mode, models, len(authors))
+	// Refuses (*database.ScanAlreadyRunningError) when a scan is still running.
+	// The check and the create are one step in the store, because the nightly
+	// ai-dedup-batch creates scans too and two concurrent starts must not both
+	// pass a separate "is one running?" read.
+	scan, err := pm.scanStore.CreateScanIfNoneActive(mode, models, len(authors))
 	if err != nil {
 		return nil, fmt.Errorf("create scan: %w", err)
 	}
@@ -1100,7 +1107,7 @@ func groupsSuggestionsToScanSuggestions(suggestions []ai.AuthorDedupSuggestion, 
 			rolesJSON, _ = json.Marshal(s.Roles)
 		}
 
-		result = append(result, database.ScanSuggestion{
+		sug := database.ScanSuggestion{
 			Action:        s.Action,
 			CanonicalName: canonicalName,
 			Reason:        s.Reason,
@@ -1109,7 +1116,12 @@ func groupsSuggestionsToScanSuggestions(suggestions []ai.AuthorDedupSuggestion, 
 			GroupIndex:    s.GroupIndex,
 			Roles:         rolesJSON,
 			Source:        "groups_scan",
-		})
+		}
+		// The group's first id is the heuristic canonical (groupAuthorIDs).
+		if s.Action == "merge" {
+			sug.KeepID = groupsKeepID(sug)
+		}
+		result = append(result, sug)
 	}
 	return result
 }
@@ -1136,6 +1148,17 @@ func fullSuggestionsToScanSuggestions(suggestions []ai.AuthorDiscoverySuggestion
 		})
 	}
 	return result
+}
+
+// fullSuggestionsWithKeep converts a full scan's answers and fills in each merge
+// row's KeepID. A failed author read is not fatal: the rows keep KeepID 0 and the
+// read path (EnsureKeepIDs) fills them in later, with the same function.
+func (pm *PipelineManager) fullSuggestionsWithKeep(scanID int, discoveries []ai.AuthorDiscoverySuggestion) []database.ScanSuggestion {
+	sugs := fullSuggestionsToScanSuggestions(discoveries)
+	if err := AssignKeepIDs(pm.mainStore, sugs); err != nil {
+		plog.Warn("scan %d: could not choose a keep author for every full-scan merge; they are filled in when the results are read: %v", scanID, err)
+	}
+	return sugs
 }
 
 // Phase implementations
@@ -1339,7 +1362,7 @@ func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, 
 	}
 
 	pm.finishSource(ctx, scanID, "full_scan", inputJSON, allDiscoveries,
-		fullSuggestionsToScanSuggestions(allDiscoveries))
+		pm.fullSuggestionsWithKeep(scanID, allDiscoveries))
 }
 
 // submitBatch records "submitting" BEFORE CreateBatch, then the batch id
@@ -1968,7 +1991,7 @@ func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, 
 			return
 		}
 		pm.finishSource(ctx, scanID, phaseType, phase.InputData, discoveries,
-			fullSuggestionsToScanSuggestions(discoveries))
+			pm.fullSuggestionsWithKeep(scanID, discoveries))
 	}
 }
 

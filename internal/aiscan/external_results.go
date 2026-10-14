@@ -1,7 +1,7 @@
 // file: internal/aiscan/external_results.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7aa87f93-e965-48b3-9872-35ac6c51a6ea
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 package aiscan
 
@@ -28,7 +28,11 @@ const externalSourcePrefix = "ai-dedup-batch:"
 // Idempotent per sourceID: a replay finds the scan it already recorded and
 // finishes it if an earlier attempt stopped part way, so aijobs re-running
 // the callback never produces a second scan or a second set of results.
-func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggestions []ai.AuthorDiscoverySuggestion) (int, error) {
+//
+// keepStore, when not nil, lets each merge row be given its keep author as it is
+// recorded (see AssignKeepIDs). Nil leaves them to the read path, which fills
+// them in with the same function (PipelineManager.EnsureKeepIDs).
+func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggestions []ai.AuthorDiscoverySuggestion, keepStore KeepStore) (int, error) {
 	key := externalSourcePrefix + sourceID
 	scans, err := store.ListScans()
 	if err != nil {
@@ -62,6 +66,11 @@ func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggest
 		}
 	}
 	scanSuggestions := fullSuggestionsToScanSuggestions(suggestions)
+	if keepStore != nil {
+		if err := AssignKeepIDs(keepStore, scanSuggestions); err != nil {
+			plog.Warn("scan %d: could not choose a keep author for every merge; they are filled in when the results are read: %v", scan.ID, err)
+		}
+	}
 	outputJSON, _ := json.Marshal(suggestions)
 	suggestionsJSON, _ := json.Marshal(scanSuggestions)
 	if err := store.SavePhaseData(scan.ID, "full_scan", nil, outputJSON, suggestionsJSON); err != nil {

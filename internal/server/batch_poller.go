@@ -1,7 +1,7 @@
 // file: internal/server/batch_poller.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 package server
 
@@ -539,7 +539,7 @@ func (s *Server) registerBatchPollerHandlers() {
 	if s.aiScanStore != nil {
 		scanStore := s.aiScanStore
 		ai.SetAuthorDedupResultSink(func(_ context.Context, sourceID string, suggestions []ai.AuthorDiscoverySuggestion) error {
-			_, err := aiscan.RecordFullScanResults(scanStore, sourceID, suggestions)
+			_, err := aiscan.RecordFullScanResults(scanStore, sourceID, suggestions, s.Ops())
 			return err
 		})
 	}

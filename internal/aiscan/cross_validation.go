@@ -1,7 +1,7 @@
 // file: internal/aiscan/cross_validation.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: d0e6f2a4-7b8c-9d0e-1f2a-3b4c5d6e7f8a
-// last-edited: 2026-05-05
+// last-edited: 2026-10-13
 
 package aiscan
 
@@ -44,7 +44,11 @@ func CrossValidate(scanID int, groupsSuggestions, fullSuggestions []database.Sca
 						Reason:        gs.Reason + " | " + fs.Reason,
 						Confidence:    higherConfidence(gs.Confidence, fs.Confidence),
 						AuthorIDs:     mergeIDs(gs.AuthorIDs, fs.AuthorIDs),
-						GroupIndex:    gs.GroupIndex,
+						// The groups scan drives an agreed row, so its heuristic
+						// canonical is the keep; the full scan's choice covers a
+						// groups row that carried no ids.
+						KeepID:     firstNonZero(gs.KeepID, fs.KeepID),
+						GroupIndex: gs.GroupIndex,
 						Roles:         coalesce(gs.Roles, fs.Roles),
 						Source:        "cross_validate",
 					},
@@ -61,6 +65,7 @@ func CrossValidate(scanID int, groupsSuggestions, fullSuggestions []database.Sca
 						Reason:        "Groups: " + gs.Reason,
 						Confidence:    gs.Confidence,
 						AuthorIDs:     gs.AuthorIDs,
+						KeepID:        gs.KeepID,
 						GroupIndex:    gs.GroupIndex,
 						Roles:         gs.Roles,
 						Source:        "groups_scan",
@@ -75,6 +80,7 @@ func CrossValidate(scanID int, groupsSuggestions, fullSuggestions []database.Sca
 						Reason:        "Full: " + fs.Reason,
 						Confidence:    fs.Confidence,
 						AuthorIDs:     fs.AuthorIDs,
+						KeepID:        fs.KeepID,
 						GroupIndex:    fs.GroupIndex,
 						Roles:         fs.Roles,
 						Source:        "full_scan",
@@ -176,6 +182,14 @@ func idSet(ids []int) map[int]bool {
 // coalesce returns the first non-nil json.RawMessage.
 func coalesce(a, b json.RawMessage) json.RawMessage {
 	if len(a) > 0 {
+		return a
+	}
+	return b
+}
+
+// firstNonZero returns a, or b when a is zero.
+func firstNonZero(a, b int) int {
+	if a != 0 {
 		return a
 	}
 	return b

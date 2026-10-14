@@ -1,7 +1,7 @@
 // file: internal/aiscan/external_results_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f4ecec1d-b082-499e-8c29-8fe9a8f99043
-// last-edited: 2026-09-19
+// last-edited: 2026-10-13
 
 package aiscan
 
@@ -23,9 +23,9 @@ func TestRecordFullScanResultsIsIdempotentPerSource(t *testing.T) {
 		{AuthorIDs: []int{3}, Action: "rename", CanonicalName: "C", Confidence: "low"},
 	}
 
-	id1, err := RecordFullScanResults(store, "run-1", sugg)
+	id1, err := RecordFullScanResults(store, "run-1", sugg, nil)
 	require.NoError(t, err)
-	id2, err := RecordFullScanResults(store, "run-1", sugg)
+	id2, err := RecordFullScanResults(store, "run-1", sugg, nil)
 	require.NoError(t, err)
 	require.Equal(t, id1, id2, "a replay reuses the scan")
 
@@ -35,7 +35,7 @@ func TestRecordFullScanResultsIsIdempotentPerSource(t *testing.T) {
 	require.Equal(t, "complete", scans[0].Status)
 	require.Len(t, resultKeys(t, store, id1), 2)
 
-	id3, err := RecordFullScanResults(store, "run-2", sugg)
+	id3, err := RecordFullScanResults(store, "run-2", sugg, nil)
 	require.NoError(t, err)
 	require.NotEqual(t, id1, id3, "a different run is a different scan")
 }
@@ -52,7 +52,7 @@ func TestRecordFullScanResultsTagsScanAtomically(t *testing.T) {
 	require.Equal(t, externalSourcePrefix+"run-1", got.OperationID)
 
 	// A replay after a crash right after creation finishes THAT scan.
-	id, err := RecordFullScanResults(store, "run-1", []ai.AuthorDiscoverySuggestion{{AuthorIDs: []int{1}, Action: "rename", CanonicalName: "A", Confidence: "high"}})
+	id, err := RecordFullScanResults(store, "run-1", []ai.AuthorDiscoverySuggestion{{AuthorIDs: []int{1}, Action: "rename", CanonicalName: "A", Confidence: "high"}}, nil)
 	require.NoError(t, err)
 	require.Equal(t, scan.ID, id)
 	scans, err := store.ListScans()
@@ -65,7 +65,7 @@ func TestRecordFullScanResultsTagsScanAtomically(t *testing.T) {
 func TestRecordFullScanResultsReplayKeepsAppliedResults(t *testing.T) {
 	store := newScanStore(t)
 	sugg := []ai.AuthorDiscoverySuggestion{{AuthorIDs: []int{1, 2}, Action: "merge", CanonicalName: "A", Confidence: "high"}}
-	id, err := RecordFullScanResults(store, "run-1", sugg)
+	id, err := RecordFullScanResults(store, "run-1", sugg, nil)
 	require.NoError(t, err)
 	rs, err := store.GetScanResults(id)
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestRecordFullScanResultsReplayKeepsAppliedResults(t *testing.T) {
 	// Crash state: the scan was not yet marked complete when the user applied.
 	require.NoError(t, store.UpdateScanStatus(id, "scanning"))
 
-	_, err = RecordFullScanResults(store, "run-1", sugg)
+	_, err = RecordFullScanResults(store, "run-1", sugg, nil)
 	require.NoError(t, err)
 	after, err := store.GetScanResults(id)
 	require.NoError(t, err)
@@ -95,14 +95,14 @@ func TestRecordFullScanResultsSupersedesUnreviewedPrevious(t *testing.T) {
 	require.NoError(t, store.UpdateScanOperationID(pipelineScan.ID, "01J9ZOPERATIONULID000000000"))
 	require.NoError(t, store.UpdateScanStatus(pipelineScan.ID, "complete"))
 
-	first, err := RecordFullScanResults(store, "night-1", sugg)
+	first, err := RecordFullScanResults(store, "night-1", sugg, nil)
 	require.NoError(t, err)
-	reviewed, err := RecordFullScanResults(store, "night-2", sugg)
+	reviewed, err := RecordFullScanResults(store, "night-2", sugg, nil)
 	require.NoError(t, err)
 	rs, err := store.GetScanResults(reviewed)
 	require.NoError(t, err)
 	require.NoError(t, store.MarkResultApplied(reviewed, rs[0].ID))
-	latest, err := RecordFullScanResults(store, "night-3", sugg)
+	latest, err := RecordFullScanResults(store, "night-3", sugg, nil)
 	require.NoError(t, err)
 
 	status := func(id int) string {
