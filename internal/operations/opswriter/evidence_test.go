@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -261,10 +261,12 @@ func TestRowAppliedIsPerRow(t *testing.T) {
 // back makes it no evidence: the batch undone by undo-last-apply (undo rows
 // in the batch), a field of it undone on its own (an undo row with no batch
 // id, at or after the batch, on a field the batch wrote), its credits row
-// voided, its repoint row reverted (even with its book write standing), its
-// journal row gone. An undo of another field, or one older than the batch,
-// leaves it standing; so does an undo of another row's batch on another
-// book. A marker that names history the Writer cannot read is no evidence.
+// voided (Voided alone), its repoint row reverted (even with its book write
+// standing), its journal row gone, its batch's rows gone. An undo of
+// another field, or one older than the batch, leaves it standing; so does
+// an undo of another row's batch on another book, and a batch behind 150
+// older rows of its book is still found. A marker that names history the
+// Writer cannot read is no evidence.
 func TestRowAppliedUndoneHistory(t *testing.T) {
 	s := newEvidenceStore()
 	w := evidenceWriter(s, "op1", ops.Live)
@@ -289,8 +291,16 @@ func TestRowAppliedUndoneHistory(t *testing.T) {
 		return err
 	})
 	applyItem(t, w, "standing", setTitle(w, "book-shared", "s"))
+	// A book with 150 older rows ahead of the batch: a capped read (this
+	// fake caps in insertion order, the store by key) would miss it.
+	s.books["book-long"] = &database.Book{ID: "book-long", Title: "long"}
+	for range 150 {
+		s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-long", Field: "publisher",
+			BatchID: "manual", ChangedAt: time.Now().Add(-time.Hour)})
+	}
+	applyItem(t, w, "long-history", setTitle(w, "book-long", "l"))
 	for _, row := range []string{"batch-undone", "field-undone", "other-field-undone", "credits-voided",
-		"repoint-reverted", "journal-gone", "standing"} {
+		"repoint-reverted", "journal-gone", "standing", "long-history"} {
 		mustRowApplied(t, w, row, true)
 	}
 
@@ -305,7 +315,7 @@ func TestRowAppliedUndoneHistory(t *testing.T) {
 			ChangedAt: time.Now().Add(-time.Hour)})
 	reverted := time.Now()
 	credits, _ := s.mark("op1", "credits-voided")
-	s.editChange(credits.Changes[0], func(c *database.OperationChange) { c.Voided, c.RevertedAt = true, &reverted })
+	s.editChange(credits.Changes[0], func(c *database.OperationChange) { c.Voided = true })
 	repoint, _ := s.mark("op1", "repoint-reverted")
 	s.editChange(repoint.Changes[0], func(c *database.OperationChange) { c.RevertedAt = &reverted })
 	gone, _ := s.mark("op1", "journal-gone")
@@ -322,6 +332,7 @@ func TestRowAppliedUndoneHistory(t *testing.T) {
 		{"repoint-reverted", false},
 		{"journal-gone", false},
 		{"standing", true},
+		{"long-history", true},
 	} {
 		mustRowApplied(t, w, c.row, c.want)
 	}
