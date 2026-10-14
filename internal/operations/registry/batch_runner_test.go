@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
 // last-edited: 2026-10-13
 
@@ -341,9 +341,10 @@ func TestChunkLeasing_ResumeLeasesExactlyUnfinished(t *testing.T) {
 // folded but not committed), and up to three disruptions of three kinds: a
 // crash right after a commit, a crash right after a fold (before its
 // commit), writes refused from some item on (ErrFenced or a lost lease, as
-// the Writer reports them), and a real fence revoked mid-run by an item that
-// swallows its refused write. A run that reached a refusal must end with that
-// error, no item that returned after a revoke may sit in a recorded chunk,
+// the Writer reports them), and a real fence revoked mid-run by an item whose
+// write through a real Writer is then refused and swallowed. A run that
+// reached a refusal must end with that error, no item that swallowed a
+// refused write may sit in a recorded chunk,
 // and the final Failed counts only the items that really fail
 // (OnItemError Continue): a refused write is never an ordinary failure.
 func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
@@ -383,18 +384,14 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 				fenceFrom := rng.IntN(n)
 				refusal := []error{ops.ErrFenced, opswriter.ErrStandDownLost}[rng.IntN(2)]
 				fence, revoke := opswriter.NewFence(uint64(attempt+1), nil)
+				w := previewWriter(fence)
 				var reached atomic.Bool
-				fencedRan := newCounts() // items that returned after the revoke
+				refused := newCounts() // items whose write the Writer refused
 				var stopRun context.CancelFunc
 				job, rc, cancel := openJob(t, items, batchOpts{order: order, size: size, workers: workers},
-					func(_ *ops.ItemRC, i int) error {
+					func(irc *ops.ItemRC, i int) error {
 						c.add(i)
 						runtime.Gosched()
-						defer func() {
-							if fence.Revoked() {
-								fencedRan.add(i)
-							}
-						}()
 						if mode == 2 && i >= fenceFrom {
 							reached.Store(true)
 							return fmt.Errorf("item %d: %w", i, refusal)
@@ -403,6 +400,9 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 							reached.Store(true)
 							revoke()
 							stopRun()
+							if err := tryWrite(irc, w); errors.Is(err, ops.ErrFenced) {
+								refused.add(i)
+							}
 							return nil // the refused write, swallowed
 						}
 						if i%11 == 0 {
@@ -459,8 +459,8 @@ func TestInvariant_EveryItemAtLeastOnce_NoCompletedChunkTwice(t *testing.T) {
 					} else if inRanges(led.Ranges, itemKey(i)) {
 						recorded[i] = true
 					}
-					if recorded[i] && fencedRan.get(i) > 0 && c.get(i) > 0 {
-						t.Fatalf("attempt %d (mode %d): item %d returned after the fence was revoked, and its chunk was recorded", attempt, mode, i)
+					if recorded[i] && refused.get(i) > 0 {
+						t.Fatalf("attempt %d (mode %d): item %d swallowed a refused write, and its chunk was recorded", attempt, mode, i)
 					}
 				}
 			}

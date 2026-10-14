@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -767,13 +767,15 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 		if err != nil && !errors.Is(err, ops.ErrPreview) && b.workCtx.Err() != nil {
 			return // the item was cut short by the stop; it did not settle
 		}
-		// After every item, not only after a failed one: an item may have
-		// swallowed a refused write and returned nil, and as a chunk's last
-		// item that would record the chunk done. A revoked fence means the
-		// item's writes cannot be trusted to have landed, so its chunk stays
-		// unfinished (a resume re-runs it) and the run ends.
-		if ferr := b.fence.Check(); ferr != nil {
-			b.fail(fmt.Errorf("%s: item %s: %w", b.cfg.opID, ch.keys[j], errors.Join(ferr, err)))
+		// The Writer flagged, on the item's outcome (Tally.Refused), a write it
+		// refused because the run is fenced or lost its lease. The item may have swallowed it and returned nil,
+		// and as a chunk's last item that would record the chunk done: so
+		// the chunk stays unfinished (a resume re-runs it) and the run ends.
+		// An item that finished without a refusal settled even if the fence
+		// was revoked meanwhile (a registry stop revokes, then cancels), so a
+		// chunk whose items all finished cleanly is still delivered below.
+		if refused := itemTally.Refused(); refused != nil {
+			b.fail(fmt.Errorf("%s: item %s: %w", b.cfg.opID, ch.keys[j], errors.Join(refused, err)))
 			return
 		}
 		if err != nil && !errors.Is(err, ops.ErrPreview) {
@@ -827,8 +829,8 @@ func (b *batchRun) runChunk(w int, ch *leasedChunk) {
 
 // writeStopped reports why an item error stops the run rather than counting
 // as one failed item: the error says a write was refused because the run is
-// fenced or lost its stand-down lease. (A revoked fence itself is checked
-// after every item, before this.)
+// fenced or lost its stand-down lease. (A refusal the item swallowed is
+// caught before this, by Tally.Refused.)
 func (b *batchRun) writeStopped(itemErr error) error {
 	if errors.Is(itemErr, ops.ErrFenced) || errors.Is(itemErr, opswriter.ErrStandDownLost) ||
 		errors.Is(itemErr, ErrScanStandDownLost) {

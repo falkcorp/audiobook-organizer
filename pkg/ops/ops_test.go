@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-13
 
@@ -384,5 +384,26 @@ func TestMarkRefusesBadNames(t *testing.T) {
 			irc := NewItemRC(NewRC(RunEnv{Context: context.Background()}), context.Background(), &Tally{}, nil)
 			irc.Mark(name)
 		}()
+	}
+}
+
+// NoteRefusal flags the item whose context it is given (or a context derived
+// from it), keeps the first refusal, ignores a context with no item, and
+// Reset clears it for the next item.
+func TestNoteRefusal(t *testing.T) {
+	tally := &Tally{}
+	irc := NewItemRC(NewRC(RunEnv{Context: context.Background()}), context.Background(), tally, nil)
+	first, second := errors.New("fenced"), errors.New("lease lost")
+	child, cancel := context.WithCancel(irc.Context())
+	defer cancel()
+	NoteRefusal(child, first)
+	NoteRefusal(irc.Context(), second)
+	NoteRefusal(context.Background(), second) // no item: nothing to flag
+	if !errors.Is(tally.Refused(), first) {
+		t.Fatalf("Refused = %v, want the first refusal", tally.Refused())
+	}
+	tally.Reset()
+	if tally.Refused() != nil {
+		t.Fatal("Reset kept the refusal")
 	}
 }

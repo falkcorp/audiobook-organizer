@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-13
 
@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -644,4 +645,56 @@ func TestModifyBookWithoutHistoryRefused(t *testing.T) {
 	if _, err := p.ModifyBook(context.Background(), "b1", func(b *database.Book) error { b.Title = "New"; return nil }); !errors.Is(err, ops.ErrPreview) {
 		t.Fatalf("preview: err = %v, want ErrPreview", err)
 	}
+}
+
+// A write refused because the run is fenced (or is being stopped) is flagged
+// on the item's outcome (ops.Tally.Refused) through the item's context, so
+// the batch runner hears of it even when the op swallows the error; a write
+// that went through, or one refused only by the item's own deadline, is not.
+func TestRefusalFlaggedOnTheItem(t *testing.T) {
+	write := func(w *Writer, ctx context.Context) (error, error) {
+		tally := &ops.Tally{}
+		irc := ops.NewItemRC(ops.NewRC(ops.RunEnv{Context: ctx}), ctx, tally, nil)
+		_, err := w.ModifyBook(irc.Context(), "b1", func(b *database.Book) error { b.Title = "x"; return nil })
+		return err, tally.Refused()
+	}
+	setup := func() (*Writer, func()) {
+		s := newRecStore()
+		s.books["b1"] = &database.Book{ID: "b1"}
+		f, revoke := NewFence(1, nil)
+		w := newTestWriter(s, ops.Live)
+		w.SetFence(f.Check)
+		return w, revoke
+	}
+	t.Run("clean write", func(t *testing.T) {
+		w, _ := setup()
+		if err, refused := write(w, context.Background()); err != nil || refused != nil {
+			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
+	t.Run("fenced", func(t *testing.T) {
+		w, revoke := setup()
+		revoke()
+		if err, refused := write(w, context.Background()); !errors.Is(err, ErrFenced) || !errors.Is(refused, ErrFenced) {
+			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
+	t.Run("revoked then canceled reports the fence", func(t *testing.T) {
+		w, revoke := setup()
+		revoke()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err, refused := write(w, ctx); !errors.Is(err, ErrFenced) || !errors.Is(refused, ErrFenced) {
+			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
+	t.Run("item deadline is not a refusal", func(t *testing.T) {
+		w, _ := setup()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+		<-ctx.Done()
+		if err, refused := write(w, ctx); err == nil || refused != nil {
+			t.Fatalf("err %v refused %v", err, refused)
+		}
+	})
 }
