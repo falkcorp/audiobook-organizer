@@ -1,4 +1,5 @@
 <!-- file: docs/system/api.md -->
+<!-- version: 1.6.1 -->
 <!-- version: 1.9.2 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-14 -->
@@ -209,6 +210,7 @@ sequenceDiagram
 | `library.bulk-write-back` | Bulk tag write-back to audio files |
 | `ai.author-review` | AI-assisted author dedup review |
 | `ai.author-merge-apply` | Apply AI author merge recommendations |
+| `ai.author-scan-apply` | Merge the authors of selected AI scan results (`POST /ai/scans/:id/apply` queues it with `dry_run=false`; omitted `dry_run` is a preview). Honours `author_name` locks, marks only results whose merge succeeded |
 
 **Renamed def_ids.** A renamed op keeps its old ID as an alias
 (`OperationDef.FormerIDs`). The old ID is accepted by `POST /operations/v2`,
