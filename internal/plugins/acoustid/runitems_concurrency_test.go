@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/runitems_concurrency_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e8c4a72-5b1d-4f39-9a6e-c2d7b3f81a45
 // last-edited: 2026-10-13
 
@@ -213,5 +213,56 @@ func TestResetAll_CandidatePassDropsInBatches(t *testing.T) {
 	defer r.mu.Unlock()
 	if want := fmt.Sprintf("%d candidates dropped", n); !strings.Contains(lastFrame(r.frames), want) {
 		t.Errorf("final summary %q does not report %q", lastFrame(r.frames), want)
+	}
+}
+
+// failingCandidateStore lists n synthetic acoustid candidates and fails the
+// second DeleteCandidates call.
+type failingCandidateStore struct {
+	n     int
+	calls int
+}
+
+func (f *failingCandidateStore) ListCandidates(c database.CandidateFilter) ([]database.DedupCandidate, int, error) {
+	var out []database.DedupCandidate
+	for i := c.Offset; i < f.n && len(out) < c.Limit; i++ {
+		out = append(out, database.DedupCandidate{ID: int64(i + 1), Layer: "acoustid"})
+	}
+	return out, f.n, nil
+}
+
+func (f *failingCandidateStore) DeleteCandidates(ids []int64) (int, error) {
+	f.calls++
+	if f.calls == 2 {
+		return 0, fmt.Errorf("synthetic batch failure")
+	}
+	return len(ids), nil
+}
+
+// TestResetAll_FailedCandidateBatchIsReported: a batch that fails deletes
+// nothing, the pass carries on with the rest, and the final summary says how
+// many batches failed and how many poisoned candidates are still in the review
+// queue, instead of reporting a clean reset.
+func TestResetAll_FailedCandidateBatchIsReported(t *testing.T) {
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return nil, nil },
+	}
+	cands := &failingCandidateStore{n: 1100} // three chunks of 500, 500, 100
+	p := &Plugin{store: store, resetCandidates: cands}
+	r := &resetAllTestReporter{}
+
+	if err := p.runResetAll(context.Background(), nil, r); err != nil {
+		t.Fatalf("runResetAll: %v", err)
+	}
+	if cands.calls != 3 {
+		t.Errorf("DeleteCandidates called %d times, want 3: a failed batch must not stop the rest", cands.calls)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	got := lastFrame(r.frames)
+	for _, want := range []string{"600 candidates dropped", "1 candidate batch(es) failed", "500 poisoned candidates were left"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("final summary %q does not contain %q", got, want)
+		}
 	}
 }

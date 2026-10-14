@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
 // last-edited: 2026-10-13
 
@@ -159,12 +159,20 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// keep showing the 14K+ poisoned rows after the rescan starts.
 	prog.Finalize("Dropping acoustid dedup candidates…")
 	deleted := 0 // sequential: the batches below run one at a time
-	if p.embeddingStore != nil {
+	failedBatches, leftBehind := 0, 0
+	var candidates resetCandidateStore
+	switch {
+	case p.resetCandidates != nil:
+		candidates = p.resetCandidates
+	case p.embeddingStore != nil:
+		candidates = p.embeddingStore
+	}
+	if candidates != nil {
 		var allCands []database.DedupCandidate
 		offset := 0
 		const pageSize = 500
 		for {
-			cands, _, lerr := p.embeddingStore.ListCandidates(database.CandidateFilter{
+			cands, _, lerr := candidates.ListCandidates(database.CandidateFilter{
 				Layer:  "acoustid",
 				Limit:  pageSize,
 				Offset: offset,
@@ -201,8 +209,13 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		if len(chunks) > 0 {
 			// runitems:sequential each chunk is one batch under the store-wide candidate lock; a pool would only queue on it
 			if derr := registry.RunItems(ctx, reporter, chunks, func(_ context.Context, chunk []int64) error {
-				n, err := p.embeddingStore.DeleteCandidates(chunk)
+				n, err := candidates.DeleteCandidates(chunk)
 				if err != nil {
+					// A failed batch deletes nothing (one Pebble batch), so
+					// all of its rows are still in the review queue: keep
+					// going with the rest, and say so in the summary.
+					failedBatches++
+					leftBehind += len(chunk)
 					log.Warn("acoustid reset-all: delete candidates failed", "chunk_size", len(chunk), "err", err)
 					return nil
 				}
@@ -221,11 +234,24 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	log.Info("acoustid reset-all: complete",
 		"cleared", cleared.Load(),
 		"candidates_deleted", deleted,
+		"candidate_batches_failed", failedBatches,
+		"candidates_left_behind", leftBehind,
 		"elapsed", time.Since(startedAt).Round(time.Second))
 
-	prog.Done(fmt.Sprintf("Reset complete: %d files cleared, %d candidates dropped, LSH index wiped (elapsed %s). Now enqueue acoustid.fingerprint-rescan with scope=all force=true.",
-		cleared.Load(), deleted, time.Since(startedAt).Round(time.Second)))
+	summary := fmt.Sprintf("Reset complete: %d files cleared, %d candidates dropped, LSH index wiped (elapsed %s).",
+		cleared.Load(), deleted, time.Since(startedAt).Round(time.Second))
+	if failedBatches > 0 {
+		summary += fmt.Sprintf(" WARNING: %d candidate batch(es) failed and %d poisoned candidates were left in the review queue; re-run to drop them.",
+			failedBatches, leftBehind)
+	}
+	prog.Done(summary + " Now enqueue acoustid.fingerprint-rescan with scope=all force=true.")
 	return nil
+}
+
+// resetCandidateStore is the part of EmbeddingStore the candidate pass uses.
+type resetCandidateStore interface {
+	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+	DeleteCandidates(ids []int64) (int, error)
 }
 
 // fingerprintResetter is the batched whole-library AcoustID fingerprint wipe.
