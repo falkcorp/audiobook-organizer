@@ -1,11 +1,12 @@
 // file: internal/database/bookfilecore_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 29325171-4866-4142-82c6-e010f724ae5e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-14
 
 package database
 
 import (
+	"encoding/json"
 	"reflect"
 	"sort"
 	"testing"
@@ -38,7 +39,15 @@ var strippedBookFileFields = []string{
 // reused here — both *core_test.go files need the identical helper.
 
 // TestBookFileCoreIsBookFileMinusHeavyFields asserts the field-name set of
-// BookFileCore equals BookFile's set minus EXACTLY the stripped heavy set.
+// BookFileCore equals BookFile's set minus EXACTLY the stripped heavy set, and
+// that every field Core keeps has BookFile's json tag and type.
+//
+// The json-tag and type parity (check 4) is what makes decodeBookFileCore
+// equivalent to BookFile.Core() for EVERY stored row: encoding/json picks the
+// target field by tag, so a Core field whose tag drifts would silently stay
+// zero when a row is decoded straight into BookFileCore, and
+// TestDecodeBookFileCoreMatchesCore cannot see it for any field its fixture
+// leaves unset.
 func TestBookFileCoreIsBookFileMinusHeavyFields(t *testing.T) {
 	bfNames := structFieldNames(reflect.TypeFor[BookFile]())
 	coreNames := structFieldNames(reflect.TypeFor[BookFileCore]())
@@ -64,6 +73,37 @@ func TestBookFileCoreIsBookFileMinusHeavyFields(t *testing.T) {
 
 	if !reflect.DeepEqual(diff, want) {
 		t.Errorf("BookFile - BookFileCore field diff mismatch\n got: %v\nwant: %v", diff, want)
+	}
+
+	// (4) json decoding parity. decodeBookFileCore unmarshals a stored row
+	// straight into BookFileCore, so it equals BookFile.Core() only when each
+	// shared field has the same json key and the same Go type, nothing is
+	// promoted from an embedded struct (encoding/json would flatten it under a
+	// key this name-based comparison cannot see), and neither type takes over
+	// decoding with its own UnmarshalJSON.
+	bfT := reflect.TypeFor[BookFile]()
+	coreT := reflect.TypeFor[BookFileCore]()
+	for _, typ := range []reflect.Type{bfT, coreT} {
+		for field := range typ.Fields() {
+			if field.Anonymous {
+				t.Errorf("%s has embedded field %q; json parity is checked per named field", typ.Name(), field.Name)
+			}
+		}
+		if reflect.PointerTo(typ).Implements(reflect.TypeFor[json.Unmarshaler]()) {
+			t.Errorf("%s implements json.Unmarshaler; the narrow decode would bypass it", typ.Name())
+		}
+	}
+	for coreField := range coreT.Fields() {
+		bfField, ok := bfT.FieldByName(coreField.Name)
+		if !ok {
+			continue // already reported by check (1)
+		}
+		if got, want := coreField.Tag.Get("json"), bfField.Tag.Get("json"); got != want {
+			t.Errorf("field %q json tag mismatch: BookFileCore %q, BookFile %q", coreField.Name, got, want)
+		}
+		if coreField.Type != bfField.Type {
+			t.Errorf("field %q type mismatch: BookFileCore %s, BookFile %s", coreField.Name, coreField.Type, bfField.Type)
+		}
 	}
 
 	// (3) Guard the retained pair explicitly — they must live on Core.
