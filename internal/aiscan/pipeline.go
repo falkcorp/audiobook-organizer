@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.10.0
+// version: 4.11.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-10-14
 
@@ -542,8 +542,11 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 		return ErrScanCanceled
 	}
 
-	phases, err := pm.scanStore.GetPhases(scanID)
-	if err != nil {
+	var phases []database.ScanPhase
+	if err := pm.retryStore(ctx, scanID, "reading its phases", func() (gerr error) {
+		phases, gerr = pm.scanStore.GetPhases(scanID)
+		return gerr
+	}); err != nil {
 		err = fmt.Errorf("get phases for scan %d: %w", scanID, err)
 		pm.abortScan(ctx, scanID, err)
 		return err
@@ -575,7 +578,9 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	pm.mu.Unlock()
 
 	if fresh {
-		if err := pm.scanStore.UpdateScanStatus(scanID, "scanning"); err != nil {
+		if err := pm.retryStore(ctx, scanID, "marking it scanning", func() error {
+			return pm.scanStore.UpdateScanStatus(scanID, "scanning")
+		}); err != nil {
 			err = fmt.Errorf("update scan status: %w", err)
 			pm.abortScan(ctx, scanID, err)
 			return err
@@ -592,7 +597,9 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	// looks it up before submitting — unless the phase carries
 	// submitLedgerArtifact and so proves it never reached CreateBatch.
 	resumed := scan.Status != "pending"
-	if err := pm.drive(scanCtx, scanID, scan.Mode, resumed); err != nil {
+	if err := pm.retryStore(scanCtx, scanID, "starting its phases", func() error {
+		return pm.drive(scanCtx, scanID, scan.Mode, resumed)
+	}); err != nil {
 		pm.abortScan(ctx, scanID, err)
 		return err
 	}
@@ -612,6 +619,14 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 //
 // Every phase function claims its phase and re-checks the row before doing
 // work (beginPhase), so drive racing OnPhaseComplete cannot run a phase twice.
+//
+// drive returns an error only BEFORE it launches anything: every read and write
+// that can fail (the phase rows, the author list, the "submitting" marks of a
+// resumed batch scan) happens first, and the launches after cannot fail. So a
+// failed drive left nothing running and can simply be run again (RunScan does,
+// through retryStore), with no phase launched twice. A resumed batch scan that
+// failed between two "submitting" marks re-reads the marked phase as
+// submitting, which settles it the same way (resolveSubmitting).
 func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, resumed bool) error {
 	phases, err := pm.scanStore.GetPhases(scanID)
 	if err != nil {
@@ -622,20 +637,18 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, r
 		byType[p.PhaseType] = p
 	}
 
-	var authors []database.Author
-	loadAuthors := func() ([]database.Author, error) {
-		if authors != nil {
-			return authors, nil
-		}
-		a, err := pm.mainStore.GetAllAuthors()
-		if err != nil {
-			return nil, fmt.Errorf("get authors: %w", err)
-		}
-		authors = a
-		return authors, nil
-	}
-
-	enrichDone := 0
+	// What each source phase needs, decided from its row.
+	type sourceStep int
+	const (
+		stepNone sourceStep = iota
+		stepLaunch
+		stepLookup // a resumed batch phase that may own a batch: mark, then look it up
+		stepResolve
+		stepEnrich
+		stepEnriched
+	)
+	steps := make(map[string]sourceStep, len(sourcePhases))
+	needAuthors := false
 	for _, sp := range sourcePhases {
 		p, ok := byType[sp.scan]
 		if !ok {
@@ -654,27 +667,51 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, r
 				// client without a BatchFinder, and with one it cost a
 				// listing and up to submitGrace of waiting — for a phase
 				// that may have had nothing to submit at all.
-				if err := pm.scanStore.UpdatePhaseStatus(scanID, sp.scan, "submitting", ""); err != nil {
-					return fmt.Errorf("mark %s submitting for lookup: %w", sp.scan, err)
-				}
-				pm.resolveSubmitting(ctx, scanID, sp.scan)
+				steps[sp.scan] = stepLookup
 				continue
 			}
-			a, err := loadAuthors()
-			if err != nil {
-				return err
-			}
-			pm.launchSource(ctx, scanID, mode, sp.scan, a)
+			steps[sp.scan] = stepLaunch
+			needAuthors = true
 		case "submitting":
-			pm.resolveSubmitting(ctx, scanID, sp.scan)
+			steps[sp.scan] = stepResolve
 		case "complete":
 			e, ok := byType[sp.enrich]
 			switch {
 			case ok && e.Status == "complete":
-				enrichDone++
+				steps[sp.scan] = stepEnriched
 			case !ok || !isTerminalPhase(e.Status):
-				go pm.runEnrichment(ctx, scanID, sp.scan, sp.enrich)
+				steps[sp.scan] = stepEnrich
 			}
+		}
+	}
+
+	// Everything that can fail, before anything is launched.
+	var authors []database.Author
+	if needAuthors {
+		if authors, err = pm.mainStore.GetAllAuthors(); err != nil {
+			return fmt.Errorf("get authors: %w", err)
+		}
+	}
+	for _, sp := range sourcePhases {
+		if steps[sp.scan] == stepLookup {
+			if err := pm.scanStore.UpdatePhaseStatus(scanID, sp.scan, "submitting", ""); err != nil {
+				return fmt.Errorf("mark %s submitting for lookup: %w", sp.scan, err)
+			}
+		}
+	}
+
+	// The launches. Nothing below returns an error.
+	enrichDone := 0
+	for _, sp := range sourcePhases {
+		switch steps[sp.scan] {
+		case stepLaunch:
+			pm.launchSource(ctx, scanID, mode, sp.scan, authors)
+		case stepLookup, stepResolve:
+			pm.resolveSubmitting(ctx, scanID, sp.scan)
+		case stepEnrich:
+			go pm.runEnrichment(ctx, scanID, sp.scan, sp.enrich)
+		case stepEnriched:
+			enrichDone++
 		}
 	}
 
@@ -687,6 +724,37 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, r
 		}
 	}
 	return nil
+}
+
+// storeRetryDelays are the waits between the attempts retryStore makes: four
+// attempts over about twenty seconds. A var so tests can shorten it.
+var storeRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
+
+// retryStore runs fn, and again after each of storeRetryDelays while it fails,
+// returning its last error. It stops waiting when ctx ends.
+//
+// RunScan's own store steps go through it before giving up on a scan: giving up
+// is abortScan, which fails the scan and CANCELS ITS PAID BATCHES, so one
+// transient local store error used to throw away batches OpenAI was already
+// billing for. A retry is safe because each step is idempotent (a read, a status
+// write, and drive, which fails only before it launches anything).
+func (pm *PipelineManager) retryStore(ctx context.Context, scanID int, what string, fn func() error) error {
+	err := fn()
+	for _, wait := range storeRetryDelays {
+		if err == nil {
+			return nil
+		}
+		plog.Warn("scan %d: %s failed; trying again in %s before giving the scan up: %v", scanID, what, wait, err)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+		err = fn()
+	}
+	return err
 }
 
 // launchSource starts one source phase in the scan's mode.

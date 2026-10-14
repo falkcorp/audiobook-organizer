@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
 // last-edited: 2026-10-14
 
@@ -253,7 +253,17 @@ func (a *authorsFailAfterCreate) GetAllAuthors() ([]database.Author, error) {
 	return a.fakeMainStore.GetAllAuthors()
 }
 
+// shortStoreRetries makes retryStore's waits a millisecond for the test.
+func shortStoreRetries(t *testing.T) {
+	t.Helper()
+	old := storeRetryDelays
+	storeRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { storeRetryDelays = old })
+}
+
+// A drive error that outlasts every retry still ends the scan.
 func TestRunScan_ADriveErrorEndsTheScanSoANewOneCanStart(t *testing.T) {
+	shortStoreRetries(t)
 	main := &authorsFailAfterCreate{fakeMainStore: newFakeMainStore(3)}
 	store := newScanStore(t)
 	pm := NewPipelineManager(store, main, newFakeLLM(newFakeAccount()))
@@ -318,4 +328,88 @@ func TestAbortScan_LeavesTheScanForTheResumeOnShutdown(t *testing.T) {
 	got, gerr := store.GetScan(scan.ID)
 	require.NoError(t, gerr)
 	require.Equal(t, "pending", got.Status)
+}
+
+// authorsFailNTimes fails the author read RunScan makes (after CreateScan's) the
+// first n times, then answers: a transient local store error.
+type authorsFailNTimes struct {
+	*fakeMainStore
+	armed  atomic.Bool
+	left   atomic.Int32
+	failed atomic.Int32
+}
+
+func (a *authorsFailNTimes) GetAllAuthors() ([]database.Author, error) {
+	if a.armed.Load() && a.left.Add(-1) >= 0 {
+		a.failed.Add(1)
+		return nil, errors.New("authors briefly unreadable")
+	}
+	return a.fakeMainStore.GetAllAuthors()
+}
+
+// A transient store error while starting the phases is retried, not answered by
+// abortScan, which fails the scan and cancels its paid batches. The retried scan
+// runs exactly as an undisturbed one: no phase is launched twice.
+func TestRunScan_ATransientDriveErrorIsRetriedAndLaunchesEachPhaseOnce(t *testing.T) {
+	shortStoreRetries(t)
+	run := func(failures int32) (*database.Scan, *fakeLLM, *database.AIScanStore) {
+		main := &authorsFailNTimes{fakeMainStore: newFakeMainStore(3)}
+		store := newScanStore(t)
+		llm := newFakeLLM(newFakeAccount())
+		pm := NewPipelineManager(store, main, llm)
+		scan, err := pm.CreateScan("realtime")
+		require.NoError(t, err)
+		main.left.Store(failures)
+		main.armed.Store(true)
+		require.NoError(t, pm.RunScan(context.Background(), scan.ID, nil))
+		require.Equal(t, failures, main.failed.Load(), "every injected failure was hit")
+		return scan, llm, store
+	}
+	_, base, baseStore := run(0)
+	scan, retried, store := run(2)
+
+	got, err := store.GetScan(scan.ID)
+	require.NoError(t, err)
+	require.Equal(t, "complete", got.Status, "the scan ran to the end")
+	base.mu.Lock()
+	want := len(base.discoverCalls)
+	base.mu.Unlock()
+	retried.mu.Lock()
+	have := len(retried.discoverCalls)
+	retried.mu.Unlock()
+	require.Equal(t, want, have, "the same LLM calls as an undisturbed run: nothing launched twice")
+	baseResults, err := baseStore.GetScanResults(1)
+	require.NoError(t, err)
+	results, err := store.GetScanResults(scan.ID)
+	require.NoError(t, err)
+	require.Len(t, results, len(baseResults))
+}
+
+// retryStore stops waiting when its context ends: a canceled scan does not sit
+// out the backoff before it is let go.
+func TestRetryStore_StopsWaitingWhenTheContextEnds(t *testing.T) {
+	old := storeRetryDelays
+	storeRetryDelays = []time.Duration{time.Hour, time.Hour}
+	t.Cleanup(func() { storeRetryDelays = old })
+
+	pm := NewPipelineManager(newScanStore(t), newFakeMainStore(1), newFakeLLM(newFakeAccount()))
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	boom := errors.New("store unreadable")
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	start := time.Now()
+	err := pm.retryStore(ctx, 1, "testing", func() error { calls++; return boom })
+	require.ErrorIs(t, err, boom, "the last error comes back")
+	require.Equal(t, 1, calls, "no attempt after the context ended")
+	require.Less(t, time.Since(start), 10*time.Second)
+}
+
+// retryStore makes len(storeRetryDelays)+1 attempts and no more.
+func TestRetryStore_IsBounded(t *testing.T) {
+	shortStoreRetries(t)
+	pm := NewPipelineManager(newScanStore(t), newFakeMainStore(1), newFakeLLM(newFakeAccount()))
+	calls := 0
+	err := pm.retryStore(context.Background(), 1, "testing", func() error { calls++; return errors.New("down") })
+	require.Error(t, err)
+	require.Equal(t, len(storeRetryDelays)+1, calls)
 }
