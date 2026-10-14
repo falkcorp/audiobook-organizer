@@ -1,7 +1,7 @@
 // file: pkg/ops/fixer.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package ops
 
@@ -278,6 +278,10 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 			// value now holds (Row.Proposed is Apply's complete end state).
 			// A row someone else changed to the same values between the
 			// attempts is indistinguishable and is reported applied too.
+			// 05-PR5b (docs/proposals/2026-10-holistic/tasks/05/05-PR5b.md,
+			// owner decision 2026-10-13, required before 05-PR7) closes that:
+			// it adds a Writer read of this run's own history and requires
+			// it here.
 			return true, nil
 		}
 		irc.Skip(SkipChangedSincePlan)
