@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.19.0
+// version: 2.20.0
 // last-edited: 2026-10-14
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -131,7 +131,14 @@ type ScanSuggestion struct {
 	KeepID     int             `json:"keep_id,omitempty"`
 	GroupIndex int             `json:"group_index,omitempty"`
 	Roles      json.RawMessage `json:"roles,omitempty"`
-	Source     string          `json:"source"` // groups_scan, full_scan, groups_enrich, full_enrich
+	Source     string          `json:"source"` // groups_scan, full_scan, cross_validate
+	// RolesSource is the scan whose answer Roles came from, on a cross_validate
+	// row (which takes the groups scan's roles, else the full scan's): "full_scan"
+	// when Roles name author ids, "groups_scan" when they name positions in the
+	// group. Empty on every other row, and on a cross_validate row stored before
+	// the field existed, which therefore cannot tell and is read as positions
+	// (aiscan.RolesNameAuthorIDs).
+	RolesSource string `json:"roles_source,omitempty"`
 }
 
 // ScanResult is the final cross-validated output.

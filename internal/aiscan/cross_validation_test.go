@@ -1,11 +1,12 @@
 // file: internal/aiscan/cross_validation_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e1f7a3b5-8c9d-0e1f-2a3b-4c5d6e7f8a9b
-// last-edited: 2026-05-05
+// last-edited: 2026-10-14
 
 package aiscan
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -95,4 +96,61 @@ func TestHigherConfidence(t *testing.T) {
 	require.Equal(t, "high", higherConfidence("low", "high"))
 	require.Equal(t, "medium", higherConfidence("medium", "low"))
 	require.Equal(t, "medium", higherConfidence("medium", "medium"))
+}
+
+// An agreed row takes the groups scan's roles, else the full scan's, and records
+// which: the groups ids are positions in the group, the full ids author ids.
+func TestCrossValidateAgreed_RecordsWhichScanItsRolesCameFrom(t *testing.T) {
+	positional := json.RawMessage(`{"narrator":{"name":"N","ids":[1]}}`)
+	byID := json.RawMessage(`{"narrator":{"name":"N","ids":[20]}}`)
+	agreed := func(gRoles, fRoles json.RawMessage) database.ScanSuggestion {
+		t.Helper()
+		results := CrossValidate(1,
+			[]database.ScanSuggestion{{Action: "merge", CanonicalName: "Synthetic A", AuthorIDs: []int{10, 20}, Roles: gRoles}},
+			[]database.ScanSuggestion{{Action: "merge", CanonicalName: "Synthetic A", AuthorIDs: []int{10, 20}, Roles: fRoles}})
+		require.Len(t, results, 1)
+		require.Equal(t, "agreed", results[0].Agreement)
+		return results[0].Suggestion
+	}
+
+	s := agreed(positional, byID)
+	require.JSONEq(t, string(positional), string(s.Roles), "the groups scan's roles win")
+	require.Equal(t, "groups_scan", s.RolesSource)
+	require.False(t, RolesNameAuthorIDs(s))
+
+	s = agreed(nil, byID)
+	require.JSONEq(t, string(byID), string(s.Roles))
+	require.Equal(t, "full_scan", s.RolesSource)
+	require.True(t, RolesNameAuthorIDs(s))
+
+	s = agreed(nil, nil)
+	require.Empty(t, s.Roles)
+	require.Empty(t, s.RolesSource)
+}
+
+func TestRolesNameAuthorIDs(t *testing.T) {
+	for _, tc := range []struct {
+		source, rolesSource string
+		want                bool
+	}{
+		{"full_scan", "", true},
+		{"groups_scan", "", false},
+		{"cross_validate", "full_scan", true},
+		{"cross_validate", "groups_scan", false},
+		{"cross_validate", "", false}, // stored before RolesSource: cannot tell, read as positions
+	} {
+		got := RolesNameAuthorIDs(database.ScanSuggestion{Source: tc.source, RolesSource: tc.rolesSource})
+		require.Equal(t, tc.want, got, "%s/%q", tc.source, tc.rolesSource)
+	}
+}
+
+// A groups answer that flagged a narrator by position refuses the row even when
+// the row carries the full scan's id-based flag: the full scan's ids say nothing
+// about which author the groups answer meant.
+func TestUnaccounted_APositionalFlagIsNotSilencedByAnIDFlag(t *testing.T) {
+	flags := RawRoleFlags{Authors: map[int]bool{20: true}, Groups: map[int]bool{4: true}}
+	why := flags.Unaccounted("cross_validate", 4, []int{10, 20, 30}, map[int]bool{20: true})
+	require.Contains(t, why, "by position")
+	require.Empty(t, flags.Unaccounted("cross_validate", 5, []int{10, 20, 30}, map[int]bool{20: true}),
+		"another group's positional flag does not touch this row")
 }

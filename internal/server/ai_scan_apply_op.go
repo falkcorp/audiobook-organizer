@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
 // last-edited: 2026-10-14
 
@@ -53,11 +53,12 @@ type scanApplyPlan struct {
 //
 // Narrator and publisher flags are acted on only where they can be trusted. A
 // groups-scan answer gives them as POSITIONS in the group it was shown, not as
-// author ids, and an agreed row's roles come from the groups answer first, so for
-// those rows (and for a flagged publisher, which has no reclassify path) the
-// result is refused rather than merged: merging would fold the flagged
-// narrator's books into the author. A full-scan row's flags are author ids, so
-// they are honoured when each is one of the row's authors other than the keep.
+// author ids, so for those rows (and for a flagged publisher, which has no
+// reclassify path) the result is refused rather than merged: merging would fold
+// the flagged narrator's books into the author. A full-scan row's flags are
+// author ids, and so are an agreed (cross_validate) row's when they came from the
+// full scan (aiscan.RolesNameAuthorIDs), so those are honoured when each is one
+// of the row's authors other than the keep.
 func planScanMerge(r database.ScanResult, flags aiscan.RawRoleFlags) (scanApplyPlan, error) {
 	sug := r.Suggestion
 	if sug.Action != "merge" {
@@ -107,7 +108,7 @@ func planScanMerge(r database.ScanResult, flags aiscan.RawRoleFlags) (scanApplyP
 	}
 	narratorSet := map[int]bool{}
 	if len(narrators) > 0 {
-		if sug.Source != "full_scan" {
+		if !aiscan.RolesNameAuthorIDs(sug) {
 			return scanApplyPlan{}, stderrors.New("it flags a narrator by position, not by author id, so which author is meant is unknown; handle it in the Authors view")
 		}
 		for _, id := range narrators {

@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 6b3d1e97-0c45-4a28-9f7e-d2a8c5416b03
 // last-edited: 2026-10-14
 
@@ -417,17 +417,28 @@ func TestPlanScanMerge(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, scanApplyPlan{KeepID: 2, MergeIDs: []int{1}, NarratorIDs: []int{3}}, plan)
 
+	// An agreed row whose roles came from the full scan names authors by id: its
+	// narrator is reclassified, as on a full-scan row.
+	agreedByID := withNarrator
+	agreedByID.Source, agreedByID.RolesSource = "cross_validate", "full_scan"
+	plan, err = planScanMerge(database.ScanResult{Suggestion: agreedByID}, aiscan.RawRoleFlags{})
+	require.NoError(t, err)
+	require.Equal(t, scanApplyPlan{KeepID: 2, MergeIDs: []int{1}, NarratorIDs: []int{3}}, plan)
+
 	for name, mutate := range map[string]func(*database.ScanSuggestion){
-		"not a merge":           func(s *database.ScanSuggestion) { s.Action = "split" },
-		"no keep":               func(s *database.ScanSuggestion) { s.KeepID = 0 },
-		"keep not in the group": func(s *database.ScanSuggestion) { s.KeepID = 9 },
-		"narrator is the keep":  func(s *database.ScanSuggestion) { s.Roles = role("narrator", 2) },
-		"narrator not in group": func(s *database.ScanSuggestion) { s.Roles = role("narrator", 8) },
-		"narrator by position":  func(s *database.ScanSuggestion) { s.Roles = role("narrator", 1); s.Source = "groups_scan" },
-		"agreed row's narrator": func(s *database.ScanSuggestion) { s.Roles = role("narrator", 1); s.Source = "cross_validate" },
-		"publisher flagged":     func(s *database.ScanSuggestion) { s.Roles = role("publisher", 1) },
-		"unreadable roles":      func(s *database.ScanSuggestion) { s.Roles = json.RawMessage(`{"narrator":`) },
-		"nothing to merge":      func(s *database.ScanSuggestion) { s.AuthorIDs = []int{2} },
+		"not a merge":                              func(s *database.ScanSuggestion) { s.Action = "split" },
+		"no keep":                                  func(s *database.ScanSuggestion) { s.KeepID = 0 },
+		"keep not in the group":                    func(s *database.ScanSuggestion) { s.KeepID = 9 },
+		"narrator is the keep":                     func(s *database.ScanSuggestion) { s.Roles = role("narrator", 2) },
+		"narrator not in group":                    func(s *database.ScanSuggestion) { s.Roles = role("narrator", 8) },
+		"narrator by position":                     func(s *database.ScanSuggestion) { s.Roles = role("narrator", 1); s.Source = "groups_scan" },
+		"agreed row's narrator, source unrecorded": func(s *database.ScanSuggestion) { s.Roles = role("narrator", 1); s.Source = "cross_validate" },
+		"agreed row's narrator by position": func(s *database.ScanSuggestion) {
+			s.Roles, s.Source, s.RolesSource = role("narrator", 1), "cross_validate", "groups_scan"
+		},
+		"publisher flagged": func(s *database.ScanSuggestion) { s.Roles = role("publisher", 1) },
+		"unreadable roles":  func(s *database.ScanSuggestion) { s.Roles = json.RawMessage(`{"narrator":`) },
+		"nothing to merge":  func(s *database.ScanSuggestion) { s.AuthorIDs = []int{2} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			sug := base
@@ -606,4 +617,27 @@ func TestAIScanApplyOp_AFlaggedNarratorWithALockedNarratorKeepsItsBook(t *testin
 	require.NoError(t, nerr)
 	require.Empty(t, narrators, "and gets no narrator the owner locked")
 	require.False(t, f.applied(id))
+}
+
+// End to end through CrossValidate: the groups scan agreed on the merge without
+// a role, the full scan flagged the narrator by author id. The agreed row carries
+// the full scan's flag and the apply reclassifies the narrator instead of
+// refusing the row (or merging the narrator into the keep).
+func TestPlanScanMerge_AnAgreedRowWithTheFullScansNarratorReclassifiesIt(t *testing.T) {
+	roles, err := json.Marshal(map[string]any{"narrator": map[string]any{"name": "Synthetic Voice", "ids": []int{30}}})
+	require.NoError(t, err)
+	results := aiscan.CrossValidate(1,
+		[]database.ScanSuggestion{{Action: "merge", CanonicalName: "Synthetic Keep", AuthorIDs: []int{10, 20, 30}, KeepID: 10, Source: "groups_scan"}},
+		[]database.ScanSuggestion{{Action: "merge", CanonicalName: "Synthetic Keep", AuthorIDs: []int{10, 20, 30}, Roles: roles, Source: "full_scan"}})
+	require.Len(t, results, 1)
+
+	plan, err := planScanMerge(results[0], aiscan.RawRoleFlags{Authors: map[int]bool{30: true}})
+	require.NoError(t, err)
+	require.Equal(t, scanApplyPlan{KeepID: 10, MergeIDs: []int{20}, NarratorIDs: []int{30}}, plan)
+
+	// The same rows where the groups scan flagged the narrator by position: refused.
+	positional := results[0]
+	positional.Suggestion.Roles, positional.Suggestion.RolesSource = json.RawMessage(`{"narrator":{"name":"N","ids":[2]}}`), "groups_scan"
+	_, err = planScanMerge(positional, aiscan.RawRoleFlags{})
+	require.ErrorContains(t, err, "narrator by position")
 }
