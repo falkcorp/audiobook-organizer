@@ -6,7 +6,10 @@
 package database
 
 import (
+	"encoding/json"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // opv3RowMarkPrefix is the per-row apply marker family:
@@ -15,7 +18,9 @@ import (
 //
 // One key per Fixer row whose Apply returned nil, written as soon as Apply
 // returns, outside the chunk ledger (05-PR5b). A discard deletes the run's
-// markers with the rest of its keys (opv3RunScopedPrefixes).
+// markers with the rest of its keys (opv3RunScopedPrefixes), and the
+// transition that makes a run terminal deletes them with its ledger: they
+// are resume evidence, and a terminal run is never resumed.
 const opv3RowMarkPrefix = "opv3:rowmark:"
 
 func opv3RowMarkRunPrefix(id string) []byte { return []byte(opv3RowMarkPrefix + id + ":") }
@@ -47,18 +52,30 @@ type RowMarkBatch struct {
 // PutRowMarkV3 writes (or replaces) the marker of row m.RowID of run id.
 // Refused for a missing or terminal run (openRunV3), like an intent: the
 // check and the write hold opsMu, so a marker can never land after a
-// discard deleted the run's keys.
+// discard or a terminal transition deleted the run's markers.
+//
+// The write does not sync, like ClearIntentV3. That is safe because the
+// marker is only ever written after the row's writes and their history
+// rows, which sync, and Pebble's WAL is replayed as a prefix: a marker that
+// survives a crash implies everything it names survived too. A marker the
+// crash loses is a false negative only (the resume skips the row as
+// changed since plan; it never writes it twice), the same outcome as a
+// crash between Apply's last write and the marker.
 func (p *PebbleStore) PutRowMarkV3(id string, m RowMarkV3) (err error) {
 	defer recoverPebbleClosed("PutRowMarkV3", &err)
 	if m.MarkedAt.IsZero() {
 		m.MarkedAt = time.Now().UTC()
+	}
+	data, err := json.Marshal(&m)
+	if err != nil {
+		return err
 	}
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 	if err := p.openRunV3(id); err != nil {
 		return err
 	}
-	return p.pebbleSetJSON(opv3RowMarkKey(id, m.RowID), &m)
+	return p.db.Set(opv3RowMarkKey(id, m.RowID), data, pebble.NoSync)
 }
 
 // GetRowMarkV3 returns the marker of rowID in run id, or nil when there is

@@ -15,8 +15,9 @@ import (
 // TestRowMarksV3: a row's apply marker round-trips by (run, row), with the
 // history it names; another run's or row's key finds nothing. Like an
 // intent, a marker is refused for a missing run (writing nothing), a
-// discarded one or a terminal one, and a discard deletes the run's markers
-// with the rest of its keys and leaves other runs' alone.
+// discarded one or a terminal one. A discard deletes the run's markers
+// with the rest of its keys and leaves other runs' alone; a run going
+// terminal deletes its markers too.
 func TestRowMarksV3(t *testing.T) {
 	p := newTimelineStore(t)
 	id := insertV3(t, p, "test.rowmarks", "")
@@ -62,6 +63,10 @@ func TestRowMarksV3(t *testing.T) {
 	}
 	transition(t, p, other, state.EvDispatch, nil)
 	transition(t, p, other, state.EvReturnNil, nil)
+	// A terminal run is never resumed: its markers go with its ledger.
+	if n := countPrefix(t, p, opv3RowMarkPrefix+other+":", ""); n != 0 {
+		t.Fatalf("%d marker keys left after the run went terminal", n)
+	}
 	if err := p.PutRowMarkV3(other, RowMarkV3{RowID: "after-terminal"}); err == nil {
 		t.Fatal("a terminal run took a marker")
 	}

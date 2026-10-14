@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-14
 
@@ -291,6 +291,12 @@ func (s *opsV3Stage) put(prev, next *RunRecord, tr *Transition) error {
 		}
 		marks := opv3MarkRunPrefix(next.ID)
 		if err := s.b.DeleteRange(marks, prefixEnd(marks), nil); err != nil {
+			return err
+		}
+		// A Fixer row's apply markers are resume evidence like the ledger:
+		// a terminal run is never resumed, so they go on the same edge.
+		rowMarks := opv3RowMarkRunPrefix(next.ID)
+		if err := s.b.DeleteRange(rowMarks, prefixEnd(rowMarks), nil); err != nil {
 			return err
 		}
 	}
