@@ -100,8 +100,9 @@ type Config struct {
 	RowMarks RowMarkStore
 	// Changes and HistoryReader let RowApplied check that the history a
 	// marker names still stands: its operation journal rows (one point read
-	// each) and the metadata history of its batches' books. Nil while a
-	// marker names history of that kind: the marker is not evidence.
+	// each), and every book it names read in BOTH stores, since a later
+	// write to a field can be recorded in either. Nil while a marker names
+	// any history: the marker is not evidence.
 	Changes       ChangeReader
 	HistoryReader BookHistoryReader
 	// ChangeScan, optional, lets RowApplied read the journal with one

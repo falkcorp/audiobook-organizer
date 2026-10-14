@@ -744,6 +744,18 @@ func TestSubjectOverlap(t *testing.T) {
 		{"title", "publisher", false},
 		{"title", "file.format:f1", false},
 		{"authors", "file_path", false},
+		// Every alias and special name is known, so it does NOT overlap an
+		// unrelated book field (an unknown name would).
+		{"title", "author", false},
+		{"title", "author_name", false},
+		{"title", "series", false},
+		{"title", "series_name", false},
+		{"title", "series_object", false},
+		{"title", "series_position", false},
+		{"title", "book_authors", false},
+		{"title", "f1", false},
+		{"title", "track_number", false},
+		{"title", "book_file:f1:track_number", false},
 		{"touched", "title", true}, // an Effect's own name is unknown: it fails closed
 		{"touched", "file.format:f1", true},
 	} {
@@ -914,9 +926,14 @@ func TestRowAppliedSeesLaterWritesInEitherStore(t *testing.T) {
 		mustRowApplied(t, w, r, true)
 	}
 
-	// Later writes to other fields, in both stores: still standing.
+	// Later writes to other fields, in both stores, and history rows that
+	// record no write to the library's rows (tags written to the files, a
+	// cover archived, an undo marker): still standing.
 	s.foreignJournal("o1", "book-001", "publisher")
 	s.foreignHistory("book-001", "publisher")
+	s.foreignHistory("book-001", "write_back")
+	s.foreignHistory("book-001", "cover_art")
+	s.foreignHistory("book-001", "apply")
 	s.foreignJournal("o2", "book-002", "title")
 	s.foreignHistory("book-003", "book_file:file-003:disc_count")
 	s.foreignJournal("o3", "book-shared", "author_id")
