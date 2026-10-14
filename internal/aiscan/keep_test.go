@@ -1,7 +1,7 @@
 // file: internal/aiscan/keep_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7e4d19-6c82-4f35-9a1d-83e5c7f2a604
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package aiscan
 
@@ -67,6 +67,32 @@ func TestChooseKeepID_GroupsScanKeepsTheHeuristicCanonical(t *testing.T) {
 	// An agreed row is driven by the groups scan: same rule.
 	s.Source = "cross_validate"
 	require.Equal(t, 4, keepOf(t, s, store))
+}
+
+func TestChooseKeepID_AGroupsRowWhoseCanonicalIsGoneFallsThroughToTheFullScanRule(t *testing.T) {
+	// Author 4, the heuristic canonical, was merged away after the scan ran; its
+	// tombstone leads to author 9, which GetAuthorByID answers with. Handing the
+	// apply keep 4 would be handing it an author that no longer exists.
+	store := &keepFake{
+		tombstones: map[int]int{4: 9},
+		names:      map[int]string{9: "Wrong Winner", 12: "Another"},
+		counts:     map[int]int{9: 500, 12: 3},
+	}
+	s := database.ScanSuggestion{
+		Action: "merge", CanonicalName: "Another", Source: "groups_scan",
+		AuthorIDs: []int{4, 9, 12},
+	}
+	require.Equal(t, 12, keepOf(t, s, store), "the author named canonical_name wins among those that exist")
+
+	// Gone outright, with no tombstone: the same.
+	store.tombstones = nil
+	s.AuthorIDs = []int{5, 9, 12}
+	s.CanonicalName = "Nobody Matches"
+	require.Equal(t, 9, keepOf(t, s, store), "most books among those that exist")
+
+	// Nothing left: no keep, and the apply refuses by name.
+	s.AuthorIDs = []int{5, 6}
+	require.Zero(t, keepOf(t, s, store))
 }
 
 func TestChooseKeepID_FullScanPrefersTheAuthorNamedCanonical(t *testing.T) {

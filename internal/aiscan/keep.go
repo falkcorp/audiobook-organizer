@@ -1,7 +1,7 @@
 // file: internal/aiscan/keep.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e1c8a42-93d7-4b60-a8f1-2c7d4e90b315
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package aiscan
 
@@ -94,8 +94,13 @@ func groupsKeepID(s database.ScanSuggestion) int {
 // older scan's results are read, so a scan gets the same answer either way.
 func chooseKeepID(s database.ScanSuggestion, lookup *keepLookup) (int, error) {
 	if s.Source == "groups_scan" || s.Source == "cross_validate" {
+		// The heuristic canonical is only a keep while it still exists: a scan read
+		// after that author was merged away must not hand the apply a keep that is
+		// gone. It then falls through to the rule a full-scan row uses.
 		if id := groupsKeepID(s); id > 0 {
-			return id, nil
+			if _, ok := lookup.name(id); ok {
+				return id, nil
+			}
 		}
 	}
 	want := dedup.NormalizeAuthorName(s.CanonicalName)

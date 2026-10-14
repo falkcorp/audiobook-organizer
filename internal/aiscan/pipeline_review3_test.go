@@ -1,17 +1,21 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package aiscan
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"github.com/stretchr/testify/require"
 )
 
@@ -231,4 +235,87 @@ func TestRecordFullScanResultsReplayOfSupersededScanIsDone(t *testing.T) {
 	after, err := store.GetScanResults(first)
 	require.NoError(t, err)
 	require.Equal(t, before[0].ID, after[0].ID, "results untouched")
+}
+
+// --- a scan that could not be run is ended, not left blocking every start -----
+
+// authorsFailAfterCreate lets CreateScan read the library, then fails the read RunScan
+// makes when it launches the first source phase: a drive error.
+type authorsFailAfterCreate struct {
+	*fakeMainStore
+	fail atomic.Bool
+}
+
+func (a *authorsFailAfterCreate) GetAllAuthors() ([]database.Author, error) {
+	if a.fail.Load() {
+		return nil, errors.New("authors unreadable")
+	}
+	return a.fakeMainStore.GetAllAuthors()
+}
+
+func TestRunScan_ADriveErrorEndsTheScanSoANewOneCanStart(t *testing.T) {
+	main := &authorsFailAfterCreate{fakeMainStore: newFakeMainStore(3)}
+	store := newScanStore(t)
+	pm := NewPipelineManager(store, main, newFakeLLM(newFakeAccount()))
+	scan, err := pm.CreateScan("realtime")
+	require.NoError(t, err)
+	main.fail.Store(true)
+
+	err = pm.RunScan(context.Background(), scan.ID, nil)
+
+	require.ErrorContains(t, err, "authors unreadable")
+	got, gerr := store.GetScan(scan.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, "failed", got.Status, "an op that returned an error leaves no live scan behind")
+	require.Equal(t, "failed", phaseStatus(t, pm, scan.ID, "groups_scan"))
+	require.Equal(t, "failed", phaseStatus(t, pm, scan.ID, "full_scan"))
+
+	main.fail.Store(false)
+	next, nerr := pm.CreateScan("realtime")
+	require.NoError(t, nerr, "the failed scan must not block the next start")
+	require.NotEqual(t, scan.ID, next.ID)
+}
+
+// A phase left "submitting" may own a paid batch. Ending the scan cancels it, by
+// looking it up when no id was ever recorded, exactly as CancelScan does.
+func TestAbortScan_CancelsTheBatchOfASubmittingPhaseAndFailsTheScan(t *testing.T) {
+	main := newFakeMainStore(3)
+	store := newScanStore(t)
+	acct := newFakeAccount()
+	llm1 := newFakeLLM(acct)
+	llm1.blockAfterCreate = true
+	pm1 := NewPipelineManager(store, main, llm1)
+	scan, err := pm1.CreateScan("batch")
+	require.NoError(t, err)
+	_ = runAsync(pm1, scan.ID)
+	<-llm1.entered
+	waitPhase(t, store, scan.ID, "full_scan", "submitting")
+	awaitGroupsSettled(t, pm1, store, scan.ID)
+
+	llm2 := newFakeLLM(acct)
+	pm2 := NewPipelineManager(store, main, finderLLM{fakeLLM: llm2})
+	pm2.abortScan(context.Background(), scan.ID, errors.New("could not be driven"))
+
+	require.Equal(t, []string{"batch_1"}, llm2.canceled())
+	got, gerr := store.GetScan(scan.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, "failed", got.Status)
+	require.Equal(t, "failed", phaseStatus(t, pm2, scan.ID, "full_scan"))
+}
+
+// A server shutdown is not a failure: the op resumes the scan after the restart.
+func TestAbortScan_LeavesTheScanForTheResumeOnShutdown(t *testing.T) {
+	main := newFakeMainStore(3)
+	store := newScanStore(t)
+	pm := NewPipelineManager(store, main, newFakeLLM(newFakeAccount()))
+	scan, err := pm.CreateScan("realtime")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(lifecycle.ErrShutdown)
+	pm.abortScan(ctx, scan.ID, errors.New("store closing"))
+
+	got, gerr := store.GetScan(scan.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, "pending", got.Status)
 }

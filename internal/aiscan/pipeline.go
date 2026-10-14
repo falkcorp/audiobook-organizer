@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.9.0
+// version: 4.10.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-10-14
 
@@ -264,6 +264,45 @@ func (pm *PipelineManager) cleanupScan(scanID int, status string) {
 	pm.finishScan(scanID, ErrScanCanceled)
 }
 
+// abortScan ends a scan whose run could not start or could not be driven: its
+// in-progress phases and the scan are marked failed, its paid batches are canceled,
+// and the waiting operation (if one is attached) is released with cause.
+//
+// Without it the scan stays "pending" or "scanning" for good: nothing drives a
+// scan whose operation has returned, and the start guard
+// (database.AIScanStore.CreateScanIfNoneActive) counts any scan that is not
+// terminal as running, so one failed start blocks every later one. It goes the way
+// CancelScan does: the rows are marked FIRST and the batches canceled after, from
+// the phases as they were before the mark, so a phase that was "submitting" (its
+// CreateBatch may be in flight) still has its batch looked up and canceled, and a
+// CreateBatch that returns later finds its phase no longer "submitting" and
+// cancels its own (recordBatch).
+//
+// A server shutdown is not a failure: the op is ResumeRestart, so the scan is left
+// for the resumed run, exactly as waitForScan leaves it.
+func (pm *PipelineManager) abortScan(ctx context.Context, scanID int, cause error) {
+	if lifecycle.IsShutdown(ctx) {
+		pm.detachScan(scanID)
+		return
+	}
+	phases, err := pm.scanStore.GetPhases(scanID)
+	if err != nil {
+		plog.Warn("scan %d: cannot read its phases to abort it; its batches are not canceled: %v", scanID, err)
+	}
+	for _, p := range phases {
+		if !isTerminalPhase(p.Status) {
+			if uerr := pm.scanStore.UpdatePhaseStatus(scanID, p.PhaseType, "failed", ""); uerr != nil {
+				plog.Warn("scan %d: cannot mark phase %s failed: %v", scanID, p.PhaseType, uerr)
+			}
+		}
+	}
+	if uerr := pm.scanStore.UpdateScanStatus(scanID, "failed"); uerr != nil {
+		plog.Warn("scan %d: cannot mark it failed; it still blocks a new scan until it is canceled: %v", scanID, uerr)
+	}
+	pm.finishScan(scanID, cause)
+	pm.cancelPhaseBatches(scanID, phases)
+}
+
 // nextPhases determines which phases should start based on current state.
 func (pm *PipelineManager) nextPhases(completedPhase, status string, phaseStates map[string]string) []string {
 	if status != "complete" {
@@ -393,11 +432,17 @@ func (pm *PipelineManager) CreateScan(mode string) (*database.Scan, error) {
 		return nil, fmt.Errorf("create scan: %w", err)
 	}
 
+	// A scan whose phases cannot be created is never run, and left pending it would
+	// refuse every later start: it is ended here.
 	if _, err := pm.scanStore.CreatePhase(scan.ID, "groups_scan", models["groups"]); err != nil {
-		return nil, fmt.Errorf("create groups phase: %w", err)
+		err = fmt.Errorf("create groups phase: %w", err)
+		pm.abortScan(context.Background(), scan.ID, err)
+		return nil, err
 	}
 	if _, err := pm.scanStore.CreatePhase(scan.ID, "full_scan", models["full"]); err != nil {
-		return nil, fmt.Errorf("create full phase: %w", err)
+		err = fmt.Errorf("create full phase: %w", err)
+		pm.abortScan(context.Background(), scan.ID, err)
+		return nil, err
 	}
 	for _, sp := range sourcePhases {
 		// Not fatal: an unledgered phase is only resumed the slower, older
@@ -499,7 +544,9 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 
 	phases, err := pm.scanStore.GetPhases(scanID)
 	if err != nil {
-		return fmt.Errorf("get phases for scan %d: %w", scanID, err)
+		err = fmt.Errorf("get phases for scan %d: %w", scanID, err)
+		pm.abortScan(ctx, scanID, err)
+		return err
 	}
 	fresh := true
 	for _, p := range phases {
@@ -529,8 +576,9 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 
 	if fresh {
 		if err := pm.scanStore.UpdateScanStatus(scanID, "scanning"); err != nil {
-			pm.finishScan(scanID, nil)
-			return fmt.Errorf("update scan status: %w", err)
+			err = fmt.Errorf("update scan status: %w", err)
+			pm.abortScan(ctx, scanID, err)
+			return err
 		}
 		pm.report(scanID, 0, 100, "Starting AI scan pipeline...")
 	} else {
@@ -545,7 +593,7 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	// submitLedgerArtifact and so proves it never reached CreateBatch.
 	resumed := scan.Status != "pending"
 	if err := pm.drive(scanCtx, scanID, scan.Mode, resumed); err != nil {
-		pm.finishScan(scanID, nil)
+		pm.abortScan(ctx, scanID, err)
 		return err
 	}
 	return pm.waitForScan(ctx, scanID, scan.Mode, done)
