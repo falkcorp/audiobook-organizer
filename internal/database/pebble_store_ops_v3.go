@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-13
 
@@ -1645,6 +1645,14 @@ func (p *PebbleStore) CommitLedgerV3(id string, lb LedgerBatch) (err error) {
 	}
 	if err := b.Set(opv3CkptKey(id), ckData, nil); err != nil {
 		return err
+	}
+	if lb.ResetMarks {
+		// Before the Sets below: within one batch the later Set wins over
+		// the range deletion.
+		marks := opv3MarkRunPrefix(id)
+		if err := b.DeleteRange(marks, prefixEnd(marks), nil); err != nil {
+			return err
+		}
 	}
 	for name, keys := range lb.Marks {
 		for _, k := range keys {

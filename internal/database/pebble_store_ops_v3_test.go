@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-13
 
@@ -1187,6 +1187,20 @@ func TestMarksStagedWithLedger(t *testing.T) {
 	transition(t, p, id, state.EvReturnNil, nil)
 	if got, _ := p.ListMarksV3(id); len(got) != 0 {
 		t.Fatalf("marks left after the terminal transition: %v", got)
+	}
+	// N-2: the first commit of a ledger started over drops the old ledger's
+	// marks in its batch, and keeps the ones it stages itself.
+	again := insertV3(t, p, "test.marks", "")
+	transition(t, p, again, state.EvDispatch, nil)
+	led := Ledger{ChunkSize: 1, ChunkCount: 1, Done: []byte{0}}
+	if err := p.CommitLedgerV3(again, LedgerBatch{Ledger: led, Marks: map[string][]string{"applied": {"old1", "old2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CommitLedgerV3(again, LedgerBatch{Ledger: led, ResetMarks: true, Marks: map[string][]string{"applied": {"new"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := p.ListMarksV3(again); !slices.Equal(got["applied"], []string{"new"}) || len(got) != 1 {
+		t.Fatalf("marks after a reset = %v, want only the new one", got)
 	}
 	// A discard of a run that never ended deletes its marks too.
 	open := insertV3(t, p, "test.marks", "")
