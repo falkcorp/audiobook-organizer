@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package jobs_test
 
@@ -44,7 +44,11 @@ import (
 // *.backup / *.bak file with no age test, and the nightly
 // maintenance.cleanup-old-backups is the one backup sweep. Its op ID is in
 // internal/server retiredOpIDs.
-const wantJobCount = 36
+//
+// 2026-10-14: 36 → 35. `fix-book-file-paths` was deleted (04-P14d): it only
+// set Missing=true, and maintenance.mark-missing-files sets and clears it. Its
+// op ID is in internal/server retiredOpIDs.
+const wantJobCount = 35
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-09-19
+// last-edited: 2026-10-14
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -50,7 +50,9 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -184,6 +186,16 @@ func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
 		ResumePolicy: sdk.ResumeDrop,
 		Liveness:     sdk.LivenessRunItems,
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		// Declared, not inherited: this op WRITES the Missing flag on every book_file
+		// row. The retired job it replaced (maintenance.fix-book-file-paths, 04-P14d)
+		// was gated on settings.manage, and an op that declares nothing is reachable
+		// by any scan.trigger holder until the generic default covers it.
+		Permissions: []auth.Permission{auth.PermSettingsManage},
+		// 4h, the retired job's budget (maintenance.DefaultPolicy). The undeclared
+		// default is 120 minutes, which is a regression for the job's callers: the
+		// stat sweep covers every book_file row of a ~726k-row library over a NAS,
+		// and an apply then re-stats and rewrites each flipped book.
+		Timeout: 4 * time.Hour,
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 			return p.runMarkMissingFiles(ctx, raw, reporter)
 		},
@@ -273,10 +285,14 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	log.Info("mark-missing-files start",
 		"apply", params.Apply, "path_prefix", params.PathPrefix, "max", params.Max)
 
+	// Stamp liveness around the one unbounded store read: nothing else can until
+	// the first RunItems item completes.
+	registry.TouchLiveness(reporter)
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return markMissingPlan{}, fmt.Errorf("load book files: %w", err)
 	}
+	registry.TouchLiveness(reporter)
 	plan := markMissingPlan{Apply: params.Apply}
 
 	// primaryBookIDs is the set of PRIMARY-version books. BooksBrokenOnDisk must
@@ -289,6 +305,14 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	// matching the stats derivation exactly. Loaded in bounded pages like repoint.
 	primaryBookIDs := make(map[string]struct{})
 	for offset := 0; ; offset += bookPageSize {
+		// This loop is a store read per page and runs before the first RunItems
+		// item can stamp liveness, so it honours Cancel and stamps the 5-minute
+		// watchdog itself. A library of tens of thousands of books is dozens of
+		// pages, each a store scan.
+		if cerr := ctx.Err(); cerr != nil {
+			return markMissingPlan{}, fmt.Errorf("load books: %w", cerr)
+		}
+		registry.TouchLiveness(reporter)
 		page, perr := store.GetAllBooksCore(bookPageSize, offset)
 		if perr != nil {
 			return markMissingPlan{}, fmt.Errorf("load books: %w", perr)
@@ -468,6 +492,11 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		// and RunItems renews only per BOOK — so stamp liveness and re-check the
 		// lease from inside it. See bookFileStatLivenessEvery.
 		beat := prewriteHeartbeat(reporter, func() bool {
+			// A book can hold ~1,500 rows; stop mid-book on Cancel rather than
+			// finishing the stat pass of a book whose write will be refused anyway.
+			if itemCtx.Err() != nil {
+				return true
+			}
 			if standDownLost.Load() {
 				return true
 			}

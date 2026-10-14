@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-14
 
@@ -127,11 +127,24 @@ func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {
 var retiredMerges = []struct {
 	old, survivor string
 	perms         []auth.Permission
+	// minTimeout is the least timeout the survivor may declare: a retired op's
+	// larger budget carries over to the survivor, since an undeclared timeout
+	// falls back to 120 minutes. Zero skips the check.
+	minTimeout time.Duration
+	// caps are capabilities the survivor must declare (the retired op's, where
+	// the survivor did not already have them). Empty skips the check.
+	caps []opsregistry.Capability
 }{
 	// 04-P3b: the manual cleanup-backups job deleted *.backup / *.bak files with
 	// no age test; the survivor deletes only fileops-written .bak-<unix>[-N]
 	// names past retention.
-	{"maintenance.cleanup-backups", "maintenance.cleanup-old-backups", []auth.Permission{auth.PermSettingsManage}},
+	{"maintenance.cleanup-backups", "maintenance.cleanup-old-backups", []auth.Permission{auth.PermSettingsManage}, 0, nil},
+	// 04-P14d: the manual fix-book-file-paths job only set Missing=true and had the
+	// maintenance.DefaultPolicy 4h budget and settings.manage gate; the survivor
+	// sets and clears the flag, takes {apply} not {dry_run}, and previously
+	// declared neither a permission nor a timeout (so 120 minutes).
+	{"maintenance.fix-book-file-paths", "maintenance.mark-missing-files", []auth.Permission{auth.PermSettingsManage},
+		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
 }
 
 func TestTwinMerge_RetiredIDsAndSurvivorPermissions(t *testing.T) {
@@ -148,6 +161,11 @@ func TestTwinMerge_RetiredIDsAndSurvivorPermissions(t *testing.T) {
 			surv, ok := srv.opRegistry.Def(row.survivor)
 			require.True(t, ok, "survivor %q must be registered", row.survivor)
 			assert.Equal(t, row.perms, surv.Permissions)
+			assert.GreaterOrEqual(t, surv.Timeout, row.minTimeout,
+				"survivor %q must keep the retired op's larger budget", row.survivor)
+			for _, c := range row.caps {
+				assert.Contains(t, surv.Capabilities, c)
+			}
 
 			// A caller holding only scan.trigger is refused on the survivor and
 			// EnqueueOp is never reached (the mock sets no EnqueueOp expectation).
