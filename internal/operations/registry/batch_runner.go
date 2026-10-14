@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-13
 
@@ -952,7 +952,8 @@ func (b *batchRun) ledgerLoop() {
 		led.ChunkCount = b.chunkTotal()
 		if b.cfg.store != nil && !closed {
 			err := b.cfg.store.CommitLedgerV3(b.cfg.opID, database.LedgerBatch{
-				Ledger: led, Leases: b.leaseCopy(), Progress: prog, ItemRows: send, Marks: b.ledger.pendingMarks()})
+				Ledger: led, Leases: b.leaseCopy(), Progress: prog, ItemRows: send, Marks: b.ledger.pendingMarks(),
+				ResetMarks: b.ledger.fresh})
 			if err != nil {
 				if errors.Is(err, database.ErrStaleTransition) || errors.Is(err, database.ErrRunNotFoundV3) {
 					closed = true
@@ -964,6 +965,9 @@ func (b *batchRun) ledgerLoop() {
 		rowsSent += len(send)
 		rows = nil
 		b.ledger.clearPending()
+		if b.cfg.store != nil && !closed {
+			b.ledger.fresh = false // the old marks are gone
+		}
 		dirty, lastCommit = false, now
 		if b.cfg.rep != nil {
 			total := 0

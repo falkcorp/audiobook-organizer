@@ -1,5 +1,5 @@
 // file: internal/operations/registry/chunk_ledger.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d4e18b1-a85c-41de-bd02-4a39b90f180a
 // last-edited: 2026-10-13
 
@@ -118,6 +118,10 @@ type chunkLedger struct {
 	// own opv3:mark: key in the commit that records its chunk, never
 	// rewritten, so there is no cap to drop past.
 	marks, pending map[string][]string
+	// fresh: this ledger was started, not loaded from a stored one. Its
+	// first successful commit sets LedgerBatch.ResetMarks, so marks an
+	// abandoned earlier ledger of the run stored are dropped.
+	fresh bool
 }
 
 func newChunkLedger(size, count int) *chunkLedger {
@@ -126,6 +130,7 @@ func newChunkLedger(size, count int) *chunkLedger {
 			Done: make([]byte, (count+7)/8), Counters: map[string]int64{}},
 		after: map[string]string{},
 		marks: map[string][]string{}, pending: map[string][]string{},
+		fresh: true,
 	}
 }
 

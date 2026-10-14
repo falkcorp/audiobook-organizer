@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -665,5 +665,42 @@ func TestMarksWrittenOnceAndAllReachFinish(t *testing.T) {
 		if times != 1 {
 			t.Fatalf("mark %s written %d times, want once", k, times)
 		}
+	}
+}
+
+// N-2 (final review): a run that starts its ledger over (ResumeFromZero)
+// drops the marks the abandoned ledger stored, so the new Finish sees only
+// its own.
+func TestStartOverDropsOldMarks(t *testing.T) {
+	store := newMemLedgerStore(t)
+	fromZero := ops.ResumeFromZero
+	run := func(name string) ops.Summary {
+		var sum atomic.Pointer[ops.Summary]
+		job, rc, cancel := openJob(t, seq(12), batchOpts{size: 4, workers: 2, resume: &fromZero,
+			finish: func(_ *ops.RC, s ops.Summary) { sum.Store(&s) }},
+			func(irc *ops.ItemRC, i int) error {
+				if i%3 == 0 {
+					irc.Mark(name)
+				}
+				return nil
+			})
+		defer cancel()
+		store.newAttempt()
+		if _, _, err := runBatch(rc.Context(), batchConfig{opID: "op", job: job, rc: rc, store: store, commitEvery: -1}); err != nil {
+			t.Fatal(err)
+		}
+		return *sum.Load()
+	}
+	run("first")
+	if got, _ := store.ListMarksV3("op"); len(got["first"]) != 4 {
+		t.Fatalf("first run stored marks %v", got)
+	}
+	second := run("second")
+	got, _ := store.ListMarksV3("op")
+	if len(got["first"]) != 0 || len(got["second"]) != 4 {
+		t.Fatalf("marks after starting over = %v, want only the second run's", got)
+	}
+	if len(second.Marked("first")) != 0 {
+		t.Fatalf("the new run's Finish saw the old marks: %v", second.Marks)
 	}
 }

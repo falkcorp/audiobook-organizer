@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
 // last-edited: 2026-10-13
 
@@ -105,6 +105,9 @@ func (s *memLedgerStore) CommitLedgerV3(_ string, b database.LedgerBatch) error 
 	s.committers[goroutineID()] = true
 	l := b.Ledger
 	s.ledger = &l
+	if b.ResetMarks {
+		s.marks = map[string]map[string]bool{}
+	}
 	for name, keys := range b.Marks {
 		if s.marks[name] == nil {
 			s.marks[name] = map[string]bool{}

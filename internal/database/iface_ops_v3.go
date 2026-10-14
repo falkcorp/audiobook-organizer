@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
 // last-edited: 2026-10-13
 
@@ -251,6 +251,11 @@ type LedgerBatch struct {
 	// the counters do without riding in every ledger write. A mark name
 	// must not contain a NUL byte.
 	Marks map[string][]string
+	// ResetMarks deletes every opv3:mark: key the run has, in the same batch
+	// and before Marks are staged: the first commit of a ledger started over
+	// (ResumeFromZero, an Unordered source, a snapshot that went missing), so
+	// marks of the abandoned ledger cannot leak into the new one's Finish.
+	ResetMarks bool
 }
 
 // OpCounts is opv3:meta:counts, maintained in the same batch as the ix:state
