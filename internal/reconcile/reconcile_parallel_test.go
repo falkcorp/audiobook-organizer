@@ -1,11 +1,12 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
 // last-edited: 2026-10-14
 
 package reconcile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -267,7 +268,7 @@ func TestBuildReconcilePreview_ParallelBrokenOrder(t *testing.T) {
 		store.books = append(store.books, database.BookCore{ID: id, Title: id, FilePath: path})
 	}
 
-	res, err := BuildReconcilePreview(store)
+	res, err := BuildReconcilePreviewCtx(context.Background(), store, nil, ScanHooks{})
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}

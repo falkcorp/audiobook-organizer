@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.23.0
+// version: 1.25.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-14
 
@@ -288,13 +288,16 @@ func (h ScanHooks) beat() {
 // saveResult. ctx is honored at every phase boundary and inside each phase's
 // per-item loop; a canceled scan returns an error wrapping ctx.Err() and saves
 // nothing, so a partial preview is never mistaken for a finished one.
+//
+// Errors are returned bare (they already say what failed); the caller adds its
+// own context, so a failure is not announced twice.
 func RunReconcileScan(ctx context.Context, store Store, saveResult SaveResultFunc, progress operations.ProgressReporter, hooks ScanHooks) error {
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 	result, err := BuildReconcilePreviewCtx(ctx, store, operations.LoggerFromReporter(progress), hooks)
 	if err != nil {
-		return fmt.Errorf("reconcile scan failed: %w", err)
+		return err
 	}
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
@@ -304,11 +307,6 @@ func RunReconcileScan(ctx context.Context, store Store, saveResult SaveResultFun
 		return fmt.Errorf("failed to store scan results: %w", err)
 	}
 	return nil
-}
-
-// BuildReconcilePreview builds the full reconciliation preview (sync, no progress).
-func BuildReconcilePreview(store Store) (*ReconcilePreviewResult, error) {
-	return BuildReconcilePreviewCtx(context.Background(), store, nil, ScanHooks{})
 }
 
 // hashFilesConcurrent computes a segment hash for every file across a bounded
@@ -508,6 +506,12 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 	hashIndex := hashFilesConcurrent(ctx, untrackedFiles, func(done int) {
 		report(done, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", done, totalUntracked))
 	}, hooks)
+	// Checked before anything is reported or matched: a canceled pool skipped
+	// files, so "Hashed N/N" and "Computed hashes" would describe work that did
+	// not happen, and hashIndex is partial -- it reads as "nothing matched".
+	if err := canceled("while hashing untracked files"); err != nil {
+		return nil, err
+	}
 	report(totalUntracked, totalUntracked, fmt.Sprintf("Hashed %d/%d untracked files", totalUntracked, totalUntracked))
 	logMsg("info", fmt.Sprintf("Computed hashes for %d untracked files", len(hashIndex)))
 
@@ -558,19 +562,23 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 	}
 	logMsg("info", fmt.Sprintf("Hash matching found %d matches", len(result.Matches)))
 
-	if err := canceled("after hashing, before filename matching"); err != nil {
-		return nil, err
-	}
-
 	// Step 4: Match by filename pattern
 	report(0, totalBroken, fmt.Sprintf("Matching %d broken records by filename patterns...", totalBroken))
+	// Each untracked basename is normalized exactly once, here, and the result is
+	// reused by the index below and by the title match, which compares every
+	// broken record against every file. normalizedBases[i] belongs to
+	// untrackedFiles[i]; the title match still walks untrackedFiles in order, so
+	// the first containing file wins exactly as before.
+	normalizedBases := make([]string, len(untrackedFiles))
+	for i, fp := range untrackedFiles {
+		normalizedBases[i] = NormalizeFilename(filepath.Base(fp))
+	}
 	filenameIndex := make(map[string][]string)
-	for _, fp := range untrackedFiles {
+	for i, fp := range untrackedFiles {
 		if matchedFiles[fp] {
 			continue
 		}
-		base := NormalizeFilename(filepath.Base(fp))
-		filenameIndex[base] = append(filenameIndex[base], fp)
+		filenameIndex[normalizedBases[i]] = append(filenameIndex[normalizedBases[i]], fp)
 	}
 
 	for _, book := range brokenBooks {
@@ -600,9 +608,9 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 
 	// Step 4b: Try matching by title contained in filename
 	report(0, totalBroken, fmt.Sprintf("Matching %d broken records by title in filename...", totalBroken))
-	// Every broken record is compared against every untracked file here, with
-	// NormalizeFilename re-run in the inner loop, so this is the longest phase
-	// that reports nothing of its own: one beat and one cancel check per record.
+	// Every broken record is compared against every untracked file here, so this
+	// is the longest phase that reports nothing of its own: one beat and one
+	// cancel check per record.
 	for _, book := range brokenBooks {
 		if err := canceled("while matching titles"); err != nil {
 			return nil, err
@@ -615,11 +623,11 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 		if normalizedTitle == "" {
 			continue
 		}
-		for _, fp := range untrackedFiles {
+		for i, fp := range untrackedFiles {
 			if matchedFiles[fp] {
 				continue
 			}
-			normalizedBase := NormalizeFilename(filepath.Base(fp))
+			normalizedBase := normalizedBases[i]
 			if strings.Contains(normalizedBase, normalizedTitle) ||
 				strings.Contains(normalizedTitle, normalizedBase) {
 				result.Matches = append(result.Matches, ReconcileMatch{

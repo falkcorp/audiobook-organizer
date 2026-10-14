@@ -1,5 +1,5 @@
 // file: internal/server/reconcile_scan_merge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2e4f61-9d03-4a75-b6c8-1e7f3a5d9c02
 // last-edited: 2026-10-14
 
@@ -8,6 +8,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +23,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -111,6 +114,139 @@ func TestLatestReconcileScan_NewestWinsAcrossFormerAndCurrentID(t *testing.T) {
 	assert.Equal(t, "manual-old", opID(t, latestScanBody(t, rows)))
 }
 
+// attemptID returns latest_attempt.id, or "" when the field is null/absent.
+func attemptID(t *testing.T, body map[string]any) string {
+	t.Helper()
+	att, ok := body["latest_attempt"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := att["id"].(string)
+	return id
+}
+
+func attemptStatus(body map[string]any) string {
+	att, _ := body["latest_attempt"].(map[string]any)
+	st, _ := att["status"].(string)
+	return st
+}
+
+// A newer run that did not produce a scan must not hide the last good one. The
+// nightly run is the same op as a manual scan now, so a single canceled night
+// would otherwise blank the tab; the caller instead gets the good preview AND
+// the newer attempt, so it can say why the scan it is showing is old.
+func TestLatestReconcileScan_NewerCanceledRunDoesNotHideTheLastGoodScan(t *testing.T) {
+	now := time.Now()
+	good := scanPayload(t, "book-good")
+	body := latestScanBody(t, []database.OperationV2Row{
+		{ID: "manual-good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-20 * time.Hour), ResultData: &good},
+		{ID: "nightly-canceled", DefID: formerReconcileScanID, Status: "canceled", QueuedAt: now},
+	})
+
+	assert.Equal(t, "manual-good", opID(t, body), "operation is the scan whose preview is returned")
+	preview, ok := body["preview"].(map[string]any)
+	require.True(t, ok, "the good scan's preview must still be served, got %v", body["preview"])
+	broken, _ := preview["broken_records"].([]any)
+	assert.Len(t, broken, 1)
+	assert.Equal(t, "nightly-canceled", attemptID(t, body), "the newer canceled run must be reported")
+	assert.Equal(t, "canceled", attemptStatus(body))
+}
+
+func TestLatestReconcileScan_NewerFailedAndInterruptedRunsAreReportedToo(t *testing.T) {
+	now := time.Now()
+	good := scanPayload(t, "book-good")
+	for _, status := range []string{"failed", "interrupted_dropped", "interrupted_quiesced"} {
+		body := latestScanBody(t, []database.OperationV2Row{
+			{ID: "good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour), ResultData: &good},
+			{ID: "newer", DefID: reconcileScanDefIDV2, Status: status, QueuedAt: now},
+		})
+		assert.Equal(t, "good", opID(t, body), status)
+		assert.NotNil(t, body["preview"], status)
+		assert.Equal(t, "newer", attemptID(t, body), status)
+		assert.Equal(t, status, attemptStatus(body))
+	}
+}
+
+// A scan in flight must stay discoverable: the tab polls it, and before this the
+// running run WAS the operation field. It now arrives as the attempt, next to
+// the previous good preview.
+func TestLatestReconcileScan_RunningScanArrivesAsTheAttemptBesideTheGoodPreview(t *testing.T) {
+	now := time.Now()
+	good := scanPayload(t, "book-good")
+	body := latestScanBody(t, []database.OperationV2Row{
+		{ID: "good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour), ResultData: &good},
+		{ID: "live", DefID: reconcileScanDefIDV2, Status: "running", QueuedAt: now},
+	})
+	assert.Equal(t, "good", opID(t, body))
+	assert.NotNil(t, body["preview"])
+	assert.Equal(t, "live", attemptID(t, body))
+	assert.Equal(t, "running", attemptStatus(body))
+}
+
+// A newest run that completed with a result that does not decode falls back to
+// the older scan that does (todo.d 20260825: it used to answer preview:null and
+// stop), and is still reported so the caller knows the newest result is unusable.
+func TestLatestReconcileScan_UnreadableNewestResultFallsBackToAnOlderScan(t *testing.T) {
+	now := time.Now()
+	good := scanPayload(t, "book-good")
+	bad := "{not json"
+	body := latestScanBody(t, []database.OperationV2Row{
+		{ID: "older-good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-3 * time.Hour), ResultData: &good},
+		{ID: "newest-corrupt", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now, ResultData: &bad},
+	})
+	assert.Equal(t, "older-good", opID(t, body))
+	assert.NotNil(t, body["preview"])
+	assert.Equal(t, "newest-corrupt", attemptID(t, body))
+	assert.Equal(t, "completed", attemptStatus(body))
+}
+
+func TestLatestReconcileScan_NewestGoodScanHasNoAttempt(t *testing.T) {
+	now := time.Now()
+	older, newest := scanPayload(t, "book-old"), scanPayload(t, "book-new")
+	body := latestScanBody(t, []database.OperationV2Row{
+		{ID: "older", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour), ResultData: &older},
+		{ID: "newest", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now, ResultData: &newest},
+	})
+	assert.Equal(t, "newest", opID(t, body))
+	assert.Nil(t, body["latest_attempt"], "nothing is newer than the scan being shown")
+}
+
+// With no usable scan the answer is what it always was: the newest run, no
+// preview, and no separate attempt (the operation field already is that run).
+func TestLatestReconcileScan_NoUsableScanAnswersWithTheNewestRun(t *testing.T) {
+	now := time.Now()
+	body := latestScanBody(t, []database.OperationV2Row{
+		{ID: "old-failed", DefID: reconcileScanDefIDV2, Status: "failed", QueuedAt: now.Add(-time.Hour)},
+		{ID: "live", DefID: reconcileScanDefIDV2, Status: "running", QueuedAt: now},
+	})
+	assert.Equal(t, "live", opID(t, body))
+	assert.Nil(t, body["preview"])
+	assert.Nil(t, body["latest_attempt"])
+
+	empty := latestScanBody(t, nil)
+	assert.Nil(t, empty["operation"])
+	assert.Nil(t, empty["preview"])
+	assert.Nil(t, empty["latest_attempt"])
+}
+
+// GET /operations/reconcile/preview is a synchronous full-library sweep. It runs
+// under the request's context so a client that goes away stops it: with a
+// canceled request the handler must not even load the books (the strict mock
+// fails on an unexpected call) and must answer nothing.
+func TestReconcilePreview_StopsWhenTheRequestIsCanceled(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+	require.NotNil(t, srv.storeForWiring())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/operations/reconcile/preview", nil).WithContext(ctx)
+
+	srv.reconcilePreview(c)
+	assert.Empty(t, w.Body.String(), "a canceled request gets no body, and in particular no 500")
+}
+
 func TestRecentReconcileScans_MatchesOnCanonicalID(t *testing.T) {
 	now := time.Now()
 	store := &reconcileIndexStore{v2: []database.OperationV2Row{
@@ -139,6 +275,10 @@ func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	assert.Contains(t, def.Capabilities, opsregistry.CapLibraryRead)
 	assert.Equal(t, reconcileScanDefIDV2, aliases[formerReconcileScanID])
 	assert.True(t, def.Cancellable, "Cancel is honored: the body checks ctx at every phase")
+	// A reconcile scan interrupted by a deploy is dropped, never resumed: the def
+	// says so, and (since the registry's old "reconcile_scan" special case was
+	// removed) the def is the only thing that does.
+	assert.Equal(t, opsregistry.ResumeDrop, def.ResumePolicy)
 	assert.Equal(t, opsregistry.LivenessManual, def.Liveness)
 
 	// The former id resolves to the same def, so a script or stored row that
@@ -146,6 +286,7 @@ func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	viaAlias, ok := srv.opRegistry.Def(formerReconcileScanID)
 	require.True(t, ok)
 	assert.Equal(t, reconcileScanDefIDV2, viaAlias.ID)
+	assert.Equal(t, opsregistry.ResumeDrop, viaAlias.ResumePolicy, "a row stored under the former id resumes through the same def")
 }
 
 // touchCountingReporter counts liveness stamps separately from progress frames.
@@ -155,6 +296,10 @@ type touchCountingReporter struct {
 }
 
 func (r touchCountingReporter) TouchLiveness() { r.touch() }
+
+// OpID is not promoted from the embedded interface, and the op's activity lines
+// are keyed on it.
+func (r touchCountingReporter) OpID() string { return "op-scan" }
 
 // Drives the registered Run end to end: the heartbeat hook must reach the
 // reporter's liveness clock (TouchLiveness), Cancel must be honored with no
@@ -187,7 +332,55 @@ func TestReconcileScanOp_RunStampsLivenessAndHonorsCancel(t *testing.T) {
 		},
 	}
 
+	srv.activityWriter = activity.NewWriter(nil, 16)
 	err := def.Run(ctx, nil, rep)
 	require.ErrorIs(t, err, context.Canceled, "empty params must decode and Cancel must stop the scan")
 	assert.GreaterOrEqual(t, touches.Load(), int64(1), "the scan must stamp the reporter's liveness clock")
+	assert.Equal(t, []string{"Reconcile scan canceled"}, scanSummaries(srv.activityWriter, "op-scan"),
+		"a canceled scan is logged as canceled, not failed")
+}
+
+// scanSummaries returns the summaries queued on w for opID.
+func scanSummaries(w *activity.Writer, opID string) []string {
+	var out []string
+	for _, e := range drainActivity(w) {
+		if e.OperationID == opID && e.Type == "reconcile.scan" {
+			out = append(out, e.Summary)
+		}
+	}
+	return out
+}
+
+// The activity line for a finished scan: a canceled scan is not a failure, and a
+// failure's text is not announced twice.
+func TestReconcileScanSummary(t *testing.T) {
+	assert.Equal(t, "Reconcile scan completed", reconcileScanSummary(nil))
+	assert.Equal(t, "Reconcile scan canceled", reconcileScanSummary(context.Canceled))
+	assert.Equal(t, "Reconcile scan canceled",
+		reconcileScanSummary(fmt.Errorf("reconcile scan canceled while matching titles: %w", context.Canceled)))
+	assert.Equal(t, "Reconcile scan failed: failed to list books: boom",
+		reconcileScanSummary(errors.New("failed to list books: boom")))
+	assert.Equal(t, "Reconcile scan failed: context deadline exceeded", reconcileScanSummary(context.DeadlineExceeded),
+		"a timeout is a failure, not an operator cancel")
+}
+
+// The error the op returns carries one prefix: the def's. RunReconcileScan used
+// to add "reconcile scan failed:" on top of a message that already said so.
+func TestReconcileScanOp_RunReturnsAFailureWithASinglePrefix(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+	store, ok := srv.store.(*mocks.MockStore)
+	require.True(t, ok)
+	store.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return(nil, errors.New("boom")).Maybe()
+	store.EXPECT().UpdateOpProgressV2(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	def, ok := srv.opRegistry.Def(reconcileScanDefIDV2)
+	require.True(t, ok)
+	ctx := context.Background()
+	rep := opsregistry.NewDBReporterForTest(ctx, "op-fail", reconcileScanDefIDV2, "reconcile", "", "", store, nil, slog.New(slog.DiscardHandler))
+
+	srv.activityWriter = activity.NewWriter(nil, 16)
+	err := def.Run(ctx, nil, rep)
+	require.Error(t, err)
+	assert.Equal(t, "reconcile.scan: failed to list books: boom", err.Error())
+	assert.Equal(t, []string{"Reconcile scan failed: failed to list books: boom"}, scanSummaries(srv.activityWriter, "op-fail"))
 }

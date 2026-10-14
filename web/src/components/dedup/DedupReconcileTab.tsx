@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupReconcileTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-10-06
+// last-edited: 2026-10-14
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRowSelection } from '../../hooks/useRowSelection';
@@ -22,7 +22,41 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import * as api from '../../services/api';
-import type { ReconcileMatch, ReconcilePreview, ReconcileBrokenRecord } from '../../services/api';
+import type {
+  Operation,
+  ReconcileMatch,
+  ReconcilePreview,
+  ReconcileBrokenRecord,
+} from '../../services/api';
+
+const inFlight = (op: Operation | null | undefined): op is Operation =>
+  !!op && (op.status === 'running' || op.status === 'queued');
+
+/**
+ * Says why the scan on screen is not the newest run. The server keeps serving
+ * the last scan with a readable result when a newer run was canceled, failed,
+ * was interrupted, or finished with a result that could not be read, and reports
+ * that newer run separately. The response cannot tell a nightly run from a
+ * manual one, so the wording does not claim to.
+ */
+function describeNewerAttempt(attempt: Operation, scanTime: string | null): string {
+  const outcome: Record<string, string> = {
+    canceled: 'was canceled',
+    failed: 'failed',
+    interrupted_dropped: 'was interrupted',
+    interrupted_quiesced: 'was interrupted',
+    interrupted_ask: 'was interrupted',
+    interrupted_restart: 'was interrupted',
+    completed: 'finished but its result could not be read',
+  };
+  const verb = outcome[attempt.status] ?? `ended as ${attempt.status}`;
+  const at = attempt.completed_at ?? attempt.started_at ?? attempt.created_at;
+  const when = at ? ` at ${new Date(at).toLocaleString()}` : '';
+  const shown = scanTime
+    ? `showing the scan from ${new Date(scanTime).toLocaleString()}`
+    : 'showing the last good scan';
+  return `The latest scan run ${verb}${when}; ${shown}.`;
+}
 
 export function ReconcileTab() {
   const [scanning, setScanning] = useState(false);
@@ -33,6 +67,8 @@ export function ReconcileTab() {
   } | null>(null);
   const [preview, setPreview] = useState<ReconcilePreview | null>(null);
   const [lastScanTime, setLastScanTime] = useState<string | null>(null);
+  // A newer run that did not produce the scan on screen (canceled, failed, ...).
+  const [newerAttempt, setNewerAttempt] = useState<Operation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<string | null>(null);
@@ -61,14 +97,21 @@ export function ReconcileTab() {
   useEffect(() => {
     const loadLatest = async () => {
       try {
-        const { operation, preview: data } = await api.getLatestReconcileScan();
-        if (operation && operation.status === 'running') {
-          setScanning(true);
-          pollForResult(operation.id);
-        } else if (data) {
+        const { operation, preview: data, latest_attempt } = await api.getLatestReconcileScan();
+        // The last good scan is shown whatever else is going on. A run still in
+        // flight arrives as latest_attempt next to it (or as operation itself
+        // when nothing has completed yet) and is polled to completion.
+        if (data) {
           setPreview(data);
           autoSelectHighConfidence(data);
           if (operation?.completed_at) setLastScanTime(operation.completed_at);
+        }
+        const live = [latest_attempt, operation].find(inFlight);
+        if (live) {
+          setScanning(true);
+          pollForResult(live.id);
+        } else if (latest_attempt) {
+          setNewerAttempt(latest_attempt);
         }
       } catch {
         // No previous scan, that's fine
@@ -90,6 +133,7 @@ export function ReconcileTab() {
           autoSelectHighConfidence(data);
         }
         setLastScanTime(new Date().toISOString());
+        setNewerAttempt(null);
       } else {
         setError(`Scan ${result.status}: ${result.message || result.error_message || ''}`);
       }
@@ -105,6 +149,7 @@ export function ReconcileTab() {
     setScanning(true);
     setError(null);
     setApplyResult(null);
+    setNewerAttempt(null);
     try {
       const op = await api.startReconcileScan();
       pollForResult(op.id);
@@ -240,6 +285,11 @@ export function ReconcileTab() {
         </Paper>
       )}
 
+      {newerAttempt && (
+        <Alert severity="warning" sx={{ mb: 2 }} data-testid="reconcile-newer-attempt">
+          {describeNewerAttempt(newerAttempt, lastScanTime)}
+        </Alert>
+      )}
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}

@@ -1,5 +1,5 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
 // last-edited: 2026-10-14
 
@@ -13,6 +13,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -92,15 +93,28 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 			// written but orphaned from the operation that produced them.
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
-				summary := "Reconcile scan completed"
-				if runErr != nil {
-					summary = fmt.Sprintf("Reconcile scan failed: %v", runErr)
-				}
-				activity.EmitInfo(s.activityWriter, opID, "reconcile.scan", "reconcile", summary, activity.AlwaysShow)
+				activity.EmitInfo(s.activityWriter, opID, "reconcile.scan", "reconcile", reconcileScanSummary(runErr), activity.AlwaysShow)
 			}
-			return runErr
+			if runErr != nil {
+				return fmt.Errorf("reconcile.scan: %w", runErr)
+			}
+			return nil
 		},
 	})
+}
+
+// reconcileScanSummary is the activity-log line for a finished reconcile scan.
+// A canceled scan is not a failure: the operator asked for it (or the server is
+// shutting down), and a "failed" entry sends them looking for a fault.
+func reconcileScanSummary(runErr error) string {
+	switch {
+	case runErr == nil:
+		return "Reconcile scan completed"
+	case errors.Is(runErr, context.Canceled):
+		return "Reconcile scan canceled"
+	default:
+		return fmt.Sprintf("Reconcile scan failed: %v", runErr)
+	}
 }
 
 // RegisterReconcileApplyOp registers the "reconcile.apply" v2 OperationDef.

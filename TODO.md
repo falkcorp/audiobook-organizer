@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.19 -->
+<!-- version: 10.76.20 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -5462,7 +5462,7 @@ lane owner, which is why the lint fix did not make it:
 Either is defensible. Silently swallowing the unmarshal error while fetching 199
 operations that can never be reached is not.
 
-- [ ] Decide which contract `/reconcile/latest-scan` should honour
+- [x] ~~Decide which contract `/reconcile/latest-scan` should honour~~ _Done 2026-10-14 (04-P14c review): fall through. `GET /operations/reconcile/scan/latest` answers from the newest completed scan whose result decodes, skipping an unreadable one, and returns the newer run as `latest_attempt` so the UI can say why the scan on screen is old._
 - [x] ~~If falling through: name the source op in the response so a stale preview is identifiable~~ — ⛔ dropped 2026-10-03: duplicate of L4402 (same /reconcile/latest-scan contract fix)
 - [x] Either way, stop discarding the `json.Unmarshal` error without a log line. _Done 2026-09-11: `latestReconcileScan` now logs a WARN with the op id and the decode error. The response is unchanged pending the contract decision above._
 

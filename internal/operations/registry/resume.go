@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -18,10 +18,6 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// reconcileScanDefID is the legacy def-id for the file-hash sweep that must
-// always be dropped on restart (it ignores ctx and can't be safely resumed).
-const reconcileScanDefID = "reconcile_scan"
-
 // resumeAfterStartup is called from Start() before the dispatcher begins.
 // It walks operations_v2 rows with status='queued', 'running' or
 // 'interrupted_quiesced' and applies the def's ResumePolicy:
@@ -31,9 +27,6 @@ const reconcileScanDefID = "reconcile_scan"
 //   - ResumeDrop: set status=interrupted_dropped.
 //   - ResumeAsk: set status=interrupted_ask.
 //   - ResumeUnspecified / unknown def: treat as ResumeDrop (logged).
-//
-// Special: any op whose def_id is "reconcile_scan" is always dropped,
-// matching existing server_lifecycle.go behaviour.
 //
 // CANDIDATES COME FROM ListResumableOperationsV2, NOT ListActiveOperationsV2.
 // The active index drops a row the moment its status stops being queued/running,
@@ -87,12 +80,6 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 		if deferredScanOpID != "" && row.ID == deferredScanOpID {
 			r.logger.Info("registry: leaving quiesced scan un-resumed this boot (stand-down reconcile)",
 				"op_id", row.ID)
-			continue
-		}
-
-		// Always drop reconcile_scan.
-		if r.canonicalDefID(row.DefID) == reconcileScanDefID {
-			r.resumeDrop(row, "reconcile_scan always dropped on restart")
 			continue
 		}
 
