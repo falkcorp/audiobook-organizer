@@ -1,15 +1,26 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.7.0
+// version: 1.8.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-09-05
+// last-edited: 2026-10-14
 
 package database
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/stretchr/testify/require"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 // seed inserts the given objects into the appropriate memdb tables.
@@ -594,4 +605,151 @@ func idList(books []Book) []string {
 		out[i] = b.ID
 	}
 	return out
+}
+
+// countPrimaryFixture is the synthetic library the CountPrimaryBooks tests
+// share. Exactly four rows are live primaries (explicit true or unset), and
+// exactly two of those have a number-leading title.
+func countPrimaryFixture() []*Book {
+	yes, no := true, false
+	return []*Book{
+		{ID: "cp-01", Title: "Alpha Tale", FilePath: "/l/cp-01.m4b", Format: "m4b"},                                                    // primary (unset)
+		{ID: "cp-02", Title: "Beta Story", FilePath: "/l/cp-02.m4b", Format: "m4b", IsPrimaryVersion: &yes},                            // primary
+		{ID: "cp-03", Title: "7 Sample Stories", FilePath: "/l/cp-03.m4b", Format: "m4b", IsPrimaryVersion: &yes},                      // primary, number-leading
+		{ID: "cp-04", Title: "42 Answers", FilePath: "/l/cp-04.m4b", Format: "m4b"},                                                    // primary (unset), number-leading
+		{ID: "cp-06", Title: "3 Duplicate Edition", FilePath: "/l/cp-06.m4b", Format: "m4b", IsPrimaryVersion: &no},                    // non-primary
+		{ID: "cp-07", Title: "Delta Alt Edition", FilePath: "/l/cp-07.m4b", Format: "m4b", IsPrimaryVersion: &no},                      // non-primary
+		{ID: "cp-08", Title: "Gamma Removed", FilePath: "/l/cp-08.m4b", Format: "m4b", MarkedForDeletion: &yes},                        // soft-deleted
+		{ID: "cp-09", Title: "9 Removed Volume", FilePath: "/l/cp-09.m4b", Format: "m4b", MarkedForDeletion: &yes},                     // soft-deleted, number-leading
+		{ID: "cp-10", Title: "5 Removed Alt", FilePath: "/l/cp-10.m4b", Format: "m4b", IsPrimaryVersion: &no, MarkedForDeletion: &yes}, // both
+	}
+}
+
+// openWarmedCountStore writes the fixture to a real on-disk Pebble store,
+// closes it, and reopens the directory, so the books reach memdb the way they
+// do in production: WarmFromPebble decodes each row and stripBookForMemdb
+// projects it. Inserting rows into memdb directly would prove nothing about
+// whether the strip keeps the fields the count reads.
+func openWarmedCountStore(t *testing.T) *PebbleStore {
+	t.Helper()
+	dir := t.TempDir()
+	seed, err := NewPebbleStore(dir)
+	require.NoError(t, err)
+	seed.WaitForWarmup()
+	for _, b := range countPrimaryFixture() {
+		_, err := seed.CreateBook(b)
+		require.NoError(t, err)
+	}
+	require.NoError(t, seed.Close())
+
+	p, err := NewPebbleStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Close() })
+	p.WaitForWarmup()
+	require.True(t, p.IsMemReady(), "memdb must publish after the reopen; the warm path is what is under test")
+	return p
+}
+
+// invalidatePrimaryCount drops CountPrimaryBooks' TTL cache so the next call
+// recomputes.
+func invalidatePrimaryCount(p *PebbleStore) {
+	p.primaryCountMu.Lock()
+	p.primaryCountValid = false
+	p.primaryCountMu.Unlock()
+}
+
+func TestMemStoreCountPrimaryBooksMatchesPebbleScan(t *testing.T) {
+	p := openWarmedCountStore(t)
+
+	memCount, memLeading, err := p.mem().CountPrimaryBooks()
+	require.NoError(t, err)
+	scanCount, scanLeading, err := p.countPrimaryBooksScan()
+	require.NoError(t, err)
+
+	require.Equal(t, 4, scanCount, "fixture sanity: four live primaries")
+	require.Equal(t, 2, scanLeading, "fixture sanity: two number-leading primaries")
+	require.Equal(t, scanCount, memCount, "memdb primary count must equal the Pebble scan")
+	require.Equal(t, scanLeading, memLeading, "memdb number-leading count must equal the Pebble scan")
+}
+
+// A memdb known to be missing book rows must refuse, never answer short.
+func TestMemStoreCountPrimaryBooksRefusesWhenShort(t *testing.T) {
+	p := openWarmedCountStore(t)
+	p.mem().recordLostRows(memTableBooks, 1)
+
+	_, _, err := p.mem().CountPrimaryBooks()
+	require.ErrorIs(t, err, ErrMemdbIncomplete)
+}
+
+// countFallbackLine scrapes the memdb fallback counter for the CountPrimaryBooks
+// site from a private meter provider.
+func countFallbackCounter(t *testing.T, p *PebbleStore) func() string {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	exporter, err := otelprom.New(otelprom.WithRegisterer(reg))
+	require.NoError(t, err)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	p.SetMeterProvider(mp)
+	return func() string {
+		rec := httptest.NewRecorder()
+		promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+		for _, l := range strings.Split(rec.Body.String(), "\n") {
+			if strings.HasPrefix(l, "audiobook_organizer_memdb_fallback_reads_total{") &&
+				strings.Contains(l, `site="CountPrimaryBooks"`) && strings.Contains(l, `outcome="fallback"`) {
+				return l
+			}
+		}
+		return ""
+	}
+}
+
+// writeRawPrimaryBook adds one live primary book to Pebble ONLY, bypassing the
+// memdb write-through, so the two backends disagree by exactly one and a test
+// can tell which one answered.
+func writeRawPrimaryBook(t *testing.T, p *PebbleStore) {
+	t.Helper()
+	b := &Book{ID: "cp-raw", Title: "Epsilon Raw", FilePath: "/l/cp-raw.m4b", Format: "m4b"}
+	data, err := json.Marshal(stripBookSigForRow(b))
+	require.NoError(t, err)
+	require.NoError(t, p.db.Set([]byte("book:cp-raw"), data, pebble.Sync))
+}
+
+func TestCountPrimaryBooksFallsBackBeforeWarm(t *testing.T) {
+	p := openWarmedCountStore(t)
+	scrape := countFallbackCounter(t, p)
+	writeRawPrimaryBook(t, p) // Pebble sees 5 live primaries, memdb still 4
+
+	// memdb unpublished: the Pebble scan answers, and the miss is counted.
+	m := p.mem()
+	p.memPtr.Store(nil)
+	got, err := p.CountPrimaryBooks()
+	require.NoError(t, err)
+	require.Equal(t, 5, got, "unpublished memdb must be answered by the Pebble scan")
+	line := scrape()
+	require.NotEmpty(t, line, "the CountPrimaryBooks fallback must be recorded")
+	require.True(t, strings.HasSuffix(line, " 1"), "want exactly one fallback read, got %q", line)
+
+	// memdb published: it answers (the raw row is invisible to it), and no
+	// further fallback is recorded.
+	p.memPtr.Store(m)
+	invalidatePrimaryCount(p)
+	got, err = p.CountPrimaryBooks()
+	require.NoError(t, err)
+	require.Equal(t, 4, got, "published memdb must answer, not the Pebble scan")
+	require.True(t, strings.HasSuffix(scrape(), " 1"), "a published memdb must not record a fallback, got %q", scrape())
+}
+
+// ErrMemdbIncomplete falls through to the authoritative scan instead of
+// serving a short count as a fact for the cache TTL.
+func TestCountPrimaryBooksFallsBackWhenMemdbShort(t *testing.T) {
+	p := openWarmedCountStore(t)
+	scrape := countFallbackCounter(t, p)
+	writeRawPrimaryBook(t, p)
+	p.mem().recordLostRows(memTableBooks, 1)
+
+	got, err := p.CountPrimaryBooks()
+	require.NoError(t, err)
+	require.Equal(t, 5, got, "a short memdb must be answered by the Pebble scan")
+	require.True(t, strings.HasSuffix(scrape(), " 1"), "the short-memdb fall-through must be recorded, got %q", scrape())
 }

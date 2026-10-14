@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-10-06
+// last-edited: 2026-10-14
 
 package database
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -442,6 +443,50 @@ func (m *MemStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookC
 	}
 
 	return bucketMetadataDuplicates(entries, threshold), nil
+}
+
+// CountPrimaryBooks is the MemStore twin of PebbleStore.countPrimaryBooksScan:
+// the number of live primary books and, from the same rows, how many of those
+// have a number-leading title (titleutil.IsNumberLeadingTitle), which feeds the
+// number_leading_titles gauge. The predicate is the scan's exactly -- not
+// soft-deleted, and primary unless IsPrimaryVersion is explicitly false (nil
+// counts as primary) -- so the two backends cannot disagree.
+//
+// One read transaction over the books table, a field check per row, no JSON
+// decode and no allocation per row: this replaced a Pebble scan that decoded
+// every Book once a minute (322MB and 4.2M objects per scan on the production
+// library). There is no per-item work to fan out.
+//
+// It REFUSES with ErrMemdbIncomplete when memdb is known to be missing book
+// rows: a short count would be served as a fact for the cache TTL. The caller
+// (PebbleStore.countPrimaryBooksUncached) falls back to the Pebble scan.
+func (m *MemStore) CountPrimaryBooks() (count, numberLeading int, err error) {
+	if err := m.requireTablesComplete("primary book count", memTableBooks); err != nil {
+		return 0, 0, err
+	}
+
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("memdb primary book count scan: %w", err)
+	}
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if bookIsSoftDeleted(b) {
+			continue
+		}
+		// Skip non-primary versions so duplicate editions don't inflate counts
+		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			continue
+		}
+		count++
+		if titleutil.IsNumberLeadingTitle(b.Title) {
+			numberLeading++
+		}
+	}
+	return count, numberLeading, nil
 }
 
 // GetBooksBySeriesIDCore returns primary, not-deleted books for a series
