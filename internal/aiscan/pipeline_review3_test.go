@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
 // last-edited: 2026-10-14
 
@@ -253,20 +253,17 @@ func (a *authorsFailAfterCreate) GetAllAuthors() ([]database.Author, error) {
 	return a.fakeMainStore.GetAllAuthors()
 }
 
-// shortStoreRetries makes retryStore's waits a millisecond for the test.
-func shortStoreRetries(t *testing.T) {
-	t.Helper()
-	old := storeRetryDelays
-	storeRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
-	t.Cleanup(func() { storeRetryDelays = old })
+// shortStoreRetries makes pm's retryStore waits a millisecond each.
+func shortStoreRetries(pm *PipelineManager) {
+	pm.retryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 }
 
 // A drive error that outlasts every retry still ends the scan.
 func TestRunScan_ADriveErrorEndsTheScanSoANewOneCanStart(t *testing.T) {
-	shortStoreRetries(t)
 	main := &authorsFailAfterCreate{fakeMainStore: newFakeMainStore(3)}
 	store := newScanStore(t)
 	pm := NewPipelineManager(store, main, newFakeLLM(newFakeAccount()))
+	shortStoreRetries(pm)
 	scan, err := pm.CreateScan("realtime")
 	require.NoError(t, err)
 	main.fail.Store(true)
@@ -351,12 +348,12 @@ func (a *authorsFailNTimes) GetAllAuthors() ([]database.Author, error) {
 // abortScan, which fails the scan and cancels its paid batches. The retried scan
 // runs exactly as an undisturbed one: no phase is launched twice.
 func TestRunScan_ATransientDriveErrorIsRetriedAndLaunchesEachPhaseOnce(t *testing.T) {
-	shortStoreRetries(t)
 	run := func(failures int32) (*database.Scan, *fakeLLM, *database.AIScanStore) {
 		main := &authorsFailNTimes{fakeMainStore: newFakeMainStore(3)}
 		store := newScanStore(t)
 		llm := newFakeLLM(newFakeAccount())
 		pm := NewPipelineManager(store, main, llm)
+		shortStoreRetries(pm)
 		scan, err := pm.CreateScan("realtime")
 		require.NoError(t, err)
 		main.left.Store(failures)
@@ -388,11 +385,8 @@ func TestRunScan_ATransientDriveErrorIsRetriedAndLaunchesEachPhaseOnce(t *testin
 // retryStore stops waiting when its context ends: a canceled scan does not sit
 // out the backoff before it is let go.
 func TestRetryStore_StopsWaitingWhenTheContextEnds(t *testing.T) {
-	old := storeRetryDelays
-	storeRetryDelays = []time.Duration{time.Hour, time.Hour}
-	t.Cleanup(func() { storeRetryDelays = old })
-
 	pm := NewPipelineManager(newScanStore(t), newFakeMainStore(1), newFakeLLM(newFakeAccount()))
+	pm.retryDelays = []time.Duration{time.Hour, time.Hour}
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0
 	boom := errors.New("store unreadable")
@@ -404,12 +398,38 @@ func TestRetryStore_StopsWaitingWhenTheContextEnds(t *testing.T) {
 	require.Less(t, time.Since(start), 10*time.Second)
 }
 
-// retryStore makes len(storeRetryDelays)+1 attempts and no more.
+// retryStore makes one attempt more than it has delays, and no more.
 func TestRetryStore_IsBounded(t *testing.T) {
-	shortStoreRetries(t)
 	pm := NewPipelineManager(newScanStore(t), newFakeMainStore(1), newFakeLLM(newFakeAccount()))
+	shortStoreRetries(pm)
 	calls := 0
 	err := pm.retryStore(context.Background(), 1, "testing", func() error { calls++; return errors.New("down") })
 	require.Error(t, err)
-	require.Equal(t, len(storeRetryDelays)+1, calls)
+	require.Equal(t, len(pm.retryDelays)+1, calls)
+}
+
+// A cancel that lands while a failing start is being retried ends the scan
+// canceled, not failed: the retry gives up on the canceled context and RunScan
+// settles the scan the way a running one is settled, instead of racing
+// CancelScan with abortScan.
+func TestRunScan_ACancelDuringTheStartRetryEndsTheScanCanceled(t *testing.T) {
+	main := &authorsFailNTimes{fakeMainStore: newFakeMainStore(3)}
+	store := newScanStore(t)
+	pm := NewPipelineManager(store, main, newFakeLLM(newFakeAccount()))
+	pm.retryDelays = []time.Duration{time.Hour, time.Hour, time.Hour}
+	scan, err := pm.CreateScan("realtime")
+	require.NoError(t, err)
+	main.left.Store(1000)
+	main.armed.Store(true)
+
+	run := runAsync(pm, scan.ID)
+	require.Eventually(t, func() bool { return main.failed.Load() >= 1 }, 5*time.Second, 5*time.Millisecond,
+		"the start failed once and is waiting to retry")
+	require.NoError(t, pm.CancelScan(scan.ID))
+
+	require.ErrorIs(t, awaitRun(t, run), ErrScanCanceled)
+	got, err := store.GetScan(scan.ID)
+	require.NoError(t, err)
+	require.Equal(t, "canceled", got.Status, "a canceled scan is not marked failed")
+	require.Equal(t, int32(1), main.failed.Load(), "no attempt after the cancel")
 }
