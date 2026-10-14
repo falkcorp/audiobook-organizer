@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-12
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -184,7 +184,6 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// authority-build builds the ref_* authority lists (dry run by default;
 		// an apply writes ref_* keys only, never owner overrides).
 		p.authorityBuildDef(),
-		p.authorDedupScanDef(),
 		p.authorSplitScanDef(),
 		// author-title-fragment-scan is REPORT ONLY (read capability, no
 		// schedule): it enumerates title-fragment author rows and changes nothing.

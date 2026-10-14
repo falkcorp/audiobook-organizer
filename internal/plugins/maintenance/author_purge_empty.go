@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-10-04
+// last-edited: 2026-10-13
 
 package maintenance
 
@@ -28,7 +28,7 @@ import (
 // "- The Emperor's Soul". Every one of them is a row in the Authors tab a user has
 // to scroll past, and a candidate every author-dedup pass has to compare against.
 //
-// No existing op covers this. maintenance.author-dedup-scan finds duplicates,
+// No existing op covers this. dedup.author-scan finds duplicates,
 // author-split-scan splits composites, author-conjunction-repair fixes "& Foo"
 // fragments, resolve-production-authors handles production credits — all of them
 // operate on authors that HAVE books.
