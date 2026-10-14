@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
 // last-edited: 2026-10-13
 
@@ -568,9 +568,9 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 	})
 	params, _ := json.Marshal(ops.FixerApply{Rows: rows})
 	w := &memTitles{titles: titles}
-	open := func() (*ops.BatchJob, *ops.RC, context.CancelFunc) {
+	open := func(resumed bool) (*ops.BatchJob, *ops.RC, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(context.Background())
-		rc := ops.NewRC(ops.RunEnv{Context: ctx, OpID: "op", DefID: "test.fixer", Mode: ops.Live, Writer: w})
+		rc := ops.NewRC(ops.RunEnv{Context: ctx, OpID: "op", DefID: "test.fixer", Mode: ops.Live, Writer: w, Resumed: resumed})
 		job, err := ops.Compile(def).OpenBatch(rc, params)
 		if err != nil {
 			t.Fatal(err)
@@ -580,7 +580,7 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 		return job, rc, cancel
 	}
 	store := newMemLedgerStore(t)
-	job, rc, cancel := open()
+	job, rc, cancel := open(false)
 	defer cancel()
 	// The world stops once chunks 0 and 1 are committed AND the worker is
 	// parked on row blockAt, so rows before it in chunk 2 are written but
@@ -600,7 +600,7 @@ func fixerResumeCase(t *testing.T, blockAt int) {
 		t.Fatal("chunk 2 was recorded; the case does not test an unfinished chunk")
 	}
 	block = false
-	job2, rc2, cancel2 := open()
+	job2, rc2, cancel2 := open(true)
 	defer cancel2()
 	_, raw, err := runBatch(rc2.Context(), batchConfig{opID: "op", job: job2, rc: rc2, store: store, commitEvery: -1})
 	if err != nil {

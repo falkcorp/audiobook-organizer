@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-13
 
@@ -105,6 +105,9 @@ type RunEnv struct {
 	// Writer is nil for a ReadOnly def.
 	Writer Writer
 	Host   Host
+	// Resumed: an earlier attempt of this run (the same op id) ran before
+	// this one, so writes under the op id may already exist (rc.Resumed).
+	Resumed bool
 }
 
 // RC is what a run receives. It replaces v2's Reporter and the four side
@@ -137,6 +140,10 @@ func (rc *RC) WithContext(ctx context.Context) *RC {
 	c.ctx = ctx
 	return &c
 }
+
+// Resumed reports whether an earlier attempt of this run ran before this
+// one (RunEnv.Resumed).
+func (rc *RC) Resumed() bool { return rc.env.Resumed }
 
 // Context is canceled on cancel, timeout, quiesce and shutdown.
 func (rc *RC) Context() context.Context { return rc.ctx }

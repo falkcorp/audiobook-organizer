@@ -1,5 +1,5 @@
 // file: pkg/ops/fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
 // last-edited: 2026-10-13
 
@@ -32,7 +32,10 @@ type FixerSpec[P any, C any] struct {
 	// plan time AND at apply time, so the plan and the apply check cannot
 	// drift.
 	Evaluate func(rc *ItemRC, p P, c C) (Row, error)
-	// Apply writes one approved, freshly re-evaluated row through w.
+	// Apply writes one approved, freshly re-evaluated row through w. Its
+	// complete end state must be what row.Proposed says (see Row.Proposed):
+	// a resumed run treats a row whose fresh Current already equals Proposed
+	// as applied by its earlier attempt and does not call Apply again.
 	Apply func(rc *ItemRC, w Writer, p P, row Row) error
 	// PartitionBy: rows sharing a key apply in order on one worker. Default
 	// Row.ID.
@@ -49,10 +52,16 @@ type Guard func(row Row) (skipReason string)
 
 // Row is what a person approves. Inputs is what the fingerprint hashes.
 type Row struct {
-	ID        string            `json:"id"`
-	Subjects  []Subject         `json:"subjects,omitempty"`
-	Title     string            `json:"title,omitempty"`
-	Current   map[string]string `json:"current,omitempty"`
+	ID       string            `json:"id"`
+	Subjects []Subject         `json:"subjects,omitempty"`
+	Title    string            `json:"title,omitempty"`
+	Current  map[string]string `json:"current,omitempty"`
+	// Proposed must describe Apply's complete end state, in the same keys
+	// and rendering as Current: once Apply has run, a fresh Evaluate of the
+	// row returns Current equal to Proposed on every key. A resumed apply
+	// relies on it to recognize a row its earlier attempt already wrote in a
+	// chunk that never completed (applyRow); a Proposed that leaves out part
+	// of what Apply writes would let that part be skipped.
 	Proposed  map[string]string `json:"proposed,omitempty"`
 	Reason    string            `json:"reason,omitempty"`
 	Risk      Risk              `json:"risk,omitempty"`
@@ -247,32 +256,32 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 	if err != nil {
 		return false, err
 	}
-	if alreadyApplied(planned, fresh) {
-		// This run (an earlier attempt, before a crash or a deploy) already
-		// wrote this row in a chunk that never completed, so the ledger did
-		// not record its mark and the resume re-runs it. Its fingerprint has
-		// changed because the write changed it; refusing it as changed since
-		// plan would drop a row the run did apply from Applied and AfterApply.
-		// Report it applied and do not write again.
-		return true, nil
-	}
-	switch {
-	case fresh.Fingerprint() != planned.Fingerprint():
+	refusal := admissible(s.Guards, fresh)
+	if fresh.Fingerprint() != planned.Fingerprint() {
+		if irc.Resumed() && refusal == "" && alreadyApplied(planned, fresh) {
+			// An earlier attempt of this run (before a crash or a deploy)
+			// wrote this row in a chunk that never completed, so the ledger
+			// has no mark for it and the resume re-runs it. Its fingerprint
+			// changed because that write changed it; refusing it as changed
+			// since plan would drop a row the run applied from Applied and
+			// AfterApply. Report it applied; do not write again.
+			//
+			// There is no direct evidence that THIS run wrote it (the SDK has
+			// no reader for the run's history or journal rows), so the claim
+			// is narrowed as far as it goes: only a resumed attempt, only a
+			// row whose fingerprint moved, only one still free of a hold, an
+			// owner-only flag and every guard, and only when every Proposed
+			// value now holds (Row.Proposed is Apply's complete end state).
+			// A row someone else changed to the same values between the
+			// attempts is indistinguishable and is reported applied too.
+			return true, nil
+		}
 		irc.Skip(SkipChangedSincePlan)
 		return false, nil
-	case fresh.Hold != "":
-		irc.Skip(SkipHeld)
-		return false, nil
-	case fresh.OwnerOnly:
-		// Owner grants arrive with the approval record (05-PR9).
-		irc.Skip(SkipOwnerOnly)
-		return false, nil
 	}
-	for _, g := range s.Guards {
-		if reason := g(fresh); reason != "" {
-			irc.Skip(reason)
-			return false, nil
-		}
+	if refusal != "" {
+		irc.Skip(refusal)
+		return false, nil
 	}
 	w := irc.Writer()
 	if w == nil {
@@ -286,6 +295,24 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 		return false, err
 	}
 	return true, nil
+}
+
+// admissible returns why fresh may not be applied now -- a hold, an
+// owner-only flag (owner grants arrive with the approval record, 05-PR9),
+// or the first guard that objects -- or "".
+func admissible(guards []Guard, fresh Row) string {
+	switch {
+	case fresh.Hold != "":
+		return SkipHeld
+	case fresh.OwnerOnly:
+		return SkipOwnerOnly
+	}
+	for _, g := range guards {
+		if reason := g(fresh); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 // alreadyApplied reports whether fresh shows the change planned proposes
