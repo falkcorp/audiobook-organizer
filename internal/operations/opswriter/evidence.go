@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -7,29 +7,41 @@ package opswriter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
-// Wrote (ops.Writer) is the evidence a resumed Fixer apply needs before it
-// reports a row as applied by an earlier attempt of the same run (05-PR5b):
-// the history that attempt recorded. Every Writer write records history
-// after it commits -- book fields as metadata history rows in batches
-// "<batchPrefix><ulid>", everything else as operation journal rows under the
-// op id -- so a row whose values match the plan's Proposed but has none of
-// this run's history for one of its subjects was changed by someone else.
-// Intents are no evidence: they are cleared once a write is recorded.
+// MarkRowApplied and RowApplied (ops.Writer) are the evidence a resumed
+// Fixer apply needs before it reports a row as applied by an earlier attempt
+// of the same run (05-PR5b). The evidence is per ROW: applyRow records a
+// marker for the row as soon as the row's own Apply returns nil, naming the
+// history Apply's writes recorded (each write notes its metadata history
+// batch or operation journal row ids on the item, ops.NoteHistory). A marker
+// can only exist because this run applied that row, so the attempt that
+// wrote it does not matter. History is still read, but only to see whether
+// what the marker names was undone since.
+//
+// Why not per subject: a run's history for a book proves the run wrote SOME
+// row of that book, not this one. Two rows of one book (title, then
+// publisher), the first written and the second not, with a foreign edit
+// setting the publisher to the second row's Proposed between the attempts,
+// made per-subject evidence report the foreign edit as the run's own.
 
-// JournalReader reads one operation's journal rows. GetOperationChanges is a
-// complete prefix scan of opchange:<opID>: (no limit).
-type JournalReader interface {
-	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+// RowMarkStore stores the per-row apply markers (opv3:rowmark:).
+type RowMarkStore interface {
+	PutRowMarkV3(id string, m database.RowMarkV3) error
+	GetRowMarkV3(id, rowID string) (*database.RowMarkV3, error)
+}
+
+// ChangeReader reads one operation change row by id (a point read).
+type ChangeReader interface {
+	GetOperationChange(operationID, changeID string) (*database.OperationChange, error)
 }
 
 // BookHistoryReader reads a book's metadata history rows.
@@ -37,136 +49,201 @@ type BookHistoryReader interface {
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
 }
 
-// completeHistory is the limit Wrote passes to GetBookChangeHistory. The
-// store reads every row of the book before it truncates at limit, and the
-// truncation is by key (metadata_change:<book>:<field>:<nanos>), so a smaller
-// limit drops rows by field name, not by age: a book with more rows than the
-// limit could lose exactly the run's own rows.
+// completeHistory is the limit RowApplied passes to GetBookChangeHistory.
+// The store reads every row of the book before it truncates at limit, and
+// the truncation is by key (metadata_change:<book>:<field>:<nanos>), so a
+// smaller limit drops rows by field name, not by age: a book with more rows
+// than the limit could lose exactly the batch's rows or its undo.
 const completeHistory = math.MaxInt
 
-// journalEvidence indexes the run's operation journal rows from earlier
-// attempts by the subject they name. It is loaded on first use and kept for
-// the Writer's life: rows this attempt records are never evidence, so a
-// later load could add nothing.
-type journalEvidence struct {
-	mu     sync.Mutex
-	loaded bool
-	books  map[string]bool
-	files  map[string]bool
+// historyRef is what a write notes on its item (ops.NoteHistory): one
+// metadata history batch of a book, or one operation journal row.
+type historyRef struct {
+	Book   string `json:"book,omitempty"`
+	Batch  string `json:"batch,omitempty"`
+	Change string `json:"change,omitempty"`
 }
 
-// Wrote reports whether an earlier attempt of this run recorded history for
-// every one of subjects (ops.Writer.Wrote). A book counts when a journal row
-// under the op id has its BookID or a metadata history row of the book is in
-// one of the run's own batches; a book_file counts when a journal row under
-// the op id names it in its field ("book_file:<id>" from RepointBookFile,
-// "file.<field>:<id>" from ModifyBookFile). Only rows recorded before
-// Config.AttemptStart count. The op's journal is read once per Writer; a
-// book's metadata history is read when the book has no journal evidence.
-func (w *Writer) Wrote(ctx context.Context, subjects []ops.Subject) (bool, error) {
-	// A read, but gated like a write: a fenced or canceled run reads
-	// nothing, the refusal is flagged on the item like a write's, and a
-	// resumed run that is recognizing rows (and so writing none) still
-	// renews its stand-down lease.
-	if err := w.check(ctx, "resumed row (history evidence read)"); err != nil {
+func noteRef(ctx context.Context, r historyRef) {
+	b, err := json.Marshal(r)
+	if err != nil {
+		// Three strings cannot fail to marshal; dropping the reference
+		// would only make a later marker name less history.
+		return
+	}
+	ops.NoteHistory(ctx, string(b))
+}
+
+// noteBatch notes a metadata history batch ModifyBook recorded.
+func noteBatch(ctx context.Context, bookID, batchID string) {
+	noteRef(ctx, historyRef{Book: bookID, Batch: batchID})
+}
+
+// noteChange notes an operation journal row journalRows recorded.
+func noteChange(ctx context.Context, changeID string) {
+	noteRef(ctx, historyRef{Change: changeID})
+}
+
+// MarkRowApplied records the apply marker of row rowID (ops.Writer): the
+// row, and every batch and journal row its Apply's writes noted on ctx's
+// item. Preview, a Writer without a marker store, or an empty rowID records
+// nothing. Gated like a write: a fenced run or a canceled ctx records
+// nothing. Nothing is returned: the row's writes committed, so a marker that
+// cannot be recorded is logged, and costs only the evidence (a resume skips
+// the row as changed since plan; it never writes it twice).
+func (w *Writer) MarkRowApplied(ctx context.Context, rowID string) {
+	if w.cfg.Mode == ops.Preview || w.cfg.RowMarks == nil || rowID == "" {
+		return
+	}
+	what := "apply marker of row " + rowID
+	if err := w.check(ctx, what); err != nil {
+		pkgLog.Warn("op %s: %s", logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	m := database.RowMarkV3{RowID: rowID, MarkedAt: time.Now().UTC()}
+	for _, raw := range ops.NotedHistory(ctx) {
+		var r historyRef
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			// A marker that names less than the row wrote could outlive an
+			// undo of the part it leaves out: record none.
+			pkgLog.Warn("op %s: %s not written: unreadable history reference %q",
+				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(what), logger.SanitizeLogValue(raw))
+			return
+		}
+		switch {
+		case r.Change != "":
+			m.Changes = append(m.Changes, r.Change)
+		case r.Book != "" && r.Batch != "":
+			m.Batches = append(m.Batches, database.RowMarkBatch{BookID: r.Book, BatchID: r.Batch})
+		}
+	}
+	if err := w.cfg.RowMarks.PutRowMarkV3(w.cfg.OpID, m); err != nil {
+		pkgLog.Warn("op %s: %s not written (the row's writes committed; a resume will skip it): %s",
+			logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(what), logger.SanitizeLogValue(err.Error()))
+	}
+}
+
+// RowApplied reports whether some attempt of this run marked row rowID
+// applied and nothing the marker names has been undone since (ops.Writer):
+// every journal row it names is still under the op id, neither voided nor
+// reverted, and no batch it names is covered by an undo (undoneBatches). A
+// read is gated like a write, so a fenced or canceled run reads nothing and
+// a resumed run that is only recognizing rows still renews its stand-down
+// lease. One point read for the marker, one per journal row it names, one
+// history read per book its batches touch.
+func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
+	if err := w.checkAs(ctx, "apply marker of resumed row "+rowID, refusedRead); err != nil {
 		return false, err
 	}
-	if w.cfg.Mode == ops.Preview || len(subjects) == 0 {
+	if w.cfg.Mode == ops.Preview || w.cfg.RowMarks == nil || rowID == "" {
 		return false, nil
 	}
-	for _, s := range subjects {
-		ok, err := w.subjectWritten(s)
-		if err != nil || !ok {
-			return false, err
+	m, err := w.cfg.RowMarks.GetRowMarkV3(w.cfg.OpID, rowID)
+	if err != nil {
+		return false, fmt.Errorf("read the apply marker of row %s: %w", rowID, err)
+	}
+	if m == nil || m.RowID != rowID {
+		return false, nil
+	}
+	ok, err := w.changesStand(m.Changes)
+	if err != nil || !ok {
+		return false, err
+	}
+	return w.batchesStand(m.Batches)
+}
+
+// changesStand reports whether every journal row of ids is still this op's
+// and neither voided nor reverted. A row that cannot be found cannot be
+// shown to stand.
+func (w *Writer) changesStand(ids []string) (bool, error) {
+	if len(ids) == 0 {
+		return true, nil
+	}
+	if w.cfg.Changes == nil {
+		return false, nil
+	}
+	for _, id := range ids {
+		c, err := w.cfg.Changes.GetOperationChange(w.cfg.OpID, id)
+		if err != nil {
+			return false, fmt.Errorf("read journal row %s of op %s: %w", id, w.cfg.OpID, err)
+		}
+		if c == nil || c.OperationID != w.cfg.OpID || c.Voided || c.RevertedAt != nil {
+			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// subjectWritten reports whether one subject has history from an earlier
-// attempt of this run.
-func (w *Writer) subjectWritten(s ops.Subject) (bool, error) {
-	j, err := w.journalIndex()
-	if err != nil {
-		return false, err
+// batchesStand reports whether every batch still stands: its rows are in
+// its book's history and no undo row covers it -- one in the batch itself
+// (undo-last-apply), or one recorded at or after the batch on a field the
+// batch wrote (a single-field undo, which carries no batch id, or an
+// operation revert, which carries its op's). The field rule can see an
+// undo of a later write to the same field and refuse a batch that still
+// stands; that only skips the row as changed since plan.
+func (w *Writer) batchesStand(batches []database.RowMarkBatch) (bool, error) {
+	if len(batches) == 0 {
+		return true, nil
 	}
-	switch s.Type {
-	case ops.SubjectBook:
-		if j.books[s.ID] {
-			return true, nil
-		}
-		return w.bookHistoryWritten(s.ID)
-	case ops.SubjectBookFile:
-		return j.files[s.ID], nil
-	default:
+	if w.cfg.HistoryReader == nil {
 		return false, nil
 	}
-}
-
-// journalIndex loads the run's earlier-attempt journal rows once. A failed
-// read is returned and not cached, so the next row tries again.
-func (w *Writer) journalIndex() (*journalEvidence, error) {
-	j := &w.journal
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.loaded {
-		return j, nil
+	byBook := map[string]map[string]bool{}
+	for _, b := range batches {
+		if byBook[b.BookID] == nil {
+			byBook[b.BookID] = map[string]bool{}
+		}
+		byBook[b.BookID][b.BatchID] = true
 	}
-	books, files := map[string]bool{}, map[string]bool{}
-	if w.cfg.JournalReader != nil && w.cfg.OpID != "" {
-		rows, err := w.cfg.JournalReader.GetOperationChanges(w.cfg.OpID)
+	for bookID, want := range byBook {
+		rows, err := w.cfg.HistoryReader.GetBookChangeHistory(bookID, completeHistory)
 		if err != nil {
-			return nil, fmt.Errorf("read the journal of op %s: %w", w.cfg.OpID, err)
+			return false, fmt.Errorf("read the metadata history of book %s: %w", bookID, err)
 		}
-		for _, c := range rows {
-			// The store's prefix scan returns only this op's rows; the
-			// check is here so the evidence never depends on that.
-			if c == nil || c.OperationID != w.cfg.OpID || !w.earlierAttempt(c.CreatedAt) {
-				continue
-			}
-			if c.BookID != "" {
-				books[c.BookID] = true
-			}
-			if id := bookFileOfField(c.FieldName); id != "" {
-				files[id] = true
-			}
+		if !batchesStandIn(rows, want) {
+			return false, nil
 		}
 	}
-	j.books, j.files, j.loaded = books, files, true
-	return j, nil
+	return true, nil
 }
 
-// bookHistoryWritten reports whether the book has a metadata history row in
-// one of this run's batches from an earlier attempt.
-func (w *Writer) bookHistoryWritten(bookID string) (bool, error) {
-	// An empty prefix owns no batch (ownsBatch); skip the read.
-	if w.cfg.HistoryReader == nil || w.cfg.History.batchPrefix == "" {
-		return false, nil
+// batchesStandIn applies batchesStand's rule to one book's history rows.
+func batchesStandIn(rows []database.MetadataChangeRecord, want map[string]bool) bool {
+	// fields: per wanted batch, the fields it wrote and when.
+	type wrote struct {
+		at     time.Time
+		fields map[string]bool
 	}
-	rows, err := w.cfg.HistoryReader.GetBookChangeHistory(bookID, completeHistory)
-	if err != nil {
-		return false, fmt.Errorf("read the metadata history of book %s: %w", bookID, err)
+	found := map[string]*wrote{}
+	for _, r := range rows {
+		if !want[r.BatchID] || r.ChangeType == ChangeTypeUndo {
+			continue
+		}
+		f := found[r.BatchID]
+		if f == nil {
+			f = &wrote{at: r.ChangedAt, fields: map[string]bool{}}
+			found[r.BatchID] = f
+		}
+		if r.ChangedAt.Before(f.at) {
+			f.at = r.ChangedAt
+		}
+		f.fields[r.Field] = true
+	}
+	if len(found) != len(want) {
+		return false
 	}
 	for _, r := range rows {
-		if w.cfg.History.ownsBatch(r.BatchID) && w.earlierAttempt(r.ChangedAt) {
-			return true, nil
+		if r.ChangeType != ChangeTypeUndo {
+			continue
+		}
+		if want[r.BatchID] {
+			return false
+		}
+		for _, f := range found {
+			if f.fields[r.Field] && !r.ChangedAt.Before(f.at) {
+				return false
+			}
 		}
 	}
-	return false, nil
-}
-
-// earlierAttempt reports whether a row recorded at t predates this attempt.
-func (w *Writer) earlierAttempt(t time.Time) bool { return t.Before(w.cfg.AttemptStart) }
-
-// bookFileOfField returns the book_file id a journal row's field names, or "".
-func bookFileOfField(field string) string {
-	if id, ok := strings.CutPrefix(field, "book_file:"); ok {
-		return id
-	}
-	if rest, ok := strings.CutPrefix(field, "file."); ok {
-		if i := strings.LastIndexByte(rest, ':'); i > 0 {
-			return rest[i+1:]
-		}
-	}
-	return ""
+	return true
 }

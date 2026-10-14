@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package database
 
@@ -267,6 +267,7 @@ var keyFamilies = []KeyFamily{
 	{"opv3:meta:", "operations v3 per-state/per-def counters", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:prog:", "operations v3 run progress, checkpoint stamp and synced opv2 row hash (the small half of a run record)", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:q:", "operations v3 dispatch queue", "internal/database/pebble_store_ops_v3.go"},
+	{"opv3:rowmark:", "operations v3 per-row Fixer apply markers, written as each row's Apply returns (05-PR5b)", "internal/database/pebble_store_ops_v3_rowmarks.go"},
 	{"opv3:run:", "operations v3 run records", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:sched:", "operations v3 schedule state (written by 05-PR8)", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:snap:", "operations v3 frozen item-key pages; opv3:snap:{op}:chunks (chunk offsets) sorts inside each run's range", "internal/database/pebble_store_ops_v3.go"},

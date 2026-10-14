@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-14
 
@@ -307,11 +307,13 @@ type v3WriterStores struct {
 	history opswriter.HistoryRecorder
 	journal opswriter.ChangeJournal
 	intents opswriter.IntentStore
-	// The reads behind Writer.Wrote, the evidence a resumed Fixer apply
-	// needs before it reports a row as applied by an earlier attempt.
-	// Optional: without them Wrote finds no evidence, so a resumed run
-	// skips such a row as changed since plan instead of claiming it.
-	journalReader opswriter.JournalReader
+	// A Fixer row's apply marker and the reads that check the history it
+	// names: the evidence a resumed Fixer apply needs before it reports a
+	// row as applied by an earlier attempt (Writer.RowApplied). Optional:
+	// without them no row is ever recognized, so a resumed run skips such
+	// a row as changed since plan instead of claiming it.
+	rowMarks      opswriter.RowMarkStore
+	changes       opswriter.ChangeReader
 	historyReader opswriter.BookHistoryReader
 }
 
@@ -332,7 +334,8 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	s.history, _ = database.AsCapability[opswriter.HistoryRecorder](r.store)
 	s.journal, _ = database.AsCapability[opswriter.ChangeJournal](r.store)
 	s.intents, _ = database.AsCapability[opswriter.IntentStore](r.store)
-	s.journalReader, _ = database.AsCapability[opswriter.JournalReader](r.store)
+	s.rowMarks, _ = database.AsCapability[opswriter.RowMarkStore](r.store)
+	s.changes, _ = database.AsCapability[opswriter.ChangeReader](r.store)
 	s.historyReader, _ = database.AsCapability[opswriter.BookHistoryReader](r.store)
 	if mode == ops.Live && (s.intents == nil || s.journal == nil || s.history == nil) {
 		return nil, fmt.Errorf("%s: %w", defID, ErrWriterUnavailable)
@@ -340,10 +343,8 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	return opswriter.New(opswriter.Config{
 		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check, RunLatch: ops.RefusalLatchFrom(ctx),
 		Intents: s.intents, Books: s.books, Files: s.files, Authors: s.authors, Journal: s.journal,
-		// The batch prefix names this run, so Wrote may read the run's
-		// batches out of a book's whole metadata history.
-		History:       opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
-		JournalReader: s.journalReader, HistoryReader: s.historyReader,
+		History:  opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
+		RowMarks: s.rowMarks, Changes: s.changes, HistoryReader: s.historyReader,
 	}), nil
 }
 

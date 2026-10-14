@@ -1,5 +1,5 @@
 // file: pkg/ops/ops_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
 // last-edited: 2026-10-14
 
@@ -424,15 +424,16 @@ func TestNoteRefusal(t *testing.T) {
 	}
 }
 
-// evidenceWriter is a Writer whose only working method is Wrote: it reports
-// the subjects in have as written by an earlier attempt (all: every subject
-// set), or fails with err. Its writes fail, so a test sees any Apply.
+// evidenceWriter is a Writer whose only working methods are the row
+// markers: RowApplied reports the rows in marked (or fails with err), and
+// MarkRowApplied records the rows it is called for. Its writes fail, so a
+// test sees any write Apply makes.
 type evidenceWriter struct {
-	mu    sync.Mutex
-	have  map[Subject]bool
-	all   bool
-	err   error
-	calls int
+	mu      sync.Mutex
+	marked  map[string]bool
+	err     error
+	asked   []string
+	markedN []string
 }
 
 func (w *evidenceWriter) ModifyBook(context.Context, string, func(*database.Book) error) (Changed, error) {
@@ -450,37 +451,35 @@ func (w *evidenceWriter) ModifyBookAuthors(context.Context, string, func([]datab
 func (w *evidenceWriter) Effect(context.Context, EffectSpec, func() ([]HistoryRow, error)) error {
 	return errors.New("evidenceWriter writes nothing")
 }
-func (w *evidenceWriter) Wrote(_ context.Context, subjects []Subject) (bool, error) {
+func (w *evidenceWriter) MarkRowApplied(_ context.Context, rowID string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.calls++
+	w.markedN = append(w.markedN, rowID)
+}
+func (w *evidenceWriter) RowApplied(_ context.Context, rowID string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.asked = append(w.asked, rowID)
 	if w.err != nil {
 		return false, w.err
 	}
-	if len(subjects) == 0 {
-		return w.all, nil
-	}
-	for _, s := range subjects {
-		if !w.all && !w.have[s] {
-			return false, nil
-		}
-	}
-	return true, nil
+	return w.marked[rowID], nil
 }
 
-func (w *evidenceWriter) wroteCalls() int {
+// calls returns the rows RowApplied was asked about and the rows
+// MarkRowApplied marked.
+func (w *evidenceWriter) calls() (asked, marked []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.calls
+	return slices.Clone(w.asked), slices.Clone(w.markedN)
 }
 
 // S-C (final review): a row whose fresh Current equals the plan's Proposed is
 // reported applied without a write only on a resumed attempt, only when its
 // fingerprint moved, and only when no hold, owner-only flag or guard objects.
 // Otherwise it takes the ordinary path: changed since plan, or the refusal.
-// The Writer has this run's history for the row's subject throughout, so
-// only the conditions under test decide (TestAlreadyAppliedNeedsEvidence
-// covers the evidence).
+// The Writer has the row's apply marker throughout, so only the conditions
+// under test decide (TestAlreadyAppliedNeedsEvidence covers the marker).
 func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
 	planned := Row{ID: "r1", Subjects: Books("book-001"), Inputs: map[string]string{"title": "old"},
 		Current: map[string]string{"title": "old"}, Proposed: map[string]string{"title": "new"}}
@@ -510,7 +509,7 @@ func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
 				Apply:    func(*ItemRC, Writer, NoParams, Row) error { applyCalled = true; return nil },
 				Guards:   c.guards,
 			}
-			w := &evidenceWriter{have: map[Subject]bool{{Type: SubjectBook, ID: "book-001"}: true}}
+			w := &evidenceWriter{marked: map[string]bool{"r1": true}}
 			rc := NewRC(RunEnv{Context: context.Background(), Resumed: c.resumed, Writer: w})
 			tally := &Tally{}
 			irc := NewItemRC(rc, context.Background(), tally, nil)
@@ -524,42 +523,45 @@ func TestAlreadyAppliedNeedsResumeAndAdmission(t *testing.T) {
 }
 
 // 05-PR5b: on a resumed attempt, a row that is admissible and whose every
-// Proposed value now holds is reported applied only when the Writer has this
-// run's history (Writer.Wrote) for EVERY subject of the planned row. The
-// foreign actor -- someone who made the same change between the attempts,
-// leaving no history under this run -- is skipped as changed since plan, as
-// is a row with evidence for only some subjects or with no subjects at all.
-// A failed read fails the item: it is neither applied nor skipped.
+// Proposed value now holds is reported applied only when the Writer holds
+// THIS row's apply marker (Writer.RowApplied, asked about the planned row's
+// id). The foreign actor -- someone who made the same change between the
+// attempts -- left no marker and is skipped as changed since plan, even when
+// the run marked another row of the same book. Subjects play no part: a row
+// with none is recognized by its marker like any other. A failed read fails
+// the item: it is neither applied nor skipped.
 func TestAlreadyAppliedNeedsEvidence(t *testing.T) {
 	subjects := append(Books("book-001"), BookFiles("file-001")...)
 	planned := Row{ID: "r1", Subjects: subjects, Inputs: map[string]string{"title": "old"},
 		Current: map[string]string{"title": "old"}, Proposed: map[string]string{"title": "new"}}
 	fresh := Row{ID: "r1", Subjects: subjects, Inputs: map[string]string{"title": "new"},
 		Current: map[string]string{"title": "new"}}
-	readFailed := errors.New("journal unreadable")
-	both := map[Subject]bool{subjects[0]: true, subjects[1]: true}
+	readFailed := errors.New("marker unreadable")
 	cases := []struct {
-		name      string
-		planned   Row
-		w         *evidenceWriter
-		noWriter  bool
-		resumed   bool
-		want      bool
-		skip      string
-		wantErr   error
-		wantCalls int
+		name     string
+		planned  Row
+		w        *evidenceWriter
+		noWriter bool
+		resumed  bool
+		want     bool
+		skip     string
+		wantErr  error
+		asked    []string
 	}{
-		{"evidence for every subject", planned, &evidenceWriter{have: both}, false, true, true, "", nil, 1},
-		{"no evidence: a foreign actor between the attempts", planned, &evidenceWriter{}, false, true, false,
-			SkipChangedSincePlan, nil, 1},
-		{"evidence for only some subjects", planned, &evidenceWriter{have: map[Subject]bool{subjects[0]: true}},
-			false, true, false, SkipChangedSincePlan, nil, 1},
-		{"a row with no subjects", Row{ID: "r1", Inputs: planned.Inputs, Current: planned.Current,
-			Proposed: planned.Proposed}, &evidenceWriter{all: true}, false, true, false, SkipChangedSincePlan, nil, 0},
-		{"the evidence read fails", planned, &evidenceWriter{err: readFailed}, false, true, false, "", readFailed, 1},
-		{"no Writer to read with", planned, nil, true, true, false, "", errAny, 0},
-		{"first attempt: the store is not read", planned, &evidenceWriter{have: both}, false, false, false,
-			SkipChangedSincePlan, nil, 0},
+		{"the row's own marker", planned, &evidenceWriter{marked: map[string]bool{"r1": true}}, false, true, true, "", nil,
+			[]string{"r1"}},
+		{"no marker: a foreign actor between the attempts", planned, &evidenceWriter{}, false, true, false,
+			SkipChangedSincePlan, nil, []string{"r1"}},
+		{"only another row of the same book is marked", planned, &evidenceWriter{marked: map[string]bool{"r2": true}},
+			false, true, false, SkipChangedSincePlan, nil, []string{"r1"}},
+		{"a row with no subjects and its marker", Row{ID: "r1", Inputs: planned.Inputs, Current: planned.Current,
+			Proposed: planned.Proposed}, &evidenceWriter{marked: map[string]bool{"r1": true}}, false, true, true, "", nil,
+			[]string{"r1"}},
+		{"the marker read fails", planned, &evidenceWriter{err: readFailed}, false, true, false, "", readFailed,
+			[]string{"r1"}},
+		{"no Writer to read with", planned, nil, true, true, false, "", errAny, nil},
+		{"first attempt: the store is not read", planned, &evidenceWriter{marked: map[string]bool{"r1": true}}, false,
+			false, false, SkipChangedSincePlan, nil, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -584,10 +586,97 @@ func TestAlreadyAppliedNeedsEvidence(t *testing.T) {
 				t.Fatalf("applied=%v applyCalled=%v skip=%q; want applied=%v skip=%q",
 					ok, applyCalled, tally.SkipReason(), c.want, c.skip)
 			}
-			if c.w != nil && c.w.wroteCalls() != c.wantCalls {
-				t.Fatalf("Wrote called %d times, want %d", c.w.wroteCalls(), c.wantCalls)
+			if c.w != nil {
+				asked, marked := c.w.calls()
+				if !slices.Equal(asked, c.asked) || len(marked) != 0 {
+					t.Fatalf("RowApplied asked about %v, MarkRowApplied marked %v; want asked %v, nothing marked",
+						asked, marked, c.asked)
+				}
 			}
 		})
+	}
+}
+
+// 05-PR5b: applyRow marks a row applied (Writer.MarkRowApplied, with the
+// planned row's id and the item's context) once its Apply returned nil, and
+// only then: not when Apply fails, refuses the row as changed since plan, or
+// is never called.
+func TestApplyRowMarksOnlyAWrittenRow(t *testing.T) {
+	planned := Row{ID: "r1", Inputs: map[string]string{"title": "old"},
+		Current: map[string]string{"title": "old"}, Proposed: map[string]string{"title": "new"}}
+	moved := Row{ID: "r1", Inputs: map[string]string{"title": "other"}, Current: map[string]string{"title": "other"}}
+	failed := errors.New("apply failed")
+	cases := []struct {
+		name     string
+		fresh    Row
+		applyErr error
+		want     []string
+	}{
+		{"applied", planned, nil, []string{"r1"}},
+		{"Apply fails", planned, failed, nil},
+		{"Apply refuses: changed since plan", planned, ErrChangedSincePlan, nil},
+		{"never applied: the fingerprint moved", moved, nil, nil},
+		{"never applied: held", withHold(planned, "hold"), nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var applyCtx context.Context
+			spec := FixerSpec[NoParams, string]{
+				Load:     func(*RC, NoParams, string) (string, bool, error) { return "c", true, nil },
+				Evaluate: func(*ItemRC, NoParams, string) (Row, error) { return c.fresh, nil },
+				Apply: func(irc *ItemRC, _ Writer, _ NoParams, _ Row) error {
+					applyCtx = irc.Context()
+					NoteHistory(applyCtx, "ref-1")
+					return c.applyErr
+				},
+			}
+			w := &evidenceWriter{}
+			tally := &Tally{}
+			irc := NewItemRC(NewRC(RunEnv{Context: context.Background(), Writer: w}), context.Background(), tally, nil)
+			_, _ = applyRow(irc, spec, NoParams{}, planned)
+			if _, marked := w.calls(); !slices.Equal(marked, c.want) {
+				t.Fatalf("marked %v, want %v", marked, c.want)
+			}
+			if c.want != nil && !slices.Equal(NotedHistory(irc.Context()), []string{"ref-1"}) {
+				t.Fatalf("the item's noted history = %v, want what Apply's writes noted", NotedHistory(irc.Context()))
+			}
+		})
+	}
+}
+
+// NoteHistory records on the live item whose context it is given (or one
+// derived from it), in order; NotedHistory returns a copy. A sealed item, a
+// context with no item, and an empty reference record nothing; Reset clears.
+func TestNoteHistory(t *testing.T) {
+	rc := NewRC(RunEnv{Context: context.Background()})
+	tally := &Tally{}
+	irc := NewItemRC(rc, rc.Context(), tally, nil)
+	child, cancel := context.WithCancel(irc.Context())
+	defer cancel()
+	NoteHistory(irc.Context(), "a")
+	NoteHistory(child, "b")
+	NoteHistory(child, "")
+	NoteHistory(rc.Context(), "run")
+	NoteHistory(context.Background(), "none")
+	got := NotedHistory(child)
+	if !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("NotedHistory = %v, want [a b]", got)
+	}
+	got[0] = "changed"
+	if NotedHistory(irc.Context())[0] != "a" {
+		t.Fatal("NotedHistory returned the item's own slice")
+	}
+	if NotedHistory(rc.Context()) != nil || NotedHistory(context.Background()) != nil {
+		t.Fatal("a context with no item has noted history")
+	}
+	tally.Seal()
+	NoteHistory(irc.Context(), "late")
+	if !slices.Equal(NotedHistory(irc.Context()), []string{"a", "b"}) {
+		t.Fatal("a sealed item took a late reference")
+	}
+	tally.Reset()
+	if NotedHistory(irc.Context()) != nil {
+		t.Fatal("Reset kept the noted history")
 	}
 }
 

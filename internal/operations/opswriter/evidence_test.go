@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 1.0.1
+// version: 2.0.0
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -8,39 +8,83 @@ package opswriter
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
-// evidenceStore adds the two history reads to recStore. Its journal read
-// returns EVERY op's rows, more than the real prefix scan would: Wrote must
-// keep only its own op id's rows itself. It counts journal reads.
+// evidenceStore adds the apply markers and the two reads RowApplied makes to
+// recStore, with injectable failures and read counters.
 type evidenceStore struct {
 	*recStore
-	journalReads atomic.Int32
-	journalErr   error
-	historyErr   error
+	marks       map[string]database.RowMarkV3 // op + "\x00" + row
+	putErr      error
+	markErr     error
+	changeErr   error
+	historyErr  error
+	markReads   atomic.Int32
+	changeReads atomic.Int32
 }
 
-func (s *evidenceStore) GetOperationChanges(string) ([]*database.OperationChange, error) {
-	s.journalReads.Add(1)
-	if s.journalErr != nil {
-		return nil, s.journalErr
+func newEvidenceStore() *evidenceStore {
+	s := &evidenceStore{recStore: newRecStore(), marks: map[string]database.RowMarkV3{}}
+	for _, id := range []string{"book-001", "book-002", "book-003", "book-004", "book-shared"} {
+		s.books[id] = &database.Book{ID: id, Title: "t " + id}
+	}
+	s.files["file-001"] = &database.BookFile{ID: "file-001", BookID: "book-001", FilePath: "/lib/001.m4b", Missing: true}
+	s.files["file-002"] = &database.BookFile{ID: "file-002", BookID: "book-002", FilePath: "/lib/002.m4b"}
+	return s
+}
+
+func (s *evidenceStore) PutRowMarkV3(id string, m database.RowMarkV3) error {
+	if s.putErr != nil {
+		return s.putErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*database.OperationChange, len(s.changes))
-	for i := range s.changes {
-		c := s.changes[i]
-		out[i] = &c
+	s.marks[id+"\x00"+m.RowID] = m
+	return nil
+}
+
+func (s *evidenceStore) GetRowMarkV3(id, rowID string) (*database.RowMarkV3, error) {
+	s.markReads.Add(1)
+	if s.markErr != nil {
+		return nil, s.markErr
 	}
-	return out, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.marks[id+"\x00"+rowID]
+	if !ok {
+		return nil, nil
+	}
+	return &m, nil
+}
+
+func (s *evidenceStore) mark(op, rowID string) (database.RowMarkV3, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.marks[op+"\x00"+rowID]
+	return m, ok
+}
+
+func (s *evidenceStore) GetOperationChange(operationID, changeID string) (*database.OperationChange, error) {
+	s.changeReads.Add(1)
+	if s.changeErr != nil {
+		return nil, s.changeErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.changes {
+		if c.OperationID == operationID && c.ID == changeID {
+			return &c, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *evidenceStore) GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error) {
@@ -58,163 +102,309 @@ func (s *evidenceStore) GetBookChangeHistory(bookID string, limit int) ([]databa
 	return out, nil
 }
 
-// evidenceWriter builds a Live Writer for op over s, the way the v3 registry
-// does: batch prefix "op-<op>-", both readers wired.
+// editChange edits the stored journal row id in place.
+func (s *evidenceStore) editChange(id string, fn func(*database.OperationChange)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.changes {
+		if s.changes[i].ID == id {
+			fn(&s.changes[i])
+			return
+		}
+	}
+	panic("no journal row " + id)
+}
+
+// dropChange deletes the stored journal row id.
+func (s *evidenceStore) dropChange(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.changes = slices.DeleteFunc(s.changes, func(c database.OperationChange) bool { return c.ID == id })
+}
+
+// evidenceWriter builds a Writer for op over s the way the v3 registry does:
+// batch prefix "op-<op>-", markers and both reads wired.
 func evidenceWriter(s *evidenceStore, op string, mode ops.Mode) *Writer {
 	return New(Config{OpID: op, Mode: mode, Intents: s, Books: s, Files: s, Authors: s, Journal: s,
-		History:       NewBookHistory(s, "test.def", "ops_v3", "op-"+op+"-", nil),
-		JournalReader: s, HistoryReader: s})
+		History:  NewBookHistory(s, "test.def", "ops_v3", "op-"+op+"-", nil),
+		RowMarks: s, Changes: s, HistoryReader: s})
 }
 
-func newEvidenceStore() *evidenceStore {
-	s := &evidenceStore{recStore: newRecStore()}
-	for _, id := range []string{"book-001", "book-002", "book-003", "book-004", "book-005", "book-010", "book-011"} {
-		s.books[id] = &database.Book{ID: id, Title: "t " + id}
-	}
-	s.files["file-001"] = &database.BookFile{ID: "file-001", BookID: "book-001", FilePath: "/lib/001.m4b", Missing: true}
-	s.files["file-002"] = &database.BookFile{ID: "file-002", BookID: "book-002", FilePath: "/lib/002.m4b"}
-	s.files["file-003"] = &database.BookFile{ID: "file-003", BookID: "book-002", FilePath: "/lib/003.m4b"}
-	return s
-}
-
-func mustWrote(t *testing.T, w *Writer, want bool, subjects ...ops.Subject) {
+// applyItem runs apply as one item would -- a fresh item context, the
+// Writer's writes made with it -- and then, when apply returned nil, marks
+// the row the way the Fixer's applyRow does.
+func applyItem(t *testing.T, w *Writer, rowID string, apply func(ctx context.Context) error) {
 	t.Helper()
-	got, err := w.Wrote(context.Background(), subjects)
+	irc := ops.NewItemRC(ops.NewRC(ops.RunEnv{Context: context.Background()}), context.Background(), &ops.Tally{}, nil)
+	if err := apply(irc.Context()); err != nil {
+		return
+	}
+	w.MarkRowApplied(irc.Context(), rowID)
+}
+
+func setTitle(w *Writer, bookID, title string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := w.ModifyBook(ctx, bookID, func(b *database.Book) error { b.Title = title; return nil })
+		return err
+	}
+}
+
+func mustRowApplied(t *testing.T, w *Writer, rowID string, want bool) {
+	t.Helper()
+	got, err := w.RowApplied(context.Background(), rowID)
 	if err != nil || got != want {
-		t.Fatalf("Wrote(%v) = %v, %v; want %v", subjects, got, err, want)
+		t.Fatalf("RowApplied(%s) = %v, %v; want %v", rowID, got, err, want)
 	}
 }
 
-// TestWroteEvidence: the history an earlier attempt of the same op recorded
-// through the Writer is evidence for its subjects -- a book's metadata
-// history batch, a credits journal row, a repointed or modified book_file --
-// and nothing else is: not another op id's journal rows or batches, not a
-// batch of a longer op id that starts with this one, not rows this attempt
-// recorded, not a subject only some of whose siblings are evidenced. The
-// journal is read once however many rows ask.
-func TestWroteEvidence(t *testing.T) {
+// TestRowAppliedIsPerRow (05-PR5b B1): a row counts as applied only by its
+// OWN marker, recorded when its own Apply returned nil -- whatever the
+// row's writes were (a book field, a book_file field, a repoint, credits,
+// an Effect, or nothing at all) and whichever attempt recorded it. The run's
+// history for a book is no evidence for another row of the same book: not a
+// sibling row's metadata batch (the shared-subject case), not a sibling
+// row's book_file or repoint journal row (whose BookID names the book). Nor
+// is a marker of another op, a row whose Apply failed, a Preview Writer or
+// one with no marker store.
+func TestRowAppliedIsPerRow(t *testing.T) {
 	s := newEvidenceStore()
-	ctx := context.Background()
 	first := evidenceWriter(s, "op1", ops.Live)
-	if _, err := first.ModifyBook(ctx, "book-001", func(b *database.Book) error { b.Title = "new 1"; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.RepointBookFile(ctx, "book-001", "file-001", database.BookFileLocation{Path: "/lib/001.m4b", Missing: true},
-		database.BookFileLocation{Path: "/lib/001b.m4b"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.ModifyBookFile(ctx, "book-002", "file-002", func(f *database.BookFile) error { f.Format = "m4b"; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.ModifyBookAuthors(ctx, "book-003", func([]database.BookAuthor) ([]database.BookAuthor, error) {
-		return []database.BookAuthor{{BookID: "book-003", AuthorID: 7}}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	applyItem(t, first, "title-shared", setTitle(first, "book-shared", "new shared"))
+	// "publisher-shared" is never written by the run; a foreign edit sets
+	// the book's publisher between the attempts. The run's batch on
+	// book-shared belongs to "title-shared".
+	pub := "Foreign Pub"
+	s.books["book-shared"].Publisher = &pub
+	applyItem(t, first, "file-001", func(ctx context.Context) error {
+		_, err := first.ModifyBookFile(ctx, "book-001", "file-001", func(f *database.BookFile) error { f.Format = "m4b"; return nil })
+		return err
+	})
+	applyItem(t, first, "repoint-002", func(ctx context.Context) error {
+		return first.RepointBookFile(ctx, "book-002", "file-002", database.BookFileLocationOf(s.files["file-002"]),
+			database.BookFileLocation{Path: "/lib/002b.m4b"})
+	})
+	applyItem(t, first, "credits-003", func(ctx context.Context) error {
+		_, err := first.ModifyBookAuthors(ctx, "book-003", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+			return []database.BookAuthor{{BookID: "book-003", AuthorID: 7}}, nil
+		})
+		return err
+	})
+	applyItem(t, first, "effect-004", func(ctx context.Context) error {
+		return first.Effect(ctx, ops.EffectSpec{Name: "touch", Subject: ops.Subject{Type: ops.SubjectBook, ID: "book-004"},
+			Resource: ops.ResBooks}, func() ([]ops.HistoryRow, error) {
+			return []ops.HistoryRow{{BookID: "book-004", Field: "touched", Old: "0", New: "1"}}, nil
+		})
+	})
+	applyItem(t, first, "noop-004", setTitle(first, "book-004", "t book-004"))
+	applyItem(t, first, "failed-004", func(ctx context.Context) error {
+		if err := setTitle(first, "book-004", "half")(ctx); err != nil {
+			return err
+		}
+		return errors.New("second write failed")
+	})
 	other := evidenceWriter(s, "op2", ops.Live)
-	if _, err := other.ModifyBook(ctx, "book-010", func(b *database.Book) error { b.Title = "new 10"; return nil }); err != nil {
-		t.Fatal(err)
+	applyItem(t, other, "other-op", setTitle(other, "book-003", "op2"))
+
+	// Each marker names exactly its own row's history.
+	if m, ok := s.mark("op1", "title-shared"); !ok || len(m.Batches) != 1 || m.Batches[0].BookID != "book-shared" ||
+		!strings.HasPrefix(m.Batches[0].BatchID, "op-op1-") || len(m.Changes) != 0 {
+		t.Fatalf("title-shared marker = %+v, %v; want its one book-shared batch", m, ok)
 	}
-	if _, err := other.ModifyBookFile(ctx, "book-002", "file-003", func(f *database.BookFile) error { f.Format = "mp3"; return nil }); err != nil {
-		t.Fatal(err)
+	if m, ok := s.mark("op1", "repoint-002"); !ok || len(m.Changes) != 1 || len(m.Batches) != 0 {
+		t.Fatalf("repoint-002 marker = %+v, %v; want its one journal row", m, ok)
 	}
-	if _, err := other.ModifyBookAuthors(ctx, "book-011", func([]database.BookAuthor) ([]database.BookAuthor, error) {
-		return []database.BookAuthor{{BookID: "book-011", AuthorID: 8}}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// op "op1-x" records batches "op-op1-x-<ulid>", which start with op1's
-	// prefix "op-op1-".
-	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-004", Field: "title",
-		BatchID: "op-op1-x-" + ulid.Make().String(), ChangedAt: time.Now().Add(-time.Hour)})
-	// A book with a long history ahead of the run's batch: a capped read
-	// (this fake caps in insertion order) would miss it.
-	for range 150 {
-		s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-006", Field: "title",
-			BatchID: "manual-" + ulid.Make().String(), ChangedAt: time.Now().Add(-2 * time.Hour)})
-	}
-	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-006", Field: "title",
-		BatchID: "op-op1-" + ulid.Make().String(), ChangedAt: time.Now().Add(-time.Hour)})
-	// The resumed attempt starts after every row above.
-	resumed := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Files: s, Authors: s, Journal: s,
-		History:       NewBookHistory(s, "test.def", "ops_v3", "op-op1-", nil),
-		JournalReader: s, HistoryReader: s, AttemptStart: time.Now().Add(time.Millisecond)})
-	time.Sleep(2 * time.Millisecond) // so this attempt's own rows come after AttemptStart
-	// This attempt's own writes are never evidence of an earlier one.
-	if _, err := resumed.ModifyBook(ctx, "book-005", func(b *database.Book) error { b.Title = "new 5"; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := resumed.RepointBookFile(ctx, "book-002", "file-003", database.BookFileLocationOf(s.files["file-003"]),
-		database.BookFileLocation{Path: "/lib/003b.m4b"}); err != nil {
-		t.Fatal(err)
+	if m, ok := s.mark("op1", "noop-004"); !ok || len(m.Changes)+len(m.Batches) != 0 {
+		t.Fatalf("noop-004 marker = %+v, %v; want a marker naming nothing", m, ok)
 	}
 
-	mustWrote(t, resumed, true, ops.Books("book-001")...)      // metadata history batch
-	mustWrote(t, resumed, true, ops.BookFiles("file-001")...)  // repoint journal row
-	mustWrote(t, resumed, true, ops.BookFiles("file-002")...)  // file.<field>:<id> journal row
-	mustWrote(t, resumed, true, ops.Books("book-003")...)      // credits journal row
-	mustWrote(t, resumed, true, ops.Books("book-002")...)      // the book_file row's BookID
-	mustWrote(t, resumed, true, ops.Books("book-006")...)      // past 150 other rows
-	mustWrote(t, resumed, false, ops.Books("book-010")...)     // op2's batch
-	mustWrote(t, resumed, false, ops.Books("book-011")...)     // op2's journal row
-	mustWrote(t, resumed, false, ops.Books("book-004")...)     // a longer op id's batch
-	mustWrote(t, resumed, false, ops.Books("book-005")...)     // this attempt's batch
-	mustWrote(t, resumed, false, ops.BookFiles("file-003")...) // op2's and this attempt's rows
-	mustWrote(t, resumed, true, append(ops.Books("book-001"), ops.BookFiles("file-001")...)...)
-	mustWrote(t, resumed, false, append(ops.Books("book-001"), ops.Books("book-010")...)...)
-	mustWrote(t, resumed, false)
-	mustWrote(t, resumed, false, ops.Subject{Type: "series", ID: "book-001"})
-	if n := s.journalReads.Load(); n != 1 {
-		t.Fatalf("the journal was read %d times, want once", n)
+	resumed := evidenceWriter(s, "op1", ops.Live)
+	for _, c := range []struct {
+		row  string
+		want bool
+	}{
+		{"title-shared", true},
+		{"publisher-shared", false}, // the shared-subject foreign edit
+		{"file-001", true},
+		{"title-001", false}, // book-001 has file-001's journal row, not this row's marker
+		{"repoint-002", true},
+		{"title-002", false}, // book-002 has repoint-002's journal row
+		{"credits-003", true},
+		{"effect-004", true},
+		{"noop-004", true},
+		{"failed-004", false},
+		{"other-op", false}, // op2's marker
+	} {
+		mustRowApplied(t, resumed, c.row, c.want)
 	}
+	// The attempt that wrote a marker reads it too: identity, not timing.
+	mustRowApplied(t, first, "title-shared", true)
 
-	// A Preview Writer never reports evidence.
-	mustWrote(t, evidenceWriter(s, "op1", ops.Preview), false, ops.Books("book-001")...)
-	// A Writer without the readers finds none, and does not fail.
+	// Preview records nothing and finds nothing.
+	preview := evidenceWriter(s, "op1", ops.Preview)
+	applyItem(t, preview, "preview-row", func(context.Context) error { return nil })
+	if _, ok := s.mark("op1", "preview-row"); ok {
+		t.Fatal("a Preview Writer recorded a marker")
+	}
+	mustRowApplied(t, preview, "title-shared", false)
+	// No marker store: nothing recorded, nothing found, no error.
 	bare := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Journal: s,
-		History: NewBookHistory(s, "test.def", "ops_v3", "op-op1-", nil)})
-	mustWrote(t, bare, false, ops.Books("book-001")...)
-	// An empty batch prefix owns no batch, even a bare ULID one.
-	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-010", Field: "title",
-		BatchID: ulid.Make().String(), ChangedAt: time.Now().Add(-time.Hour)})
-	noPrefix := New(Config{OpID: "op9", Mode: ops.Live, Journal: s, History: NewBookHistory(s, "x", "y", "", nil),
-		HistoryReader: s})
-	mustWrote(t, noPrefix, false, ops.Books("book-010")...)
+		History: NewBookHistory(s, "test.def", "ops_v3", "op-op1-", nil), Changes: s, HistoryReader: s})
+	applyItem(t, bare, "bare-row", func(context.Context) error { return nil })
+	if _, ok := s.mark("op1", "bare-row"); ok {
+		t.Fatal("a Writer without a marker store recorded a marker")
+	}
+	mustRowApplied(t, bare, "title-shared", false)
 }
 
-// A failed read is the caller's error, never "no evidence" or "written", and
-// a failed journal read is not cached: the next row reads again. A fenced
-// run reads nothing.
-func TestWroteReadFailures(t *testing.T) {
+// TestRowAppliedUndoneHistory (05-PR5b S1): a marker proves its row applied
+// only while the history it names stands. Each way that history is taken
+// back makes it no evidence: the batch undone by undo-last-apply (undo rows
+// in the batch), a field of it undone on its own (an undo row with no batch
+// id, at or after the batch, on a field the batch wrote), its credits row
+// voided, its repoint row reverted (even with its book write standing), its
+// journal row gone. An undo of another field, or one older than the batch,
+// leaves it standing; so does an undo of another row's batch on another
+// book. A marker that names history the Writer cannot read is no evidence.
+func TestRowAppliedUndoneHistory(t *testing.T) {
 	s := newEvidenceStore()
-	s.changes = append(s.changes, database.OperationChange{OperationID: "op1", BookID: "book-001",
-		FieldName: "authors", CreatedAt: time.Now().Add(-time.Hour)})
-	down := errors.New("store down")
-	s.journalErr = down
 	w := evidenceWriter(s, "op1", ops.Live)
-	if _, err := w.Wrote(context.Background(), ops.Books("book-001")); !errors.Is(err, down) {
-		t.Fatalf("journal read failure = %v", err)
+	applyItem(t, w, "batch-undone", setTitle(w, "book-001", "a"))
+	applyItem(t, w, "field-undone", setTitle(w, "book-002", "b"))
+	applyItem(t, w, "other-field-undone", setTitle(w, "book-003", "c"))
+	applyItem(t, w, "credits-voided", func(ctx context.Context) error {
+		_, err := w.ModifyBookAuthors(ctx, "book-004", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+			return []database.BookAuthor{{BookID: "book-004", AuthorID: 9}}, nil
+		})
+		return err
+	})
+	applyItem(t, w, "repoint-reverted", func(ctx context.Context) error {
+		if err := setTitle(w, "book-004", "d")(ctx); err != nil {
+			return err
+		}
+		return w.RepointBookFile(ctx, "book-002", "file-002", database.BookFileLocationOf(s.files["file-002"]),
+			database.BookFileLocation{Path: "/lib/002b.m4b"})
+	})
+	applyItem(t, w, "journal-gone", func(ctx context.Context) error {
+		_, err := w.ModifyBookFile(ctx, "book-001", "file-001", func(f *database.BookFile) error { f.Format = "m4b"; return nil })
+		return err
+	})
+	applyItem(t, w, "standing", setTitle(w, "book-shared", "s"))
+	for _, row := range []string{"batch-undone", "field-undone", "other-field-undone", "credits-voided",
+		"repoint-reverted", "journal-gone", "standing"} {
+		mustRowApplied(t, w, row, true)
 	}
-	s.journalErr = nil
-	mustWrote(t, w, true, ops.Books("book-001")...)
-	if n := s.journalReads.Load(); n != 2 {
-		t.Fatalf("journal reads = %d, want 2 (the failure is not cached)", n)
+
+	m, _ := s.mark("op1", "batch-undone")
+	later := time.Now().Add(time.Second)
+	s.history = append(s.history,
+		database.MetadataChangeRecord{BookID: "book-001", Field: "title", ChangeType: ChangeTypeUndo,
+			BatchID: m.Batches[0].BatchID, ChangedAt: later},
+		database.MetadataChangeRecord{BookID: "book-002", Field: "title", ChangeType: ChangeTypeUndo, ChangedAt: later},
+		database.MetadataChangeRecord{BookID: "book-003", Field: "publisher", ChangeType: ChangeTypeUndo, ChangedAt: later},
+		database.MetadataChangeRecord{BookID: "book-003", Field: "title", ChangeType: ChangeTypeUndo,
+			ChangedAt: time.Now().Add(-time.Hour)})
+	reverted := time.Now()
+	credits, _ := s.mark("op1", "credits-voided")
+	s.editChange(credits.Changes[0], func(c *database.OperationChange) { c.Voided, c.RevertedAt = true, &reverted })
+	repoint, _ := s.mark("op1", "repoint-reverted")
+	s.editChange(repoint.Changes[0], func(c *database.OperationChange) { c.RevertedAt = &reverted })
+	gone, _ := s.mark("op1", "journal-gone")
+	s.dropChange(gone.Changes[0])
+
+	for _, c := range []struct {
+		row  string
+		want bool
+	}{
+		{"batch-undone", false},
+		{"field-undone", false},
+		{"other-field-undone", true},
+		{"credits-voided", false},
+		{"repoint-reverted", false},
+		{"journal-gone", false},
+		{"standing", true},
+	} {
+		mustRowApplied(t, w, c.row, c.want)
 	}
-	s.historyErr = down
-	if _, err := w.Wrote(context.Background(), ops.Books("book-002")); !errors.Is(err, down) {
-		t.Fatalf("history read failure = %v", err)
+
+	// The same markers through a Writer that cannot read what they name.
+	noChanges := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, HistoryReader: s})
+	mustRowApplied(t, noChanges, "standing", true) // a batch only
+	applyItem(t, w, "credits-standing", func(ctx context.Context) error {
+		_, err := w.ModifyBookAuthors(ctx, "book-001", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+			return []database.BookAuthor{{BookID: "book-001", AuthorID: 3}}, nil
+		})
+		return err
+	})
+	mustRowApplied(t, w, "credits-standing", true)
+	mustRowApplied(t, noChanges, "credits-standing", false)
+	noHistory := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s})
+	mustRowApplied(t, noHistory, "standing", false)
+	mustRowApplied(t, noHistory, "credits-standing", true)
+	// A batch whose rows are gone from the book's history cannot be shown
+	// to stand.
+	s.history = slices.DeleteFunc(s.history, func(r database.MetadataChangeRecord) bool { return r.BookID == "book-shared" })
+	mustRowApplied(t, w, "standing", false)
+}
+
+// A failed read is the caller's error, never "not applied" or "applied". A
+// fenced run reads nothing, and says "not read". A marker is written like
+// a write: never once the fence is revoked or the item's context is
+// canceled, and a store failure is logged, not returned.
+func TestRowMarkerReadAndWriteFailures(t *testing.T) {
+	s := newEvidenceStore()
+	w := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, w, "r1", func(ctx context.Context) error {
+		if err := setTitle(w, "book-001", "x")(ctx); err != nil {
+			return err
+		}
+		_, err := w.ModifyBookAuthors(ctx, "book-001", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+			return []database.BookAuthor{{BookID: "book-001", AuthorID: 1}}, nil
+		})
+		return err
+	})
+	down := errors.New("store down")
+	for _, c := range []struct {
+		name string
+		set  func(error)
+	}{
+		{"marker", func(e error) { s.markErr = e }},
+		{"journal row", func(e error) { s.changeErr = e }},
+		{"history", func(e error) { s.historyErr = e }},
+	} {
+		c.set(down)
+		if ok, err := w.RowApplied(context.Background(), "r1"); ok || !errors.Is(err, down) {
+			t.Fatalf("%s read failure: RowApplied = %v, %v", c.name, ok, err)
+		}
+		c.set(nil)
 	}
-	s.historyErr = nil
+	mustRowApplied(t, w, "r1", true)
 
 	f, revoke := NewFence(1, nil)
 	fenced := evidenceWriter(s, "op1", ops.Live)
 	fenced.SetFence(f.Check)
 	revoke()
-	before := s.journalReads.Load()
-	if ok, err := fenced.Wrote(context.Background(), ops.Books("book-001")); ok || !errors.Is(err, ops.ErrFenced) {
-		t.Fatalf("fenced Wrote = %v, %v; want ErrFenced", ok, err)
+	before := s.markReads.Load()
+	ok, err := fenced.RowApplied(context.Background(), "r1")
+	if ok || !errors.Is(err, ops.ErrFenced) || !strings.Contains(err.Error(), "not read") {
+		t.Fatalf("fenced RowApplied = %v, %v; want ErrFenced, \"not read\"", ok, err)
 	}
-	if s.journalReads.Load() != before {
-		t.Fatal("a fenced Wrote read the store")
+	if s.markReads.Load() != before {
+		t.Fatal("a fenced RowApplied read the store")
+	}
+	fenced.MarkRowApplied(context.Background(), "fenced-row")
+	if _, ok := s.mark("op1", "fenced-row"); ok {
+		t.Fatal("a fenced Writer recorded a marker")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.MarkRowApplied(canceled, "canceled-row")
+	if _, ok := s.mark("op1", "canceled-row"); ok {
+		t.Fatal("a canceled context recorded a marker")
+	}
+	s.putErr = down
+	w.MarkRowApplied(context.Background(), "put-fails") // logged; must not panic or block
+	s.putErr = nil
+	if _, ok := s.mark("op1", "put-fails"); ok {
+		t.Fatal("a failed marker write left a marker")
 	}
 }

@@ -1,5 +1,5 @@
 // file: pkg/ops/writer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: dc4d264d-6ac3-4ecd-bd11-247d5300dd3c
 // last-edited: 2026-10-14
 
@@ -25,8 +25,11 @@ import (
 // A crash between 2 and 5 leaves an intent: recovery lists that subject as
 // "may be partially applied".
 //
-// Wrote is the one read: it writes nothing, takes no intent and records no
-// history.
+// MarkRowApplied and RowApplied are a Fixer apply's bookkeeping, not
+// writes to the library: they take no intent and record no history, and
+// only the Fixer's applyRow calls them. Every write method also reports the
+// history it recorded on the item (NoteHistory), so the row's marker can
+// name it.
 //
 // ctx, on every method, must be the item's context (ItemRC.Context()) or one
 // derived from it, from inside the item, before the item returns. A write
@@ -59,19 +62,28 @@ type Writer interface {
 	// 1, 2 and 5 around fn and records the history rows fn returns after it
 	// returns. ctx: the item's context or derived from it.
 	Effect(ctx context.Context, e EffectSpec, fn func() ([]HistoryRow, error)) error
-	// Wrote reports whether an EARLIER attempt of this run (the same op id;
-	// never the current attempt) recorded history for every one of
-	// subjects: an operation journal row under the op id naming the book
-	// (its BookID) or the book_file (its field), or, for a book, a metadata
-	// history row in one of the run's own batches. A Fixer's resumed apply
-	// requires it before it reports a row as applied by that earlier
-	// attempt (applyRow). It is false for no subjects, on a Preview
-	// Writer, and when the store cannot read that history -- never an
-	// error for those. Evidence is per subject, not per row: history
-	// another row of the same run recorded for a shared subject counts.
-	// ctx: the item's context or derived from it; a canceled context or a
-	// revoked fence is an error.
-	Wrote(ctx context.Context, subjects []Subject) (bool, error)
+	// MarkRowApplied records, under the run's op id, that the Fixer row
+	// rowID's Apply returned nil, naming the history the writes Apply made
+	// with ctx recorded (NoteHistory on ctx's item). It is the evidence
+	// RowApplied reads on a resume. Gated like a write (a fenced run or a
+	// canceled ctx records nothing); in Preview it records nothing. It
+	// returns nothing: the row's writes already committed, so a marker
+	// that cannot be recorded is logged and costs only that evidence -- a
+	// resume then skips the row as changed since plan, and never writes it
+	// twice. ctx: the item's context, after Apply returned.
+	MarkRowApplied(ctx context.Context, rowID string)
+	// RowApplied reports whether some attempt of this run marked the row
+	// rowID applied (MarkRowApplied) and none of the history that marker
+	// names has been undone since: no operation journal row of it voided
+	// or reverted, no metadata history batch of it undone in whole or by
+	// field. Evidence is per row: another row's writes, even to the same
+	// book, never count. A Fixer's resumed apply requires it before it
+	// reports a row as applied by an earlier attempt (applyRow). False on
+	// a Preview Writer and when the store keeps no markers -- never an
+	// error for those; a failed read is an error. ctx: the item's context
+	// or derived from it; a canceled context or a revoked fence is an
+	// error.
+	RowApplied(ctx context.Context, rowID string) (bool, error)
 }
 
 // Changed lists the tracked fields a write changed, in

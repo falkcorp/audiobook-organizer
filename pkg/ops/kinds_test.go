@@ -1,5 +1,5 @@
 // file: pkg/ops/kinds_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d3536389-9d87-4f21-b694-6ce022e230a8
 // last-edited: 2026-10-14
 
@@ -47,8 +47,12 @@ func (w *titleWriter) Effect(context.Context, EffectSpec, func() ([]HistoryRow, 
 	return errors.New("unused")
 }
 
-// Wrote: an in-memory title map keeps no history, so it is never evidence.
-func (w *titleWriter) Wrote(context.Context, []Subject) (bool, error) { return false, nil }
+// MarkRowApplied and RowApplied: an in-memory title map keeps no markers,
+// so no row is ever recognized as applied by an earlier attempt.
+func (w *titleWriter) MarkRowApplied(context.Context, string) {}
+func (w *titleWriter) RowApplied(context.Context, string) (bool, error) {
+	return false, nil
+}
 
 // ordinalFixer is examples.md Example 3 against an in-memory title map:
 // rewrite a leading "l " ordinal to "1 ".
