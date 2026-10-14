@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -127,6 +127,14 @@ func TestWroteEvidence(t *testing.T) {
 	// prefix "op-op1-".
 	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-004", Field: "title",
 		BatchID: "op-op1-x-" + ulid.Make().String(), ChangedAt: time.Now().Add(-time.Hour)})
+	// A book with a long history ahead of the run's batch: a capped read
+	// (this fake caps in insertion order) would miss it.
+	for range 150 {
+		s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-006", Field: "title",
+			BatchID: "manual-" + ulid.Make().String(), ChangedAt: time.Now().Add(-2 * time.Hour)})
+	}
+	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-006", Field: "title",
+		BatchID: "op-op1-" + ulid.Make().String(), ChangedAt: time.Now().Add(-time.Hour)})
 	// The resumed attempt starts after every row above.
 	resumed := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Files: s, Authors: s, Journal: s,
 		History:       NewBookHistory(s, "test.def", "ops_v3", "op-op1-", nil),
@@ -146,6 +154,7 @@ func TestWroteEvidence(t *testing.T) {
 	mustWrote(t, resumed, true, ops.BookFiles("file-002")...)  // file.<field>:<id> journal row
 	mustWrote(t, resumed, true, ops.Books("book-003")...)      // credits journal row
 	mustWrote(t, resumed, true, ops.Books("book-002")...)      // the book_file row's BookID
+	mustWrote(t, resumed, true, ops.Books("book-006")...)      // past 150 other rows
 	mustWrote(t, resumed, false, ops.Books("book-010")...)     // op2's batch
 	mustWrote(t, resumed, false, ops.Books("book-011")...)     // op2's journal row
 	mustWrote(t, resumed, false, ops.Books("book-004")...)     // a longer op id's batch
