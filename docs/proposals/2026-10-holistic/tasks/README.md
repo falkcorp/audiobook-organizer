@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/README.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 2f8c6a4e-9b1d-4e73-8a5c-6d0f3b2e7c19 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -11,10 +11,10 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 
 | Count | Value |
 |---|---|
-| Briefs | 154 |
-| Sonnet / Opus | 124 / 30 |
+| Briefs | 155 |
+| Sonnet / Opus | 125 / 30 |
 | Wave 0 | 25 |
-| Wave 1 | 66 |
+| Wave 1 | 67 |
 | Wave 2 | 36 |
 | Wave F | 19 |
 | Wave 3 | 6 |
@@ -124,6 +124,7 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | [05-PR7](05/05-PR7.md) | One op catalog, a rewritten `oplint`, and a startup ledger check | 1 | opus | M | 05-PR5, 05-PR5b, 05-PR6, 07-S3, 01-P3, 07-R2, 07-R3, 07-R4, 01-P81a, 04-P6, 04-P7, 04-P13 |
 | [05-PR8](05/05-PR8.md) | One schedule declaration (`ops.Schedule`) and a cron evaluator in the TaskScheduler | 1 | sonnet | M | 05-PR5, 05-PR7, 04-P1, 04-P4a, 04-P4b, 04-P4c, 04-P4d, 04-P4e, 04-P4f, 04-P9, 04-P12 |
 | [05-PR9](05/05-PR9.md) | `/api/v3/ops/*` census, timeline and SSE endpoints | 1 | sonnet | M | 05-PR4, 05-PR5, 05-PR8, 08-X2 |
+| [06-P13](06/06-P13.md) | stop the forced GCs and the startup scan churn that keep the process in GC for 30 minutes after a restart | 1 | sonnet | M | 07-R2 |
 | [06-P3](06/06-P3.md) | Ship the pprof tag in the normal deploy build; the committed Makefile owns the build flags | 1 | sonnet | S | 07-C3, 06-P1 |
 | [07-G1](07/07-G1.md) | ratchet the flattened `database.Store` method count and the wide-consumer references, as Go tests | 1 | sonnet | S | 07-C1, 07-C3 |
 | [07-G2](07/07-G2.md) | layering rule as a Go test with a shrink-only map of known violations | 1 | sonnet | S | 07-C1 |
