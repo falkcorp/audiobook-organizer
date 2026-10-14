@@ -245,6 +245,48 @@ func TestAIScanApplyOp_ResultsSharingAnAuthorAreAppliedInOrder(t *testing.T) {
 	require.Equal(t, c.ID, still.ID, "nothing was merged into a keep author that was already gone")
 }
 
+// R1 folds B into A. R2 asks to fold B and D into C. B is gone, but it went into A,
+// not C, so R2 must not be marked applied (A and C are still separate), while D is
+// still merged.
+func TestAIScanApplyOp_AnAuthorMergedIntoSomeoneElseDoesNotCountAsMerged(t *testing.T) {
+	f := newApplyFixture(t)
+	a, b, c, d := f.author("Elsewhere A"), f.author("Elsewhere B"), f.author("Elsewhere C"), f.author("Elsewhere D")
+	mkRelinkOpBook(t, f.st, "elsewhere-b", b.ID, false)
+	bookD := mkRelinkOpBook(t, f.st, "elsewhere-d", d.ID, false)
+	r1 := f.result(database.ScanSuggestion{CanonicalName: a.Name, KeepID: a.ID, AuthorIDs: []int{a.ID, b.ID}, Source: "groups_scan"})
+	r2 := f.result(database.ScanSuggestion{CanonicalName: c.Name, KeepID: c.ID, AuthorIDs: []int{c.ID, b.ID, d.ID}, Source: "groups_scan"})
+
+	_, err := f.run(live(), r1, r2)
+
+	require.Error(t, err)
+	require.True(t, f.applied(r1))
+	require.False(t, f.applied(r2), "B went into A, so A and C are still separate: R2 is not done")
+	require.Contains(t, err.Error(), "already merged into author "+strconv.Itoa(a.ID)+", not author "+strconv.Itoa(c.ID))
+	require.Equal(t, []int{c.ID}, junctionIDs(t, f.st, bookD), "D, which was free to merge, still merged")
+	requireSourceDeleted(t, f.st, d.ID)
+}
+
+func TestAIScanApplyOp_AFlaggedNarratorAlreadyMergedIntoAnAuthorIsNotReclassified(t *testing.T) {
+	f := newApplyFixture(t)
+	a, v, keep := f.author("Narr Elsewhere A"), f.author("Narr Elsewhere Voice"), f.author("Narr Elsewhere Keep")
+	mkRelinkOpBook(t, f.st, "narr-elsewhere-voice", v.ID, false)
+	mkRelinkOpBook(t, f.st, "narr-elsewhere-keep", keep.ID, false)
+	r1 := f.result(database.ScanSuggestion{CanonicalName: a.Name, KeepID: a.ID, AuthorIDs: []int{a.ID, v.ID}, Source: "groups_scan"})
+	roles, err := json.Marshal(map[string]any{"narrator": map[string]any{"name": v.Name, "ids": []int{v.ID}}})
+	require.NoError(t, err)
+	r2 := f.result(database.ScanSuggestion{
+		CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, v.ID, f.author("Narr Elsewhere Extra").ID},
+		Roles: roles, Source: "full_scan",
+	})
+
+	_, err = f.run(live(), r1, r2)
+
+	require.Error(t, err)
+	require.True(t, f.applied(r1))
+	require.False(t, f.applied(r2))
+	require.Contains(t, err.Error(), "cannot be reclassified as a narrator")
+}
+
 func TestAIScanApplyOp_ACancelStopsBetweenResultsAndKeepsWhatMerged(t *testing.T) {
 	f := newApplyFixture(t)
 	keep, from := f.author("Cancel Keep"), f.author("Cancel From")
