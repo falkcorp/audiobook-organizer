@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -54,7 +55,7 @@ type scanApplyPlan struct {
 // result is refused rather than merged: merging would fold the flagged
 // narrator's books into the author. A full-scan row's flags are author ids, so
 // they are honoured when each is one of the row's authors other than the keep.
-func planScanMerge(r database.ScanResult) (scanApplyPlan, error) {
+func planScanMerge(r database.ScanResult, flags aiscan.RawRoleFlags) (scanApplyPlan, error) {
 	sug := r.Suggestion
 	if sug.Action != "merge" {
 		return scanApplyPlan{}, fmt.Errorf("it is a %q suggestion; only merge suggestions can be applied here", sug.Action)
@@ -82,6 +83,21 @@ func planScanMerge(r database.ScanResult) (scanApplyPlan, error) {
 		if roles.Publisher != nil {
 			publishers = roles.Publisher.IDs
 		}
+	}
+	// The model's flags as the scan stored them. A result whose converter dropped
+	// the deprecated is_narrator / is_publisher lists (every scan before the
+	// converters kept them) carries no flag, and merging it would fold a flagged
+	// narrator into the keep author: refuse what the stored answer flags that the
+	// result does not carry.
+	carried := map[int]bool{}
+	for _, id := range narrators {
+		carried[id] = true
+	}
+	for _, id := range publishers {
+		carried[id] = true
+	}
+	if why := flags.Unaccounted(sug.Source, sug.GroupIndex, sug.AuthorIDs, carried); why != "" {
+		return scanApplyPlan{}, stderrors.New(why + "; handle it in the Authors view")
 	}
 	if len(publishers) > 0 {
 		return scanApplyPlan{}, stderrors.New("it flags a publisher, which cannot be reclassified here; handle it in the Authors view")
@@ -150,11 +166,12 @@ func applyScanResult(
 	store scanApplyStore,
 	opID string,
 	r database.ScanResult,
+	flags aiscan.RawRoleFlags,
 	dryRun bool,
 	canceled func() bool,
 ) (res scanApplyResult, cancelled bool) {
 	res.ResultID = r.ID
-	plan, err := planScanMerge(r)
+	plan, err := planScanMerge(r, flags)
 	if err != nil {
 		res.Errors = []string{fmt.Sprintf("result %d refused: %v", r.ID, err)}
 		return res, false
@@ -331,6 +348,11 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 	for _, r := range stored {
 		byID[r.ID] = r
 	}
+	// Fails closed: an unreadable stored answer must not read as "nothing flagged".
+	flags, err := aiscan.LoadRawRoleFlags(s.aiScanStore, p.ScanID)
+	if err != nil {
+		return fmt.Errorf("ai.author-scan-apply: %w", err)
+	}
 
 	mode := "Applying"
 	if dryRun {
@@ -366,7 +388,7 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 			continue
 		}
 
-		res, cancelled := applyScanResult(ctx, store, opID, r, dryRun, progress.IsCanceled)
+		res, cancelled := applyScanResult(ctx, store, opID, r, flags, dryRun, progress.IsCanceled)
 		if cancelled {
 			_ = progress.Log("warn", "Operation cancelled by user", nil)
 			report.Results = append(report.Results, res)

@@ -1,11 +1,12 @@
 // file: internal/aiscan/keep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7e4d19-6c82-4f35-9a1d-83e5c7f2a604
 // last-edited: 2026-10-13
 
 package aiscan
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -246,4 +247,76 @@ func TestChooseKeepID_ATombstonedAuthorIsGoneNotItsSuccessor(t *testing.T) {
 
 	s.AuthorIDs = []int{2}
 	require.Zero(t, keepOf(t, s, store), "the only candidate was merged away")
+}
+
+func rolesOf(t *testing.T, raw json.RawMessage) ai.SuggestionRoles {
+	t.Helper()
+	var r ai.SuggestionRoles
+	require.NoError(t, json.Unmarshal(raw, &r))
+	return r
+}
+
+// The batch prompts ask only for is_narrator / is_publisher: both converters keep
+// those lists as roles, whatever the model did with the structured roles.
+func TestConvertersFoldTheDeprecatedFlagListsIntoRoles(t *testing.T) {
+	full := fullSuggestionsToScanSuggestions([]ai.AuthorDiscoverySuggestion{
+		{AuthorIDs: []int{1, 2, 3}, Action: "merge", IsNarrator: []int{2}, IsPublisher: []int{3}},
+		{AuthorIDs: []int{4, 5}, Action: "merge"},
+		{AuthorIDs: []int{6, 7}, Action: "merge", IsNarrator: []int{7},
+			Roles: &ai.SuggestionRoles{Narrator: &ai.SuggestionRole{Name: "N", IDs: []int{6}}}},
+		{AuthorIDs: []int{8, 9}, Action: "merge", IsNarrator: []int{9},
+			Roles: &ai.SuggestionRoles{Narrator: &ai.SuggestionRole{Name: "Named only"}}},
+	})
+	r := rolesOf(t, full[0].Roles)
+	require.Equal(t, []int{2}, r.Narrator.IDs)
+	require.Equal(t, []int{3}, r.Publisher.IDs)
+	require.Empty(t, full[1].Roles, "no flags and no roles stays empty")
+	require.Equal(t, []int{6}, rolesOf(t, full[2].Roles).Narrator.IDs, "ids the roles already carry win")
+	named := rolesOf(t, full[3].Roles)
+	require.Equal(t, []int{9}, named.Narrator.IDs)
+	require.Equal(t, "Named only", named.Narrator.Name, "the model's name is kept")
+
+	groups := groupsSuggestionsToScanSuggestions([]ai.AuthorDedupSuggestion{
+		{GroupIndex: 0, Action: "merge", IsNarrator: []int{1}},
+	}, [][]int{{10, 11}})
+	require.Equal(t, []int{1}, rolesOf(t, groups[0].Roles).Narrator.IDs, "positions, which the apply refuses")
+}
+
+func TestRecordFullScanResultsKeepsAnIsNarratorFlagOnTheResult(t *testing.T) {
+	store := newScanStore(t)
+	id, err := RecordFullScanResults(store, "night-flag", []ai.AuthorDiscoverySuggestion{
+		{AuthorIDs: []int{1, 2}, Action: "merge", CanonicalName: "A", Confidence: "high", IsNarrator: []int{2}},
+	}, nil)
+	require.NoError(t, err)
+	rows, err := store.GetScanResults(id)
+	require.NoError(t, err)
+	require.Equal(t, []int{2}, rolesOf(t, rows[0].Suggestion.Roles).Narrator.IDs)
+}
+
+func TestLoadRawRoleFlagsReadsWhatTheStoredPhaseOutputFlags(t *testing.T) {
+	store := newScanStore(t)
+	scan, err := store.CreateScan("realtime", nil, 0)
+	require.NoError(t, err)
+	for _, ph := range []string{"full_scan", "groups_scan"} {
+		_, err := store.CreatePhase(scan.ID, ph, "m")
+		require.NoError(t, err)
+	}
+	full, _ := json.Marshal([]ai.AuthorDiscoverySuggestion{
+		{AuthorIDs: []int{1, 2}, IsNarrator: []int{2}}, {AuthorIDs: []int{3, 4}, IsPublisher: []int{4}},
+		{AuthorIDs: []int{5, 6}, Roles: &ai.SuggestionRoles{Narrator: &ai.SuggestionRole{IDs: []int{6}}}},
+	})
+	groups, _ := json.Marshal([]ai.AuthorDedupSuggestion{{GroupIndex: 0}, {GroupIndex: 3, IsNarrator: []int{1}}})
+	require.NoError(t, store.SavePhaseData(scan.ID, "full_scan", nil, full, json.RawMessage("[]")))
+	require.NoError(t, store.SavePhaseData(scan.ID, "groups_scan", nil, groups, json.RawMessage("[]")))
+
+	flags, err := LoadRawRoleFlags(store, scan.ID)
+	require.NoError(t, err)
+	require.Equal(t, map[int]bool{2: true, 4: true, 6: true}, flags.Authors)
+	require.Equal(t, map[int]bool{3: true}, flags.Groups)
+
+	require.Contains(t, flags.Unaccounted("full_scan", 0, []int{1, 2}, nil), "flags author 2")
+	require.Empty(t, flags.Unaccounted("full_scan", 0, []int{1, 2}, map[int]bool{2: true}), "a flag the result carries is the apply's to handle")
+	require.Empty(t, flags.Unaccounted("full_scan", 0, []int{7, 8}, nil))
+	require.Contains(t, flags.Unaccounted("groups_scan", 3, []int{1, 2}, nil), "by position")
+	require.Empty(t, flags.Unaccounted("groups_scan", 0, []int{1, 2}, nil))
 }
