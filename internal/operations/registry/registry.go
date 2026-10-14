@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.52.1
+// version: 3.53.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-14
 
@@ -93,6 +93,9 @@ type Registry struct {
 	// cancelByRow makes is a compare-and-set from the status it read (see
 	// cancelByRow).
 	retryMu sync.Mutex
+	// evidenceWarn logs, once per Registry, that a Live v3 Writer was built
+	// without the reads a resumed Fixer's apply markers need (newV3Writer).
+	evidenceWarn sync.Once
 	// admitLocks holds one *sync.Mutex per def id (see admissionLock). It
 	// serializes every "is another run of this def active?" check with the
 	// write that makes a run active: EnqueueOp's dedupe → insert, and

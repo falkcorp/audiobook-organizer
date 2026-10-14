@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-14
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -315,7 +316,13 @@ type v3WriterStores struct {
 	rowMarks      opswriter.RowMarkStore
 	changes       opswriter.ChangeReader
 	historyReader opswriter.BookHistoryReader
+	// changeScan: one whole-journal scan per run while the per-book index
+	// is not usable (opswriter.ChangeScanner). Optional.
+	changeScan opswriter.ChangeScanner
 }
+
+// v3WriterLog is the subsystem logger of the v3 Writer wiring.
+var v3WriterLog = logger.New("registry.v3writer")
 
 // historyChangeTypeV3 is the metadata-history change type of v3 Writer rows.
 const historyChangeTypeV3 = "ops_v3"
@@ -337,14 +344,26 @@ func (r *Registry) newV3Writer(ctx context.Context, opID, defID string, mode ops
 	s.rowMarks, _ = database.AsCapability[opswriter.RowMarkStore](r.store)
 	s.changes, _ = database.AsCapability[opswriter.ChangeReader](r.store)
 	s.historyReader, _ = database.AsCapability[opswriter.BookHistoryReader](r.store)
+	s.changeScan, _ = database.AsCapability[opswriter.ChangeScanner](r.store)
 	if mode == ops.Live && (s.intents == nil || s.journal == nil || s.history == nil) {
 		return nil, fmt.Errorf("%s: %w", defID, ErrWriterUnavailable)
+	}
+	if mode == ops.Live && (s.rowMarks == nil || s.changes == nil || s.historyReader == nil) {
+		// The store keeps run state but cannot back the resume evidence: a
+		// resumed Fixer will skip every row an earlier attempt applied as
+		// changed since plan. Not an error (the run is still correct), but
+		// worth one line: it means a store method was renamed or a
+		// decorator stopped unwrapping.
+		r.evidenceWarn.Do(func() {
+			v3WriterLog.Warn("v3 Writer for %s: the store lacks the Fixer resume evidence reads (row markers %v, journal %v, metadata history %v); a resumed Fixer will not recognize rows an earlier attempt applied",
+				logger.SanitizeLogValue(defID), s.rowMarks != nil, s.changes != nil, s.historyReader != nil)
+		})
 	}
 	return opswriter.New(opswriter.Config{
 		OpID: opID, Mode: mode, Fence: opswriter.FenceFromContext(ctx).Check, RunLatch: ops.RefusalLatchFrom(ctx),
 		Intents: s.intents, Books: s.books, Files: s.files, Authors: s.authors, Journal: s.journal,
 		History:  opswriter.NewBookHistory(s.history, defID, historyChangeTypeV3, "op-"+opID+"-", nil),
-		RowMarks: s.rowMarks, Changes: s.changes, HistoryReader: s.historyReader,
+		RowMarks: s.rowMarks, Changes: s.changes, HistoryReader: s.historyReader, ChangeScan: s.changeScan,
 	}), nil
 }
 

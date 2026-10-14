@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -39,6 +39,34 @@ type evidenceStore struct {
 	undecodable    map[string]int // book -> history rows that "did not decode"
 	markReads      atomic.Int32
 	changeReads    atomic.Int32
+	// The ChangeScanner half: whether the per-book index is "usable", the
+	// scans and per-book reads made, and a hook run on each scanned row.
+	indexUsable atomic.Bool
+	scans       atomic.Int32
+	bookReads   atomic.Int32
+	scanErr     error
+	onScanRow   func()
+}
+
+func (s *evidenceStore) OpChangeByBookIndexUsable() bool { return s.indexUsable.Load() }
+
+func (s *evidenceStore) ScanOperationChanges(fn func(*database.OperationChange) error) error {
+	s.scans.Add(1)
+	if s.scanErr != nil {
+		return s.scanErr
+	}
+	s.mu.Lock()
+	rows := slices.Clone(s.changes)
+	s.mu.Unlock()
+	for i := range rows {
+		if s.onScanRow != nil {
+			s.onScanRow()
+		}
+		if err := fn(&rows[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newEvidenceStore() *evidenceStore {
@@ -98,6 +126,7 @@ func (s *evidenceStore) GetOperationChange(operationID, changeID string) (*datab
 }
 
 func (s *evidenceStore) GetBookChanges(bookID string) ([]*database.OperationChange, error) {
+	s.bookReads.Add(1)
 	if s.bookChangesErr != nil {
 		return nil, s.bookChangesErr
 	}
@@ -215,10 +244,13 @@ func TestRowAppliedIsPerRow(t *testing.T) {
 		})
 		return err
 	})
-	applyItem(t, first, "effect-004", func(ctx context.Context) error {
-		return first.Effect(ctx, ops.EffectSpec{Name: "touch", Subject: ops.Subject{Type: ops.SubjectBook, ID: "book-004"},
+	// An Effect row's own name ("touched") is unknown to the check, so any
+	// later write on its book defeats it (it fails closed): it gets a book
+	// no other row writes.
+	applyItem(t, first, "effect-005", func(ctx context.Context) error {
+		return first.Effect(ctx, ops.EffectSpec{Name: "touch", Subject: ops.Subject{Type: ops.SubjectBook, ID: "book-005"},
 			Resource: ops.ResBooks}, func() ([]ops.HistoryRow, error) {
-			return []ops.HistoryRow{{BookID: "book-004", Field: "touched", Old: "0", New: "1"}}, nil
+			return []ops.HistoryRow{{BookID: "book-005", Field: "touched", Old: "0", New: "1"}}, nil
 		})
 	})
 	applyItem(t, first, "noop-004", setTitle(first, "book-004", "t book-004"))
@@ -255,7 +287,7 @@ func TestRowAppliedIsPerRow(t *testing.T) {
 		{"repoint-002", true},
 		{"title-002", false}, // book-002 has repoint-002's journal row
 		{"credits-003", true},
-		{"effect-004", true},
+		{"effect-005", true},
 		{"noop-004", true},
 		{"failed-004", false},
 		{"other-op", false}, // op2's marker
@@ -364,8 +396,10 @@ func TestRowAppliedUndoneHistory(t *testing.T) {
 	}
 
 	// The same markers through a Writer that cannot read what they name.
+	// A later write to a batch's field can be in either store, so a Writer
+	// missing either read cannot show anything on a book stands.
 	noChanges := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, HistoryReader: s})
-	mustRowApplied(t, noChanges, "standing", true) // a batch only
+	mustRowApplied(t, noChanges, "standing", false) // a batch only
 	applyItem(t, w, "credits-standing", func(ctx context.Context) error {
 		_, err := w.ModifyBookAuthors(ctx, "book-001", func([]database.BookAuthor) ([]database.BookAuthor, error) {
 			return []database.BookAuthor{{BookID: "book-001", AuthorID: 3}}, nil
@@ -376,7 +410,7 @@ func TestRowAppliedUndoneHistory(t *testing.T) {
 	mustRowApplied(t, noChanges, "credits-standing", false)
 	noHistory := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s})
 	mustRowApplied(t, noHistory, "standing", false)
-	mustRowApplied(t, noHistory, "credits-standing", true)
+	mustRowApplied(t, noHistory, "credits-standing", false)
 	// A batch whose rows are gone from the book's history cannot be shown
 	// to stand.
 	s.history = slices.DeleteFunc(s.history, func(r database.MetadataChangeRecord) bool { return r.BookID == "book-shared" })
@@ -675,9 +709,10 @@ func TestRowAppliedJournalRowMustBeNewest(t *testing.T) {
 	}
 }
 
-// TestJournalOverlap pins which journal FieldNames can write the same
-// thing.
-func TestJournalOverlap(t *testing.T) {
+// TestSubjectOverlap pins which names, from either store, can write the
+// same thing (subjectOf, overlap).
+func TestSubjectOverlap(t *testing.T) {
+	files := map[string]bool{"f1": true}
 	for _, c := range []struct {
 		a, b string
 		want bool
@@ -688,18 +723,36 @@ func TestJournalOverlap(t *testing.T) {
 		{"file.format:f1", "book_file:f1", true},
 		{"book_file:f1", "file.size:f1", true},
 		{"book_file:f1", "book_file:f2", false},
+		{"file.track_number:f1", "book_file:f1:track_number", true}, // a manual file edit in metadata history
+		{"file.format:f1", "book_file:f1:track_number", false},
 		{"file.format:f1", "file_path", true},
 		{"file_path", "book_file:f2", true},
+		{"file.track_number:f1", "track_number", true}, // a manual track edit with no file id
+		{"book_file:f2", "disc_number", true},
+		{"file.format:f1", "f1", true}, // a repoint journaled under the bare file id
+		{"file.format:f2", "f9", true}, // an unknown bare name: anything
 		{"authors", "authors", true},
+		{"authors", "book_authors", true},
+		{"authors", "author_id", false},
+		{"author_id", "author", true},
+		{"author_id", "author_name", true},
+		{"series_id", "series", true},
+		{"series_id", "series_name", true},
+		{"series_id", "series_object", true},
+		{"series_sequence", "series_position", true},
+		{"title", "title", true},
+		{"title", "publisher", false},
+		{"title", "file.format:f1", false},
 		{"authors", "file_path", false},
-		{"authors", "book_file:f1", false},
-		{"touched", "authors", false},
+		{"touched", "title", true}, // an Effect's own name is unknown: it fails closed
+		{"touched", "file.format:f1", true},
 	} {
-		if got := journalOverlap(c.a, c.b); got != c.want {
-			t.Errorf("journalOverlap(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		a, b := subjectOf(c.a, files), subjectOf(c.b, files)
+		if got := overlap(a, b); got != c.want {
+			t.Errorf("overlap(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
-		if got := journalOverlap(c.b, c.a); got != c.want {
-			t.Errorf("journalOverlap(%q, %q) = %v, want %v", c.b, c.a, got, c.want)
+		if got := overlap(b, a); got != c.want {
+			t.Errorf("overlap(%q, %q) = %v, want %v", c.b, c.a, got, c.want)
 		}
 	}
 }
@@ -788,4 +841,172 @@ func TestRowAppliedUndecodableJournal(t *testing.T) {
 	mustRowApplied(t, w, "credits", false)
 	s.changeErr = nil
 	mustRowApplied(t, w, "credits", true)
+}
+
+// foreignJournal appends a journal row of another op, stamped later.
+func (s *evidenceStore) foreignJournal(id, bookID, field string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.changes = append(s.changes, database.OperationChange{ID: id, OperationID: "op-foreign", BookID: bookID,
+		ChangeType: "foreign", FieldName: field, CreatedAt: time.Now().Add(time.Second)})
+}
+
+// foreignHistory appends a metadata history row, stamped later.
+func (s *evidenceStore) foreignHistory(bookID, field string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := `"x"`
+	s.history = append(s.history, database.MetadataChangeRecord{BookID: bookID, Field: field, NewValue: &v,
+		ChangeType: database.ChangeTypeManual, Source: "user_edit", ChangedAt: time.Now().Add(time.Second)})
+}
+
+// TestRowAppliedSeesLaterWritesInEitherStore (05-PR5b round 3 B1): a later
+// write defeats a row's marker whichever store recorded it and whatever it
+// is named there. Each shape a real writer records is planted after the
+// run's write, on another book each:
+//
+//  1. a book field written only to the journal (fs-regroup's "title");
+//  2. a repoint journaled with FieldName the bare file id;
+//  3. a manual track edit recorded in METADATA history as
+//     book_file:<id>:track_number, and one recorded as bare track_number;
+//  4. a credit-list rewrite journaled as book_authors;
+//  5. a series override recorded under its lock key series_name (and, as
+//     a control, under series);
+//  6. a later journal row under a name the check does not know, which
+//     fails closed.
+//
+// A later write to another field, in either store, leaves the row standing.
+func TestRowAppliedSeesLaterWritesInEitherStore(t *testing.T) {
+	s := newEvidenceStore()
+	s.books["book-005"] = &database.Book{ID: "book-005", Title: "t book-005"}
+	s.books["book-006"] = &database.Book{ID: "book-006", Title: "t book-006"}
+	s.files["file-003"] = &database.BookFile{ID: "file-003", BookID: "book-003", FilePath: "/lib/003.m4b"}
+	s.files["file-004"] = &database.BookFile{ID: "file-004", BookID: "book-004", FilePath: "/lib/004.m4b"}
+	w := evidenceWriter(s, "op1", ops.Live)
+	setTrack := func(bookID, fileID string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := w.ModifyBookFile(ctx, bookID, fileID, func(f *database.BookFile) error { f.TrackNumber = 7; return nil })
+			return err
+		}
+	}
+	sid := 9
+	applyItem(t, w, "journal-title", setTitle(w, "book-001", "mine"))
+	applyItem(t, w, "bare-file-id", func(ctx context.Context) error {
+		return w.RepointBookFile(ctx, "book-002", "file-002", database.BookFileLocationOf(s.files["file-002"]),
+			database.BookFileLocation{Path: "/lib/002b.m4b"})
+	})
+	applyItem(t, w, "history-file-track", setTrack("book-003", "file-003"))
+	applyItem(t, w, "history-bare-track", setTrack("book-004", "file-004"))
+	applyItem(t, w, "book-authors", func(ctx context.Context) error {
+		_, err := w.ModifyBookAuthors(ctx, "book-shared", func([]database.BookAuthor) ([]database.BookAuthor, error) {
+			return []database.BookAuthor{{BookID: "book-shared", AuthorID: 4}}, nil
+		})
+		return err
+	})
+	applyItem(t, w, "series-name", func(ctx context.Context) error {
+		_, err := w.ModifyBook(ctx, "book-005", func(b *database.Book) error { b.SeriesID = &sid; return nil })
+		return err
+	})
+	applyItem(t, w, "unknown-name", setTitle(w, "book-006", "mine"))
+	rows := []string{"journal-title", "bare-file-id", "history-file-track", "history-bare-track", "book-authors",
+		"series-name", "unknown-name"}
+	for _, r := range rows {
+		mustRowApplied(t, w, r, true)
+	}
+
+	// Later writes to other fields, in both stores: still standing.
+	s.foreignJournal("o1", "book-001", "publisher")
+	s.foreignHistory("book-001", "publisher")
+	s.foreignJournal("o2", "book-002", "title")
+	s.foreignHistory("book-003", "book_file:file-003:disc_count")
+	s.foreignJournal("o3", "book-shared", "author_id")
+	s.foreignHistory("book-005", "title")
+	for _, r := range rows {
+		mustRowApplied(t, w, r, true)
+	}
+
+	s.foreignJournal("f1", "book-001", "title")
+	s.foreignJournal("f2", "book-002", "file-002")
+	s.foreignHistory("book-003", "book_file:file-003:track_number")
+	s.foreignHistory("book-004", "track_number")
+	s.foreignJournal("f4", "book-shared", "book_authors")
+	s.foreignHistory("book-005", "series_name")
+	s.foreignJournal("f6", "book-006", "orphan_series")
+	for _, r := range rows {
+		mustRowApplied(t, w, r, false)
+	}
+	// The control: the same series edit recorded under "series".
+	s.mu.Lock()
+	s.history[len(s.history)-1].Field = "series"
+	s.mu.Unlock()
+	mustRowApplied(t, w, "series-name", false)
+}
+
+// TestRowAppliedScansTheJournalOncePerRun (05-PR5b round 3 S1): while the
+// per-book index is not usable, RowApplied reads the journal with ONE
+// whole-journal scan per Writer, however many rows and books it checks;
+// once the index is usable it reads each book with GetBookChanges instead.
+// A scan the context stops is an error and is not kept (the next call scans
+// again); a scan that stops on an undecodable row is kept as "not standing"
+// without a rescan. A Writer without a ChangeScan reads per book.
+func TestRowAppliedScansTheJournalOncePerRun(t *testing.T) {
+	s := newEvidenceStore()
+	first := evidenceWriter(s, "op1", ops.Live)
+	ids := []string{"book-001", "book-002", "book-003", "book-004"}
+	for _, id := range ids {
+		applyItem(t, first, "row-"+id, setTitle(first, id, "n "+id))
+	}
+	resumed := func() *Writer {
+		return New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s, ChangeScan: s})
+	}
+	w := resumed()
+	for range 3 {
+		for _, id := range ids {
+			mustRowApplied(t, w, "row-"+id, true)
+		}
+	}
+	if n := s.scans.Load(); n != 1 {
+		t.Fatalf("%d journal scans for 12 checks; want 1", n)
+	}
+	if n := s.bookReads.Load(); n != 0 {
+		t.Fatalf("%d per-book journal reads while the index is not usable; want 0", n)
+	}
+	s.indexUsable.Store(true)
+	mustRowApplied(t, w, "row-book-001", true)
+	if s.scans.Load() != 1 || s.bookReads.Load() != 1 {
+		t.Fatalf("index usable: %d scans, %d book reads; want 1, 1", s.scans.Load(), s.bookReads.Load())
+	}
+	s.indexUsable.Store(false)
+
+	// A canceled scan: an error, not kept.
+	s.changes = append(s.changes, make([]database.OperationChange, journalScanCtxEvery)...)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.onScanRow = cancel
+	stopped := resumed()
+	if ok, err := stopped.RowApplied(ctx, "row-book-001"); ok || err == nil {
+		t.Fatalf("canceled scan: RowApplied = %v, %v; want an error", ok, err)
+	}
+	s.onScanRow = nil
+	before := s.scans.Load()
+	mustRowApplied(t, stopped, "row-book-001", true)
+	if s.scans.Load() != before+1 {
+		t.Fatal("a scan the context stopped was kept")
+	}
+
+	// An undecodable row: not standing, kept.
+	s.scanErr = fmt.Errorf("opchange op9:c9: %w", json.Unmarshal([]byte("{not json"), &struct{}{}))
+	bad := resumed()
+	mustRowApplied(t, bad, "row-book-001", false)
+	mustRowApplied(t, bad, "row-book-002", false)
+	if s.scans.Load() != before+2 {
+		t.Fatalf("an undecodable scan was not kept: %d scans", s.scans.Load()-before)
+	}
+	s.scanErr = nil
+
+	// No ChangeScan: per book.
+	reads := s.bookReads.Load()
+	mustRowApplied(t, evidenceWriter(s, "op1", ops.Live), "row-book-001", true)
+	if s.bookReads.Load() != reads+1 {
+		t.Fatal("a Writer without ChangeScan did not read the book's journal")
+	}
 }

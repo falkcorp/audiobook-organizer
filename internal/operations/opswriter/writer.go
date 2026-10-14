@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
 // last-edited: 2026-10-14
 
@@ -104,6 +104,10 @@ type Config struct {
 	// marker names history of that kind: the marker is not evidence.
 	Changes       ChangeReader
 	HistoryReader BookHistoryReader
+	// ChangeScan, optional, lets RowApplied read the journal with one
+	// whole-journal scan per run while the per-book index is not usable
+	// (bookJournal), instead of one full scan per book checked.
+	ChangeScan ChangeScanner
 }
 
 // Writer is the fenced, journaling write path (ops.Writer). Safe for
@@ -118,6 +122,9 @@ type Writer struct {
 	leaseValid atomic.Pointer[func() bool]
 	leaseLost  atomic.Bool
 	writes     atomic.Int64
+	// journalMemo is RowApplied's whole-journal scan while the index is not
+	// usable (bookJournal).
+	journalMemo journalMemo
 }
 
 var _ ops.Writer = (*Writer)(nil)
