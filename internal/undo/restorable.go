@@ -660,7 +660,8 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	switch c.ChangeType {
 	case "file_move", "organize_rename",
 		"organize_failed", "organize_skipped", "organize_summary",
-		ChangeTypeRepairPlanRecord, ChangeTypeBookPrimaryHandoffRefused, ChangeTypeRepairOwnerApply:
+		ChangeTypeRepairPlanRecord, ChangeTypeBookPrimaryHandoffRefused, ChangeTypeRepairOwnerApply,
+		ChangeTypeAIScanResultApplied:
 		return ""
 	case ChangeTypeTagWrite:
 		// A tag_write row restores exactly OldValue into one book_file. Rows
@@ -833,7 +834,7 @@ func NotRestorableLabel(c *database.OperationChange) string {
 // the operation's own change list keeps them.
 func IsLedgerOnly(c *database.OperationChange) bool {
 	return c != nil && (c.ChangeType == ChangeTypeRepairPlanRecord || c.ChangeType == ChangeTypeBookPrimaryHandoffRefused ||
-		c.ChangeType == ChangeTypeRepairOwnerApply)
+		c.ChangeType == ChangeTypeRepairOwnerApply || c.ChangeType == ChangeTypeAIScanResultApplied)
 }
 
 // IsRestorable reports whether the revert engine can reverse c.

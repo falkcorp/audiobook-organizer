@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
 // last-edited: 2026-10-14
 
@@ -28,6 +28,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // scanApplyStore is what applying a result needs: the shared author merge and the
@@ -431,14 +432,28 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 			return fmt.Errorf("cancelled")
 		}
 		if res.Applied && !dryRun {
-			// Mark ONLY a result whose merge fully succeeded.
-			if merr := s.aiScanStore.MarkResultApplied(p.ScanID, rid); merr != nil {
-				res.Applied = false
-				var sup *database.ScanSupersededError
-				if stderrors.As(merr, &sup) {
-					res.Errors = append(res.Errors, fmt.Sprintf("merged, but scan %d was superseded meanwhile, so the result was not marked applied: %v", p.ScanID, merr))
+			// Mark ONLY a result whose merge fully succeeded. The note that lets an
+			// undo of this operation mark the result pending again is written first
+			// and voided if the mark is refused, like every other row of the ledger.
+			res.Applied = false
+			voidNote, nerr := journalAppliedResult(store, opID, p.ScanID, rid)
+			switch {
+			case nerr != nil:
+				res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result was not marked applied: its undo note could not be recorded: %v", nerr))
+			default:
+				if merr := s.aiScanStore.MarkResultApplied(p.ScanID, rid); merr != nil {
+					if verr := voidNote(); verr != nil {
+						logging.Warn(ctx, "ai scan apply: could not void the undo note of a result that was not marked applied",
+							"scan_id", p.ScanID, "result_id", rid, "err", verr)
+					}
+					var sup *database.ScanSupersededError
+					if stderrors.As(merr, &sup) {
+						res.Errors = append(res.Errors, fmt.Sprintf("merged, but scan %d was superseded meanwhile, so the result was not marked applied: %v", p.ScanID, merr))
+					} else {
+						res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result could not be marked applied: %v", merr))
+					}
 				} else {
-					res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result could not be marked applied: %v", merr))
+					res.Applied = true
 				}
 			}
 		}
@@ -481,4 +496,15 @@ func (s *Server) saveScanApplyReport(ctx context.Context, reporter opsregistry.R
 
 func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterAIScanApplyOp(reg) })
+}
+
+// journalAppliedResult writes the ledger note that ties an applied scan result to
+// the operation, before the result is marked, and returns the function that voids it
+// when the mark is refused.
+func journalAppliedResult(store authorMergeJournalStore, opID string, scanID, resultID int) (void func() error, err error) {
+	row, err := undo.NewAIScanResultAppliedRow(scanID, resultID)
+	if err != nil {
+		return nil, err
+	}
+	return journalStep(store, opID, row)
 }

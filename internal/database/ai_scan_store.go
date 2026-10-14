@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.18.0
+// version: 2.18.1
 // last-edited: 2026-10-14
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -1039,6 +1039,36 @@ func (s *AIScanStore) MarkResultApplied(scanID, resultID int) error {
 		return fmt.Errorf("failed to marshal result: %w", err)
 	}
 
+	return s.db.Set(key, data, pebble.Sync)
+}
+
+// ClearResultApplied marks a result pending again: the merge it recorded was
+// undone (Server.revertOperation), so the review list must offer it once more.
+// A result already pending is left as it is.
+func (s *AIScanStore) ClearResultApplied(scanID, resultID int) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	key := s.k("scan_result:%d:%06d", scanID, resultID)
+	value, closer, err := s.db.Get(key)
+	if err == pebble.ErrNotFound {
+		return fmt.Errorf("result %d for scan %d not found", resultID, scanID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get result: %w", err)
+	}
+	defer closer.Close()
+	var result ScanResult
+	if err := json.Unmarshal(value, &result); err != nil {
+		return fmt.Errorf("failed to unmarshal result: %w", err)
+	}
+	if !result.Applied {
+		return nil
+	}
+	result.Applied, result.AppliedAt = false, nil
+	data, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("failed to marshal result: %w", err)
+	}
 	return s.db.Set(key, data, pebble.Sync)
 }
 

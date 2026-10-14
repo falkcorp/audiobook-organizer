@@ -127,6 +127,11 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 		if c.Voided {
 			continue // the write it describes never happened
 		}
+		if IsLedgerOnly(c) {
+			// Restores nothing and counts in no total: the revert skips it too.
+			report.TotalChanges--
+			continue
+		}
 		// Classify before the reverted check, as the revert does: a
 		// record-only row is never counted as already reverted.
 		if label := NotRestorableLabel(c); label != "" {
