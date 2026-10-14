@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-13
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,10 +50,14 @@ func (p *Plugin) centralizationDef() sdk.OperationDef {
 }
 
 // centralizeConcurrency is the worker-pool size for deluge.centralize. Each
-// item is one BOOK's pending files: disk copies, store writes and, when
-// Deluge storage moves are enabled, Deluge RPCs, so the pool is bounded by what
-// the Deluge daemon and the library disk tolerate rather than by core count.
-// A fixed 4 (deluge.link-backfill sizes its pool min(NumCPU, 8)).
+// item is one connected group of pending files (see the partition in
+// runCentralization): disk copies, store writes and, when Deluge storage moves
+// are enabled, Deluge RPCs, so the pool is bounded by what the Deluge daemon
+// and the library disk tolerate rather than by core count. A fixed 4
+// (deluge.link-backfill sizes its pool min(NumCPU, 8)).
+//
+// An operator pause is honoured between GROUPS, not files: RunItems parks the
+// next group, and the files of a group already running finish first.
 const centralizeConcurrency = 4
 
 // centralizationCheckpoint is the op's liveness record: counts only. It is NOT
@@ -88,7 +93,28 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 		return nil
 	}
 
-	sdk.NewProgress(reporter, total).Start(fmt.Sprintf("Centralizing %d files...", total))
+	// PARTITION: the pool's unit is a connected group of files, never a lone
+	// file. Two pending files are connected when they belong to the same book
+	// OR carry the same Deluge torrent hash, and groups are the connected
+	// components of that relation (so a book holding hashes A and B, and
+	// another book holding B, are one group). Within a group one worker
+	// processes the files one after another. Why:
+	//   - sibling files of one book share a torrent, and ImportToLibraryWith
+	//     can ask Deluge to move that torrent's storage per file, which would
+	//     race a sibling's copy;
+	//   - two BOOKS can hold files of the same torrent too (the relink fixer
+	//     reports this as a hash held "of another book"), so the book alone is
+	//     not enough;
+	//   - each file write recomputes its book's aggregates from the book's file
+	//     rows outside ModifyBook, so two siblings committing together can
+	//     leave a stale snapshot as the last write.
+	// Different components share neither a book nor a torrent.
+	groups := connectedFileGroups(toImport)
+
+	// Progress counts GROUPS (the pool's unit) from Start to Done; the
+	// checkpoint below counts files.
+	prog := sdk.NewProgress(reporter, len(groups))
+	prog.Start(fmt.Sprintf("Centralizing %d files in %d groups...", total, len(groups)))
 
 	var successCount, skipCount, inPlaceCount, protectedCount, notLoadedCount, errCount atomic.Int64
 
@@ -102,44 +128,46 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 		protected = p.cache
 	}
 
-	// ckptMu guards lastErr and orders the liveness checkpoint writes. The
-	// workers set lastErr; the checkpoint is written from the group closure.
+	// ckptMu guards lastErr and completed. The checkpoint itself is written
+	// OUTSIDE ckptMu (workers recording an error must not wait on a database
+	// write), ordered by the completion count: a snapshot older than one
+	// already written is dropped, so the stored checkpoint only moves forward.
 	var (
-		ckptMu    sync.Mutex
-		lastErr   string
-		completed int
+		ckptMu      sync.Mutex
+		lastErr     string
+		completed   int
+		writeMu     sync.Mutex
+		lastWritten int
 	)
 	setLastError := func(msg string) {
 		ckptMu.Lock()
 		lastErr = msg
 		ckptMu.Unlock()
 	}
-	// finishFile counts one handled file and writes the counts-only checkpoint.
+	// finishFile counts one handled file, stamps the stuck-op clock and writes
+	// the counts-only checkpoint.
+	//
+	// The stamp is per FILE on purpose. RunItems reports progress once per
+	// finished group, and a group can hold a long run of slow copies; the
+	// registry's stuck-op watchdog reads only UpdateProgress and TouchLiveness
+	// (Checkpoint does not move it), so per-group liveness would have the
+	// watchdog time out a healthy op, typically on the tail of a run, and a
+	// timed-out op does not resume. TouchLiveness writes nothing and leaves the
+	// progress numbers alone, and it follows real work (a finished copy or a
+	// failed read), so a genuinely wedged copy still goes quiet.
 	finishFile := func() {
+		registry.TouchLiveness(reporter)
 		ckptMu.Lock()
-		defer ckptMu.Unlock()
 		completed++
-		_ = reporter.Checkpoint(centralizationCheckpoint{Completed: completed, Total: total, LastError: lastErr})
-	}
+		snap := centralizationCheckpoint{Completed: completed, Total: total, LastError: lastErr}
+		ckptMu.Unlock()
 
-	// PARTITION: the pool's unit is a BOOK, not a file. A book's pending files
-	// are processed one after another by one worker, so no two workers ever
-	// touch the same book. Sibling files of one book share a Deluge torrent
-	// (DelugeHash), and ImportToLibraryWith can ask Deluge to move that
-	// torrent's storage per file, which would race a sibling's copy; and each
-	// file write recomputes the book's aggregates from its file rows outside
-	// ModifyBook, so two siblings committing together can leave a stale
-	// snapshot as the last write. Different books share neither.
-	byBook := make(map[string]int)
-	var groups [][]*database.BookFileCore
-	for _, bf := range toImport {
-		gi, ok := byBook[bf.BookID]
-		if !ok {
-			gi = len(groups)
-			byBook[bf.BookID] = gi
-			groups = append(groups, nil)
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if snap.Completed > lastWritten {
+			lastWritten = snap.Completed
+			_ = reporter.Checkpoint(snap)
 		}
-		groups[gi] = append(groups[gi], bf)
 	}
 
 	centralizeOne := func(bf *database.BookFileCore) {
@@ -250,8 +278,12 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 	}, registry.RunItemsOptions{
 		ErrMode:     registry.ErrModeCollect,
 		Concurrency: centralizeConcurrency,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Centralizing book %d/%d", i+1, t)
+		// sdk.Progress reserves a start and a done step around the N units
+		// (total = N+2), so the pool reports against the same denominator
+		// and the bar never changes units between Start, the pool and Done.
+		ProgressTotal: len(groups) + 2,
+		Label: func(i, _ int) string {
+			return fmt.Sprintf("Centralizing group %d/%d", i+1, len(groups))
 		},
 	})
 
@@ -262,10 +294,53 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 		"protected_list_not_loaded", notLoadedCount.Load(),
 		"skipped", skipCount.Load(),
 		"errors", errCount.Load())
-	sdk.NewProgress(reporter, total).Done(
+	prog.Done(
 		fmt.Sprintf("Done: %d succeeded, %d already in library (marked imported), %d protected (left pending), "+
 			"%d left pending (Deluge protected list not loaded), %d skipped, %d errors",
 			successCount.Load(), inPlaceCount.Load(), protectedCount.Load(), notLoadedCount.Load(), skipCount.Load(), errCount.Load()),
 	)
 	return runErr
+}
+
+// connectedFileGroups splits files into the connected components of "same book
+// or same Deluge torrent hash" (union-find over book and hash nodes), keeping
+// the order of first appearance for both groups and the files inside each.
+// A file with no hash is connected only through its book.
+func connectedFileGroups(files []*database.BookFileCore) [][]*database.BookFileCore {
+	parent := map[string]string{}
+	find := func(k string) string {
+		if _, ok := parent[k]; !ok {
+			parent[k] = k
+		}
+		for parent[k] != k {
+			parent[k] = parent[parent[k]] // path halving
+			k = parent[k]
+		}
+		return k
+	}
+	union := func(a, b string) {
+		if ra, rb := find(a), find(b); ra != rb {
+			parent[rb] = ra
+		}
+	}
+	bookKey := func(bf *database.BookFileCore) string { return "book:" + bf.BookID }
+	for _, bf := range files {
+		find(bookKey(bf))
+		if bf.DelugeHash != "" {
+			union(bookKey(bf), "hash:"+strings.ToLower(bf.DelugeHash))
+		}
+	}
+	index := map[string]int{}
+	var groups [][]*database.BookFileCore
+	for _, bf := range files {
+		root := find(bookKey(bf))
+		gi, ok := index[root]
+		if !ok {
+			gi = len(groups)
+			index[root] = gi
+			groups = append(groups, nil)
+		}
+		groups[gi] = append(groups[gi], bf)
+	}
+	return groups
 }
