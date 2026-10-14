@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-10-14
 
@@ -176,13 +176,14 @@ type serverAuthorReader interface {
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 }
 
-// serverAuthorWriter: Author rows: create, alias, merge-delete, rename, delete.
-// A merge removes the merged author with MergeDeleteAuthor (aliases moved to the
-// survivor, tombstone in the same batch), never DeleteAuthor + CreateAuthorTombstone.
+// serverAuthorWriter: Author rows: create, alias, rename, delete. A merge removes
+// the merged author through the database.AuthorMergeDeleter capability
+// (database.MergeDeleteAuthorOf: aliases moved to the survivor, tombstone in the
+// same batch), never DeleteAuthor + CreateAuthorTombstone. It is not on this
+// interface because it is not on database.Store.
 type serverAuthorWriter interface {
 	CreateAuthor(name string) (*database.Author, error)
 	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
-	MergeDeleteAuthor(fromID, intoID int) (*database.AuthorMergeDeleteResult, error)
 	DeleteAuthor(id int) error
 	UpdateAuthorName(id int, name string) error
 }

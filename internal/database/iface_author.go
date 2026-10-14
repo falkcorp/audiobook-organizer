@@ -1,5 +1,5 @@
 // file: internal/database/iface_author.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
 // last-edited: 2026-10-14
 
@@ -100,8 +100,11 @@ type AuthorMinter interface {
 }
 
 // AuthorMergeDeleter is the one way an author merged into another is removed.
-// Its own interface because AuthorWriter is at interfacebloat's limit of 8;
-// composed into the same parent as AuthorMinter.
+// It is a capability, not part of Store (Store's flattened width is capped:
+// store_width_test.go): a merge resolves it with AsCapability, or through
+// MergeDeleteAuthorOf, and refuses the merge when the store does not offer it.
+// There is no fallback to DeleteAuthor plus CreateAuthorTombstone: that pair
+// deletes the merged author's aliases. *PebbleStore implements it.
 type AuthorMergeDeleter interface {
 	// MergeDeleteAuthor deletes fromID as DeleteAuthor does, except that its
 	// aliases are MOVED onto intoID (under their own ids) instead of deleted, and
@@ -119,5 +122,4 @@ type AuthorStore interface {
 	AuthorWriter
 	BookAuthorModifier
 	AuthorMinter
-	AuthorMergeDeleter
 }

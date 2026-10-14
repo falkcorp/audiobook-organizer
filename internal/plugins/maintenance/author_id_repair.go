@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
 // last-edited: 2026-10-14
 
@@ -649,6 +649,13 @@ func (p *Plugin) authorIDMergeOne(
 		NormalizedName: norm, DuplicateID: dup.ID, DuplicateName: dup.Name, CanonicalID: canonical.ID,
 		JoinRewrites: []string{}, ScalarRepoints: []string{},
 	}
+	// The delete is the store's merge-delete capability; a store without it
+	// would have to drop the duplicate's aliases with it. Refuse before any book
+	// moves, in a preview too. No DeleteAuthor fallback.
+	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
+		ch.Outcome, ch.Error = authorIDMergeFailed, database.ErrAuthorMergeDeleteUnsupported.Error()
+		return ch, false, 0
+	}
 
 	// The book set is the union of the memdb-or-Pebble relink view and the
 	// Pebble-only durable scan, so a credit only one store can see still moves.
@@ -760,7 +767,7 @@ func (p *Plugin) authorIDMergeOne(
 		ch.Outcome, ch.StillCrediting = authorIDMergeHeld, still
 		log.Warn("author-id-repair: duplicate still credited after moves, NOT deleted",
 			"author_id", dup.ID, "name", dup.Name, "canonical_id", canonical.ID, "still", still)
-	} else if _, delErr := store.MergeDeleteAuthor(dup.ID, canonical.ID); delErr != nil {
+	} else if _, delErr := database.MergeDeleteAuthorOf(store, dup.ID, canonical.ID); delErr != nil {
 		// MergeDeleteAuthor: the duplicate's aliases move to the canonical row and
 		// the tombstone is written with the delete (DeleteAuthor dropped both).
 		ch.Outcome, ch.Error = authorIDMergeFailed, delErr.Error()
