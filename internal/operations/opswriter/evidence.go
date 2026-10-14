@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -8,6 +8,7 @@ package opswriter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -25,7 +26,8 @@ import (
 // batch or operation journal row ids on the item, ops.NoteHistory). A marker
 // can only exist because this run applied that row, so the attempt that
 // wrote it does not matter. History is still read, but only to see whether
-// what the marker names was undone since.
+// what the marker names still stands: not undone, and not overwritten by
+// a later write since (RowApplied).
 //
 // Why not per subject: a run's history for a book proves the run wrote SOME
 // row of that book, not this one. Two rows of one book (title, then
@@ -178,7 +180,8 @@ func (w *Writer) RowApplied(ctx context.Context, rowID string) (bool, error) {
 // nothing older guarantees it), and no other journal row of its book, of
 // any operation and any change type, was recorded at or after it on what it
 // wrote (journalRowsNewest). A row that cannot be found cannot be shown to
-// stand.
+// stand, and neither can one that does not decode, nor any row of a book
+// whose journal holds an undecodable row (fail closed, not an error).
 //
 // A row with no book id has no per-book journal to look in, so only the
 // first two checks apply to it. Nor can any check see a write that recorded
@@ -196,6 +199,11 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 	byBook := map[string][]*database.OperationChange{}
 	for _, id := range ids {
 		c, err := w.cfg.Changes.GetOperationChange(w.cfg.OpID, id)
+		if undecodable(err) {
+			pkgLog.Warn("op %s: journal row %s does not decode; it is not counted as standing: %s",
+				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
+			return false, nil
+		}
 		if err != nil {
 			return false, fmt.Errorf("read journal row %s of op %s: %w", id, w.cfg.OpID, err)
 		}
@@ -208,6 +216,15 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 	}
 	for bookID, named := range byBook {
 		rows, err := w.cfg.Changes.GetBookChanges(bookID)
+		if undecodable(err) {
+			// GetBookChanges fails on an undecodable journal row (once its
+			// index is trusted, on one anywhere in the journal). The row it
+			// could not read could be the later write: fail closed, as for
+			// metadata history, rather than fail the item.
+			pkgLog.Warn("op %s: the operation journal of book %s has a row that does not decode; its journal rows are not counted as standing: %s",
+				logger.SanitizeLogValue(w.cfg.OpID), logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+			return false, nil
+		}
 		if err != nil {
 			return false, fmt.Errorf("read the operation journal of book %s: %w", bookID, err)
 		}
@@ -216,6 +233,14 @@ func (w *Writer) changesStand(ids []string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// undecodable reports whether err is a JSON decode failure of a stored row
+// (as opposed to a failed read): the row is there but cannot be judged.
+func undecodable(err error) bool {
+	var syntax *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	return errors.As(err, &syntax) || errors.As(err, &typ)
 }
 
 // journalRowsNewest reports whether no row of rows other than c itself was
