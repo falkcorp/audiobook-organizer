@@ -18,17 +18,21 @@ write and history are recorded, so a failed, panicking or unrecorded write
 stays listed as "may be partially applied". A run whose writes start being
 refused (it was canceled, or lost its hold on the library scan) stops with
 an error instead of counting the refused items as ordinary failures and
-ending "completed", even when an item swallows the refusal; a chunk whose
+ending "completed", even when an item swallows the refusal or makes the
+write outside its own context (then the whole run fails, since the write
+cannot be pinned on a chunk); a chunk whose
 items all finished cleanly when a run was stopped is still kept, so a
 resume does not redo it. A crash in an item or in any of the op's other
 callbacks is recorded as a failure instead of taking the server down. A run stopped by a server shutdown leaves its
 final summary to the resumed run, so a fixer's follow-up step runs once,
 over every row applied before and after the restart, including rows applied
-in a chunk the restart cut short. (A fixer run that is discarded from
+in a chunk the restart cut short (recognized only on the resumed attempt,
+and only for a row no hold, owner-only flag or guard now stops). (A fixer run that is discarded from
 "awaiting decision" instead of retried never runs its follow-up; a planned
 follow-up adds a third choice there, "Finish without resuming", which runs
 only the follow-up over the rows already applied.) The applied list is stored a row at a time,
-so it has no size cap. A writing run refuses to start when the store cannot
+so it has no size cap, and a run that starts over drops the list its
+abandoned attempt stored. A writing run refuses to start when the store cannot
 record intents, the operation journal or metadata history, instead of
 writing without them. Nothing in production uses the SDK yet:
 the adapter registers a v3 definition on the existing registry (one queue,
