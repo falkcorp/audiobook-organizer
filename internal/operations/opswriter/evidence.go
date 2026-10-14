@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 86a05fa0-d0ef-43d9-a47d-4e1763aad9cc
 // last-edited: 2026-10-14
 
@@ -492,8 +492,8 @@ func standsIn(hist []database.MetadataChangeRecord, journal []journalRow, n *boo
 
 // subject is what one recorded write wrote, as both stores name it.
 //
-//   - file "": the book field part (a Book JSON name, or "authors" for the
-//     credit list).
+//   - file "": the book field part (a Book JSON name; "authors" for the
+//     author_id column and the credit list together, bookFieldAliases).
 //   - file <id>: book_file <id>; part is one of its fields (BookFile JSON
 //     name), or "" for the file row as a whole.
 //   - file everyFile: every book_file of the book.
