@@ -10,7 +10,7 @@
 # Stage 1: Build frontend
 # SHA pinned 2026-06-23 (node:26-alpine manifest-list). Refresh with:
 #   docker buildx imagetools inspect node:26-alpine --format '{{.Manifest.Digest}}'
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a AS frontend-builder
 
 WORKDIR /build/web
 
@@ -24,7 +24,7 @@ RUN npm run build
 # Uses native platform (no cross-compile) so CGO works without cross-toolchain.
 # SHA pinned 2026-10-09 (golang:1.27.2-alpine manifest-list). Keep in step with
 # the Makefile's GOTOOLCHAIN pin.
-FROM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS go-builder
+FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS go-builder
 
 WORKDIR /build
 
