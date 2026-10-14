@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d1a47c63-8e29-4f50-b6a3-90e5c2f1d784
 // last-edited: 2026-10-14
 
@@ -115,6 +115,13 @@ func TestAuthorMergeOp_UndoRestoresTheAuthorItsCreditsAndPrimary(t *testing.T) {
 	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-undo-merge"}))
 	requireSourceDeleted(t, w.st, w.from.ID)
 
+	// The merged author's alias now belongs to the keep author, so the name it
+	// resolved by still resolves (to the author that absorbed it).
+	viaAlias, err := w.st.FindAuthorByAlias("U. From")
+	require.NoError(t, err)
+	require.NotNil(t, viaAlias)
+	require.Equal(t, w.keep.ID, viaAlias.ID)
+
 	// Every row the merge wrote is one the revert can reverse.
 	rows, err := w.st.GetOperationChanges("op-undo-merge")
 	require.NoError(t, err)
@@ -131,6 +138,13 @@ func TestAuthorMergeOp_UndoRestoresTheAuthorItsCreditsAndPrimary(t *testing.T) {
 	require.Equal(t, 4, res.Restored)
 	require.Zero(t, res.Failed)
 	w.requireRestored(t)
+	keepAliases, err := w.st.GetAuthorAliases(w.keep.ID)
+	require.NoError(t, err)
+	require.Empty(t, keepAliases, "the keep author gives the carried alias back")
+	viaAlias, err = w.st.FindAuthorByAlias("U. From")
+	require.NoError(t, err)
+	require.NotNil(t, viaAlias)
+	require.Equal(t, w.from.ID, viaAlias.ID, "and the alias names the restored author again")
 
 	// And a second revert has nothing left to do.
 	_, err = revertOp(t, w.st, "op-undo-merge")
@@ -151,11 +165,54 @@ func TestAIScanApplyOp_UndoRestoresTheMergedAuthor(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-undo-ai"}))
 	requireSourceDeleted(t, w.st, w.from.ID)
+	require.True(t, f.applied(id))
 
-	res, err := revertOp(t, w.st, "op-undo-ai")
+	// The preflight counts the same rows the revert will restore: the note that
+	// ties the result to the operation restores nothing and is in neither.
+	report, err := undo.PreflightUndoConflicts(w.st, "op-undo-ai")
+	require.NoError(t, err)
+	require.Equal(t, 4, report.TotalChanges)
+	require.Zero(t, report.NotRestorable)
+
+	// The server's revert is the one that also marks the result pending again.
+	res, err := f.s.revertOperation("op-undo-ai")
 	require.NoError(t, err)
 	require.Equal(t, 4, res.Restored)
+	require.Equal(t, 4, res.Total)
 	w.requireRestored(t)
+	require.False(t, f.applied(id), "undone means the review list offers the suggestion again")
+
+	// And it can be applied again.
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-undo-ai-2"}))
+	requireSourceDeleted(t, w.st, w.from.ID)
+	require.True(t, f.applied(id))
+}
+
+// A partly undone merge leaves its result applied: the library still holds part of
+// what the result did, and the list must not claim otherwise.
+func TestAIScanApplyOp_APartlyUndoneApplyKeepsItsResultApplied(t *testing.T) {
+	w := newUndoWorld(t)
+	f := newApplyFixture(t)
+	f.st, f.s = w.st, newRelinkOpServer(w.st)
+	f.s.aiScanStore = f.scanStore
+	f.s.pipelineManager = aiscanManagerFor(f)
+	id := f.result(database.ScanSuggestion{CanonicalName: w.keep.Name, KeepID: w.keep.ID, AuthorIDs: []int{w.keep.ID, w.from.ID}, Source: "groups_scan"})
+	def := relinkOpDef(t, f.s.RegisterAIScanApplyOp, handlers.AIScanApplyDefID)
+	raw, err := json.Marshal(handlers.AIScanApplyOpParams{ScanID: f.scan.ID, ResultIDs: []int{id}, DryRun: live()})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-undo-ai-partial"}))
+
+	extra, err := w.st.CreateAuthor("Undo Later Coauthor")
+	require.NoError(t, err)
+	cur, err := w.st.GetBookAuthors(w.coBook)
+	require.NoError(t, err)
+	require.NoError(t, w.st.SetBookAuthors(w.coBook, append(append([]database.BookAuthor{}, cur...),
+		database.BookAuthor{BookID: w.coBook, AuthorID: extra.ID, Role: "author", Position: len(cur)})))
+
+	res, err := f.s.revertOperation("op-undo-ai-partial")
+	require.Error(t, err)
+	require.Equal(t, 1, res.Failed)
+	require.True(t, f.applied(id), "part of the merge is still in the library")
 }
 
 // After the merge, somebody edits one of the books. The revert puts back every

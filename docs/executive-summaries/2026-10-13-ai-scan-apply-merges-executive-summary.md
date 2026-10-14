@@ -39,7 +39,7 @@ Branch `task/03-pr8` (03-PR8, PR #4013).
   author credits back as they were. A book you edited after the merge is left
   alone and reported, and the undo is refused if another author has taken the
   name since. If the history entry cannot be written, that book is simply not
-  moved. This covers the AI scan's Apply and the Authors view's Merge. Merges
+  moved. Undoing an AI Apply also puts its suggestions back on the review list. The merged author's pen-name aliases move to the surviving author and go back on undo. This covers the AI scan's Apply and the Authors view's Merge. Merges
   made before this change stay unrecoverable.
 - **A narrator is no longer merged into the author.** The AI scan flags some
   names as narrators. One of the two ways it reports that was being dropped, so

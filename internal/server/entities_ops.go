@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-10-14
 
@@ -150,10 +150,11 @@ type authorMergeStore interface {
 }
 
 // authorMergeJournalStore: the undo ledger rows, and the aliases a delete cascades
-// (so they can be journaled and restored).
+// (read to be journaled and restored, and recreated on the keep author).
 type authorMergeJournalStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
+	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
 }
 
 // authorMergeSpec is one merge: fold MergeIDs into KeepID.
@@ -493,6 +494,19 @@ func mergeFinish(ctx context.Context, store authorMergeStore, opID string, from,
 		logging.Warn(ctx, "author merge: tombstone not written", "author", from.ID, "into", keep.ID, "err", err)
 		out.Errors = append(out.Errors, fmt.Sprintf(
 			"author %d was merged, but its redirect to author %d could not be written: %v", from.ID, keep.ID, err))
+	}
+	// The author's aliases (pen names) go with it: DeleteAuthor removes them, and
+	// without this a name that resolved to the merged author through one would stop
+	// resolving to anyone. They are recreated on the keep author. The undo row
+	// already lists them, and the revert removes the copies before it gives the
+	// aliases back (audiobooks.RevertService.restoreAuthor). One that cannot be
+	// created (the keep author or another author already has that name) is logged:
+	// the merge itself is done.
+	for _, al := range aliases {
+		if _, err := store.CreateAuthorAlias(keep.ID, al.Name, al.Type); err != nil {
+			logging.Warn(ctx, "author merge: alias not carried to the keep author",
+				"alias", al.Name, "from", from.ID, "into", keep.ID, "err", err)
+		}
 	}
 	return true
 }

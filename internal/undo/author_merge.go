@@ -1,5 +1,5 @@
 // file: internal/undo/author_merge.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b7d21f94-3a68-4e05-9c1b-5f8e0a3d7c26
 // last-edited: 2026-10-14
 
@@ -39,7 +39,43 @@ const (
 	// ChangeTypeAuthorReclassifyDelete: the reclassified author row was deleted.
 	// OldValue is an AuthorSnapshot; NewValue an AuthorReclassifyDelete.
 	ChangeTypeAuthorReclassifyDelete = "author_reclassify_delete"
+	// ChangeTypeAIScanResultApplied: ai.author-scan-apply marked a scan result
+	// applied. NewValue is an AIScanResultApplied. A ledger note (IsLedgerOnly): it
+	// restores nothing itself, and is marked reverted only when the whole operation
+	// is, which is the signal the server's revert wrapper acts on to mark the result
+	// pending again (Server.revertOperation). Without it, undoing an AI apply brought
+	// the authors back while the review list still said "applied".
+	ChangeTypeAIScanResultApplied = "ai_scan_result_applied"
 )
+
+// AIScanResultApplied is NewValue of a ChangeTypeAIScanResultApplied row.
+type AIScanResultApplied struct {
+	ScanID   int `json:"scan_id"`
+	ResultID int `json:"result_id"`
+}
+
+// DecodeAIScanResultApplied reads the scan result a ChangeTypeAIScanResultApplied
+// row names.
+func DecodeAIScanResultApplied(c *database.OperationChange) (AIScanResultApplied, error) {
+	var v AIScanResultApplied
+	if err := json.Unmarshal([]byte(c.NewValue), &v); err != nil || v.ScanID <= 0 || v.ResultID <= 0 {
+		return v, &ReferentError{Reason: ReasonOldValueUnparsable, Detail: fmt.Sprintf("applied scan result of change %s", c.ID)}
+	}
+	return v, nil
+}
+
+// NewAIScanResultAppliedRow builds the ledger note for one applied scan result.
+// The caller sets ID and OperationID.
+func NewAIScanResultAppliedRow(scanID, resultID int) (*database.OperationChange, error) {
+	nv, err := json.Marshal(AIScanResultApplied{ScanID: scanID, ResultID: resultID})
+	if err != nil {
+		return nil, err
+	}
+	return &database.OperationChange{
+		ChangeType: ChangeTypeAIScanResultApplied, FieldName: fmt.Sprintf("ai_scan:%d:result:%d", scanID, resultID),
+		NewValue: string(nv),
+	}, nil
+}
 
 // AuthorAliasSnapshot is one alias of a deleted author.
 type AuthorAliasSnapshot struct {

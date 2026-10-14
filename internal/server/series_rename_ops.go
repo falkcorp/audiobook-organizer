@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	ulid "github.com/oklog/ulid/v2"
@@ -162,7 +163,42 @@ func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error)
 	if res != nil && res.RestoredTypes[undo.ChangeTypeMergeCombineJournal] > 0 {
 		s.invalidateBookDuplicateCaches()
 	}
+	if res != nil {
+		s.reopenAppliedScanResults(id)
+	}
 	return res, err
+}
+
+// reopenAppliedScanResults marks the AI scan results an undone ai.author-scan-apply
+// operation had applied pending again, so the review list offers them once more.
+// The operation wrote one ledger note per result it applied
+// (undo.ChangeTypeAIScanResultApplied); the revert marks those notes reverted only
+// when every restorable row of the operation was, so a result whose merge was only
+// partly undone stays applied. Runs after a partial revert too: it acts on whatever
+// notes ended up reverted. Idempotent.
+func (s *Server) reopenAppliedScanResults(opID string) {
+	if s.aiScanStore == nil {
+		return
+	}
+	rows, err := s.storeForWiring().GetOperationChanges(opID)
+	if err != nil {
+		logging.Warn(context.Background(), "revert: could not read the operation's ledger to reopen its scan results", "operation_id", opID, "err", err)
+		return
+	}
+	for _, c := range rows {
+		if c.ChangeType != undo.ChangeTypeAIScanResultApplied || c.Voided || c.RevertedAt == nil {
+			continue
+		}
+		note, derr := undo.DecodeAIScanResultApplied(c)
+		if derr != nil {
+			logging.Warn(context.Background(), "revert: unreadable scan-result note", "operation_id", opID, "change_id", c.ID, "err", derr)
+			continue
+		}
+		if cerr := s.aiScanStore.ClearResultApplied(note.ScanID, note.ResultID); cerr != nil {
+			logging.Warn(context.Background(), "revert: could not mark a scan result pending again",
+				"operation_id", opID, "scan_id", note.ScanID, "result_id", note.ResultID, "err", cerr)
+		}
+	}
 }
 
 // RegisterSeriesRenameOp registers the "entities.series-rename" v2 OperationDef.
