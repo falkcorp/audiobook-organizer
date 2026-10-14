@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-09-25
+// last-edited: 2026-10-13
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -28,14 +28,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// authorMergeOpParams holds the parameters for the entities.author-merge op. It
-// mirrors the server-package type of the same shape; EnqueueOp json.Marshals
-// params immediately, so the server-side Run func unmarshals by these json
-// tags. The tags MUST stay identical to the server-package definition.
-type authorMergeOpParams struct {
+// AuthorMergeOpParams holds the parameters for the entities.author-merge op. It is
+// exported, and package server decodes the op's params into this same type, so the
+// wire shape has one definition: it used to be declared twice, coupled only by
+// matching JSON tags, and editing one side left the build green.
+type AuthorMergeOpParams struct {
 	KeepID   int    `json:"keep_id"`
 	MergeIDs []int  `json:"merge_ids"`
 	KeepName string `json:"keep_name"`
+	// HonorLocks: leave a book with a user-locked author_name on the author it is
+	// credited to (that author is then kept and reported). Absent means TRUE, like
+	// dry_run's safe default: the Authors & series lane merges many groups from one
+	// click and its request carries no such field. An explicit false restores the
+	// old "the user chose these ids" behaviour.
+	HonorLocks *bool `json:"honor_locks,omitempty"`
 }
 
 // entitiesLog is the package logger (the handlers here logged through slog
@@ -704,6 +710,8 @@ func (h *Handler) MergeAuthors(c *gin.Context) {
 	var req struct {
 		KeepID   int   `json:"keep_id" binding:"required"`
 		MergeIDs []int `json:"merge_ids" binding:"required"`
+		// HonorLocks is optional; absent means true (see AuthorMergeOpParams).
+		HonorLocks *bool `json:"honor_locks"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
@@ -721,10 +729,11 @@ func (h *Handler) MergeAuthors(c *gin.Context) {
 		return
 	}
 
-	params := authorMergeOpParams{
-		KeepID:   req.KeepID,
-		MergeIDs: req.MergeIDs,
-		KeepName: keepAuthor.Name,
+	params := AuthorMergeOpParams{
+		KeepID:     req.KeepID,
+		MergeIDs:   req.MergeIDs,
+		KeepName:   keepAuthor.Name,
+		HonorLocks: req.HonorLocks,
 	}
 	opID, ok := h.enqueueEntityOp(c, "entities.author-merge", params)
 	if !ok {
