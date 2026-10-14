@@ -6,9 +6,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,4 +146,35 @@ func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	viaAlias, ok := srv.opRegistry.Def(formerReconcileScanID)
 	require.True(t, ok)
 	assert.Equal(t, reconcileScanDefIDV2, viaAlias.ID)
+}
+
+// Drives the registered Run end to end: the heartbeat hook must reach the
+// reporter's liveness clock (TouchLiveness), Cancel must be honored with no
+// preview saved (the strict store mock fails on any unexpected write), and a call with no params at all (what the retired op was
+// enqueued with, and what an alias caller may still send) must not fail to decode.
+func TestReconcileScanOp_RunStampsLivenessAndHonorsCancel(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+	store, ok := srv.store.(*mocks.MockStore)
+	require.True(t, ok)
+	store.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return([]database.BookCore{
+		{ID: "b1", Title: "synthetic", FilePath: filepath.Join(t.TempDir(), "gone.m4b")},
+	}, nil).Maybe()
+
+	store.EXPECT().UpdateOpProgressV2(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	def, ok := srv.opRegistry.Def(reconcileScanDefIDV2)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var touches atomic.Int64
+	rep := opsregistry.NewDBReporterForTestWithTouch(ctx, "op-scan", reconcileScanDefIDV2, "reconcile", "", "", store, nil,
+		slog.New(slog.DiscardHandler), func() {
+			touches.Add(1)
+			cancel() // the first heartbeat is the stat worker's; cancel from there
+		})
+
+	err := def.Run(ctx, nil, rep)
+	require.ErrorIs(t, err, context.Canceled, "empty params must decode and Cancel must stop the scan")
+	assert.GreaterOrEqual(t, touches.Load(), int64(1), "the scan must stamp the reporter's liveness clock")
 }
