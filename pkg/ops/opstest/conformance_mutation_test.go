@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/conformance_mutation_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4f2c63-1e8b-4d57-b0a9-5c3e7f1d2b86
 // last-edited: 2026-10-14
 
@@ -373,6 +373,126 @@ func TestCrashResumeCountsCommittedItems(t *testing.T) {
 	}
 }
 
+// crashFixture is a synthetic clean run of four items in two chunks of two
+// and a CrashMidChunk(1, 0) + Resume pair that satisfies every expectation of
+// checkCrash, mid-chunk included. A test changes one thing and asserts the
+// one message that follows; the unchanged fixture is each test's twin.
+func crashFixture() (*suite, crashPair) {
+	keys := []string{"book-001", "book-002", "book-003", "book-004"}
+	total := int64(4)
+	clean := &Outcome{Summary: ops.Summary{Done: 4}}
+	for i, k := range keys {
+		clean.Items = append(clean.Items, ItemEvent{Key: k, Chunk: i / 2, Index: i % 2})
+	}
+	pre := &Outcome{Crashed: true, Order: ops.Snapshot, ResumePolicy: ops.ResumeContinue,
+		Items: []ItemEvent{
+			{Key: keys[0], Chunk: 0, Done: true, Committed: true},
+			{Key: keys[1], Chunk: 0, Index: 1, Done: true, Committed: true},
+			{Key: keys[2], Chunk: 1, Done: true}, // done, its chunk not recorded: the crash hit mid-chunk
+		},
+		Chunks: []ChunkEvent{{Chunk: 0, Keys: keys[:2], Done: true}, {Chunk: 1, Keys: keys[2:]}},
+		Ledger: &database.Ledger{ChunkCount: 2, Done: []byte{0b01}, Items: database.LedgerItems{Done: 2}, ChunksDone: 1}}
+	post := &Outcome{State: state.V3Succeeded, Order: ops.Snapshot, ResumePolicy: ops.ResumeContinue,
+		Items: []ItemEvent{
+			{Key: keys[2], Chunk: 1, Done: true, Committed: true},
+			{Key: keys[3], Chunk: 1, Index: 1, Done: true, Committed: true},
+		},
+		Chunks:  []ChunkEvent{{Chunk: 1, Keys: keys[2:], Done: true}},
+		Summary: ops.Summary{Done: 4},
+		Progress: []ops.ProgressSnapshot{{Done: 2, Total: &total},
+			{Done: 4, Total: &total, Chunks: &ops.ChunkProgress{Done: 2, Total: 2, Size: 2}}}}
+	return &suite{clean: clean}, crashPair{label: "CrashMidChunk(1, 0)", chunk: 1, pre: pre, post: post}
+}
+
+// crashMessages is what checkCrash reports for the pair.
+func crashMessages(t *testing.T, s *suite, p crashPair, mid bool) []string {
+	t.Helper()
+	rec := newRecorder(t)
+	rec.Run(AssertCrashMidChunkNoRerun, func(tt tester) { s.checkCrash(tt, p, mid) })
+	return rec.messages(AssertCrashMidChunkNoRerun)
+}
+
+// expectOneMessage asserts the pair fails with exactly one message holding
+// want, and its unchanged twin fails with none.
+func expectOneMessage(t *testing.T, mutate func(*crashPair), mid bool, want string) {
+	t.Helper()
+	s, p := crashFixture()
+	if got := crashMessages(t, s, p, mid); len(got) > 0 {
+		t.Fatalf("the unchanged fixture must pass checkCrash, it reported %v", got)
+	}
+	mutate(&p)
+	got := crashMessages(t, s, p, mid)
+	if len(got) != 1 || !strings.Contains(got[0], want) {
+		t.Fatalf("checkCrash reported %v; want exactly one message containing %q", got, want)
+	}
+}
+
+// TestCrashResumeFinishSeesEveryAttemptsDone: the Done a resumed attempt's
+// Finish sees is a clean run's. A resumed Finish that saw only its own
+// attempt's items would report Done 2 where a clean run reports 4, and
+// nothing else in the pair says so: the items are all committed, the
+// progress ends complete. A job that resumes from zero is exempt: it counts
+// afresh by design.
+func TestCrashResumeFinishSeesEveryAttemptsDone(t *testing.T) {
+	t.Parallel()
+	t.Run("continue", func(t *testing.T) {
+		t.Parallel()
+		for _, mid := range []bool{false, true} {
+			expectOneMessage(t, func(p *crashPair) { p.post.Summary.Done = 2 }, mid,
+				"the resumed attempt's Finish got Done 2, a clean run's 4")
+		}
+	})
+	t.Run("from_zero_exempt", func(t *testing.T) {
+		t.Parallel()
+		s, p := crashFixture()
+		p.post.ResumePolicy = ops.ResumeFromZero
+		p.post.Summary.Done = 2
+		if got := crashMessages(t, s, p, false); len(got) > 0 {
+			t.Fatalf("a job that resumes from zero counts afresh, yet checkCrash reported %v", got)
+		}
+	})
+}
+
+// TestCrashMidChunkExpectations: each expectation of CrashMidChunk's strong
+// form is caught by a pair built to break it alone. They are not redundant
+// with the rest of the block: the resumed items as a set pass the first
+// two, and the progress and counts expectations hold nothing else.
+//
+//   - resumes from the chunk's first item: a resume that runs the same set
+//     of items starting from the middle of the chunk keeps the set equal;
+//   - progress starts at the ledger's folded Done: a resume that starts
+//     above the folded count never goes backwards, so progress_monotone
+//     passes it;
+//   - an item outside the crashed chunk runs once: only a start the crashed
+//     attempt itself repeated shows here, the rest is the set equality;
+//   - an item of the crashed chunk runs at most twice.
+func TestCrashMidChunkExpectations(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*crashPair)
+		want   string
+	}{
+		{"resumes_from_first_item", func(p *crashPair) {
+			p.post.Items[0], p.post.Items[1] = p.post.Items[1], p.post.Items[0] // same set, last item first
+		}, "the resume did not re-run chunk 1 from its first item book-003"},
+		{"progress_starts_at_ledger", func(p *crashPair) {
+			p.post.Progress[0].Done = 3 // the folded count is 2
+		}, "the resume's progress starts at 3, not at the ledger's folded 2"},
+		{"outside_chunk_runs_once", func(p *crashPair) {
+			p.pre.Items = append(p.pre.Items, ItemEvent{Key: "book-001", Chunk: 0, Done: true, Committed: true})
+		}, "item book-001 outside the crashed chunk ran 2 times (exactly 1)"},
+		{"crashed_chunk_item_at_most_twice", func(p *crashPair) {
+			p.pre.Items = append(p.pre.Items, ItemEvent{Key: "book-003", Chunk: 1, Done: true})
+		}, "item book-003 of the crashed chunk ran 3 times (at most 2)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			expectOneMessage(t, tc.mutate, true, tc.want)
+		})
+	}
+}
+
 // TestCatches_AppendOnlyLie: a paged source over book ids claims AppendOnly,
 // but a book inserted with a smaller id lands below the cursor, where the
 // resumed run never looks. The Snapshot twin makes no such claim.
@@ -415,6 +535,48 @@ func TestCatches_NonIdempotentItem(t *testing.T) {
 	}
 	expectCaught(t, conform(t, w, logDef("opstest.broken.append-log", true)),
 		conform(t, w, logDef("opstest.put-value", false)), AssertIdempotentItem, true)
+}
+
+// TestCatches_ResumeDependentEffect: an Item whose Effect depends on
+// rc.Resumed() writes "true" when it runs in a resumed attempt and "false"
+// otherwise. Each run over its own end state leaves the same World (a second
+// live run is not resumed, so it rewrites "false"), so a check of the second
+// run alone passes it; a crash + resume leaves a World where the items the
+// resume ran hold "true", which differs from a clean run's. Only the
+// crash-and-resume comparison of idempotent_item can see it. The twin writes
+// a constant.
+func TestCatches_ResumeDependentEffect(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books := w.Books()
+	stampDef := func(id string, byResumed bool) ops.Definition {
+		return ops.Batch(id, ops.BatchSpec[struct{}, database.Book, titleResult]{
+			Common: common("Stamp every book", ops.Writes(ops.ResBooks)),
+			Source: bookSource(books),
+			Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+				sub := ops.Subject{Type: ops.SubjectBook, ID: b.ID}
+				v := "stamped"
+				if byResumed { // the bug: the effect depends on how many attempts the run took
+					v = fmt.Sprint(rc.Resumed())
+				}
+				return rc.Writer().Effect(rc.Context(), ops.EffectSpec{Name: "opstest.stamp", Subject: sub},
+					func() ([]ops.HistoryRow, error) { return nil, books.PutValue(sub, "stamp", v) })
+			},
+			Finish: titleFinish,
+		})
+	}
+	broken, twin := conform(t, w, stampDef("opstest.broken.resume-stamp", true)),
+		conform(t, w, stampDef("opstest.stamp", false))
+	expectCaught(t, broken, twin, AssertIdempotentItem, true)
+	msgs := broken.messages(AssertIdempotentItem)
+	if !strings.Contains(msgs[0], "+ Resume left a different World than a clean run") {
+		t.Fatalf("idempotent_item failed for another reason than the crash + resume World: %s", msgs[0])
+	}
+	for _, m := range msgs {
+		if strings.Contains(m, "second run") {
+			t.Fatalf("the second live run alone must pass this def (it is not resumed): %s", m)
+		}
+	}
 }
 
 // TestCatches_PartitionStraddle: a chunker that groups by partition but cuts

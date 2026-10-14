@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: be635650-8d61-463e-b257-fce48c067cd3
 // last-edited: 2026-10-14
 
@@ -86,14 +86,24 @@ func TestWorldStoreServesEveryCapability(t *testing.T) {
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	// go test runs a package's tests in its source directory. runtime.Caller
-	// is not usable here: CI builds with -trimpath, which turns the file name
-	// into an import path that does not exist on disk.
-	wd, err := os.Getwd()
+	// go test runs a package's tests in its source directory, so the root is
+	// the nearest parent holding go.mod. runtime.Caller is not usable here:
+	// CI builds with -trimpath, which turns the file name into an import path
+	// that does not exist on disk. (Same walk as internal/arch's repoRoot.)
+	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	return filepath.Join(wd, "..", "..", "..")
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found in any parent directory")
+		}
+		dir = parent
+	}
 }
 
 // registryCapabilities lists, sorted and unique, the type argument of every
