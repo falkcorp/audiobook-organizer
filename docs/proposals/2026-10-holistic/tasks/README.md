@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/README.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 2f8c6a4e-9b1d-4e73-8a5c-6d0f3b2e7c19 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-14 -->
 
 # Task briefs for the October 2026 holistic roadmap
 
@@ -11,14 +11,14 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 
 | Count | Value |
 |---|---|
-| Briefs | 151 |
-| Sonnet / Opus | 122 / 29 |
+| Briefs | 154 |
+| Sonnet / Opus | 124 / 30 |
 | Wave 0 | 25 |
-| Wave 1 | 65 |
+| Wave 1 | 66 |
 | Wave 2 | 36 |
 | Wave F | 19 |
-| Wave 3 | 5 |
-| Wave 4 | 1 |
+| Wave 3 | 6 |
+| Wave 4 | 2 |
 
 ## How to run one
 
@@ -119,8 +119,9 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | [05-PR3](05/05-PR3.md) | Write fence, hold the exclusive key until the goroutine exits, per-row cancel in Repairs apply | 1 | opus | M | 05-PR1 |
 | [05-PR4](05/05-PR4.md) | `opv3:` keyspace, migration 065, v2 mirror | 1 | opus | L | 05-PR1, 05-PR3 |
 | [05-PR5](05/05-PR5.md) | `pkg/ops` SDK, chunk-leasing Batch runner, fenced Writer, v2 adapter | 1 | opus | L | 05-PR3, 05-PR4, 08-X2, 07-R2, 07-R3, 07-R4, 11-PR4 |
+| [05-PR5b](05/05-PR5b.md) | Fixer resume proof: count a row as already applied only with this run's own history evidence | 1 | opus | S | 05-PR5 |
 | [05-PR6](05/05-PR6.md) | `opstest` harness and `Conformance` (fault injection for chunk leasing) | 1 | opus | M | 05-PR5 |
-| [05-PR7](05/05-PR7.md) | One op catalog, a rewritten `oplint`, and a startup ledger check | 1 | opus | M | 05-PR5, 05-PR6, 07-S3, 01-P3, 07-R2, 07-R3, 07-R4, 01-P81a, 04-P6, 04-P7, 04-P13 |
+| [05-PR7](05/05-PR7.md) | One op catalog, a rewritten `oplint`, and a startup ledger check | 1 | opus | M | 05-PR5, 05-PR5b, 05-PR6, 07-S3, 01-P3, 07-R2, 07-R3, 07-R4, 01-P81a, 04-P6, 04-P7, 04-P13 |
 | [05-PR8](05/05-PR8.md) | One schedule declaration (`ops.Schedule`) and a cron evaluator in the TaskScheduler | 1 | sonnet | M | 05-PR5, 05-PR7, 04-P1, 04-P4a, 04-P4b, 04-P4c, 04-P4d, 04-P4e, 04-P4f, 04-P9, 04-P12 |
 | [05-PR9](05/05-PR9.md) | `/api/v3/ops/*` census, timeline and SSE endpoints | 1 | sonnet | M | 05-PR4, 05-PR5, 05-PR8, 08-X2 |
 | [06-P3](06/06-P3.md) | Ship the pprof tag in the normal deploy build; the committed Makefile owns the build flags | 1 | sonnet | S | 07-C3, 06-P1 |
@@ -148,7 +149,7 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | [01-P76](01/01-P76.md) | Delete internal/download and its config | 2 | sonnet | S | 07-C1, 01-P79a, 10-PR0, 04-P10 |
 | [01-P80](01/01-P80.md) | Remove the 11 unread Settings fields and their UI | 2 | sonnet | M | 01-P76, 01-P79a, 04-P10, 01-P79b, 01-P79c |
 | [01-P81b](01/01-P81b.md) | Retire the reading-state routes (books/:id aliases and status repair) | 2 | sonnet | S | 01-P81a, 01-P72, 03-PR12, 01-P3 |
-| [01-P81c](01/01-P81c.md) | Retire the collections and playlist-export routes | 2 | sonnet | S | 01-P81a, 01-P72, 03-PR12, 01-P3 |
+| [01-P81c](01/01-P81c.md) | Retire the playlist M3U export route (collection routes KEPT) | 2 | sonnet | S | 01-P81a, 01-P72, 03-PR12, 01-P3 |
 | [01-P81d](01/01-P81d.md) | Retire the audiobook alternative-titles, path-history and rescan routes | 2 | sonnet | S | 01-P81a, 01-P72, 03-PR12, 01-P3 |
 | [01-P81e](01/01-P81e.md) | Retire the narrator, work-stats and entity-tag routes | 2 | sonnet | S | 01-P81a, 01-P72, 03-PR12, 01-P3 |
 | [01-P81f](01/01-P81f.md) | Retire the provider-throttle and metadata-fields routes | 2 | sonnet | S | 01-P81a, 01-P72, 03-PR12, 01-P3 |
@@ -202,7 +203,9 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | [06-P4](06/06-P4.md) | Always-on runtime flight recorder with watchdog and search-stall snapshots | 3 | opus | M | 05-PR5 |
 | [06-P9](06/06-P9.md) | Typecheck with TypeScript 7 (tsc), keep TypeScript 6 (tsc6) for typescript-eslint | 3 | sonnet | S | none |
 | [07-F1](07/07-F1.md) | generate TypeScript types from Go structs with tygo | 3 | sonnet | M | 07-C3, 07-G4, 01-T2 |
+| [07-F5a](07/07-F5a.md) | Collections backend: owner-evaluated dynamic collections, relative dates, atomic add/remove books, permissions on auth | 3 | sonnet | L | 01-P81c |
 | [07-F4](07/07-F4.md) | delete `docs/api/openapi.json` | 4 | sonnet | S | 07-F1 |
+| [07-F5b](07/07-F5b.md) | Collections page in the web UI (static and dynamic), visible in ABS | 4 | sonnet | M | 07-F5a |
 
 ## Per-workstream indexes
 
