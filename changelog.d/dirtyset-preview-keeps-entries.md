@@ -1,0 +1,1 @@
+- A preview run of a DirtySet op no longer deletes the dirty entries it read. It wrote nothing, so the live run that followed found those subjects already clean and skipped them. No op in production uses a DirtySet source yet, so nothing was affected.
