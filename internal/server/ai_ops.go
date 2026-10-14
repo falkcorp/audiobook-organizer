@@ -1,5 +1,5 @@
 // file: internal/server/ai_ops.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-14
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -109,6 +110,20 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 			applied := 0
 			var applyErrors []string
 
+			// A merge or alias suggestion removes the variant author through the
+			// store's merge-delete capability. Without it the variant's aliases
+			// could only be deleted with it, so the run is refused before any book
+			// is moved; there is no DeleteAuthor fallback.
+			for _, sug := range suggestions {
+				if sug.Action != "merge" && sug.Action != "alias" {
+					continue
+				}
+				if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
+					return fmt.Errorf("ai.author-merge-apply: nothing applied: %w", database.ErrAuthorMergeDeleteUnsupported)
+				}
+				break
+			}
+
 			_ = progress.Log("info", fmt.Sprintf("Starting AI author review apply: %d suggestion(s)", total), nil)
 
 			for i, sug := range suggestions {
@@ -173,7 +188,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 						// writes the tombstone in the same batch: DeleteAuthor then
 						// CreateAuthorTombstone dropped the aliases, so a pen name
 						// resolved to nobody.
-						if _, err := store.MergeDeleteAuthor(mergeID, sug.KeepID); err != nil {
+						if _, err := database.MergeDeleteAuthorOf(store, mergeID, sug.KeepID); err != nil {
 							applyErrors = append(applyErrors, fmt.Sprintf("delete author %d: %v", mergeID, err))
 						}
 					}
@@ -214,7 +229,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 							// legacy AuthorID, which MergeDeleteAuthor repoints. It also
 							// carries the variant's own aliases to KeepID and writes the
 							// tombstone in the same batch, as in the merge case above.
-							if _, err := store.MergeDeleteAuthor(mergeID, sug.KeepID); err != nil {
+							if _, err := database.MergeDeleteAuthorOf(store, mergeID, sug.KeepID); err != nil {
 								applyErrors = append(applyErrors, fmt.Sprintf("delete aliased author %d: %v", mergeID, err))
 							}
 						}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
 // last-edited: 2026-10-14
 
@@ -260,4 +260,55 @@ func writtenIDs(ids func() []string) func(string) (*int, bool) {
 		}
 		return nil, false
 	}
+}
+
+// noMergeDeleteStore is a Store without the AuthorMergeDeleter capability:
+// embedding the interface hides *PebbleStore's MergeDeleteAuthor, and it does
+// not unwrap to the store underneath.
+type noMergeDeleteStore struct{ database.Store }
+
+// A store that cannot merge-delete makes every merge path here refuse before any
+// credit moves. Falling back to DeleteAuthor would delete the merged author's
+// aliases with it.
+func TestMergePaths_AStoreWithoutTheMergeDeleteCapabilityRefuses(t *testing.T) {
+	// Each path gets its own authors and book, so one path's mistake cannot
+	// hide another's.
+	world := func(t *testing.T, name string) (*database.PebbleStore, *database.Author, *database.Author, string) {
+		t.Helper()
+		s := newRelinkTrashedStore(t)
+		from, err := s.CreateAuthor("Capless From " + name)
+		require.NoError(t, err)
+		into, err := s.CreateAuthor("Capless Into " + name)
+		require.NoError(t, err)
+		return s, from, into, mkRelinkTrashedBook(t, s, "capless-"+name, from.ID, false)
+	}
+	untouched := func(t *testing.T, s *database.PebbleStore, from *database.Author, book string) {
+		t.Helper()
+		still, err := s.GetAuthorByID(from.ID)
+		require.NoError(t, err)
+		require.NotNil(t, still)
+		require.Equal(t, from.ID, still.ID, "the author was not deleted")
+		assertCreditedTo(t, s, book, from.ID, false)
+	}
+
+	t.Run("mergeAuthorInto", func(t *testing.T) {
+		s, from, into, book := world(t, "merge")
+		hidden := noMergeDeleteStore{Store: s}
+		p := &Plugin{deps: fakeDeps{store: hidden}}
+		n, err := p.mergeAuthorInto(context.Background(), *from, *into, false, slog.Default())
+		require.ErrorIs(t, err, database.ErrAuthorMergeDeleteUnsupported)
+		require.Zero(t, n, "no credit moved")
+		untouched(t, s, from, book)
+	})
+	t.Run("author-id-repair", func(t *testing.T) {
+		s, from, into, book := world(t, "idrepair")
+		hidden := noMergeDeleteStore{Store: s}
+		p := &Plugin{deps: fakeDeps{store: hidden}}
+		ch, wrote, ledger := p.authorIDMergeOne(hidden, false, "op-capless", "capless", *from, *into, slog.Default())
+		require.Equal(t, authorIDMergeFailed, ch.Outcome)
+		require.Contains(t, ch.Error, "AuthorMergeDeleter")
+		require.False(t, wrote, "nothing written")
+		require.Zero(t, ledger)
+		untouched(t, s, from, book)
+	})
 }

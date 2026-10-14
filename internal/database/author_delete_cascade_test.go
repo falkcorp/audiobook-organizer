@@ -1,5 +1,5 @@
 // file: internal/database/author_delete_cascade_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5f2b8d14-7c39-4a60-b1e8-0d6a3c9f2e57
 // last-edited: 2026-10-14
 
@@ -205,3 +205,43 @@ func TestAuthorNameIndexOnRestore(t *testing.T) {
 		})
 	}
 }
+
+// MergeDeleteAuthor is a capability, not part of Store. MergeDeleteAuthorOf
+// resolves it, looking through a decorator that unwraps, and refuses (writing
+// nothing) for a store that does not offer it.
+func TestMergeDeleteAuthorOf_ResolvesTheCapabilityOrRefuses(t *testing.T) {
+	st, err := NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	st.WaitForWarmup()
+	t.Cleanup(func() { _ = st.Close() })
+	from, err := st.CreateAuthor("Cap From")
+	require.NoError(t, err)
+	into, err := st.CreateAuthor("Cap Into")
+	require.NoError(t, err)
+	_, err = st.CreateAuthorAlias(from.ID, "C. From", "pen_name")
+	require.NoError(t, err)
+
+	// Embedding the interface hides the method; no Unwrap, so nothing to find.
+	hidden := struct{ Store }{Store: st}
+	_, err = MergeDeleteAuthorOf(hidden, from.ID, into.ID)
+	require.ErrorIs(t, err, ErrAuthorMergeDeleteUnsupported)
+	still, err := st.GetAuthorByID(from.ID)
+	require.NoError(t, err)
+	require.Equal(t, from.ID, still.ID, "refused means nothing deleted")
+	alias, err := st.FindAuthorByAlias("C. From")
+	require.NoError(t, err)
+	require.Equal(t, from.ID, alias.ID, "and the alias untouched")
+
+	// A decorator that unwraps to the Pebble store reaches the capability.
+	res, err := MergeDeleteAuthorOf(unwrappingStore{Store: st}, from.ID, into.ID)
+	require.NoError(t, err)
+	require.Len(t, res.MovedAliases, 1)
+	alias, err = st.FindAuthorByAlias("C. From")
+	require.NoError(t, err)
+	require.Equal(t, into.ID, alias.ID)
+}
+
+// unwrappingStore is a decorator that opts in to AsCapability's unwrap.
+type unwrappingStore struct{ Store }
+
+func (u unwrappingStore) Unwrap() Store { return u.Store }

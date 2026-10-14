@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-10-14
 
@@ -149,9 +149,9 @@ type authorMergeStore interface {
 	// GetAuthorByName: whether the merged author holds its own name entry, read
 	// for the delete row journaled before the merge-delete.
 	GetAuthorByName(name string) (*database.Author, error)
-	// MergeDeleteAuthor deletes the merged author, moves its aliases onto the keep
-	// author and writes the tombstone, in one batch.
-	database.AuthorMergeDeleter
+	// The merge-delete itself (database.AuthorMergeDeleter) is a capability, not
+	// part of this interface: mergeAuthorsInto resolves it from the store and
+	// refuses the whole merge when the store does not offer it.
 }
 
 // authorMergeJournalStore: the undo ledger rows, and the aliases the merge moves
@@ -249,6 +249,15 @@ func mergeAuthorsInto(
 ) (out authorMergeOutcome, cancelled bool) {
 	keepID := spec.KeepID
 	out.MergedIDs = make(map[int]bool, len(spec.MergeIDs))
+
+	// The merge-delete is a store capability (database.AuthorMergeDeleter). A
+	// store without it cannot remove a merged author without deleting its
+	// aliases, so the merge is refused here, before any book is moved; there is
+	// no DeleteAuthor fallback.
+	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
+		out.Errors = append(out.Errors, fmt.Sprintf("nothing merged into author %d: %v", keepID, database.ErrAuthorMergeDeleteUnsupported))
+		return out, false
+	}
 
 	// GetAuthorByID FOLLOWS the author tombstone: asked for a merged-away id it
 	// answers with the author it was merged into. An answer whose ID is not the one
@@ -517,7 +526,7 @@ func mergeFinish(ctx context.Context, store authorMergeStore, opID string, from,
 		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: undo row not recorded: %v", from.ID, err))
 		return false
 	}
-	res, err := store.MergeDeleteAuthor(from.ID, keep.ID)
+	res, err := database.MergeDeleteAuthorOf(store, from.ID, keep.ID)
 	if err != nil {
 		if verr := void(); verr != nil {
 			logging.Warn(ctx, "author merge: could not void the undo row of a refused delete", "author", from.ID, "err", verr)

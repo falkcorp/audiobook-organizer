@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-10-14
 
@@ -304,6 +304,13 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 // instead of being destroyed with it.
 func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author, dryRun bool, log *slog.Logger) (int, error) {
 	store := p.deps.OpsStore()
+	// The delete at the end is the store's merge-delete capability. Without it
+	// the merged author could only be deleted with its aliases, so refuse before
+	// any credit moves (a preview too: it must not promise a merge the apply
+	// refuses). No DeleteAuthor fallback.
+	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
+		return 0, fmt.Errorf("merge author %d into %d: %w", from.ID, into.ID, database.ErrAuthorMergeDeleteUnsupported)
+	}
 
 	books, err := store.GetBooksByAuthorIDForRelinkCore(from.ID)
 	if err != nil {
@@ -342,7 +349,7 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 	// names) move to the survivor and the tombstone redirecting the old id is
 	// written in the same batch. DeleteAuthor cascades the aliases away, so a pen
 	// name of a merged author resolved to nobody.
-	if _, err := store.MergeDeleteAuthor(from.ID, into.ID); err != nil {
+	if _, err := database.MergeDeleteAuthorOf(store, from.ID, into.ID); err != nil {
 		return relinked, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
 	return relinked, nil

@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.145.0
+// version: 1.146.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-14
 
@@ -141,8 +141,10 @@ type MockStore struct {
 	CreateAuthorFunc    func(name string) (*Author, error)
 	MintAuthorFunc      func(name string) (*Author, bool, error)
 	DeleteAuthorFunc    func(id int) error
-	// MergeDeleteAuthorFunc overrides MergeDeleteAuthor; unset, it is DeleteAuthor
-	// then CreateAuthorTombstone (so a test that stubs those two sees the merge).
+	// MergeDeleteAuthorFunc overrides MergeDeleteAuthor, which makes MockStore
+	// offer the AuthorMergeDeleter capability (it is not on Store). Unset, the
+	// test double approximates it with DeleteAuthor then CreateAuthorTombstone, so
+	// a test that stubs those two sees the merge; production code never does.
 	MergeDeleteAuthorFunc func(fromID, intoID int) (*AuthorMergeDeleteResult, error)
 	// Count overrides. Without these the getters below are hardcoded to empty
 	// maps, so a test asserting on "author has N books" cannot express its own

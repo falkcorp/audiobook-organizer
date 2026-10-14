@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_author_merge_delete.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 555c9709-4403-46af-b207-96b428052d33
 // last-edited: 2026-10-14
 
@@ -18,6 +18,25 @@ import (
 // ErrAuthorNotLive: a merge-delete named an author (to delete, or to merge into)
 // that has no live row of that id.
 var ErrAuthorNotLive = errors.New("author has no live row of that id")
+
+// ErrAuthorMergeDeleteUnsupported: the store a merge was given does not offer
+// AuthorMergeDeleter (a backend or decorator that does not implement it, or does
+// not unwrap to one that does). The merge is refused before anything is deleted.
+var ErrAuthorMergeDeleteUnsupported = errors.New("store cannot merge-delete an author (no AuthorMergeDeleter capability)")
+
+// MergeDeleteAuthorOf merge-deletes fromID into intoID through store's
+// AuthorMergeDeleter capability (AsCapability, so an opted-in decorator chain is
+// looked through). A store without it gets ErrAuthorMergeDeleteUnsupported and
+// nothing is written: every merge path fails closed rather than falling back to
+// DeleteAuthor plus CreateAuthorTombstone, which would delete the merged
+// author's aliases.
+func MergeDeleteAuthorOf(store any, fromID, intoID int) (*AuthorMergeDeleteResult, error) {
+	md, ok := AsCapability[AuthorMergeDeleter](store)
+	if !ok {
+		return nil, fmt.Errorf("merge author %d into %d: %w", fromID, intoID, ErrAuthorMergeDeleteUnsupported)
+	}
+	return md.MergeDeleteAuthor(fromID, intoID)
+}
 
 // AuthorMergeDeleteResult is what MergeDeleteAuthor did that an undo needs to put
 // back. Every field is read under the locks the delete holds.

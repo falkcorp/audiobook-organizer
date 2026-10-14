@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -351,4 +351,68 @@ func TestWireScanApplyClaims_AClaimOfARunThatIsNotRunningDoesNotHoldTheScan(t *t
 	require.Empty(t, got.ApplyingOpID, "cleared at startup")
 	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-crashed"))
 	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-next"), "op-crashed is not running, so it holds nothing")
+}
+
+// noMergeDeleteStore is a Store without the AuthorMergeDeleter capability:
+// embedding the interface hides *PebbleStore's MergeDeleteAuthor, and it does
+// not unwrap to the store underneath.
+type noMergeDeleteStore struct{ database.Store }
+
+// The merge-delete is a store capability, not part of Store. A store without it
+// makes the Authors-view merge refuse before any book moves: there is no
+// DeleteAuthor fallback, which would delete the merged author's aliases.
+func TestAuthorMergeOp_AStoreWithoutTheMergeDeleteCapabilityRefusesTheMerge(t *testing.T) {
+	w := newUndoWorld(t)
+	def := relinkOpDef(t, newRelinkOpServer(noMergeDeleteStore{Store: w.st}).RegisterAuthorMergeOp, "entities.author-merge")
+	raw, err := json.Marshal(entities.AuthorMergeOpParams{KeepID: w.keep.ID, MergeIDs: []int{w.from.ID}, KeepName: w.keep.Name})
+	require.NoError(t, err)
+
+	err = def.Run(context.Background(), raw, &opReporter{id: "op-capless"})
+	require.ErrorContains(t, err, "AuthorMergeDeleter")
+
+	still, err := w.st.GetAuthorByID(w.from.ID)
+	require.NoError(t, err)
+	require.Equal(t, w.from.ID, still.ID, "the author was not deleted")
+	for id, want := range w.before {
+		got, gerr := w.st.GetBookAuthors(id)
+		require.NoError(t, gerr)
+		require.Equal(t, want, got, "book %s was not moved", id)
+	}
+	alias, err := w.st.FindAuthorByAlias("U. From")
+	require.NoError(t, err)
+	require.Equal(t, w.from.ID, alias.ID, "the alias was not touched")
+}
+
+// The AI dedup apply refuses a run with a merge or alias suggestion the same way.
+func TestAIAuthorMergeApplyOp_AStoreWithoutTheMergeDeleteCapabilityRefusesTheRun(t *testing.T) {
+	for _, action := range []string{"merge", "alias"} {
+		t.Run(action, func(t *testing.T) {
+			st := newRelinkOpStore(t)
+			keep, err := st.CreateAuthor("Capless Keep")
+			require.NoError(t, err)
+			from, err := st.CreateAuthor("Capless From")
+			require.NoError(t, err)
+			book := mkRelinkOpBook(t, st, "capless-"+action, from.ID, false)
+
+			def := relinkOpDef(t, newRelinkOpServer(noMergeDeleteStore{Store: st}).RegisterAIAuthorMergeApplyOp, handlers.AIAuthorMergeApplyDefID)
+			raw, err := json.Marshal(handlers.AIMergeApplyOpParams{Suggestions: []handlers.AIMergeApplySuggestion{
+				{Action: action, KeepID: keep.ID, MergeIDs: []int{from.ID}, CanonicalName: keep.Name},
+			}})
+			require.NoError(t, err)
+
+			err = def.Run(context.Background(), raw, &opReporter{id: "op-capless-" + action})
+			require.ErrorIs(t, err, database.ErrAuthorMergeDeleteUnsupported)
+
+			still, err := st.GetAuthorByID(from.ID)
+			require.NoError(t, err)
+			require.Equal(t, from.ID, still.ID, "the author was not deleted")
+			credits, err := st.GetBookAuthors(book)
+			require.NoError(t, err)
+			require.Len(t, credits, 1)
+			require.Equal(t, from.ID, credits[0].AuthorID, "the book was not moved")
+			aliases, err := st.GetAuthorAliases(keep.ID)
+			require.NoError(t, err)
+			require.Empty(t, aliases, "no alias was created")
+		})
+	}
 }
