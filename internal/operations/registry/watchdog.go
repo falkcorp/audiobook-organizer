@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-11
+// last-edited: 2026-10-14
 
 package registry
 
@@ -104,6 +104,22 @@ func (r *Registry) zombieSweep(now time.Time) {
 	}
 }
 
+// notifyWatchdogStrike calls the strike hook (SetWatchdogStrikeHook), if one
+// is installed. A panicking hook is logged, never allowed to take the
+// watchdog goroutine down with it.
+func (r *Registry) notifyWatchdogStrike(kind string) {
+	fn := r.watchdogStrikeHook.Load()
+	if fn == nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			r.logger.Error("registry: watchdog strike hook panicked", "kind", kind, "panic", fmt.Sprint(p))
+		}
+	}()
+	(*fn)(kind)
+}
+
 // watchdogCycle inspects all running ops once.
 func (r *Registry) watchdogCycle() {
 	r.zombieSweep(r.livenessClock())
@@ -195,6 +211,7 @@ func (r *Registry) watchdogCycle() {
 			if everReported {
 				r.writeStrike(h.id, def.ID, def.Plugin, "stuck",
 					fmt.Sprintf("no progress for %s (timeout=%s)", idle, progressTimeout))
+				r.notifyWatchdogStrike("stuck")
 				r.logger.Warn("registry: canceling stuck op", "op_id", h.id, "def_id", def.ID,
 					"idle_since", lastProgress)
 			} else {
@@ -204,6 +221,7 @@ func (r *Registry) watchdogCycle() {
 				r.writeStrike(h.id, def.ID, def.Plugin, "never_reported",
 					fmt.Sprintf("never reported progress in the %s since it started (timeout=%s); "+
 						"the op is most likely not wired to its reporter", idle, progressTimeout))
+				r.notifyWatchdogStrike("never_reported")
 				r.logger.Error("registry: canceling op that never reported progress",
 					"op_id", h.id, "def_id", def.ID, "started_at", lastProgress, "ran_for", idle,
 					"hint", "Run never called reporter.UpdateProgress — run the work through "+

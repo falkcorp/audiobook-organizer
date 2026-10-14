@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.51.0
+// version: 3.52.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -185,6 +185,11 @@ type Registry struct {
 	scanStandDownGrace   time.Duration
 	scanStandDownGraceFn atomic.Pointer[func() time.Duration]
 
+	// watchdogStrikeHook is called on the watchdog goroutine right after a
+	// stuck or never_reported strike is written (see SetWatchdogStrikeHook).
+	// Atomic because the server installs it after construction.
+	watchdogStrikeHook atomic.Pointer[func(kind string)]
+
 	// sweepStopped is closed by the DepsScheduler sweep-ticker goroutine when
 	// it exits. Shutdown joins on it UNCONDITIONALLY (after canceling the
 	// internal context) so an in-flight SweepTick — which reads the store via
@@ -248,6 +253,11 @@ type Options struct {
 	// test advance time explicitly instead of racing real sleeps against
 	// ProgressTimeout on a loaded runner.
 	LivenessNow func() time.Time
+	// OnWatchdogStrike is called with the strike kind ("stuck" or
+	// "never_reported") right after the watchdog writes one of those strikes.
+	// Nil = no hook. Same contract as SetWatchdogStrikeHook, which production
+	// uses because the container builds the registry without Options.
+	OnWatchdogStrike func(kind string)
 }
 
 // livenessClock is the watchdog's clock (see Options.LivenessNow).
@@ -287,6 +297,21 @@ func (r *Registry) SetScanStandDownGraceFunc(fn func() time.Duration) {
 		return
 	}
 	r.scanStandDownGraceFn.Store(&fn)
+}
+
+// SetWatchdogStrikeHook installs fn to be called with the strike kind each
+// time the watchdog writes a stuck or never_reported strike (never for
+// uncheckpointed, which does not cancel anything). fn runs on the watchdog
+// goroutine, the one thing watching a wedged process, so it must return at
+// once; a panic in it is recovered and logged. The registry never learns what
+// fn does: the server uses it to snapshot the runtime flight recorder. Nil
+// removes the hook. Safe to call at any time.
+func (r *Registry) SetWatchdogStrikeHook(fn func(kind string)) {
+	if fn == nil {
+		r.watchdogStrikeHook.Store(nil)
+		return
+	}
+	r.watchdogStrikeHook.Store(&fn)
 }
 
 // runStateV3 is everything the registry needs from the ops v3 store
@@ -360,7 +385,7 @@ func NewWithOptions(store database.OpsV2Store, lg *slog.Logger, workers int, opt
 	if ops == nil {
 		ops = opsmetrics.Default()
 	}
-	return &Registry{
+	r := &Registry{
 		ops:                ops,
 		defs:               make(map[string]OperationDef),
 		running:            make(map[string]*runHandle),
@@ -386,6 +411,8 @@ func NewWithOptions(store database.OpsV2Store, lg *slog.Logger, workers int, opt
 		livenessNow:        opts.LivenessNow,
 		scanStandDownGrace: opts.ScanStandDownGrace,
 	}
+	r.SetWatchdogStrikeHook(opts.OnWatchdogStrike)
+	return r
 }
 
 // SetScanStandDownStore wires the persistent store used to record the scan
