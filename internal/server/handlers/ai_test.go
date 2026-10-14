@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -21,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // newAICtx builds a gin context with the given path params, query string, and
@@ -262,6 +265,67 @@ func TestAIHandler_StartScan_AlreadyRunning_409(t *testing.T) {
 
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Contains(t, w.Body.String(), "already running (scan #4, scanning)")
+}
+
+// oneAuthorStore is the pipeline's author store for the concurrency test: just
+// enough to let CreateScan count authors.
+type oneAuthorStore struct{}
+
+func (oneAuthorStore) GetAllAuthors() ([]database.Author, error) {
+	return []database.Author{{ID: 1, Name: "Concurrent Fixture"}}, nil
+}
+func (oneAuthorStore) GetAuthorByID(int) (*database.Author, error)  { return nil, nil }
+func (oneAuthorStore) GetAllAuthorBookCounts() (map[int]int, error) { return map[int]int{}, nil }
+func (oneAuthorStore) GetBooksByAuthorIDWithRoleCore(int) ([]database.BookCore, error) {
+	return nil, nil
+}
+
+// Two starts at once on the REAL scan store and pipeline: one scan is created
+// (202) and the others are refused (409). A mocked pipeline would prove nothing
+// here; the guarantee is the store's check-and-create being one step. Run under
+// -race.
+func TestAIHandler_StartScan_ConcurrentStartsCreateExactlyOneScan(t *testing.T) {
+	scanStore, err := database.NewAIScanStore(t.TempDir() + "/aiscan.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = scanStore.Close() })
+	pm := aiscan.NewPipelineManager(scanStore, oneAuthorStore{}, nil)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	reg.EXPECT().EnqueueOp(mock.Anything, "ai.author-scan", mock.Anything).Return("op-1", nil).Maybe()
+
+	h := newAIHandlerWithRegistry(scanStore, pm, reg)
+	const starters = 8
+	codes := make([]int, starters)
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	for i := range starters {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, w := newAICtx(http.MethodPost, "/ai/scans", `{"mode":"realtime"}`, nil)
+			<-gate
+			h.StartScan(c)
+			codes[i] = w.Code
+		}()
+	}
+	close(gate)
+	wg.Wait()
+
+	created, refused := 0, 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusAccepted:
+			created++
+		case http.StatusConflict:
+			refused++
+		default:
+			t.Errorf("unexpected status %d", code)
+		}
+	}
+	assert.Equal(t, 1, created)
+	assert.Equal(t, starters-1, refused)
+	scans, err := scanStore.ListScans()
+	require.NoError(t, err)
+	assert.Len(t, scans, 1)
 }
 
 func TestAIHandler_StartScan_EnqueueError_500(t *testing.T) {

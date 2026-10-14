@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-06
+// last-edited: 2026-10-13
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
 // A scan in one of these states will not change again, so it is not polled
@@ -143,10 +143,17 @@ function AIAuthorPipelinePage() {
   const applySelected = async () => {
     if (!scan || selected.size === 0) return;
     try {
-      await api.applyAIScanResults(scan.id, Array.from(selected));
+      // Apply queues a merge operation (it no longer just marks the rows). Wait for
+      // it to end, then re-read: the rows are marked applied only as each merge
+      // succeeds, so reading sooner shows nothing applied.
+      const started = await api.applyAIScanResults(scan.id, Array.from(selected));
+      const final = await api.pollOperationV2(started.id);
       const res = await api.getAIScanResults(scan.id);
       setResults(res);
       clearSelected();
+      if (final.status !== 'completed') {
+        setError(final.error_message || `The apply ended ${final.status}`);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to apply results');
       // 409: the scan was superseded after it was loaded. Reload it so it

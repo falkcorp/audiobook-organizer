@@ -1,5 +1,5 @@
 // file: web/src/components/review/AuthorsPanel.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6d03b9f2-a4e1-4875-b3c6-0f92d8e15a47
 // last-edited: 2026-10-13
 
@@ -357,12 +357,14 @@ export interface AuthorsPanelProps {
   authors: AuthorsLane;
   /** The AI scans sub-view's state. Owned by the workspace (the lane menu's commands read it). */
   aiScans: AIScansLane;
+  /** Starts the AI scans sub-view's Apply selected and reports it (ReviewWorkspace's startJob). */
+  onApplyAIScan?: () => void | Promise<void>;
 }
 
 /** The lane's body: whichever sub-view is showing. */
-export function AuthorsPanel({ authors, aiScans }: AuthorsPanelProps) {
+export function AuthorsPanel({ authors, aiScans, onApplyAIScan }: AuthorsPanelProps) {
   if (authors.view === 'series') return <SeriesPanel authors={authors} />;
-  if (authors.view === 'ai') return <AIScansPanel authors={authors} ai={aiScans} />;
+  if (authors.view === 'ai') return <AIScansPanel authors={authors} ai={aiScans} onApply={onApplyAIScan} />;
   return <AuthorsView authors={authors} />;
 }
 

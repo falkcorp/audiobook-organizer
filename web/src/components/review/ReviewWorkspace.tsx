@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.26.1
+// version: 1.27.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-14
 //
@@ -816,7 +816,14 @@ export function ReviewWorkspace() {
       {lane === 'repairs' ? (
         <RepairsPanel repairs={repairs} viewMode={viewMode} />
       ) : lane === 'authors' ? (
-        <AuthorsPanel authors={authors} aiScans={aiScans} />
+        <AuthorsPanel
+          authors={authors}
+          aiScans={aiScans}
+          // Goes through startJob like the other commands: a "started - watch the bell"
+          // toast, and the server's own refusal (superseded scan, row not a merge) as
+          // an error toast.
+          onApplyAIScan={startJob('AI scan apply', () => aiScans.applySelected(), { reason: true })}
+        />
       ) : lane === 'regroup' ? (
         <RegroupPanel regroup={regroup} />
       ) : lane === 'dupes' ? (

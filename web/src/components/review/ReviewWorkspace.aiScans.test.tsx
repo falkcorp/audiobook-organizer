@@ -1,11 +1,12 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
 // last-edited: 2026-10-13
 
 /**
- * The AI scans sub-view inside the workspace: how it is reached, and the two lane
- * menu commands (Start AI author scan, Cancel scan) that act on it.
+ * The AI scans sub-view inside the workspace: how it is reached, the two lane
+ * menu commands (Start AI author scan, Cancel scan) that act on it, and Apply
+ * selected, which goes through the same startJob.
  *
  * A file of its own rather than a block in ReviewWorkspace.test.tsx, which is a
  * hotspot every lane edits; this keeps the sub-view's wiring tests out of that
@@ -64,7 +65,7 @@ const cancel = () => screen.findByTestId('command-ai-author-scan-cancel');
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(5), scan(6)]);
-  vi.mocked(reads.fetchAIScanResults).mockResolvedValue([]);
+  vi.mocked(reads.fetchAIScanResults).mockResolvedValue({ results: [], authorNames: {} });
   vi.mocked(authorsReads.fetchAuthorGroups).mockResolvedValue({ groups: [], needsRefresh: false });
   vi.mocked(authorsReads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: false });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
@@ -259,6 +260,17 @@ describe('the Authors & series menu', () => {
     ).toBeInTheDocument();
   });
 
+  it('Start while a scan is already running shows the server\'s own 409 text', async () => {
+    const user = userEvent.setup();
+    const refusal = 'an AI author scan is already running (scan #4, scanning); wait for it to finish or cancel it first';
+    vi.mocked(api.startAIScan).mockRejectedValue(new Error(refusal));
+    renderWorkspace('/review?lane=authors&view=ai');
+    await screen.findByTestId('ai-history-list');
+    await openMenu(user);
+    await user.click(await start());
+    expect(await screen.findByText(`Failed to start AI author scan: ${refusal}`)).toBeInTheDocument();
+  });
+
   it('Start cannot be fired twice: once the POST has answered the scan is listed and the command is refused, even if the re-read never answers', async () => {
     const user = userEvent.setup();
     vi.mocked(api.startAIScan).mockResolvedValue(scan(7, { status: 'pending' }));
@@ -299,5 +311,64 @@ describe('the Authors & series menu', () => {
     await waitFor(() => expect(api.cancelAIScan).toHaveBeenCalledWith(7));
     expect(await screen.findByText('Scan #7 canceled.')).toBeInTheDocument();
     await waitFor(() => expect(within(screen.getByTestId('ai-scan-7')).getByText('canceled')).toBeInTheDocument());
+  });
+});
+
+describe('Apply selected goes through startJob', () => {
+  const mergeRow = {
+    id: 1,
+    scan_id: 5,
+    agreement: 'agreed' as const,
+    applied: false,
+    suggestion: {
+      action: 'merge',
+      canonical_name: 'Dana Fixture',
+      reason: 'same person',
+      confidence: 'high',
+      author_ids: [10, 11],
+      keep_id: 10,
+      source: 'cross_validate',
+    },
+  };
+
+  async function openAndSelect(user: ReturnType<typeof userEvent.setup>) {
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue({
+      results: [mergeRow],
+      authorNames: { 10: 'Dana Fixture', 11: 'Fixture, Dana' },
+    });
+    renderWorkspace('/review?lane=authors&view=ai');
+    await user.click(await screen.findByTestId('ai-scan-5'));
+    expect(await screen.findByTestId('ai-result-plan-1')).toHaveTextContent('keep Dana Fixture, merge Fixture, Dana');
+    await user.click(screen.getByRole('checkbox', { name: 'Select result 1' }));
+  }
+
+  it('queues the merge, points at the bell, then reports what the operation did and re-reads', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.applyAIScanResults).mockResolvedValue({
+      id: 'op-apply',
+      type: 'ai.author-scan-apply',
+      status: 'queued',
+      scan_id: 5,
+      results: 1,
+    });
+    vi.mocked(api.pollOperationV2).mockResolvedValue({ id: 'op-apply', status: 'completed', error_message: null } as api.OperationV2);
+    await openAndSelect(user);
+    await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
+
+    await waitFor(() => expect(api.applyAIScanResults).toHaveBeenCalledWith(5, [1]));
+    expect(await screen.findByText('AI scan apply started — watch the bell for progress.')).toBeInTheDocument();
+    expect(await screen.findByTestId('ai-scans-notice')).toHaveTextContent('Merged the authors of 1 selected result.');
+    await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledTimes(2));
+  });
+
+  it('a refusal is an error toast with the server\'s own words, and nothing is polled', async () => {
+    const user = userEvent.setup();
+    const refusal = 'result 1 is a "alias" suggestion; only merge suggestions can be applied here';
+    vi.mocked(api.applyAIScanResults).mockRejectedValue(new Error(refusal));
+    await openAndSelect(user);
+    await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
+
+    expect(await screen.findByText(`Failed to start AI scan apply: ${refusal}`)).toBeInTheDocument();
+    expect(api.pollOperationV2).not.toHaveBeenCalled();
   });
 });

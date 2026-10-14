@@ -1,6 +1,7 @@
 // file: web/src/services/api.ts
 // version: 2.180.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
+// last-edited: 2026-10-13
 // last-edited: 2026-10-14
 
 // API service layer for audiobook-organizer backend
@@ -5495,11 +5496,31 @@ export interface AIScanResult {
     reason: string;
     confidence: string;
     author_ids?: number[];
+    /**
+     * The author a merge keeps; the other author_ids are folded into it. Absent
+     * when none could be chosen, and on rows that are not merges.
+     */
+    keep_id?: number;
     roles?: SuggestionRoles;
     source: string;
   };
   applied: boolean;
   applied_at?: string;
+  /**
+   * The other half of a disagreement: the two phases' answers are two rows, and
+   * this is the id of the one that is not this. Absent on every other row.
+   */
+  paired_with?: number;
+}
+
+/** What POST /ai/scans/:id/apply answers: the ai.author-scan-apply operation it queued. */
+export interface AIScanApplyStarted {
+  /** The v2 operation id; follow it with pollOperationV2. */
+  id: string;
+  type: string;
+  status: string;
+  scan_id: number;
+  results: number;
 }
 
 export interface AIScanDetail extends AIScan {
@@ -5552,10 +5573,13 @@ export async function getAIScanResults(id: number, agreement?: string): Promise<
   return data.results || [];
 }
 
-export async function applyAIScanResults(
-  scanID: number,
-  resultIDs: number[]
-): Promise<{ applied: number; errors: string[] }> {
+/**
+ * Merges the authors of the selected merge results. The server validates the
+ * request and queues an operation (202); the merges happen in it, and a result is
+ * marked applied only once its merge succeeded. Refusals are 409 (superseded or
+ * unfinished scan, result already applied) and 400 (not a merge, no keep author).
+ */
+export async function applyAIScanResults(scanID: number, resultIDs: number[]): Promise<AIScanApplyStarted> {
   const response = await apiFetch(`${API_BASE}/ai/scans/${scanID}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

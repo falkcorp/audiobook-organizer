@@ -1,5 +1,5 @@
 // file: web/src/components/review/AIScansPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b84f1c2d-7e09-4a63-95d8-1f3a6c0e5b72
 // last-edited: 2026-10-13
 
@@ -20,6 +20,13 @@
  * COUNTS CLICK THROUGH. The agreement chips (All / Agreed / Groups Only / Full
  * Only / Disagreed) are counted from the same array the rows come from, so each
  * filters to exactly the number it shows.
+ *
+ * ONLY MERGE ROWS ARE APPLIED HERE. A merge row says which author it keeps and
+ * which it folds in ("keep X, merge Y, Z", with names, the keep first) and has a
+ * checkbox; Apply selected merges those authors (locked author names stay where
+ * they are) and marks the rows that merged. Rename, alias, split, reclassify and
+ * skip rows are read-only, with a link to the Authors view focused on their
+ * group. A disagreed row shows both phases' answers, whichever it is.
  *
  * Starting and cancelling a scan are commands in the lane menu (ReviewWorkspace),
  * which report through the notification bell. This panel has the Realtime / Batch
@@ -42,6 +49,7 @@ import {
   CircularProgress,
   IconButton,
   LinearProgress,
+  Link,
   List,
   ListItemButton,
   Paper,
@@ -130,8 +138,42 @@ function ScanEntry({ s, open, onOpen }: { s: AIScan; open: boolean; onOpen: () =
   );
 }
 
+/** `/review?lane=authors&author=<id>`: the Authors view focused on the group that author is in. */
+const authorsViewHref = (authorId: number) => `/review?lane=authors&author=${authorId}`;
+
+/** An author by name, or by id when the name is gone (merged away since the scan). */
+const nameOf = (names: Readonly<Record<number, string>>, id: number) => names[id] ?? `author #${id} (no longer exists)`;
+
+const PHASE_LABEL: Record<string, string> = { groups_scan: 'Groups scan', full_scan: 'Full scan' };
+
+/** What a merge row will do, naming the keep first. */
+function MergePlan({ r, names }: { r: AIScanResult; names: Readonly<Record<number, string>> }) {
+  const { suggestion } = r;
+  const keep = suggestion.keep_id ?? 0;
+  if (keep <= 0) {
+    return (
+      <Typography variant="caption" sx={{ display: 'block', color: 'warning.main' }} data-testid={`ai-result-plan-${r.id}`}>
+        No keep author could be chosen for this merge, so it cannot be applied here.{' '}
+        <Link href={authorsViewHref((suggestion.author_ids ?? [])[0] ?? 0)} target="_blank" rel="noopener">
+          Review it in the Authors view
+        </Link>
+      </Typography>
+    );
+  }
+  const merged = (suggestion.author_ids ?? []).filter((id) => id !== keep);
+  return (
+    <Typography variant="body2" sx={{ display: 'block' }} data-testid={`ai-result-plan-${r.id}`}>
+      keep <strong>{nameOf(names, keep)}</strong>, merge{' '}
+      {merged.length > 0 ? merged.map((id) => nameOf(names, id)).join(', ') : 'nothing'}
+    </Typography>
+  );
+}
+
 function ResultCard({ r, lane }: { r: AIScanResult; lane: AIScansLane }) {
   const { suggestion } = r;
+  const isMerge = suggestion.action === 'merge';
+  const pair = lane.pairOf(r);
+  const focusId = suggestion.keep_id || (suggestion.author_ids ?? [])[0] || 0;
   return (
     <Card sx={{ mb: 1, opacity: r.applied ? 0.5 : 1 }} variant="outlined" data-testid={`ai-result-${r.id}`}>
       <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
@@ -151,7 +193,7 @@ function ResultCard({ r, lane }: { r: AIScanResult; lane: AIScansLane }) {
             size="small"
             variant="outlined"
             color={
-              suggestion.action === 'merge'
+              isMerge
                 ? 'primary'
                 : suggestion.action === 'rename'
                   ? 'warning'
@@ -176,13 +218,62 @@ function ResultCard({ r, lane }: { r: AIScanResult; lane: AIScansLane }) {
           </Box>
           {r.applied && <Chip label="Applied" size="small" color="info" />}
         </Box>
+        {isMerge && (
+          <Box sx={{ ml: 5, mt: 0.5 }}>
+            <MergePlan r={r} names={lane.authorNames} />
+          </Box>
+        )}
+        {!isMerge && (
+          <Typography
+            variant="caption"
+            sx={{ display: 'block', ml: 5, mt: 0.5, color: 'text.secondary' }}
+            data-testid={`ai-result-readonly-${r.id}`}
+          >
+            Read-only here: only merges are applied from this view.{' '}
+            {focusId > 0 && (
+              <Link href={authorsViewHref(focusId)} target="_blank" rel="noopener" data-testid={`ai-result-authors-link-${r.id}`}>
+                Review it in the Authors view
+              </Link>
+            )}
+          </Typography>
+        )}
+        {r.agreement === 'disagreed' && (
+          <Typography
+            variant="caption"
+            sx={{ display: 'block', ml: 5, mt: 0.5, color: 'text.secondary' }}
+            data-testid={`ai-result-pair-${r.id}`}
+          >
+            {pair
+              ? [r, pair]
+                  .sort((x, y) => (x.suggestion.source === 'groups_scan' ? -1 : y.suggestion.source === 'groups_scan' ? 1 : 0))
+                  .map(
+                    (x) =>
+                      `${PHASE_LABEL[x.suggestion.source] ?? x.suggestion.source} said ${x.suggestion.action} "${x.suggestion.canonical_name}"`
+                  )
+                  .join(' · ')
+              : `${PHASE_LABEL[suggestion.source] ?? suggestion.source} said ${suggestion.action}; the other phase disagreed.`}
+          </Typography>
+        )}
         {suggestion.roles && <RoleLines roles={suggestion.roles} />}
       </CardContent>
     </Card>
   );
 }
 
-export function AIScansPanel({ authors, ai }: { authors: AuthorsLane; ai: AIScansLane }) {
+export function AIScansPanel({
+  authors,
+  ai,
+  onApply,
+}: {
+  authors: AuthorsLane;
+  ai: AIScansLane;
+  /**
+   * Starts the apply and reports it (ReviewWorkspace wraps `ai.applySelected` in
+   * its startJob, so the bell and a toast carry it). Without one, the panel
+   * applies silently and the notice below is the report.
+   */
+  onApply?: () => void | Promise<void>;
+}) {
   const { scan, selection } = ai;
   const running = scan !== null && !isTerminalScan(scan.status);
 
@@ -377,7 +468,7 @@ export function AIScansPanel({ authors, ai }: { authors: AuthorsLane; ai: AIScan
                     borderRadius: 2,
                   }}
                 >
-                  <Button variant="contained" onClick={() => void ai.applySelected()} disabled={ai.applying}>
+                  <Button variant="contained" onClick={() => void (onApply ? onApply() : ai.applySelected().catch(() => undefined))} disabled={ai.applying}>
                     Apply selected ({selection.selectedCount})
                   </Button>
                   <Button variant="outlined" size="small" onClick={selection.clear} disabled={ai.applying}>
@@ -395,10 +486,10 @@ export function AIScansPanel({ authors, ai }: { authors: AuthorsLane; ai: AIScan
                       indeterminate={selection.header.indeterminate}
                       disabled={selection.header.disabled}
                       onChange={selection.togglePage}
-                      slotProps={{ input: { 'aria-label': `Select all ${ai.filtered.length} results shown` } }}
+                      slotProps={{ input: { 'aria-label': `Select all ${ai.filtered.filter(ai.isApplicable).length} mergeable results shown` } }}
                     />
                     <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                      Select all shown · Shift-click a checkbox to select a range
+                      Select all mergeable results shown · Shift-click a checkbox to select a range
                     </Typography>
                   </Box>
                   {ai.filtered.map((r) => (

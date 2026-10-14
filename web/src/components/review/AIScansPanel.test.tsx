@@ -1,5 +1,5 @@
 // file: web/src/components/review/AIScansPanel.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4e18d73-9f02-4b6a-a5d1-7e30b82f6c19
 // last-edited: 2026-10-13
 
@@ -34,6 +34,7 @@ vi.mock('../../services/api', async (importOriginal) => ({
   getDedupCandidates: vi.fn(),
   startAIScan: vi.fn(),
   applyAIScanResults: vi.fn(),
+  pollOperationV2: vi.fn(),
   cancelAIScan: vi.fn(),
 }));
 vi.mock('./lanes/authorsReads');
@@ -46,6 +47,11 @@ function Harness() {
   const aiScans = useAIScans(toast, authors.view === 'ai');
   return <AuthorsPanel authors={authors} aiScans={aiScans} />;
 }
+
+const read = (rows: AIScanResult[], authorNames: Record<number, string> = {}) => ({ results: rows, authorNames });
+const started = { id: 'op-apply', type: 'ai.author-scan-apply', status: 'queued', scan_id: 5, results: 1 };
+const finished = (status: string, error_message: string | null = null) =>
+  ({ id: 'op-apply', status, error_message }) as api.OperationV2;
 
 function renderPanel() {
   return render(
@@ -78,7 +84,8 @@ function result(id: number, agreement: AIScanResult['agreement'] = 'agreed', app
       canonical_name: `Author ${id}`,
       reason: 'same person',
       confidence: 'high',
-      author_ids: [id],
+      author_ids: [id * 10, id * 10 + 1],
+      keep_id: id * 10,
       source: 'full_scan',
     },
   };
@@ -95,7 +102,7 @@ beforeEach(() => {
   toast.mockReset();
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(5), scan(6)]);
-  vi.mocked(reads.fetchAIScanResults).mockResolvedValue(MIXED);
+  vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read(MIXED));
 });
 
 describe('the sub-view control', () => {
@@ -223,7 +230,7 @@ describe('the open scan', () => {
     expect(alert).toHaveTextContent('results: 500');
     expect(screen.queryByTestId('ai-results-empty')).not.toBeInTheDocument();
 
-    vi.mocked(reads.fetchAIScanResults).mockResolvedValue([]);
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read([]));
     await user.click(within(alert).getByRole('button', { name: 'Retry' }));
     expect(await screen.findByTestId('ai-results-empty')).toBeInTheDocument();
     expect(screen.queryByTestId('ai-results-error')).not.toBeInTheDocument();
@@ -261,10 +268,71 @@ describe('agreement chips', () => {
   });
 });
 
-describe('selection and apply', () => {
-  it('header selects every unapplied result; shift range skips applied ones', async () => {
+describe('merge rows and read-only rows', () => {
+  it('a merge row says which author it keeps and which it folds in, by name, the keep first', async () => {
     const user = userEvent.setup();
-    vi.mocked(api.applyAIScanResults).mockResolvedValue({ applied: 3, errors: [] });
+    const row = result(1);
+    row.suggestion.author_ids = [10, 11, 12];
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(
+      read([row], { 10: 'Dana Fixture', 11: 'Fixture, Dana', 12: 'D. Fixture' })
+    );
+    renderPanel();
+    await openScan(user, 5);
+    expect(await screen.findByTestId('ai-result-plan-1')).toHaveTextContent(
+      'keep Dana Fixture, merge Fixture, Dana, D. Fixture'
+    );
+  });
+
+  it('an author merged away since the scan is named by id, not left blank', async () => {
+    const user = userEvent.setup();
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read([result(1)], { 10: 'Dana Fixture' }));
+    renderPanel();
+    await openScan(user, 5);
+    expect(await screen.findByTestId('ai-result-plan-1')).toHaveTextContent('merge author #11 (no longer exists)');
+  });
+
+  it('rename, alias, split, reclassify and skip rows are read-only, each with a link to the Authors view', async () => {
+    const user = userEvent.setup();
+    const rows = ['rename', 'alias', 'split', 'reclassify', 'skip'].map((action, i) => {
+      const r = result(i + 1);
+      return { ...r, suggestion: { ...r.suggestion, action, keep_id: undefined } };
+    });
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read(rows));
+    renderPanel();
+    await openScan(user, 5);
+    for (const r of rows) {
+      expect(await screen.findByTestId(`ai-result-readonly-${r.id}`)).toHaveTextContent('Read-only here');
+      expect(screen.getByRole('checkbox', { name: `Select result ${r.id}` })).toBeDisabled();
+      const link = screen.getByTestId(`ai-result-authors-link-${r.id}`);
+      expect(link).toHaveAttribute('href', `/review?lane=authors&author=${r.suggestion.author_ids![0]}`);
+    }
+    // Nothing is selectable, so there is nothing to apply.
+    expect(screen.getByRole('checkbox', { name: /Select all 0 mergeable results shown/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /apply selected/i })).not.toBeInTheDocument();
+  });
+
+  it('a disagreed row shows both phases\' answers, and a disagreed MERGE row can still be selected', async () => {
+    const user = userEvent.setup();
+    const groups = { ...result(3, 'disagreed'), paired_with: 4 };
+    groups.suggestion = { ...groups.suggestion, source: 'groups_scan', canonical_name: 'Dana Fixture' };
+    const full = { ...result(4, 'disagreed'), paired_with: 3 };
+    full.suggestion = { ...full.suggestion, source: 'full_scan', action: 'alias', keep_id: undefined, canonical_name: 'D. Fixture' };
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read([groups, full]));
+    renderPanel();
+    await openScan(user, 5);
+    const expected = 'Groups scan said merge "Dana Fixture" · Full scan said alias "D. Fixture"';
+    expect(await screen.findByTestId('ai-result-pair-3')).toHaveTextContent(expected);
+    expect(screen.getByTestId('ai-result-pair-4')).toHaveTextContent(expected);
+    expect(screen.getByRole('checkbox', { name: 'Select result 3' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: 'Select result 4' })).toBeDisabled();
+  });
+});
+
+describe('selection and apply', () => {
+  it('header selects every unapplied merge result; shift range skips applied ones', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.applyAIScanResults).mockResolvedValue({ ...started, results: 3 });
+    vi.mocked(api.pollOperationV2).mockResolvedValue(finished('completed'));
     renderPanel();
     await openScan(user, 5);
     await screen.findByTestId('ai-result-1');
@@ -277,12 +345,15 @@ describe('selection and apply', () => {
     // The count lives on the button; there is no second number that opens nothing.
     expect(screen.queryByText(/\d+ of \d+ selected/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: 'Select all 4 results shown' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select all 3 mergeable results shown' }));
     await user.click(screen.getByRole('button', { name: 'Apply selected (3)' }));
     await waitFor(() => expect(api.applyAIScanResults).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.applyAIScanResults).mock.calls[0][0]).toBe(5);
     expect([...vi.mocked(api.applyAIScanResults).mock.calls[0][1]].sort()).toEqual([1, 3, 4]);
-    expect(await screen.findByTestId('ai-scans-notice')).toHaveTextContent('Applied 3 of 3 selected results.');
+    // Not the old "Applied N of M": the merges run in an operation, and the notice
+    // reports it once it has ended.
+    expect(await screen.findByTestId('ai-scans-notice')).toHaveTextContent('Merged the authors of 3 selected results.');
+    await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledTimes(2));
   });
 
   it('changing scan clears selection', async () => {
@@ -317,15 +388,18 @@ describe('selection and apply', () => {
     expect(reads.fetchAIScans).toHaveBeenCalledTimes(2);
   });
 
-  it('says which results the server could not mark', async () => {
+  it('says which results the operation could not apply', async () => {
     const user = userEvent.setup();
-    vi.mocked(api.applyAIScanResults).mockResolvedValue({ applied: 0, errors: ['result 1: boom'] });
+    const failure = 'AI scan #5: 0 of 1 result(s) applied, 1 not applied: result 1: book b1: author name is user-locked';
+    vi.mocked(api.applyAIScanResults).mockResolvedValue(started);
+    vi.mocked(api.pollOperationV2).mockResolvedValue(finished('failed', failure));
     renderPanel();
     await openScan(user, 5);
     await user.click(await screen.findByRole('checkbox', { name: 'Select result 1' }));
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
     const notice = await screen.findByTestId('ai-scans-notice');
-    expect(notice).toHaveTextContent('Applied 0 of 1');
-    expect(notice).toHaveTextContent('result 1: boom');
+    expect(notice).toHaveTextContent('0 of 1 result(s) applied');
+    expect(notice).toHaveTextContent('result 1');
+    expect(notice).toHaveTextContent('user-locked');
   });
 });

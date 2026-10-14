@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAIScans.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a3d9f20-1b84-4e57-8c02-d5f7e19a4b63
 // last-edited: 2026-10-13
 
@@ -7,7 +7,8 @@
  * The AI scans sub-view's data layer, ported from DedupAIReviewTab.test.tsx and
  * the AI part of dedupTabs.selectAll.test.tsx, then extended for what the lane
  * changes: abortable reads, four states each for the history and the results,
- * and no timer.
+ * and no timer of its own. Apply queues an operation, so the apply tests follow that
+ * operation (pollOperationV2 is mocked) instead of asserting a mark-only answer.
  *
  * The reads are mocked at their module (`aiScanReads`), the writes at the api
  * module (partially: `ApiError` stays real, because the hook tells a 409 from
@@ -27,6 +28,7 @@ vi.mock('../../../services/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../services/api')>()),
   startAIScan: vi.fn(),
   applyAIScanResults: vi.fn(),
+  pollOperationV2: vi.fn(),
   cancelAIScan: vi.fn(),
 }));
 vi.mock('./aiScanReads');
@@ -45,6 +47,7 @@ function scan(id: number, over: Partial<AIScan> = {}): AIScan {
   };
 }
 
+/** A merge row: it keeps author id*10 and folds in id*10+1. */
 function result(id: number, agreement: AIScanResult['agreement'] = 'agreed', applied = false): AIScanResult {
   return {
     id,
@@ -56,11 +59,36 @@ function result(id: number, agreement: AIScanResult['agreement'] = 'agreed', app
       canonical_name: `Author ${id}`,
       reason: 'same person',
       confidence: 'high',
-      author_ids: [id],
+      author_ids: [id * 10, id * 10 + 1],
+      keep_id: id * 10,
       source: 'full_scan',
     },
   };
 }
+
+/** A row of another action: read-only in this view. */
+function other(id: number, action: string): AIScanResult {
+  const r = result(id);
+  return { ...r, suggestion: { ...r.suggestion, action, keep_id: undefined } };
+}
+
+/** What the results read answers with. */
+const read = (rows: AIScanResult[], authorNames: Record<number, string> = {}): reads.AIScanResultsRead => ({
+  results: rows,
+  authorNames,
+});
+
+/** The operation the apply queued, as POST /ai/scans/:id/apply answers. */
+const started = (over: Partial<api.AIScanApplyStarted> = {}): api.AIScanApplyStarted => ({
+  id: 'op-apply',
+  type: 'ai.author-scan-apply',
+  status: 'queued',
+  scan_id: 5,
+  results: 1,
+  ...over,
+});
+const finished = (status: string, error_message: string | null = null) =>
+  ({ id: 'op-apply', status, error_message }) as api.OperationV2;
 
 const MIXED = [result(1, 'agreed'), result(2, 'agreed', true), result(3, 'disagreed'), result(4, 'groups_only')];
 
@@ -78,7 +106,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   toast.mockReset();
   vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(5), scan(6)]);
-  vi.mocked(reads.fetchAIScanResults).mockResolvedValue(MIXED);
+  vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read(MIXED));
 });
 
 afterEach(() => {
@@ -154,7 +182,7 @@ describe('the open scan', () => {
   });
 
   it('a finished scan with no results is empty, which is not an error', async () => {
-    vi.mocked(reads.fetchAIScanResults).mockResolvedValue([]);
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read([]));
     const h = mount();
     await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
     act(() => h.result.current.selectScan(5));
@@ -197,6 +225,50 @@ describe('selection', () => {
     expect([...h.result.current.selection.selected].sort()).toEqual([1, 3, 4]);
   });
 
+  it('only merge rows are selectable: rename, alias, split, reclassify and skip are read-only', async () => {
+    const rows = [
+      result(1),
+      other(2, 'rename'),
+      other(3, 'alias'),
+      other(4, 'split'),
+      other(5, 'reclassify'),
+      other(6, 'skip'),
+      { ...result(7), suggestion: { ...result(7).suggestion, keep_id: undefined } }, // a merge with no keep author
+    ];
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read(rows));
+    const h = mount();
+    await open(h, 5);
+    expect(h.result.current.selection.checkboxProps(1).disabled).toBe(false);
+    for (const id of [2, 3, 4, 5, 6, 7]) expect(h.result.current.selection.checkboxProps(id).disabled).toBe(true);
+    expect(rows.filter(h.result.current.isApplicable).map((r) => r.id)).toEqual([1]);
+    act(() => h.result.current.selection.togglePage());
+    expect([...h.result.current.selection.selected]).toEqual([1]);
+  });
+
+  it('a disagreed merge row stays selectable, and shows the other phase\'s answer', async () => {
+    const groups = { ...result(3, 'disagreed'), paired_with: 4, suggestion: { ...result(3).suggestion, source: 'groups_scan' } };
+    const full = {
+      ...result(4, 'disagreed'),
+      paired_with: 3,
+      suggestion: { ...result(4).suggestion, action: 'alias', keep_id: undefined, source: 'full_scan' },
+    };
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read([groups, full]));
+    const h = mount();
+    await open(h, 5);
+    expect(h.result.current.selection.checkboxProps(3).disabled).toBe(false);
+    expect(h.result.current.selection.checkboxProps(4).disabled).toBe(true);
+    expect(h.result.current.pairOf(h.result.current.results[0])?.id).toBe(4);
+    expect(h.result.current.pairOf(h.result.current.results[1])?.id).toBe(3);
+    expect(h.result.current.pairOf(result(1))).toBeNull();
+  });
+
+  it('exposes the author names the read returned', async () => {
+    vi.mocked(reads.fetchAIScanResults).mockResolvedValue(read(MIXED, { 10: 'Dana Fixture', 11: 'Fixture, Dana' }));
+    const h = mount();
+    await open(h, 5);
+    expect(h.result.current.authorNames).toEqual({ 10: 'Dana Fixture', 11: 'Fixture, Dana' });
+  });
+
   it('changing scan clears selection', async () => {
     const h = mount();
     await open(h, 5);
@@ -228,8 +300,9 @@ describe('selection', () => {
 });
 
 describe('apply', () => {
-  it('sends the selected ids and re-reads the rows, so Applied shows', async () => {
-    vi.mocked(api.applyAIScanResults).mockResolvedValue({ applied: 2, errors: [] });
+  it('queues the merge for the selected ids, follows the operation, then re-reads the rows and history', async () => {
+    vi.mocked(api.applyAIScanResults).mockResolvedValue(started({ results: 3 }));
+    vi.mocked(api.pollOperationV2).mockResolvedValue(finished('completed'));
     const h = mount();
     await open(h, 5);
     act(() => h.result.current.selection.togglePage());
@@ -237,24 +310,78 @@ describe('apply', () => {
     expect(api.applyAIScanResults).toHaveBeenCalledTimes(1);
     expect(vi.mocked(api.applyAIScanResults).mock.calls[0][0]).toBe(5);
     expect([...vi.mocked(api.applyAIScanResults).mock.calls[0][1]].sort()).toEqual([1, 3, 4]);
-    expect(h.result.current.notice).toEqual({ severity: 'success', text: 'Applied 2 of 3 selected results.' });
+    // The operation is the one the POST named.
+    await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledWith('op-apply', undefined, expect.any(Number), expect.anything()));
+    await waitFor(() =>
+      expect(h.result.current.notice).toEqual({ severity: 'success', text: 'Merged the authors of 3 selected results.' })
+    );
     expect(h.result.current.selection.selectedCount).toBe(0);
+    expect(h.result.current.applying).toBe(false);
+    // Rows (Applied shows) and history are read again once it has ended, not before.
     await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reads.fetchAIScans).toHaveBeenCalledTimes(2));
   });
 
-  it('says so when the server could not mark some of the results', async () => {
-    vi.mocked(api.applyAIScanResults).mockResolvedValue({ applied: 1, errors: ['result 3: boom'] });
+  it('Apply stays busy until the operation ends', async () => {
+    vi.mocked(api.applyAIScanResults).mockResolvedValue(started());
+    const run = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReturnValue(run.promise);
+    const h = mount();
+    await open(h, 5);
+    act(() => h.result.current.selection.toggle(1));
+    await act(() => h.result.current.applySelected());
+    expect(h.result.current.applying).toBe(true);
+    // No second request while the first is merging, and no re-read yet.
+    act(() => h.result.current.selection.toggle(3));
+    await act(() => h.result.current.applySelected());
+    expect(api.applyAIScanResults).toHaveBeenCalledTimes(1);
+    expect(reads.fetchAIScanResults).toHaveBeenCalledTimes(1);
+
+    await act(async () => run.resolve(finished('completed')));
+    await waitFor(() => expect(h.result.current.applying).toBe(false));
+  });
+
+  it('a run that did not finish shows the operation\'s own failure text, naming the results not applied', async () => {
+    const failure = 'AI scan #5: 1 of 2 result(s) applied, 1 not applied: result 3: book b1: author name is user-locked';
+    vi.mocked(api.applyAIScanResults).mockResolvedValue(started({ results: 2 }));
+    vi.mocked(api.pollOperationV2).mockResolvedValue(finished('failed', failure));
     const h = mount();
     await open(h, 5);
     act(() => h.result.current.selection.toggle(1));
     act(() => h.result.current.selection.toggle(3));
     await act(() => h.result.current.applySelected());
-    expect(h.result.current.notice?.severity).toBe('warning');
-    expect(h.result.current.notice?.text).toContain('Applied 1 of 2');
-    expect(h.result.current.notice?.text).toContain('result 3: boom');
+    await waitFor(() => expect(h.result.current.notice).toEqual({ severity: 'warning', text: failure }));
+    // The merged result is marked in the rows, so they are read again either way.
+    await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledTimes(2));
   });
 
-  it('apply is refused for a superseded scan: the server\'s message is shown and the scan reloads as superseded', async () => {
+  it('an operation that cannot be followed says to refresh, and does not claim success', async () => {
+    vi.mocked(api.applyAIScanResults).mockResolvedValue(started());
+    vi.mocked(api.pollOperationV2).mockRejectedValue(new Error('server went away'));
+    const h = mount();
+    await open(h, 5);
+    act(() => h.result.current.selection.toggle(1));
+    await act(() => h.result.current.applySelected());
+    await waitFor(() => expect(h.result.current.notice?.severity).toBe('warning'));
+    expect(h.result.current.notice?.text).toContain('server went away');
+    expect(h.result.current.notice?.text).toContain('Refresh');
+    expect(h.result.current.applying).toBe(false);
+  });
+
+  it('leaving the sub-view stops following the operation', async () => {
+    vi.mocked(api.applyAIScanResults).mockResolvedValue(started());
+    vi.mocked(api.pollOperationV2).mockImplementation(() => new Promise(() => {}));
+    const h = mount();
+    await open(h, 5);
+    act(() => h.result.current.selection.toggle(1));
+    await act(() => h.result.current.applySelected());
+    const signal = vi.mocked(api.pollOperationV2).mock.calls[0][3]?.signal;
+    expect(signal?.aborted).toBe(false);
+    h.unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('apply is refused for a superseded scan: the server\'s message is shown, the call rejects, and the scan reloads as superseded', async () => {
     const message = 'scan 5 was superseded by scan 12; apply from scan 12 instead';
     vi.mocked(api.applyAIScanResults).mockRejectedValue(new api.ApiError(message, 409));
     const h = mount();
@@ -262,12 +389,16 @@ describe('apply', () => {
     // Re-reads now find it superseded.
     vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(5, { status: 'superseded', superseded_by: 12 }), scan(6)]);
     act(() => h.result.current.selection.toggle(1));
-    await act(() => h.result.current.applySelected());
+    // Rejected, so the caller's startJob can show the refusal as a toast too.
+    await act(async () => {
+      await expect(h.result.current.applySelected()).rejects.toThrow(message);
+    });
 
     expect(h.result.current.notice).toEqual({ severity: 'error', text: message });
     expect(h.result.current.selection.selectedCount).toBe(0);
     await waitFor(() => expect(h.result.current.superseded).toBe(true));
     expect(h.result.current.selection.checkboxProps(1).disabled).toBe(true);
+    expect(api.pollOperationV2).not.toHaveBeenCalled();
   });
 
   it('another failure keeps the selection so Apply can be tried again', async () => {
@@ -275,17 +406,18 @@ describe('apply', () => {
     const h = mount();
     await open(h, 5);
     act(() => h.result.current.selection.toggle(1));
-    await act(() => h.result.current.applySelected());
+    await act(async () => {
+      await expect(h.result.current.applySelected()).rejects.toThrow('network down');
+    });
     expect(h.result.current.notice).toEqual({ severity: 'error', text: 'network down' });
     expect(h.result.current.selection.selectedCount).toBe(1);
     expect(h.result.current.applying).toBe(false);
   });
 
-  it('a second click while the first is in flight sends nothing', async () => {
-    const releases: Array<(v: { applied: number; errors: string[] }) => void> = [];
-    vi.mocked(api.applyAIScanResults).mockImplementation(
-      () => new Promise((resolve) => releases.push(resolve))
-    );
+  it('a second click while the first POST is in flight sends nothing', async () => {
+    const releases: Array<(v: api.AIScanApplyStarted) => void> = [];
+    vi.mocked(api.applyAIScanResults).mockImplementation(() => new Promise((resolve) => releases.push(resolve)));
+    vi.mocked(api.pollOperationV2).mockResolvedValue(finished('completed'));
     const h = mount();
     await open(h, 5);
     act(() => h.result.current.selection.toggle(1));
@@ -300,10 +432,10 @@ describe('apply', () => {
     });
     expect(api.applyAIScanResults).toHaveBeenCalledTimes(1);
     await act(async () => {
-      releases.forEach((release) => release({ applied: 1, errors: [] }));
+      releases.forEach((release) => release(started()));
       await Promise.all([first, second]);
     });
-    expect(h.result.current.applying).toBe(false);
+    await waitFor(() => expect(h.result.current.applying).toBe(false));
   });
 });
 
@@ -384,7 +516,7 @@ describe('Start cannot queue two paid scans', () => {
 
 describe('an apply that is still out when another scan is opened', () => {
   it('reports by toast and touches nothing of the other scan: its notice, selection and rows', async () => {
-    const post = deferred<{ applied: number; errors: string[] }>();
+    const post = deferred<api.AIScanApplyStarted>();
     vi.mocked(api.applyAIScanResults).mockReturnValue(post.promise);
     const h = mount();
     await open(h, 5);
@@ -402,26 +534,30 @@ describe('an apply that is still out when another scan is opened', () => {
     act(() => h.result.current.selection.toggle(3));
     const reads6 = vi.mocked(reads.fetchAIScanResults).mock.calls.length;
 
+    vi.mocked(api.pollOperationV2).mockResolvedValue(finished('completed'));
     await act(async () => {
-      post.resolve({ applied: 1, errors: [] });
+      post.resolve(started());
       await applying;
     });
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith('Scan #5: Merged the authors of 1 selected result.', 'success')
+    );
     expect(h.result.current.notice).toBeNull();
     expect([...h.result.current.selection.selected]).toEqual([3]);
     // Scan 6's rows were not re-read on scan 5's account.
     expect(vi.mocked(reads.fetchAIScanResults).mock.calls.length).toBe(reads6);
-    expect(toast).toHaveBeenCalledWith('Scan #5: Applied 1 of 1 selected results.', 'success');
   });
 
   it('a 409 for the scan that was left still re-reads the history, but shows no error on the open scan', async () => {
-    const post = deferred<{ applied: number; errors: string[] }>();
+    const post = deferred<api.AIScanApplyStarted>();
     vi.mocked(api.applyAIScanResults).mockReturnValue(post.promise);
     const h = mount();
     await open(h, 5);
     act(() => h.result.current.selection.toggle(1));
     let applying: Promise<void> = Promise.resolve();
     act(() => {
-      applying = h.result.current.applySelected();
+      // Rejected: the caller reports it, so the test absorbs it here.
+      applying = h.result.current.applySelected().catch(() => undefined);
     });
     act(() => h.result.current.selectScan(6));
     await waitFor(() => expect(h.result.current.resultsStatus).toBe('populated'));
@@ -444,10 +580,10 @@ describe('an apply that is still out when another scan is opened', () => {
 
 describe('a late results answer', () => {
   it('for a scan that was left never replaces the open scan\'s rows', async () => {
-    const slowA = deferred<AIScanResult[]>();
+    const slowA = deferred<reads.AIScanResultsRead>();
     vi.mocked(reads.fetchAIScanResults).mockImplementation((id: number) =>
       // A transport that ignores its signal: scan 5's answer arrives last.
-      id === 5 ? slowA.promise : Promise.resolve([result(11, 'agreed'), result(12, 'disagreed')])
+      id === 5 ? slowA.promise : Promise.resolve(read([result(11, 'agreed'), result(12, 'disagreed')]))
     );
     const h = mount();
     await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
@@ -458,7 +594,7 @@ describe('a late results answer', () => {
     expect(h.result.current.results.map((r) => r.id)).toEqual([11, 12]);
 
     await act(async () => {
-      slowA.resolve([result(1, 'agreed'), result(2, 'agreed')]);
+      slowA.resolve(read([result(1, 'agreed'), result(2, 'agreed')]));
       await Promise.resolve();
     });
     expect(h.result.current.scan?.id).toBe(6);
@@ -467,9 +603,9 @@ describe('a late results answer', () => {
   });
 
   it('a late failure for a scan that was left shows no error on the open scan', async () => {
-    const slowA = deferred<AIScanResult[]>();
+    const slowA = deferred<reads.AIScanResultsRead>();
     vi.mocked(reads.fetchAIScanResults).mockImplementation((id: number) =>
-      id === 5 ? slowA.promise : Promise.resolve([result(11, 'agreed')])
+      id === 5 ? slowA.promise : Promise.resolve(read([result(11, 'agreed')]))
     );
     const h = mount();
     await waitFor(() => expect(h.result.current.historyStatus).toBe('populated'));
