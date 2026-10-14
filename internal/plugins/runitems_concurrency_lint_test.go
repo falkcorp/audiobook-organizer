@@ -1,38 +1,41 @@
 // file: internal/plugins/runitems_concurrency_lint_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 6b0f7a3e-2c9d-4d58-8e41-a7c5d9f1b2e3
 // last-edited: 2026-10-13
 
 package plugins
 
 import (
+	"fmt"
 	"go/ast"
-	"go/parser"
+	"go/constant"
 	"go/token"
-	"io/fs"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/tools/go/packages"
 )
 
 const (
 	// runItemsImportPath is the package that owns RunItems.
 	runItemsImportPath = modulePath + "/internal/operations/registry"
 
-	// sequentialMarker, on the RunItems call's line or the line above it,
-	// records that an omitted Concurrency is deliberate. The reason after it
-	// is required: the marker is a statement that someone decided, not a
-	// switch that makes the lint quiet.
+	// sequentialMarker, on a RunItems call's line or in the comment block
+	// directly above it, records that the call is deliberately not a worker
+	// pool (or that its options are deliberately not provable here). The
+	// reason after it is required: the marker is a statement that someone
+	// decided, not a switch that makes the lint quiet.
 	sequentialMarker = "runitems:sequential"
 )
 
-// TestRunItemsCallsDeclareConcurrency fails when a RunItemsOptions literal
-// has no Concurrency key, when registry.RunItems is called with no options at
-// all, or when RunItems is used other than as a direct call, unless a
-// `// runitems:sequential <reason>` comment covers it.
+// TestRunItemsCallsDeclareConcurrency fails when a registry.RunItems call's
+// options are not PROVABLY a RunItemsOptions with a non-zero Concurrency,
+// unless a `// runitems:sequential <reason>` comment covers the call.
 //
 // WHY: RunItemsOptions.Concurrency defaults to zero and RunItems clamps
 // anything below 1 up to 1, so a call that omits the field is an ordinary
@@ -42,55 +45,38 @@ const (
 // the parallel shape. An explicit value, even `Concurrency: 1`, is a choice a
 // reviewer can see; an omission is indistinguishable from forgetting.
 //
-// What is judged: EVERY composite literal of type RunItemsOptions, wherever it
-// is built (a call argument, an `opts :=` variable, a helper's return value,
-// a slice element), so a helper like linkRunOptions(...) is checked where it
-// constructs the value rather than skipped at the call. A call with no options
-// argument is flagged at the call. A reference to RunItems that is not a call
-// (a function value, which would hide the call from this lint) is flagged.
-// What is NOT judged: options assembled by assigning fields one at a time to a
-// zero value built elsewhere, which is why a bare `RunItemsOptions{}` is
-// itself flagged: set the key in the literal.
+// The check is type-based (go/types via go/packages), not syntactic, so an
+// alias, a dot import, a renamed import and an elided composite literal are
+// all resolved. It flags:
+//   - any composite literal whose TYPE is RunItemsOptions (including elided
+//     elements of []RunItemsOptions and []*RunItemsOptions) that has no
+//     Concurrency key, or whose Concurrency is the constant 0;
+//   - a RunItems call with no options argument;
+//   - a RunItems call whose options argument cannot be traced to such a
+//     literal: a spread (`opts...`), a function parameter, a variable that is
+//     assigned more than once, or a call to something that is not a function
+//     with source in this tree. Tracing follows a local variable's single
+//     assignment and a function's return statements (a helper such as
+//     linkRunOptions), and rejects a `v.Concurrency = 0` assignment;
+//   - any use of RunItems that is not a direct call (a function value would
+//     hide the call from this lint).
 //
-// The marker covers a call on its own line, or on the line(s) of a contiguous
-// comment block directly above it; for a literal it also covers the enclosing
-// RunItems call. The reason after the marker is required.
+// A call that is correct but not traceable (options built in a way the walk
+// cannot follow) says so with the marker and a reason, or builds its options
+// through a helper that returns a literal.
 func TestRunItemsCallsDeclareConcurrency(t *testing.T) {
 	root := moduleRootDir(t)
+	start := time.Now()
 
-	var offenders []string
-	for _, top := range []string{"internal", "pkg"} {
-		err := filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "mocks", "testdata", "node_modules":
-					return filepath.SkipDir
-				}
-				// The package that defines RunItems and its own helpers.
-				if filepath.ToSlash(path) == filepath.ToSlash(filepath.Join(root, "internal", "operations", "registry")) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			rel, _ := filepath.Rel(root, path)
-			offenders = append(offenders, runItemsOffenders(t, path, filepath.ToSlash(rel))...)
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", top, err)
-		}
-	}
+	pkgs := loadRunItemsPackages(t, root)
+	offenders := lintRunItems(t, pkgs, root, os.ReadFile)
 
+	t.Logf("type-checked %d packages that import the registry in %s", len(pkgs), time.Since(start).Round(time.Millisecond))
 	sort.Strings(offenders)
 	for _, o := range offenders {
-		t.Errorf("%s\n\t  set RunItemsOptions.Concurrency (runtime.NumCPU() for CPU/DB-bound work, a small fixed number "+
-			"for a rate-limited target), or add `// %s <reason>` on or above the call", o, sequentialMarker)
+		t.Errorf("%s\n\t  set RunItemsOptions.Concurrency to a non-zero value in a literal the lint can trace "+
+			"(runtime.NumCPU() for CPU/DB-bound work, a small fixed number for a rate-limited target), "+
+			"or add `// %s <reason>` on or above the call", o, sequentialMarker)
 	}
 }
 
@@ -108,202 +94,467 @@ func moduleRootDir(t *testing.T) string {
 	return root
 }
 
-// runItemsOffenders returns one "path:line: reason" entry per violation in the
-// file.
-func runItemsOffenders(t *testing.T, path, rel string) []string {
+// loadRunItemsPackages type-checks the non-test packages under internal/ and
+// pkg/ that import the registry (the only ones that can call RunItems). Two
+// loads: a cheap import-graph listing to find them, then a typed load of just
+// those, with their dependencies read from export data rather than re-checked.
+func loadRunItemsPackages(t *testing.T, root string) []*packages.Package {
 	t.Helper()
-	src, err := os.ReadFile(path)
+	list, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedImports,
+		Dir:  root,
+	}, "./internal/...", "./pkg/...")
 	if err != nil {
-		t.Fatalf("read %s: %v", rel, err)
+		t.Fatalf("list packages: %v", err)
 	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	var paths []string
+	for _, p := range list {
+		if p.PkgPath == runItemsImportPath || strings.Contains(p.PkgPath, "/mocks") {
+			continue // the package that defines RunItems, and generated mocks
+		}
+		if _, ok := p.Imports[runItemsImportPath]; ok {
+			paths = append(paths, p.PkgPath)
+		}
+	}
+	if len(paths) == 0 {
+		t.Fatal("found no package that imports the registry: the package listing is broken")
+	}
+	return loadTyped(t, root, nil, paths)
+}
+
+func loadTyped(t *testing.T, root string, overlay map[string][]byte, patterns []string) []*packages.Package {
+	t.Helper()
+	pkgs, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
+			packages.NeedImports | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
+		Dir:     root,
+		Overlay: overlay,
+	}, patterns...)
 	if err != nil {
-		t.Fatalf("parse %s: %v", rel, err)
+		t.Fatalf("load packages: %v", err)
+	}
+	for _, p := range pkgs {
+		for _, e := range p.Errors {
+			t.Errorf("package %s does not type-check: %v", p.PkgPath, e)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	return pkgs
+}
+
+// runItemsFuncDecl is a function with source in the loaded set, for tracing
+// the options a helper returns.
+type runItemsFuncDecl struct {
+	decl *ast.FuncDecl
+	info *types.Info
+}
+
+// lintRunItems returns one "path:line: reason" entry per violation.
+func lintRunItems(t *testing.T, pkgs []*packages.Package, root string, read func(string) ([]byte, error)) []string {
+	t.Helper()
+
+	// ---- indexes over the whole loaded set --------------------------------
+	funcs := map[string]runItemsFuncDecl{} // types.Func.FullName() -> source
+	assigns := map[types.Object][]ast.Expr{}
+	fieldAssigns := map[types.Object][]ast.Expr{} // v.Concurrency = e
+	infoOf := map[*ast.File]*types.Info{}
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Syntax {
+			infoOf[f] = pkg.TypesInfo
+			indexFile(f, pkg.TypesInfo, funcs, assigns, fieldAssigns)
+		}
 	}
 
-	// Local names the registry package is imported under in this file, and
-	// whether it is dot-imported (then RunItems and RunItemsOptions are bare).
-	names := map[string]bool{}
-	dot := false
-	for _, imp := range f.Imports {
-		p, uerr := strconv.Unquote(imp.Path.Value)
-		if uerr != nil || p != runItemsImportPath {
-			continue
+	// ---- per-file marker tables ------------------------------------------
+	type fileLines struct {
+		lines  []string
+		marked map[int]bool
+	}
+	fileTables := map[string]*fileLines{}
+	tableFor := func(fset *token.FileSet, f *ast.File) *fileLines {
+		name := fset.Position(f.Pos()).Filename
+		if ft, ok := fileTables[name]; ok {
+			return ft
 		}
-		switch {
-		case imp.Name == nil:
-			names["registry"] = true
-		case imp.Name.Name == ".":
-			dot = true
-		case imp.Name.Name != "_":
-			names[imp.Name.Name] = true
+		ft := &fileLines{marked: map[int]bool{}}
+		if src, err := read(name); err == nil {
+			ft.lines = strings.Split(string(src), "\n")
 		}
-	}
-	if len(names) == 0 && !dot {
-		return nil
-	}
-
-	lines := strings.Split(string(src), "\n")
-	ownLineComment := func(line int) bool {
-		return line >= 1 && line <= len(lines) && strings.HasPrefix(strings.TrimSpace(lines[line-1]), "//")
-	}
-	// Lines carrying a valid marker: `//`, the marker, whitespace, a reason.
-	marked := map[int]bool{}
-	for _, cg := range f.Comments {
-		for _, c := range cg.List {
-			text, ok := strings.CutPrefix(c.Text, "//")
-			if !ok {
-				continue
-			}
-			rest, ok := strings.CutPrefix(strings.TrimLeft(text, " \t"), sequentialMarker)
-			if ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') && strings.TrimSpace(rest) != "" {
-				marked[fset.Position(c.Pos()).Line] = true
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				if validMarker(c.Text) {
+					ft.marked[fset.Position(c.Pos()).Line] = true
+				}
 			}
 		}
-	}
-	// covered: the marker is on this line, or in the contiguous block of
-	// own-line comments directly above it.
-	covered := func(line int) bool {
-		if marked[line] {
-			return true
-		}
-		for k := line - 1; ownLineComment(k); k-- {
-			if marked[k] {
-				return true
-			}
-		}
-		return false
-	}
-
-	isRunItemsRef := func(e ast.Expr) bool {
-		switch x := e.(type) {
-		case *ast.SelectorExpr:
-			id, ok := x.X.(*ast.Ident)
-			return ok && names[id.Name] && x.Sel.Name == "RunItems"
-		case *ast.Ident:
-			return dot && x.Name == "RunItems"
-		}
-		return false
-	}
-	isOptionsType := func(e ast.Expr) bool {
-		switch x := e.(type) {
-		case *ast.SelectorExpr:
-			id, ok := x.X.(*ast.Ident)
-			return ok && names[id.Name] && x.Sel.Name == "RunItemsOptions"
-		case *ast.Ident:
-			return dot && x.Name == "RunItemsOptions"
-		}
-		return false
-	}
-	unwrapGeneric := func(e ast.Expr) ast.Expr {
-		switch x := e.(type) {
-		case *ast.IndexExpr:
-			return x.X
-		case *ast.IndexListExpr:
-			return x.X
-		}
-		return e
+		fileTables[name] = ft
+		return ft
 	}
 
 	var out []string
-	flag := func(pos token.Pos, msg string) {
-		out = append(out, rel+":"+strconv.Itoa(fset.Position(pos).Line)+": "+msg)
-	}
-
-	skipIdent := map[*ast.Ident]bool{}
-	callFuns := map[ast.Expr]bool{}      // RunItems expressions that are a call's Fun
-	owner := map[*ast.CompositeLit]int{} // options literal -> line of its RunItems call
-	judgeLit := func(lit *ast.CompositeLit) {
-		for _, e := range lit.Elts {
-			if kv, ok := e.(*ast.KeyValueExpr); ok {
-				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Concurrency" {
-					return
+	for _, pkg := range pkgs {
+		info, fset := pkg.TypesInfo, pkg.Fset
+		for _, f := range pkg.Syntax {
+			ft := tableFor(fset, f)
+			ownLineComment := func(line int) bool {
+				if line < 1 || line > len(ft.lines) {
+					return false
 				}
+				s := strings.TrimSpace(ft.lines[line-1])
+				return strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/*")
 			}
-		}
-		line := fset.Position(lit.Pos()).Line
-		if covered(line) {
-			return
-		}
-		if cl, ok := owner[lit]; ok && covered(cl) {
-			return
-		}
-		flag(lit.Pos(), "RunItemsOptions has no Concurrency key (clamps to one core)")
-	}
+			// covered: the marker is on this line, or in the contiguous block
+			// of own-line comments directly above it.
+			covered := func(line int) bool {
+				if ft.marked[line] {
+					return true
+				}
+				for k := line - 1; ownLineComment(k); k-- {
+					if ft.marked[k] {
+						return true
+					}
+				}
+				return false
+			}
+			flag := func(pos token.Pos, msg string) {
+				p := fset.Position(pos)
+				rel, err := filepath.Rel(root, p.Filename)
+				if err != nil {
+					rel = p.Filename
+				}
+				out = append(out, fmt.Sprintf("%s:%d: %s", filepath.ToSlash(rel), p.Line, msg))
+			}
 
+			callIdents := map[*ast.Ident]bool{}
+			ownerLine := map[*ast.CompositeLit]int{}
+
+			// Pass 1: calls, so pass 2 can tell a call from any other use.
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				id := runItemsCallee(info, call.Fun)
+				if id == nil {
+					return true
+				}
+				callIdents[id] = true
+				line := fset.Position(call.Pos()).Line
+				if len(call.Args) < 5 {
+					if !covered(line) {
+						flag(call.Pos(), "RunItems called with no RunItemsOptions (runs on one core)")
+					}
+					return true
+				}
+				if call.Ellipsis.IsValid() {
+					if !covered(line) {
+						flag(call.Pos(), "RunItems options passed as a spread; cannot be proven to set Concurrency")
+					}
+					return true
+				}
+				for _, arg := range call.Args[4:] {
+					if lit, ok := ast.Unparen(arg).(*ast.CompositeLit); ok {
+						ownerLine[lit] = line
+					}
+					if why := untraceable(arg, info, funcs, assigns, fieldAssigns, 0); why != "" && !covered(line) {
+						flag(arg.Pos(), "RunItems options cannot be proven to set Concurrency: "+why)
+					}
+				}
+				return true
+			})
+
+			// Pass 2: every composite literal of the options type.
+			ast.Inspect(f, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok || !isOptionsType(info.TypeOf(lit)) {
+					return true
+				}
+				if setsConcurrency(lit, info) {
+					return true
+				}
+				line := fset.Position(lit.Pos()).Line
+				if covered(line) {
+					return true
+				}
+				if cl, ok := ownerLine[lit]; ok && covered(cl) {
+					return true
+				}
+				flag(lit.Pos(), "RunItemsOptions has no non-zero Concurrency (clamps to one core)")
+				return true
+			})
+
+			// Pass 3: any other use of RunItems hides the call from this lint.
+			ast.Inspect(f, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok || callIdents[id] || !isRunItemsFunc(info.Uses[id]) {
+					return true
+				}
+				if !covered(fset.Position(id.Pos()).Line) {
+					flag(id.Pos(), "RunItems used other than as a direct call (hides the call from this lint)")
+				}
+				return true
+			})
+		}
+
+	}
+	return out
+}
+
+// validMarker reports whether a comment (// or /* */) carries the marker
+// followed by whitespace and a non-empty reason.
+func validMarker(comment string) bool {
+	text := comment
+	if rest, ok := strings.CutPrefix(text, "//"); ok {
+		text = rest
+	} else if rest, ok := strings.CutPrefix(text, "/*"); ok {
+		text = strings.TrimSuffix(rest, "*/")
+	} else {
+		return false
+	}
+	rest, ok := strings.CutPrefix(strings.TrimLeft(text, " \t"), sequentialMarker)
+	return ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') && strings.TrimSpace(rest) != ""
+}
+
+func isRunItemsFunc(obj types.Object) bool {
+	fn, ok := obj.(*types.Func)
+	return ok && fn.Pkg() != nil && fn.Pkg().Path() == runItemsImportPath && fn.Name() == "RunItems"
+}
+
+// runItemsCallee returns the identifier naming registry.RunItems when fun is a
+// (possibly instantiated) reference to it, whatever the import alias.
+func runItemsCallee(info *types.Info, fun ast.Expr) *ast.Ident {
+	switch x := ast.Unparen(fun).(type) {
+	case *ast.IndexExpr:
+		return runItemsCallee(info, x.X)
+	case *ast.IndexListExpr:
+		return runItemsCallee(info, x.X)
+	case *ast.SelectorExpr:
+		if isRunItemsFunc(info.Uses[x.Sel]) {
+			return x.Sel
+		}
+	case *ast.Ident:
+		if isRunItemsFunc(info.Uses[x]) {
+			return x
+		}
+	}
+	return nil
+}
+
+// isOptionsType reports whether t is registry.RunItemsOptions or a pointer to
+// it, seeing through aliases.
+func isOptionsType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(ptr.Elem())
+	}
+	named, ok := t.(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == runItemsImportPath &&
+		named.Obj().Name() == "RunItemsOptions"
+}
+
+// constZero reports whether e is a constant expression equal to zero.
+func constZero(info *types.Info, e ast.Expr) bool {
+	tv, ok := info.Types[e]
+	if !ok || tv.Value == nil {
+		return false
+	}
+	switch tv.Value.Kind() {
+	case constant.Int, constant.Float:
+		return constant.Sign(tv.Value) == 0
+	}
+	return false
+}
+
+// setsConcurrency reports whether the options literal has a Concurrency key
+// whose value is not the constant 0.
+func setsConcurrency(lit *ast.CompositeLit, info *types.Info) bool {
+	for _, e := range lit.Elts {
+		kv, ok := e.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Concurrency" {
+			return !constZero(info, kv.Value)
+		}
+	}
+	return false
+}
+
+// indexFile records, for tracing: function declarations by full name, every
+// whole-variable assignment, and every `v.Concurrency = e` assignment. A nil
+// expression marks an assignment the trace cannot follow (a zero-value `var`,
+// a multi-value right-hand side).
+func indexFile(f *ast.File, info *types.Info, funcs map[string]runItemsFuncDecl, assigns, fieldAssigns map[types.Object][]ast.Expr) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
-		case *ast.CallExpr:
-			fun := unwrapGeneric(x.Fun)
-			if !isRunItemsRef(fun) {
-				return true
+		case *ast.FuncDecl:
+			if fn, ok := info.Defs[x.Name].(*types.Func); ok && x.Body != nil {
+				funcs[fn.FullName()] = runItemsFuncDecl{decl: x, info: info}
 			}
-			callFuns[fun] = true
-			line := fset.Position(x.Pos()).Line
-			if len(x.Args) < 5 {
-				if !covered(line) {
-					flag(x.Pos(), "RunItems called with no RunItemsOptions (runs on one core)")
+		case *ast.AssignStmt:
+			for i, lhs := range x.Lhs {
+				var rhs ast.Expr
+				if len(x.Lhs) == len(x.Rhs) {
+					rhs = x.Rhs[i]
 				}
-				return true
-			}
-			if lit, ok := x.Args[len(x.Args)-1].(*ast.CompositeLit); ok {
-				owner[lit] = line
-			}
-		case *ast.CompositeLit:
-			switch tp := x.Type.(type) {
-			case *ast.ArrayType:
-				// []RunItemsOptions{{...}}: the elements carry no type.
-				if isOptionsType(tp.Elt) {
-					for _, e := range x.Elts {
-						if el, ok := e.(*ast.CompositeLit); ok && el.Type == nil {
-							judgeLit(el)
+				switch l := ast.Unparen(lhs).(type) {
+				case *ast.Ident:
+					if obj := info.ObjectOf(l); obj != nil {
+						assigns[obj] = append(assigns[obj], rhs)
+					}
+				case *ast.SelectorExpr:
+					if base, ok := ast.Unparen(l.X).(*ast.Ident); ok && l.Sel.Name == "Concurrency" {
+						if obj := info.ObjectOf(base); obj != nil {
+							fieldAssigns[obj] = append(fieldAssigns[obj], rhs)
 						}
 					}
 				}
-			case *ast.MapType:
-				if isOptionsType(tp.Value) {
-					for _, e := range x.Elts {
-						if kv, ok := e.(*ast.KeyValueExpr); ok {
-							if el, ok := kv.Value.(*ast.CompositeLit); ok && el.Type == nil {
-								judgeLit(el)
-							}
-						}
+			}
+		case *ast.ValueSpec:
+			for i, name := range x.Names {
+				var rhs ast.Expr
+				if len(x.Values) == len(x.Names) {
+					rhs = x.Values[i]
+				}
+				if obj := info.ObjectOf(name); obj != nil {
+					assigns[obj] = append(assigns[obj], rhs)
+				}
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{x.Key, x.Value} {
+				if id, ok := e.(*ast.Ident); ok {
+					if obj := info.ObjectOf(id); obj != nil {
+						assigns[obj] = append(assigns[obj], nil)
 					}
 				}
-			default:
-				if x.Type != nil && isOptionsType(x.Type) {
-					judgeLit(x)
-				}
-			}
-		case *ast.SelectorExpr:
-			skipIdent[x.Sel] = true // a selector's Sel is not a bare reference
-			if isRunItemsRef(x) && !callFuns[x] && !covered(fset.Position(x.Pos()).Line) {
-				flag(x.Pos(), "RunItems used other than as a direct call (hides the call from this lint)")
-			}
-		case *ast.Ident:
-			if !skipIdent[x] && isRunItemsRef(x) && !callFuns[x] && !covered(fset.Position(x.Pos()).Line) {
-				flag(x.Pos(), "RunItems used other than as a direct call (hides the call from this lint)")
 			}
 		}
 		return true
 	})
-	return out
+}
+
+// untraceable returns "" when expr is provably a RunItemsOptions literal (the
+// literal itself is judged by the literal pass) and otherwise says why not.
+func untraceable(expr ast.Expr, info *types.Info, funcs map[string]runItemsFuncDecl,
+	assigns, fieldAssigns map[types.Object][]ast.Expr, depth int) string {
+	if depth > 4 {
+		return "the trace is too deep"
+	}
+	switch x := ast.Unparen(expr).(type) {
+	case *ast.CompositeLit:
+		if isOptionsType(info.TypeOf(x)) {
+			return ""
+		}
+		return "not a RunItemsOptions literal"
+	case *ast.CallExpr:
+		var callee *types.Func
+		switch fun := ast.Unparen(x.Fun).(type) {
+		case *ast.Ident:
+			callee, _ = info.Uses[fun].(*types.Func)
+		case *ast.SelectorExpr:
+			if sel := info.Selections[fun]; sel != nil {
+				callee, _ = sel.Obj().(*types.Func)
+			} else {
+				callee, _ = info.Uses[fun.Sel].(*types.Func)
+			}
+		}
+		if callee == nil {
+			return "a call whose function is not statically known"
+		}
+		fd, ok := funcs[callee.FullName()]
+		if !ok {
+			return "a call to " + callee.Name() + ", which has no source in the checked tree"
+		}
+		returns := 0
+		why := ""
+		ast.Inspect(fd.decl.Body, func(n ast.Node) bool {
+			switch r := n.(type) {
+			case *ast.FuncLit:
+				return false // returns in a nested closure are not this function's
+			case *ast.ReturnStmt:
+				returns++
+				if len(r.Results) == 0 {
+					why = callee.Name() + " has a bare return"
+				} else if w := untraceable(r.Results[0], fd.info, funcs, assigns, fieldAssigns, depth+1); w != "" && why == "" {
+					why = callee.Name() + ": " + w
+				}
+			}
+			return true
+		})
+		if returns == 0 {
+			return callee.Name() + " has no return"
+		}
+		return why
+	case *ast.Ident:
+		obj := info.ObjectOf(x)
+		if _, ok := obj.(*types.Var); !ok {
+			return "not a variable"
+		}
+		list := assigns[obj]
+		if len(list) != 1 || list[0] == nil {
+			return fmt.Sprintf("variable %s is not assigned exactly once from a traceable expression", x.Name)
+		}
+		for _, fe := range fieldAssigns[obj] {
+			if fe == nil || constZero(info, fe) {
+				return fmt.Sprintf("variable %s has Concurrency assigned to zero or an untraceable value", x.Name)
+			}
+		}
+		return untraceable(list[0], info, funcs, assigns, fieldAssigns, depth+1)
+	}
+	return "an expression the lint cannot trace"
 }
 
 // TestRunItemsLintRecognisesOffenders pins the lint's own behaviour on
-// synthetic source, so a refactor of the walk cannot quietly turn it into a
+// synthetic, type-correct source loaded through the same go/packages path as
+// the real tree, so a refactor of the walk cannot quietly turn it into a
 // check that never fires (or one that fires on correct code).
 func TestRunItemsLintRecognisesOffenders(t *testing.T) {
 	const header = `package x
+
 import (
 	"context"
+
 	rg "` + runItemsImportPath + `"
 )
-var _ = context.Background
+
+var (
+	ctx   context.Context
+	r     rg.Reporter
+	items []int
+)
+
+func fn(context.Context, int) error { return nil }
+
+func okOpts() rg.RunItemsOptions { return rg.RunItemsOptions{Concurrency: 4} }
+
 `
 	const dotHeader = `package x
-import . "` + runItemsImportPath + `"
+
+import (
+	"context"
+
+	. "` + runItemsImportPath + `"
+)
+
+var (
+	ctx   context.Context
+	r     Reporter
+	items []int
+)
+
+func fn(context.Context, int) error { return nil }
+
+type S struct{}
+
+func (S) RunItems() {}
+
+var _ = RunItemsOptions{Concurrency: 1}
+
 `
 	cases := []struct {
 		name   string
@@ -316,47 +567,87 @@ import . "` + runItemsImportPath + `"
 		{"explicit key", header, "func f() { rg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{Concurrency: 4}) }", 0},
 		{"explicit one", header, "func f() { rg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{Concurrency: 1}) }", 0},
 		{"explicit type argument", header, "func f() { rg.RunItems[int](ctx, r, items, fn, rg.RunItemsOptions{}) }", 1},
-		{"spread options", header, "func f() { rg.RunItems(ctx, r, items, fn, opts...) }", 0},
 
-		// Every literal is judged where it is built.
-		{"literal in a variable", header, "func f() { opts := rg.RunItemsOptions{ErrMode: 1}; _ = opts }", 1},
-		{"literal in a variable with key", header, "func f() { opts := rg.RunItemsOptions{Concurrency: 2}; _ = opts }", 0},
-		{"helper return literal", header, "func build() rg.RunItemsOptions { return rg.RunItemsOptions{Label: nil} }", 1},
+		// Probe cases: the ways the syntactic lint could be dodged.
+		{"zero-value var passed", header, "func f() { var o rg.RunItemsOptions; o.ErrMode = 1; rg.RunItems(ctx, r, items, fn, o) }", 1},
+		{"empty spread slice", header, "func f() { rg.RunItems(ctx, r, items, fn, []rg.RunItemsOptions{}...) }", 1},
+		{"spread of a variable", header, "func f(o ...rg.RunItemsOptions) { rg.RunItems(ctx, r, items, fn, o...) }", 1},
+		{"pointer slice elided element", header, "var o = []*rg.RunItemsOptions{{ErrMode: 1}}", 1},
+		{"local alias type", header, "type opts = rg.RunItemsOptions\nfunc f() { rg.RunItems(ctx, r, items, fn, opts{ErrMode: 1}) }", 1},
+		{"explicit zero", header, "func f() { rg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{Concurrency: 0}) }", 1},
+		{"zero through a constant", header, "const none = 0\nfunc f() { rg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{Concurrency: none}) }", 1},
+
+		// Tracing: a variable, a helper, and the ways it can fail.
+		{"variable from a literal with key", header, "func f() { o := rg.RunItemsOptions{Concurrency: 2}; rg.RunItems(ctx, r, items, fn, o) }", 0},
+		{"variable from a helper with key", header, "func f() { o := okOpts(); o.ErrMode = 1; rg.RunItems(ctx, r, items, fn, o) }", 0},
+		{"helper call with key", header, "func f() { rg.RunItems(ctx, r, items, fn, okOpts()) }", 0},
+		{"helper whose literal lacks the key", header, "func badOpts() rg.RunItemsOptions { return rg.RunItemsOptions{Label: nil} }\nfunc f() { rg.RunItems(ctx, r, items, fn, badOpts()) }", 1},
+		{"variable reassigned", header, "func f() { o := okOpts(); o = rg.RunItemsOptions{Concurrency: 2}; rg.RunItems(ctx, r, items, fn, o) }", 1},
+		{"variable Concurrency set to zero", header, "func f() { o := okOpts(); o.Concurrency = 0; rg.RunItems(ctx, r, items, fn, o) }", 1},
+		{"function parameter", header, "func f(o rg.RunItemsOptions) { rg.RunItems(ctx, r, items, fn, o) }", 1},
+		{"literal with key, standalone", header, "func f() { o := rg.RunItemsOptions{Concurrency: 2}; _ = o }", 0},
+		{"literal without key, standalone", header, "func f() { o := rg.RunItemsOptions{ErrMode: 1}; _ = o }", 1},
 		{"pointer literal", header, "func f() { o := &rg.RunItemsOptions{ErrMode: 1}; _ = o }", 1},
 		{"slice element missing key", header, "var o = []rg.RunItemsOptions{{ErrMode: 1}}", 1},
 		{"slice element with key", header, "var o = []rg.RunItemsOptions{{Concurrency: 4}}", 0},
 		{"map value missing key", header, "var o = map[string]rg.RunItemsOptions{\"a\": {ErrMode: 1}}", 1},
-		{"options built elsewhere, not a literal", header, "func f() { rg.RunItems(ctx, r, items, fn, build()) }", 0},
 
 		// RunItems used other than as a call hides the call.
 		{"function value", header, "var run = rg.RunItems[int]", 1},
 		{"function value assigned", header, "func f() { run := rg.RunItems[string]; _ = run }", 1},
 
-		// Dot imports resolve the bare names.
+		// Dot imports resolve the bare names; an unrelated method is not RunItems.
 		{"dot import no options", dotHeader, "func f() { RunItems(ctx, r, items, fn) }", 1},
 		{"dot import literal missing key", dotHeader, "func f() { RunItems(ctx, r, items, fn, RunItemsOptions{ErrMode: 1}) }", 1},
 		{"dot import literal with key", dotHeader, "func f() { RunItems(ctx, r, items, fn, RunItemsOptions{Concurrency: 3}) }", 0},
 		{"dot import function value", dotHeader, "var run = RunItems[int]", 1},
-		{"dot import unrelated method", dotHeader, "func f() { s.RunItems() }", 0},
+		{"dot import unrelated method", dotHeader, "func f() { S{}.RunItems() }", 0},
+		{"field named RunItems", header, "type T struct{ RunItems int }\nvar _ = T{RunItems: 1}", 0},
 
 		// The marker.
 		{"marker with reason above", header, "func f() {\n// runitems:sequential one book at a time\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 0},
 		{"marker above a comment block", header, "func f() {\n// runitems:sequential one book at a time\n// and a second line of why\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 0},
 		{"marker on the call line", header, "func f() { rg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) // runitems:sequential reason\n}", 0},
+		{"block comment marker", header, "func f() {\n/* runitems:sequential reason */\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 0},
+		{"marker covers an untraceable call", header, "func f(o rg.RunItemsOptions) {\n// runitems:sequential reason\nrg.RunItems(ctx, r, items, fn, o) }", 0},
 		{"marker covers a literal below the call", header, "func f() {\n// runitems:sequential reason\nrg.RunItems(ctx, r, items, func(context.Context, int) error {\nreturn nil\n}, rg.RunItemsOptions{\nErrMode: 1,\n}) }", 0},
 		{"marker without reason", header, "func f() {\n// runitems:sequential\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 1},
+		{"block marker without reason", header, "func f() {\n/* runitems:sequential */\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 1},
 		{"marker run into a word", header, "func f() {\n// runitems:sequentially reason\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 1},
 		{"marker as trailing comment on the previous code line", header, "func f() {\n_ = 1 // runitems:sequential reason\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 1},
 		{"marker separated by code", header, "func f() {\n// runitems:sequential reason\n_ = 1\nrg.RunItems(ctx, r, items, fn, rg.RunItemsOptions{}) }", 1},
 	}
-	for _, tc := range cases {
+
+	root := moduleRootDir(t)
+	overlay := map[string][]byte{}
+	var patterns []string
+	dirOf := func(i int) string { return fmt.Sprintf("zzlintsynthetic/c%02d", i) }
+	for i, tc := range cases {
+		dir := filepath.Join(root, "internal", "plugins", dirOf(i))
+		overlay[filepath.Join(dir, "x.go")] = []byte(tc.header + tc.body)
+		patterns = append(patterns, modulePath+"/internal/plugins/"+filepath.ToSlash(dirOf(i)))
+	}
+	start := time.Now()
+	pkgs := loadTyped(t, root, overlay, patterns)
+	t.Logf("loaded %d synthetic packages in %s", len(pkgs), time.Since(start).Round(time.Millisecond))
+
+	byDir := map[string]*packages.Package{}
+	for _, p := range pkgs {
+		byDir[strings.TrimPrefix(p.PkgPath, modulePath+"/internal/plugins/")] = p
+	}
+	read := func(name string) ([]byte, error) {
+		if src, ok := overlay[name]; ok {
+			return src, nil
+		}
+		return os.ReadFile(name)
+	}
+	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			p := filepath.Join(dir, "x.go")
-			if err := os.WriteFile(p, []byte(tc.header+tc.body), 0o644); err != nil {
-				t.Fatal(err)
+			pkg := byDir[dirOf(i)]
+			if pkg == nil {
+				t.Fatalf("synthetic package %s was not loaded", dirOf(i))
 			}
-			if got := runItemsOffenders(t, p, "x.go"); len(got) != tc.want {
+			if got := lintRunItems(t, []*packages.Package{pkg}, root, read); len(got) != tc.want {
 				t.Errorf("offenders = %v, want %d", got, tc.want)
 			}
 		})
