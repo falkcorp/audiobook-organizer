@@ -188,10 +188,12 @@ type authorMergeOutcome struct {
 // cancelled is reported true (what was merged stays merged). step, when not nil,
 // is told how many of the ids have been handled.
 //
-// A merge id whose author is already gone counts as merged: an earlier merge
-// (this run's, or another screen's) removed it, and re-merging a deleted id is
-// not a proven no-op (see the op's ResumePolicy comment). A keep author that is
-// gone fails every id: there is nothing to fold them into.
+// A merge id whose author is already gone counts as merged only when nothing
+// remains of it or it was merged into THIS keep author: an earlier merge (this
+// run's, or another screen's) removed it, and re-merging a deleted id is not a
+// proven no-op (see the op's ResumePolicy comment). One merged into a different
+// author fails with that author named. A keep author that is gone fails every id:
+// there is nothing to fold them into.
 func mergeAuthorsInto(
 	ctx context.Context,
 	store authorMergeStore,
@@ -231,8 +233,22 @@ func mergeAuthorsInto(
 			out.Errors = append(out.Errors, fmt.Sprintf("failed to read author %d: %v", mergeID, merr))
 			continue
 		}
-		if mergeAuthor == nil || mergeAuthor.ID != mergeID {
+		if mergeAuthor == nil {
+			// Deleted with no tombstone: nothing left to fold in.
 			out.MergedIDs[mergeID] = true
+			continue
+		}
+		if mergeAuthor.ID != mergeID {
+			// Merged away already. Done only if it went into THIS keep author: one
+			// merged into somebody else is still not part of this group, and
+			// calling it merged would drop a suggestion whose authors are not
+			// together (result R1 folds B into A; R2 asks to fold B and D into C).
+			if mergeAuthor.ID == keepID {
+				out.MergedIDs[mergeID] = true
+			} else {
+				out.Errors = append(out.Errors, fmt.Sprintf(
+					"author %d was already merged into author %d, not author %d", mergeID, mergeAuthor.ID, keepID))
+			}
 			continue
 		}
 		mergeAuthorName := mergeAuthor.Name

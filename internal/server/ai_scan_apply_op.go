@@ -189,6 +189,23 @@ func applyScanResult(
 		if canceled != nil && canceled() {
 			return res, true
 		}
+		// GetAuthorByID follows the author tombstone. Nothing left of the author
+		// means a reclassify already happened; an answer under another id means it
+		// was MERGED into that author, so its books are credited to an author and
+		// not to a narrator, and calling it reclassified would be false.
+		cur, gerr := store.GetAuthorByID(id)
+		switch {
+		case gerr != nil:
+			res.Errors = append(res.Errors, fmt.Sprintf("author %d could not be read before reclassifying it: %v", id, gerr))
+			return res, false
+		case cur == nil:
+			res.Reclassified = append(res.Reclassified, id)
+			continue
+		case cur.ID != id:
+			res.Errors = append(res.Errors, fmt.Sprintf(
+				"author %d was already merged into author %d, so it cannot be reclassified as a narrator", id, cur.ID))
+			return res, false
+		}
 		if dryRun {
 			res.Reclassified = append(res.Reclassified, id)
 			continue
@@ -207,9 +224,6 @@ func applyScanResult(
 		})
 		switch {
 		case rerr == nil:
-			res.Reclassified = append(res.Reclassified, id)
-		case stderrors.Is(rerr, entities.ErrAuthorNotFound):
-			// Already gone (merged or reclassified by someone else): done.
 			res.Reclassified = append(res.Reclassified, id)
 		default:
 			res.Errors = append(res.Errors, fmt.Sprintf("reclassifying author %d as a narrator failed: %v", id, rerr))
