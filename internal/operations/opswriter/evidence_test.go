@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -1067,7 +1067,7 @@ func TestRowAppliedScansTheJournalOncePerRun(t *testing.T) {
 // in the batch under the same name, is still seen without the clock.
 func TestRowAppliedAuthorIsOneSubject(t *testing.T) {
 	s := newEvidenceStore()
-	for _, id := range []string{"book-005", "book-006", "book-007"} {
+	for _, id := range []string{"book-005", "book-006", "book-007", "book-008"} {
 		s.books[id] = &database.Book{ID: id, Title: "t " + id}
 	}
 	w := evidenceWriter(s, "op1", ops.Live)
@@ -1101,8 +1101,9 @@ func TestRowAppliedAuthorIsOneSubject(t *testing.T) {
 	applyItem(t, w, "credits-then-column", both(credits, column, "book-005"))
 	applyItem(t, w, "both-undone", both(column, credits, "book-006"))
 	applyItem(t, w, "column-7", column("book-007"))
+	applyItem(t, w, "column-8", column("book-008"))
 	rows := []string{"credits-1", "credits-2", "column-3", "column-then-credits", "credits-then-column",
-		"both-undone", "column-7"}
+		"both-undone", "column-7", "column-8"}
 	for _, r := range rows {
 		mustRowApplied(t, w, r, true) // P7: a row writing both is claimed, in either order
 	}
@@ -1137,6 +1138,23 @@ func TestRowAppliedAuthorIsOneSubject(t *testing.T) {
 	}
 	mustRowApplied(t, w, "forged-7", false)
 	mustRowApplied(t, w, "column-7", false)
+
+	// The other order: the forged foreign batch is stamped BEFORE the run's
+	// column write. The named foreign write was overwritten, and only a pair
+	// of the run's own writes is exempt, so the forged marker does not stand.
+	m8, _ := s.mark("op1", "column-8")
+	s.mu.Lock()
+	s.history = append(s.history, database.MetadataChangeRecord{BookID: "book-008", Field: database.HistoryFieldAuthor,
+		NewValue: &nv2, ChangeType: database.ChangeTypeManual, Source: "user_edit", BatchID: "manual-8",
+		ChangedAt: time.Now().Add(-time.Hour)})
+	s.mu.Unlock()
+	mustRowApplied(t, w, "column-8", true) // an older foreign write leaves the run's row standing
+	m8.RowID = "forged-8"
+	m8.BookBatches = append(m8.BookBatches, database.RowMarkBatch{BookID: "book-008", BatchID: "manual-8"})
+	if err := s.PutRowMarkV3("op1", m8); err != nil {
+		t.Fatal(err)
+	}
+	mustRowApplied(t, w, "forged-8", false)
 
 	// Later foreign writes under each other name of the subject.
 	s.foreignJournal("p1", "book-001", "author_id")           // P1: a credit rewrite journaled as author_id
@@ -1263,6 +1281,34 @@ func TestRowAppliedJournalMemoWaitersHonourTheirContext(t *testing.T) {
 	}
 	if !<-waiter {
 		t.Fatal("the waiter took the leader's canceled scan as its answer")
+	}
+}
+
+// TestRowAppliedJournalMemoResetDuringScan: a scan that was running when
+// the index became usable (reset) finishes for its reader but is not kept.
+func TestRowAppliedJournalMemoResetDuringScan(t *testing.T) {
+	s := newEvidenceStore()
+	first := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, first, "r1", setTitle(first, "book-001", "mine"))
+	s.foreignJournal("o1", "book-009", "title") // a row to scan
+	w := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s, ChangeScan: s})
+	var once atomic.Bool
+	s.onScanRow = func() {
+		if once.CompareAndSwap(false, true) {
+			w.journalMemo.reset()
+		}
+	}
+	mustRowApplied(t, w, "r1", true)
+	w.journalMemo.mu.Lock()
+	kept := w.journalMemo.built
+	w.journalMemo.mu.Unlock()
+	if kept {
+		t.Fatal("a scan reset while it ran was kept")
+	}
+	s.onScanRow = nil
+	mustRowApplied(t, w, "r1", true)
+	if s.scans.Load() != 2 {
+		t.Fatalf("%d scans; want 2 (the reset scan was not kept)", s.scans.Load())
 	}
 }
 
