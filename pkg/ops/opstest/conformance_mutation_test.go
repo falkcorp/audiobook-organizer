@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/conformance_mutation_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9a4f2c63-1e8b-4d57-b0a9-5c3e7f1d2b86
 // last-edited: 2026-10-14
 
@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -140,6 +141,29 @@ func TestCatches_WriteAfterCancel(t *testing.T) {
 	expectCaught(t, conform(t, w, broken), conform(t, w, titleDef(books)), AssertNoWriteAfterFence, false)
 }
 
+// TestCatches_HistoryAfterCancel: an Item that, when the Writer refuses its
+// write because the run is fenced, journals the change itself anyway. The
+// row commits after the revoke, inside the attempt's window.
+func TestCatches_HistoryAfterCancel(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books, journal := w.Books(), w.Journal()
+	broken := ops.Batch("opstest.broken.history-after-cancel", ops.BatchSpec[struct{}, database.Book, titleResult]{
+		Common: common("Journal around the fence", ops.Writes(ops.ResBooks)),
+		Source: bookSource(books),
+		Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+			_, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle)
+			if fenced(err) { // the bug: the history row goes around the fence
+				_ = journal.CreateOperationChange(&database.OperationChange{OperationID: rc.OpID(), BookID: b.ID,
+					ChangeType: "title_write", FieldName: "title", NewValue: strings.ToUpper(b.Title)})
+			}
+			return err
+		},
+		Finish: titleFinish,
+	})
+	expectCaught(t, conform(t, w, broken), conform(t, w, titleDef(books)), AssertNoWriteAfterFence, false)
+}
+
 // TestCatches_HistoryBeforeWrite: an Effect that journals the change before
 // it makes the write, so a crash between the two would leave history for a
 // write that never happened.
@@ -173,6 +197,180 @@ func TestCatches_HistoryBeforeWrite(t *testing.T) {
 	}
 	expectCaught(t, conform(t, w, effectDef("opstest.broken.history-first", true)),
 		conform(t, w, effectDef("opstest.tag", false)), AssertHistoryFollowsWrite, false)
+}
+
+// TestCatches_HistoryInsideEffectBeforeWrite: an item that writes the
+// book's title through the Writer, then runs an Effect that journals its tag
+// before it puts the tag. A match by book alone passes it (the title write
+// precedes the row); the row must pair with a write of its book made inside
+// the call that recorded it.
+func TestCatches_HistoryInsideEffectBeforeWrite(t *testing.T) {
+	t.Parallel()
+	w := NewWorld(t)
+	books, journal := w.Books(), w.Journal()
+	tagDef := func(id string, historyFirst bool) ops.Definition {
+		return ops.Batch(id, ops.BatchSpec[struct{}, database.Book, titleResult]{
+			Common: common("Title and tag every book", ops.Writes(ops.ResBooks)),
+			Source: bookSource(books),
+			Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+				if _, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle); err != nil {
+					return err
+				}
+				sub := ops.Subject{Type: ops.SubjectBook, ID: b.ID}
+				return rc.Writer().Effect(rc.Context(), ops.EffectSpec{Name: "opstest.tag", Subject: sub},
+					func() ([]ops.HistoryRow, error) {
+						if historyFirst { // the bug: the tag's row commits ahead of the tag
+							if err := journal.CreateOperationChange(&database.OperationChange{OperationID: rc.OpID(),
+								BookID: b.ID, ChangeType: "tag_write", FieldName: "tag", NewValue: "tagged"}); err != nil {
+								return nil, err
+							}
+							return nil, books.PutValue(sub, "tag", "tagged")
+						}
+						if err := books.PutValue(sub, "tag", "tagged"); err != nil {
+							return nil, err
+						}
+						return []ops.HistoryRow{{BookID: b.ID, Field: "tag", New: "tagged"}}, nil
+					})
+			},
+			Finish: titleFinish,
+		})
+	}
+	expectCaught(t, conform(t, w, tagDef("opstest.broken.title-then-history-first", true)),
+		conform(t, w, tagDef("opstest.title-then-tag", false)), AssertHistoryFollowsWrite, true)
+}
+
+// tbRecorder is a testing.TB that records Errorf instead of failing, so a
+// test can assert what a World reports through its TB (checkOrphans).
+type tbRecorder struct {
+	*testing.T
+	mu   sync.Mutex
+	errs []string
+}
+
+func (r *tbRecorder) Errorf(format string, args ...any) {
+	r.mu.Lock()
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
+	r.mu.Unlock()
+}
+
+func (r *tbRecorder) errors() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.errs)
+}
+
+// TestCatches_WriteAfterRunEnds is TestCatches_WriteAfterCancel's async
+// twin: the fenced item hands its write (a book write, or a history row) to
+// a goroutine that makes it straight to the store once the run is over. No
+// attempt's window holds it, so the per-attempt assertion cannot see it; the
+// World reports it, at its next Reset, as committed outside every attempt.
+func TestCatches_WriteAfterRunEnds(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, leak string) (*Outcome, []string) {
+		rec := &tbRecorder{T: t}
+		w := NewWorld(rec)
+		books, journal := w.Books(), w.Journal()
+		release := make(chan struct{})
+		var wg sync.WaitGroup
+		def := ops.Batch("opstest.write-after-run", ops.BatchSpec[struct{}, database.Book, titleResult]{
+			Common: common("Write after the run", ops.Writes(ops.ResBooks)),
+			Source: bookSource(books),
+			Item: func(rc *ops.ItemRC, _ struct{}, b database.Book) error {
+				_, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle)
+				if fenced(err) && leak != "" { // the bug: the write outlives the run
+					opID := rc.OpID()
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						<-release
+						if leak == "journal" {
+							_ = journal.CreateOperationChange(&database.OperationChange{OperationID: opID,
+								BookID: b.ID, ChangeType: "tag_write", FieldName: "tag", NewValue: "late"})
+							return
+						}
+						_, _ = books.ModifyBook(b.ID, upperTitle)
+					}()
+				}
+				return err
+			},
+			Finish: titleFinish,
+		})
+		o := w.Run(def, nil, Live(), ChunkSize(2), CancelAt(5))
+		close(release)
+		wg.Wait()
+		w.Reset()
+		return o, rec.errors()
+	}
+	for leak, want := range map[string]string{
+		"write":   "a write committed outside every run attempt",
+		"journal": "a history row was recorded outside every run attempt",
+	} {
+		t.Run(leak, func(t *testing.T) {
+			t.Parallel()
+			o, errs := run(t, leak)
+			if o.FenceRevokedAt == 0 {
+				t.Fatalf("CancelAt(5) never revoked the fence: %v", o.Notes)
+			}
+			for _, wr := range o.Writes {
+				if wr.Seq > o.FenceRevokedAt {
+					t.Fatalf("the leaked write landed inside the attempt's window (seq %d, revoke %d, end %d); "+
+						"the test no longer exercises a write after the run", wr.Seq, o.FenceRevokedAt, o.EndSeq)
+				}
+			}
+			for _, h := range o.History {
+				if h.Seq > o.FenceRevokedAt {
+					t.Fatalf("the leaked history row landed inside the attempt's window (seq %d, revoke %d); "+
+						"the test no longer exercises a row after the run", h.Seq, o.FenceRevokedAt)
+				}
+			}
+			if len(errs) == 0 || !strings.Contains(errs[0], AssertNoWriteAfterFence) || !strings.Contains(errs[0], want) {
+				t.Fatalf("what the leaked goroutine made after the run was not reported as %q: %v", want, errs)
+			}
+			t.Logf("%s caught it (%d failures), first: %s", AssertNoWriteAfterFence, len(errs), errs[0])
+		})
+	}
+	t.Run("twin", func(t *testing.T) {
+		t.Parallel()
+		if _, twin := run(t, ""); len(twin) > 0 {
+			t.Fatalf("the correct twin was reported: %v", twin)
+		}
+	})
+}
+
+// TestCrashResumeCountsCommittedItems: crash_resume_at_least_once asks for
+// every item's completion to be committed across the crash and the resume,
+// not merely started. Here a runner recorded item book-002's chunk complete
+// at lease: the item started before the crash, never returned, and the
+// resume skipped its chunk. A count of starts sees it run once; the
+// committed count catches it, even though the resume's progress ends
+// complete, so the checkEnd backstop does not fire.
+func TestCrashResumeCountsCommittedItems(t *testing.T) {
+	t.Parallel()
+	total := int64(2)
+	rec := newRecorder(t)
+	s := &suite{clean: &Outcome{Items: []ItemEvent{{Key: "book-001"}, {Key: "book-002"}}}}
+	pre := &Outcome{Crashed: true, Order: ops.Snapshot, ResumePolicy: ops.ResumeContinue, Items: []ItemEvent{
+		{Key: "book-001", Chunk: 0, Done: true, Committed: true},
+		{Key: "book-002", Chunk: 1}, // started; its chunk recorded at lease; never returned
+	}}
+	post := &Outcome{State: state.V3Succeeded, Order: ops.Snapshot, ResumePolicy: ops.ResumeContinue,
+		Progress: []ops.ProgressSnapshot{{Done: total, Total: &total}}}
+	rec.Run(AssertCrashResumeAtLeastOnce, func(tt tester) {
+		s.checkCrash(tt, crashPair{label: "CrashAt(0)", chunk: -1, pre: pre, post: post}, false)
+	})
+	msgs := rec.messages(AssertCrashResumeAtLeastOnce)
+	if len(msgs) != 1 || !strings.Contains(msgs[0], "book-002 never completed") {
+		t.Fatalf("crash_resume_at_least_once reported %v; want exactly book-002 never completed", msgs)
+	}
+	pre.Items[1].Done, pre.Items[1].Committed = true, true
+	ok := newRecorder(t)
+	ok.Run(AssertCrashResumeAtLeastOnce, func(tt tester) {
+		s.checkCrash(tt, crashPair{label: "CrashAt(0)", chunk: -1, pre: pre, post: post}, false)
+	})
+	if got := ok.failedSet(); len(got) > 0 {
+		t.Fatalf("with book-002 committed before the crash, the assertion still failed: %v",
+			ok.messages(AssertCrashResumeAtLeastOnce))
+	}
 }
 
 // TestCatches_AppendOnlyLie: a paged source over book ids claims AppendOnly,

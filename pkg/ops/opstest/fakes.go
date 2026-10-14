@@ -1,5 +1,5 @@
 // file: pkg/ops/opstest/fakes.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5e2a9c71-4d08-4f3b-8a6e-1b9d7c3f2a54
 // last-edited: 2026-10-14
 
@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
@@ -34,7 +35,8 @@ var errWorldStopped = errors.New("opstest: the world stopped (simulated crash); 
 // logs.
 //
 // It implements the Writer's store interfaces (opswriter.BookStore,
-// BookFileStore, AuthorStore). It has no delete, like the Writer.
+// BookFileStore, AuthorStore), so a def that bypasses the Writer can be
+// written against it. It has no delete, like the Writer.
 type FakeBooks struct {
 	w *World
 
@@ -135,93 +137,27 @@ func (b *FakeBooks) GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 }
 
 // ModifyBook implements opswriter.BookStore: the store's own ModifyBook,
-// recorded when it commits. The record's sequence number is taken inside the
-// store's critical section, so two writes of one book are numbered in the
-// order they committed.
+// recorded when it commits (World.modifyBook), under the gate of the
+// generation now running.
 func (b *FakeBooks) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	release, err := b.w.admit()
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	var seq int64
-	var changed []string
-	out, err := b.w.st().ModifyBook(id, func(row *database.Book) error {
-		before := fieldsOf(row)
-		if ferr := fn(row); ferr != nil {
-			return ferr
-		}
-		changed = diffFields(before, fieldsOf(row))
-		seq = b.w.log.next()
-		return nil
-	})
-	if err != nil || out == nil || seq == 0 {
-		return out, err
-	}
-	b.w.log.addWrite(WriteRecord{Seq: seq, Subject: ops.Subject{Type: ops.SubjectBook, ID: id}, BookID: id,
-		Op: "modify_book", Changed: changed})
-	return out, nil
+	return b.w.modifyBook(b.w.cur.Load(), id, fn)
 }
 
 // ModifyBookFile implements opswriter.BookFileStore, recorded like ModifyBook.
 func (b *FakeBooks) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	release, err := b.w.admit()
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	var seq int64
-	var changed []string
-	out, err := b.w.st().ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
-		before := fieldsOf(f)
-		if ferr := fn(f); ferr != nil {
-			return ferr
-		}
-		changed = diffFields(before, fieldsOf(f))
-		seq = b.w.log.next()
-		return nil
-	})
-	if err != nil || out == nil || seq == 0 {
-		return out, err
-	}
-	b.w.log.addWrite(WriteRecord{Seq: seq, Subject: ops.Subject{Type: ops.SubjectBookFile, ID: fileID}, BookID: bookID,
-		Op: "modify_book_file", Changed: changed})
-	return out, nil
+	return b.w.modifyBookFile(b.w.cur.Load(), bookID, fileID, fn)
 }
 
 // ModifyBookAuthors implements opswriter.AuthorStore, recorded like
 // ModifyBook.
 func (b *FakeBooks) ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
-	release, err := b.w.admit()
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	var seq int64
-	var changed []string
-	out, err := b.w.st().ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
-		next, ferr := fn(cur)
-		if ferr != nil {
-			return nil, ferr
-		}
-		if !slices.Equal(cur, next) {
-			changed = []string{"authors"}
-		}
-		seq = b.w.log.next()
-		return next, nil
-	})
-	if err != nil || seq == 0 {
-		return out, err
-	}
-	b.w.log.addWrite(WriteRecord{Seq: seq, Subject: ops.Subject{Type: ops.SubjectBook, ID: bookID}, BookID: bookID,
-		Op: "modify_book_authors", Changed: changed})
-	return out, nil
+	return b.w.modifyBookAuthors(b.w.cur.Load(), bookID, fn)
 }
 
-// InsertBook creates a book (InsertBelowCursor's insert, or a def's). It is
-// recorded as a write.
+// InsertBook creates a book: InsertBelowCursor's insert, made by the
+// harness, so it is recorded as a write that belongs to no def.
 func (b *FakeBooks) InsertBook(book database.Book) error {
-	release, err := b.w.admit()
+	release, err := b.w.cur.Load().admit()
 	if err != nil {
 		return err
 	}
@@ -230,7 +166,7 @@ func (b *FakeBooks) InsertBook(book database.Book) error {
 		return err
 	}
 	b.w.log.addWrite(WriteRecord{Subject: ops.Subject{Type: ops.SubjectBook, ID: book.ID}, BookID: book.ID,
-		Op: "insert_book", Changed: []string{"id"}})
+		Op: "insert_book", Changed: []string{"id"}, harness: true})
 	return nil
 }
 
@@ -239,7 +175,7 @@ func (b *FakeBooks) InsertBook(book database.Book) error {
 // def makes it inside rc.Writer().Effect. Changed is empty when the value
 // was already set.
 func (b *FakeBooks) PutValue(sub ops.Subject, field, value string) error {
-	release, err := b.w.admit()
+	release, err := b.w.cur.Load().admit()
 	if err != nil {
 		return err
 	}
@@ -275,7 +211,7 @@ func (b *FakeBooks) Value(sub ops.Subject, field string) string {
 // changes the log; it is how a test models a side effect that is not
 // idempotent.
 func (b *FakeBooks) AppendLog(name, entry string) error {
-	release, err := b.w.admit()
+	release, err := b.w.cur.Load().admit()
 	if err != nil {
 		return err
 	}
@@ -373,270 +309,123 @@ func diffFields(a, b map[string]string) []string {
 
 // ── history ─────────────────────────────────────────────────────────────────
 
-// Journal is the World's operation-change journal (opswriter.ChangeJournal),
-// recorded as HistoryRows in commit order.
+// Journal is the World's operation-change journal (opswriter.ChangeJournal)
+// for the history a def records itself, under the gate of the generation now
+// running, recorded as HistoryRows in commit order. (The Writer's own
+// history goes through the registry's store, recorded the same way.)
 type Journal struct{ w *World }
 
 var _ opswriter.ChangeJournal = (*Journal)(nil)
 
 // CreateOperationChange records one operation change row.
 func (j *Journal) CreateOperationChange(c *database.OperationChange) error {
-	release, err := j.w.admit()
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := j.w.st().CreateOperationChange(c); err != nil {
-		return err
-	}
-	j.w.log.addHistory(HistoryRow{BookID: c.BookID, Field: c.FieldName, Old: c.OldValue, New: c.NewValue,
-		Kind: "journal:" + c.ChangeType})
-	return nil
-}
-
-// metaRecorder is the World's metadata-history recorder
-// (opswriter.HistoryRecorder): book-field rows.
-type metaRecorder struct{ w *World }
-
-var _ opswriter.HistoryRecorder = (*metaRecorder)(nil)
-
-func (m *metaRecorder) RecordMetadataChange(r *database.MetadataChangeRecord) error {
-	release, err := m.w.admit()
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := m.w.st().RecordMetadataChange(r); err != nil {
-		return err
-	}
-	h := HistoryRow{BookID: r.BookID, Field: r.Field, Kind: "metadata:" + r.ChangeType}
-	if r.PreviousValue != nil {
-		h.Old = *r.PreviousValue
-	}
-	if r.NewValue != nil {
-		h.New = *r.NewValue
-	}
-	m.w.log.addHistory(h)
-	return nil
-}
-
-// ── the run store ───────────────────────────────────────────────────────────
-
-// opsStore is the runner's chunk store and the Writer's intent store: the
-// real store's methods (so the CAS, terminal-run and mark rules are the
-// production ones), refused after a crash and observed on commit.
-type opsStore struct{ w *World }
-
-var (
-	_ database.OpsV3ChunkStore = (*opsStore)(nil)
-	_ opswriter.IntentStore    = (*opsStore)(nil)
-)
-
-func (s *opsStore) write(fn func(*database.PebbleStore) error) error {
-	release, err := s.w.admit()
-	if err != nil {
-		return err
-	}
-	defer release()
-	return fn(s.w.st())
-}
-
-func (s *opsStore) PutSnapshotPageV3(id string, page int, keys []string) error {
-	return s.write(func(p *database.PebbleStore) error { return p.PutSnapshotPageV3(id, page, keys) })
-}
-
-func (s *opsStore) GetSnapshotPageV3(id string, page int) ([]string, bool, error) {
-	return s.w.st().GetSnapshotPageV3(id, page)
-}
-
-func (s *opsStore) PutChunkOffsetsV3(id string, offsets []int32) error {
-	return s.write(func(p *database.PebbleStore) error { return p.PutChunkOffsetsV3(id, offsets) })
-}
-
-func (s *opsStore) GetChunkOffsetsV3(id string) ([]int32, bool, error) {
-	return s.w.st().GetChunkOffsetsV3(id)
-}
-
-func (s *opsStore) CommitLedgerV3(id string, b database.LedgerBatch) error {
-	if err := s.write(func(p *database.PebbleStore) error { return p.CommitLedgerV3(id, b) }); err != nil {
-		return err
-	}
-	if a := s.w.attemptOf(id); a != nil {
-		a.observeCommit(b.Ledger)
-	}
-	return nil
-}
-
-func (s *opsStore) GetLedgerV3(id string) (*database.Ledger, error) { return s.w.st().GetLedgerV3(id) }
-
-func (s *opsStore) ListMarksV3(id string) (map[string][]string, error) {
-	return s.w.st().ListMarksV3(id)
-}
-
-func (s *opsStore) PutIntentV3(id string, in database.Intent) error {
-	return s.write(func(p *database.PebbleStore) error { return p.PutIntentV3(id, in) })
-}
-
-func (s *opsStore) ClearIntentV3(id string, seq uint64) error {
-	return s.write(func(p *database.PebbleStore) error { return p.ClearIntentV3(id, seq) })
-}
-
-func (s *opsStore) ListIntentsV3(id string) ([]database.Intent, error) {
-	return s.w.st().ListIntentsV3(id)
+	return j.w.createOperationChange(j.w.cur.Load(), c)
 }
 
 // ── the run's Writer ────────────────────────────────────────────────────────
 
 // trackedWriter is the run's Writer as an item sees it: the production
-// opswriter.Writer, with every call counted in flight. A fault that revokes
-// the fence first waits for the calls in flight to finish (drain), so a
-// write that passed the fence check before the revoke is committed before
-// the revoke is logged, and a write logged after it can only be one that
-// started after it. It embeds the interface, so a method added to ops.Writer
-// later passes straight through (untracked until it is added here).
+// Writer the registry built (newV3Writer), wrapped through
+// RunnerHooks.WrapWriter. It embeds the interface, so every method ops.Writer
+// gains passes straight through; the five write methods are also:
+//
+//   - counted in flight (drain): a fault that revokes the fence first waits
+//     for the calls in flight, so a write that passed the fence before the
+//     revoke is committed before the revoke is logged, and a write logged
+//     after it can only be one that started after it;
+//   - bracketed in the commit sequence (span), with the book they write, so
+//     history_follows_write pairs a history row made inside a call with a
+//     write of its book inside the same call;
+//   - checked after a revoke: a call that started after the harness revoked
+//     the fence and returned nil was accepted past the fence (late).
 //
 // A Writer callback (ModifyBook's fn, Effect's fn) must not call the Writer
 // again: the nested call would wait on a drain that waits on its caller.
 type trackedWriter struct {
 	ops.Writer
-	drain *sync.RWMutex
+	a       *attempt
+	drain   sync.RWMutex
+	revoked atomic.Bool
+}
+
+// span is one Writer call in the commit sequence: (Start, End) bracket every
+// write and history row it made.
+type span struct {
+	Start, End int64
+	Book       string // the book the call writes ("" when none)
+	Call       string
+}
+
+func (t *trackedWriter) call(name, book string, f func() error) error {
+	t.drain.RLock()
+	defer t.drain.RUnlock()
+	late := t.revoked.Load()
+	start := t.a.w.log.next()
+	err := f()
+	end := t.a.w.log.next()
+	t.a.addSpan(span{Start: start, End: end, Book: book, Call: name})
+	if late && err == nil {
+		t.a.lateWrite(fmt.Sprintf("%s of book %q", name, book))
+	}
+	return err
 }
 
 func (t *trackedWriter) ModifyBook(ctx context.Context, bookID string, fn func(*database.Book) error) (ops.Changed, error) {
-	t.drain.RLock()
-	defer t.drain.RUnlock()
-	return t.Writer.ModifyBook(ctx, bookID, fn)
+	var ch ops.Changed
+	err := t.call("ModifyBook", bookID, func() (err error) {
+		ch, err = t.Writer.ModifyBook(ctx, bookID, fn)
+		return err
+	})
+	return ch, err
 }
 
 func (t *trackedWriter) ModifyBookFile(ctx context.Context, bookID, fileID string, fn func(*database.BookFile) error) (ops.Changed, error) {
-	t.drain.RLock()
-	defer t.drain.RUnlock()
-	return t.Writer.ModifyBookFile(ctx, bookID, fileID, fn)
+	var ch ops.Changed
+	err := t.call("ModifyBookFile", bookID, func() (err error) {
+		ch, err = t.Writer.ModifyBookFile(ctx, bookID, fileID, fn)
+		return err
+	})
+	return ch, err
 }
 
 func (t *trackedWriter) RepointBookFile(ctx context.Context, bookID, fileID string, expect, to database.BookFileLocation) error {
-	t.drain.RLock()
-	defer t.drain.RUnlock()
-	return t.Writer.RepointBookFile(ctx, bookID, fileID, expect, to)
-}
-
-func (t *trackedWriter) ModifyBookAuthors(ctx context.Context, bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) (ops.Changed, error) {
-	t.drain.RLock()
-	defer t.drain.RUnlock()
-	return t.Writer.ModifyBookAuthors(ctx, bookID, fn)
-}
-
-func (t *trackedWriter) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.HistoryRow, error)) error {
-	t.drain.RLock()
-	defer t.drain.RUnlock()
-	return t.Writer.Effect(ctx, e, fn)
-}
-
-// ── scan stand-down ─────────────────────────────────────────────────────────
-
-// standDown is the fake scan stand-down: a lease that holds until LoseLeaseAt
-// says it was lost. The Writer renews it on every write, as in production.
-type standDown struct {
-	mu   sync.Mutex
-	held bool
-	lost bool
-}
-
-func (s *standDown) renew() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.held && !s.lost
-}
-
-func (s *standDown) isHeld() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.held
-}
-
-func (s *standDown) lose() {
-	s.mu.Lock()
-	s.lost = true
-	s.mu.Unlock()
-}
-
-type standDownHold struct {
-	sd   *standDown
-	w    *opswriter.Writer
-	once sync.Once
-}
-
-func (h *standDownHold) Release() {
-	h.once.Do(func() {
-		h.sd.mu.Lock()
-		h.sd.held = false
-		h.sd.mu.Unlock()
-		if h.w != nil {
-			h.w.SetLease(nil)
-			h.w.SetLeaseValid(nil)
-		}
+	return t.call("RepointBookFile", bookID, func() error {
+		return t.Writer.RepointBookFile(ctx, bookID, fileID, expect, to)
 	})
 }
 
-// ── host ────────────────────────────────────────────────────────────────────
-
-// worldHost is the executor's half of a run context (ops.Host).
-type worldHost struct {
-	a *attempt
-}
-
-func (h *worldHost) Progress(done int64, total ops.Total, note string) {
-	if done < 0 {
-		return
-	}
-	p := ops.ProgressSnapshot{Done: done, Current: note}
-	if n, ok := total.Value(); ok {
-		p.Total = &n
-	}
-	h.a.sink.Published(p)
-}
-
-func (h *worldHost) Touch() {}
-
-func (h *worldHost) Phase(string) {}
-
-func (h *worldHost) Checkpoint(raw json.RawMessage) error {
-	release, err := h.a.w.admit()
-	if err != nil {
+func (t *trackedWriter) ModifyBookAuthors(ctx context.Context, bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) (ops.Changed, error) {
+	var ch ops.Changed
+	err := t.call("ModifyBookAuthors", bookID, func() (err error) {
+		ch, err = t.Writer.ModifyBookAuthors(ctx, bookID, fn)
 		return err
+	})
+	return ch, err
+}
+
+func (t *trackedWriter) Effect(ctx context.Context, e ops.EffectSpec, fn func() ([]ops.HistoryRow, error)) error {
+	return t.call("Effect "+e.Name, t.a.w.books.bookOf(e.Subject), func() error { return t.Writer.Effect(ctx, e, fn) })
+}
+
+// ── the registry's event bus ────────────────────────────────────────────────
+
+// termBus is the registry's Bus for one generation: it ends an attempt when
+// the registry publishes its op.terminal (every terminal path of the
+// executor publishes it), and ignores every other event. It never drops an
+// event, unlike the SSE hub, whose slow subscribers lose them.
+type termBus struct{ g *generation }
+
+func (b termBus) Publish(_ context.Context, name string, payload any) error {
+	if name != "op.terminal" {
+		return nil
 	}
-	defer release()
-	h.a.w.mu.Lock()
-	h.a.w.checkpoints[h.a.opID] = slices.Clone(raw)
-	h.a.w.mu.Unlock()
+	m, _ := payload.(map[string]any)
+	id, _ := m["op_id"].(string)
+	status, _ := m["status"].(string)
+	if a := b.g.attemptOf(id); a != nil {
+		a.end(status)
+	}
 	return nil
-}
-
-func (h *worldHost) Restore() (json.RawMessage, bool, error) {
-	h.a.w.mu.Lock()
-	defer h.a.w.mu.Unlock()
-	raw, ok := h.a.w.checkpoints[h.a.opID]
-	return slices.Clone(raw), ok, nil
-}
-
-func (h *worldHost) Enqueue(def ops.Definition, _ json.RawMessage, _ ops.EnqueueConfig) (ops.RunRef, error) {
-	return ops.RunRef{}, fmt.Errorf("opstest: %s: child runs are not supported by the harness", def.ID())
-}
-
-func (h *worldHost) Await(context.Context, ops.RunRef) (ops.Outcome, error) {
-	return ops.Outcome{}, errors.New("opstest: child runs are not supported by the harness")
-}
-
-func (h *worldHost) StandDown(context.Context) (ops.Hold, error) {
-	sd := h.a.sd
-	sd.mu.Lock()
-	sd.held, sd.lost = true, false
-	sd.mu.Unlock()
-	if h.a.writer != nil {
-		h.a.writer.SetLease(sd.renew)
-		h.a.writer.SetLeaseValid(sd.renew)
-	}
-	return &standDownHold{sd: sd, w: h.a.writer}, nil
 }
 
 // ── progress ────────────────────────────────────────────────────────────────

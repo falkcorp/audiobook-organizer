@@ -1,30 +1,60 @@
 // file: pkg/ops/opstest/world.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c6d1f8e-2b47-4a95-b3e1-7d5c9a2f4e18
 // last-edited: 2026-10-14
 
 // Package opstest is the test harness for operations v3 definitions
 // (sdk-api.md section 12). A World is a real in-memory store, a fake clock
-// and an optional seeded scheduler; World.Run drives a definition through the
-// production batch runner with fault injection; Conformance proves a
+// and an optional seeded scheduler; World.Run drives a definition through a
+// real operations registry with fault injection; Conformance proves a
 // definition keeps the runner's invariants:
 //
 //	opstest.Conformance(t, def, params)
 //
+// Nothing of the executor is re-implemented here. Each run is enqueued on a
+// real registry.Registry (Register, Start, EnqueueOp), so dispatch, the
+// exclusive key, the fence, cancel, abandonment, the scan stand-down, the
+// Writer (built by the registry's own newV3Writer), the reporter, the commit
+// cadence of the chunk ledger and the boot sweep that resumes a crashed run
+// are the production code paths. The harness reaches in only through
+// registry.RunnerHooks (Options.RunnerHooksForTest), to observe and to inject
+// faults, and through the store the registry runs over (worldStore), to
+// record writes in commit order and to stop the world on a simulated crash.
+//
 // The store is the production store (database.NewPebbleStoreInMemory), not a
 // fake: every run record transition, ledger commit, snapshot page, intent,
-// book and book_file write goes through the same code the server runs, so
-// the harness can be no more permissive than production. The harness only
-// wraps it to record writes and history rows in commit order and to stop the
-// world on a simulated crash.
+// book and book_file write goes through the same code the server runs.
 //
-// Only tests import this package.
+// Where a run differs from production, and why:
+//
+//   - The runner's clock is fake (fakeClock): it steps 1ms a reading, so the
+//     ledger's commit throttle keeps completions folded but uncommitted the
+//     way a busy server does, and a crash loses them. CrashMidChunk and
+//     InsertBelowCursor step past the throttle instead, so every fold
+//     commits: their checks need every other chunk recorded.
+//   - Worker count and chunk size come from the run's options (the Job
+//     hook), and the registry's watchdog and sweep run hourly: the harness
+//     makes the faults itself.
+//   - The World supplies the DirtySet compare-and-delete the Pebble store
+//     does not have yet (02 PR 14 adds it), so a DirtySet def runs here
+//     while production still refuses it (registry.ErrDirtySetUnsupported).
+//   - worldStore has no Unwrap and leaves out the warm-up gate, stand-down
+//     persistence and v1 operation rows; TestWorldStoreServesEveryCapability
+//     fails on any capability the registry resolves that it does not serve.
+//   - history_follows_write pairs a history row with the Writer call it was
+//     made inside (a write of its book between the call's start and the
+//     row); a row made outside every call falls back to any earlier write of
+//     its book in the attempt.
+//   - A write committed outside every attempt (a goroutine a def leaked,
+//     writing after its run ended) is reported through the World's
+//     testing.TB at the next Reset and at cleanup, as no_write_after_fence.
+//
+// Only tests import this package (internal/arch guards it).
 package opstest
 
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -34,7 +64,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -46,29 +75,25 @@ type World struct {
 
 	seedBooks []database.Book
 	seedFiles []database.BookFile
+	seedDirty map[string][]byte
 
 	store atomic.Pointer[database.PebbleStore]
-
-	// gate orders writes against a crash: every recorded write holds it for
-	// reading; a crash takes it for writing and sets frozen, so no write is
-	// in flight at the crash and none is accepted after it.
-	gate   sync.RWMutex
-	frozen bool
+	// cur is the generation now running: the gate a write made straight
+	// through Books() or Journal() passes. A crash kills it; the next run or
+	// resume starts a new one.
+	cur atomic.Pointer[generation]
+	// dirtyMu orders the dirty-set writes the World makes (MarkDirty and the
+	// runner's compare-and-delete).
+	dirtyMu sync.Mutex
 
 	log   worldLog
 	clock fakeClock
-	keys  keyTable
-	opSeq atomic.Int64
 
 	books   *FakeBooks
 	journal *Journal
-	meta    *metaRecorder
-	ops     *opsStore
 
-	mu          sync.Mutex
-	attempts    map[string]*attempt // op id -> the live attempt
-	crashed     map[string]bool     // op ids a crash left running
-	checkpoints map[string]json.RawMessage
+	mu      sync.Mutex
+	crashed map[string]bool // op ids a crash left running, not yet resumed
 }
 
 // WorldOpt configures NewWorld.
@@ -99,24 +124,43 @@ func WithBookFiles(files ...database.BookFile) WorldOpt {
 	return func(w *World) { w.seedFiles = append(w.seedFiles, files...) }
 }
 
+// WithDirty seeds a DirtySet: one entry prefix+id per id, marked at epoch 1
+// (the 8-byte big-endian mark epoch ops.DirtySet reads).
+func WithDirty(prefix string, ids ...string) WorldOpt {
+	return func(w *World) {
+		if w.seedDirty == nil {
+			w.seedDirty = map[string][]byte{}
+		}
+		for _, id := range ids {
+			w.seedDirty[prefix+id] = dirtyEpoch(1)
+		}
+	}
+}
+
+func dirtyEpoch(n uint64) []byte {
+	b := make([]byte, 8)
+	for i := 7; i >= 0; i-- {
+		b[i] = byte(n)
+		n >>= 8
+	}
+	return b
+}
+
 // NewWorld builds a World over a fresh in-memory store, seeded by opts.
 func NewWorld(t testing.TB, opts ...WorldOpt) *World {
 	t.Helper()
-	w := &World{t: t, attempts: map[string]*attempt{}, crashed: map[string]bool{},
-		checkpoints: map[string]json.RawMessage{}}
+	w := &World{t: t, crashed: map[string]bool{}}
 	for _, o := range opts {
 		o(w)
 	}
-	if len(opts) == 0 {
+	if len(w.seedBooks) == 0 && len(w.seedDirty) == 0 {
 		SyntheticBooks(12)(w)
 	}
 	w.books = &FakeBooks{w: w}
 	w.journal = &Journal{w: w}
-	w.meta = &metaRecorder{w: w}
-	w.ops = &opsStore{w: w}
-	w.keys.init()
 	w.Reset()
 	t.Cleanup(func() {
+		w.checkOrphans()
 		if s := w.store.Swap(nil); s != nil {
 			_ = s.Close()
 		}
@@ -125,22 +169,55 @@ func NewWorld(t testing.TB, opts ...WorldOpt) *World {
 }
 
 // Books is the World's book and book_file store. Defs under test read
-// through it (it implements the read and write interfaces ops use); a write
-// made through it directly, rather than through the run's Writer, is
-// recorded like any other, which is how the harness catches a def that
-// bypasses the Writer.
+// through it; a write made through it directly, rather than through the
+// run's Writer, is recorded like any other, which is how the harness catches
+// a def that bypasses the Writer.
 func (w *World) Books() *FakeBooks { return w.books }
 
-// Journal is the World's operation-change journal: the history rows the
-// Writer records for non-book writes. A def that records history itself goes
-// through it.
+// Journal is the World's operation-change journal: the history rows a def
+// records itself go through it (the Writer records its own through the
+// registry's store).
 func (w *World) Journal() *Journal { return w.journal }
 
-// Reset replaces the store with a fresh one seeded from the World's seed and
-// clears every side value. It is a restart: anything a crash left frozen is
-// gone. Call it between runs that must not see each other's writes.
+// MarkDirty marks a DirtySet entry (prefix+id) at epoch, as the dirty-set
+// marker does: a re-mark while an item runs keeps the entry dirty.
+func (w *World) MarkDirty(prefix, id string, epoch uint64) error {
+	release, err := w.cur.Load().admit()
+	if err != nil {
+		return err
+	}
+	defer release()
+	w.dirtyMu.Lock()
+	defer w.dirtyMu.Unlock()
+	return w.st().SetRaw(prefix+id, dirtyEpoch(epoch))
+}
+
+// Dirty lists the DirtySet entries left under prefix, as ids.
+func (w *World) Dirty(prefix string) []string {
+	var out []string
+	after := ""
+	for {
+		page, next, err := w.st().ScanPrefixPage(prefix, after, 256)
+		if err != nil {
+			w.t.Fatalf("opstest: scan %s: %v", prefix, err)
+		}
+		for _, kv := range page {
+			out = append(out, strings.TrimPrefix(kv.Key, prefix))
+		}
+		if next == "" {
+			return out
+		}
+		after = next
+	}
+}
+
+// Reset replaces the store with a fresh one seeded from the World's seed. It
+// is a restart: anything a crash left is gone. Call it between runs that
+// must not see each other's writes. It first reports every write no run
+// accounts for (see checkOrphans).
 func (w *World) Reset() {
 	w.t.Helper()
+	w.checkOrphans()
 	s, err := database.NewPebbleStoreInMemory("/opstest")
 	if err != nil {
 		w.t.Fatalf("opstest: open the in-memory store: %v", err)
@@ -157,64 +234,22 @@ func (w *World) Reset() {
 			w.t.Fatalf("opstest: seed book file %s: %v", f.ID, err)
 		}
 	}
+	for k, v := range w.seedDirty {
+		if err := s.SetRaw(k, v); err != nil {
+			w.t.Fatalf("opstest: seed dirty entry %s: %v", k, err)
+		}
+	}
 	if old := w.store.Swap(s); old != nil {
 		_ = old.Close()
 	}
-	w.gate.Lock()
-	w.frozen = false
-	w.gate.Unlock()
+	w.cur.Store(newGeneration(w))
 	w.books.reset()
 	w.mu.Lock()
 	clear(w.crashed)
-	clear(w.checkpoints)
 	w.mu.Unlock()
 }
 
 func (w *World) st() *database.PebbleStore { return w.store.Load() }
-
-// admit is taken by every recorded write for its duration; it refuses once a
-// crash froze the world. The caller runs release when its write is done.
-func (w *World) admit() (release func(), err error) {
-	w.gate.RLock()
-	if w.frozen {
-		w.gate.RUnlock()
-		return nil, errWorldStopped
-	}
-	return w.gate.RUnlock, nil
-}
-
-// freeze stops the world: it waits for the writes in flight, then refuses
-// every later one until boot.
-func (w *World) freeze() {
-	w.gate.Lock()
-	w.frozen = true
-	w.gate.Unlock()
-}
-
-// boot is a process start after a crash: the world accepts writes again and
-// every run the crash left running or stopping is swept to interrupted, as
-// the registry's boot sweep does.
-func (w *World) boot() error {
-	w.gate.Lock()
-	w.frozen = false
-	w.gate.Unlock()
-	w.mu.Lock()
-	ids := slices.Sorted(maps.Keys(w.crashed))
-	clear(w.crashed)
-	w.mu.Unlock()
-	for _, id := range ids {
-		rec, err := w.st().GetRunV3(id)
-		if err != nil || rec == nil {
-			return fmt.Errorf("opstest: boot sweep of %s: read the run: %v", id, err)
-		}
-		if _, err := w.st().TransitionRunV3(database.TransitionRequest{ID: id, ExpectState: rec.State,
-			ExpectAttempt: rec.Attempt, ExpectFenceEpoch: rec.FenceEpoch, Event: state.EvBootSweep,
-			InterruptedWhy: state.WhyCrash}); err != nil {
-			return fmt.Errorf("opstest: boot sweep of %s: %w", id, err)
-		}
-	}
-	return nil
-}
 
 // State is a canonical dump of the World's data: every book, its files and
 // credits, and every side value and log. Two runs that left the same effects
@@ -300,15 +335,51 @@ func strip(v any) {
 // ── the commit-ordered log ──────────────────────────────────────────────────
 
 // worldLog numbers every recorded write, every history row and every
-// harness marker (attempt start and end, fence revoked) with one global
-// sequence, so "history after its write" and "no write after the fence" are
-// comparisons of two numbers.
+// harness marker (attempt start and end, fence revoked, a Writer call's
+// start and end) with one global sequence, so "history after its write" and
+// "no write after the fence" are comparisons of two numbers. Entries carry
+// no attempt number: an Outcome stamps its own copies with its attempt
+// (two runs of one registry can be live at once, so a global "current
+// attempt" would misattribute).
 type worldLog struct {
 	mu      sync.Mutex
 	seq     int64
-	attempt int // the attempt number writes are attributed to
 	writes  []WriteRecord
 	history []HistoryRow
+	// windows are the (start, end] spans of every attempt that ended;
+	// checked and checkedHistory count the writes and history rows
+	// checkOrphans already looked at.
+	windows        [][2]int64
+	checked        int
+	checkedHistory int
+	// clears are the DirtySet entries the runner deleted (the item's
+	// durable completion for a DirtySet source), by sequence number.
+	clears []clearRec
+}
+
+type clearRec struct {
+	seq int64
+	key string
+}
+
+func (l *worldLog) addClear(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.seq++
+	l.clears = append(l.clears, clearRec{seq: l.seq, key: key})
+}
+
+// clearedIn is the set of DirtySet keys deleted in (from, to].
+func (l *worldLog) clearedIn(from, to int64) map[string]bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := map[string]bool{}
+	for _, c := range l.clears {
+		if c.seq > from && c.seq <= to {
+			out[c.key] = true
+		}
+	}
+	return out
 }
 
 // next reserves the next sequence number.
@@ -326,7 +397,6 @@ func (l *worldLog) addWrite(r WriteRecord) {
 		l.seq++
 		r.Seq = l.seq
 	}
-	r.Attempt = l.attempt
 	l.writes = append(l.writes, r)
 }
 
@@ -335,30 +405,31 @@ func (l *worldLog) addHistory(h HistoryRow) {
 	defer l.mu.Unlock()
 	l.seq++
 	h.Seq = l.seq
-	h.Attempt = l.attempt
 	l.history = append(l.history, h)
 }
 
-func (l *worldLog) setAttempt(n int) {
+func (l *worldLog) addWindow(from, to int64) {
 	l.mu.Lock()
-	l.attempt = n
+	l.windows = append(l.windows, [2]int64{from, to})
 	l.mu.Unlock()
 }
 
 // window returns the writes and history rows numbered in (from, to], in
-// sequence order.
-func (l *worldLog) window(from, to int64) ([]WriteRecord, []HistoryRow) {
+// sequence order, stamped with attempt.
+func (l *worldLog) window(from, to int64, attempt int) ([]WriteRecord, []HistoryRow) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var ws []WriteRecord
 	for _, r := range l.writes {
 		if r.Seq > from && r.Seq <= to {
+			r.Attempt = attempt
 			ws = append(ws, r)
 		}
 	}
 	var hs []HistoryRow
 	for _, h := range l.history {
 		if h.Seq > from && h.Seq <= to {
+			h.Attempt = attempt
 			hs = append(hs, h)
 		}
 	}
@@ -367,95 +438,194 @@ func (l *worldLog) window(from, to int64) ([]WriteRecord, []HistoryRow) {
 	return ws, hs
 }
 
+// orphans returns the writes and history rows not yet checked that lie in
+// no ended attempt's window (writes the harness made itself excepted).
+func (l *worldLog) orphans() ([]WriteRecord, []HistoryRow) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	inWindow := func(seq int64) bool {
+		for _, win := range l.windows {
+			if seq > win[0] && seq <= win[1] {
+				return true
+			}
+		}
+		return false
+	}
+	var ws []WriteRecord
+	for _, r := range l.writes[l.checked:] {
+		if !r.harness && !inWindow(r.Seq) {
+			ws = append(ws, r)
+		}
+	}
+	var hs []HistoryRow
+	for _, h := range l.history[l.checkedHistory:] {
+		if !inWindow(h.Seq) {
+			hs = append(hs, h)
+		}
+	}
+	l.checked, l.checkedHistory = len(l.writes), len(l.history)
+	return ws, hs
+}
+
+// checkOrphans is no_write_after_fence for what no assertion window sees: a
+// write or history row committed while no attempt of any run was live.
+// Everything a def commits belongs to an attempt, from the moment the
+// registry starts it to its terminal transition (or its crash); a write or
+// row outside them all came from a goroutine the def left behind, after its
+// run ended, and the fence (which stops writes through the Writer) did not
+// stop it. Run by Reset and at the World's cleanup, reported through the
+// World's testing.TB.
+func (w *World) checkOrphans() {
+	ws, hs := w.log.orphans()
+	for _, r := range ws {
+		w.t.Errorf("opstest: %s: a write committed outside every run attempt: %s %s:%s (seq %d); a goroutine the "+
+			"def left behind wrote after its run ended, past the fence", AssertNoWriteAfterFence, r.Op,
+			r.Subject.Type, r.Subject.ID, r.Seq)
+	}
+	for _, h := range hs {
+		w.t.Errorf("opstest: %s: a history row was recorded outside every run attempt: book %s field %s (seq %d); "+
+			"a goroutine the def left behind recorded it after its run ended, past the fence",
+			AssertNoWriteAfterFence, h.BookID, h.Field, h.Seq)
+	}
+}
+
 // ── fake clock ──────────────────────────────────────────────────────────────
 
-// fakeClock is the runner's clock: it starts at a fixed instant and moves one
-// millisecond per reading, so nothing the runner computes depends on the
-// host's speed.
-type fakeClock struct{ ticks atomic.Int64 }
+// fakeClock is the runner's clock: it starts at a fixed instant and moves by
+// a step per reading, so nothing the runner computes depends on the host's
+// speed. A step of 1ms keeps the production commit throttle (2s) from ever
+// firing inside a small run, so completions stay folded and uncommitted
+// until the final commit, the state a crash must survive; a step above the
+// throttle makes every completion commit at once (CrashMidChunk's strong
+// form needs every other chunk recorded).
+type fakeClock struct{ ns atomic.Int64 }
 
 var clockBase = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-func (c *fakeClock) now() time.Time {
-	return clockBase.Add(time.Duration(c.ticks.Add(1)) * time.Millisecond)
-}
-
-// ── exclusive keys ──────────────────────────────────────────────────────────
-
-// keyTable is the registry's exclusive-key rule reproduced inside the
-// harness: a run holds its def's Exclusive key from dispatch until its last
-// goroutine returned, and a second run of the same key waits queued until
-// then.
-type keyTable struct {
-	mu   sync.Mutex
-	cond *sync.Cond
-	held map[string]bool
-}
-
-func (k *keyTable) init() {
-	k.cond = sync.NewCond(&k.mu)
-	k.held = map[string]bool{}
-}
-
-// acquire takes key; when it is held it calls queued once and waits.
-func (k *keyTable) acquire(key string, queued func()) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	signaled := false
-	for k.held[key] {
-		if !signaled && queued != nil {
-			signaled = true
-			queued()
-		}
-		k.cond.Wait()
-	}
-	k.held[key] = true
-}
-
-func (k *keyTable) release(key string) {
-	k.mu.Lock()
-	delete(k.held, key)
-	k.mu.Unlock()
-	k.cond.Broadcast()
+func (c *fakeClock) now(step time.Duration) time.Time {
+	return clockBase.Add(time.Duration(c.ns.Add(int64(step))))
 }
 
 // Intent is a write-ahead intent row (database.Intent).
 type Intent = database.Intent
 
-// stateOf reads a run's v3 state.
-func (w *World) stateOf(opID string) (*database.RunRecord, error) {
-	rec, err := w.st().GetRunV3(opID)
+// ── recorded writes ─────────────────────────────────────────────────────────
+
+// modifyBook is the store's ModifyBook under g's gate, recorded when it
+// commits. The record's sequence number is taken inside the store's critical
+// section, so two writes of one book are numbered in the order they
+// committed.
+func (w *World) modifyBook(g *generation, id string, fn func(*database.Book) error) (*database.Book, error) {
+	release, err := g.admit()
 	if err != nil {
 		return nil, err
 	}
-	if rec == nil {
-		return nil, fmt.Errorf("opstest: run %s not found", opID)
+	defer release()
+	var seq int64
+	var changed []string
+	out, err := w.st().ModifyBook(id, func(row *database.Book) error {
+		before := fieldsOf(row)
+		if ferr := fn(row); ferr != nil {
+			return ferr
+		}
+		changed = diffFields(before, fieldsOf(row))
+		seq = w.log.next()
+		return nil
+	})
+	if err != nil || out == nil || seq == 0 {
+		return out, err
 	}
-	return rec, nil
+	w.log.addWrite(WriteRecord{Seq: seq, Subject: ops.Subject{Type: ops.SubjectBook, ID: id}, BookID: id,
+		Op: "modify_book", Changed: changed})
+	return out, nil
 }
 
-// transition moves a run with the store's compare-and-set rule (state,
-// attempt and fence epoch must be the ones just read).
-func (w *World) transition(opID string, req database.TransitionRequest) (*database.RunRecord, error) {
-	rec, err := w.stateOf(opID)
+func (w *World) modifyBookFile(g *generation, bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	release, err := g.admit()
 	if err != nil {
 		return nil, err
 	}
-	req.ID, req.ExpectState, req.ExpectAttempt, req.ExpectFenceEpoch = opID, rec.State, rec.Attempt, rec.FenceEpoch
-	return w.st().TransitionRunV3(req)
-}
-
-// mode is the run record's spelling of a mode.
-func modeString(live bool) string {
-	if live {
-		return ops.Live.String()
+	defer release()
+	var seq int64
+	var changed []string
+	out, err := w.st().ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
+		before := fieldsOf(f)
+		if ferr := fn(f); ferr != nil {
+			return ferr
+		}
+		changed = diffFields(before, fieldsOf(f))
+		seq = w.log.next()
+		return nil
+	})
+	if err != nil || out == nil || seq == 0 {
+		return out, err
 	}
-	return ops.Preview.String()
+	w.log.addWrite(WriteRecord{Seq: seq, Subject: ops.Subject{Type: ops.SubjectBookFile, ID: fileID}, BookID: bookID,
+		Op: "modify_book_file", Changed: changed})
+	return out, nil
 }
 
-// attemptOf is the live attempt of opID, or nil.
-func (w *World) attemptOf(opID string) *attempt {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.attempts[opID]
+func (w *World) modifyBookAuthors(g *generation, bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
+	release, err := g.admit()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	var seq int64
+	var changed []string
+	out, err := w.st().ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		next, ferr := fn(cur)
+		if ferr != nil {
+			return nil, ferr
+		}
+		if !slices.Equal(cur, next) {
+			changed = []string{"authors"}
+		}
+		seq = w.log.next()
+		return next, nil
+	})
+	if err != nil || seq == 0 {
+		return out, err
+	}
+	w.log.addWrite(WriteRecord{Seq: seq, Subject: ops.Subject{Type: ops.SubjectBook, ID: bookID}, BookID: bookID,
+		Op: "modify_book_authors", Changed: changed})
+	return out, nil
+}
+
+// recordMetadataChange is a book-field history row (the Writer's
+// HistoryRecorder), recorded in commit order.
+func (w *World) recordMetadataChange(g *generation, r *database.MetadataChangeRecord) error {
+	release, err := g.admit()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := w.st().RecordMetadataChange(r); err != nil {
+		return err
+	}
+	h := HistoryRow{BookID: r.BookID, Field: r.Field, Kind: "metadata:" + r.ChangeType}
+	if r.PreviousValue != nil {
+		h.Old = *r.PreviousValue
+	}
+	if r.NewValue != nil {
+		h.New = *r.NewValue
+	}
+	w.log.addHistory(h)
+	return nil
+}
+
+// createOperationChange is an operation-journal row, recorded in commit
+// order.
+func (w *World) createOperationChange(g *generation, c *database.OperationChange) error {
+	release, err := g.admit()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := w.st().CreateOperationChange(c); err != nil {
+		return err
+	}
+	w.log.addHistory(HistoryRow{BookID: c.BookID, Field: c.FieldName, Old: c.OldValue, New: c.NewValue,
+		Kind: "journal:" + c.ChangeType})
+	return nil
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.52.0
+// version: 3.52.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-14
 
@@ -179,6 +179,8 @@ type Registry struct {
 	// "now". Nil means time.Now. All three must read the same clock or the
 	// idle time the watchdog computes is meaningless.
 	livenessNow func() time.Time
+	// runnerHooksForTest is Options.RunnerHooksForTest: nil in production.
+	runnerHooksForTest func(opID string) *RunnerHooks
 	// scanStandDownGrace is the static re-queue grace from Options (see
 	// scanStandDownGraceFor). scanStandDownGraceFn, when set, overrides it
 	// with a live value (the server wires the config setting through it).
@@ -258,6 +260,11 @@ type Options struct {
 	// Nil = no hook. Same contract as SetWatchdogStrikeHook, which production
 	// uses because the container builds the registry without Options.
 	OnWatchdogStrike func(kind string)
+
+	// RunnerHooksForTest returns the test hooks of one v3 run (RunnerHooks),
+	// asked once per attempt by op id; nil, and every production registry,
+	// runs with none. Only pkg/ops/opstest sets it.
+	RunnerHooksForTest func(opID string) *RunnerHooks
 }
 
 // livenessClock is the watchdog's clock (see Options.LivenessNow).
@@ -409,6 +416,7 @@ func NewWithOptions(store database.OpsV2Store, lg *slog.Logger, workers int, opt
 		scanStandDownLease: opts.ScanStandDownLease,
 		scanStandDownNow:   opts.ScanStandDownNow,
 		livenessNow:        opts.LivenessNow,
+		runnerHooksForTest: opts.RunnerHooksForTest,
 		scanStandDownGrace: opts.ScanStandDownGrace,
 	}
 	r.SetWatchdogStrikeHook(opts.OnWatchdogStrike)

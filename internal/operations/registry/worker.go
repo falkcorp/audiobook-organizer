@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.40.0
+// version: 2.40.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package registry
 
@@ -797,6 +797,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.releaseSlotKeepKeyLocked(qr.opID)
 			r.mu.Unlock()
 			r.pingDispatch()
+			r.runnerHooksFor(qr.opID).abandonedForTest() // pkg/ops/opstest only; nil in production
 			// R-3: the runaway goroutine keeps calling reporter.Log even though
 			// its flushLoop has exited (runCtx canceled) — the buffered lines are
 			// unrecoverable by design, so flip the reporter's terminal flag to make
