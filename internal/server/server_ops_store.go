@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-10-13
 
@@ -64,6 +64,7 @@ type serverEntityStore interface {
 	serverAuthorStore
 	serverAuthorLinkStore
 	serverEntityReader
+	serverNarratorWriter
 }
 
 // serverTagStore: Tag reads and writes.
@@ -200,6 +201,15 @@ type serverEntityReader interface {
 	GetNarratorByID(id int) (*database.Narrator, error)
 	GetSeriesByID(id int) (*database.Series, error)
 	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
+}
+
+// serverNarratorWriter: Narrator rows and a book's narrator links, for the one
+// path that turns an author into a narrator (entities.ReclassifyAuthorAsNarrator,
+// run by ai.author-scan-apply for a narrator the AI flagged).
+type serverNarratorWriter interface {
+	CreateNarrator(name string) (*database.Narrator, error)
+	GetNarratorByName(name string) (*database.Narrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 }
 
 // serverTagWriter: Adds, sets and removes tags on books, authors and series.

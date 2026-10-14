@@ -457,106 +457,10 @@ func (h *Handler) RenameAuthor(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"id": authorID, "name": name})
 }
 
-// repointPrimaryAuthor moves book.AuthorID off an author that is about to be
-// deleted, onto newPrimary, keeping the denormalized book.Author snapshot in
-// agreement with it.
-//
-// Updating the book_authors junction is NOT sufficient before a DeleteAuthor.
-// book.AuthorID is a denormalized pointer living on the BOOK row, and
-// DeleteAuthor never touches it: it removes the author row, the name index and
-// the aliases, then sweeps the junction (pebble_store_authors.go:157-220) and
-// stops. A caller that rewrites the junction, deletes the author and returns
-// leaves book.AuthorID dangling for every book it touched.
-//
-// A dangling AuthorID is not cosmetic, and it is not symmetric across read
-// paths. The list path serves books out of memdb, where stripBookForMemdb
-// clears book.Author (memdb_strip.go:53), so the name is re-hydrated via
-// GetAuthorsByIDs -> GetAuthorByID. For a deleted author with no tombstone that
-// returns nil, GetAuthorsByIDs omits the key entirely rather than recording a
-// miss (pebble_store_authors.go:87), and service_query.go:658 then leaves
-// AuthorName nil: the book renders with NO AUTHOR. Callers that read the full
-// Pebble row instead still see the stale snapshot and show the OLD name, so the
-// same book disagrees with itself between two screens.
-//
-// Both fields must be set together when there IS a successor. Writing AuthorID
-// alone would leave UpdateBook's preserve-on-nil guard (pebble_store.go:2407)
-// holding the previous Author object, which is precisely the stale-snapshot
-// half of the divergence above.
-//
-// newPrimary must be non-nil. Until 2026-09-13 nil meant "clear AuthorID" (the
-// reclassify case with no surviving author), which left an authorless book and a
-// stale Author snapshot. Clearing is no longer allowed: a caller with no
-// successor passes the Unknown Author placeholder (h.unknownAuthor), the same
-// fallback DeleteAuthor applies at the store level. A nil here is logged and
-// the write refused rather than silently clearing.
-//
-// Third copy of this logic, after internal/scheduler/extra_ops.go:382-410 and
-// internal/plugins/maintenance/author.go:221-246. Those two agree; this handler
-// was the one that had drifted, which is what the "keep in sync" comment on the
-// scheduler copy was meant to prevent and did not.
-// unknownAuthor returns the Unknown Author placeholder row the name index
-// resolves, creating it when absent.
-func (h *Handler) unknownAuthor() (*database.Author, error) {
-	u, err := h.store.GetAuthorByName(database.UnknownAuthorName)
-	if err != nil {
-		return nil, err
-	}
-	if u == nil {
-		if u, err = h.store.CreateAuthor(database.UnknownAuthorName); err != nil {
-			return nil, err
-		}
-	}
-	if u == nil || u.ID <= 0 {
-		return nil, fmt.Errorf("%q author did not resolve", database.UnknownAuthorName)
-	}
-	return u, nil
-}
-
+// repointPrimaryAuthor is the method form of the package function of the same
+// name (reclassify.go), which package server's AI apply op shares.
 func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID int, newPrimary *database.Author) {
-	if book == nil {
-		return
-	}
-	// Only the books whose PRIMARY author is the doomed one need repointing;
-	// for the rest the junction rewrite was the whole job.
-	if book.AuthorID == nil || *book.AuthorID != deletedAuthorID {
-		return
-	}
-	if newPrimary == nil {
-		entitiesLog.Warn("author repoint: no successor given, refusing to clear AuthorID book=%s author=%d",
-			book.ID, deletedAuthorID)
-		return
-	}
-	id := newPrimary.ID
-	newID := &id
-
-	// ModifyBook sets AuthorID and the denormalized Author on the stored row
-	// under its lock. Until 2026-09-14 this hydrated the row with GetBookByID,
-	// set the two fields and wrote the whole row back with UpdateBook -- and
-	// when the hydrate failed, wrote book.ToBook(), a BookCore PROJECTION, as
-	// the whole row (the store restores nine heavy columns on such a write,
-	// but not the rest). Both were column writes in disguise: AuthorID and Author
-	// are the only columns this function owns, the whole-row write reverted
-	// anything another writer committed meanwhile, and the projection write
-	// would have blanked every column BookCore does not carry. The store
-	// reads the row itself now, so there is no hydrate step to fail and no
-	// fallback. A row whose primary author is no longer the deleted one
-	// (another writer repointed it meanwhile) is left as it is.
-	updated, err := h.store.ModifyBook(book.ID, func(b *database.Book) error {
-		if b.AuthorID == nil || *b.AuthorID != deletedAuthorID {
-			return database.ErrSkipBookWrite
-		}
-		b.AuthorID = newID
-		b.Author = newPrimary
-		return nil
-	})
-	switch {
-	case err != nil:
-		entitiesLog.Warn("author repoint: failed to update book %s to author %d: %s",
-			book.ID, id, err.Error())
-	case updated == nil:
-		entitiesLog.Warn("author repoint: book %s no longer exists, nothing to repoint from author %d",
-			book.ID, deletedAuthorID)
-	}
+	repointPrimaryAuthor(h.store, book, deletedAuthorID, newPrimary)
 }
 
 // SplitCompositeAuthor splits an author like "Author1 / Author2" or "Author1, Author2"
@@ -933,115 +837,25 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 		return
 	}
 
-	author, err := h.store.GetAuthorByID(authorID)
-	if err != nil || author == nil {
-		httputil.RespondWithNotFound(c, "author", "")
-		return
-	}
-
-	// Create or find narrator with same name
-	narrator, err := h.store.GetNarratorByName(author.Name)
-	if err != nil || narrator == nil {
-		narrator, err = h.store.CreateNarrator(author.Name)
-		if err != nil {
-			httputil.InternalError(c, "failed to create narrator", err)
-			return
-		}
-	}
-
-	// Get all books linked to this author, trash included: the DeleteAuthor
-	// below sweeps trashed books' junction rows too.
-	books, err := h.store.GetBooksByAuthorIDForRelinkCore(authorID)
+	out, err := ReclassifyAuthorAsNarrator(h.store, authorID, ReclassifyOptions{})
 	if err != nil {
-		httputil.InternalError(c, "failed to get author books", err)
-		return
-	}
-
-	booksUpdated := 0
-	var unknown *database.Author // resolved at most once, on first need
-	for _, book := range books {
-		// Remove author link
-		bookAuthors, err := h.store.GetBookAuthors(book.ID)
-		if err != nil {
-			continue
+		var re *ReclassifyError
+		switch {
+		case errors.Is(err, ErrAuthorNotFound):
+			httputil.RespondWithNotFound(c, "author", "")
+		case errors.Is(err, database.ErrAuthorStillLinked):
+			httputil.RespondWithConflict(c, err.Error())
+		case errors.As(err, &re):
+			httputil.InternalError(c, re.Msg, re.Err)
+		default:
+			httputil.InternalError(c, "failed to reclassify author as narrator", err)
 		}
-		var newAuthors []database.BookAuthor
-		for _, ba := range bookAuthors {
-			if ba.AuthorID != authorID {
-				newAuthors = append(newAuthors, ba)
-			}
-		}
-		if err := h.store.SetBookAuthors(book.ID, newAuthors); err != nil {
-			continue
-		}
-
-		// The reclassified person is a NARRATOR now, so unlike the split there
-		// is no designated successor: promote whatever author the junction
-		// still lists first, and clear when none is left. Either way
-		// book.AuthorID must stop pointing at the row DeleteAuthor is about to
-		// remove below.
-		var successor *database.Author
-		if len(newAuthors) > 0 {
-			if a, err := h.store.GetAuthorByID(newAuthors[0].AuthorID); err == nil && a != nil {
-				successor = a
-			}
-		}
-		if successor == nil {
-			// No surviving author (or its lookup failed): fall back to the
-			// Unknown Author placeholder the name index resolves. Clearing is
-			// not allowed -- it strands the book authorless -- and leaving the
-			// scalar would dangle once DeleteAuthor below runs.
-			if unknown == nil {
-				u, uErr := h.unknownAuthor()
-				if uErr != nil {
-					httputil.InternalError(c, "failed to resolve the Unknown Author placeholder", uErr)
-					return
-				}
-				unknown = u
-			}
-			successor = unknown
-		}
-		h.repointPrimaryAuthor(&book, authorID, successor)
-
-		// Add narrator link if not already present
-		bookNarrators, err := h.store.GetBookNarrators(book.ID)
-		if err != nil {
-			continue
-		}
-		hasNarrator := false
-		for _, bn := range bookNarrators {
-			if bn.NarratorID == narrator.ID {
-				hasNarrator = true
-				break
-			}
-		}
-		if !hasNarrator {
-			bookNarrators = append(bookNarrators, database.BookNarrator{
-				BookID:     book.ID,
-				NarratorID: narrator.ID,
-				Role:       "narrator",
-				Position:   len(bookNarrators),
-			})
-			if err := h.store.SetBookNarrators(book.ID, bookNarrators); err != nil {
-				continue
-			}
-		}
-		booksUpdated++
-	}
-
-	// Delete the author record, unless a book the loop above skipped still
-	// credits it.
-	if h.refuseDeleteWhileLinked(c, authorID) {
-		return
-	}
-	if err := h.store.DeleteAuthor(authorID); err != nil {
-		httputil.InternalError(c, "failed to delete author", err)
 		return
 	}
 
 	h.dedupCache.Invalidate("author-duplicates")
 	h.authorsCache.InvalidateAll()
-	httputil.RespondWithOK(c, gin.H{"narrator_id": narrator.ID, "books_updated": booksUpdated})
+	httputil.RespondWithOK(c, gin.H{"narrator_id": out.NarratorID, "books_updated": out.BooksUpdated})
 }
 
 // ResolveProductionAuthor attempts to find real authors for books attributed to

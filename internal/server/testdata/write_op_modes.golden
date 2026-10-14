@@ -1,5 +1,5 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.17.3
+# version: 1.18.1
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
 # last-edited: 2026-10-14
 #
@@ -34,6 +34,7 @@ acoustid.reset-all	no-mode
 acoustid.window-backfill	preview
 ai.author-merge-apply	no-mode
 ai.author-review	no-mode
+ai.author-scan-apply	preview
 dedup.auto-resolve	preview
 dedup.book-merge	no-mode
 dedup.book-signature-scan	no-mode

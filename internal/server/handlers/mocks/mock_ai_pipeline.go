@@ -158,6 +158,57 @@ func (_c *MockAIPipeline_CreateScan_Call) RunAndReturn(run func(mode string) (*d
 	return _c
 }
 
+// EnsureKeepIDs provides a mock function for the type MockAIPipeline
+func (_mock *MockAIPipeline) EnsureKeepIDs(scanID int) error {
+	ret := _mock.Called(scanID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EnsureKeepIDs")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(int) error); ok {
+		r0 = returnFunc(scanID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAIPipeline_EnsureKeepIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EnsureKeepIDs'
+type MockAIPipeline_EnsureKeepIDs_Call struct {
+	*mock.Call
+}
+
+// EnsureKeepIDs is a helper method to define mock.On call
+//   - scanID int
+func (_e *MockAIPipeline_Expecter) EnsureKeepIDs(scanID any) *MockAIPipeline_EnsureKeepIDs_Call {
+	return &MockAIPipeline_EnsureKeepIDs_Call{Call: _e.mock.On("EnsureKeepIDs", scanID)}
+}
+
+func (_c *MockAIPipeline_EnsureKeepIDs_Call) Run(run func(scanID int)) *MockAIPipeline_EnsureKeepIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAIPipeline_EnsureKeepIDs_Call) Return(err error) *MockAIPipeline_EnsureKeepIDs_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockAIPipeline_EnsureKeepIDs_Call) RunAndReturn(run func(scanID int) error) *MockAIPipeline_EnsureKeepIDs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // LinkOperation provides a mock function for the type MockAIPipeline
 func (_mock *MockAIPipeline) LinkOperation(scanID int, opID string) error {
 	ret := _mock.Called(scanID, opID)
