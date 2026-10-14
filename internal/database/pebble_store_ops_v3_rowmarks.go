@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_rowmarks.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 01d04b73-654b-4085-a8d5-1ad63d2ca6c7
 // last-edited: 2026-10-14
 
@@ -30,9 +30,9 @@ func opv3RowMarkKey(id, rowID string) []byte { return []byte(opv3RowMarkPrefix +
 type RowMarkV3 struct {
 	RowID    string    `json:"row_id"`
 	MarkedAt time.Time `json:"marked_at"`
-	// Batches are the metadata history batches the row's book writes
+	// BookBatches are the metadata history batches the row's book writes
 	// recorded.
-	Batches []RowMarkBatch `json:"batches,omitempty"`
+	BookBatches []RowMarkBatch `json:"batches,omitempty"`
 	// Changes are the ids of the operation journal rows, under the run's
 	// op id, the row's other writes recorded.
 	Changes []string `json:"changes,omitempty"`

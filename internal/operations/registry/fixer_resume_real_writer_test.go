@@ -1,5 +1,5 @@
 // file: internal/operations/registry/fixer_resume_real_writer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 53c15d37-1fc7-4e53-ac78-538932952997
 // last-edited: 2026-10-14
 
@@ -283,13 +283,13 @@ func TestFixerResumeRealWriter(t *testing.T) {
 				// under the batch id); someone then sets the title back to
 				// row 10's Proposed. Row 11 is left alone.
 				m, err := p.GetRowMarkV3("op", itemKey(10))
-				if err != nil || m == nil || len(m.Batches) != 1 {
+				if err != nil || m == nil || len(m.BookBatches) != 1 {
 					t.Fatalf("row 10's marker = %+v, %v; want one batch", m, err)
 				}
 				old, applied := `"orig bk-`+itemKey(10)+`"`, `"new `+itemKey(10)+`"`
-				if err := p.RecordMetadataChange(&database.MetadataChangeRecord{BookID: m.Batches[0].BookID,
+				if err := p.RecordMetadataChange(&database.MetadataChangeRecord{BookID: m.BookBatches[0].BookID,
 					Field: "title", PreviousValue: &applied, NewValue: &old, ChangeType: opswriter.ChangeTypeUndo,
-					Source: "undo-last-apply", ChangedAt: time.Now(), BatchID: m.Batches[0].BatchID}); err != nil {
+					Source: "undo-last-apply", ChangedAt: time.Now(), BatchID: m.BookBatches[0].BatchID}); err != nil {
 					t.Fatal(err)
 				}
 			}, all(10)},

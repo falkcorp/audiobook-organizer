@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_rowmarks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8e3d0f1-a530-4206-b9a9-20bfd85c4ec5
 // last-edited: 2026-10-14
 
@@ -21,7 +21,7 @@ func TestRowMarksV3(t *testing.T) {
 	p := newTimelineStore(t)
 	id := insertV3(t, p, "test.rowmarks", "")
 	other := insertV3(t, p, "test.rowmarks", "")
-	m := RowMarkV3{RowID: "row:1", Batches: []RowMarkBatch{{BookID: "book-001", BatchID: "op-x-01"}},
+	m := RowMarkV3{RowID: "row:1", BookBatches: []RowMarkBatch{{BookID: "book-001", BatchID: "op-x-01"}},
 		Changes: []string{"c-1", "c-2"}}
 	if err := p.PutRowMarkV3(id, m); err != nil {
 		t.Fatal(err)
@@ -30,8 +30,8 @@ func TestRowMarksV3(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := p.GetRowMarkV3(id, "row:1")
-	if err != nil || got == nil || got.RowID != "row:1" || got.MarkedAt.IsZero() || len(got.Batches) != 1 ||
-		got.Batches[0] != m.Batches[0] || len(got.Changes) != 2 || got.Changes[1] != "c-2" {
+	if err != nil || got == nil || got.RowID != "row:1" || got.MarkedAt.IsZero() || len(got.BookBatches) != 1 ||
+		got.BookBatches[0] != m.BookBatches[0] || len(got.Changes) != 2 || got.Changes[1] != "c-2" {
 		t.Fatalf("GetRowMarkV3 = %+v, %v", got, err)
 	}
 	for _, k := range [][2]string{{id, "row:2"}, {other, "row:1"}, {id, "row"}} {

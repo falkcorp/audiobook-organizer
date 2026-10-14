@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package database
 
@@ -927,6 +927,11 @@ func TestOpv3KeysAllInRegisteredFamilies(t *testing.T) {
 	_ = p.PutSnapshotPageV3(child, 0, []string{"a"})
 	_ = p.PutChunkOffsetsV3(child, []int32{0})
 	_ = p.PutIntentV3(child, Intent{Seq: 1})
+	// child is dispatched, not terminal: a terminal transition deletes its
+	// row markers, and a refused put would only show up as "not exercised".
+	if err := p.PutRowMarkV3(child, RowMarkV3{RowID: "r"}); err != nil {
+		t.Fatal(err)
+	}
 	_ = p.AppendLogV3(child, LogLine{Message: "m"})
 	if err := p.CommitLedgerV3(child, LedgerBatch{Ledger: Ledger{ChunkCount: 1},
 		ItemRows: []ItemOutcome{{Key: "k", Outcome: "skipped:dup"}}, Marks: map[string][]string{"applied": {"k"}}}); err != nil {
