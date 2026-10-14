@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package database
 
@@ -374,11 +374,20 @@ type OpsV3RunReader interface {
 	ListRunEventsV3(id string, limit int) ([]Transition, error)
 }
 
-// OpsV3ChunkStore is the checkpoint, snapshot and chunk-ledger surface
-// (chunk leasing, D28a).
-type OpsV3ChunkStore interface {
+// OpsV3CheckpointStore is a run's checkpoint: a Task's saved state, its
+// phase, and (written by CommitLedgerV3, never through here) a batch run's
+// lease table. Task resume reads and writes it; the batch runner does not.
+type OpsV3CheckpointStore interface {
 	SaveCheckpointV3(id string, ck Checkpoint) error
 	GetCheckpointV3(id string) (*Checkpoint, error)
+}
+
+// OpsV3ChunkStore is the batch runner's chunk-leasing surface (D28a): the
+// frozen snapshot and its chunk offsets, the chunk ledger and the marks
+// committed with it. Split from OpsV3CheckpointStore along the line between
+// a Batch's chunk table and a Task's saved state; registry.batchStore is
+// exactly this set.
+type OpsV3ChunkStore interface {
 	PutSnapshotPageV3(id string, page int, keys []string) error
 	GetSnapshotPageV3(id string, page int) ([]string, bool, error)
 	PutChunkOffsetsV3(id string, offsets []int32) error
@@ -422,6 +431,7 @@ type OpsV3AuxStore interface {
 type OpsV3Store interface {
 	OpsV3RunWriter
 	OpsV3RunReader
+	OpsV3CheckpointStore
 	OpsV3ChunkStore
 	OpsV3AuxStore
 }
