@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.8.0
+// version: 4.9.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package aiscan
 
@@ -1089,6 +1089,41 @@ func (pm *PipelineManager) buildFullInput(authors []database.Author) []ai.Author
 	return inputs
 }
 
+// rolesWithFlags is the stored Roles of a suggestion: the structured roles the
+// model returned, with the deprecated is_narrator / is_publisher id lists folded
+// in when the roles do not carry ids themselves.
+//
+// The batch prompts (ai/openai_batch.go) ask ONLY for is_narrator and
+// is_publisher, so for every batch and nightly scan those lists are the whole
+// of the model's "this one is a narrator" answer. The converters used to drop
+// them, and a flagged narrator was then merged into the keep author as if it
+// were a name variant. In a full scan the ids are author ids; in a groups scan
+// they are positions in the group, which the apply refuses (planScanMerge).
+func rolesWithFlags(roles *ai.SuggestionRoles, narrators, publishers []int) json.RawMessage {
+	if roles == nil && len(narrators) == 0 && len(publishers) == 0 {
+		return nil
+	}
+	var out ai.SuggestionRoles
+	if roles != nil {
+		out = *roles
+	}
+	fold := func(role **ai.SuggestionRole, ids []int) {
+		if len(ids) == 0 || (*role != nil && len((*role).IDs) > 0) {
+			return
+		}
+		var r ai.SuggestionRole
+		if *role != nil {
+			r = **role
+		}
+		r.IDs = append([]int(nil), ids...)
+		*role = &r
+	}
+	fold(&out.Narrator, narrators)
+	fold(&out.Publisher, publishers)
+	raw, _ := json.Marshal(out)
+	return raw
+}
+
 // groupsSuggestionsToScanSuggestions converts AI groups suggestions to normalized ScanSuggestions.
 func groupsSuggestionsToScanSuggestions(suggestions []ai.AuthorDedupSuggestion, groupIDs [][]int) []database.ScanSuggestion {
 	var result []database.ScanSuggestion
@@ -1102,10 +1137,7 @@ func groupsSuggestionsToScanSuggestions(suggestions []ai.AuthorDedupSuggestion, 
 			authorIDs = append(authorIDs, groupIDs[s.GroupIndex]...)
 		}
 
-		var rolesJSON json.RawMessage
-		if s.Roles != nil {
-			rolesJSON, _ = json.Marshal(s.Roles)
-		}
+		rolesJSON := rolesWithFlags(s.Roles, s.IsNarrator, s.IsPublisher)
 
 		sug := database.ScanSuggestion{
 			Action:        s.Action,
@@ -1132,10 +1164,7 @@ func fullSuggestionsToScanSuggestions(suggestions []ai.AuthorDiscoverySuggestion
 	for _, s := range suggestions {
 		canonicalName := dedup.NormalizeAuthorName(s.CanonicalName)
 
-		var rolesJSON json.RawMessage
-		if s.Roles != nil {
-			rolesJSON, _ = json.Marshal(s.Roles)
-		}
+		rolesJSON := rolesWithFlags(s.Roles, s.IsNarrator, s.IsPublisher)
 
 		result = append(result, database.ScanSuggestion{
 			Action:        s.Action,

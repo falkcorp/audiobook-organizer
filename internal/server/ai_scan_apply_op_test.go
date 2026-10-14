@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b3d1e97-0c45-4a28-9f7e-d2a8c5416b03
 // last-edited: 2026-10-13
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -385,13 +386,13 @@ func TestPlanScanMerge(t *testing.T) {
 	}
 	base := database.ScanSuggestion{Action: "merge", KeepID: 2, AuthorIDs: []int{1, 2, 3, 3, 0}, Source: "full_scan"}
 
-	plan, err := planScanMerge(database.ScanResult{Suggestion: base})
+	plan, err := planScanMerge(database.ScanResult{Suggestion: base}, aiscan.RawRoleFlags{})
 	require.NoError(t, err)
 	require.Equal(t, scanApplyPlan{KeepID: 2, MergeIDs: []int{1, 3}}, plan, "duplicates and non-ids are dropped, the keep is not merged")
 
 	withNarrator := base
 	withNarrator.Roles = role("narrator", 3)
-	plan, err = planScanMerge(database.ScanResult{Suggestion: withNarrator})
+	plan, err = planScanMerge(database.ScanResult{Suggestion: withNarrator}, aiscan.RawRoleFlags{})
 	require.NoError(t, err)
 	require.Equal(t, scanApplyPlan{KeepID: 2, MergeIDs: []int{1}, NarratorIDs: []int{3}}, plan)
 
@@ -410,8 +411,83 @@ func TestPlanScanMerge(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sug := base
 			mutate(&sug)
-			_, err := planScanMerge(database.ScanResult{Suggestion: sug})
+			_, err := planScanMerge(database.ScanResult{Suggestion: sug}, aiscan.RawRoleFlags{})
 			require.Error(t, err)
 		})
 	}
+}
+
+// The batch prompts ask the model ONLY for is_narrator / is_publisher, so for every
+// batch and nightly scan that list is the whole flag. Recording such a scan used
+// to drop it and the apply merged the narrator into the keep author.
+func TestAIScanApplyOp_ADeprecatedIsNarratorFlagIsHonouredNotMerged(t *testing.T) {
+	f := newApplyFixture(t)
+	keep, variant, voice := f.author("Flag Keep"), f.author("Flag Variant"), f.author("Flag Voice")
+	variantBook := mkRelinkOpBook(t, f.st, "flag-variant", variant.ID, false)
+	voiceBook := mkRelinkOpBook(t, f.st, "flag-voice", voice.ID, false)
+
+	scanID, err := aiscan.RecordFullScanResults(f.scanStore, "night-flag", []ai.AuthorDiscoverySuggestion{{
+		AuthorIDs: []int{keep.ID, variant.ID, voice.ID}, Action: "merge", CanonicalName: keep.Name,
+		Confidence: "high", IsNarrator: []int{voice.ID},
+	}}, f.st)
+	require.NoError(t, err)
+	f.scan, err = f.scanStore.GetScan(scanID)
+	require.NoError(t, err)
+	rows, err := f.scanStore.GetScanResults(scanID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	rep, err := f.run(live(), rows[0].ID)
+
+	require.NoError(t, err)
+	require.Equal(t, []int{keep.ID}, junctionIDs(t, f.st, variantBook), "the variant merged")
+	credits, cerr := f.st.GetBookAuthors(voiceBook)
+	require.NoError(t, cerr)
+	for _, ba := range credits {
+		require.NotEqual(t, keep.ID, ba.AuthorID, "the flagged narrator's book must not be credited to the keep author")
+	}
+	narrators, nerr := f.st.GetBookNarrators(voiceBook)
+	require.NoError(t, nerr)
+	require.Len(t, narrators, 1, "the flagged voice became the narrator of its book")
+	require.Equal(t, []int{voice.ID}, rep.report(t).Results[0].Reclassified)
+}
+
+// A scan stored before the converters kept the flag has no flag on its result; the
+// stored phase output is the only place the answer survives. The apply refuses the
+// result, and merges nothing, rather than folding the flagged author in.
+func TestAIScanApplyOp_AFlagOnlyInTheStoredPhaseOutputRefusesTheResult(t *testing.T) {
+	f := newApplyFixture(t)
+	keep, voice := f.author("Old Keep"), f.author("Old Voice")
+	voiceBook := mkRelinkOpBook(t, f.st, "old-voice", voice.ID, false)
+	_, err := f.scanStore.CreatePhase(f.scan.ID, "full_scan", "m")
+	require.NoError(t, err)
+	output, err := json.Marshal([]ai.AuthorDiscoverySuggestion{{
+		AuthorIDs: []int{keep.ID, voice.ID}, Action: "merge", CanonicalName: keep.Name, IsNarrator: []int{voice.ID},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, f.scanStore.SavePhaseData(f.scan.ID, "full_scan", nil, output, json.RawMessage("[]")))
+	// The stored result as the old converter wrote it: no roles at all.
+	id := f.result(database.ScanSuggestion{CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, voice.ID}, Source: "full_scan"})
+
+	_, err = f.run(live(), id)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "flags author "+strconv.Itoa(voice.ID))
+	require.Equal(t, []int{voice.ID}, junctionIDs(t, f.st, voiceBook), "refused means untouched")
+	require.False(t, f.applied(id))
+}
+
+func TestAIScanApplyOp_AnUnreadableStoredPhaseOutputFailsTheRunClosed(t *testing.T) {
+	f := newApplyFixture(t)
+	keep, from := f.author("Bad Keep"), f.author("Bad From")
+	book := mkRelinkOpBook(t, f.st, "bad-book", from.ID, false)
+	_, err := f.scanStore.CreatePhase(f.scan.ID, "full_scan", "m")
+	require.NoError(t, err)
+	require.NoError(t, f.scanStore.SavePhaseData(f.scan.ID, "full_scan", nil, json.RawMessage(`{"not":"a list"}`), json.RawMessage("[]")))
+	id := f.result(database.ScanSuggestion{CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, from.ID}, Source: "full_scan"})
+
+	_, err = f.run(live(), id)
+
+	require.Error(t, err)
+	require.Equal(t, []int{from.ID}, junctionIDs(t, f.st, book), "an unreadable answer is not 'nothing flagged'")
 }
