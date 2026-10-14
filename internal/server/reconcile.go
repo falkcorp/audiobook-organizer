@@ -1,5 +1,5 @@
 // file: internal/server/reconcile.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-10-14
 // HTTP adapters — all logic in internal/reconcile
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
@@ -162,6 +163,33 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 		body["latest_attempt"] = attempt
 	}
 	httputil.RespondWithOK(c, body)
+}
+
+// LatestReconcileScan implements maintenanceplugin.ReconcileScanReader for the
+// Repairs fixer reconcile.missing-files: the scan GET
+// /operations/reconcile/scan/latest shows, picked by the same rule over the
+// same rows, so the fixer's trial and the endpoint can never disagree on which
+// scan is "latest".
+func (s *Server) LatestReconcileScan() (maintenanceplugin.ReconcileScan, error) {
+	store := s.Ops()
+	if store == nil {
+		return maintenanceplugin.ReconcileScan{}, errors.New("database not initialized")
+	}
+	scan, preview, attempt := pickLatestReconcileScan(recentReconcileScans(store, 200, s.canonicalDefIDFunc()))
+	var out maintenanceplugin.ReconcileScan
+	if scan == nil || preview == nil {
+		// No usable scan. scan, when set, is the newest run (in flight, or
+		// with nothing decodable): report it as the attempt.
+		if scan != nil {
+			out.AttemptOpID, out.AttemptStatus = scan.ID, scan.Status
+		}
+		return out, nil
+	}
+	out.OpID, out.CompletedAt, out.Preview = scan.ID, scan.CompletedAt, preview
+	if attempt != nil {
+		out.AttemptOpID, out.AttemptStatus = attempt.ID, attempt.Status
+	}
+	return out, nil
 }
 
 func (s *Server) startReconcile(c *gin.Context) {

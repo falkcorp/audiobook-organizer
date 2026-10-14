@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.87.1
+// version: 1.88.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
+	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -939,6 +940,32 @@ type CandidateRefetchResult struct {
 	Detail     string
 }
 
+// ReconcileScan is the latest saved reconcile scan, chosen by the rule GET
+// /operations/reconcile/scan/latest answers with (server
+// pickLatestReconcileScan): the newest reconcile.scan run that COMPLETED and
+// whose saved result decodes, read on the registry's canonical def id so the
+// runs recorded under the retired maintenance.reconcile-scan id count.
+type ReconcileScan struct {
+	// OpID and CompletedAt name the scan Preview came from. Preview is nil
+	// when no run is usable: none has completed, or none decodes.
+	OpID        string
+	CompletedAt *time.Time
+	Preview     *reconcile.ReconcilePreviewResult
+	// AttemptOpID and AttemptStatus name the newest run when it is NOT the
+	// scan above (still running, canceled, failed, or completed with an
+	// unreadable result); both "" when the newest run is the scan.
+	AttemptOpID   string
+	AttemptStatus string
+}
+
+// ReconcileScanReader serves the missing-files fixer
+// (reconcile.missing-files). Implemented on *server.Server, which owns the
+// operations registry's canonical def ids and the scan-selection rule; the
+// fixer must not re-implement either.
+type ReconcileScanReader interface {
+	LatestReconcileScan() (ReconcileScan, error)
+}
+
 // CandidateRefetcher serves the lost-candidates fixer
 // (maintenance.refetch-lost-candidates). Implemented on *server.Server, which
 // owns the candidate-fetch op's per-book path and its provider rate gate.
@@ -1037,6 +1064,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	LibraryCloner
 	CandidateRefetcher
 	VersionTwinMetadata
+	ReconcileScanReader
 }
 
 // ----- reporter adapter -----
