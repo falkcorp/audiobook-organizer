@@ -1,5 +1,5 @@
 // file: pkg/ops/rc.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 340c802d-854d-4fad-9e9f-cd5f9caae2b7
 // last-edited: 2026-10-14
 
@@ -296,7 +296,12 @@ type tallyKey struct{}
 // in the row's apply marker so a resume can tell whether that history was
 // undone. With no live item in ctx (the run's context, an unrelated one, or
 // a sealed item's) it is dropped: no row marker can name it. Writer
-// implementations only.
+// implementations only. It is exported only because the Writer lives in
+// another package; a plugin that calls it (or NotedHistory) anyway can only
+// make the resume check stricter, never looser: a reference the Writer
+// cannot read, or one saying history went unrecorded, makes MarkRowApplied
+// record no marker at all, and any other reference only adds history that
+// must still stand before RowApplied claims the row.
 func NoteHistory(ctx context.Context, ref string) {
 	if ctx == nil || ref == "" {
 		return
@@ -313,7 +318,8 @@ func NoteHistory(ctx context.Context, ref string) {
 }
 
 // NotedHistory returns the references NoteHistory recorded on the item
-// whose context ctx is, in order, or nil. Writer implementations only.
+// whose context ctx is, in order, or nil. Writer implementations only. It
+// returns a copy: a plugin that reads it can change nothing a marker names.
 func NotedHistory(ctx context.Context) []string {
 	if ctx == nil {
 		return nil

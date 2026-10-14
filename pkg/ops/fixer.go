@@ -1,5 +1,5 @@
 // file: pkg/ops/fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8628f5c0-14c0-4191-8884-8abe658eabf6
 // last-edited: 2026-10-14
 
@@ -39,7 +39,10 @@ type FixerSpec[P any, C any] struct {
 	// returned nil (Writer.MarkRowApplied, Writer.RowApplied), as applied by
 	// that attempt and does not call Apply again. Its writes must use w and
 	// the item's context (rc.Context() or one derived from it), so the
-	// marker names their history.
+	// marker names their history. A write made with any other context, or
+	// one that records no history (a store write that bypasses w), is
+	// still covered by the marker but not named in it: undoing or
+	// overwriting it later cannot stop a resume from claiming the row.
 	Apply func(rc *ItemRC, w Writer, p P, row Row) error
 	// PartitionBy: rows sharing a key apply in order on one worker. Default
 	// Row.ID.
@@ -317,7 +320,7 @@ func applyRow[P any, C any](irc *ItemRC, s FixerSpec[P, C], p P, planned Row) (b
 // hold, an owner-only flag and every guard (refusal ""); every Proposed value
 // now holding (Row.Proposed is Apply's complete end state); and evidence that
 // THIS run wrote THIS row -- the marker applyRow recorded when the row's own
-// Apply returned nil, with none of the history it names undone since
+// Apply returned nil, with all of the history it names still standing
 // (Writer.RowApplied). A row someone else changed to the same values between
 // the attempts has no marker, even when the run wrote another row of the
 // same book, and is skipped as changed since plan. The store read comes

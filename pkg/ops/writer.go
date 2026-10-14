@@ -1,5 +1,5 @@
 // file: pkg/ops/writer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: dc4d264d-6ac3-4ecd-bd11-247d5300dd3c
 // last-edited: 2026-10-14
 
@@ -73,11 +73,13 @@ type Writer interface {
 	// twice. ctx: the item's context, after Apply returned.
 	MarkRowApplied(ctx context.Context, rowID string)
 	// RowApplied reports whether some attempt of this run marked the row
-	// rowID applied (MarkRowApplied) and none of the history that marker
-	// names has been undone since: no operation journal row of it voided
-	// or reverted, no metadata history batch of it undone in whole or by
-	// field. Evidence is per row: another row's writes, even to the same
-	// book, never count. A Fixer's resumed apply requires it before it
+	// rowID applied (MarkRowApplied) and all of the history that marker
+	// names still stands: no operation journal row of it voided or
+	// reverted, or followed by a later journal row of its book on what it
+	// wrote; every metadata history batch of it still the newest history
+	// on every field it wrote, whatever wrote after it, and never undone.
+	// Evidence is per row: another row's writes, even to the same book,
+	// never count. A Fixer's resumed apply requires it before it
 	// reports a row as applied by an earlier attempt (applyRow). False on
 	// a Preview Writer and when the store keeps no markers -- never an
 	// error for those; a failed read is an error. ctx: the item's context
