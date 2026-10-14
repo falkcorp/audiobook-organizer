@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
 // last-edited: 2026-10-14
 
@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
@@ -228,6 +230,10 @@ func applyScanResult(
 			continue
 		}
 		ro, rerr := entities.ReclassifyAuthorAsNarrator(store, id, entities.ReclassifyOptions{
+			// Journaled under this operation, so a revert of it undoes the reclassify too.
+			Journal: &entities.ReclassifyJournal{OperationID: opID, Store: store},
+			// A reclassify takes the author credit off the book AND puts a narrator
+			// on it: either lock stops it.
 			SkipBook: func(bookID string) (bool, string, error) {
 				locks, lerr := database.LoadFieldLocks(store, bookID)
 				if lerr != nil {
@@ -235,6 +241,9 @@ func applyScanResult(
 				}
 				if locks.Locked(database.FieldKeyAuthorName) {
 					return true, "author name is user-locked; it keeps this author", nil
+				}
+				if locks.Locked(database.FieldKeyNarrator) {
+					return true, "narrator is user-locked; no narrator is added", nil
 				}
 				return false, "", nil
 			},
@@ -336,6 +345,32 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 	}
 	if scan.Status == "superseded" {
 		return (&database.ScanSupersededError{ScanID: scan.ID, By: scan.SupersededBy})
+	}
+	// Only a finished scan's results are final. The route checks this too; the run
+	// re-checks, because the scan can change between the request and the run.
+	if scan.Status != "complete" {
+		return fmt.Errorf("ai.author-scan-apply: scan %d is %s; only a finished scan's results can be applied", scan.ID, scan.Status)
+	}
+	// Claim the scan before the first merge: a nightly run that supersedes it
+	// meanwhile is refused (database.AIScanStore.SupersedeIfUnapplied), where an
+	// unclaimed scan was hidden under a run that then merged its results and could
+	// not mark them. The claim is the authoritative status check too (it re-reads
+	// under the store's apply lock). A preview writes nothing and claims nothing.
+	if !dryRun {
+		claimID := opID
+		if claimID == "" {
+			claimID = "unattributed-" + ulid.Make().String()
+		}
+		if err := s.aiScanStore.ClaimScanForApply(p.ScanID, claimID); err != nil {
+			return fmt.Errorf("ai.author-scan-apply: %w", err)
+		}
+		// Released on every exit; a run that dies without reaching here leaves a
+		// claim that expires (database.AIScanApplyClaimTTL).
+		defer func() {
+			if err := s.aiScanStore.ReleaseScanApply(p.ScanID, claimID); err != nil {
+				logging.Warn(ctx, "ai scan apply: could not release the scan claim", "scan_id", p.ScanID, "err", err)
+			}
+		}()
 	}
 	if err := s.pipelineManager.EnsureKeepIDs(p.ScanID); err != nil {
 		logging.Warn(ctx, "ai scan apply: could not fill in keep authors", "scan_id", p.ScanID, "err", err)
