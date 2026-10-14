@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/sdk-api.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: b4575f26-f7c3-4fb6-a442-b74a31581e88 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -434,9 +434,11 @@ type Writer interface {
 	// resumed apply counts a row whose values already equal Proposed as
 	// applied only by that row's own marker, with everything it names
 	// still standing: no batch missing or undone, no journal row voided or
-	// reverted, and no named write followed on what it wrote by a later
-	// write of its book in either store (metadata history or the journal;
-	// an unknown name counts as a write to everything). The
+	// reverted, no book_file it wrote moved off its book, and no named
+	// write followed on what it wrote by a later write of its book in
+	// either store (metadata history or the journal; an unknown name counts
+	// as a write to everything; the author column and credit list are one
+	// thing; "later" is by the rows' stamps). The
 	// run's history for the row's book is never enough: another row of the
 	// same book may have written it.
 	MarkRowApplied(ctx context.Context, rowID string)

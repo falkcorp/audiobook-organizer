@@ -15,3 +15,17 @@
       evidence check reading it as a third store. No migration: the family starts empty,
       and a marker older than it reads as today. Owner call whether the write amplification
       is worth it.
+
+- [ ] **05-PR5b follow-up: stamp order for journal-first writers in the Fixer resume check.**
+      `opswriter.standsIn` orders a run's write against later foreign writes by their rows'
+      timestamps. A journal-first writer (`internal/repairs.Writer`: `Step`, the book_file and
+      credit methods) stamps its journal row BEFORE making the write, and on a resumed
+      operation finds its earlier row and records nothing new, so a write made today can
+      carry a stamp from its first attempt and read as older than the run's write.
+      `CreateOperationChange` and `stageSeriesObjectDrop` also stamp before their batch
+      commits (a window of the commit's duration). Two ways to close it, owner's choice:
+      re-stamp the journal row after the write commits (touches `repairs.Writer`'s journal
+      index and dedup, and every revert reader that orders by `CreatedAt`), or record a
+      per-store commit sequence and compare that instead of the clock (a new counter key
+      written in every history and journal batch). Mitigated, like the item above, by the
+      resume also requiring every `Proposed` value to hold.
