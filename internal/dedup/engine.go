@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-10-14
 
@@ -102,15 +102,18 @@ type Engine struct {
 	AutoMergeEnabled    bool
 
 	// Layer 3 ambiguous zones — candidates whose similarity falls inside these
-	// ranges (inclusive) are sent to the LLM during RunLLMReview.
+	// ranges (inclusive) are sent to the LLM during RunLLMReviewWithHooks.
 	LLMBookLow    float64
 	LLMBookHigh   float64
 	LLMAuthorLow  float64
 	LLMAuthorHigh float64
 
-	// LLMMaxPairsPerRun caps how many pairs a single RunLLMReview invocation will
+	// LLMMaxPairsPerRun caps how many pairs a single RunLLMReviewWithHooks invocation will
 	// send to the LLM. Zero means "all pending ambiguous candidates".
 	LLMMaxPairsPerRun int
+
+	// listCap overrides ambiguousListCap when positive. Unexported: tests only.
+	listCap int
 
 	// Background-context fields used by event-driven flows (e.g. dedup-on-import
 	// subscriber, chromem hydrate). Initialised lazily in PostInit so the
@@ -184,7 +187,7 @@ type Engine struct {
 
 // NewEngine creates a Engine with sensible defaults.
 // llmParser may be nil if Layer 3 LLM review should be disabled.
-// aiJobsStore may be nil; if so, RunLLMReview will fall back to synchronous ReviewDedupPairs.
+// aiJobsStore may be nil; if so, RunLLMReviewWithHooks will fall back to synchronous ReviewDedupPairs.
 func NewEngine(
 	embedStore *database.EmbeddingStore,
 	bookStore Store,
@@ -217,7 +220,7 @@ func NewEngine(
 }
 
 // SetAIJobsStore configures the aijobs store for async batch submissions.
-// Must be called before RunLLMReview if async review is desired.
+// Must be called before RunLLMReviewWithHooks if async review is desired.
 func (de *Engine) SetAIJobsStore(store database.AIJobsStore) {
 	de.aiJobsStore = store
 }
@@ -3877,33 +3880,6 @@ func (de *Engine) getAllPrimaryBooksWithFullFields() ([]database.Book, error) {
 	return filtered, nil
 }
 
-// RunLLMReview processes ambiguous candidates through LLM review (Layer 3).
-// Pending book candidates whose similarity falls in [LLMBookLow, LLMBookHigh] and
-// pending author candidates in [LLMAuthorLow, LLMAuthorHigh] are fetched, enriched
-// with entity metadata, batched, and sent to the OpenAI chat LLM. The verdict is
-// persisted via UpdateCandidateLLM (which also sets layer='llm').
-//
-// Candidates that are already at layer='llm' are skipped — rerunning is cheap in
-// bookkeeping but expensive in API calls, so callers should use UpsertCandidate to
-// clear the layer back to 'embedding' if they want a re-review.
-// RunLLMReview scans pending ambiguous embedding-layer candidates (book and
-// author) and submits them as a batch to the configured LLM for review.
-//
-// progressFn is optional (H9, 2026-07 error-correction sweep): the
-// input-building loop below can iterate up to LLMMaxPairsPerRun (default
-// 10K) pairs, each doing a store read per side via buildPairInput, inside a
-// 120-minute op timeout. Before this, the op reported zero progress between
-// "starting" and "job submitted" — indistinguishable from a hang. When a
-// callback is supplied it is invoked every 100 pairs (and once at the end)
-// with (built-so-far, total-candidates).
-func (de *Engine) RunLLMReview(ctx context.Context, progressFn ...ProgressCallback) error {
-	var hooks LLMReviewHooks
-	if len(progressFn) > 0 {
-		hooks.Progress = progressFn[0]
-	}
-	return de.RunLLMReviewWithHooks(ctx, hooks)
-}
-
 // LLMReviewHooks are the optional callbacks RunLLMReviewWithHooks reports
 // through. Both may be nil.
 type LLMReviewHooks struct {
@@ -3918,17 +3894,37 @@ type LLMReviewHooks struct {
 	Heartbeat func(message string)
 }
 
-// LLMReviewConfigured reports whether RunLLMReview will do any work: it returns
+// LLMReviewConfigured reports whether RunLLMReviewWithHooks will do any work: it returns
 // immediately, without error, when no enabled LLM parser is wired.
 func (de *Engine) LLMReviewConfigured() bool {
 	return de.llmParser != nil && de.llmParser.IsEnabled()
 }
 
-// RunLLMReviewWithHooks is RunLLMReview with liveness reporting and
-// cancellation. Cancellation is checked between listing pages, between the
-// book and author listings, at the top of every build-loop iteration and
-// before the batch is submitted; the submit itself (job row, file upload,
-// batch create) is not interruptible once started.
+// RunLLMReviewWithHooks processes ambiguous candidates through LLM review
+// (Layer 3). Pending embedding-layer book candidates whose similarity falls in
+// [LLMBookLow, LLMBookHigh] and author candidates in [LLMAuthorLow,
+// LLMAuthorHigh] are listed, enriched with entity metadata, batched, and
+// submitted to the OpenAI chat LLM as one async aijobs batch. Verdicts are
+// persisted later, when the batch completes, via UpdateCandidateLLM (which also
+// sets layer='llm'). Candidates already at layer='llm' are skipped: rerunning
+// is cheap in bookkeeping but expensive in API calls, so callers use
+// UpsertCandidate to clear the layer back to 'embedding' for a re-review.
+//
+// hooks.Progress is optional (H9, 2026-07 error-correction sweep): the
+// input-building loop can iterate up to LLMMaxPairsPerRun (default 10K) pairs,
+// each doing a store read per side via buildPairInput, inside a 120-minute op
+// timeout. Without it the op reports nothing between "starting" and "job
+// submitted", which is indistinguishable from a hang. It is invoked every 100
+// pairs (and once at the end) with (built-so-far, total-candidates).
+// hooks.Heartbeat covers the phases that have no countable progress.
+//
+// Cancellation is checked between listing pages, between the book and author
+// listings, at the top of every build-loop iteration and before the batch is
+// submitted. ctx also reaches the submit's HTTP calls, so a cancel during the
+// submit aborts the call in flight: during the file upload the aijob is marked
+// failed; during the batch create the aijob stays pending (the batch may
+// already exist at OpenAI) until ReconcileOrphans / WriteOffUnlinked settles
+// it. Only the aijob row write ignores ctx.
 func (de *Engine) RunLLMReviewWithHooks(ctx context.Context, hooks LLMReviewHooks) error {
 	if !de.LLMReviewConfigured() {
 		logging.Info(ctx, "dedup LLM review skipped — llmParser not configured")
@@ -4026,14 +4022,18 @@ func (de *Engine) RunLLMReviewWithHooks(ctx context.Context, hooks LLMReviewHook
 // window of the listing however large the pending backlog is.
 const ambiguousListPageSize = 500
 
-// ambiguousListCap bounds how many ambiguous candidates of one entity type a
-// run considers, taking the most similar first.
+// ambiguousListCap is the default bound on how many ambiguous candidates of one
+// entity type a run considers, taking the most similar first. Engine.listCap
+// overrides it (tests).
 const ambiguousListCap = 10000
 
-// listAmbiguousCandidates returns pending embedding-layer candidates whose
-// similarity falls inside [low, high], most similar first, at most
-// ambiguousListCap of them. It walks the backlog in keyset pages
-// (ListCandidatesAfterID), calling heartbeat and checking ctx after each page.
+// listAmbiguousCandidates returns pending, non-manual embedding-layer
+// candidates whose similarity falls inside [low, high], most similar first, at
+// most the cap (ambiguousListCap by default) of them. It walks the backlog in
+// keyset pages (ListCandidatesAfterID), calling heartbeat and checking ctx
+// after each page. A page bounds the number of matching rows returned, not the
+// number of rows scanned: ListCandidatesAfterID walks the non-matching pending
+// rows in between, so the heartbeat cadence is per matching page.
 func (de *Engine) listAmbiguousCandidates(ctx context.Context, entityType string, low, high float64, heartbeat func(string)) ([]database.DedupCandidate, error) {
 	filter := database.CandidateFilter{
 		EntityType:    entityType,
@@ -4055,31 +4055,38 @@ func (de *Engine) listAmbiguousCandidates(ctx context.Context, entityType string
 		if len(page) == 0 {
 			break
 		}
-		candidates = append(candidates, page...)
+		// A manual candidate that pins a scanner embedding row keeps the
+		// "embedding" layer, so the filter above can return it. The LLM review
+		// can auto-merge what it reviews; a human asked to review this one
+		// themselves. Dropped here, before the sort and cap, so a manual row
+		// never takes one of the capped slots.
+		for _, c := range page {
+			if !database.IsManualCandidate(c) {
+				candidates = append(candidates, c)
+			}
+		}
 		cursor = page[len(page)-1].ID
 		heartbeat(fmt.Sprintf("listing ambiguous %s candidates: %d so far", entityType, len(candidates)))
+		if len(page) < ambiguousListPageSize {
+			break
+		}
 	}
 	// The whole matching window is read (it is narrow), then the most similar
 	// are kept: this run is a paid per-pair external LLM batch that is further
 	// capped by LLMMaxPairsPerRun, each run consumes from the top of the
-	// similarity-sorted window, and later runs drain the rest.
+	// similarity-sorted window, and later runs drain the rest. The cap must
+	// come after the sort: pages arrive in ID order, not similarity order.
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidateSimilarity(candidates[i]) > candidateSimilarity(candidates[j])
 	})
-	if len(candidates) > ambiguousListCap {
-		candidates = candidates[:ambiguousListCap]
+	limit := ambiguousListCap
+	if de.listCap > 0 {
+		limit = de.listCap
 	}
-	// A manual candidate that pins a scanner embedding row keeps the
-	// "embedding" layer, so the filter above can return it. The LLM review
-	// can auto-merge what it reviews; a human asked to review this one
-	// themselves.
-	kept := candidates[:0]
-	for _, c := range candidates {
-		if !database.IsManualCandidate(c) {
-			kept = append(kept, c)
-		}
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
 	}
-	return kept, nil
+	return candidates, nil
 }
 
 func candidateSimilarity(c database.DedupCandidate) float64 {

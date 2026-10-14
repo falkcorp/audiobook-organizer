@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_test.go
-// version: 2.12.0
+// version: 2.12.1
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
 // last-edited: 2026-10-14
 
@@ -1167,8 +1167,8 @@ func TestRunLLMReview_NilParserSkipsGracefully(t *testing.T) {
 
 	seedCandidate(t, es, "book", "X", "Y", 0.85)
 
-	if err := engine.RunLLMReview(context.Background()); err != nil {
-		t.Fatalf("RunLLMReview with nil parser: %v", err)
+	if err := engine.RunLLMReviewWithHooks(context.Background(), LLMReviewHooks{}); err != nil {
+		t.Fatalf("RunLLMReviewWithHooks with nil parser: %v", err)
 	}
 	// Candidate should remain unchanged at layer='embedding'.
 	got, _, _ := es.ListCandidates(database.CandidateFilter{EntityType: "book"})

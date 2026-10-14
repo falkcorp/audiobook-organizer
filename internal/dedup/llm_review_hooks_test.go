@@ -1,5 +1,5 @@
 // file: internal/dedup/llm_review_hooks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4e2a17-5b93-4d06-9e1f-a3d7c0b64f52
 // last-edited: 2026-10-14
 
@@ -16,7 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// llmReviewEngine returns an engine wired for RunLLMReview with no network: an
+// llmReviewEngine returns an engine wired for RunLLMReviewWithHooks with no network: an
 // enabled parser (never called), a store that knows every book, and NO aijobs
 // store, so a run that reaches the submit fails with "aiJobsStore not
 // configured" instead of calling out. n book candidates are seeded with
@@ -82,7 +82,7 @@ func TestRunLLMReview_PreCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := engine.RunLLMReview(ctx); !errors.Is(err, context.Canceled) {
+	if err := engine.RunLLMReviewWithHooks(ctx, LLMReviewHooks{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
@@ -146,8 +146,8 @@ func TestRunLLMReview_CancelMidRunStopsBeforeSubmit(t *testing.T) {
 	})
 }
 
-// The paged listing keeps the order and cap of the one-shot listing it
-// replaced: most similar first across page boundaries.
+// The paged listing keeps the order of the one-shot listing it replaced: most
+// similar first across page boundaries.
 func TestListAmbiguousCandidates_PagedKeepsSimilarityOrder(t *testing.T) {
 	engine := llmReviewEngine(t, 2*ambiguousListPageSize+7)
 
@@ -162,6 +162,64 @@ func TestListAmbiguousCandidates_PagedKeepsSimilarityOrder(t *testing.T) {
 		if candidateSimilarity(got[i-1]) < candidateSimilarity(got[i]) {
 			t.Fatalf("candidate %d (%.4f) is more similar than %d (%.4f): not sorted most-similar first",
 				i, candidateSimilarity(got[i]), i-1, candidateSimilarity(got[i-1]))
+		}
+	}
+}
+
+// The cap keeps the top-N by similarity, not the first N by ID: pages arrive in
+// ID order, and here similarity rises with ID, so a cap applied in the page
+// loop would keep the least similar rows. Mutation check: apply the cap inside
+// the page loop (before the sort) and this fails.
+func TestListAmbiguousCandidates_CapKeepsMostSimilarNotLowestID(t *testing.T) {
+	const n, capN = 12, 5
+	engine, _, es := setupTestEngine(t)
+	engine.listCap = capN
+	for i := 0; i < n; i++ {
+		// IDs ascend with similarity: 0.81 .. 0.92 stays inside the window.
+		seedCandidate(t, es, "book", fmt.Sprintf("A%02d", i), fmt.Sprintf("B%02d", i), 0.81+0.01*float64(i))
+	}
+
+	got, err := engine.listAmbiguousCandidates(context.Background(), "book", 0.80, 0.93, func(string) {})
+	if err != nil {
+		t.Fatalf("listAmbiguousCandidates: %v", err)
+	}
+	if len(got) != capN {
+		t.Fatalf("got %d candidates, want the cap %d", len(got), capN)
+	}
+	for k, c := range got {
+		want := fmt.Sprintf("A%02d", n-1-k) // most similar first
+		if c.EntityAID != want {
+			t.Errorf("kept[%d] = %s, want %s (top-%d by similarity)", k, c.EntityAID, want, capN)
+		}
+	}
+}
+
+// A manual candidate is dropped before the cap, so it never takes a slot from a
+// reviewable row. Mutation check: move the manual filter after the cap and the
+// kept set shrinks to capN-1.
+func TestListAmbiguousCandidates_ManualRowDoesNotUseCapSlot(t *testing.T) {
+	const capN = 3
+	engine, _, es := setupTestEngine(t)
+	engine.listCap = capN
+	// The most similar pair is pinned by a human.
+	seedCandidate(t, es, "book", "M_A", "M_B", 0.91)
+	if _, err := es.EnqueueManualCandidate("book", "M_A", "M_B", ""); err != nil {
+		t.Fatalf("EnqueueManualCandidate: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		seedCandidate(t, es, "book", fmt.Sprintf("A%d", i), fmt.Sprintf("B%d", i), 0.81+0.01*float64(i))
+	}
+
+	got, err := engine.listAmbiguousCandidates(context.Background(), "book", 0.80, 0.93, func(string) {})
+	if err != nil {
+		t.Fatalf("listAmbiguousCandidates: %v", err)
+	}
+	if len(got) != capN {
+		t.Fatalf("got %d candidates, want %d non-manual rows", len(got), capN)
+	}
+	for _, c := range got {
+		if database.IsManualCandidate(c) {
+			t.Errorf("manual candidate %d was returned", c.ID)
 		}
 	}
 }
