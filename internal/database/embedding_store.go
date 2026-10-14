@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.29.0
+// version: 2.30.0
 // last-edited: 2026-10-13
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -1885,6 +1885,12 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
 }
 
+// deleteCandidatesBeforeCommit is a TEST seam: when set, DeleteCandidates calls
+// it with the store lock held, after the batch is staged and before it
+// commits. A test uses it to land a concurrent writer in exactly the window the
+// lock exists to close. Nil in production.
+var deleteCandidatesBeforeCommit atomic.Pointer[func()]
+
 // DeleteCandidates removes the candidates named by ids in ONE lock acquisition
 // and ONE Pebble batch, and returns how many it deleted.
 //
@@ -1938,6 +1944,9 @@ func (s *EmbeddingStore) DeleteCandidates(ids []int64) (int, error) {
 	}
 	if deleted == 0 {
 		return 0, nil
+	}
+	if hook := deleteCandidatesBeforeCommit.Load(); hook != nil {
+		(*hook)()
 	}
 	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync, as DeleteCandidate (#19)
 		return 0, fmt.Errorf("delete candidates commit: %w", err)

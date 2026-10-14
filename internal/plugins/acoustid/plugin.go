@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-10-13
 
@@ -24,6 +24,10 @@ type Plugin struct {
 	engine         *dedupengine.Engine
 	store          pluginStore
 	embeddingStore *database.EmbeddingStore
+	// resetCandidates replaces embeddingStore for acoustid.reset-all's
+	// candidate pass in tests, so a failing batch can be injected into a store
+	// that is otherwise a concrete Pebble-backed struct. Nil in production.
+	resetCandidates resetCandidateStore
 
 	// toolsMu guards the window op's tool wiring: SetToolRegistry runs
 	// during server startup, the op reads it when dispatched.
