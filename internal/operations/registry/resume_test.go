@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
-// last-edited: 2026-09-15
+// last-edited: 2026-10-14
 
 package registry_test
 
@@ -341,28 +341,54 @@ func TestResume_RequeueFreshRun(t *testing.T) {
 	}
 }
 
-// TestResume_ReconcileScanAlwaysDropped verifies that even if reconcile_scan
-// has a registered def with ResumeRestart, it is always force-dropped.
-func TestResume_ReconcileScanAlwaysDropped(t *testing.T) {
+// TestResume_ReconcileScanRowsAreDroppedThroughTheirDef pins how an interrupted
+// reconcile scan is dropped on restart: through the def's ResumeDrop policy, not
+// a special case on a def id. The scan is registered as "reconcile.scan" with the
+// retired nightly id as an alias, and rows recorded under either must be dropped.
+// (An earlier special case compared against the literal "reconcile_scan", which
+// neither id ever matched.)
+func TestResume_ReconcileScanRowsAreDroppedThroughTheirDef(t *testing.T) {
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
 		WatchdogInterval: 30 * time.Second,
 	})
 
-	// Register a def whose ID matches the hardcoded reconcile_scan constant.
-	def := makeValidDef("reconcile_scan")
-	def.ResumePolicy = registry.ResumeRestart // would normally restart, but must drop
+	def := makeValidDef("reconcile.scan")
+	def.FormerIDs = []string{"maintenance.reconcile-scan"}
+	def.ResumePolicy = registry.ResumeDrop
 	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error { return nil }
-	_ = r.RegisterOp(def)
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatalf("register: %v", err)
+	}
 
-	opID := insertRunningOp(store, "reconcile_scan", "scanner", 1)
+	current := insertRunningOp(store, "reconcile.scan", "reconcile", 1)
+	former := insertRunningOp(store, "maintenance.reconcile-scan", "reconcile", 1)
 
-	ctx := t.Context()
-	r.Start(ctx)
+	r.Start(t.Context())
 
 	time.Sleep(20 * time.Millisecond)
-	if store.statusOf(opID) != "interrupted_dropped" {
-		t.Errorf("reconcile_scan: expected interrupted_dropped, got %s", store.statusOf(opID))
+	for name, id := range map[string]string{"reconcile.scan": current, "maintenance.reconcile-scan": former} {
+		if got := store.statusOf(id); got != "interrupted_dropped" {
+			t.Errorf("row stored under %s: expected interrupted_dropped, got %s", name, got)
+		}
+	}
+}
+
+// A row stored under the literal id "reconcile_scan" (the scheduler task's name,
+// never a def id) has no def, so it falls into the unknown-def drop rather than
+// being resumed.
+func TestResume_RowUnderTheTaskNameReconcileScanIsDroppedAsUnknown(t *testing.T) {
+	store := newFakeStore()
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		WatchdogInterval: 30 * time.Second,
+	})
+	opID := insertRunningOp(store, "reconcile_scan", "scanner", 1)
+
+	r.Start(t.Context())
+
+	time.Sleep(20 * time.Millisecond)
+	if got := store.statusOf(opID); got != "interrupted_dropped" {
+		t.Errorf("reconcile_scan: expected interrupted_dropped, got %s", got)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/reconcile.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-10-14
 // HTTP adapters — all logic in internal/reconcile
@@ -7,14 +7,17 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
@@ -27,8 +30,16 @@ func (s *Server) reconcilePreview(c *gin.Context) {
 		return
 	}
 
-	result, err := reconcile.BuildReconcilePreview(store)
+	// Runs under the request's context: this is a full-library stat, walk and
+	// hash sweep done inline, so a client that disconnects (or a proxy timeout)
+	// must stop it rather than leave it burning disk until it finishes.
+	result, err := reconcile.BuildReconcilePreviewCtx(c.Request.Context(), store, nil, reconcile.ScanHooks{})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// The caller is gone; there is no one to send a 500 to and nothing
+			// failed. Not logged as an error for the same reason.
+			return
+		}
 		httputil.InternalError(c, "failed to build reconcile preview", err)
 		return
 	}
@@ -75,6 +86,53 @@ func (s *Server) canonicalDefIDFunc() func(string) string {
 	return s.opRegistry.CanonicalDefID
 }
 
+// reconcileScanLog is the subsystem logger for the reconcile HTTP adapters.
+var reconcileScanLog = logger.New("server.reconcile")
+
+// pickLatestReconcileScan chooses what GET /operations/reconcile/scan/latest
+// answers from ops (newest first).
+//
+//   - scan and preview are the newest run that completed AND whose result
+//     decodes: the last scan whose findings can actually be shown. A newer run
+//     that was canceled, failed, was interrupted by a deploy, or finished with an
+//     unreadable result must not hide it. Before 04-P14c the endpoint answered
+//     from ops[0] regardless of status, which was tolerable while only a manual
+//     click could start a scan; the nightly run now shares this id, and one
+//     canceled night would have blanked the tab until the next good run.
+//   - attempt is ops[0] when it is NOT the scan above: the newer run the caller
+//     would otherwise never hear about (still running, canceled, failed, or
+//     completed with an unreadable result). nil when the newest run is the scan.
+//   - With no usable scan at all, scan is ops[0] and preview nil, which is what
+//     the endpoint always answered for a library that has never been scanned
+//     (or whose only run is still in flight); attempt is then nil, since the
+//     operation field already is that run.
+func pickLatestReconcileScan(ops []*database.Operation) (scan *database.Operation, preview *reconcile.ReconcilePreviewResult, attempt *database.Operation) {
+	if len(ops) == 0 {
+		return nil, nil, nil
+	}
+	for _, op := range ops {
+		if op.Status != "completed" || op.ResultData == nil {
+			continue
+		}
+		var decoded reconcile.ReconcilePreviewResult
+		if err := json.Unmarshal([]byte(*op.ResultData), &decoded); err != nil {
+			// An unreadable result is skipped, not fatal: an older run may still
+			// parse. It stays visible to the caller if it is the newest run.
+			reconcileScanLog.Warn("reconcile: scan %s completed but its result could not be decoded; looking for an older scan: %v", op.ID, err)
+			continue
+		}
+		scan, preview = op, &decoded
+		break
+	}
+	if scan == nil {
+		return ops[0], nil, nil
+	}
+	if ops[0] != scan {
+		attempt = ops[0]
+	}
+	return scan, preview, attempt
+}
+
 func (s *Server) latestReconcileScan(c *gin.Context) {
 	store := s.Ops()
 	if store == nil {
@@ -82,49 +140,28 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 		return
 	}
 
-	// Find the most recent reconcile scan, newest first, across BOTH keyspaces.
-	// A v2-only scan would hide every reconcile run from before the v1 row was
-	// retired; a v1-only scan (what this did) now finds nothing at all, because
-	// new runs no longer write one.
+	// Find the most recent reconcile scans, newest first. Only the v2 keyspace is
+	// read: nothing has minted a v1 row since the minter was retired. Rows are
+	// matched on the registry's canonical def id so the nightly runs recorded
+	// under the id this scan absorbed (04-P14c) still appear.
 	ops := recentReconcileScans(store, 200, s.canonicalDefIDFunc())
 
-	// Only the newest op is ever considered. This was written as a loop over all
-	// 200, but every path through the body returned on the first iteration, so
-	// the rest were unreachable -- staticcheck SA4004, which made `make ci` red.
-	// Written as an index so the behaviour is stated rather than implied.
-	//
-	// NOTE: this preserves the existing behaviour exactly, including a latent
-	// flaw it carries -- a completed scan whose ResultData fails to unmarshal
-	// answers with preview:nil instead of falling back to an older scan that
-	// would parse. Fixing that changes what this endpoint returns, which is an
-	// API decision for this lane's owner; filed as
-	// todo.d/20260825-latest-reconcile-scan-hides-older-usable-previews.md.
-	if len(ops) == 0 {
-		httputil.RespondWithOK(c, gin.H{"operation": nil, "preview": nil})
+	scan, preview, attempt := pickLatestReconcileScan(ops)
+	if scan == nil {
+		httputil.RespondWithOK(c, gin.H{"operation": nil, "preview": nil, "latest_attempt": nil})
 		return
 	}
-
-	op := ops[0]
-	if op.Status == "completed" && op.ResultData != nil {
-		var preview reconcile.ReconcilePreviewResult
-		err := json.Unmarshal([]byte(*op.ResultData), &preview)
-		if err == nil {
-			httputil.RespondWithOK(c, gin.H{
-				"operation": op,
-				"preview":   preview,
-			})
-			return
-		}
-		// The response still says preview:nil (what it answers is an open API
-		// decision, see the NOTE above), but the reason must not vanish: from
-		// the outside, an unreadable result and "no scan has run" look alike.
-		slog.Warn("reconcile: latest scan's result could not be decoded; answering with no preview",
-			"op_id", op.ID, "error", err)
+	// preview is a nil *ReconcilePreviewResult when no scan is usable; gin.H would
+	// marshal that as null, but a typed nil in an interface is easy to misread, so
+	// the two shapes are spelled out.
+	body := gin.H{"operation": scan, "preview": nil, "latest_attempt": nil}
+	if preview != nil {
+		body["preview"] = preview
 	}
-	httputil.RespondWithOK(c, gin.H{
-		"operation": op,
-		"preview":   nil,
-	})
+	if attempt != nil {
+		body["latest_attempt"] = attempt
+	}
+	httputil.RespondWithOK(c, body)
 }
 
 func (s *Server) startReconcile(c *gin.Context) {

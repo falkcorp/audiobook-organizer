@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.179.0
+// version: 2.180.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5688,8 +5688,15 @@ export async function startReconcileScan(): Promise<Operation> {
 }
 
 export interface LatestReconcileScan {
+  /** The newest scan that completed with a readable result: the one `preview` came from. */
   operation: Operation | null;
   preview: ReconcilePreview | null;
+  /**
+   * The newest run, when it is NOT the scan above: still running or queued,
+   * canceled, failed, interrupted, or completed with an unreadable result. null
+   * when the newest run is the scan being shown.
+   */
+  latest_attempt?: Operation | null;
 }
 
 export async function getLatestReconcileScan(): Promise<LatestReconcileScan> {
