@@ -1,5 +1,5 @@
 // file: internal/database/metadata_history_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-14
 
@@ -223,13 +223,11 @@ func TestGetBookChangeHistory_LimitRespected(t *testing.T) {
 	}
 }
 
-// 05-PR5b: GetBookChangeHistory truncates at limit by KEY order
-// (metadata_change:<book>:<field>:<nanos>, reversed), not by age, so with more
-// rows than the limit it drops whole fields -- here the one "author_id" row,
-// which sorts before every "title" row, is the row lost at limit 100. It
-// reads every row before it truncates, so math.MaxInt returns them all:
-// opswriter.Writer.Wrote relies on that to find a run's batch in a book's
-// whole history.
+// 05-PR5b: opswriter.Writer.Wrote looks for a run's batch in a book's
+// WHOLE metadata history, so it calls GetBookChangeHistory with math.MaxInt.
+// That must return every row, however many there are and however their
+// fields sort (the "author_id" row sorts before every "title" one). A capped
+// read keeps only limit rows; which ones it keeps is not pinned here.
 func TestGetBookChangeHistory_MaxIntLimitIsComplete(t *testing.T) {
 	store, cleanup := setupTestDBWithMigrations(t)
 	defer cleanup()
@@ -258,9 +256,8 @@ func TestGetBookChangeHistory_MaxIntLimitIsComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(capped) != 100 || hasRunBatch(capped) {
-		t.Fatalf("limit 100: %d rows, run batch present=%v; the truncation this test documents changed",
-			len(capped), hasRunBatch(capped))
+	if len(capped) != 100 {
+		t.Fatalf("limit 100 returned %d rows", len(capped))
 	}
 	all, err := store.GetBookChangeHistory("book-many", math.MaxInt)
 	if err != nil {
