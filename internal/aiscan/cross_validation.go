@@ -49,8 +49,8 @@ func CrossValidate(scanID int, groupsSuggestions, fullSuggestions []database.Sca
 						// groups row that carried no ids.
 						KeepID:     firstNonZero(gs.KeepID, fs.KeepID),
 						GroupIndex: gs.GroupIndex,
-						Roles:         coalesce(gs.Roles, fs.Roles),
-						Source:        "cross_validate",
+						Roles:      coalesce(gs.Roles, fs.Roles),
+						Source:     "cross_validate",
 					},
 				}
 				results = append(results, result)

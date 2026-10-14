@@ -227,7 +227,7 @@ var slogRatchet = map[string]int{
 	"internal/server/bootstrap.go":                               13,
 	"internal/server/cache_snapshotter.go":                       2,
 	"internal/server/embedding_backfill.go":                      24,
-	"internal/server/entities_ops.go":                            2,
+	"internal/server/entities_ops.go":                            1,
 	"internal/server/entity_cache_warmers.go":                    6,
 	"internal/server/external_id_backfill.go":                    2,
 	"internal/server/file_io_pool.go":                            13,

@@ -1,5 +1,5 @@
 // file: internal/aiscan/keep.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e1c8a42-93d7-4b60-a8f1-2c7d4e90b315
 // last-edited: 2026-10-13
 
@@ -46,8 +46,11 @@ func (l *keepLookup) name(id int) (string, bool) {
 	if l.absent[id] {
 		return "", false
 	}
+	// GetAuthorByID follows the author tombstone: for a merged-away id it answers
+	// with the author it was merged into, whose ID differs. That is "gone", not a
+	// candidate to keep under the wrong id.
 	a, err := l.store.GetAuthorByID(id)
-	if err != nil || a == nil {
+	if err != nil || a == nil || a.ID != id {
 		l.absent[id] = true
 		return "", false
 	}

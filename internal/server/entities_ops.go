@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-10-13
 
@@ -23,18 +23,18 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	ulid "github.com/oklog/ulid/v2"
 )
 
-// authorMergeOpParams holds the parameters for the entities.author-merge op.
-type authorMergeOpParams struct {
-	KeepID   int    `json:"keep_id"`
-	MergeIDs []int  `json:"merge_ids"`
-	KeepName string `json:"keep_name"`
-}
+// authorMergeOpParams holds the parameters for the entities.author-merge op. It is
+// the one definition of the wire shape: package handlers/entities builds it
+// (entities.AuthorMergeOpParams) and Run decodes it here, so the two cannot drift.
+type authorMergeOpParams = entities.AuthorMergeOpParams
 
 // resolveProductionAuthorOpParams holds the parameters for the
 // entities.resolve-production-author op.
@@ -86,152 +86,271 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 			opID := opsregistry.ReporterOpID(reporter)
 			keepID := p.KeepID
 			mergeIDs := p.MergeIDs
-			keepName := p.KeepName
 
 			progress := registryProgressAdapter{r: reporter}
 
-			_ = progress.Log("info", fmt.Sprintf("Merging %d author(s) into %q", len(mergeIDs), keepName), nil)
+			_ = progress.Log("info", fmt.Sprintf("Merging %d author(s) into %q", len(mergeIDs), p.KeepName), nil)
 			_ = progress.UpdateProgress(0, len(mergeIDs), "Starting author merge...")
 
-			merged := 0
-			var mergeErrors []string
-			// mergedIDs is the set of ids whose author was really folded in and
-			// deleted. The failed set is everything else, and it is what the
-			// caller needs: a per-id log line is not something a client can act on.
-			mergedIDs := make(map[int]bool, len(mergeIDs))
-			for i, mergeID := range mergeIDs {
-				if progress.IsCanceled() {
-					return fmt.Errorf("cancelled")
-				}
-				if mergeID == keepID {
-					continue
-				}
-				// ForRelink includes the trash: DeleteAuthor below sweeps the
-				// merged author out of trashed books' junction rows too, so a
-				// trashed book skipped here lost its credit for good.
-				books, err := store.GetBooksByAuthorIDForRelinkCore(mergeID)
-				if err != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for author %d: %v", mergeID, err))
-					continue
-				}
-
-				mergeAuthor, _ := store.GetAuthorByID(mergeID)
-				mergeAuthorName := ""
-				if mergeAuthor != nil {
-					mergeAuthorName = mergeAuthor.Name
-				}
-
-				for _, book := range books {
-					bookAuthors, err := store.GetBookAuthors(book.ID)
-					if err != nil {
-						continue
-					}
-					hasKeep := false
-					for _, ba := range bookAuthors {
-						if ba.AuthorID == keepID {
-							hasKeep = true
-							break
-						}
-					}
-					var newAuthors []database.BookAuthor
-					for _, ba := range bookAuthors {
-						if ba.AuthorID == mergeID {
-							if !hasKeep {
-								ba.AuthorID = keepID
-								newAuthors = append(newAuthors, ba)
-								hasKeep = true
-							}
-						} else {
-							newAuthors = append(newAuthors, ba)
-						}
-					}
-					if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
-						mergeErrors = append(mergeErrors, fmt.Sprintf("failed to update book %s: %v", book.ID, err))
-					} else {
-						_ = store.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: opID,
-							BookID:      book.ID,
-							ChangeType:  "author_reassign",
-							FieldName:   "book_authors",
-							OldValue:    fmt.Sprintf("author_id:%d (%s)", mergeID, mergeAuthorName),
-							NewValue:    fmt.Sprintf("author_id:%d (%s)", keepID, keepName),
-						})
-					}
-
-					// Sync the denormalized `book.AuthorID` pointer on the Book row itself.
-					// SetBookAuthors above updates the join table, but callers that read the Book
-					// struct directly expect book.AuthorID to match the primary author in the join
-					// table. Without this sync, the field still points at the losing author ID.
-					//
-					// Backlog 7.11 — found while investigating the merge ITL cleanup bug (#251).
-					//
-					// ModifyBook re-reads the row under the book's write lock and
-					// sets only AuthorID, so a column another writer commits in the
-					// meantime is not reverted (audit A1#15). A vanished book is
-					// (nil, nil): nothing to sync, as before.
-					if _, upErr := store.ModifyBook(book.ID, func(current *database.Book) error {
-						if current.AuthorID == nil || *current.AuthorID != mergeID {
-							return database.ErrSkipBookWrite
-						}
-						newID := keepID
-						current.AuthorID = &newID
-						return nil
-					}); upErr != nil {
-						slog.Warn("author merge failed to sync denormalized AuthorID on book", "book", book.ID, "upErr", upErr)
-					}
-				}
-
-				// The loop above skips a book on any read or write failure, so
-				// re-check before the delete erases whatever it could not move.
-				if err := database.VerifyAuthorUnlinked(store, mergeID); err != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("author %d NOT deleted: %v", mergeID, err))
-				} else if err := store.DeleteAuthor(mergeID); err != nil {
-					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete author %d: %v", mergeID, err))
-				} else {
-					_ = store.CreateAuthorTombstone(mergeID, keepID)
-					_ = store.CreateOperationChange(&database.OperationChange{
-						ID:          ulid.Make().String(),
-						OperationID: opID,
-						BookID:      "",
-						ChangeType:  "author_delete",
-						FieldName:   "author",
-						OldValue:    fmt.Sprintf("%d:%s", mergeID, mergeAuthorName),
-						NewValue:    fmt.Sprintf("merged_into:%d:%s", keepID, keepName),
-					})
-					merged++
-					mergedIDs[mergeID] = true
-				}
-
-				_ = progress.UpdateProgress(i+1, len(mergeIDs),
-					fmt.Sprintf("Merged %d/%d authors", i+1, len(mergeIDs)))
+			out, cancelled := mergeAuthorsInto(ctx, store, opID, authorMergeSpec{
+				KeepID:   keepID,
+				MergeIDs: mergeIDs,
+				KeepName: p.KeepName,
+				// Locks are honoured unless the caller says otherwise: the Authors
+				// view's request carries no such field, and a merge of many groups
+				// from one click must not move a book whose author the owner pinned.
+				HonorLocks: p.HonorLocks == nil || *p.HonorLocks,
+			}, progress.IsCanceled, func(done, total int) {
+				_ = progress.UpdateProgress(done, total, fmt.Sprintf("Merged %d/%d authors", done, total))
+			})
+			if cancelled {
+				// The ids that DID merge before the cancel are gone.
+				s.dedupCache.InvalidateAll()
+				s.authorsCache.InvalidateAll()
+				return fmt.Errorf("cancelled")
 			}
 
-			resultMsg := fmt.Sprintf("Author merge complete: merged %d, %d errors", merged, len(mergeErrors))
+			resultMsg := fmt.Sprintf("Author merge complete: merged %d, %d errors", out.Merged, len(out.Errors))
 			_ = progress.Log("info", resultMsg, nil)
-			if len(mergeErrors) > 0 {
-				errDetail := strings.Join(mergeErrors[:min(len(mergeErrors), 10)], "; ")
+			if len(out.Errors) > 0 {
+				errDetail := strings.Join(out.Errors[:min(len(out.Errors), 10)], "; ")
 				_ = progress.Log("warn", fmt.Sprintf("Errors: %s", errDetail), nil)
 			}
 			// Invalidate even on a partial failure: the ids that DID merge are gone.
 			s.dedupCache.InvalidateAll()
 			s.authorsCache.InvalidateAll()
-			if failed := unmergedAuthorIDs(mergeIDs, keepID, mergedIDs); len(failed) > 0 {
+			if failed := unmergedAuthorIDs(mergeIDs, keepID, out.MergedIDs); len(failed) > 0 {
 				// Report failure rather than completing: the op used to return nil
 				// here, so the UI treated a merge that left authors behind as done
 				// and dropped the whole group. The id list is in a fixed form
 				// (AuthorMergeFailedIDsPrefix) so the client can keep exactly the
 				// variants that remain.
 				detail := ""
-				if len(mergeErrors) > 0 {
-					detail = ": " + strings.Join(mergeErrors[:min(len(mergeErrors), 3)], "; ")
+				if len(out.Errors) > 0 {
+					detail = ": " + strings.Join(out.Errors[:min(len(out.Errors), 3)], "; ")
 				}
 				return fmt.Errorf("%s%s] of %d not merged, %d merged%s",
-					AuthorMergeFailedIDsPrefix, joinInts(failed), len(mergeIDs), merged, detail)
+					AuthorMergeFailedIDsPrefix, joinInts(failed), len(mergeIDs), out.Merged, detail)
 			}
 			return nil
 		},
 	})
+}
+
+// authorMergeStore is what folding one author into another reads and writes.
+type authorMergeStore interface {
+	authorAssignStore
+	database.AuthorRelinkLister
+	// The field-lock reader (database.LoadFieldLocks).
+	database.MetadataFieldStateReader
+	GetAuthorByID(id int) (*database.Author, error)
+	DeleteAuthor(id int) error
+	CreateAuthorTombstone(oldID, newID int) error
+	CreateOperationChange(change *database.OperationChange) error
+}
+
+// authorMergeSpec is one merge: fold MergeIDs into KeepID.
+type authorMergeSpec struct {
+	KeepID   int
+	MergeIDs []int
+	// KeepName labels the op-change ledger rows; empty means the keep author's stored name.
+	KeepName string
+	// HonorLocks leaves a book whose author_name is user-locked on the author it is
+	// credited to. That author is then not deleted (a book still credits it) and the
+	// lock is named in Errors. The zero value ignores locks; callers pass true
+	// unless the user chose otherwise.
+	HonorLocks bool
+}
+
+// authorMergeOutcome is what a merge did.
+type authorMergeOutcome struct {
+	// Merged counts authors this run folded in and deleted.
+	Merged int
+	// MergedIDs is every merge id that no longer exists as a distinct author: the
+	// ones this run merged, and the ones that were already gone when it got there.
+	// The failed set is every other id, and it is what a caller needs: a per-id
+	// log line is not something a client can act on.
+	MergedIDs map[int]bool
+	Errors    []string
+}
+
+// mergeAuthorsInto folds spec.MergeIDs into spec.KeepID, one author at a time,
+// relinking every book (trash included), writing the undo ledger, deleting the
+// merged author once nothing credits it and leaving a tombstone. It is the body
+// of entities.author-merge and of ai.author-scan-apply, which must behave the
+// same.
+//
+// canceled is polled between authors; a true return stops the merge and
+// cancelled is reported true (what was merged stays merged). step, when not nil,
+// is told how many of the ids have been handled.
+//
+// A merge id whose author is already gone counts as merged: an earlier merge
+// (this run's, or another screen's) removed it, and re-merging a deleted id is
+// not a proven no-op (see the op's ResumePolicy comment). A keep author that is
+// gone fails every id: there is nothing to fold them into.
+func mergeAuthorsInto(
+	ctx context.Context,
+	store authorMergeStore,
+	opID string,
+	spec authorMergeSpec,
+	canceled func() bool,
+	step func(done, total int),
+) (out authorMergeOutcome, cancelled bool) {
+	keepID, keepName := spec.KeepID, spec.KeepName
+	out.MergedIDs = make(map[int]bool, len(spec.MergeIDs))
+
+	// GetAuthorByID FOLLOWS the author tombstone: asked for a merged-away id it
+	// answers with the author it was merged into. An answer whose ID is not the one
+	// asked for therefore means the author is gone.
+	keepAuthor, kerr := store.GetAuthorByID(keepID)
+	if kerr != nil || keepAuthor == nil || keepAuthor.ID != keepID {
+		why := "it no longer exists"
+		if kerr != nil {
+			why = kerr.Error()
+		}
+		out.Errors = append(out.Errors, fmt.Sprintf("keep author %d cannot be read, nothing merged: %s", keepID, why))
+		return out, false
+	}
+	if keepName == "" {
+		keepName = keepAuthor.Name
+	}
+
+	for i, mergeID := range spec.MergeIDs {
+		if canceled != nil && canceled() {
+			return out, true
+		}
+		if mergeID == keepID {
+			continue
+		}
+		mergeAuthor, merr := store.GetAuthorByID(mergeID)
+		if merr != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("failed to read author %d: %v", mergeID, merr))
+			continue
+		}
+		if mergeAuthor == nil || mergeAuthor.ID != mergeID {
+			out.MergedIDs[mergeID] = true
+			continue
+		}
+		mergeAuthorName := mergeAuthor.Name
+		// Unlike the series merge there is no "same name, nothing moves" exemption:
+		// author names are unique, so a merge always moves a book to a differently
+		// named author.
+		checkLocks := spec.HonorLocks
+
+		// ForRelink includes the trash: DeleteAuthor below sweeps the
+		// merged author out of trashed books' junction rows too, so a
+		// trashed book skipped here lost its credit for good.
+		books, err := store.GetBooksByAuthorIDForRelinkCore(mergeID)
+		if err != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("failed to get books for author %d: %v", mergeID, err))
+			continue
+		}
+
+		lockedBooks := 0
+		for _, book := range books {
+			if checkLocks {
+				locks, lerr := database.LoadFieldLocks(store, book.ID)
+				if lerr != nil {
+					out.Errors = append(out.Errors, fmt.Sprintf("book %s: not moved off author %d, %v", book.ID, mergeID, lerr))
+					continue
+				}
+				if locks.Locked(database.FieldKeyAuthorName) {
+					lockedBooks++
+					out.Errors = append(out.Errors,
+						fmt.Sprintf("book %s: author name is user-locked as %q; not moved to %q (author %d kept)",
+							book.ID, mergeAuthorName, keepAuthor.Name, mergeID))
+					continue
+				}
+			}
+			bookAuthors, err := store.GetBookAuthors(book.ID)
+			if err != nil {
+				continue
+			}
+			hasKeep := false
+			for _, ba := range bookAuthors {
+				if ba.AuthorID == keepID {
+					hasKeep = true
+					break
+				}
+			}
+			var newAuthors []database.BookAuthor
+			for _, ba := range bookAuthors {
+				if ba.AuthorID == mergeID {
+					if !hasKeep {
+						ba.AuthorID = keepID
+						newAuthors = append(newAuthors, ba)
+						hasKeep = true
+					}
+				} else {
+					newAuthors = append(newAuthors, ba)
+				}
+			}
+			if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
+				out.Errors = append(out.Errors, fmt.Sprintf("failed to update book %s: %v", book.ID, err))
+			} else {
+				_ = store.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: opID,
+					BookID:      book.ID,
+					ChangeType:  "author_reassign",
+					FieldName:   "book_authors",
+					OldValue:    fmt.Sprintf("author_id:%d (%s)", mergeID, mergeAuthorName),
+					NewValue:    fmt.Sprintf("author_id:%d (%s)", keepID, keepName),
+				})
+			}
+
+			// Sync the denormalized `book.AuthorID` pointer on the Book row itself.
+			// SetBookAuthors above updates the join table, but callers that read the Book
+			// struct directly expect book.AuthorID to match the primary author in the join
+			// table. Without this sync, the field still points at the losing author ID.
+			//
+			// Backlog 7.11 — found while investigating the merge ITL cleanup bug (#251).
+			//
+			// ModifyBook re-reads the row under the book's write lock and
+			// sets only AuthorID, so a column another writer commits in the
+			// meantime is not reverted (audit A1#15). A vanished book is
+			// (nil, nil): nothing to sync, as before.
+			if _, upErr := store.ModifyBook(book.ID, func(current *database.Book) error {
+				if current.AuthorID == nil || *current.AuthorID != mergeID {
+					return database.ErrSkipBookWrite
+				}
+				newID := keepID
+				current.AuthorID = &newID
+				return nil
+			}); upErr != nil {
+				logging.Warn(ctx, "author merge failed to sync denormalized AuthorID on book", "book", book.ID, "err", upErr)
+			}
+		}
+
+		// The loop above skips a book on any read or write failure, so
+		// re-check before the delete erases whatever it could not move.
+		if lockedBooks > 0 {
+			out.Errors = append(out.Errors, fmt.Sprintf(
+				"author %d NOT deleted: %d book(s) have a user-locked author name and keep it", mergeID, lockedBooks))
+		} else if err := database.VerifyAuthorUnlinked(store, mergeID); err != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: %v", mergeID, err))
+		} else if err := store.DeleteAuthor(mergeID); err != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("failed to delete author %d: %v", mergeID, err))
+		} else {
+			_ = store.CreateAuthorTombstone(mergeID, keepID)
+			_ = store.CreateOperationChange(&database.OperationChange{
+				ID:          ulid.Make().String(),
+				OperationID: opID,
+				BookID:      "",
+				ChangeType:  "author_delete",
+				FieldName:   "author",
+				OldValue:    fmt.Sprintf("%d:%s", mergeID, mergeAuthorName),
+				NewValue:    fmt.Sprintf("merged_into:%d:%s", keepID, keepName),
+			})
+			out.Merged++
+			out.MergedIDs[mergeID] = true
+		}
+
+		if step != nil {
+			step(i+1, len(spec.MergeIDs))
+		}
+	}
+	return out, false
 }
 
 // AuthorMergeFailedIDsPrefix opens the list of author ids a failed

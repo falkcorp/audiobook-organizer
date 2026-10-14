@@ -17,6 +17,9 @@ import (
 // keepFake is a KeepStore over a fixed author table. Authors absent from names
 // do not exist; countsErr makes the book-count read fail.
 type keepFake struct {
+	// tombstones maps a merged-away id to the author it became: like the real
+	// store, GetAuthorByID answers such an id with THAT author.
+	tombstones map[int]int
 	names      map[int]string
 	counts     map[int]int
 	countsErr  error
@@ -24,6 +27,9 @@ type keepFake struct {
 }
 
 func (f *keepFake) GetAuthorByID(id int) (*database.Author, error) {
+	if to, ok := f.tombstones[id]; ok {
+		id = to
+	}
 	n, ok := f.names[id]
 	if !ok {
 		return nil, nil
@@ -225,4 +231,19 @@ func TestCreateScanRefusesWhileAnotherScanRuns(t *testing.T) {
 	require.NoError(t, store.UpdateScanStatus(first.ID, "complete"))
 	_, err = pm.CreateScan("realtime")
 	require.NoError(t, err)
+}
+
+// GetAuthorByID follows the author tombstone, so a merged-away id comes back as
+// the author it was merged into. That author must not be kept under the old id.
+func TestChooseKeepID_ATombstonedAuthorIsGoneNotItsSuccessor(t *testing.T) {
+	store := &keepFake{
+		names:      map[int]string{6: "Bravo"},
+		tombstones: map[int]int{2: 6},
+		counts:     map[int]int{6: 1},
+	}
+	s := database.ScanSuggestion{Action: "merge", CanonicalName: "Bravo", Source: "full_scan", AuthorIDs: []int{2, 6}}
+	require.Equal(t, 6, keepOf(t, s, store))
+
+	s.AuthorIDs = []int{2}
+	require.Zero(t, keepOf(t, s, store), "the only candidate was merged away")
 }
