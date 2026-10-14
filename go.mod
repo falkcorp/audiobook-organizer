@@ -19,9 +19,9 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/oklog/ulid/v2 v2.1.2
-	github.com/openai/openai-go/v3 v3.71.1
+	github.com/openai/openai-go/v3 v3.76.0
 	github.com/philippgille/chromem-go v0.7.0
-	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/quic-go/quic-go v0.63.0
 	github.com/spf13/cobra v1.10.2
@@ -39,14 +39,14 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.senan.xyz/taglib v0.14.0
-	golang.org/x/crypto v0.57.0
-	golang.org/x/image v0.46.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/image v0.47.0
 	golang.org/x/oauth2 v0.37.0
-	golang.org/x/sync v0.23.0
-	golang.org/x/sys v0.48.0
-	golang.org/x/text v0.42.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/text v0.43.0
 	golang.org/x/time v0.16.0
-	golang.org/x/tools v0.50.0
+	golang.org/x/tools v0.51.0
 	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
 	howett.net/plist v1.0.1
@@ -156,7 +156,7 @@ require (
 	golang.org/x/arch v0.31.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
