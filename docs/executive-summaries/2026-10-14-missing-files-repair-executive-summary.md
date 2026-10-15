@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-14-missing-files-repair-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 9b3fe5ba-cb9d-49bf-b3da-0b4222fff839 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -41,9 +41,10 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   on the Operations page puts both back. If the apply is stopped between the
   two (cancelled, or the server restarts), resuming it, or starting a new
   apply of the same row, finishes the second change instead of refusing the
-  row. A new apply that finishes an earlier one records the first change
-  again as its own, so undoing just the new apply puts the book fully back,
-  and undoing both, in either order, ends where the book started.
+  row. A new apply that finishes an earlier one takes the whole change over
+  from it: undoing the new apply puts the book fully back, and undoing the
+  earlier one changes nothing for that book. Whichever order they are undone
+  in, the book and its file record never end up pointing at different files.
   A book only counts as half done when this repair's own record says so.
   If something else already pointed the book at the matched file (for
   example the old "Reconcile Apply" job), the row is shown as changed and
