@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-14-missing-files-repair-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9b3fe5ba-cb9d-49bf-b3da-0b4222fff839 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -49,9 +49,20 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   already uses a file. During that time the repair says "file index warming
   up; retry in a few minutes" instead of offering rows it cannot check.
 - **Only administrators can run it.** Repointing books at files needs the
-  "manage settings" permission, the same as the old apply job. Repairs can now
-  ask for a stronger permission than the usual "edit metadata" one, and this
-  is the first that does.
+  "manage settings" permission. The old apply job declares that same
+  permission, but its own button checks only the weaker "start scans"
+  permission; which of the two is right is listed for the owner to decide.
+  Repairs can now ask for a stronger permission than the usual "edit
+  metadata" one, and this is the first that does.
+- **One file is never given to two books.** If the scan matched the same file
+  to more than one book, every one of those rows is skipped for a person to
+  decide, rather than the first one winning.
+- **Fingerprints follow the file.** When the match was made by the file's
+  contents, the book keeps the content fingerprints it had. When it was made
+  some other way, the fingerprints that described the old file are cleared, so
+  the duplicate finder does not compare the book on content it no longer
+  points at. They are filled in again the next time files are fingerprinted,
+  and undoing the apply puts them back.
 
 ## What is not changed
 
