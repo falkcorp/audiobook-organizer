@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -340,9 +340,11 @@ func mergeAuthorsInto(
 			}
 			// Journaled first (authormerge.MoveCredits): a book whose row cannot be
 			// recorded is not moved, and the primary is repointed only when it
-			// names the merged author.
+			// names the merged author. Into is the keep row read above, written as
+			// the repointed book's denormalized Author so it does not keep naming
+			// the merged-away author.
 			moved, merr := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
-				BookID: book.ID, FromID: mergeID, IntoID: keepID,
+				BookID: book.ID, FromID: mergeID, IntoID: keepID, Into: keepAuthor,
 				Before: bookAuthors, After: newAuthors, PrimaryBefore: book.AuthorID,
 			})
 			if merr != nil {

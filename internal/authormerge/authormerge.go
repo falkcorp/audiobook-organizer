@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
 // last-edited: 2026-10-15
 
@@ -69,8 +69,10 @@ type CreditsStore interface {
 type CreditMove struct {
 	BookID         string
 	FromID, IntoID int
-	// Into, when set, is also written as the book's denormalized Author when its
-	// primary is repointed (the maintenance merges kept it in step).
+	// Into is written as the book's denormalized Author when its primary is
+	// repointed. Every caller passes the keep author's row. Left nil, the
+	// Author is cleared rather than left naming FromID (readers then fall back
+	// to an AuthorID lookup); ModifyBook and ModifyBookCredits write that nil.
 	Into *database.Author
 	// Before is the book's junction as the caller read it; After is what the
 	// caller wants it to be.
@@ -188,6 +190,7 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 			}
 			id := m.IntoID
 			cur.AuthorID = &id
+			cur.Author = nil
 			if m.Into != nil {
 				into := *m.Into
 				cur.Author = &into
@@ -235,6 +238,7 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 		}
 		id := m.IntoID
 		cur.AuthorID = &id
+		cur.Author = nil
 		if m.Into != nil {
 			into := *m.Into
 			cur.Author = &into
