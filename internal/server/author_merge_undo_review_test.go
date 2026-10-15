@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -415,4 +415,56 @@ func TestAIAuthorMergeApplyOp_AStoreWithoutTheMergeDeleteCapabilityRefusesTheRun
 			require.Empty(t, aliases, "no alias was created")
 		})
 	}
+}
+
+// An author whose name fails today's creation gate (the library holds rows that
+// predate it: "read by narrator", "Epigraph") is merged and reclassified like any
+// other, so its undo must bring it back. The restore used to apply the creation
+// gate: the preflight called every row safe and the revert failed all of them.
+func TestUndo_AnAuthorWhoseNameFailsTheCreationGateComesBack(t *testing.T) {
+	for _, junk := range []string{"read by narrator", "Epigraph", "14 BBY"} {
+		t.Run("merge/"+junk, func(t *testing.T) {
+			require.Error(t, database.CheckAuthorNameForCreation(junk))
+			w := newUndoWorld(t)
+			require.NoError(t, w.st.UpdateAuthorName(w.from.ID, junk))
+			w.from.Name = junk
+			runUndoWorldMerge(t, w, "op-gate-merge")
+
+			pre, err := undo.PreflightUndoConflicts(w.st, "op-gate-merge")
+			require.NoError(t, err)
+			require.Equal(t, pre.TotalChanges, pre.Safe, "the preflight calls every row safe")
+			res, err := revertOp(t, w.st, "op-gate-merge")
+			require.NoError(t, err)
+			require.Zero(t, res.Failed, "and the revert restores every row")
+
+			back, err := w.st.GetAuthorByID(w.from.ID)
+			require.NoError(t, err)
+			require.Equal(t, w.from.ID, back.ID)
+			require.Equal(t, junk, back.Name)
+			for id, want := range w.before {
+				got, gerr := w.st.GetBookAuthors(id)
+				require.NoError(t, gerr)
+				require.Equal(t, want, got, "book %s credits", id)
+			}
+		})
+	}
+	t.Run("reclassify", func(t *testing.T) {
+		w := newUndoWorld(t)
+		require.NoError(t, w.st.UpdateAuthorName(w.from.ID, "read by narrator"))
+		_, err := entities.ReclassifyAuthorAsNarrator(w.st, w.from.ID, entities.ReclassifyOptions{
+			Journal: &entities.ReclassifyJournal{OperationID: "op-gate-recl", Store: w.st},
+		})
+		require.NoError(t, err)
+
+		pre, err := undo.PreflightUndoConflicts(w.st, "op-gate-recl")
+		require.NoError(t, err)
+		require.Equal(t, pre.TotalChanges, pre.Safe)
+		res, err := revertOp(t, w.st, "op-gate-recl")
+		require.NoError(t, err)
+		require.Zero(t, res.Failed)
+		back, err := w.st.GetAuthorByID(w.from.ID)
+		require.NoError(t, err)
+		require.Equal(t, w.from.ID, back.ID)
+		require.Equal(t, "read by narrator", back.Name)
+	})
 }

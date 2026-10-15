@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_author_restore.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e8a1c37-95b2-4d60-a3f9-7c2d0b6e1f58
 // last-edited: 2026-10-14
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 
@@ -103,8 +104,12 @@ func (p *PebbleStore) RestoreAuthor(id int, name string, opts AuthorRestoreOptio
 	if id <= 0 {
 		return nil, fmt.Errorf("restore author: invalid id %d", id)
 	}
-	if err := CheckAuthorNameForCreation(name); err != nil {
-		return nil, err
+	// Not CheckAuthorNameForCreation: a restore puts back a row that existed,
+	// under its own id, and the creation gate is for minting new authors. Rows
+	// that predate the gate ("read by narrator", "Epigraph") are merged and
+	// reclassified like any other, and their undo must bring them back.
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("restore author %d: empty name", id)
 	}
 	// The same locks every writer of author:name: and author_alias: holds, in
 	// their order (see nameIndexLocks).
