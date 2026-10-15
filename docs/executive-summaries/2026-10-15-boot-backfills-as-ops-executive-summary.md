@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-15-boot-backfills-as-ops-executive-summary.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 9a4c7e12-6b3d-4f58-8e91-2d5f0b7c3a66 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -86,6 +86,16 @@ works through the library out of sight any more.
   against that mark as it stood when the check ran, by which time the new
   server's own entries had moved it forward and could hide an older version's
   entries. It now uses the mark from when the log opened.
+- **A restart no longer loses the repair (found in review).** That mark was
+  only remembered in memory. If the server restarted before the check had
+  run, which is easy because the check waits a couple of minutes and then
+  takes its turn in the queue, the next start began from the already-advanced
+  mark and never looked at the entries the older version left behind. The
+  server now writes the starting point to the database as soon as it sees
+  entries above the mark, and removes it only when a check finds nothing
+  missing or a full rebuild finishes. A check that fails or is stopped leaves
+  it in place.
 - **If the check fails part way,** the activity filters stay switched back to
-  the slower path, and the failure message names the operation to run to
-  switch them back on.
+  the slower path. The next start now notices this and runs the full rebuild
+  by itself (owner decision), instead of waiting for someone to start it by
+  hand; the failure message still names the operation.
