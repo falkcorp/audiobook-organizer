@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
 // last-edited: 2026-10-14
 
@@ -722,10 +722,17 @@ func (p *Plugin) authorIDMergeOne(
 		if joinChanged {
 			after = newJoins
 		}
+		// A ghost book (a credit row whose book row is gone: the durable scan
+		// lists it, GetBookByID returns nil, nil) has no primary. Its credit move
+		// is still journaled and made; the primary repoint is skipped.
+		var primary *int
+		if full != nil {
+			primary = full.AuthorID
+		}
 		target := canonical
 		res, mErr := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
 			BookID: bookID, FromID: dup.ID, IntoID: canonical.ID, Into: &target,
-			Before: joins, After: after, PrimaryBefore: full.AuthorID,
+			Before: joins, After: after, PrimaryBefore: primary,
 		})
 		if mErr != nil {
 			ch.Error = mErr.Error()
