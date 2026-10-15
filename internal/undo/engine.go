@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-15
 //
@@ -325,7 +325,10 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(CheckAuthorRename(cur, id, from, to))
 	case ChangeTypeAuthorIDRepoint:
 		// The revert puts the old primary back only while the book still
-		// carries the one the repair wrote.
+		// carries the one the repair wrote. A newer row of this operation
+		// that repointed the same book (phase b's merge moving the primary
+		// off the author phase a repointed it to) is reverted first, so the
+		// check is against the primary that row puts back.
 		old, to, err := DecodeAuthorIDRepoint(c)
 		if err != nil {
 			return rowVerdict{refusal: err}
@@ -334,7 +337,11 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		if refusal != nil {
 			return rowVerdict{refusal: refusal}
 		}
-		return verdictOf(CheckAuthorIDRepoint(c.BookID, book.AuthorID, old.AuthorID, to))
+		current := book.AuthorID
+		if predicted, ok := plan.PredictedPrimary(c.BookID); ok {
+			current = predicted
+		}
+		return verdictOf(CheckAuthorIDRepoint(c.BookID, current, old.AuthorID, to))
 	case ChangeTypeAuthorMergeDelete, ChangeTypeAuthorReclassifyDelete:
 		// The revert recreates the author under its id (RestoreAuthor), refused
 		// only when another author took the name entry it held

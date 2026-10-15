@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -112,6 +112,7 @@ func (w *mergeUndoWorld) requireUndone(t *testing.T, opID string) {
 	require.NoError(t, err)
 	require.Zero(t, report.NotRestorable)
 	require.Equal(t, len(rows), report.TotalChanges)
+	require.Empty(t, report.CheckFailed, "the preflight refuses a row the revert restores")
 
 	res, err := audiobooks.NewRevertService(w.st).RevertOperation(opID)
 	require.NoError(t, err)
@@ -444,4 +445,45 @@ func TestAuthorIDRepair_AnAuthorChangedSinceTheReadIsNotRepointed(t *testing.T) 
 		}
 	}
 	require.Equal(t, 1, seen, "the repoint was journaled before the write")
+}
+
+// author-id-repair's phase (a) repoints a dangling primary onto x, and its
+// phase (b) then merges x away, moving the same book's primary again. The
+// revert runs newest-first, so the merge row puts x back before the repoint
+// row runs; the preflight must predict that rather than refuse the repoint
+// row against the primary stored now.
+func TestAuthorIDRepair_PreflightFollowsANewerMergeOfTheSameBook(t *testing.T) {
+	s := newRepairPebble(t)
+	x := repairAuthor(t, s, "Jane Doe")
+	y := repairAuthor(t, s, "jane twin")
+	require.NoError(t, s.UpdateAuthorName(y.ID, "JANE DOE"))
+	dangling := 777777
+	repairBook(t, s, "b1", &dangling, x.ID)
+
+	res := runRepair(t, New(&fakeDeps{store: s}), `{"dry_run":false}`)
+	require.Equal(t, 1, res.DanglingOutcomes["repointed"], "%+v", res.DanglingChanges)
+	require.Equal(t, 1, res.DuplicateOutcomes[authorIDMergeMerged], "%+v", res.DuplicateChanges)
+	rows, err := s.GetOperationChanges("op-id-repair")
+	require.NoError(t, err)
+	movedPrimary := false
+	for _, r := range rows {
+		if r.ChangeType == undo.ChangeTypeAuthorMergeCredits && r.BookID == "b1" {
+			_, move, derr := undo.DecodeAuthorMergeCredits(r)
+			require.NoError(t, derr)
+			movedPrimary = move.PrimaryChanged
+		}
+	}
+	require.True(t, movedPrimary, "fixture: the merge must move b1's primary a second time")
+
+	report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+	require.NoError(t, err)
+	require.Empty(t, report.CheckFailed, "the repoint row is restorable once the newer merge row is")
+	require.Equal(t, report.TotalChanges, report.Safe, "%+v", report)
+	rv, err := audiobooks.NewRevertService(s).RevertOperation("op-id-repair")
+	require.NoError(t, err)
+	require.Zero(t, rv.Failed, "%+v", rv)
+	back, err := s.GetBookByID("b1")
+	require.NoError(t, err)
+	require.NotNil(t, back.AuthorID)
+	require.Equal(t, dangling, *back.AuthorID)
 }
