@@ -7543,7 +7543,6 @@
               "backfill-metadata-source-hash",
               "backfill-sync-ids",
               "bulk-deluge-import",
-              "bulk-fetch-metadata",
               "cleanup-empty-folders",
               "cleanup-organize-mess",
               "cleanup-series",
