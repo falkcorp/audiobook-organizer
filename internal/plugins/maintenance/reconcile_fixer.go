@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-15
 
@@ -629,7 +629,8 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 	to := database.BookFileLocation{Path: c.NewPath, Missing: false, Size: nf.size}
 	if rmKeepsHashes(c.MatchType) {
 		// The matched file's content is the content the row's hash names.
-		// Any other match type: cleared for the next hash pass to fill.
+		// Any other match type leaves the row's hash empty for the
+		// backfill-file-hashes job (see rmKeepsHashes).
 		to.Hash = was.Hash
 	}
 	r.Reason = fmt.Sprintf("The file %s is missing; the scan matched the untracked file %s by %s (confidence %s). "+
@@ -650,7 +651,20 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 // hashes do not name; a "filename" match proves nothing about content.
 // Those hashes are cleared in the same writes that repoint the book and its
 // row, so dedup's exact-hash collectors never pair the book on content it no
-// longer points at, and the next hash pass fills them from the file.
+// longer points at.
+//
+// What fills them again differs. The row's hash comes back when the
+// backfill-file-hashes job (internal/maintenance/jobs) is run: it is not
+// scheduled and previews by default, and it hashes every book_file row with
+// an empty hash. The book's two hashes have no backfill:
+// that job writes only rows, and they are written by the scanner when it
+// re-reads the file (applyScannerFields), by organize
+// (scanner.ApplyOrganizedFileMetadata) or by an iTunes import. An ordinary
+// scan does not re-read the matched file when its scan-cache entry is
+// unchanged (classifySkipFile), so the book's hashes stay empty until the
+// file misses the cache, is marked NeedsRescan, changes on disk, is seen by a
+// force_update scan, or is organized
+// (todo.d/2026-10-15-missing-files-book-hash-refill.md).
 //
 // Book.OriginalFileHash is never cleared: it is the import-time identity of
 // the book's content, not a claim about the file at FilePath, and it is what
