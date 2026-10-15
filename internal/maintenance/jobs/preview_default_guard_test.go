@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/preview_default_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c7d2b1e-5f3a-4e68-9a41-7d2e8b6c3f15
-// last-edited: 2026-09-25
+// last-edited: 2026-10-15
 
 package jobs
 
@@ -39,7 +39,6 @@ var noPreviewMode = map[string]string{
 	"scan-metadata-hash-dups": "read-only scan; Run ignores dryRun",
 
 	// No dry_run key in DefaultParams at all.
-	"bulk-fetch-metadata": "no preview mode: Run names dryRun but never reads it, so it always fetches and applies",
 	"scan-chapter-groups": "read-only scan; Run ignores dryRun; the writing twin merge-chapter-groups previews by default",
 
 	// revert-metadata-fetch and generate-itl-tests were listed here until
