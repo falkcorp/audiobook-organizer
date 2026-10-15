@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle_boot_ops_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b9e2a74-1c6d-4f38-8a07-3d4e6f2b9c18
 // last-edited: 2026-10-15
 
@@ -52,6 +52,11 @@ func TestStartBackfills_EnqueuesBootOps(t *testing.T) {
 		// 04-P7: every boot, unconditionally (a rollback leaves rows the
 		// sentinel cannot see); without ensure the op would only preview.
 		{id: "maintenance.opchange-book-index-rebuild", params: `{"ensure":true}`},
+		// 04-P6 part 2: the sentinel-gated build, not the forced rebuild; and
+		// the reconcile mode, not the full backfill (which would be a
+		// whole-table pass on every boot).
+		{id: "maintenance.book-atpath-index-backfill", params: `{"if_needed":true}`},
+		{id: "maintenance.activity-filter-index-backfill", params: `{"reconcile":true}`},
 	}
 	if len(*got) != len(want) {
 		t.Fatalf("enqueued %v, want %v", *got, want)
@@ -95,7 +100,7 @@ func TestStartBackfills_NoBootGoroutineForConvertedOps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"external-id-backfill", "strip-movement-atoms", "remux-malformed-m4b", "transcode+quarantine", "opchange-index-backfill"} {
+	for _, name := range []string{"external-id-backfill", "strip-movement-atoms", "remux-malformed-m4b", "transcode+quarantine", "opchange-index-backfill", "book-atpath-backfill"} {
 		if strings.Contains(string(src), `bgWG.Go("`+name+`"`) {
 			t.Errorf("server_lifecycle.go still starts the %q goroutine; it is enqueued as an op now", name)
 		}
@@ -104,6 +109,15 @@ func TestStartBackfills_NoBootGoroutineForConvertedOps(t *testing.T) {
 		if !strings.Contains(string(src), `bgWG.Go("`+name+`"`) {
 			t.Errorf("server_lifecycle.go lost the %q goroutine, which 04-P6 keeps", name)
 		}
+	}
+	// The activity reconcile was started from the activity service's Build, not
+	// from this file.
+	act, err := os.ReadFile(wd + "/../activity/register.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(act), "reconcileFilterIndexAtBoot") {
+		t.Error("internal/activity/register.go still starts reconcileFilterIndexAtBoot; it is enqueued as maintenance.activity-filter-index-backfill {reconcile:true} now")
 	}
 }
 

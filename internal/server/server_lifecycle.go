@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.43.4
+// version: 4.44.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1114,8 +1114,9 @@ func (s *Server) startBackfills() {
 	// how shutdown still drains them before the store closes.
 	if s.opRegistry == nil {
 		lifecycleLog.Warn("startup: no operations registry; the boot ops were not enqueued: the one-time " +
-			"backfills, and the every-boot opchange_by_book index ensure, so GetBookChanges stays on the " +
-			"full journal scan until a boot with a registry verifies the index")
+			"backfills, the every-boot opchange_by_book index ensure and activity filter-index reconcile, and " +
+			"the book_atpath index build, so GetBookChanges, the activity filters and LiveBookIDsAtPath " +
+			"stay on their slower paths until a boot with a registry verifies or builds the index")
 	} else {
 		checks := bootOpChecks{settingTrue: func(key string) bool {
 			st, err := s.Ops().GetSetting(key)
@@ -1196,41 +1197,6 @@ func (s *Server) startBackfills() {
 		}
 	})
 
-	// book_atpath: multi-valued path index, one-time build gated by a
-	// sentinel (pebble_store_atpath_index.go). Until it completes,
-	// LiveBookIDsAtPath serves from a full scan, so nothing is wrong while it
-	// is pending — only slow. Waits for memdb warmup first so it does not
-	// compete with warmup's own full book scan. Resolved through
-	// AsCapability for the same reason as the version-group backfill above.
-	s.bgWG.Go("book-atpath-backfill", func() {
-		if err := s.bgCtx.Err(); err != nil {
-			return
-		}
-		b, ok := resolveBookAtPathBackfiller(s.Ops())
-		if !ok {
-			// CodeQL go/clear-text-logging (alert #1929): same shape as the
-			// version-group warn above, flagged as #1472 then #1595 and
-			// dismissed both times as a false positive (see #1595). %T renders
-			// only the dynamic type name (e.g. *database.PebbleStore), never a
-			// struct field value, so no credential reachable through s.Ops()
-			// can appear in this log record.
-			slog.Warn("book-atpath-backfill: store does not implement BackfillBookAtPathIndex, index will NOT be built; LiveBookIDsAtPath stays on the full scan",
-				"store_type", fmt.Sprintf("%T", s.Ops()))
-			return
-		}
-		warm := make(chan struct{})
-		go func() { b.WaitForWarmup(); close(warm) }()
-		select {
-		case <-warm:
-		case <-s.bgCtx.Done():
-			slog.Info("book-atpath-backfill: shutdown before memdb warmup finished; will run next boot")
-			return
-		}
-		if _, err := b.BackfillBookAtPathIndex(s.bgCtx, nil); err != nil {
-			slog.Warn("book-atpath-backfill", "err", err)
-		}
-	})
-
 	// Book identification index (database/ident_state.go): rebuilt from
 	// scratch when its marker is absent or old -- ident: queries answer 503
 	// and the review summary reports ready=false until it finishes -- and
@@ -1277,7 +1243,7 @@ func (s *Server) startBackfills() {
 		r, ok := resolveOpsV2TimelineReconciler(s.Ops())
 		if !ok {
 			// %T renders only the dynamic type name, never a field value (same
-			// reasoning as the book-atpath warn above).
+			// reasoning as the version-group warn above).
 			lifecycleLog.Warn("opsv2-timeline-reconcile: store does not implement ReconcileOpsV2TimelineIndex, index will NOT be used; the operations timeline stays on the full scan: store_type=%T",
 				s.Ops())
 			return
@@ -1383,16 +1349,31 @@ type opStatusLookup interface {
 //     the sentinel cannot know, so the verify is the check. Until it trusts
 //     the index, GetBookChanges serves from the full journal scan. Without
 //     params the op previews.
+//   - book-atpath-index-backfill {"if_needed": true} (04-P6 part 2, was the
+//     book-atpath-backfill goroutine): the sentinel-gated BackfillBookAtPathIndex
+//     instead of the operator's forced RebuildBookAtPathIndex. Until it
+//     finishes, LiveBookIDsAtPath serves from a full scan (slow, not wrong).
+//     A first build is a full book scan and reports progress per chunk.
+//   - activity-filter-index-backfill {"reconcile": true} (04-P6 part 2, was
+//     reconcileFilterIndexAtBoot, started from the activity service's Build):
+//     ReconcileFilterIndexCoverage, which checks the rows above the
+//     seen-through mark the store recorded when it opened and indexes any gap
+//     a rolled-back build left. Without params the op is the full backfill.
 //
 // Every def is PriorityLow, so these never get ahead of a user's op. A run
 // with nothing to do logs with opsregistry.NoOpAttr, so the activity feed
 // hides it by default.
 //
 // Readiness: the registry's dispatcher holds every def without NoWarmupWait
-// (all five) until the memdb warmup finishes, bounded by
+// (all seven) until the memdb warmup finishes, bounded by
 // registry.WarmupWaitTimeout. The first four goroutines did not wait for it at
-// all; the opchange one waited without a bound, so after the bound its op now
-// runs on a store that is still warming (correct, only competing for reads).
+// all; the opchange and the book-atpath ones waited without a bound, so after
+// the bound those ops now run on a store that is still warming (correct, only
+// competing for reads). The activity reconcile used to run the moment the
+// activity service was built, before any warmup hold; it now waits for it, so
+// rows a rolled-back build wrote without filter keys stay unindexed behind a
+// complete sentinel for that window (the planner's budgeted scan still answers
+// and reports partial).
 //
 // Shutdown: the goroutines were in bgWG so shutdown waited for them before
 // CloseStore (up to 30s). Registry.Shutdown, which Server.Shutdown calls
@@ -1406,10 +1387,14 @@ type opStatusLookup interface {
 // at least every 10,000 journal rows (every 5,000-row backfill or rebuild
 // chunk, every 10,000 rows of the verify, each a point read per row) and
 // its wait for the index-pass slot is ctx-aware, so a cancel ends it well
-// inside the bound.
+// inside the bound. The book_atpath build checks it per row in each worker and
+// in its producer's select, and the reconcile checks it every 64 rows of the
+// check and per 2,000-row reindex chunk.
 //
-// Restart mid-run: the four ResumeDrop ops are dropped and the next boot
-// enqueues them again. The transcode is ResumeAsk: an interrupted (or
+// Restart mid-run: the five ResumeDrop ops (the atpath one included) are
+// dropped and the next boot enqueues them again. The activity reconcile is
+// ResumeRestart: an interrupted run resumes with the same params, and since a
+// reconcile never checkpoints, it simply starts over from the open mark. The transcode is ResumeAsk: an interrupted (or
 // never-started queued) row becomes interrupted_ask and waits for an
 // operator. That row is not queued or running, so the enqueue dedupe does not
 // see it; enqueueBootOps therefore skips the transcode while such a row exists
@@ -1426,6 +1411,8 @@ var bootOps = []bootOp{
 		skipWhileAsk: true, skipWhenAllSet: []string{remux.TranscodeKey, quarantineKnownBadKey},
 	},
 	{id: "maintenance.opchange-book-index-rebuild", params: map[string]any{"ensure": true}},
+	{id: "maintenance.book-atpath-index-backfill", params: map[string]any{"if_needed": true}},
+	{id: "maintenance.activity-filter-index-backfill", params: map[string]any{"reconcile": true}},
 }
 
 // enqueueBootOps enqueues each of bootOps. A failed enqueue is logged and the
@@ -1971,21 +1958,6 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 // path. A guard that cannot reach the production call site does not guard it.
 func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 	return database.AsCapability[vgBackfiller](s)
-}
-
-// bookAtPathBackfiller is the book_atpath: index startup build plus the warmup
-// gate it waits on. Both are *PebbleStore methods outside database.Store.
-type bookAtPathBackfiller interface {
-	WaitForWarmup()
-	BackfillBookAtPathIndex(ctx context.Context, progress database.BookAtPathProgress) (database.BookAtPathBackfillResult, error)
-}
-
-// resolveBookAtPathBackfiller finds the book_atpath: backfill through the
-// store's decorator chain (see resolveVGBackfiller for why a bare assertion
-// misses). A named function so TestStoreExposesBookAtPathBackfill can
-// exercise the production resolution path.
-func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
-	return database.AsCapability[bookAtPathBackfiller](s)
 }
 
 // identIndexBuilder is the identification index's supervisor (boot build
