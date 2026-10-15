@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-13-ai-scan-apply-merges-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 3c8e5b71-9a24-4d06-b7f3-6e1d2a94c850 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -110,7 +110,10 @@ repair points a book whose main author no longer exists at a real one. Undo
 puts the old name back, and puts the old (missing) author reference back
 together with the author name the book displayed before, so it no longer keeps
 showing the replacement's name. The rename is not put back if another author
-has taken that name since; that is reported instead. An author credit on a book
+has taken that name since; that is reported instead. The "&" job itself no longer renames
+onto a name another author took while it ran: it skips that name and says so,
+where it used to take the name over and leave the other author unfindable by
+name. An author credit on a book
 record that no longer exists is put back too.
 
 What is still not undone: the older AI review's apply renaming the author it
@@ -124,7 +127,9 @@ author a book's main author, the book's author list names it too. Only the
 clean-up jobs did that before. The list is changed only when the main author
 really changes, in the same save: a book someone moved to a different author
 while the merge ran keeps its list as it was, and a save that fails changes
-neither. A preview of the undo shows the same refusals before anything
+neither. Such a book now also shows the kept author's name: the Authors view and
+both AI applies used to leave it showing the name of the author that had just
+been merged away. A preview of the undo shows the same refusals before anything
 runs. Names that differ only in capitals or spacing, which are exactly what a
 duplicate merge joins, are handled. An undo that stopped part way finishes when
 run again, and the restored author appears without restarting the server.
