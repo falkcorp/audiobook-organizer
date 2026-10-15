@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-15
 
@@ -197,11 +197,12 @@ func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, rep
 // outcomes match the goroutine it replaced, with each failure now a red op
 // row instead of a log line only:
 //
-//   - ctx ended (shutdown, an operator cancel): an interruption, not a
+//   - ctx cancelled (shutdown, an operator cancel): an interruption, not a
 //     failure. Logged at Info, and ctx's error is returned so the registry
 //     records the run as canceled. Nothing is trusted; the next boot retries.
-//   - any other error, or a run that ends without a trusted index: Error,
-//     and the op fails. GetBookChanges stays on the full scan.
+//   - any other error, the def's Timeout (DeadlineExceeded) included, or a
+//     run that ends without a trusted index: Error, and the op fails.
+//     GetBookChanges stays on the full scan.
 //   - trusted, but the journal holds undecodable rows: the op fails, as the
 //     rebuild mode does, because GetBookChanges fails for every book until
 //     each such row is rewritten or removed.
@@ -213,11 +214,15 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 	_ = reporter.UpdateProgress(0, 1, "checking opchange_by_book: index")
 	res, err := r.EnsureOpChangeByBookIndex(ctx, opChangeIndexProgressTo(reporter))
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil || errors.Is(err, context.Canceled) {
+		// Only a cancel is an interruption (shutdown, an operator, or the
+		// watchdog, which logs its own kill). The def's Timeout ends ctx with
+		// DeadlineExceeded: a run too slow to finish leaves the index
+		// untrusted, which is a failure, not a clean stop.
+		if errors.Is(ctx.Err(), context.Canceled) || (ctx.Err() == nil && errors.Is(err, context.Canceled)) {
 			_ = reporter.Log(slog.LevelInfo, "opchange_by_book index check interrupted; GetBookChanges "+
 				"uses the full journal scan until the next boot checks it",
 				slog.String("error", err.Error()))
-			if ctxErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
 				return fmt.Errorf("opchange_by_book index ensure interrupted: %w", ctxErr)
 			}
 			return fmt.Errorf("opchange_by_book index ensure interrupted: %w", err)

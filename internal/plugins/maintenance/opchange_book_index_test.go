@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
 // last-edited: 2026-10-15
 
@@ -439,6 +439,29 @@ func TestOpchangeBookIndexEnsure_CancelWhileWaitingReturnsPromptly(t *testing.T)
 	}
 	if hasLevel(rep, slog.LevelError) {
 		t.Error("a cancelled ensure logged an Error line")
+	}
+}
+
+// The def's Timeout ends ctx with DeadlineExceeded. A run cut by it leaves the
+// index untrusted, so it is a failure (Error, red row), not an interruption.
+func TestOpchangeBookIndexEnsure_TimeoutIsAFailure(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	r := fakeOpChangeRebuilder{ensure: func(ctx context.Context) (database.OpChangeByBookEnsureResult, error) {
+		return database.OpChangeByBookEnsureResult{}, fmt.Errorf("opchange_by_book backfill: %w", ctx.Err())
+	}}
+	rep := &p6AttrReporter{}
+	err := ensureOpChangeBookIndex(ctx, r, rep)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline wrapped", err)
+	}
+	if !hasLevel(rep, slog.LevelError) {
+		t.Error("a timed-out ensure logged no Error line")
+	}
+	for _, l := range rep.lines {
+		if strings.Contains(l.msg, "interrupted") {
+			t.Errorf("a timed-out ensure was logged as an interruption: %q", l.msg)
+		}
 	}
 }
 
