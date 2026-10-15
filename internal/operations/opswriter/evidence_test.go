@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -1165,6 +1165,46 @@ func TestRowAppliedAuthorIsOneSubject(t *testing.T) {
 		mustRowApplied(t, w, r, false)
 	}
 	mustRowApplied(t, w, "credits-then-column", true)
+}
+
+// TestRowAppliedSiblingAuthorWriteDefeatsTheRow (05-PR5b round 5 S1): the
+// exemption for the run's own writes to one subject under two names covers
+// only writes the marker NAMES. A sibling row Y of the same run, not named
+// by row X's marker, that later writes the same book's author under the
+// other name is an ordinary later write: X does not stand. Case a is Y's
+// write in the book's history (ModifyBook author_id, carrying the run's
+// batch prefix); case b is Y's write in the operation journal (an Effect row
+// named author_id, under the run's op id).
+func TestRowAppliedSiblingAuthorWriteDefeatsTheRow(t *testing.T) {
+	s := newEvidenceStore()
+	w := evidenceWriter(s, "op1", ops.Live)
+	credits := func(bookID string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := w.ModifyBookAuthors(ctx, bookID, func([]database.BookAuthor) ([]database.BookAuthor, error) {
+				return []database.BookAuthor{{BookID: bookID, AuthorID: 4}}, nil
+			})
+			return err
+		}
+	}
+	applyItem(t, w, "x-a", credits("book-001"))
+	applyItem(t, w, "x-b", credits("book-002"))
+	mustRowApplied(t, w, "x-a", true)
+	mustRowApplied(t, w, "x-b", true)
+
+	time.Sleep(2 * time.Millisecond) // Y's rows are stamped after X's
+	aid := 4
+	applyItem(t, w, "y-a", func(ctx context.Context) error {
+		_, err := w.ModifyBook(ctx, "book-001", func(b *database.Book) error { b.AuthorID = &aid; return nil })
+		return err
+	})
+	applyItem(t, w, "y-b", func(ctx context.Context) error {
+		return w.Effect(ctx, ops.EffectSpec{Name: "author", Subject: ops.Subject{Type: ops.SubjectBook, ID: "book-002"},
+			Resource: ops.ResBooks}, func() ([]ops.HistoryRow, error) {
+			return []ops.HistoryRow{{BookID: "book-002", Field: "author_id", Old: "0", New: "4"}}, nil
+		})
+	})
+	mustRowApplied(t, w, "x-a", false) // a: Y's history row of the run's batch prefix, not named
+	mustRowApplied(t, w, "x-b", false) // b: Y's journal row of the run, not named
 }
 
 // TestRowAppliedFileMovedToAnotherBook (05-PR5b round 4 N3): a book_file a
