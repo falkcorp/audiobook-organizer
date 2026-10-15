@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package scheduler
 
@@ -138,9 +138,9 @@ func (ts *TaskScheduler) IsTaskRunning(name string) bool {
 // maintenance window skips a task when isTaskRunning says it is already going,
 // and the tasks page renders IsRunning from it.
 //
-// Only tasks that actually enqueue an operation appear. transcode,
-// label_refinement and batch_poller do not — transcode fails by design without
-// a book_id, and the other two dispatch through their own paths.
+// Only tasks that actually enqueue an operation appear. transcode and
+// batch_poller do not — transcode fails by design without a book_id, and
+// batch_poller polls an external batch API.
 //
 // A test asserts this map against what each task's TriggerFn really enqueues, so
 // it cannot drift the way opTypeMap did. That one covered 14 of the 24 tasks
@@ -164,6 +164,7 @@ var taskV2DefIDs = map[string]string{
 	"dedup_refresh":               "dedup.author-scan",
 	"acoustid_backfill":           "acoustid.backfill",
 	"dedup_llm_review":            "dedup.llm-review",
+	"label_refinement":            "dedup.label-refinement",
 	"series_prune":                "dedup.series-prune",
 	"series_normalize":            "dedup.series-normalize",
 	"asin_backfill":               "metafetch.asin-backfill",

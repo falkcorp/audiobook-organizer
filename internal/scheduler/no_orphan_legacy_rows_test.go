@@ -1,7 +1,7 @@
 // file: internal/scheduler/no_orphan_legacy_rows_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1e6d90b4-73af-4c25-8d10-b2c4f9a05e37
-// last-edited: 2026-08-24
+// last-edited: 2026-10-15
 
 package scheduler
 
@@ -170,9 +170,8 @@ func TestTranscodeTriggerFailsWithoutWritingARow(t *testing.T) {
 // The exempt set is small and each entry states why it enqueues nothing.
 func TestEveryEnqueueingTaskHasADefIDEntry(t *testing.T) {
 	exempt := map[string]string{
-		"transcode":        "fails by design without a book_id; never enqueues",
-		"label_refinement": "dispatches its own chain rather than one op",
-		"batch_poller":     "polls an external batch API; not an operation",
+		"transcode":    "fails by design without a book_id; never enqueues",
+		"batch_poller": "polls an external batch API; not an operation",
 	}
 
 	ts := NewTaskScheduler(testDeps())
