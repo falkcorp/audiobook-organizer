@@ -1,5 +1,5 @@
 // file: internal/server/ai_author_reassign_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b1d3f27-6c94-4a05-9e21-3d7f0a58c4b6
 // last-edited: 2026-10-15
 
@@ -15,14 +15,15 @@ import (
 // fakeReassignStore implements the narrow authorReassignStore surface so the
 // test can inject read/write failures per book.
 type fakeReassignStore struct {
-	books      []database.BookCore
-	booksErr   error
-	authors    map[string][]database.BookAuthor
-	authorsErr map[string]error
-	setErr     map[string]error
-	setCalls   map[string][]database.BookAuthor
-	ledger     []database.OperationChange
-	keepGone   bool
+	books          []database.BookCore
+	booksErr       error
+	authors        map[string][]database.BookAuthor
+	authorsErr     map[string]error
+	setErr         map[string]error
+	setCalls       map[string][]database.BookAuthor
+	ledger         []database.OperationChange
+	keepGone       bool
+	keepRedirected bool
 }
 
 func (f *fakeReassignStore) CreateOperationChange(c *database.OperationChange) error {
@@ -35,10 +36,15 @@ func (f *fakeReassignStore) ModifyBook(string, func(*database.Book) error) (*dat
 	return nil, nil
 }
 
-// GetAuthorByID: the keep author is live unless keepGone.
+// GetAuthorByID: the keep author is live unless keepGone; keepRedirected
+// answers with a different row than the one asked for, as a store does when the
+// id has been merged away and redirects to its survivor.
 func (f *fakeReassignStore) GetAuthorByID(id int) (*database.Author, error) {
 	if f.keepGone {
 		return nil, nil
+	}
+	if f.keepRedirected {
+		return &database.Author{ID: id + 1, Name: "Synthetic Survivor"}, nil
 	}
 	return &database.Author{ID: id, Name: "Synthetic Keep"}, nil
 }
@@ -154,6 +160,22 @@ func TestReassignBooksFromAuthor_DedupWhenAlreadyCreditsKeep(t *testing.T) {
 // row is journaled.
 func TestReassignBooksFromAuthor_AGoneKeepAuthorMovesNothing(t *testing.T) {
 	f := &fakeReassignStore{keepGone: true,
+		books:   []database.BookCore{{ID: "b1"}},
+		authors: map[string][]database.BookAuthor{"b1": {{BookID: "b1", AuthorID: mergeID, Role: "author"}}}}
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if len(errs) != 1 {
+		t.Fatalf("want one error, got %v", errs)
+	}
+	if len(f.setCalls) != 0 || len(f.ledger) != 0 {
+		t.Fatalf("nothing may move or be journaled: sets %v ledger %d", f.setCalls, len(f.ledger))
+	}
+}
+
+// A keep author whose id redirects to a different row fails the reassign before
+// any book moves or any row is journaled: writing the survivor's name onto the
+// books would credit the wrong author.
+func TestReassignBooksFromAuthor_ARedirectedKeepAuthorMovesNothing(t *testing.T) {
+	f := &fakeReassignStore{keepRedirected: true,
 		books:   []database.BookCore{{ID: "b1"}},
 		authors: map[string][]database.BookAuthor{"b1": {{BookID: "b1", AuthorID: mergeID, Role: "author"}}}}
 	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
