@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_override_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1a8e0840-e3e1-4dd5-9e0f-38b2181b5090
-// last-edited: 2026-09-19
+// last-edited: 2026-10-15
 
 package database
 
@@ -217,3 +217,43 @@ var errRatingFallback = &mockOverrideTestError{}
 type mockOverrideTestError struct{}
 
 func (*mockOverrideTestError) Error() string { return "mock override test sentinel" }
+
+// The default RenameAuthorChecked refuses a row that is nil or answers for a
+// different id (a merged-away id reading as its survivor), after check has run,
+// as PebbleStore.RenameAuthorChecked does, and never renames it.
+func TestMockStore_RenameAuthorCheckedRefusesANilOrRedirectedRow(t *testing.T) {
+	cases := map[string]*Author{
+		"nil row":        nil,
+		"redirected row": {ID: 8, Name: "Synthetic Survivor"},
+	}
+	for name, row := range cases {
+		t.Run(name, func(t *testing.T) {
+			renamed := false
+			m := &MockStore{
+				GetAuthorByIDFunc:    func(int) (*Author, error) { return row, nil },
+				UpdateAuthorNameFunc: func(int, string) error { renamed = true; return nil },
+			}
+			checked := false
+			err := m.RenameAuthorChecked(7, "Synthetic New", func(*Author, int) error { checked = true; return nil })
+			if err == nil {
+				t.Fatal("want an error for a row not live under the id")
+			}
+			if !checked {
+				t.Error("check must still run before the refusal")
+			}
+			if renamed {
+				t.Error("the author must not be renamed")
+			}
+		})
+	}
+	t.Run("live row", func(t *testing.T) {
+		renamed := false
+		m := &MockStore{
+			GetAuthorByIDFunc:    func(id int) (*Author, error) { return &Author{ID: id, Name: "Synthetic Old"}, nil },
+			UpdateAuthorNameFunc: func(int, string) error { renamed = true; return nil },
+		}
+		if err := m.RenameAuthorChecked(7, "Synthetic New", func(*Author, int) error { return nil }); err != nil || !renamed {
+			t.Fatalf("a live row is renamed: err %v renamed %v", err, renamed)
+		}
+	})
+}

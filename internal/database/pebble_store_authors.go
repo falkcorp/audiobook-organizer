@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-10-15
 
@@ -534,6 +534,8 @@ type AuthorCheckedRenamer interface {
 	// name only when check returns nil. check's error is returned as-is.
 	RenameAuthorChecked(id int, name string, check func(cur *Author, nameHolder int) error) error
 }
+
+var _ AuthorCheckedRenamer = (*PebbleStore)(nil)
 
 // RenameAuthorChecked implements AuthorCheckedRenamer. The read, the check and
 // the write all run under nameIdx.author, so no create or rename can take the

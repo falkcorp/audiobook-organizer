@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.149.0
+// version: 1.150.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-15
 
@@ -822,7 +822,8 @@ func (m *MockStore) AuthorNameHolder(name string) (int, error) {
 // RenameAuthorChecked (database.AuthorCheckedRenamer) approximates the store's
 // locked check-and-rename: it reads the row (GetAuthorByID) and the holder
 // (AuthorNameHolder), runs check, and renames through UpdateAuthorName only
-// when check passes. There is no lock to hold in a mock.
+// when check passes and the row read is live under id (a nil or redirected row
+// is refused, as the PebbleStore does). There is no lock to hold in a mock.
 func (m *MockStore) RenameAuthorChecked(id int, name string, check func(cur *Author, nameHolder int) error) error {
 	if m.RenameAuthorCheckedFunc != nil {
 		return m.RenameAuthorCheckedFunc(id, name, check)
@@ -837,6 +838,9 @@ func (m *MockStore) RenameAuthorChecked(id int, name string, check func(cur *Aut
 	}
 	if err := check(cur, holder); err != nil {
 		return err
+	}
+	if cur == nil || cur.ID != id {
+		return fmt.Errorf("author %d not found", id)
 	}
 	return m.UpdateAuthorName(id, name)
 }
