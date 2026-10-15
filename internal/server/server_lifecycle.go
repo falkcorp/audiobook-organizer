@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.42.1
+// version: 4.43.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1254,7 +1254,7 @@ func (s *Server) startBackfills() {
 
 	// opv2 timeline index (pebble_store_ops_v2_timeline.go): opv2:open: and
 	// opv2:done: keys that let ListOperationsV2Since skip decoding every
-	// operation row. Same trust model as opchange_by_book below: the index
+	// operation row. Same trust model as the opchange_by_book: index (bootOps): the index
 	// is UNTRUSTED at every boot and the timeline serves from the full scan
 	// (correct, only slower) until this boot's reconcile has checked and
 	// repaired it, because a rollback to a build that predates the index
@@ -1293,51 +1293,6 @@ func (s *Server) startBackfills() {
 			// Error, not Warn: the index is not in use this boot.
 			lifecycleLog.Error("opsv2-timeline-reconcile: index not trusted this boot; the timeline stays on the full scan and the next boot retries: err=%s",
 				logger.SanitizeLogValue(err.Error()))
-		}
-	})
-
-	// opchange_by_book: index over the operation-change journal
-	// (pebble_store_opchange_index.go). EnsureOpChangeByBookIndex runs the
-	// one-time backfill (sentinel-gated, resumable from a cursor), then a
-	// read-only verify of every journal row against the index, and only when
-	// that finds nothing missing does GetBookChanges start reading the index;
-	// a non-clean verify is logged at ERROR and answered with a rebuild. This
-	// runs on EVERY boot, because a rollback to a build that predates the
-	// index writes rows with no entry and the sentinel cannot know. Until it
-	// finishes, GetBookChanges serves from the full journal scan, so nothing
-	// is wrong while it is pending, only slow. Waits for memdb warmup first so
-	// it does not compete with warmup's own reads. Resolved through
-	// AsCapability for the same reason as the version-group backfill above.
-	s.bgWG.Go("opchange-index-backfill", func() {
-		if err := s.bgCtx.Err(); err != nil {
-			return
-		}
-		b, ok := resolveOpChangeIndexBackfiller(s.Ops())
-		if !ok {
-			// %T renders only the dynamic type name, never a field value (same
-			// reasoning as the book-atpath warn above).
-			lifecycleLog.Warn("opchange-index-backfill: store does not implement EnsureOpChangeByBookIndex, index will NOT be built; GetBookChanges stays on the full scan: store_type=%T",
-				s.Ops())
-			return
-		}
-		warm := make(chan struct{})
-		go func() { b.WaitForWarmup(); close(warm) }()
-		select {
-		case <-warm:
-		case <-s.bgCtx.Done():
-			lifecycleLog.Info("opchange-index-backfill: shutdown before memdb warmup finished; will run next boot")
-			return
-		}
-		if _, err := b.EnsureOpChangeByBookIndex(s.bgCtx, nil); err != nil {
-			// GetBookChanges stays on the full scan (correct, only slower);
-			// the next boot retries. Error, not Warn: the index is not in use.
-			// A cancelled bgCtx is a clean shutdown interrupting the check,
-			// not a failure.
-			if errors.Is(err, context.Canceled) {
-				lifecycleLog.Info("opchange-index-backfill: check interrupted by shutdown; reads use the full scan until the next boot: err=%s", logger.SanitizeLogValue(err.Error()))
-				return
-			}
-			lifecycleLog.Error("opchange-index-backfill: index not trusted this boot; GetBookChanges stays on the full scan: err=%s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
 
@@ -1413,14 +1368,25 @@ type opStatusLookup interface {
 //     same once-gated function the goroutine did.
 //   - malformed-m4b-transcode {"quarantine_after": true}: the transcode, then
 //     quarantineKnownBadFiles, the goroutine's two steps.
+//   - opchange-book-index-rebuild {"ensure": true} (04-P7, was the
+//     opchange-index-backfill goroutine): EnsureOpChangeByBookIndex, i.e.
+//     backfill if needed, verify every journal row against the
+//     opchange_by_book: index, rebuild on a dirty verify, and only then let
+//     GetBookChanges read it. Enqueued on EVERY boot with no skip check: a
+//     rollback to a build that predates the index writes rows with no entry,
+//     the sentinel cannot know, so the verify is the check. Until it trusts
+//     the index, GetBookChanges serves from the full journal scan. Without
+//     params the op previews.
 //
 // Every def is PriorityLow, so these never get ahead of a user's op. A run
 // with nothing to do logs with opsregistry.NoOpAttr, so the activity feed
 // hides it by default.
 //
 // Readiness: the registry's dispatcher holds every def without NoWarmupWait
-// (all four) until the memdb warmup finishes, bounded by
-// registry.WarmupWaitTimeout. The goroutines did not wait for it at all.
+// (all five) until the memdb warmup finishes, bounded by
+// registry.WarmupWaitTimeout. The first four goroutines did not wait for it at
+// all; the opchange one waited without a bound, so after the bound its op now
+// runs on a store that is still warming (correct, only competing for reads).
 //
 // Shutdown: the goroutines were in bgWG so shutdown waited for them before
 // CloseStore. Registry.Shutdown, which Server.Shutdown calls before bgCancel
@@ -1429,7 +1395,7 @@ type opStatusLookup interface {
 // here runs on that ctx, including the external-id backfill and the
 // quarantine step, which used to watch only bgCtx or nothing.
 //
-// Restart mid-run: the three ResumeDrop ops are dropped and the next boot
+// Restart mid-run: the four ResumeDrop ops are dropped and the next boot
 // enqueues them again. The transcode is ResumeAsk: an interrupted (or
 // never-started queued) row becomes interrupted_ask and waits for an
 // operator. That row is not queued or running, so the enqueue dedupe does not
@@ -1446,6 +1412,7 @@ var bootOps = []bootOp{
 		id: "maintenance.malformed-m4b-transcode", params: map[string]any{"quarantine_after": true},
 		skipWhileAsk: true, skipWhenAllSet: []string{remux.TranscodeKey, quarantineKnownBadKey},
 	},
+	{id: "maintenance.opchange-book-index-rebuild", params: map[string]any{"ensure": true}},
 }
 
 // enqueueBootOps enqueues each of bootOps. A failed enqueue is logged and the
@@ -2030,22 +1997,6 @@ type opsV2TimelineReconciler interface {
 // resolution path.
 func resolveOpsV2TimelineReconciler(s any) (opsV2TimelineReconciler, bool) {
 	return database.AsCapability[opsV2TimelineReconciler](s)
-}
-
-// opChangeIndexBackfiller is the opchange_by_book: index startup
-// build-and-verify plus the warmup gate it waits on. Both are *PebbleStore
-// methods outside database.Store.
-type opChangeIndexBackfiller interface {
-	WaitForWarmup()
-	EnsureOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookEnsureResult, error)
-}
-
-// resolveOpChangeIndexBackfiller finds the opchange_by_book: backfill through
-// the store's decorator chain (see resolveVGBackfiller for why a bare assertion
-// misses). A named function so TestStoreExposesOpChangeIndexBackfill can
-// exercise the production resolution path.
-func resolveOpChangeIndexBackfiller(s any) (opChangeIndexBackfiller, bool) {
-	return database.AsCapability[opChangeIndexBackfiller](s)
 }
 
 // expiredSessionPruner is the narrow slice of the ops store that the periodic
