@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-10-15
 
@@ -1316,4 +1316,84 @@ func TestOpchangeIndex_EnsureReportsEveryStep(t *testing.T) {
 	if backfill == 0 {
 		t.Fatal("the ensure's first build reported no \"backfill\" progress")
 	}
+}
+
+// TestOpchangeIndex_EnsureCancelMidStep: the boot ensure runs as an op that
+// Registry.Shutdown cancels with a short drain budget, so a cancel inside
+// each long step must end the call promptly with ctx's error and leave the
+// index untrusted. A cut backfill or rebuild leaves its cursor, and the next
+// ensure resumes from it rather than from the first row.
+func TestOpchangeIndex_EnsureCancelMidStep(t *testing.T) {
+	oldChunk, oldVerifyRows := opChangeByBookBackfillChunk, opChangeVerifyProgressRows
+	opChangeByBookBackfillChunk, opChangeVerifyProgressRows = 1, 1
+	t.Cleanup(func() { opChangeByBookBackfillChunk, opChangeVerifyProgressRows = oldChunk, oldVerifyRows })
+
+	seed := func(t *testing.T, p *PebbleStore, raw bool) {
+		t.Helper()
+		for i := 0; i < 4; i++ {
+			c := &OperationChange{ID: fmt.Sprintf("c%d", i), OperationID: "op1", BookID: "b1"}
+			if raw {
+				rawPutOpChange(t, p, c)
+			} else if err := p.CreateOperationChange(c); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// ensureCancelOn runs the ensure and cancels its ctx the first time phase
+	// reports, then requires a prompt return with context.Canceled.
+	ensureCancelOn := func(t *testing.T, p *PebbleStore, phase string) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			_, err := p.EnsureOpChangeByBookIndex(ctx, func(ph string, _ int) {
+				if ph == phase {
+					cancel()
+				}
+			})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want context.Canceled from the %s step", err, phase)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("ensure did not return within 2s of a cancel in its %s step", phase)
+		}
+		if p.opChangeByBookIndexTrusted() {
+			t.Fatalf("a cancelled %s left the index trusted", phase)
+		}
+	}
+
+	t.Run("verify", func(t *testing.T) {
+		p := newOpChangeTestStore(t)
+		seed(t, p, false)
+		mustBackfillOpChange(t, p)
+		ensureCancelOn(t, p, "verify")
+		mustTrustOpChange(t, p)
+	})
+	t.Run("backfill resumes", func(t *testing.T) {
+		p := newOpChangeTestStore(t)
+		seed(t, p, false)
+		ensureCancelOn(t, p, "backfill")
+		res := mustTrustOpChange(t, p)
+		if res.Backfill.ResumedAfter == "" || res.Backfill.Skipped {
+			t.Fatalf("next ensure backfill = %+v, want it resumed from the cut run's cursor", res.Backfill)
+		}
+	})
+	t.Run("rebuild resumes", func(t *testing.T) {
+		p := newOpChangeTestStore(t)
+		mustBackfillOpChange(t, p)
+		seed(t, p, true) // rows with no entry: the verify is dirty, so the ensure rebuilds
+		ensureCancelOn(t, p, "rebuild")
+		res := mustTrustOpChange(t, p)
+		if res.Backfill.ResumedAfter == "" || res.Backfill.Skipped {
+			t.Fatalf("next ensure backfill = %+v, want it resumed from the cut rebuild's cursor", res.Backfill)
+		}
+		if res.Rebuilt {
+			t.Fatalf("next ensure = %+v, want the resumed backfill to complete the index without another rebuild", res)
+		}
+	})
 }
