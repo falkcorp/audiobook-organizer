@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-14
 
@@ -365,6 +365,23 @@ func TestReconcileFixer_DriftBetweenReplanAndWriteIsRefused(t *testing.T) {
 		}},
 		{"matched file rewritten", func(t *testing.T, f *rmFixture, _ string) {
 			require.NoError(t, os.WriteFile(f.path("new/One.m4b"), []byte("a longer, different file"), 0o644))
+		}},
+		// Same size, new modification time: only the mtime half of the
+		// file check catches it.
+		{"matched file touched (mtime only)", func(t *testing.T, f *rmFixture, _ string) {
+			later := time.Now().Add(time.Hour)
+			require.NoError(t, os.Chtimes(f.path("new/One.m4b"), later, later))
+		}},
+		// The book's own row at the matched file: the owner read excludes
+		// the book itself, so only the pre-write own-row check stops a
+		// second row of the book at one file.
+		{"book gained a file row at the match", func(t *testing.T, f *rmFixture, id string) {
+			require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: id, FilePath: f.path("new/One.m4b")}))
+		}},
+		{"book became an iTunes book", func(t *testing.T, f *rmFixture, id string) {
+			pid := "FEDCBA9876543210"
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+			require.NoError(t, err)
 		}},
 	}
 	for _, tc := range cases {
@@ -772,4 +789,67 @@ func TestReconcileFixer_AFileMatchedToTwoBooksSkipsBoth(t *testing.T) {
 	for id, st := range before {
 		assert.Equal(t, st, f.state(t, id), "nothing written")
 	}
+}
+
+// TestReconcileFixer_PrecheckRefusesABookThatMovedOrWasRetired calls
+// rmPrecheck directly: the Modify compare-and-set would also refuse these,
+// so only a direct call shows the pre-write check itself holds.
+func TestReconcileFixer_PrecheckRefusesABookThatMovedOrWasRetired(t *testing.T) {
+	t.Parallel()
+	for name, drift := range map[string]func(b *database.Book, f *rmFixture){
+		"path changed": func(b *database.Book, f *rmFixture) { b.FilePath = f.path("elsewhere/One.m4b") },
+		"soft-deleted": func(b *database.Book, _ *rmFixture) { yes := true; b.MarkedForDeletion = &yes },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newRMFixture(t)
+			one := f.missingBook(t, "Book One", "old/One.m4b", nil)
+			f.file(t, "new/One.m4b")
+			f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "hash", "high")
+			planned := rmRow(t, f.plan(t), one)
+			fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+			require.NoError(t, err)
+			d, ok := fresh.Detail.(*rmDecision)
+			require.True(t, ok)
+			rd, err := f.fx.reader()
+			require.NoError(t, err)
+			done, err := rmPrecheck(rd, d)
+			require.NoError(t, err)
+			require.False(t, done)
+
+			_, err = f.s.ModifyBook(one, func(b *database.Book) error { drift(b, f); return nil })
+			require.NoError(t, err)
+			_, err = rmPrecheck(rd, d)
+			assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+		})
+	}
+}
+
+// TestReconcileFixer_TwoOwnRowsAtTheOldPathIsNoSingleRow: a book with two
+// rows at its missing path has no single row to repoint (no_file_row).
+func TestReconcileFixer_TwoOwnRowsAtTheOldPathIsNoSingleRow(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	one := f.missingBook(t, "Book One", "old/One.m4b", nil)
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: one, FilePath: f.path("old/One.m4b"), Missing: true}))
+	f.file(t, "new/One.m4b")
+	f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "hash", "high")
+	r := rmRow(t, f.plan(t), one)
+	assert.Equal(t, rmSkipNoFileRow, r.Skipped, r.Reason)
+}
+
+// TestReconcileFixer_AMatchedDirectoryIsNotAFile: the matched path must be a
+// regular file; a directory there is file_gone, never applicable.
+func TestReconcileFixer_AMatchedDirectoryIsNotAFile(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	one := f.missingBook(t, "Book One", "old/One.m4b", nil)
+	require.NoError(t, os.MkdirAll(f.path("new/One.m4b"), 0o755))
+	f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "filename", "low")
+	r := rmRow(t, f.plan(t), one)
+	assert.Equal(t, rmSkipFileGone, r.Skipped, r.Reason)
+
+	assert.False(t, rmNewFile(f.path("new/One.m4b")).exists, "a directory")
+	assert.False(t, rmNewFile(f.path("new/nothing.m4b")).exists, "nothing")
+	assert.True(t, rmNewFile(f.file(t, "new/real.m4b")).exists, "a regular file")
 }
