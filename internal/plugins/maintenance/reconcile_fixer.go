@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-14
 
@@ -66,6 +66,11 @@ const (
 	// matched file; repointing its row at the old path there would make two
 	// rows of one book at one path.
 	rmSkipOwnRowAtMatch = "own_row_at_match"
+	// rmSkipSharedMatch: the scan matched this row's file to more than one
+	// book. Every such row is skipped, not the first kept: which book owns
+	// the file is a decision for a person, and skipping them all keeps the
+	// applicable rows disjoint by file as well as by book (see rmCandidates).
+	rmSkipSharedMatch = "shared_match"
 	// rmSkipIndexWarming: the file index (memdb) is warming up, so who holds
 	// the matched file cannot be told yet. Transient (Row.RetryLater).
 	rmSkipIndexWarming = "index_warming"
@@ -198,6 +203,9 @@ type rmCandidate struct {
 	// the row's evidence. They are not decision inputs.
 	ScanOpID      string `json:"scan_op_id"`
 	ScanCompleted string `json:"scan_completed,omitempty"`
+	// SharedWith lists the other books the scan matched to NewPath (sorted);
+	// non-empty makes the row a shared_match skip.
+	SharedWith []string `json:"shared_with,omitempty"`
 }
 
 func (c rmCandidate) hasMatch() bool { return c.NewPath != "" }
@@ -245,6 +253,14 @@ func (f *reconcileFixer) reader() (rmReader, error) {
 // rmCandidates turns a scan into one candidate per book: its matches, then
 // its unmatched books. A book listed twice (the scan never does this) keeps
 // its first entry, so row ids stay unique.
+//
+// A file matched to more than one book (the scan matches a file at most once,
+// but nothing here relies on it) marks EVERY one of those candidates with the
+// other books (SharedWith), and evaluate skips them all. That keeps the
+// applicable rows disjoint by file as well as by book: the apply engine
+// partitions parallel workers by BookIDs only, so two applicable rows naming
+// one file could otherwise both repoint a book at it on different workers,
+// each passing its "no other owner" check before the other wrote.
 func rmCandidates(scan ReconcileScan) []rmCandidate {
 	completed := ""
 	if scan.CompletedAt != nil {
@@ -271,6 +287,24 @@ func rmCandidates(scan ReconcileScan) []rmCandidate {
 	}
 	for _, u := range scan.Preview.UnmatchedBooks {
 		add(rmCandidate{BookID: u.BookID, Title: u.Title, OldPath: u.FilePath})
+	}
+	byFile := map[string][]string{}
+	for _, c := range out {
+		if c.hasMatch() {
+			byFile[c.NewPath] = append(byFile[c.NewPath], c.BookID)
+		}
+	}
+	for i := range out {
+		books := byFile[out[i].NewPath]
+		if !out[i].hasMatch() || len(books) < 2 {
+			continue
+		}
+		for _, id := range books {
+			if id != out[i].BookID {
+				out[i].SharedWith = append(out[i].SharedWith, id)
+			}
+		}
+		sort.Strings(out[i].SharedWith)
 	}
 	return out
 }
@@ -435,6 +469,13 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 		r.Skipped, r.SkipReason, r.Reason = kind, reason, why
 		r.Fingerprint = rmFingerprint(r, fp.String())
 		return r
+	}
+
+	if len(c.SharedWith) > 0 {
+		fmt.Fprintf(&fp, "|shared=%s", strings.Join(c.SharedWith, ","))
+		return skip(rmSkipSharedMatch, "the scan matched this file to more than one book",
+			fmt.Sprintf("The scan matched %s to this book and to book(s) %s; decide which book it belongs to.",
+				c.NewPath, strings.Join(c.SharedWith, ", "))), nil
 	}
 
 	book, err := rd.GetBookByID(c.BookID)

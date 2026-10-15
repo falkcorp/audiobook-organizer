@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-14
 
@@ -738,4 +738,38 @@ func TestReconcileFixer_ResumeFinishesARowCutOffBetweenItsTwoWrites(t *testing.T
 	_, err = audiobooks.NewRevertService(f.s).RevertOperation(opID)
 	require.NoError(t, err)
 	assert.Equal(t, before, f.state(t, one), "the revert puts the book and its row back")
+}
+
+// TestReconcileFixer_AFileMatchedToTwoBooksSkipsBoth (SF-1): when the scan
+// matches one file to two books, both rows are skipped (not the first kept),
+// so the applicable rows stay disjoint by file for the parallel apply
+// workers, and applying them writes nothing. A third book's own match is
+// unaffected.
+func TestReconcileFixer_AFileMatchedToTwoBooksSkipsBoth(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	a := f.missingBook(t, "Book A", "old/A.m4b", nil)
+	b := f.missingBook(t, "Book B", "old/B.m4b", nil)
+	c := f.missingBook(t, "Book C", "old/C.m4b", nil)
+	f.file(t, "new/shared.m4b")
+	f.file(t, "new/C.m4b")
+	f.match(a, "Book A", "old/A.m4b", "new/shared.m4b", "filename", "low")
+	f.match(b, "Book B", "old/B.m4b", "new/shared.m4b", "filename", "low")
+	f.match(c, "Book C", "old/C.m4b", "new/C.m4b", "hash", "high")
+
+	res := f.plan(t)
+	assert.Equal(t, 1, res.Applicable)
+	for id, other := range map[string]string{a: b, b: a} {
+		r := rmRow(t, res, id)
+		assert.Equal(t, rmSkipSharedMatch, r.Skipped, r.Reason)
+		assert.Contains(t, r.Reason, other)
+	}
+	assert.True(t, rmRow(t, res, c).Applicable())
+
+	before := map[string]rmState{a: f.state(t, a), b: f.state(t, b)}
+	out, _ := f.apply(t, res, rmRowID(a), rmRowID(b))
+	assert.Equal(t, 0, out.Applied)
+	for id, st := range before {
+		assert.Equal(t, st, f.state(t, id), "nothing written")
+	}
 }
