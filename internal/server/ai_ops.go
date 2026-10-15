@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -170,14 +170,14 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 						if mergeID == sug.KeepID {
 							continue
 						}
-						reassignErrs, problems := reassignBooksFromAuthor(store, opID, mergeID, sug.KeepID)
+						reassignErrs, problems, booksFailed := reassignBooksFromAuthor(store, opID, mergeID, sug.KeepID)
 						applyErrors = append(applyErrors, reassignErrs...)
 						applyErrors = append(applyErrors, problems...)
 						// Only delete the merged-away author once EVERY book that
 						// credited it has been re-pointed. Deleting while a book still
 						// credits mergeID would leave a dangling author reference.
 						if len(reassignErrs) > 0 {
-							applyErrors = append(applyErrors, fmt.Sprintf("author %d NOT deleted: %d book(s) could not be reassigned", mergeID, len(reassignErrs)))
+							applyErrors = append(applyErrors, reassignBlockedMessage("author", mergeID, booksFailed))
 							continue
 						}
 
@@ -213,7 +213,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 							}
 							// Re-link books and delete the variant author only if every
 							// book was successfully re-pointed (see reassignBooksFromAuthor).
-							reassignErrs, problems := reassignBooksFromAuthor(store, opID, mergeID, sug.KeepID)
+							reassignErrs, problems, booksFailed := reassignBooksFromAuthor(store, opID, mergeID, sug.KeepID)
 							for _, e := range reassignErrs {
 								applyErrors = append(applyErrors, e+" (alias)")
 							}
@@ -221,7 +221,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 								applyErrors = append(applyErrors, e+" (alias)")
 							}
 							if len(reassignErrs) > 0 {
-								applyErrors = append(applyErrors, fmt.Sprintf("aliased author %d NOT deleted: %d book(s) could not be reassigned", mergeID, len(reassignErrs)))
+								applyErrors = append(applyErrors, reassignBlockedMessage("aliased author", mergeID, booksFailed))
 								continue
 							}
 							// Gated and journaled as in the merge case above. The
