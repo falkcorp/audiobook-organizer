@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b3d1e97-0c45-4a28-9f7e-d2a8c5416b03
 // last-edited: 2026-10-14
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // applyReporter is the relink reporter plus a result slot and a cancel switch.
@@ -640,4 +641,48 @@ func TestPlanScanMerge_AnAgreedRowWithTheFullScansNarratorReclassifiesIt(t *test
 	positional.Suggestion.Roles, positional.Suggestion.RolesSource = json.RawMessage(`{"narrator":{"name":"N","ids":[2]}}`), "groups_scan"
 	_, err = planScanMerge(positional, aiscan.RawRoleFlags{})
 	require.ErrorContains(t, err, "narrator by position")
+}
+
+// supersedeAfterNoteStore supersedes the scan the moment the apply records a
+// result's undo note, so the MarkResultApplied that follows is refused.
+type supersedeAfterNoteStore struct {
+	*database.PebbleStore
+	scans  *database.AIScanStore
+	scanID int
+}
+
+func (s supersedeAfterNoteStore) CreateOperationChange(c *database.OperationChange) error {
+	if err := s.PebbleStore.CreateOperationChange(c); err != nil {
+		return err
+	}
+	if c.ChangeType == undo.ChangeTypeAIScanResultApplied && !c.Voided {
+		return s.scans.UpdateScanStatus(s.scanID, "superseded")
+	}
+	return nil
+}
+
+// The note that lets an undo reopen a result is written before the result is
+// marked applied. A mark that is refused voids the note, so an undo never
+// "reopens" a result this run did not mark.
+func TestAIScanApplyOp_ARefusedMarkVoidsTheResultsUndoNote(t *testing.T) {
+	f := newApplyFixture(t)
+	keep, from := f.author("Note Keep"), f.author("Note From")
+	mkRelinkOpBook(t, f.st, "note-from", from.ID, false)
+	id := f.result(database.ScanSuggestion{CanonicalName: keep.Name, KeepID: keep.ID, AuthorIDs: []int{keep.ID, from.ID}, Source: "groups_scan"})
+	f.s.store = supersedeAfterNoteStore{PebbleStore: f.st, scans: f.scanStore, scanID: f.scan.ID}
+
+	_, err := f.run(live(), id)
+
+	require.Error(t, err, "the result is reported not applied")
+	require.False(t, f.applied(id))
+	changes, err := f.st.GetOperationChanges("op-apply-test")
+	require.NoError(t, err)
+	notes := 0
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeAIScanResultApplied {
+			notes++
+			require.True(t, c.Voided, "the note of a result that was not marked is voided")
+		}
+	}
+	require.Equal(t, 1, notes, "the note was written before the mark")
 }
