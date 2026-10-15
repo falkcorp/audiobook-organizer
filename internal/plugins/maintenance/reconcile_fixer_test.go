@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-14
 
@@ -9,20 +9,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -31,43 +31,31 @@ import (
 // satisfy it, or production refuses every plan.
 var _ rmReader = database.Store(nil)
 
-// rmDeps is fakeDeps with a scripted latest scan and an EnqueueOp that
-// records what the fixer starts. When exec is set, each enqueued
-// reconcile.apply also runs, synchronously, the core the real op runs.
-type rmDeps struct {
-	fakeDeps
-	mu       sync.Mutex
-	enqueued []rmApplyParams
-	defIDs   []string
-	exec     func(rmApplyParams) error
+// rmWarmingStore is the store while memdb is warming up: BookFilesAtPath
+// cannot give a complete answer.
+type rmWarmingStore struct {
+	*database.PebbleStore
+	warming atomic.Bool
 }
 
-func (d *rmDeps) EnqueueOp(_ context.Context, defID string, params any) (string, error) {
-	p, ok := params.(rmApplyParams)
-	if !ok {
-		return "", errors.New("rmDeps: unexpected params type")
+func (s *rmWarmingStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	if s.warming.Load() {
+		return nil, fmt.Errorf("%w: memdb is not serving", database.ErrBookFilesAtPathUnavailable)
 	}
-	d.mu.Lock()
-	d.defIDs = append(d.defIDs, defID)
-	d.enqueued = append(d.enqueued, p)
-	n := len(d.enqueued)
-	d.mu.Unlock()
-	if d.exec != nil {
-		if err := d.exec(p); err != nil {
-			return "", err
-		}
-	}
-	return "apply-op-" + string(rune('0'+n)), nil
+	return s.PebbleStore.BookFilesAtPath(path)
 }
 
 // rmFixture is a library with missing-file books and untracked files on
 // disk, and the scan that matched them. Titles and paths are synthetic.
 type rmFixture struct {
 	s    *database.PebbleStore
+	st   *rmWarmingStore
 	dir  string
-	deps *rmDeps
+	deps *fakeDeps
 	fx   *reconcileFixer
 	scan reconcile.ReconcilePreviewResult
+	// applies numbers the apply ops, so each has its own journal.
+	applies int
 }
 
 func newRMFixture(t *testing.T) *rmFixture {
@@ -75,7 +63,8 @@ func newRMFixture(t *testing.T) *rmFixture {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	f := &rmFixture{s: newFragStore(t), dir: dir}
-	f.deps = &rmDeps{fakeDeps: fakeDeps{store: f.s, root: dir}}
+	f.st = &rmWarmingStore{PebbleStore: f.s}
+	f.deps = &fakeDeps{store: f.st, root: dir}
 	f.deps.reconcileScan = func() (ReconcileScan, error) {
 		at := time.Date(2026, 10, 14, 3, 0, 0, 0, time.UTC)
 		preview := f.scan
@@ -97,8 +86,8 @@ func (f *rmFixture) file(t *testing.T, rel string) string {
 	return p
 }
 
-// missingBook creates a book whose file (and one book_file row) is at rel,
-// which is NOT on disk.
+// missingBook creates a book whose file (and one Missing book_file row,
+// with a hash and size) is at rel, which is NOT on disk.
 func (f *rmFixture) missingBook(t *testing.T, title, rel string, mut func(*database.Book)) string {
 	t.Helper()
 	b := &database.Book{Title: title, FilePath: f.path(rel)}
@@ -107,7 +96,8 @@ func (f *rmFixture) missingBook(t *testing.T, title, rel string, mut func(*datab
 	}
 	b, err := f.s.CreateBook(b)
 	require.NoError(t, err)
-	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f.path(rel), Missing: true}))
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f.path(rel), Missing: true,
+		FileHash: "hash-" + title, FileSize: 11}))
 	return b.ID
 }
 
@@ -129,13 +119,48 @@ func (f *rmFixture) plan(t *testing.T) *repairs.PlanResult {
 	return res
 }
 
-func (f *rmFixture) apply(t *testing.T, res *repairs.PlanResult, rowIDs ...string) *repairs.ApplyResult {
+// writer is an apply op's journaled Writer; opID names the op.
+func (f *rmFixture) writer() (*repairs.Writer, string) {
+	f.applies++
+	opID := fmt.Sprintf("repairs-apply-%d", f.applies)
+	return repairs.NewWriter(f.s, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, opID), opID
+}
+
+// apply runs a real (not dry-run) apply of rowIDs and returns its result
+// and op id.
+func (f *rmFixture) apply(t *testing.T, res *repairs.PlanResult, rowIDs ...string) (*repairs.ApplyResult, string) {
 	t.Helper()
-	w := repairs.NewWriter(f.s, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "repairs-apply-1")
+	w, opID := f.writer()
 	out, err := repairs.RunApply(context.Background(), f.fx, res, "plan-1", rowIDs, false,
-		repairs.ApplyDeps{Guard: f.s, Writer: w, OpID: "repairs-apply-1"}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: f.s, Writer: w, OpID: opID}, &fakeReporter{})
 	require.NoError(t, err)
-	return out
+	return out, opID
+}
+
+// state is a book's path and its book_file rows' locations, by row id.
+type rmState struct {
+	Path  string
+	Files map[string]database.BookFileLocation
+}
+
+func (f *rmFixture) state(t *testing.T, bookID string) rmState {
+	t.Helper()
+	b, err := f.s.GetBookByID(bookID)
+	require.NoError(t, err)
+	files, err := f.s.GetBookFiles(bookID)
+	require.NoError(t, err)
+	st := rmState{Path: b.FilePath, Files: map[string]database.BookFileLocation{}}
+	for i := range files {
+		st.Files[files[i].ID] = database.BookFileLocationOf(&files[i])
+	}
+	return st
+}
+
+func (f *rmFixture) countRows(t *testing.T) int {
+	t.Helper()
+	all, err := f.s.GetAllBookFilesCore()
+	require.NoError(t, err)
+	return len(all)
 }
 
 func rmRow(t *testing.T, res *repairs.PlanResult, bookID string) repairs.Row {
@@ -158,8 +183,8 @@ func rmOutcomes(out *repairs.ApplyResult) map[string]string {
 }
 
 // TestReconcileFixer_RowsComeFromTheLatestSavedScan: every scan match and
-// every unmatched book is one row, with book -> file, match type and
-// confidence on the match rows.
+// every unmatched book is one row; a match row proposes the path only, its
+// match type and confidence are its class and evidence.
 func TestReconcileFixer_RowsComeFromTheLatestSavedScan(t *testing.T) {
 	t.Parallel()
 	f := newRMFixture(t)
@@ -181,14 +206,17 @@ func TestReconcileFixer_RowsComeFromTheLatestSavedScan(t *testing.T) {
 	assert.True(t, r1.Applicable(), r1.SkipReason)
 	assert.Equal(t, "Book One", r1.Title)
 	assert.Equal(t, []string{one}, r1.BookIDs)
-	assert.Equal(t, f.path("old/Book One.m4b")+" (missing)", r1.Current["path"])
-	assert.Equal(t, map[string]string{"path": f.path("new/Book One.m4b"), "match_type": "hash", "confidence": "high"}, r1.Proposed)
+	assert.Equal(t, map[string]string{"path": f.path("old/Book One.m4b") + " (missing)"}, r1.Current)
+	assert.Equal(t, map[string]string{"path": f.path("new/Book One.m4b")}, r1.Proposed)
+	assert.Equal(t, "hash", r1.Class)
 	assert.Equal(t, repairs.RiskLow, r1.Risk)
 	assert.Contains(t, r1.Evidence[0], "scan-1")
+	assert.Contains(t, r1.Evidence[1], "matched by hash, confidence high")
 
 	r2 := rmRow(t, res, two)
 	assert.True(t, r2.Applicable(), r2.SkipReason)
-	assert.Equal(t, "low", r2.Proposed["confidence"])
+	assert.Equal(t, map[string]string{"path": f.path("new/b2.m4b")}, r2.Proposed)
+	assert.Contains(t, r2.Evidence[1], "confidence low")
 	assert.Equal(t, repairs.RiskReview, r2.Risk, "a filename match is for review")
 }
 
@@ -207,80 +235,148 @@ func TestReconcileFixer_NoCandidateFileIsASkippedRowWithAReason(t *testing.T) {
 	assert.Equal(t, rmClassNoCandidate, r.Class)
 	assert.Equal(t, map[string]int{rmSkipNoCandidate: 1}, res.SkippedByKind, "the skipped count is a filter")
 
-	// Applying it starts nothing.
-	out := f.apply(t, res, r.RowID)
+	before := f.state(t, lost)
+	out, _ := f.apply(t, res, r.RowID)
 	assert.Equal(t, repairs.OutcomeNotApplicable, rmOutcomes(out)[r.RowID])
-	assert.Empty(t, f.deps.enqueued)
+	assert.Equal(t, before, f.state(t, lost), "nothing written")
 }
 
-// TestReconcileFixer_ApplyPassesOnlyPickedRowsToReconcileApply: two of three
-// applicable rows are picked; ONE reconcile.apply run carries exactly them.
-// A picked row that drifted since the plan is refused and left out.
-func TestReconcileFixer_ApplyPassesOnlyPickedRowsToReconcileApply(t *testing.T) {
+// TestReconcileFixer_ApplyRepointsExactlyThePickedBooksAndUndoRestoresThem:
+// two of four applicable rows are picked. Exactly those two books, and each
+// one's book_file row, now point at the matched file; the other two are
+// untouched; no book_file row is created or deleted (a second Missing row on
+// a picked book stays as it was). Reverting the apply op puts both books and
+// both rows back.
+func TestReconcileFixer_ApplyRepointsExactlyThePickedBooksAndUndoRestoresThem(t *testing.T) {
 	t.Parallel()
 	f := newRMFixture(t)
 	var ids []string
-	for _, n := range []string{"A", "B", "C", "D"} {
+	for i, n := range []string{"A", "B", "C", "D"} {
 		id := f.missingBook(t, "Book "+n, "old/"+n+".m4b", nil)
 		f.file(t, "new/"+n+".m4b")
-		f.match(id, "Book "+n, "old/"+n+".m4b", "new/"+n+".m4b", "hash", "high")
+		kind := "hash"
+		if i == 2 {
+			kind = "filename"
+		}
+		f.match(id, "Book "+n, "old/"+n+".m4b", "new/"+n+".m4b", kind, "high")
 		ids = append(ids, id)
 	}
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: ids[0], FilePath: f.path("old/A part 2.m4b"), Missing: true}))
+	before := map[string]rmState{}
+	for _, id := range ids {
+		before[id] = f.state(t, id)
+	}
+	rowsBefore := f.countRows(t)
 	res := f.plan(t)
 	require.Equal(t, 4, res.Applicable)
 
-	out := f.apply(t, res, rmRowID(ids[0]), rmRowID(ids[2]))
-	assert.Equal(t, 2, out.Applied)
-	require.Equal(t, []string{"reconcile.apply"}, f.deps.defIDs, "one run")
-	got := f.deps.enqueued[0].Matches
-	sort.Slice(got, func(i, j int) bool { return got[i].BookID < got[j].BookID })
-	want := []reconcile.ReconcileApplyItem{
-		{BookID: ids[0], NewPath: f.path("new/A.m4b")},
-		{BookID: ids[2], NewPath: f.path("new/C.m4b")},
-	}
-	sort.Slice(want, func(i, j int) bool { return want[i].BookID < want[j].BookID })
-	assert.Equal(t, want, got)
-	assert.Equal(t, "apply-op-1", out.FollowUp)
+	out, opID := f.apply(t, res, rmRowID(ids[0]), rmRowID(ids[2]))
+	require.Equal(t, 2, out.Applied, "%+v", out.Rows)
+	assert.Equal(t, rowsBefore, f.countRows(t), "no book_file row created or deleted")
 
-	// A drifted pick (its matched file gone) is refused at re-plan and is
-	// not handed on; the other pick is.
-	require.NoError(t, os.Remove(f.path("new/D.m4b")))
-	out = f.apply(t, res, rmRowID(ids[1]), rmRowID(ids[3]))
-	o := rmOutcomes(out)
-	assert.Equal(t, repairs.OutcomeApplied, o[rmRowID(ids[1])])
-	assert.Equal(t, repairs.OutcomeChangedSincePlan, o[rmRowID(ids[3])])
-	require.Len(t, f.deps.enqueued, 2)
-	assert.Equal(t, []reconcile.ReconcileApplyItem{{BookID: ids[1], NewPath: f.path("new/B.m4b")}}, f.deps.enqueued[1].Matches)
+	for _, k := range []struct {
+		id, n    string
+		keepHash bool
+	}{{ids[0], "A", true}, {ids[2], "C", false}} {
+		st := f.state(t, k.id)
+		assert.Equal(t, f.path("new/"+k.n+".m4b"), st.Path, "book %s repointed", k.n)
+		require.Len(t, st.Files, len(before[k.id].Files))
+		moved := 0
+		for fid, loc := range st.Files {
+			was := before[k.id].Files[fid]
+			if was.Path != f.path("old/"+k.n+".m4b") {
+				assert.Equal(t, was, loc, "another row of the book is untouched")
+				continue
+			}
+			moved++
+			assert.Equal(t, f.path("new/"+k.n+".m4b"), loc.Path)
+			assert.False(t, loc.Missing)
+			assert.Equal(t, int64(len("audio new/"+k.n+".m4b")), loc.Size)
+			if k.keepHash {
+				assert.Equal(t, was.Hash, loc.Hash, "a hash match keeps the row's hash")
+			} else {
+				assert.Empty(t, loc.Hash, "a filename match proves nothing about content")
+			}
+		}
+		assert.Equal(t, 1, moved)
+	}
+	for _, id := range []string{ids[1], ids[3]} {
+		assert.Equal(t, before[id], f.state(t, id), "an unpicked book is untouched")
+	}
+
+	_, err := audiobooks.NewRevertService(f.s).RevertOperation(opID)
+	require.NoError(t, err)
+	for _, id := range ids {
+		assert.Equal(t, before[id], f.state(t, id), "undo restores book %s and its rows", id)
+	}
+	assert.Equal(t, rowsBefore, f.countRows(t))
 }
 
-// TestReconcileFixer_ApplySplitsAtTheBulkApplyCap: reconcile.apply refuses a
-// whole set over the cap, so a larger selection goes in runs of the cap.
-// Not parallel: it sets the process-wide config.
-func TestReconcileFixer_ApplySplitsAtTheBulkApplyCap(t *testing.T) {
-	prev := config.Snapshot().BulkApplyMaxItems
-	config.Mutate(func(c *config.Config) { c.BulkApplyMaxItems = 2 })
-	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
-
-	f := newRMFixture(t)
-	var rows []string
-	for _, n := range []string{"A", "B", "C"} {
-		id := f.missingBook(t, "Book "+n, "old/"+n+".m4b", nil)
-		f.file(t, "new/"+n+".m4b")
-		f.match(id, "Book "+n, "old/"+n+".m4b", "new/"+n+".m4b", "hash", "high")
-		rows = append(rows, rmRowID(id))
+// TestReconcileFixer_DriftBetweenReplanAndWriteIsRefused: Apply re-reads
+// right before writing. A row fresh from Replan whose book moved, whose
+// matched file another book took (its path or a book_file row), whose book
+// was retired, or whose matched file changed is refused as
+// changed_since_plan with nothing written.
+func TestReconcileFixer_DriftBetweenReplanAndWriteIsRefused(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		drift func(t *testing.T, f *rmFixture, bookID string)
+	}{
+		{"book path changed", func(t *testing.T, f *rmFixture, id string) {
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.FilePath = f.path("elsewhere/One.m4b"); return nil })
+			require.NoError(t, err)
+		}},
+		{"file now another book's path", func(t *testing.T, f *rmFixture, _ string) {
+			_, err := f.s.CreateBook(&database.Book{Title: "Book Other", FilePath: f.path("new/One.m4b")})
+			require.NoError(t, err)
+		}},
+		{"file now another book's file row", func(t *testing.T, f *rmFixture, _ string) {
+			b, err := f.s.CreateBook(&database.Book{Title: "Book Other", FilePath: f.path("other")})
+			require.NoError(t, err)
+			require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f.path("new/One.m4b")}))
+		}},
+		{"book soft-deleted", func(t *testing.T, f *rmFixture, id string) {
+			yes := true
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.MarkedForDeletion = &yes; return nil })
+			require.NoError(t, err)
+		}},
+		{"matched file rewritten", func(t *testing.T, f *rmFixture, _ string) {
+			require.NoError(t, os.WriteFile(f.path("new/One.m4b"), []byte("a longer, different file"), 0o644))
+		}},
 	}
-	res := f.plan(t)
-	out := f.apply(t, res, rows...)
-	assert.Equal(t, 3, out.Applied)
-	require.Len(t, f.deps.enqueued, 2)
-	assert.Len(t, f.deps.enqueued[0].Matches, 2)
-	assert.Len(t, f.deps.enqueued[1].Matches, 1)
-	assert.Equal(t, "apply-op-1,apply-op-2", out.FollowUp)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newRMFixture(t)
+			one := f.missingBook(t, "Book One", "old/One.m4b", nil)
+			f.file(t, "new/One.m4b")
+			f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "hash", "high")
+			planned := rmRow(t, f.plan(t), one)
+			require.True(t, planned.Applicable(), planned.SkipReason)
+			fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+			require.NoError(t, err)
+			require.Equal(t, planned.Fingerprint, fresh.Fingerprint)
+			before := f.state(t, one)
+
+			tc.drift(t, f, one)
+			before2 := f.state(t, one)
+			w, _ := f.writer()
+			err = f.fx.Apply(context.Background(), w, fresh)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), err.Error())
+			assert.Equal(t, 0, w.Journaled(), "nothing journaled")
+			assert.Equal(t, before2, f.state(t, one), "nothing written")
+			for fid, loc := range before.Files {
+				assert.Equal(t, loc, f.state(t, one).Files[fid], "the file row is as planned")
+			}
+		})
+	}
 }
 
-// TestReconcileFixer_ITunesRowsAreSkippedAndNeverWritten: an iTunes book
-// (its iTunes id) and a match onto a file in an iTunes Media folder are both
-// skipped as iTunes, and applying them starts nothing.
+// TestReconcileFixer_ITunesRowsAreSkippedAndNeverWritten: an iTunes book (its
+// iTunes id, or its iTunes path) and a match onto a file in an iTunes Media
+// folder are all skipped as iTunes, and applying them writes nothing.
 func TestReconcileFixer_ITunesRowsAreSkippedAndNeverWritten(t *testing.T) {
 	t.Parallel()
 	f := newRMFixture(t)
@@ -291,21 +387,28 @@ func TestReconcileFixer_ITunesRowsAreSkippedAndNeverWritten(t *testing.T) {
 	onto := f.missingBook(t, "Book Two", "old/Two.m4b", nil)
 	f.file(t, "Music/iTunes Media/Audiobooks/Author A/Two.m4b")
 	f.match(onto, "Book Two", "old/Two.m4b", "Music/iTunes Media/Audiobooks/Author A/Two.m4b", "filename", "low")
+	itPath := "file:///Users/someone/Music/Three.m4b"
+	byPath := f.missingBook(t, "Book Three", "old/Three.m4b", func(b *database.Book) {
+		//lint:ignore SA1019 the fixture sets the legacy column the fixer must still honour
+		b.ITunesPath = &itPath
+	})
+	f.file(t, "new/Three.m4b")
+	f.match(byPath, "Book Three", "old/Three.m4b", "new/Three.m4b", "hash", "high")
 
 	res := f.plan(t)
 	assert.Equal(t, 0, res.Applicable)
-	for _, id := range []string{book, onto} {
+	all := []string{book, onto, byPath}
+	before := map[string]rmState{}
+	for _, id := range all {
 		r := rmRow(t, res, id)
 		assert.Equal(t, repairs.SkipITunes, r.Skipped, id)
 		assert.Equal(t, "iTunes", r.SkipReason, id)
+		before[id] = f.state(t, id)
 	}
-	out := f.apply(t, res, rmRowID(book), rmRowID(onto))
+	out, _ := f.apply(t, res, rmRowID(book), rmRowID(onto), rmRowID(byPath))
 	assert.Equal(t, 0, out.Applied)
-	assert.Empty(t, f.deps.enqueued, "nothing handed to reconcile.apply")
-	for _, id := range []string{book, onto} {
-		b, err := f.s.GetBookByID(id)
-		require.NoError(t, err)
-		assert.Equal(t, f.path("old/"+map[string]string{book: "One", onto: "Two"}[id]+".m4b"), b.FilePath)
+	for _, id := range all {
+		assert.Equal(t, before[id], f.state(t, id), "nothing written")
 	}
 }
 
@@ -324,7 +427,9 @@ func TestReconcileFixer_ReplanEqualsPlanForUnchangedState(t *testing.T) {
 	for _, planned := range res.Rows {
 		fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
 		require.NoError(t, err)
-		assert.Equal(t, planned, fresh, planned.RowID)
+		assert.Equal(t, planned.Fingerprint, fresh.Fingerprint, planned.RowID)
+		assert.Equal(t, planned.Skipped, fresh.Skipped, planned.RowID)
+		assert.Equal(t, planned.Proposed, fresh.Proposed, planned.RowID)
 	}
 }
 
@@ -346,13 +451,16 @@ func TestReconcileFixer_ReplanSkipsAMatchWhoseFileIsGone(t *testing.T) {
 	assert.Equal(t, rmSkipFileGone, fresh.Skipped)
 	assert.NotEqual(t, planned.Fingerprint, fresh.Fingerprint)
 
-	out := f.apply(t, res, planned.RowID)
+	before := f.state(t, one)
+	out, _ := f.apply(t, res, planned.RowID)
 	assert.Equal(t, repairs.OutcomeChangedSincePlan, rmOutcomes(out)[planned.RowID])
-	assert.Empty(t, f.deps.enqueued)
+	assert.Equal(t, before, f.state(t, one))
 }
 
 // TestReconcileFixer_ReplanCatchesEveryDrift covers the other re-checks: the
-// book repointed, its file back, the matched file taken by another book.
+// book repointed, its file back, the matched file taken by another book or
+// rewritten (same size, new modification time), and the book gaining a file
+// row at the match.
 func TestReconcileFixer_ReplanCatchesEveryDrift(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -379,6 +487,21 @@ func TestReconcileFixer_ReplanCatchesEveryDrift(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f.path("new/One.m4b")}))
 		}, rmSkipFileTracked},
+		{"matched file touched (mtime only)", func(t *testing.T, f *rmFixture, _ string) {
+			later := time.Now().Add(time.Hour)
+			require.NoError(t, os.Chtimes(f.path("new/One.m4b"), later, later))
+		}, ""},
+		{"book gained a file row at the match", func(t *testing.T, f *rmFixture, id string) {
+			require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: id, FilePath: f.path("new/One.m4b")}))
+		}, rmSkipOwnRowAtMatch},
+		{"book lost its file row", func(t *testing.T, f *rmFixture, id string) {
+			files, err := f.s.GetBookFiles(id)
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			// Repointed elsewhere by another writer (never deleted).
+			files[0].FilePath = f.path("elsewhere/One part.m4b")
+			require.NoError(t, f.s.UpdateBookFile(files[0].ID, &files[0]))
+		}, rmSkipNoFileRow},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -398,52 +521,102 @@ func TestReconcileFixer_ReplanCatchesEveryDrift(t *testing.T) {
 	}
 }
 
-// TestReconcileFixer_OwnFileRowAtTheMatchIsNotAnotherOwner: the book's own
-// book_file row at the matched path is the book's file, not a conflict.
-func TestReconcileFixer_OwnFileRowAtTheMatchIsNotAnotherOwner(t *testing.T) {
+// TestReconcileFixer_OldPathStates (B1): only "does not exist" is missing. A
+// folder at the book's path is present (a folder book whose folder came
+// back), and a stat error that is not "does not exist" (an unreadable parent)
+// is an error row, never applicable.
+func TestReconcileFixer_OldPathStates(t *testing.T) {
 	t.Parallel()
-	f := newRMFixture(t)
-	one := f.missingBook(t, "Book One", "old/One.m4b", nil)
-	f.file(t, "new/One.m4b")
-	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: one, FilePath: f.path("new/One.m4b")}))
-	f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "hash", "high")
-	r := rmRow(t, f.plan(t), one)
-	assert.True(t, r.Applicable(), r.SkipReason)
+	t.Run("folder comes back", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		one := f.missingBook(t, "Book One", "old/One", nil)
+		f.file(t, "new/One.m4b")
+		f.match(one, "Book One", "old/One", "new/One.m4b", "filename", "low")
+		planned := rmRow(t, f.plan(t), one)
+		require.True(t, planned.Applicable(), planned.SkipReason)
+
+		require.NoError(t, os.MkdirAll(f.path("old/One"), 0o755))
+		fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+		require.NoError(t, err)
+		assert.Equal(t, rmSkipNotMissing, fresh.Skipped, fresh.Reason)
+	})
+	t.Run("unreadable parent", func(t *testing.T) {
+		t.Parallel()
+		if os.Geteuid() == 0 {
+			t.Skip("root reads through a 0o000 directory")
+		}
+		f := newRMFixture(t)
+		one := f.missingBook(t, "Book One", "locked/One.m4b", nil)
+		f.file(t, "new/One.m4b")
+		f.match(one, "Book One", "locked/One.m4b", "new/One.m4b", "hash", "high")
+		require.NoError(t, os.MkdirAll(f.path("locked"), 0o755))
+		require.NoError(t, os.Chmod(f.path("locked"), 0o000))
+		t.Cleanup(func() { _ = os.Chmod(f.path("locked"), 0o755) })
+
+		r := rmRow(t, f.plan(t), one)
+		assert.False(t, r.Applicable())
+		assert.Equal(t, rmSkipError, r.Skipped, r.Reason)
+		assert.Contains(t, r.Reason, "Could not tell whether")
+		assert.Contains(t, r.Reason, "permission denied")
+
+		missing, err := rmOldPathMissing(f.path("locked/One.m4b"))
+		assert.Error(t, err, "an unreadable parent is not \"missing\"")
+		assert.False(t, missing)
+	})
+	t.Run("only does-not-exist is missing", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "folder"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "file.m4b"), []byte("x"), 0o644))
+		for name, want := range map[string]bool{"folder": false, "file.m4b": false, "gone.m4b": true, "gone/deeper.m4b": true} {
+			missing, err := rmOldPathMissing(filepath.Join(dir, name))
+			require.NoError(t, err, name)
+			assert.Equal(t, want, missing, name)
+		}
+	})
 }
 
-// TestReconcileFixer_NoBookFileRowIsDeletedByApply runs the picked match
-// through reconcile.apply's own core: the book is repointed and every
-// book_file row is still there.
-func TestReconcileFixer_NoBookFileRowIsDeletedByApply(t *testing.T) {
+// TestReconcileFixer_IndexWarmingUp (S3): while memdb cannot list every
+// book_file row at a path, the plan fails with "file index warming up; retry
+// in a few minutes", a re-plan holds the row retry_later (its retry
+// fingerprint is the planned one, so the engine says retry_later, not
+// changed), and Apply refuses with ErrRetryLater.
+func TestReconcileFixer_IndexWarmingUp(t *testing.T) {
 	t.Parallel()
 	f := newRMFixture(t)
 	one := f.missingBook(t, "Book One", "old/One.m4b", nil)
-	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: one, FilePath: f.path("old/One part 2.m4b"), Missing: true}))
 	f.file(t, "new/One.m4b")
 	f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "hash", "high")
-	f.deps.exec = func(p rmApplyParams) error {
-		return reconcile.ExecuteReconcile(context.Background(), f.s, "reconcile-apply-1",
-			func(any) error { return nil }, p.Matches, logger.New("test"))
-	}
-	countRows := func() int {
-		all, err := f.s.GetAllBookFilesCore()
-		require.NoError(t, err)
-		return len(all)
-	}
-	before := countRows()
-	require.Equal(t, 2, before)
-
 	res := f.plan(t)
-	out := f.apply(t, res, rmRowID(one))
-	require.Equal(t, 1, out.Applied)
-	require.Len(t, f.deps.enqueued, 1)
-	assert.Equal(t, before, countRows(), "no book_file row deleted or created")
-	b, err := f.s.GetBookByID(one)
+	planned := rmRow(t, res, one)
+	require.True(t, planned.Applicable(), planned.SkipReason)
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
 	require.NoError(t, err)
-	assert.Equal(t, f.path("new/One.m4b"), b.FilePath, "reconcile.apply repointed the book")
-	files, err := f.s.GetBookFiles(one)
+
+	f.st.warming.Store(true)
+	_, err = f.fx.Plan(context.Background(), nil, &fakeReporter{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file index warming up; retry in a few minutes")
+
+	held, err := f.fx.Replan(context.Background(), nil, planned, nil)
 	require.NoError(t, err)
-	assert.Len(t, files, 2)
+	assert.True(t, held.RetryLater)
+	assert.Equal(t, rmSkipIndexWarming, held.Skipped)
+	assert.Equal(t, planned.Fingerprint, held.RetryFingerprint)
+
+	before := f.state(t, one)
+	out, _ := f.apply(t, res, planned.RowID)
+	assert.Equal(t, repairs.OutcomeRetryLater, rmOutcomes(out)[planned.RowID])
+
+	w, _ := f.writer()
+	err = f.fx.Apply(context.Background(), w, fresh)
+	assert.True(t, errors.Is(err, repairs.ErrRetryLater), "%v", err)
+	assert.Equal(t, before, f.state(t, one), "nothing written while warming up")
+
+	f.st.warming.Store(false)
+	out, _ = f.apply(t, res, planned.RowID)
+	assert.Equal(t, repairs.OutcomeApplied, rmOutcomes(out)[planned.RowID], "applies once warm")
 }
 
 // TestReconcileFixer_NoUsableScanFailsThePlan: with no completed scan the
@@ -461,16 +634,21 @@ func TestReconcileFixer_NoUsableScanFailsThePlan(t *testing.T) {
 }
 
 // TestReconcileFixer_RegisteredAsMissingFiles: the lane lists it by its id
-// and title.
+// and title; it writes itself (takes the normal stand-down, keeps no
+// per-run state) and needs settings.manage.
 func TestReconcileFixer_RegisteredAsMissingFiles(t *testing.T) {
 	t.Parallel()
 	p := &Plugin{deps: fakeDeps{}}
 	fx, ok := p.Repairs().Get(reconcileFixerID)
 	require.True(t, ok)
 	assert.Equal(t, "Missing files", fx.Title())
-	assert.True(t, strings.Contains(fx.Description(), "Reconcile Apply"))
+	assert.True(t, strings.Contains(fx.Description(), "nothing moves on disk"))
+	assert.False(t, strings.Contains(fx.Description(), "Reconcile Apply"))
 	_, isNoStandDown := fx.(repairs.NoScanStandDown)
-	assert.True(t, isNoStandDown)
+	assert.False(t, isNoStandDown)
+	_, isScoped := fx.(repairs.ApplyScoped)
+	assert.False(t, isScoped)
+	assert.Equal(t, []auth.Permission{auth.PermSettingsManage}, repairs.RequiredPermissions(fx))
 }
 
 // The candidate is the row's State: it round-trips, so a re-plan decides the

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-14
 
@@ -12,21 +12,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
-	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/applycap"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // reconcileFixerID is the Repairs-lane id of the missing-files fixer. It takes
@@ -34,10 +33,6 @@ import (
 // 03-PR10): the latest scan's matches, applying picked ones, and the books
 // with no candidate file.
 const reconcileFixerID = "reconcile.missing-files"
-
-// rmApplyDefID is the operation an apply hands its picked matches to. It is
-// the op POST /operations/reconcile starts (internal/server/reconcile_ops.go).
-const rmApplyDefID = "reconcile.apply"
 
 var rmLog = logger.New("repairs.reconcile-missing-files")
 
@@ -64,9 +59,23 @@ const (
 	// rmSkipFileTracked: the matched file now belongs to another book (its
 	// path, or a book_file row at it).
 	rmSkipFileTracked = "file_tracked"
+	// rmSkipNoFileRow: the book has no book_file row at its path, or more
+	// than one, so there is no single row to repoint.
+	rmSkipNoFileRow = "no_file_row"
+	// rmSkipOwnRowAtMatch: the book already has a book_file row at the
+	// matched file; repointing its row at the old path there would make two
+	// rows of one book at one path.
+	rmSkipOwnRowAtMatch = "own_row_at_match"
+	// rmSkipIndexWarming: the file index (memdb) is warming up, so who holds
+	// the matched file cannot be told yet. Transient (Row.RetryLater).
+	rmSkipIndexWarming = "index_warming"
 	// rmSkipError: something the decision needs could not be read.
 	rmSkipError = "error"
 )
+
+// rmReasonIndexWarming is the plan's refusal, and a re-plan's hold, while the
+// file index is warming up.
+const rmReasonIndexWarming = "file index warming up; retry in a few minutes"
 
 // Skip reasons shown to the owner, by kind.
 const (
@@ -75,7 +84,7 @@ const (
 )
 
 // reconcileFixer lists the latest saved reconcile scan as Repairs rows and
-// applies the picked matches through the reconcile.apply operation.
+// applies a picked match by repointing the book at the matched file.
 //
 // PLAN SOURCE. The latest saved scan, picked by the rule GET
 // /operations/reconcile/scan/latest uses (ServerDeps.LatestReconcileScan,
@@ -95,19 +104,28 @@ const (
 // Reconcile tab's matches plus its unmatched books for the same scan.
 //
 //   - A match row is applicable only while, read now: the book is live, its
-//     path is still the one the scan found missing and still not on disk, the
-//     matched file is on disk, and no other book holds the file (no live book
-//     at that path and no other book's book_file row at it; the scan's own
-//     "untracked" test reads book paths only). Every one of those answers is
-//     in the fingerprint, so a re-plan at apply refuses a row that drifted.
+//     path is still the one the scan found missing and that path does not
+//     exist (fs.ErrNotExist; an existing folder is present, and any other
+//     stat error is an error row, never "missing"), the book has exactly one
+//     book_file row at that path and none at the matched file (a second row
+//     there would duplicate it), the matched file is a regular file on disk,
+//     and no other book holds it (no live book at that path and no other
+//     book's book_file row at it; the scan's own "untracked" test reads book
+//     paths only). Every one of those answers, and the matched file's size
+//     and modification time, is in the fingerprint, so a re-plan at apply
+//     refuses a row that drifted.
 //   - A book with no candidate file is a skipped row with the reason "no
 //     candidate file", so the count stays clickable.
 //   - iTunes: a row whose book is an iTunes book, or whose matched file is
 //     an iTunes file, is skipped with the reason "iTunes". The predicate is
-//     duplicate-copies' (itunesCopyWhy) over the book's path, its book_file
-//     rows, its iTunes ids and external ids AND the matched file's path: the
-//     scan walks the iTunes Media/Audiobooks folder for candidates, and the
-//     framework guard reads only the book's own paths.
+//     duplicate-copies' (itunesCopyWhy) over the book's path, its iTunes path
+//     and ids, its book_file rows and external ids AND the matched file's
+//     path: the scan walks the iTunes Media/Audiobooks folder for candidates,
+//     and the framework guard reads only the book's own paths.
+//   - While the file index (memdb) is warming up the "who holds this file"
+//     read cannot be complete: a plan then fails with "file index warming
+//     up; retry in a few minutes", and a re-plan at apply holds the row
+//     retry_later (Row.RetryLater) instead of guessing.
 //
 // Written Evaluate-style for the ops v3 port: evaluate decides ONE candidate
 // from reads it makes itself and never writes. Plan reads the scan once and
@@ -115,26 +133,30 @@ const (
 // in the row's State, without reading the scan again (a newer scan does not
 // invalidate a plan; drift in the library does).
 //
-// APPLY. The fixer writes nothing itself: each applied row's match is
-// collected (Apply), and once the rows have settled AfterApply starts ONE
-// reconcile.apply run with exactly those matches, never the rest of the scan.
-// A selection larger than the bulk-apply cap (reconcile.apply refuses a whole
-// set over it) is split into runs of at most the cap. reconcile.apply re-reads
-// each book, checks the file is on disk, journals a file_path_update change
-// and sets the book's file path; it never deletes or recreates a book_file
-// row. The row outcome "applied" therefore means "handed to Reconcile Apply";
-// what that run wrote is in its own result on the Operations page. Because
-// the fixer writes no library row, it takes no scan stand-down
-// (NoScanStandDown) and its Writer refuses every write.
+// APPLY (owner decision 2026-10-14: the fixer writes directly; it no longer
+// hands its picks to reconcile.apply). Right before writing, Apply reads again
+// who holds the matched file (the strict book_file read and the live-book
+// read), the book, and the iTunes predicate, and checks the file is still the
+// one planned (size and modification time); any change refuses the row with
+// nothing written. Then, through the Writer (scan stand-down held, fenced,
+// journaled first and voided on refusal):
+//
+//  1. the book's path, as a restorable book_path_update, compare-and-set:
+//     the book must still be live and still point at the scan's old path;
+//  2. the book_file row at the old path, as a restorable
+//     book_file_repoint_location (Writer.RepointBookFile), compare-and-set on
+//     the row's location; nothing moves on disk.
+//
+// A refusal of step 2 after step 1 is reported partially_applied. No
+// book_file row is ever deleted or created. Reverting the apply operation
+// puts the book's path and the row back.
 type reconcileFixer struct{ p *Plugin }
 
 func newReconcileFixer(p *Plugin) *reconcileFixer { return &reconcileFixer{p: p} }
 
 var (
-	_ repairs.Fixer           = (*reconcileFixer)(nil)
-	_ repairs.ApplyScoped     = (*reconcileFixer)(nil)
-	_ repairs.AfterApplier    = (*reconcileFixer)(nil)
-	_ repairs.NoScanStandDown = (*reconcileFixer)(nil)
+	_ repairs.Fixer            = (*reconcileFixer)(nil)
+	_ repairs.PermissionScoped = (*reconcileFixer)(nil)
 )
 
 func (f *reconcileFixer) ID() string    { return reconcileFixerID }
@@ -144,13 +166,16 @@ func (f *reconcileFixer) Description() string {
 		"match to an untracked file on disk with its match type and confidence, and the books the scan found " +
 		"no candidate file for (listed as skipped). A match is offered only while the book is still missing " +
 		"its file, the matched file is still on disk and no other book holds it; iTunes books and iTunes files " +
-		"are skipped. Applying starts one Reconcile Apply operation with exactly the selected matches, which " +
-		"points each book at its matched file; its result is on the Operations page. No file row is deleted."
+		"are skipped. Applying a row points the book, and its file row, at the matched file; nothing moves on " +
+		"disk and no file row is deleted. Reverting the apply operation puts both back."
 }
 
-// NoScanStandDown: the fixer writes no library row (reconcile.apply does, as
-// its own operation), so an apply run parks no scan.
-func (f *reconcileFixer) NoScanStandDown() bool { return true }
+// RequiredPermissions implements repairs.PermissionScoped: repointing books
+// at files is what the reconcile apply op does, and that op is settings.manage
+// (owner decision 2026-10-14), above the lane's default library.edit_metadata.
+func (f *reconcileFixer) RequiredPermissions() []auth.Permission {
+	return []auth.Permission{auth.PermSettingsManage}
+}
 
 // rmCandidate is one book of the scan: its match, or none. It is the row's
 // State, so a re-plan decides the same candidate without reading the scan.
@@ -170,9 +195,16 @@ type rmCandidate struct {
 
 func (c rmCandidate) hasMatch() bool { return c.NewPath != "" }
 
-// rmDecision is what Apply hands on for one fresh row, carried in Row.Detail.
+// rmDecision is what Apply writes for one fresh row, carried in Row.Detail.
 type rmDecision struct {
-	bookID, newPath string
+	bookID, oldPath, newPath string
+	// newFile is the matched file as evaluate saw it; Apply refuses a file
+	// that changed since.
+	newFile rmFileState
+	// fileID is the book's book_file row at oldPath; was its location as
+	// read, to the location Apply writes.
+	fileID  string
+	was, to database.BookFileLocation
 }
 
 // rmReader is what evaluate reads: the book, its book_file rows and external
@@ -241,7 +273,8 @@ func rmCandidates(scan ReconcileScan) []rmCandidate {
 func rmRowID(bookID string) string { return "missing:" + bookID }
 
 // Plan reads the latest saved scan once and decides every candidate with
-// evaluate on a bounded pool: each makes a few reads and two stats.
+// evaluate on a bounded pool: each makes a few reads and two stats. While the
+// file index is warming up it fails rather than offer rows it cannot check.
 func (f *reconcileFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
 	scan, err := f.p.deps.LatestReconcileScan()
 	if err != nil {
@@ -281,13 +314,16 @@ func (f *reconcileFixer) Plan(ctx context.Context, _ json.RawMessage, rep regist
 	if runErr != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if rep != nil {
-		applicable := 0
-		for _, r := range rows {
-			if r.Applicable() {
-				applicable++
-			}
+	applicable := 0
+	for _, r := range rows {
+		if r.RetryLater {
+			return nil, fmt.Errorf("%s: %s", reconcileFixerID, rmReasonIndexWarming)
 		}
+		if r.Applicable() {
+			applicable++
+		}
+	}
+	if rep != nil {
 		msg := fmt.Sprintf("%s: reconcile scan %s: %d matches, %d books with no candidate file; %d rows, %d applicable",
 			reconcileFixerID, scan.OpID, len(scan.Preview.Matches), len(scan.Preview.UnmatchedBooks), len(rows), applicable)
 		if scan.AttemptOpID != "" {
@@ -318,22 +354,41 @@ func (f *reconcileFixer) Replan(ctx context.Context, _ json.RawMessage, planned 
 	return row, nil
 }
 
-// rmFileState is what evaluate found at a path on disk.
+// rmFileState is the matched file as evaluate found it on disk.
 type rmFileState struct {
 	exists bool
 	size   int64
+	mtime  time.Time
 }
 
-func rmStat(path string) rmFileState {
-	if path == "" {
-		return rmFileState{}
-	}
+// same reports whether a and b are the same file state (time.Equal, not ==).
+func (a rmFileState) same(b rmFileState) bool {
+	return a.exists == b.exists && a.size == b.size && a.mtime.Equal(b.mtime)
+}
+
+// rmNewFile stats the matched file: present only as a regular file.
+func rmNewFile(path string) rmFileState {
 	fi, err := os.Stat(path)
 	if err != nil || !fi.Mode().IsRegular() {
-		// The scan counts any stat failure as "missing"; so does this.
 		return rmFileState{}
 	}
-	return rmFileState{exists: true, size: fi.Size()}
+	return rmFileState{exists: true, size: fi.Size(), mtime: fi.ModTime()}
+}
+
+// rmOldPathMissing says whether the book's path is gone. Only fs.ErrNotExist
+// is "missing": an existing folder (a folder book) or file is present, and
+// any other stat error (a permission error, an I/O error on a share) is
+// returned, because it does not say the file is gone.
+func rmOldPathMissing(path string) (bool, error) {
+	_, err := os.Stat(path)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	default:
+		return false, err
+	}
 }
 
 // evaluate decides one candidate. It reads the book, its book_file rows and
@@ -363,7 +418,7 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 			r.Risk = repairs.RiskLow
 		}
 		r.Evidence = append(r.Evidence, fmt.Sprintf("matched by %s, confidence %s, score %.2f", c.MatchType, c.Confidence, c.Score))
-		r.Proposed = map[string]string{"path": c.NewPath, "match_type": c.MatchType, "confidence": c.Confidence}
+		r.Proposed = map[string]string{"path": c.NewPath}
 	}
 	r.Current = map[string]string{"path": c.OldPath}
 
@@ -407,6 +462,14 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 		fp.WriteString("|itunes-unreadable")
 		return skip(rmSkipError, err.Error(), "Could not tell whether this is an iTunes book: "+err.Error()), nil
 	case unsure:
+		// A path that cannot be resolved is usually one that cannot be
+		// stat'ed (an unreadable parent): name that error when it is the
+		// book's path, rather than only "could not tell".
+		if _, serr := rmOldPathMissing(book.FilePath); serr != nil {
+			fp.WriteString("|old-unreadable")
+			return skip(rmSkipError, serr.Error(),
+				fmt.Sprintf("Could not tell whether %s is missing: %v", book.FilePath, serr)), nil
+		}
 		fp.WriteString("|itunes-unsure")
 		return skip(repairs.SkipGuardUnreadable, "could not tell whether a path is under books/itunes/**",
 			"Could not tell whether the book or the matched file is in the iTunes library (a path could not be resolved)."), nil
@@ -419,26 +482,61 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 		return skip(rmSkipPathChanged, "the book's path changed since the scan",
 			fmt.Sprintf("The scan found %q missing; the book now points at %q.", c.OldPath, book.FilePath)), nil
 	}
-	old := rmStat(book.FilePath)
-	fmt.Fprintf(&fp, "|old-exists=%t", old.exists)
-	if !old.exists {
-		r.Current["path"] = c.OldPath + " (missing)"
+	missing, serr := rmOldPathMissing(book.FilePath)
+	if serr != nil {
+		fp.WriteString("|old-unreadable")
+		return skip(rmSkipError, serr.Error(),
+			fmt.Sprintf("Could not tell whether %s is missing: %v", book.FilePath, serr)), nil
 	}
-	if old.exists {
+	fmt.Fprintf(&fp, "|old-missing=%t", missing)
+	if !missing {
 		return skip(rmSkipNotMissing, "the book's file is on disk again",
 			fmt.Sprintf("%s is on disk again; there is nothing to repair.", book.FilePath)), nil
 	}
+	r.Current["path"] = c.OldPath + " (missing)"
 	if !c.hasMatch() {
 		return skip(rmSkipNoCandidate, rmReasonNoCandidate,
 			fmt.Sprintf("The file %s is missing and the scan found no untracked file on disk that matches it.", c.OldPath)), nil
 	}
-	nf := rmStat(c.NewPath)
-	fmt.Fprintf(&fp, "|new-exists=%t|new-size=%d", nf.exists, nf.size)
+	var atOld []database.BookFile
+	for _, bf := range files {
+		if bf.FilePath == c.OldPath {
+			atOld = append(atOld, bf)
+		}
+	}
+	if len(atOld) != 1 {
+		fmt.Fprintf(&fp, "|rows-at-old=%d", len(atOld))
+		return skip(rmSkipNoFileRow, "no single file row at the book's path",
+			fmt.Sprintf("The book has %d file rows at %s, not exactly one to repoint.", len(atOld), c.OldPath)), nil
+	}
+	if rmHasRowAt(files, c.NewPath) {
+		fp.WriteString("|own-row-at-new")
+		return skip(rmSkipOwnRowAtMatch, "the book already has a file row at the matched file",
+			fmt.Sprintf("The book already has a file row at %s; repointing its row at %s there would make two rows for one file.",
+				c.NewPath, c.OldPath)), nil
+	}
+	row := atOld[0]
+	was := database.BookFileLocationOf(&row)
+	fmt.Fprintf(&fp, "|row=%s|row-loc=%s|%t", row.ID, was.Path, was.Missing)
+	nf := rmNewFile(c.NewPath)
+	fmt.Fprintf(&fp, "|new-exists=%t|new-size=%d|new-mtime=%d", nf.exists, nf.size, nf.mtime.UnixNano())
 	if !nf.exists {
 		return skip(rmSkipFileGone, "the matched file is no longer on disk",
 			fmt.Sprintf("The matched file %s is no longer on disk.", c.NewPath)), nil
 	}
 	owners, err := rmPathOwners(rd, c.NewPath, c.BookID)
+	if errors.Is(err, database.ErrOwnershipLookupIncomplete) {
+		// Transient: the index finishes warming up without the row changing.
+		// RetryFingerprint is this row's fingerprint once it does and finds
+		// no other owner (the applicable row's), so the engine reports the
+		// hold retry_later only when every other input is as planned.
+		clear := repairs.Row{RowID: r.RowID, Class: r.Class}
+		retryFP := rmFingerprint(clear, fp.String()+"|owners=")
+		fp.WriteString("|owners-warming")
+		row := skip(rmSkipIndexWarming, rmReasonIndexWarming, "Who holds the matched file cannot be told while the file index is warming up.")
+		row.RetryLater, row.RetryFingerprint = true, retryFP
+		return row, nil
+	}
 	if err != nil {
 		fp.WriteString("|owners-unreadable")
 		return skip(rmSkipError, err.Error(), "Could not tell whether another book holds the matched file: "+err.Error()), nil
@@ -449,18 +547,41 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 			fmt.Sprintf("The matched file %s now belongs to book(s) %s.", c.NewPath, strings.Join(owners, ", "))), nil
 	}
 
+	to := database.BookFileLocation{Path: c.NewPath, Missing: false, Size: nf.size}
+	if c.MatchType == "hash" || c.MatchType == "original_hash" {
+		// The scan proved the content: the row keeps its hash. A filename
+		// match proves nothing about content, so the hash is cleared for the
+		// next hash pass to fill.
+		to.Hash = was.Hash
+	}
 	r.Reason = fmt.Sprintf("The file %s is missing; the scan matched the untracked file %s by %s (confidence %s). "+
-		"Applying hands this match to Reconcile Apply, which points the book at that file.",
+		"Applying points the book and its file row at that file; nothing moves on disk.",
 		c.OldPath, c.NewPath, c.MatchType, c.Confidence)
-	r.Detail = &rmDecision{bookID: c.BookID, newPath: c.NewPath}
+	r.Detail = &rmDecision{bookID: c.BookID, oldPath: c.OldPath, newPath: c.NewPath, newFile: nf,
+		fileID: row.ID, was: was, to: to}
 	r.Fingerprint = rmFingerprint(r, fp.String())
 	return r, nil
 }
 
+// rmHasRowAt reports whether any of files is at path.
+func rmHasRowAt(files []database.BookFile, path string) bool {
+	for _, bf := range files {
+		if bf.FilePath == path {
+			return true
+		}
+	}
+	return false
+}
+
 // rmITunesWhy is duplicate-copies' iTunes predicate (itunesCopyWhy) for the
 // book together with the matched file: why the row is iTunes ("" when it is
-// not), or unsure when a path could not be settled.
+// not), or unsure when a path could not be settled. The book's own iTunes
+// path counts like a row's.
 func rmITunesWhy(rd rmReader, res *repairs.PathResolver, b *database.Book, files []database.BookFile, newPath string) (why string, unsure bool, err error) {
+	//lint:ignore SA1019 the legacy book.itunes_path still marks an iTunes book until it is drained; reading it only widens the skip
+	if itp := b.ITunesPath; itp != nil && *itp != "" {
+		return "book iTunes path " + *itp, false, nil
+	}
 	exts, err := rd.GetExternalIDsForBook(b.ID)
 	if err != nil {
 		return "", false, fmt.Errorf("external ids of %s: %w", b.ID, err)
@@ -485,16 +606,16 @@ func rmITunesWhy(rd rmReader, res *repairs.PathResolver, b *database.Book, files
 // rmPathOwners lists the books other than self that hold path: live books
 // whose path it is, and books with a book_file row at it (a Missing row
 // counts: it is a claim on the file). Sorted, unique. The book_file read is
-// the strict one: while memdb is warming up an incomplete answer is an
-// error, not "nobody holds it".
+// the strict one: while memdb is warming up it returns an error wrapping
+// database.ErrOwnershipLookupIncomplete, never "nobody holds it".
 func rmPathOwners(rd rmReader, path, self string) ([]string, error) {
-	live, err := rd.LiveBookIDsAtPath(path)
-	if err != nil {
-		return nil, fmt.Errorf("books at %s: %w", path, err)
-	}
 	rows, err := database.BookFileRowsAtPathStrict(rd, path)
 	if err != nil {
 		return nil, fmt.Errorf("file rows at %s: %w", path, err)
+	}
+	live, err := rd.LiveBookIDsAtPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("books at %s: %w", path, err)
 	}
 	set := map[string]bool{}
 	for _, id := range live {
@@ -530,85 +651,92 @@ func rmErrorRow(c rmCandidate, err error) repairs.Row {
 	return r
 }
 
-// rmSession is one apply run's picked matches (repairs.ApplyScoped): Apply
-// records each applied row's match, AfterApply hands them to reconcile.apply.
-type rmSession struct {
-	mu     sync.Mutex
-	picked map[string]string // book id -> matched path
-}
-
-type rmSessionKey struct{}
-
-// BeginApply implements repairs.ApplyScoped.
-func (f *reconcileFixer) BeginApply(ctx context.Context, _ bool) (context.Context, func()) {
-	return context.WithValue(ctx, rmSessionKey{}, &rmSession{picked: map[string]string{}}), func() {}
-}
-
-// Apply records one fresh row's match for the run's reconcile.apply. It
-// writes nothing: the row was re-planned just before (the fingerprint
-// matched), and AfterApply starts the run once every row has settled.
-func (f *reconcileFixer) Apply(ctx context.Context, _ *repairs.Writer, fresh repairs.Row) error {
+// Apply repoints one fresh row's book and its file row at the matched file
+// (see APPLY on reconcileFixer). It re-reads, right before writing, what a
+// write could otherwise get wrong between the re-plan and now; every refusal
+// before the first write leaves nothing written.
+func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*rmDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no match", reconcileFixerID, fresh.RowID)
 	}
-	s, _ := ctx.Value(rmSessionKey{}).(*rmSession)
-	if s == nil {
-		return fmt.Errorf("%s: row %s: no apply session; nothing recorded", reconcileFixerID, fresh.RowID)
+	rd, err := f.reader()
+	if err != nil {
+		return err
 	}
-	s.mu.Lock()
-	s.picked[d.bookID] = d.newPath
-	s.mu.Unlock()
+	if err := rmPrecheck(rd, d); err != nil {
+		return err
+	}
+	// 1. The book's path, compare-and-set, journaled first (voided on a
+	// refusal).
+	err = w.JournalStep(d.bookID, repairs.UndoEntry{ChangeType: undo.ChangeTypeBookPathUpdate, Field: "file_path",
+		Old: d.oldPath, New: d.newPath}, func() error {
+		_, merr := w.Modify(d.bookID, func(b *database.Book) error {
+			switch {
+			case b.IsSoftDeleted():
+				return fmt.Errorf("%w: book %s was retired", repairs.ErrChangedSincePlan, d.bookID)
+			case b.FilePath != d.oldPath:
+				return fmt.Errorf("%w: book %s now points at %q, not %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath, d.oldPath)
+			}
+			b.FilePath = d.newPath
+			return nil
+		})
+		return merr
+	})
+	if err != nil {
+		return err
+	}
+	// 2. The file row at the old path, compare-and-set on its location.
+	if err := w.RepointBookFile(d.bookID, d.fileID, d.was, d.to); err != nil {
+		return fmt.Errorf("%w: book %s now points at %s but its file row %s was not repointed: %w",
+			repairs.ErrPartiallyApplied, d.bookID, d.newPath, d.fileID, err)
+	}
 	return nil
 }
 
-// rmApplyParams is reconcile.apply's params (the server's
-// reconcileApplyOpParams): the matches to apply.
-type rmApplyParams struct {
-	Matches []reconcile.ReconcileApplyItem `json:"matches"`
-}
-
-// AfterApply starts reconcile.apply with the matches of the applied rows
-// (bookIDs, from the engine) and nothing else, in runs of at most the
-// bulk-apply cap. It returns the started run ids, comma-separated.
-func (f *reconcileFixer) AfterApply(ctx context.Context, bookIDs []string) (string, error) {
-	s, _ := ctx.Value(rmSessionKey{}).(*rmSession)
-	if s == nil {
-		return "", fmt.Errorf("%s: no apply session; reconcile.apply not started for %d books", reconcileFixerID, len(bookIDs))
+// rmPrecheck re-reads, just before the first write, who holds the matched
+// file, the book and the iTunes predicate, and checks the file is the one
+// planned. The re-plan read all of it moments ago; this closes the window up
+// to the write. ErrChangedSincePlan on any change; ErrRetryLater while the
+// file index is warming up.
+func rmPrecheck(rd rmReader, d *rmDecision) error {
+	owners, err := rmPathOwners(rd, d.newPath, d.bookID)
+	switch {
+	case errors.Is(err, database.ErrOwnershipLookupIncomplete):
+		return fmt.Errorf("%w: %s: %w", repairs.ErrRetryLater, rmReasonIndexWarming, err)
+	case err != nil:
+		return err
+	case len(owners) > 0:
+		return fmt.Errorf("%w: %s now belongs to book(s) %s", repairs.ErrChangedSincePlan, d.newPath, strings.Join(owners, ", "))
 	}
-	if f.p.deps == nil {
-		return "", errNoEnqueuer
+	b, err := rd.GetBookByID(d.bookID)
+	if err != nil {
+		return fmt.Errorf("read book %s: %w", d.bookID, err)
 	}
-	s.mu.Lock()
-	var (
-		matches []reconcile.ReconcileApplyItem
-		lost    []string
-	)
-	for _, id := range bookIDs {
-		p, ok := s.picked[id]
-		if !ok {
-			lost = append(lost, id)
-			continue
-		}
-		matches = append(matches, reconcile.ReconcileApplyItem{BookID: id, NewPath: p})
+	switch {
+	case b == nil || b.IsSoftDeleted():
+		return fmt.Errorf("%w: book %s is gone or retired", repairs.ErrChangedSincePlan, d.bookID)
+	case b.FilePath != d.oldPath:
+		return fmt.Errorf("%w: book %s now points at %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath)
 	}
-	s.mu.Unlock()
-	limit := applycap.Effective(config.Snapshot().BulkApplyMaxItems)
-	var (
-		ids  []string
-		errs []error
-	)
-	for chunk := range slices.Chunk(matches, limit) {
-		opID, err := f.p.deps.EnqueueOp(ctx, rmApplyDefID, rmApplyParams{Matches: chunk})
-		if err != nil {
-			errs = append(errs, fmt.Errorf("enqueue %s for %d matches: %w", rmApplyDefID, len(chunk), err))
-			continue
-		}
-		ids = append(ids, opID)
+	files, err := rd.GetBookFiles(d.bookID)
+	if err != nil {
+		return fmt.Errorf("files of %s: %w", d.bookID, err)
 	}
-	if len(lost) > 0 {
-		errs = append(errs, fmt.Errorf("%s: no recorded match for applied book(s) %s; not handed to %s",
-			reconcileFixerID, strings.Join(lost, ", "), rmApplyDefID))
+	if rmHasRowAt(files, d.newPath) {
+		return fmt.Errorf("%w: book %s now has a file row at %s", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
 	}
-	return strings.Join(ids, ","), errors.Join(errs...)
+	why, unsure, err := rmITunesWhy(rd, repairs.NewPathResolver(), b, files, d.newPath)
+	switch {
+	case err != nil:
+		return err
+	case unsure:
+		return fmt.Errorf("%w: could not tell whether book %s or %s is in the iTunes library", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
+	case why != "":
+		return fmt.Errorf("%w: iTunes: %s", repairs.ErrChangedSincePlan, why)
+	}
+	if nf := rmNewFile(d.newPath); !nf.same(d.newFile) {
+		return fmt.Errorf("%w: the matched file %s changed or is gone", repairs.ErrChangedSincePlan, d.newPath)
+	}
+	return nil
 }
