@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-14
 
@@ -814,13 +814,13 @@ func TestReconcileFixer_PrecheckRefusesABookThatMovedOrWasRetired(t *testing.T) 
 			require.True(t, ok)
 			rd, err := f.fx.reader()
 			require.NoError(t, err)
-			done, err := rmPrecheck(rd, d)
+			_, done, err := rmPrecheck(rd, d)
 			require.NoError(t, err)
 			require.False(t, done)
 
 			_, err = f.s.ModifyBook(one, func(b *database.Book) error { drift(b, f); return nil })
 			require.NoError(t, err)
-			_, err = rmPrecheck(rd, d)
+			_, _, err = rmPrecheck(rd, d)
 			assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
 		})
 	}
@@ -853,4 +853,61 @@ func TestReconcileFixer_AMatchedDirectoryIsNotAFile(t *testing.T) {
 	assert.False(t, rmNewFile(f.path("new/One.m4b")).exists, "a directory")
 	assert.False(t, rmNewFile(f.path("new/nothing.m4b")).exists, "nothing")
 	assert.True(t, rmNewFile(f.file(t, "new/real.m4b")).exists, "a regular file")
+}
+
+// TestReconcileFixer_BookHashesFollowWhatTheMatchProves (NIT b): a hash match
+// keeps the book's current-file hashes and the row's hash; an original_hash
+// or filename match clears Book.FileHash and Book.OrganizedFileHash (they
+// name content the book no longer points at) in the same compare-and-set as
+// the path, and the row's hash, and keeps Book.OriginalFileHash. Reverting
+// the apply puts every cleared hash back.
+func TestReconcileFixer_BookHashesFollowWhatTheMatchProves(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	hashes := func(n string) func(b *database.Book) {
+		return func(b *database.Book) {
+			cur, org, orig := "cur-"+n, "org-"+n, "orig-"+n
+			b.FileHash, b.OrganizedFileHash, b.OriginalFileHash = &cur, &org, &orig
+		}
+	}
+	ids := map[string]string{}
+	for _, k := range []string{"hash", "original_hash", "filename"} {
+		id := f.missingBook(t, "Book "+k, "old/"+k+".m4b", hashes(k))
+		f.file(t, "new/"+k+".m4b")
+		f.match(id, "Book "+k, "old/"+k+".m4b", "new/"+k+".m4b", k, "high")
+		ids[k] = id
+	}
+	type bookHashes struct{ cur, org, orig string }
+	read := func(id string) bookHashes {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		return bookHashes{rmStr(b.FileHash), rmStr(b.OrganizedFileHash), rmStr(b.OriginalFileHash)}
+	}
+	before := map[string]rmState{}
+	for _, id := range ids {
+		before[id] = f.state(t, id)
+	}
+	res := f.plan(t)
+	out, opID := f.apply(t, res, rmRowID(ids["hash"]), rmRowID(ids["original_hash"]), rmRowID(ids["filename"]))
+	require.Equal(t, 3, out.Applied, "%+v", out.Rows)
+
+	assert.Equal(t, bookHashes{"cur-hash", "org-hash", "orig-hash"}, read(ids["hash"]))
+	assert.Equal(t, bookHashes{"", "", "orig-original_hash"}, read(ids["original_hash"]))
+	assert.Equal(t, bookHashes{"", "", "orig-filename"}, read(ids["filename"]))
+	for k, id := range ids {
+		for _, loc := range f.state(t, id).Files {
+			if k == "hash" {
+				assert.Equal(t, "hash-Book hash", loc.Hash, k)
+			} else {
+				assert.Empty(t, loc.Hash, k)
+			}
+		}
+	}
+
+	_, err := audiobooks.NewRevertService(f.s).RevertOperation(opID)
+	require.NoError(t, err)
+	for k, id := range ids {
+		assert.Equal(t, bookHashes{"cur-" + k, "org-" + k, "orig-" + k}, read(id), "revert restores %s", k)
+		assert.Equal(t, before[id], f.state(t, id), "revert restores %s's path and row", k)
+	}
 }
