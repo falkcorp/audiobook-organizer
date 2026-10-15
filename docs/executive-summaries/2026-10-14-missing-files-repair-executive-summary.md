@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-14-missing-files-repair-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 9b3fe5ba-cb9d-49bf-b3da-0b4222fff839 -->
-<!-- last-edited: 2026-10-14 -->
+<!-- last-edited: 2026-10-15 -->
 
 # Repair: books whose files went missing, reviewed one row at a time
 
@@ -61,8 +61,12 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   contents, the book keeps the content fingerprints it had. When it was made
   some other way, the fingerprints that described the old file are cleared, so
   the duplicate finder does not compare the book on content it no longer
-  points at. They are filled in again the next time files are fingerprinted,
-  and undoing the apply puts them back.
+  points at. Undoing the apply puts them back. They are not refilled on
+  their own yet: the file-level fingerprint comes back when someone runs the
+  "Backfill File Hashes" job (it is not scheduled, and it previews by
+  default), but the book-level ones stay empty until a scan re-reads the
+  file or the book is organized. Whether the repair
+  should fill them itself is on the TODO list for the owner to decide.
 
 ## What is not changed
 
