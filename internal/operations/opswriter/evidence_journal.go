@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_journal.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3d79460b-a54c-4691-ba04-dc81be729043
 // last-edited: 2026-10-14
 
@@ -172,6 +172,8 @@ func (w *Writer) journalMemoBook(ctx context.Context, sc ChangeScanner, bookID s
 		f := &memoFlight{done: make(chan struct{})}
 		m.flight = f
 		m.built, m.err, m.byBook = false, nil, nil
+		// at is the scan's START: the memo's age counts from before any row
+		// the scan could miss, never from when a slow scan ended.
 		gen, at := m.gen, m.clock()
 		m.scans++
 		m.mu.Unlock()
