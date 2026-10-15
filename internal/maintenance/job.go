@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -90,7 +90,8 @@ type PermissionAware interface {
 // As of PR-2 the bridge is gone and RegisterMaintenanceJobOps reads this per job,
 // so a value here is now load-bearing rather than declarative. Four jobs
 // (backfill-file-hashes, bulk-fetch-metadata, recompute-book-aggregates,
-// retention-and-hygiene) declare something other than DefaultPolicy(); the other
+// retention-and-hygiene; bulk-fetch-metadata was retired in 04-P14f) declare
+// something other than DefaultPolicy(); the other
 // 33 assert the bridge's old behaviour was correct for them.
 //
 // ⚠️ The zero value is INVALID and deliberately so: ResumeUnspecified and
@@ -167,8 +168,8 @@ func DefaultPolicy() ExecutionPolicy {
 // Choose this when the OPERATION ID is the anchor. For a maintenance job it always
 // is: maintenance_job_op.go keys the activity summary and GetOperationSummaryLog
 // off the run's own v2 id, and the 202 response hands that id to the operator.
-// Two jobs additionally rebuild their skip-set from GetOperationResults(id) —
-// scan-composer-tags and bulk-fetch-metadata — which is the
+// One job additionally rebuilds its skip-set from GetOperationResults(id) —
+// scan-composer-tags (bulk-fetch-metadata did too until 04-P14f retired it) — which is the
 // same shape metadata.candidate-fetch uses, and whose comment there calls the
 // filter "load-bearing for ResumePolicy=ResumeRestart". ResumeRequeue mints a
 // fresh ULID and moves all of that.
