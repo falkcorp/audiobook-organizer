@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -251,4 +252,60 @@ func TestAuthorIDRepair_UndoOfAMixedRunRestoresBothPhases(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, back.AuthorID)
 	require.Equal(t, dangling, *back.AuthorID, "the repair's repoint is undone")
+}
+
+// primaryRecordingStore records the denormalized Author each ModifyBook write
+// leaves on a book, and can list every relink book twice (a book carrying two
+// role rows for the author).
+type primaryRecordingStore struct {
+	*database.PebbleStore
+	authors map[string]*database.Author
+	twice   bool
+}
+
+func (s primaryRecordingStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return s.PebbleStore.ModifyBook(id, func(b *database.Book) error {
+		err := fn(b)
+		if err == nil {
+			s.authors[id] = b.Author
+		}
+		return err
+	})
+}
+
+func (s primaryRecordingStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error) {
+	books, err := s.PebbleStore.GetBooksByAuthorIDForRelinkCore(authorID)
+	if s.twice {
+		books = append(books, books...)
+	}
+	return books, err
+}
+
+// author-id-repair repoints a merged book's denormalized Author along with its
+// AuthorID (CreditMove.Into), not just the id.
+func TestAuthorIDRepair_RepointsTheDenormalizedAuthorToo(t *testing.T) {
+	w := newMergeUndoWorld(t, "Undo Denorm Author", "UNDO DENORM AUTHOR", 0)
+	st := primaryRecordingStore{PebbleStore: w.st, authors: map[string]*database.Author{}}
+	p := New(&fakeDeps{store: st})
+	ch, _, _ := p.authorIDMergeOne(st, false, "op-denorm", "undo denorm author", w.from, w.into, slog.Default())
+	require.Equal(t, authorIDMergeMerged, ch.Outcome, "%+v", ch)
+	got := st.authors[w.books[0]]
+	require.NotNil(t, got, "the primary book's Author was not written")
+	require.Equal(t, w.into.ID, got.ID)
+	require.Equal(t, w.into.Name, got.Name)
+}
+
+// A book listed once per role row for the merged author is moved and journaled
+// once: one credit row per distinct book, plus the delete row.
+func TestMergeAuthorInto_ABookListedTwiceIsJournaledOnce(t *testing.T) {
+	w := newMergeUndoWorld(t, "Undo Twice From", "Undo Twice Into", 0)
+	st := primaryRecordingStore{PebbleStore: w.st, authors: map[string]*database.Author{}, twice: true}
+	p := New(&fakeDeps{store: st})
+	n, rows, err := p.mergeAuthorInto(context.Background(), w.from, w.into, false, "op-twice", slog.Default())
+	require.NoError(t, err)
+	require.Equal(t, len(w.books), n, "each distinct book is relinked once")
+	require.Equal(t, len(w.books)+1, rows, "one credit row per distinct book and the delete row")
+	ledger, err := w.st.GetOperationChanges("op-twice")
+	require.NoError(t, err)
+	require.Len(t, ledger, len(w.books)+1)
 }
