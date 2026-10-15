@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 55555555-5555-5555-5555-555555555555
 // last-edited: 2026-09-25
 
@@ -189,9 +189,9 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// Go's zero value.
 	//
 	// listMaintenanceJobs (above) publishes each job's DefaultParams() to clients
-	// as `default_params`, and 21 of the 37 registered jobs advertise
-	// {"dry_run": true} — including cleanup-series, cleanup-organize-mess,
-	// dedup-books and repair-missing-files. (fix-library-states was in this list
+	// as `default_params`, and 28 of the 34 registered jobs advertise
+	// {"dry_run": true} — including cleanup-series, cleanup-organize-mess
+	// and dedup-books. (fix-library-states was in this list
 	// until 2026-09-10; it was deleted, not merely unregistered, because it wrote
 	// a present/missing library_state vocabulary nothing consumes — see
 	// internal/maintenance/jobs/fix_library_states_test.go.) This handler
