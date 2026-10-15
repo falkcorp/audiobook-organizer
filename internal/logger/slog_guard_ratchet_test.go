@@ -219,7 +219,6 @@ var slogRatchet = map[string]int{
 	"internal/search/bleve_index.go":                             3,
 	"internal/search/register.go":                                5,
 	"internal/server/absauth/audit.go":                           3,
-	"internal/server/ai_ops.go":                                  2,
 	"internal/server/apikey_expiry_sweep.go":                     4,
 	"internal/server/audiobooks_helpers.go":                      7,
 	"internal/server/batch_poller_register.go":                   2,
