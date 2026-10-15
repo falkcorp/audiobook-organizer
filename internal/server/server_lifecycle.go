@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.43.0
+// version: 4.43.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1109,7 +1109,9 @@ func (s *Server) startBackfills() {
 	// registry's dispatcher (D44). See enqueueBootOps for the list and for
 	// how shutdown still drains them before the store closes.
 	if s.opRegistry == nil {
-		lifecycleLog.Warn("startup: no operations registry; the one-time boot backfill ops were not enqueued")
+		lifecycleLog.Warn("startup: no operations registry; the boot ops were not enqueued: the one-time " +
+			"backfills, and the every-boot opchange_by_book index ensure, so GetBookChanges stays on the " +
+			"full journal scan until a boot with a registry verifies the index")
 	} else {
 		checks := bootOpChecks{settingTrue: func(key string) bool {
 			st, err := s.Ops().GetSetting(key)
