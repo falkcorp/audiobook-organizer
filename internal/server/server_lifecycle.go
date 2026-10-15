@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.45.0
+// version: 4.45.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1443,6 +1444,16 @@ var bootOps = []bootOp{
 	},
 }
 
+// bootParamsJSON renders op params as the JSON the op receives, for the log
+// ("{}" rather than the Go map syntax "map[]").
+func bootParamsJSON(params map[string]any) string {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Sprintf("%v", params)
+	}
+	return string(b)
+}
+
 // activityFilterIndexBootParams picks the activity op's mode for this boot
 // (owner decision 2026-10-15). With the indexes complete it is the reconcile,
 // the rollback check. With the sentinel unset (never built, or withdrawn by a
@@ -1487,7 +1498,7 @@ func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id st
 		if op.paramsFor != nil {
 			var note string
 			if params, note = op.paramsFor(checks); note != "" {
-				lifecycleLog.Info("startup: enqueueing %s with params %v: %s", op.id, params, note)
+				lifecycleLog.Info("startup: enqueueing %s with params %s: %s", op.id, bootParamsJSON(params), note)
 			}
 		}
 		opID, err := enqueue(ctx, op.id, params)
