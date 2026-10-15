@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.148.0
+// version: 1.149.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-15
 
@@ -142,9 +142,9 @@ type MockStore struct {
 	// RenameAuthorCheckedFunc overrides RenameAuthorChecked
 	// (database.AuthorCheckedRenamer).
 	RenameAuthorCheckedFunc func(id int, name string, check func(cur *Author, nameHolder int) error) error
-	CreateAuthorFunc     func(name string) (*Author, error)
-	MintAuthorFunc       func(name string) (*Author, bool, error)
-	DeleteAuthorFunc     func(id int) error
+	CreateAuthorFunc        func(name string) (*Author, error)
+	MintAuthorFunc          func(name string) (*Author, bool, error)
+	DeleteAuthorFunc        func(id int) error
 	// MergeDeleteAuthorFunc overrides MergeDeleteAuthor, which makes MockStore
 	// offer the AuthorMergeDeleter capability (it is not on Store). Unset, the
 	// test double approximates it with DeleteAuthor then CreateAuthorTombstone, so
