@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-15-boot-backfills-as-ops-executive-summary.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 9a4c7e12-6b3d-4f58-8e91-2d5f0b7c3a66 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -94,7 +94,8 @@ works through the library out of sight any more.
   server now writes the starting point to the database as soon as it sees
   entries above the mark, and removes it only when a check finds nothing
   missing or a full rebuild finishes. A check that fails or is stopped leaves
-  it in place.
+  it in place. If the saved starting point can ever not be read, the next
+  check starts from the very beginning instead of guessing.
 - **If the check fails part way,** the activity filters stay switched back to
   the slower path. The next start now notices this and runs the full rebuild
   by itself (owner decision), instead of waiting for someone to start it by
