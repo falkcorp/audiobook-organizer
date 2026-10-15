@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-15
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -190,7 +191,7 @@ func (p *Plugin) transcodeTempCleanupDef() sdk.OperationDef {
 		ProgressTimeout: tempFileCleanupProgressTimeout, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean stale transcode temp files",
-		Description:     "Removes transcode temp files older than 2 hours under every import path.",
+		Description:     "Removes transcode temp files older than 2 hours under every import path. Previews (counts only) unless dry_run is false.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.temp-file-cleanup",
@@ -207,8 +208,14 @@ func (p *Plugin) transcodeTempCleanupDef() sdk.OperationDef {
 // never saw it). Each import path is its own walk root and this DELETES, so
 // appdirs.Current() is passed exactly as the tickers did: an app directory
 // configured inside an import path is skipped. A path that is gone is logged
-// and skipped, not fatal.
-func (p *Plugin) runTranscodeTempCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+// and skipped, not fatal. Without dry_run=false it only counts (preview).
+func (p *Plugin) runTranscodeTempCleanup(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	// Owner rule 2026-09-25: an omitted mode is a PREVIEW. The hourly scheduler
+	// task passes dry_run=false explicitly.
+	dryRun, err := opmode.ParseDryRun("maintenance.transcode-temp-cleanup", raw)
+	if err != nil {
+		return err
+	}
 	paths, err := p.deps.OpsStore().GetAllImportPaths()
 	if err != nil {
 		return fmt.Errorf("list import paths: %w", err)
@@ -223,10 +230,14 @@ func (p *Plugin) runTranscodeTempCleanup(ctx context.Context, _ json.RawMessage,
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Skipping import path %q: %v", ip.Path, statErr))
 			continue
 		}
-		removed += transcode.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge)
+		removed += transcode.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge, dryRun)
 		swept++
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Removed %d stale transcode temp files from %d of %d import paths", removed, swept, len(paths)))
+	verb := "Removed"
+	if dryRun {
+		verb = "Preview: would remove"
+	}
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("%s %d stale transcode temp files from %d of %d import paths", verb, removed, swept, len(paths)))
 	return nil
 }
 
