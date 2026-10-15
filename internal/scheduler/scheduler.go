@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-10-15
 
@@ -53,14 +53,11 @@ type SchedulerDeps struct {
 	// operations. Required; must not be nil when Start() is called.
 	OpRegistry *opsregistry.Registry
 
-	// HasDedupEngine returns true when a dedup engine is wired up. Used by the
-	// dedup_llm_review task's IsEnabled guard.
-	HasDedupEngine func() bool
-
 	// HasDedupPlugin returns true when the dedup UOS plugin is built, which
 	// needs the dedup engine AND the embedding store (dedup/register.go returns
 	// a nil plugin without both, so none of its ops are registered). Used by
-	// the label_refinement IsEnabled guard. Nil means false.
+	// the label_refinement and dedup_llm_review IsEnabled guards. Nil means
+	// false.
 	HasDedupPlugin func() bool
 
 	// HasMetadataFetchSvc returns true when a metadata fetch service is wired.

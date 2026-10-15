@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b86925c-8469-4216-83f5-c7733c9ff488
-// last-edited: 2026-10-08
+// last-edited: 2026-10-15
 
 // Unit tests for the task-scheduler and maintenance-window HTTP handlers,
 // moved verbatim (renamed to the SchedulerHandler receiver and its own
@@ -374,7 +374,6 @@ func schedulerView(t *testing.T, name string) (scheduler.TaskInfo, bool) {
 	t.Helper()
 	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
 		Store:               func() scheduler.SchedulerStore { return nil },
-		HasDedupEngine:      func() bool { return false },
 		HasMetadataFetchSvc: func() bool { return false },
 		HasActivitySvc:      func() bool { return false },
 		HasBatchPoller:      func() bool { return false },
@@ -471,7 +470,6 @@ func TestUpdateTaskConfig_MetadataUpgradeIntervalAloneSchedulesIt(t *testing.T) 
 		t.Helper()
 		ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
 			Store:               func() scheduler.SchedulerStore { return nil },
-			HasDedupEngine:      func() bool { return false },
 			HasMetadataFetchSvc: func() bool { return true },
 			HasActivitySvc:      func() bool { return false },
 			HasBatchPoller:      func() bool { return false },

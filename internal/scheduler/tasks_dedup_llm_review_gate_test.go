@@ -16,7 +16,6 @@ import (
 // engine is wired but the plugin was never built.
 func TestDedupLLMReviewNeedsTheDedupPlugin(t *testing.T) {
 	deps := testDeps()
-	deps.HasDedupEngine = func() bool { return true }
 	deps.HasDedupPlugin = nil
 	def, ok := NewTaskScheduler(deps).GetTask("dedup_llm_review")
 	assert.True(t, ok)

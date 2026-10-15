@@ -1,7 +1,7 @@
 // file: internal/scheduler/task_reachability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1d84f2b7-6c03-4e91-a7d5-9b02e6f41c38
-// last-edited: 2026-08-13
+// last-edited: 2026-10-15
 
 package scheduler
 
@@ -13,7 +13,7 @@ import (
 // reachabilityTestDeps builds a fully-capable SchedulerDeps.
 //
 // Every capability probe returns TRUE on purpose. Several IsEnabled closures are
-// gated on them (HasActivitySvc, HasDedupEngine, HasMetadataFetchSvc), so
+// gated on them (HasActivitySvc, HasDedupPlugin, HasMetadataFetchSvc), so
 // stubbing them false would report those tasks as disabled and the reachability
 // invariant would skip exactly the tasks most likely to be misconfigured. True
 // models a fully-provisioned production server, which is the case that matters.
@@ -27,7 +27,7 @@ import (
 func reachabilityTestDeps() SchedulerDeps {
 	return SchedulerDeps{
 		Store:               func() SchedulerStore { return nil },
-		HasDedupEngine:      func() bool { return true },
+		HasDedupPlugin:      func() bool { return true },
 		HasMetadataFetchSvc: func() bool { return true },
 		HasActivitySvc:      func() bool { return true },
 		HasBatchPoller:      func() bool { return true },
