@@ -39,8 +39,15 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   after the other: it points the book at the matched file, then moves the
   book's file record to it. Each change is recorded so that undoing the apply
   on the Operations page puts both back. If the apply is stopped between the
-  two (cancelled, or the server restarts), resuming it finishes the second
-  change instead of refusing the row.
+  two (cancelled, or the server restarts), resuming it, or starting a new
+  apply of the same row, finishes the second change instead of refusing the
+  row. A new apply that finishes an earlier one records the first change
+  again as its own, so undoing just the new apply puts the book fully back,
+  and undoing both, in either order, ends where the book started.
+  A book only counts as half done when this repair's own record says so.
+  If something else already pointed the book at the matched file (for
+  example the old "Reconcile Apply" job), the row is shown as changed and
+  is not applied.
   Nothing is moved on disk and no file record is created or deleted. The
   repair no longer goes through the old "Reconcile Apply" job, which only
   updated the book and left its file record pointing at the missing file.
@@ -65,8 +72,8 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   their own yet: the file-level fingerprint comes back when someone runs the
   "Backfill File Hashes" job (it is not scheduled, and it previews by
   default), but the book-level ones stay empty until a scan re-reads the
-  file or the book is organized. Whether the repair
-  should fill them itself is on the TODO list for the owner to decide.
+  file or the book is organized. Whether the repair should fill them itself
+  is on the TODO list for the owner to decide.
 
 ## What is not changed
 

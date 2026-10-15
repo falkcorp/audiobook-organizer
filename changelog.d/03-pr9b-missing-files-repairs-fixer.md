@@ -34,7 +34,9 @@ It then makes two compare-and-set writes, each journaled and revertible from the
 
 Nothing moves on disk, no file row is created or deleted, and the fixer no longer hands its picks to Reconcile Apply.
 
-Only a hash match keeps the book's current-file hashes. For an original-hash or filename match, `file_hash` and `organized_file_hash` are cleared in the same write as the path, and the row's hash is cleared too. The original-file hash is kept. If the apply is stopped between the two writes (cancel, restart), resuming it finishes the second write.
+Only a hash match keeps the book's current-file hashes. For an original-hash or filename match, `file_hash` and `organized_file_hash` are cleared in the same write as the path, and the row's hash is cleared too. The original-file hash is kept. The cleared book hashes are not refilled automatically: `backfill-file-hashes` (manual) refills only the file row's hash, and the book's come back only when a scan re-reads the file or the book is organized (todo `MISSING-FILES-BOOK-HASH-REFILL`).
+
+If an apply is stopped between the two writes (cancel, restart), resuming it or a new apply of the row finishes the second write. Step 1 counts as done only when the fixer's own journal shows it: the latest path change on the book must be an unreverted `book_path_update` from `reconcile.missing-files` with the planned old and new paths, and its hashes must match what that write left. A book moved by anything else, including the legacy Reconcile Apply (which writes no file row), is shown as `path_changed` and refused. A new op that finishes an earlier op's row journals the path change and hash clears again as journal-only rows, so reverting that op alone restores the book, its file row and its hashes; reverting both ops, in either order, ends at the original state. A refusal by a different op's step 2 is reported as `changed_since_plan`, not as a partial apply.
 
 While the file index is still warming up after a restart, the trial fails with "file index warming up; retry in a few minutes", and an apply holds the row as "retry later".
 
