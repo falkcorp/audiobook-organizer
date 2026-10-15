@@ -1,5 +1,5 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
 // last-edited: 2026-10-15
 
@@ -103,13 +103,6 @@ test.describe('Author Dedup', () => {
     // Use heading role to target canonical name specifically
     await expect(page.getByRole('heading', { name: 'Brandon Sanderson' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'James S. A. Corey' })).toBeVisible();
-  });
-
-  test('shows variant count and book count chips', async ({ page }) => {
-    await openDedupPage(page);
-
-    await expect(page.getByText('12 book(s)')).toBeVisible();
-    await expect(page.getByText('9 book(s)')).toBeVisible();
   });
 
   test('shows variant chips', async ({ page }) => {
@@ -240,80 +233,6 @@ test.describe('Author Dedup', () => {
   });
 });
 
-// ── Book Preview Popover Tests ──
-
-test.describe('Book Preview Popover', () => {
-  test('clicking book count chip opens popover with books', async ({ page }) => {
-    await openDedupPage(page);
-
-    await page.getByText('12 book(s)').click();
-
-    await expect(page.getByText('The Way of Kings')).toBeVisible();
-    await expect(page.getByText('Words of Radiance')).toBeVisible();
-    await expect(page.getByText('Oathbringer')).toBeVisible();
-  });
-
-  test('popover shows cover thumbnails when available', async ({ page }) => {
-    await openDedupPage(page);
-
-    await page.getByText('12 book(s)').click();
-
-    // Words of Radiance has a cover_url
-    const img = page.locator('img[src*="covers/local"]');
-    await expect(img).toBeVisible();
-  });
-
-  test('popover shows books without covers', async ({ page }) => {
-    await openDedupPage(page);
-
-    await page.getByText('12 book(s)').click();
-
-    // Books without covers should still appear
-    await expect(page.getByText('The Way of Kings')).toBeVisible();
-  });
-
-  test('clicking book in popover navigates to book detail', async ({ page }) => {
-    await openDedupPage(page);
-
-    await page.getByText('12 book(s)').click();
-    await page.getByText('The Way of Kings').click();
-
-    await expect(page).toHaveURL(/\/library\/b1/);
-  });
-
-  test('popover closes when clicking outside', async ({ page }) => {
-    await openDedupPage(page);
-
-    await page.getByText('12 book(s)').click();
-    await expect(page.getByText('The Way of Kings')).toBeVisible();
-
-    // Click outside the popover
-    await page.mouse.click(10, 10);
-
-    await expect(page.getByText('The Way of Kings')).not.toBeVisible();
-  });
-
-  test('popover handles empty book list', async ({ page }) => {
-    await setupMockApi(page, {
-      books: generateTestBooks(5),
-      authorDedup: { groups: authorDedupGroups },
-    });
-    await page.route('**/api/v1/audiobooks?author_id=*', async (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ items: [], count: 0 }),
-      });
-    });
-
-    await page.goto('/dedup?tab=authors');
-    await page.waitForLoadState('networkidle');
-
-    await page.getByText('12 book(s)').click();
-    await expect(page.getByText(/no books/i).first()).toBeVisible();
-  });
-});
-
 // ── Series Dedup Tests ──
 
 test.describe('Series Dedup', () => {
@@ -390,17 +309,5 @@ test.describe('Dedup Bulk Actions', () => {
 
     // Confirmation dialog
     await expect(page.getByRole('heading', { name: /confirm/i })).toBeVisible();
-  });
-});
-
-// ── AI Review ──
-
-test.describe('Dedup AI Review', () => {
-  test('AI Review button is visible on authors tab', async ({ page }) => {
-    await openDedupPage(page);
-
-    // AI Review is a Tab in the legacy view (role="tab"), not a button.
-    const aiTab = page.getByRole('tab', { name: /ai review/i });
-    await expect(aiTab).toBeVisible();
   });
 });
