@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-15
 
@@ -186,10 +186,15 @@ type opsAuthorStore interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
-	// GetAuthorAliases: an author merge journals the aliases its delete moves
-	// onto the survivor (authormerge.MergeDelete), so the undo can move them back.
-	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 	UpdateAuthorName(id int, name string) error
+}
+
+// opsAuthorAliasLister lists an author's aliases. An author merge journals the
+// aliases its delete moves onto the survivor (authormerge.MergeDelete), so the
+// undo can move them back. Its own interface because opsAuthorStore is at
+// interfacebloat's cap of eight.
+type opsAuthorAliasLister interface {
+	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 }
 
 // opsSeriesStore reads and mutates series.
@@ -358,13 +363,14 @@ type opsNarratorStore interface {
 // method set OpsStore exposes is unchanged by the grouping.
 type opsPeopleStore interface {
 	opsAuthorStore
+	opsAuthorAliasLister
 	opsNarratorStore
 	// The merge-delete (mergeAuthorInto, author-id-repair) is not here: it is
 	// the database.AuthorMergeDeleter capability, resolved from the store with
 	// database.MergeDeleteAuthorOf, and a store without it refuses the merge.
 }
 
-// OpsStore is the 88 methods the maintenance ops need -- what they call directly
+// OpsStore is the 89 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
