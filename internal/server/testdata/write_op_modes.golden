@@ -1,5 +1,5 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.19.0
+# version: 1.19.1
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
 # last-edited: 2026-10-15
 #
@@ -159,7 +159,7 @@ maintenance.temp-file-cleanup	no-mode
 maintenance.title-backfill	preview
 maintenance.title-repair	preview
 maintenance.tombstone-cleanup	no-mode
-maintenance.transcode-temp-cleanup	no-mode
+maintenance.transcode-temp-cleanup	preview
 maintenance.trash-cleanup	no-mode
 maintenance.version-group-primary-repair	preview
 maintenance.window	no-mode
