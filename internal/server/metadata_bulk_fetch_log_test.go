@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package server
 
@@ -293,3 +293,44 @@ func TestBulkFetchOutcomeLine_SharedCacheHitIsFromCache(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestBulkFetchByIDs_SkipsBooksMarkedNoMatch: a book the owner marked "no_match"
+// is left out of the fetch entirely -- no walk of the source chain, so no
+// ledger row and no provider call -- while an unmarked book in the same
+// selection is fetched (here, with no providers configured, it ledgers
+// not_found, which only a book that reached the chain walk does). The skipped
+// count is reported in the final progress summary (04-P14f).
+func TestBulkFetchByIDs_SkipsBooksMarkedNoMatch(t *testing.T) {
+	disableMetadataSourcesForTest(t)
+
+	books := map[string]*database.Book{
+		"b-marked": {ID: "b-marked", Title: "Synthetic Marked Title", MetadataReviewStatus: strPtr("no_match")},
+		"b-plain":  {ID: "b-plain", Title: "Synthetic Plain Title"},
+	}
+	store, _, _ := newFastpathMockStore(books, nil)
+	var ledgerMu sync.Mutex
+	ledger := map[string]string{}
+	store.CreateOperationResultFunc = func(r *database.OperationResult) error {
+		ledgerMu.Lock()
+		ledger[r.BookID] = r.Status
+		ledgerMu.Unlock()
+		return nil
+	}
+	srv := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+	rec := &recordingProgress{}
+
+	if _, err := srv.runBulkMetadataFetchForBookIDs(context.Background(), "op-bulk-nomatch",
+		[]string{"b-marked", "b-plain"}, operations.BulkMetadataFetchParams{}, store, rec); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if _, ok := ledger["b-marked"]; ok {
+		t.Errorf("marked book was fetched: ledger[b-marked] = %q", ledger["b-marked"])
+	}
+	if got := ledger["b-plain"]; got != metafetch.FetchStatusNotFound {
+		t.Errorf("ledger[b-plain] = %q, want %q (the unmarked book must be fetched)", got, metafetch.FetchStatusNotFound)
+	}
+	if !strings.Contains(rec.last(), "marked no-match 1") {
+		t.Errorf("final summary %q does not report the skipped count", rec.last())
+	}
+}
