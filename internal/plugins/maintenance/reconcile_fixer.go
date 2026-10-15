@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-15
 
@@ -161,8 +161,10 @@ const (
 // (rmStepOneOf: the state AND this fixer's own journaled step 1) and write
 // step 2 only, journaling in the finishing op the step-1 changes it depends
 // on so that op reverts on its own (rmFinishStepTwo). Any other refusal of
-// step 2 after this op's own step 1 is reported partially_applied. No book_file row is ever deleted or
-// created. Reverting the apply operation puts the book's path and the row
+// step 2 after this op's own step 1 -- in the same run, or when the resumed
+// run IS the op that wrote step 1 -- is reported partially_applied; a refusal
+// by an op that wrote nothing on the book is changed_since_plan. No book_file
+// row is ever deleted or created. Reverting the apply operation puts the book's path and the row
 // back.
 type reconcileFixer struct{ p *Plugin }
 
@@ -923,8 +925,11 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 //
 // One JournalSteps call: a no-change compare-and-set Modify that the book is
 // still as step 1 left it, then the row repoint. A refusal of either voids
-// the journal-only rows and is reported as itself (changed_since_plan, a
-// fence, a lost lease), never partially_applied: this op wrote nothing.
+// the journal-only rows this call created. When this op is NOT the one that
+// wrote step 1 the refusal is reported as itself (changed_since_plan, a
+// fence, a lost lease), never partially_applied: this op wrote nothing. When
+// it IS (a resume of the same op), its own step 1 stands and the refusal is
+// partially_applied, as in Apply (rmRepointRow).
 func rmFinishStepTwo(w *repairs.Writer, d *rmDecision, book *database.Book, st *rmStepOne) error {
 	steps := []repairs.BookStep{{BookID: d.bookID, Entry: repairs.UndoEntry{
 		ChangeType: undo.ChangeTypeBookPathUpdate, Field: "file_path", Old: d.oldPath, New: d.newPath}}}
@@ -960,6 +965,10 @@ func rmFinishStepTwo(w *repairs.Writer, d *rmDecision, book *database.Book, st *
 		return done, nil
 	})
 	if err != nil {
+		if st.opID == w.OpID() {
+			return fmt.Errorf("%w: book %s points at %s but its file row %s was not repointed: %w",
+				repairs.ErrPartiallyApplied, d.bookID, d.newPath, d.fileID, err)
+		}
 		return fmt.Errorf("book %s: the file row of operation %s's unfinished apply not repointed: %w", d.bookID, st.opID, err)
 	}
 	return nil
