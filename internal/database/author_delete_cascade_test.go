@@ -1,5 +1,5 @@
 // file: internal/database/author_delete_cascade_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5f2b8d14-7c39-4a60-b1e8-0d6a3c9f2e57
 // last-edited: 2026-10-14
 
@@ -245,3 +245,30 @@ func TestMergeDeleteAuthorOf_ResolvesTheCapabilityOrRefuses(t *testing.T) {
 type unwrappingStore struct{ Store }
 
 func (u unwrappingStore) Unwrap() Store { return u.Store }
+
+// RestoreAuthor puts back a row that existed, so it does not apply the creation
+// gate: library rows that predate it ("read by narrator", "Epigraph") are merged
+// and reclassified like any other, and their undo must bring them back. Only an
+// empty name is refused.
+func TestRestoreAuthor_BringsBackANameTheCreationGateWouldRefuse(t *testing.T) {
+	st := newAuthorTestStore(t)
+	for i, junk := range []string{"read by narrator", "Epigraph", "14 BBY"} {
+		require.Error(t, CheckAuthorNameForCreation(junk), "%q must fail the creation gate for this test to mean anything", junk)
+		a, err := st.CreateAuthor([]string{"Gate Restore Alpha", "Gate Restore Beta", "Gate Restore Gamma"}[i])
+		require.NoError(t, err)
+		require.NoError(t, st.UpdateAuthorName(a.ID, junk))
+		require.NoError(t, st.DeleteAuthor(a.ID))
+
+		res, err := st.RestoreAuthor(a.ID, junk, AuthorRestoreOptions{OwnedNameIndex: true})
+		require.NoError(t, err, junk)
+		require.True(t, res.Restored)
+		got, err := st.GetAuthorByID(a.ID)
+		require.NoError(t, err)
+		require.Equal(t, junk, got.Name)
+		byName, err := st.GetAuthorByName(junk)
+		require.NoError(t, err)
+		require.Equal(t, a.ID, byName.ID)
+	}
+	_, err := st.RestoreAuthor(987654, "  ", AuthorRestoreOptions{})
+	require.Error(t, err, "an empty name is refused")
+}
