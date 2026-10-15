@@ -1,7 +1,7 @@
 // file: web/tests/e2e/operation-monitoring.spec.ts
-// version: 3.2.0
+// version: 3.3.0
 // guid: 9845a5f8-e3e4-472f-ae99-2723b6163aae
-// last-edited: 2026-09-10
+// last-edited: 2026-10-15
 
 // The standalone Operations page this spec was written against was deleted in
 // afe18e8f ("unified Activity page with pinned ops, compound filters, source
@@ -322,5 +322,44 @@ test.describe('Operation Monitoring', () => {
     await expect(
       page.getByText('Activity entry 1', { exact: true })
     ).not.toBeVisible();
+  });
+});
+
+// ── Scheduler Task Integration (moved from dedup-operations.spec.ts) ──
+
+async function setupSchedulerMocks(page: Page) {
+  await setupMockApi(page, { operations: { active: [], history: [], logs: {} } });
+}
+
+test.describe('Scheduler Tasks for Dedup', () => {
+  test('system tasks endpoint returns dedup tasks', async ({ page }) => {
+    await setupSchedulerMocks(page);
+
+    await page.goto('/operations');
+    await page.waitForLoadState('networkidle');
+
+    const response = await page.evaluate(async () => {
+      const resp = await fetch('/api/v1/system/tasks');
+      return resp.json();
+    });
+
+    expect(response.tasks).toBeDefined();
+    const taskNames = response.tasks.map((t: { name: string }) => t.name);
+    expect(taskNames).toContain('dedup_refresh');
+    expect(taskNames).toContain('resolve_production_authors');
+  });
+
+  test('manual task trigger creates operation', async ({ page }) => {
+    await setupSchedulerMocks(page);
+    await page.goto('/review?lane=authors');
+    await page.waitForLoadState('networkidle');
+
+    const response = await page.evaluate(async () => {
+      const resp = await fetch('/api/v1/system/tasks/dedup_refresh/run', { method: 'POST' });
+      return resp.json();
+    });
+
+    expect(response.id).toBe('task-run-1');
+    expect(response.status).toBe('running');
   });
 });
