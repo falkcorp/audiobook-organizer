@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-10-14
 
@@ -66,6 +66,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -257,10 +258,17 @@ func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 		// source file and clones it back into the tree. Branch A (in-tree repoint) writes only
 		// the DB, but the capability set is static per def, so both are declared regardless.
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesRead, sdk.CapFilesWrite},
-		// settings.manage, explicit: the retired repair-missing-files job required it, and
-		// until the 08 X2 role rework an undeclared Permissions leaves this op reachable by
-		// any scan.trigger holder (04-P14e).
+		// Declared explicitly, not left to the default: the retired
+		// repair-missing-files job (04-P14e) was gated on settings.manage, and the
+		// generic operations endpoint already holds a def with no Permissions to
+		// settings.manage (defPermissionsHeld), so declaring it changes no effective
+		// access; it just states the gate on the def itself.
 		Permissions: []auth.Permission{auth.PermSettingsManage},
+		// 4h, the retired job's budget (maintenance.DefaultPolicy). The undeclared
+		// default is 120 minutes, which would be a regression for the job's callers on
+		// a full-library pass over a NAS. LivenessRunItems is a stall watchdog, not a
+		// run-length bound, so it does not substitute for this.
+		Timeout: 4 * time.Hour,
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 			return p.runRecoverMissingFiles(ctx, raw, reporter)
 		},
