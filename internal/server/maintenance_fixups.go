@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.23.0
+// version: 2.24.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 package server
 
@@ -228,100 +228,6 @@ func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 		ByCategory:  counts,
 		Problems:    len(problems),
 		Details:     problems,
-	})
-}
-
-type missingFileRepairResult struct {
-	BookID  string `json:"book_id"`
-	Title   string `json:"book_title"`
-	OldPath string `json:"old_path"`
-	NewPath string `json:"new_path,omitempty"`
-	// Method values: "pid", "filename", "truncation", "author_title",
-	// "skipped", "unresolved", "ambiguous"
-	Method  string `json:"method"`
-	Matches int    `json:"matches,omitempty"`
-	Applied bool   `json:"applied"`
-	Error   string `json:"error,omitempty"`
-}
-
-func (s *Server) handleGetMissingFileRepairResults(c *gin.Context) {
-	opID := c.Param("id")
-	if opID == "" {
-		httputil.RespondWithBadRequest(c, "operation id required")
-		return
-	}
-	store := s.Ops()
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	op, err := s.lookupMaintenanceResultOp(opID, "repair-missing-files",
-		"missing-file-repair", "maintenance:repair-missing-files")
-	switch {
-	case errors.Is(err, errMaintenanceOpWrongJob):
-		httputil.RespondWithBadRequest(c, "not a missing-file-repair operation")
-		return
-	case errors.Is(err, os.ErrNotExist):
-		httputil.RespondWithNotFound(c, "operation", opID)
-		return
-	case err != nil:
-		// A store failure is not a missing id. Answering 404 here would tell the
-		// operator their operation id was wrong when the database is the thing
-		// that broke.
-		httputil.InternalError(c, "failed to look up operation", err)
-		return
-	}
-	rawResults, err := store.GetOperationResults(opID)
-	if err != nil {
-		httputil.InternalError(c, "failed to load results", err)
-		return
-	}
-
-	byMethod := map[string]int{}
-	var problems []missingFileRepairResult
-	repaired, unresolved, ambiguous, skipped := 0, 0, 0, 0
-	for _, raw := range rawResults {
-		var r missingFileRepairResult
-		if jsonErr := json.Unmarshal([]byte(raw.ResultJSON), &r); jsonErr != nil {
-			continue
-		}
-		byMethod[r.Method]++
-		switch r.Method {
-		case "unresolved":
-			unresolved++
-			problems = append(problems, r)
-		case "ambiguous":
-			ambiguous++
-			problems = append(problems, r)
-		case "skipped":
-			skipped++
-		default:
-			repaired++
-		}
-	}
-
-	httputil.RespondWithOK(c, struct {
-		OperationID string                    `json:"operation_id"`
-		Status      string                    `json:"status"`
-		Progress    int                       `json:"progress"`
-		Total       int                       `json:"total"`
-		ByMethod    map[string]int            `json:"by_method"`
-		Repaired    int                       `json:"repaired"`
-		Unresolved  int                       `json:"unresolved"`
-		Ambiguous   int                       `json:"ambiguous"`
-		Skipped     int                       `json:"skipped"`
-		Problems    []missingFileRepairResult `json:"problems"`
-	}{
-		OperationID: opID,
-		Status:      op.Status,
-		Progress:    op.Progress,
-		Total:       op.Total,
-		ByMethod:    byMethod,
-		Repaired:    repaired,
-		Unresolved:  unresolved,
-		Ambiguous:   ambiguous,
-		Skipped:     skipped,
-		Problems:    problems,
 	})
 }
 

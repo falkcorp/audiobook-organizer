@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-14
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -38,6 +38,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -176,6 +177,10 @@ func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 		Liveness: sdk.LivenessRunItems,
 		// CapLibraryWrite: this op mutates book_file rows (FilePath only).
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		// settings.manage, explicit: the retired repair-missing-files job required it, and
+		// until the 08 X2 role rework an undeclared Permissions leaves this op reachable by
+		// any scan.trigger holder (04-P14e).
+		Permissions: []auth.Permission{auth.PermSettingsManage},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 			return p.runMissingFileRepoint(ctx, raw, reporter)
 		},

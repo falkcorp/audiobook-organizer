@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_result_keyspace_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b654171b-40ad-4ba9-88df-841c4d39c5cc
-// last-edited: 2026-08-23
+// last-edited: 2026-10-14
 
 package server
 
@@ -88,7 +88,7 @@ func TestLookupMaintenanceResultOp_WrongJobIsNotNotFound(t *testing.T) {
 		opID := ulid.Make().String()
 		if err := server.storeForWiring().InsertOperationV2(database.OperationV2Row{
 			ID:       opID,
-			DefID:    maintenanceOpID("repair-missing-files"),
+			DefID:    maintenanceOpID("cleanup-empty-folders"),
 			Plugin:   "maintenance",
 			Status:   "completed",
 			QueuedAt: time.Now().UTC(),
@@ -104,7 +104,7 @@ func TestLookupMaintenanceResultOp_WrongJobIsNotNotFound(t *testing.T) {
 
 	t.Run("v1 row for a different job", func(t *testing.T) {
 		opID := ulid.Make().String()
-		if _, err := server.storeForWiring().CreateOperation(opID, "maintenance:repair-missing-files", nil); err != nil {
+		if _, err := server.storeForWiring().CreateOperation(opID, "maintenance:cleanup-empty-folders", nil); err != nil {
 			t.Fatalf("CreateOperation: %v", err)
 		}
 		_, err := server.lookupMaintenanceResultOp(opID, "scan-composer-tags",
