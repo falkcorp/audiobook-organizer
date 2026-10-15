@@ -1,7 +1,7 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
-// last-edited: 2026-09-19
+// last-edited: 2026-10-15
 
 package database
 
@@ -198,6 +198,86 @@ func equalSizeParts() []BookFile {
 	for i := 0; i < 20; i++ {
 		out = append(out, BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/Part %02d.mp3", i),
 			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: 1800, Missing: i >= 10})
+	}
+	return out
+}
+
+// sizedRows builds file rows with a size and a duration each (0 = unmeasured).
+func sizedRows(sizes []int64, durs []int) []BookFile {
+	out := make([]BookFile, len(sizes))
+	for i := range sizes {
+		out[i] = BookFile{ID: fmt.Sprintf("f%d", i), FileSize: sizes[i], Duration: durs[i]}
+	}
+	return out
+}
+
+func TestBookRuntimeEstimate(t *testing.T) {
+	const mb = int64(1_000_000)
+	// 4 MB measured at 8 min: 8333 B/s. Total 8 MB -> ~960 s, upper x3.
+	ownerCase := sizedRows([]int64{4 * mb, 4 * mb}, []int{480, 0})
+	// 10 h book, 2 of 20 chapters measured (30 min each, 28.8 MB each).
+	tenHour := sizedRows(repeat64(20, 28_800_000), append(repeat(2, 1800), repeat(18, 0)...))
+	noSize := sizedRows([]int64{4 * mb, 0}, []int{480, 0})
+	measuredNoSize := sizedRows([]int64{0, 4 * mb}, []int{480, 0})
+	complete := sizedRows([]int64{4 * mb, 4 * mb}, []int{480, 480})
+	none := sizedRows([]int64{4 * mb, 4 * mb}, []int{0, 0})
+
+	for _, c := range []struct {
+		name      string
+		files     []BookFile
+		wantEst   int
+		wantUpper int
+		wantOK    bool
+	}{
+		{"owner case: 2 files, one measured", ownerCase, 960, 2880, true},
+		{"10h book with 2 of 20 chapters measured", tenHour, 36000, 108000, true},
+		{"an unmeasured row without a size: no estimate", noSize, 0, 0, false},
+		{"the measured row has no size: no rate", measuredNoSize, 0, 0, false},
+		{"complete runtime has nothing to estimate", complete, 0, 0, false},
+		{"no measured file at all", none, 0, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := ComputeBookRuntime(nil, c.files)
+			est, ok := rt.EstimatedSeconds()
+			up, upOK := rt.EstimatedUpperSeconds()
+			if ok != c.wantOK || upOK != c.wantOK {
+				t.Fatalf("ok = %v/%v, want %v (rt %+v)", ok, upOK, c.wantOK, rt)
+			}
+			if est != c.wantEst || up != c.wantUpper {
+				t.Errorf("estimate/upper = %d/%d, want %d/%d", est, up, c.wantEst, c.wantUpper)
+			}
+		})
+	}
+}
+
+// The estimate, and so the upper bound, is never below the known lower bound,
+// even for a hand-built runtime whose sample would extrapolate to less.
+func TestBookRuntimeEstimateNeverBelowLowerBound(t *testing.T) {
+	rt := BookRuntime{
+		Seconds: 1000, Source: RuntimeSourceFiles, FilesCounted: 2, FilesKnown: 1,
+		SizesComplete: true, TotalBytes: 10, RateBytes: 10, RateSeconds: 1000,
+	}
+	if up, ok := rt.EstimatedUpperSeconds(); !ok || up < 1000 {
+		t.Errorf("upper = %d, %v; want >= 1000", up, ok)
+	}
+	broken := rt
+	broken.RateBytes = 0 // a hand-built runtime with seconds but no bytes must not divide by zero
+	if _, ok := broken.EstimatedSeconds(); ok {
+		t.Error("estimate made from a zero-byte sample")
+	}
+	rt.RateSeconds = 100 // sample says 100 s, lower bound says 1000 s
+	if est, _ := rt.EstimatedSeconds(); est < 1000 {
+		t.Errorf("estimate %d below the lower bound 1000", est)
+	}
+	if up, _ := rt.EstimatedUpperSeconds(); up < 1000 {
+		t.Errorf("upper %d below the lower bound 1000", up)
+	}
+}
+
+func repeat64(n int, v int64) []int64 {
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = v
 	}
 	return out
 }

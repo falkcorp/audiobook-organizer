@@ -1,7 +1,7 @@
 // file: internal/database/book_runtime.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 64a8ba17-7539-4be1-a2f7-1ee0f0e0cc44
-// last-edited: 2026-09-19
+// last-edited: 2026-10-15
 
 package database
 
@@ -67,6 +67,18 @@ type BookRuntime struct {
 	// BookAggregateSec is the stored Book.Duration, reported for display and
 	// diagnosis only. It is NOT a runtime when Source != RuntimeSourceBook.
 	BookAggregateSec int `json:"book_aggregate_sec,omitempty"`
+	// SizesComplete is true when every counted row carries a positive
+	// FileSize. A total byte count that silently omitted a size-less row
+	// would under-estimate the runtime, so EstimatedSeconds refuses without it.
+	SizesComplete bool `json:"sizes_complete,omitempty"`
+	// TotalBytes is the summed FileSize of every counted row. It is a total
+	// only when SizesComplete: otherwise it omits the size-less rows.
+	TotalBytes int64 `json:"total_bytes,omitempty"`
+	// RateBytes and RateSeconds are the size and the duration of the counted
+	// rows that have BOTH a positive FileSize and a known duration: the sample
+	// the bytes-per-second rate is measured on.
+	RateBytes   int64 `json:"rate_bytes,omitempty"`
+	RateSeconds int   `json:"rate_seconds,omitempty"`
 }
 
 // Complete reports whether Seconds is the book's full runtime: every counted
@@ -102,6 +114,42 @@ func (r BookRuntime) KnownSeconds() (int, bool) {
 		return 0, false
 	}
 	return r.Seconds, true
+}
+
+// PartialUpperFactor is the headroom EstimatedUpperSeconds puts over the
+// bytes-per-second estimate. The estimate extrapolates the measured files'
+// bitrate to the unmeasured ones; VBR, a mix of encodes, or a low-bitrate
+// measured sample can make the true runtime several times the estimate, and
+// the estimate exists to rule out only a candidate that is absurdly long for
+// the bytes on disk (a 14 h candidate for 8 MB), never to second-guess a
+// plausible one. 3x keeps a 10 h book whose measured chapters happen to be 2x
+// denser than the rest inside the bound.
+const PartialUpperFactor = 3
+
+// EstimatedSeconds extrapolates a PARTIAL runtime to the whole book: the
+// measured files' bytes-per-second applied to the total size of every counted
+// file. ok is false when the runtime is not partial, when any counted row has
+// no size, or when no measured row has both a size and a duration, so no
+// estimate can be made and callers keep treating the runtime as unknown.
+// The result is never below the known lower bound.
+func (r BookRuntime) EstimatedSeconds() (int, bool) {
+	if !r.Partial() || !r.SizesComplete || r.TotalBytes <= 0 || r.RateBytes <= 0 || r.RateSeconds <= 0 {
+		return 0, false
+	}
+	est := int(math.Round(float64(r.TotalBytes) * float64(r.RateSeconds) / float64(r.RateBytes)))
+	return max(est, r.Seconds), true
+}
+
+// EstimatedUpperSeconds is the conservative upper bound a candidate runtime is
+// compared against: EstimatedSeconds times PartialUpperFactor. EstimatedSeconds
+// is already floored at the known lower bound, so the upper bound is too. A candidate longer than this is longer than the files
+// on disk can plausibly hold; one at or below it proves nothing.
+func (r BookRuntime) EstimatedUpperSeconds() (int, bool) {
+	est, ok := r.EstimatedSeconds()
+	if !ok {
+		return 0, false
+	}
+	return est * PartialUpperFactor, true
 }
 
 // Status is a one-word description for logs and UI: "complete", "partial",
@@ -180,6 +228,7 @@ func ComputeBookRuntime(book *Book, files []BookFile) BookRuntime {
 	// Each present row can absorb at most one missing duplicate.
 	absorbed := make([]bool, len(present))
 
+	sizesComplete := true
 	for i := range files {
 		f := &files[i]
 		if f.Missing && !useAll {
@@ -190,11 +239,21 @@ func ComputeBookRuntime(book *Book, files []BookFile) BookRuntime {
 			rt.FilesMissingUnmatched++
 		}
 		rt.FilesCounted++
+		if f.FileSize > 0 {
+			rt.TotalBytes += f.FileSize
+		} else {
+			sizesComplete = false
+		}
 		if sec := BookFileRuntimeSec(f); sec > 0 {
 			rt.Seconds += sec
 			rt.FilesKnown++
+			if f.FileSize > 0 {
+				rt.RateBytes += f.FileSize
+				rt.RateSeconds += sec
+			}
 		}
 	}
+	rt.SizesComplete = sizesComplete && rt.FilesCounted > 0
 
 	if rt.FilesKnown > 0 {
 		rt.Source = RuntimeSourceFiles
