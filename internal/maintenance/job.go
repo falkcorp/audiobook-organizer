@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-10-11
 
@@ -167,8 +167,8 @@ func DefaultPolicy() ExecutionPolicy {
 // Choose this when the OPERATION ID is the anchor. For a maintenance job it always
 // is: maintenance_job_op.go keys the activity summary and GetOperationSummaryLog
 // off the run's own v2 id, and the 202 response hands that id to the operator.
-// Three jobs additionally rebuild their skip-set from GetOperationResults(id) —
-// scan-composer-tags, repair-missing-files and bulk-fetch-metadata — which is the
+// Two jobs additionally rebuild their skip-set from GetOperationResults(id) —
+// scan-composer-tags and bulk-fetch-metadata — which is the
 // same shape metadata.candidate-fetch uses, and whose comment there calls the
 // filter "load-bearing for ResumePolicy=ResumeRestart". ResumeRequeue mints a
 // fresh ULID and moves all of that.
