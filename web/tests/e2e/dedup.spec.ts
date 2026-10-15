@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
-// last-edited: 2026-09-11
+// last-edited: 2026-10-15
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -332,50 +332,6 @@ test.describe('Series Dedup', () => {
     // Should show empty state or the series tab content
     const seriesTab = page.getByRole('tab', { name: /series/i });
     await expect(seriesTab).toHaveAttribute('aria-selected', 'true');
-  });
-});
-
-// ── Tab Navigation Tests ──
-
-test.describe('Dedup Tab Navigation', () => {
-  test('default tab is Books when no query param', async ({ page }) => {
-    await setupMockApi(page, {
-      books: generateTestBooks(3),
-      authorDedup: { groups: authorDedupGroups },
-    });
-    await page.goto('/dedup');
-    await page.waitForLoadState('networkidle');
-
-    // TAB_NAMES[0] is still 'books', but its LABEL is now "Version Groups".
-    // /books/i matched "Split Books" — a different, correctly-unselected tab —
-    // so this assertion was checking the wrong element entirely.
-    const booksTab = page.getByRole('tab', { name: /version groups/i });
-    await expect(booksTab).toHaveAttribute('aria-selected', 'true');
-  });
-
-  test('can switch between tabs', async ({ page }) => {
-    await openDedupPage(page);
-
-    // Should be on Authors tab
-    await expect(page.getByRole('heading', { name: 'Brandon Sanderson' })).toBeVisible();
-
-    // Switch to Books
-    await page.getByRole('tab', { name: /books/i }).click();
-    // Books tab should become active
-    const booksTab = page.getByRole('tab', { name: /books/i });
-    await expect(booksTab).toHaveAttribute('aria-selected', 'true');
-
-    // Switch back to Authors
-    await page.getByRole('tab', { name: /authors/i }).click();
-    await expect(page.getByRole('heading', { name: 'Brandon Sanderson' })).toBeVisible();
-  });
-
-  test('tabs are visible', async ({ page }) => {
-    await openDedupPage(page);
-
-    await expect(page.getByRole('tab', { name: /books/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /authors/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /series/i })).toBeVisible();
   });
 });
 

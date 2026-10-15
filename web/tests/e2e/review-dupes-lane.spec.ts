@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.4.0
+// version: 2.5.0
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 // End-to-end coverage for the dupes lane of /review.
 //
@@ -426,5 +426,170 @@ test.describe('the dupes lane of /review', () => {
 
     await expect.poll(() => linkBody?.primary_book_id).toBe('01ABCDEFGHIJKLMNOPQRSTUV05');
     expect(linkBody?.book_ids).toHaveLength(3);
+  });
+});
+
+// -- Legacy dedup URLs redirect into Review ----------------------------------
+//
+// Replaces dedup.spec.ts's "Dedup Tab Navigation": /dedup, /dedup/labels,
+// /authors/dedup and /books/dedup are one redirect element (DedupRedirect) that
+// maps ?tab= to a Review lane and keeps ?book= and ?band=. One test per row of
+// the mapping table; each asserts the final URL and that the target is visibly
+// selected.
+
+async function mockRedirectTargets(page: Page) {
+  await setupPhase2Interactive(page);
+  await mockDedupRoutes(page);
+  const json = (body: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: body }),
+  });
+  const plan = (id: string) => ({
+    operation_id: `plan-${id}`,
+    status: 'completed',
+    queued_at: '2026-10-01T00:00:00Z',
+    completed_at: '2026-10-01T00:01:00Z',
+    total: 0,
+    applicable: 0,
+  });
+  await page.route('**/api/v1/repairs', (route) =>
+    route.fulfill(
+      json({
+        fixers: [
+          { id: 'dedup.merge-versions', title: 'Merge versions', description: '', last_plan: plan('m') },
+          { id: 'reconcile.missing-files', title: 'Missing files', description: '', last_plan: plan('r') },
+          { id: 'dedup.split-books', title: 'Split books', description: '', last_plan: plan('s') },
+        ],
+      })
+    )
+  );
+  await page.route('**/api/v1/repairs/*/plans/*/rows**', (route) =>
+    route.fulfill(
+      json({
+        plan_op_id: 'plan',
+        fixer_id: 'fx',
+        planned_at: '2026-10-01T00:00:00Z',
+        filter: 'applicable',
+        offset: 0,
+        limit: 50,
+        total: 0,
+        applicable: 0,
+        skipped_by_kind: {},
+        rows: [],
+      })
+    )
+  );
+}
+
+/** The path + query the page is on, origin dropped. */
+function finalUrl(page: Page): string {
+  const u = new URL(page.url());
+  return u.pathname + u.search;
+}
+
+/** The redirect is client-side, so poll for the URL rather than read it once. */
+async function expectFinalUrl(page: Page, expected: string) {
+  await expect.poll(() => finalUrl(page)).toBe(expected);
+}
+
+test.describe('legacy dedup URLs redirect into Review', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockRedirectTargets(page);
+  });
+
+  test('/dedup lands on the exact layer of the Duplicates lane', async ({ page }) => {
+    await page.goto('/dedup');
+    await expect(page.getByTestId('dupes-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=dupes&layer=exact');
+    await expect(page.getByRole('tab', { name: /duplicates/i })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('layer-chip-exact')).toHaveClass(/MuiChip-filled/);
+  });
+
+  for (const path of ['/authors/dedup', '/books/dedup']) {
+    test(`${path} lands like /dedup`, async ({ page }) => {
+      await page.goto(path);
+      await expect(page.getByTestId('dupes-rail')).toBeVisible();
+      await expectFinalUrl(page, '/review?lane=dupes&layer=exact');
+    });
+  }
+
+  for (const tab of ['books', 'book-duplicates']) {
+    test(`/dedup?tab=${tab} lands on the exact layer`, async ({ page }) => {
+      await page.goto(`/dedup?tab=${tab}`);
+      await expect(page.getByTestId('dupes-rail')).toBeVisible();
+      await expectFinalUrl(page, '/review?lane=dupes&layer=exact');
+      await expect(page.getByTestId('layer-chip-exact')).toHaveClass(/MuiChip-filled/);
+    });
+  }
+
+  test('/dedup?tab=embedding lands on the Duplicates lane, all layers', async ({ page }) => {
+    await page.goto('/dedup?tab=embedding');
+    await expect(page.getByTestId('dupes-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=dupes');
+    await expect(page.getByTestId('layer-chip-all')).toHaveClass(/MuiChip-filled/);
+  });
+
+  test('/dedup?tab=acoustic selects the Acoustic chip', async ({ page }) => {
+    await page.goto('/dedup?tab=acoustic');
+    await expect(page.getByTestId('dupes-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=dupes&layer=acoustid');
+    await expect(page.getByTestId('layer-chip-acoustid')).toHaveClass(/MuiChip-filled/);
+  });
+
+  test('/dedup?tab=authors opens the Authors & series lane on Authors', async ({ page }) => {
+    await page.goto('/dedup?tab=authors');
+    await expect(page.getByTestId('authors-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=authors');
+    await expect(page.getByRole('tab', { name: 'Authors & series' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('authors-subview-authors')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('/dedup?tab=series selects Series', async ({ page }) => {
+    await page.goto('/dedup?tab=series');
+    await expectFinalUrl(page, '/review?lane=authors&view=series');
+    await expect(page.getByRole('tab', { name: 'Authors & series' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('authors-subview-series')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('/dedup?tab=ai selects AI scans', async ({ page }) => {
+    await page.goto('/dedup?tab=ai');
+    await expectFinalUrl(page, '/review?lane=authors&view=ai');
+    await expect(page.getByRole('tab', { name: 'Authors & series' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('authors-subview-ai')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('/dedup?tab=reconcile preselects the Missing files fixer', async ({ page }) => {
+    await page.goto('/dedup?tab=reconcile');
+    await expect(page.getByTestId('repairs-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=repairs&fixer=reconcile.missing-files');
+    await expect(page.getByTestId('repairs-fixer-reconcile.missing-files')).toHaveClass(/Mui-selected/);
+  });
+
+  test('/dedup?tab=split-books preselects the Split books fixer', async ({ page }) => {
+    await page.goto('/dedup?tab=split-books');
+    await expect(page.getByTestId('repairs-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=repairs&fixer=dedup.split-books');
+    await expect(page.getByTestId('repairs-fixer-dedup.split-books')).toHaveClass(/Mui-selected/);
+  });
+
+  test('/dedup/labels opens the Duplicates lane on Labels', async ({ page }) => {
+    await page.goto('/dedup/labels');
+    await expect(page.getByTestId('dupes-subview-labels')).toHaveAttribute('aria-pressed', 'true');
+    await expectFinalUrl(page, '/review?lane=dupes&view=labels');
+  });
+
+  test('an unknown tab keeps book and drops every other param', async ({ page }) => {
+    await page.goto('/dedup?tab=unified&book=01ABCDEFGHIJKLMNOPQRSTUV01&foo=1');
+    await expect(page.getByTestId('dupes-rail')).toBeVisible();
+    await expectFinalUrl(page, '/review?lane=dupes&book=01ABCDEFGHIJKLMNOPQRSTUV01');
+  });
+
+  test('Back after a redirect does not return to the redirecting URL', async ({ page }) => {
+    await page.goto('/review?lane=metadata');
+    await page.goto('/dedup?tab=authors');
+    await expect(page.getByTestId('authors-rail')).toBeVisible();
+    await page.goBack();
+    await expectFinalUrl(page, '/review?lane=metadata');
   });
 });

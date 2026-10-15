@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup-operations.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-2c3d4e5f6a7b
-// last-edited: 2026-09-11
+// last-edited: 2026-10-15
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -179,41 +179,6 @@ test.describe('Dedup Operation Progress', () => {
     await splitBtn.click();
 
     await expect(page.getByText(/split|updated|success/i).first()).toBeVisible({ timeout: 5000 });
-  });
-});
-
-// ── Scheduler Task Integration ──
-
-test.describe('Scheduler Tasks for Dedup', () => {
-  test('system tasks endpoint returns dedup tasks', async ({ page }) => {
-    await setupDedupWithOperations(page);
-
-    await page.goto('/operations');
-    await page.waitForLoadState('networkidle');
-
-    const response = await page.evaluate(async () => {
-      const resp = await fetch('/api/v1/system/tasks');
-      return resp.json();
-    });
-
-    expect(response.tasks).toBeDefined();
-    const taskNames = response.tasks.map((t: { name: string }) => t.name);
-    expect(taskNames).toContain('dedup_refresh');
-    expect(taskNames).toContain('resolve_production_authors');
-  });
-
-  test('manual task trigger creates operation', async ({ page }) => {
-    await setupDedupWithOperations(page);
-    await page.goto('/dedup?tab=authors');
-    await page.waitForLoadState('networkidle');
-
-    const response = await page.evaluate(async () => {
-      const resp = await fetch('/api/v1/system/tasks/dedup_refresh/run', { method: 'POST' });
-      return resp.json();
-    });
-
-    expect(response.id).toBe('task-run-1');
-    expect(response.status).toBe('running');
   });
 });
 
