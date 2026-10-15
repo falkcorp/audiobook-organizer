@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.11.0
-// last-edited: 2026-10-13
+// version: 1.11.1
+// last-edited: 2026-10-15
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -201,7 +201,7 @@ func init() {
 // reconcileFilterIndexAtBoot runs PebbleActivityStore.ReconcileFilterIndexCoverage
 // once per process and logs the outcome.
 func reconcileFilterIndexAtBoot(s *database.PebbleActivityStore) {
-	res, err := s.ReconcileFilterIndexCoverage(context.Background())
+	res, err := s.ReconcileFilterIndexCoverage(context.Background(), nil)
 	switch {
 	case err != nil:
 		serviceLog.Error("filter-index boot reconcile failed (seen-through=%d, reindexed=%d): %v — run maintenance.activity-filter-index-backfill to re-enable indexed filtering",

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -393,6 +393,14 @@ type FilterIndexReconcileResult struct {
 	Reindexed   int   // rows indexed to close the gap
 }
 
+// FilterIndexProgress receives progress from ReconcileFilterIndexCoverage so
+// the op running it can keep its liveness clock fresh. phase is "check" (the
+// read-only gap scan; rows is how many rows above the mark it has read) or
+// "reindex" (rows is how many rows the gap reindex has indexed so far). It is
+// called at least every activityCtxCheckInterval rows of the check and once
+// per committed reindex chunk, and may be nil.
+type FilterIndexProgress func(phase string, rows int)
+
 // ReconcileFilterIndexCoverage closes the rollback hole: an indexing build
 // completes the backfill, the service is rolled back to an older build that
 // writes rows WITHOUT filter keys, then rolled forward. The sentinel still
@@ -406,17 +414,25 @@ type FilterIndexReconcileResult struct {
 // the sentinel (which advances the mark). Nothing happens when the sentinel is
 // not set: the backfill op has not finished and will cover those rows.
 //
+// The mark it starts from is the one persisted when this store was opened
+// (seenThroughAtOpen), not the live one: this boot's own writes advance the
+// live mark past the rollback rows, and the reconcile runs as an op well after
+// the store opened (behind the warmup hold), so the live mark would hide the
+// very gap this exists to find.
+//
 // If it fails or is cancelled after withdrawing the sentinel, the sentinel
 // stays withdrawn (safe: queries are partial, never silently short) and
-// maintenance.activity-filter-index-backfill must be run to restore it.
-func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context) (res FilterIndexReconcileResult, err error) {
+// maintenance.activity-filter-index-backfill must be run to restore it: the
+// next reconcile, like a resumed one, returns at once on a withdrawn sentinel.
+// res.GapFound tells the caller that the sentinel was withdrawn.
+func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context, progress FilterIndexProgress) (res FilterIndexReconcileResult, err error) {
 	defer recoverPebbleClosed("pebble_activity_store.ReconcileFilterIndexCoverage", &err)
 	if !s.FilterIndexBackfillDone() {
 		return res, nil
 	}
-	mark := s.seenThrough.Load()
+	mark := s.seenThroughAtOpen
 	res.SeenThrough = mark
-	gap, err := s.filterIndexGapAbove(ctx, mark)
+	gap, err := s.filterIndexGapAbove(ctx, mark, progress)
 	if err != nil || !gap {
 		return res, err
 	}
@@ -425,7 +441,11 @@ func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context) 
 	if err := s.ClearFilterIndexBackfillDone(); err != nil {
 		return res, err
 	}
-	n, err := s.BackfillFilterIndexWindow(ctx, mark+1, 0, true)
+	var onChunk func(indexed int)
+	if progress != nil {
+		onChunk = func(indexed int) { progress("reindex", indexed) }
+	}
+	n, err := s.backfillFilterIndexWindow(ctx, mark+1, 0, true, onChunk)
 	res.Reindexed = n
 	if err != nil {
 		return res, fmt.Errorf("pebble_activity_store: reindex rollback gap: %w", err)
@@ -439,7 +459,7 @@ func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context) 
 
 // filterIndexGapAbove reports whether any decodable row with a key timestamp
 // above mark lacks one of its filter-index keys.
-func (s *PebbleActivityStore) filterIndexGapAbove(ctx context.Context, mark int64) (bool, error) {
+func (s *PebbleActivityStore) filterIndexGapAbove(ctx context.Context, mark int64, progress FilterIndexProgress) (bool, error) {
 	for _, tier := range actTiers {
 		it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: pactNanosKey(tier, mark+1), UpperBound: pactPrimaryUpperBound(tier)})
 		if err != nil {
@@ -452,6 +472,9 @@ func (s *PebbleActivityStore) filterIndexGapAbove(ctx context.Context, mark int6
 				if seen%activityCtxCheckInterval == 0 {
 					if ctxErr := ctx.Err(); ctxErr != nil {
 						return false, ctxErr
+					}
+					if progress != nil && seen > 0 {
+						progress("check", seen)
 					}
 				}
 				seen++
@@ -556,6 +579,13 @@ func pactNanosKey(tier string, nanos int64) []byte {
 // choice every other activity scan makes for such a row, and one no filter
 // query can observe, since the unindexed scan drops that row too.
 func (s *PebbleActivityStore) BackfillFilterIndexWindow(ctx context.Context, fromNanos, toNanos int64, openEnded bool) (indexed int, err error) {
+	return s.backfillFilterIndexWindow(ctx, fromNanos, toNanos, openEnded, nil)
+}
+
+// backfillFilterIndexWindow is BackfillFilterIndexWindow with an optional
+// onChunk, called with the running total of rows indexed after each committed
+// chunk of this window (the reconcile reports it as liveness).
+func (s *PebbleActivityStore) backfillFilterIndexWindow(ctx context.Context, fromNanos, toNanos int64, openEnded bool, onChunk func(indexed int)) (indexed int, err error) {
 	defer recoverPebbleClosed("pebble_activity_store.BackfillFilterIndexWindow", &err)
 	tally := &pactDecodeTally{}
 	defer tally.log("filter index backfill")
@@ -565,7 +595,12 @@ func (s *PebbleActivityStore) BackfillFilterIndexWindow(ctx context.Context, fro
 		if !openEnded {
 			upper = pactNanosKey(tier, toNanos)
 		}
-		n, err := s.backfillFilterIndexRange(ctx, pactNanosKey(tier, fromNanos), upper, tally)
+		base := indexed
+		n, err := s.backfillFilterIndexRange(ctx, pactNanosKey(tier, fromNanos), upper, tally, func(inTier int) {
+			if onChunk != nil {
+				onChunk(base + inTier)
+			}
+		})
 		indexed += n
 		if err != nil {
 			return indexed, fmt.Errorf("pebble_activity_store: filter index backfill (tier=%s): %w", tier, err)
@@ -584,7 +619,7 @@ var pactFilterBackfillBeforeCommit func()
 // the same shape as claimDayChunk/streamTierEntries. One iterator held across
 // every commit of a window would pin the memtables and sstables it opened on
 // for as long as the window runs, times NumCPU concurrent windows.
-func (s *PebbleActivityStore) backfillFilterIndexRange(ctx context.Context, lower, upper []byte, tally *pactDecodeTally) (indexed int, err error) {
+func (s *PebbleActivityStore) backfillFilterIndexRange(ctx context.Context, lower, upper []byte, tally *pactDecodeTally, onChunk func(indexed int)) (indexed int, err error) {
 	next := lower
 	for {
 		batch := s.db.NewBatch()
@@ -607,6 +642,9 @@ func (s *PebbleActivityStore) backfillFilterIndexRange(ctx context.Context, lowe
 			return indexed, err
 		}
 		indexed += staged
+		if onChunk != nil {
+			onChunk(indexed)
+		}
 		if done {
 			return indexed, nil
 		}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.6.3
+// version: 1.7.0
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 // The book_atpath: multi-valued path index.
 //
@@ -188,19 +188,31 @@ type BookAtPathBackfillResult struct {
 	SampleUndecodable []string `json:"sample_undecodable,omitempty"`
 }
 
+// BookAtPathProgress receives progress from a book_atpath: backfill or rebuild
+// so the op running it can keep its liveness clock fresh through a long first
+// build. scanned is how many book rows the pass has staged so far. It is
+// called from the pass's worker goroutines (so it must be safe for concurrent
+// use), every bookAtPathBackfillLogEvery rows and after every chunk commit,
+// and may be nil.
+type BookAtPathProgress func(scanned int)
+
 // BackfillBookAtPathIndex builds the book_atpath: index once, gated by its
 // sentinel. It is the startup repair: after the first successful run it is a
-// logged no-op.
-func (p *PebbleStore) BackfillBookAtPathIndex(ctx context.Context) (BookAtPathBackfillResult, error) {
-	return p.backfillBookAtPath(ctx, false)
+// logged no-op. progress may be nil.
+//
+// The wait for the store-wide run lock reports no progress: every caller is a
+// registered op, and the verify and rebuild ops share one ConcurrencyKey, so
+// the registry has already serialized them and the lock is never contended.
+func (p *PebbleStore) BackfillBookAtPathIndex(ctx context.Context, progress BookAtPathProgress) (BookAtPathBackfillResult, error) {
+	return p.backfillBookAtPath(ctx, false, progress)
 }
 
 // RebuildBookAtPathIndex rewrites every book's index key regardless of the
 // sentinel, then sets it. For the rollback runbook: a pre-index binary may have
 // moved books without maintaining the index. It only ever Sets keys, so running
 // it on a live store is safe; stale keys it cannot see stay as harmless extras.
-func (p *PebbleStore) RebuildBookAtPathIndex(ctx context.Context) (BookAtPathBackfillResult, error) {
-	return p.backfillBookAtPath(ctx, true)
+func (p *PebbleStore) RebuildBookAtPathIndex(ctx context.Context, progress BookAtPathProgress) (BookAtPathBackfillResult, error) {
+	return p.backfillBookAtPath(ctx, true, progress)
 }
 
 // backfillBookAtPath is one pass over the book rows, fanned out over a bounded
@@ -227,7 +239,7 @@ func (p *PebbleStore) RebuildBookAtPathIndex(ctx context.Context) (BookAtPathBac
 // the sentinel can never outlive a key it vouches for, an interrupted run loses
 // no correctness, and the next run simply rescans. A checkpoint cursor would
 // miss rows a pre-index binary moved between attempts.
-func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookAtPathBackfillResult, error) {
+func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progress BookAtPathProgress) (BookAtPathBackfillResult, error) {
 	var res BookAtPathBackfillResult
 	start := time.Now()
 	mode := "backfill"
@@ -344,6 +356,9 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 				batch = p.db.NewBatch()
 				buffered = 0
 				n := commits.Add(1)
+				if progress != nil {
+					progress(int(scanned.Load()))
+				}
 				if bookAtPathBackfillAfterChunk != nil {
 					bookAtPathBackfillAfterChunk(int(n))
 				}
@@ -386,6 +401,9 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 				}
 				buffered++
 				if n := scanned.Add(1); n%bookAtPathBackfillLogEvery == 0 {
+					if progress != nil {
+						progress(int(n))
+					}
 					slog.Info("book-atpath-backfill: progress", "scanned", n,
 						"elapsed", time.Since(start).Round(time.Second).String())
 				}

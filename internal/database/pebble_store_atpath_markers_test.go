@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package database
 
@@ -156,7 +156,7 @@ func TestUndecodableMarker_EmptySetReaderDoesNoRangeScan(t *testing.T) {
 	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.BackfillBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	setRawBookRow(t, s, "01BADROW", "{not json")
@@ -203,7 +203,7 @@ func TestUndecodableMarker_BackfillKeepsSetExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","title":"fixed","file_path":"/fixed"}`)
-	if _, err := s.RebuildBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := s.undecodableMarkerCount(); n != 0 {
@@ -264,7 +264,7 @@ func TestVerifyBookAtPathIndex_MarkerNotInSetReported(t *testing.T) {
 	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.BackfillBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	setRawBookRow(t, s, "01BADROW", "{not json")
@@ -293,7 +293,7 @@ func TestVerifyBookAtPathIndex_MarkerNotInSetReported(t *testing.T) {
 	}
 
 	// The repair: the rebuild re-notes every still-undecodable row.
-	if _, err := s.RebuildBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.undecodableMarkerMayExist("01BADROW"); !ok {
@@ -383,7 +383,7 @@ func TestUndecodableMarker_SurvivesReopenFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	setRawBookRow(t, s, "01BADROW", "{not json")
-	if res, err := s.RebuildBookAtPathIndex(context.Background()); err != nil || res.UndecodableRows != 1 {
+	if res, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil || res.UndecodableRows != 1 {
 		s.Close()
 		t.Fatalf("rebuild: %+v %v, want 1 undecodable row", res, err)
 	}
@@ -458,7 +458,7 @@ func TestUndecodableMarker_UpdateBookCommitBeforeBackfillMarkerCommit(t *testing
 		bookAtPathBackfillBeforeChunkCommit = nil
 	})
 
-	if _, err := s.RebuildBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if fired != 1 {
@@ -502,7 +502,7 @@ func TestBookAtPathRunLock_SerializesBackfillAndVerify(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.RebuildBookAtPathIndex(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := s.RebuildBookAtPathIndex(ctx, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("rebuild waiting on a held run lock with a cancelled ctx: %v, want context.Canceled", err)
 	}
 	if _, err := s.VerifyBookAtPathIndex(ctx); !errors.Is(err, context.Canceled) {
@@ -511,7 +511,7 @@ func TestBookAtPathRunLock_SerializesBackfillAndVerify(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.BackfillBookAtPathIndex(context.Background())
+		_, err := s.BackfillBookAtPathIndex(context.Background(), nil)
 		done <- err
 	}()
 	select {

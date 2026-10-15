@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.43.3
+// version: 4.43.4
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1226,7 +1226,7 @@ func (s *Server) startBackfills() {
 			slog.Info("book-atpath-backfill: shutdown before memdb warmup finished; will run next boot")
 			return
 		}
-		if _, err := b.BackfillBookAtPathIndex(s.bgCtx); err != nil {
+		if _, err := b.BackfillBookAtPathIndex(s.bgCtx, nil); err != nil {
 			slog.Warn("book-atpath-backfill", "err", err)
 		}
 	})
@@ -1977,7 +1977,7 @@ func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 // gate it waits on. Both are *PebbleStore methods outside database.Store.
 type bookAtPathBackfiller interface {
 	WaitForWarmup()
-	BackfillBookAtPathIndex(ctx context.Context) (database.BookAtPathBackfillResult, error)
+	BackfillBookAtPathIndex(ctx context.Context, progress database.BookAtPathProgress) (database.BookAtPathBackfillResult, error)
 }
 
 // resolveBookAtPathBackfiller finds the book_atpath: backfill through the

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b1896d34-1538-4a3f-a3f0-469871f9ca8c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -41,7 +41,7 @@ func newFolderBuildStore(t *testing.T) *fbSpyStore {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
-	if _, err := s.BackfillBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	return &fbSpyStore{PebbleStore: s}

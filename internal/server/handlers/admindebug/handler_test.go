@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
-// last-edited: 2026-09-25
+// last-edited: 2026-10-15
 
 package admindebug
 
@@ -320,7 +320,7 @@ func TestLookups(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Nil(t, out["book_ids"])
 	require.NotEmpty(t, out["book_ids_unavailable"])
-	_, err := fx.store.BackfillBookAtPathIndex(context.Background())
+	_, err := fx.store.BackfillBookAtPathIndex(context.Background(), nil)
 	require.NoError(t, err)
 
 	w, out = do(t, r, http.MethodGet, "/api/v1/admin/debug/lookup?path="+url.QueryEscape(fx.broken.FilePath), "")

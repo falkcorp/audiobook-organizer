@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-10-04
+// last-edited: 2026-10-15
 
 package database
 
@@ -52,7 +52,7 @@ func resetAtPathIndex(t testing.TB, s *PebbleStore) {
 
 func mustBackfill(t testing.TB, s *PebbleStore) {
 	t.Helper()
-	if _, err := s.BackfillBookAtPathIndex(context.Background()); err != nil {
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 }
@@ -372,7 +372,7 @@ func TestBackfill_BuildsIndexForPreIndexRows(t *testing.T) {
 	bookAtPathBackfillChunk = 2
 	defer func() { bookAtPathBackfillChunk = old }()
 
-	res, err := s.BackfillBookAtPathIndex(context.Background())
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestBackfill_BuildsIndexForPreIndexRows(t *testing.T) {
 	checkAgainstOracle(t, s, hostilePaths)
 
 	// A second run is a no-op.
-	res, err = s.BackfillBookAtPathIndex(context.Background())
+	res, err = s.BackfillBookAtPathIndex(context.Background(), nil)
 	if err != nil || !res.Skipped {
 		t.Fatalf("second run = %+v, %v; want skipped", res, err)
 	}
@@ -411,7 +411,7 @@ func TestBackfill_InterruptedRunLeavesNoSentinelAndReaderFallsBack(t *testing.T)
 			cancel()
 		}
 	}
-	if _, err := s.BackfillBookAtPathIndex(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := s.BackfillBookAtPathIndex(ctx, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	built, err := s.bookAtPathIndexBuilt()
@@ -510,7 +510,7 @@ func TestBackfill_WorkerPoolIndexesEveryRow(t *testing.T) {
 	var hookCalls atomic.Int64
 	bookAtPathBackfillAfterChunk = func(int) { hookCalls.Add(1) }
 
-	res, err := s.BackfillBookAtPathIndex(context.Background())
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func seedUndecodableAfterBackfill(t *testing.T, s *PebbleStore) string {
 	if err := s.db.Set([]byte("book:01BADROW"), []byte("{not json"), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.BackfillBookAtPathIndex(context.Background())
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("an undecodable row must not fail the backfill: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestRebuild_RecomputesUndecodableMarkers(t *testing.T) {
 		t.Fatalf("verify unmarked = %d %v, want 1 [01BADTWO]", rep.UnmarkedUndecodable, rep.SampleUnmarked)
 	}
 
-	res, err := s.RebuildBookAtPathIndex(context.Background())
+	res, err := s.RebuildBookAtPathIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -883,12 +883,67 @@ func TestBackfill_CancelUnblocksTheProducer(t *testing.T) {
 
 	var err error
 	waitOrFatal(t, "BackfillBookAtPathIndex to return after a cancel with the producer blocked", func() {
-		_, err = s.BackfillBookAtPathIndex(ctx)
+		_, err = s.BackfillBookAtPathIndex(ctx, nil)
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if built, berr := s.bookAtPathIndexBuilt(); berr != nil || built {
 		t.Fatalf("a cancelled run must not set the sentinel: built=%v err=%v", built, berr)
+	}
+}
+
+// TestBackfill_ReportsProgressPerChunk: a pass reports how many rows it has
+// staged after every chunk commit, so the op running it keeps the watchdog's
+// liveness clock fresh through a long first build instead of going silent for
+// the whole pass. A nil callback is allowed (every other test passes one).
+func TestBackfill_ReportsProgressPerChunk(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	for i := 0; i < 7; i++ {
+		if _, err := s.CreateBook(&Book{Title: "x", FilePath: "/p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, force := range []bool{false, true} {
+		resetAtPathIndex(t, s)
+		oldChunk, oldWorkers := bookAtPathBackfillChunk, bookAtPathBackfillWorkers
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers = 2, 1
+		var (
+			mu   sync.Mutex
+			seen []int
+		)
+		progress := func(scanned int) {
+			mu.Lock()
+			defer mu.Unlock()
+			seen = append(seen, scanned)
+		}
+		var (
+			res BookAtPathBackfillResult
+			err error
+		)
+		if force {
+			res, err = s.RebuildBookAtPathIndex(context.Background(), progress)
+		} else {
+			res, err = s.BackfillBookAtPathIndex(context.Background(), progress)
+		}
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers = oldChunk, oldWorkers
+		if err != nil {
+			t.Fatalf("force=%t: %v", force, err)
+		}
+		mu.Lock()
+		got := append([]int(nil), seen...)
+		mu.Unlock()
+		if len(got) < 3 {
+			t.Fatalf("force=%t: 7 rows in chunks of 2 must report at least 3 times, got %v", force, got)
+		}
+		for i := 1; i < len(got); i++ {
+			if got[i] < got[i-1] {
+				t.Fatalf("force=%t: progress went backwards: %v", force, got)
+			}
+		}
+		if got[len(got)-1] != res.Scanned {
+			t.Fatalf("force=%t: last report = %d, want the final scanned count %d (%v)", force, got[len(got)-1], res.Scanned, got)
+		}
 	}
 }

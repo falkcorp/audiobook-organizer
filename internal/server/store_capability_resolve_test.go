@@ -1,5 +1,5 @@
 // file: internal/server/store_capability_resolve_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
 // last-edited: 2026-10-15
 
@@ -290,7 +290,7 @@ func TestStoreExposesBookAtPathBackfill(t *testing.T) {
 		t.Fatalf("CreateBook: %v", err)
 	}
 	b.WaitForWarmup()
-	res, err := b.BackfillBookAtPathIndex(context.Background())
+	res, err := b.BackfillBookAtPathIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("BackfillBookAtPathIndex through the decorator: %v", err)
 	}

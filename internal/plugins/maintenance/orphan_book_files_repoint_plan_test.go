@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7830431a-11dc-4bee-97c0-82047798cb98
-// last-edited: 2026-09-19
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -22,7 +22,7 @@ func newPlanStore(t *testing.T, buildAtPath bool) *database.PebbleStore {
 	t.Cleanup(func() { _ = store.Close() })
 	store.WaitForWarmup()
 	if buildAtPath {
-		if _, err := store.BackfillBookAtPathIndex(context.Background()); err != nil {
+		if _, err := store.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-09
+// last-edited: 2026-10-15
 
 package handlers
 
@@ -102,7 +102,7 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 		}
 		require.NoError(tb, store.PutMetadataCache(entry))
 	}
-	_, err = store.BackfillBookAtPathIndex(context.Background())
+	_, err = store.BackfillBookAtPathIndex(context.Background(), nil)
 	require.NoError(tb, err)
 	return store, metafetch.NewService(store)
 }
