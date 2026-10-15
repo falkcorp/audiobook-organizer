@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
 // last-edited: 2026-10-14
 
@@ -321,7 +321,6 @@ type v3WriterStores struct {
 	changeScan opswriter.ChangeScanner
 }
 
-// v3WriterLog is the subsystem logger of the v3 Writer wiring.
 // The capabilities newV3Writer resolves for the Fixer resume evidence,
 // pinned on the production store in production code (not a test), so the
 // binary itself fails to build if a method rename on the store would leave
@@ -333,6 +332,7 @@ var (
 	_ opswriter.ChangeScanner     = (*database.PebbleStore)(nil)
 )
 
+// v3WriterLog is the subsystem logger of the v3 Writer wiring.
 var v3WriterLog = logger.New("registry.v3writer")
 
 // historyChangeTypeV3 is the metadata-history change type of v3 Writer rows.
