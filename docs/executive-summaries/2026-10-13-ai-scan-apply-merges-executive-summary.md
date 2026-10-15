@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-13-ai-scan-apply-merges-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 3c8e5b71-9a24-4d06-b7f3-6e1d2a94c850 -->
-<!-- last-edited: 2026-10-14 -->
+<!-- last-edited: 2026-10-15 -->
 
 # The AI scan's "Apply selected" button now merges authors, and merges can be undone
 
@@ -104,10 +104,20 @@ is not restored if a different author has taken its name since. A pen name that
 was deleted since is put back; one that now belongs to another author is
 reported instead.
 
-Two things the older AI review's apply does are not undone: renaming the
-author it keeps, and, for its "alias" action, adding the merged name to the
-kept author as a pen name. After an undo the kept author keeps that name and
-that pen name. A preview of the undo shows the same refusals before anything
+The clean-up jobs' other changes are undoable too: the job that strips a stray
+"&" renames a name in place when there is nothing to merge it into, and the id
+repair points a book whose main author no longer exists at a real one. Undo
+puts the old name back, and puts the old (missing) author reference back.
+
+What is still not undone: the older AI review's apply renaming the author it
+keeps, its "rename" action, and its "alias" action adding the merged name to
+the kept author as a pen name (after an undo the kept author keeps that name
+and that pen name); the id repair creating the shared "Unknown Author" entry
+when it needs one; and changes made before this release.
+
+One small behaviour is now the same everywhere: when a merge makes the kept
+author a book's main author, the book's author list names it too. Only the
+clean-up jobs did that before. A preview of the undo shows the same refusals before anything
 runs. Names that differ only in capitals or spacing, which are exactly what a
 duplicate merge joins, are handled. An undo that stopped part way finishes when
 run again, and the restored author appears without restarting the server.
