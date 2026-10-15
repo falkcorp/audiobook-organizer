@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -523,4 +523,35 @@ func TestRevertOperation_APartlyRestoredAuthorWithNoBooksDropsTheAuthorCaches(t 
 	require.Equal(t, from.ID, back.ID, "the author row is back")
 	require.Zero(t, s.authorsCache.Len(), "author list cache dropped")
 	require.Zero(t, s.dedupCache.Len(), "dedup cache dropped")
+}
+
+// A reclassify of an author whose normalized name entry a case variant holds
+// records SharedNameIndex (handlers/entities/reclassify.go). Its undo brings the
+// author back without taking the entry from the variant. Without the flag the
+// restore treated the entry as the author's own, and the variant holding it read
+// as "another author has taken the name": the undo was refused.
+func TestReclassify_UndoOfAnAuthorWhoseNameACaseVariantHoldsLeavesTheVariantTheEntry(t *testing.T) {
+	w := newUndoWorld(t)
+	require.NoError(t, w.st.UpdateAuthorName(w.from.ID, "undo keep"))
+	require.NoError(t, w.st.UpdateAuthorName(w.keep.ID, "Undo Keep"))
+	h, err := w.st.GetAuthorByName("undo keep")
+	require.NoError(t, err)
+	require.Equal(t, w.keep.ID, h.ID, "fixture: the case variant holds the shared entry")
+	_, err = entities.ReclassifyAuthorAsNarrator(w.st, w.from.ID, entities.ReclassifyOptions{
+		Journal: &entities.ReclassifyJournal{OperationID: "op-recl-variant", Store: w.st},
+	})
+	require.NoError(t, err)
+
+	pre, err := undo.PreflightUndoConflicts(w.st, "op-recl-variant")
+	require.NoError(t, err)
+	require.Equal(t, pre.TotalChanges, pre.Safe)
+	res, err := revertOp(t, w.st, "op-recl-variant")
+	require.NoError(t, err)
+	require.Zero(t, res.Failed)
+	back, err := w.st.GetAuthorByID(w.from.ID)
+	require.NoError(t, err)
+	require.Equal(t, w.from.ID, back.ID, "the author is back")
+	h, err = w.st.GetAuthorByName("undo keep")
+	require.NoError(t, err)
+	require.Equal(t, w.keep.ID, h.ID, "and the variant still holds the entry")
 }
