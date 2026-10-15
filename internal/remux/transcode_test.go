@@ -1,7 +1,7 @@
 // file: internal/remux/transcode_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-02
+// last-edited: 2026-10-15
 
 package remux
 
@@ -49,8 +49,17 @@ func TestTranscodeMalformedFilesAlreadyCompleted(t *testing.T) {
 		},
 	}
 	transcoder := NewTranscoder(store)
+	if !transcoder.AlreadyDone() {
+		t.Error("AlreadyDone() = false with the done flag set, want true")
+	}
 	if err := transcoder.TranscodeMalformedFiles(context.Background(), nil); err != nil {
 		t.Errorf("TranscodeMalformedFiles() already-completed should return nil, got %v", err)
+	}
+	if NewTranscoder(&MockStore{}).AlreadyDone() {
+		t.Error("AlreadyDone() = true with no done flag, want false")
+	}
+	if (&Transcoder{}).AlreadyDone() {
+		t.Error("AlreadyDone() = true with no store, want false")
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
 // version: 1.50.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -244,18 +244,21 @@ func (d fakeDeps) RunAutoPurgeSoftDeleted(ctx context.Context, _ string) {
 		*d.purgeCtx = ctx
 	}
 }
-func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error { return nil }
-func (d fakeDeps) StripMovementAtoms(_ context.Context)               {}
-func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {
-	return nil
+func (d fakeDeps) BackfillExternalIDs(_ context.Context, _ bool, _ func(int, int, string)) (bool, error) {
+	return false, nil
 }
-func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {
-	return nil
+func (d fakeDeps) StripMovementAtoms(_ context.Context) bool { return false }
+func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) (bool, error) {
+	return false, nil
 }
-func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int { return 0 }
-func (d fakeDeps) CleanupTrashedVersions() int                     { return 0 }
-func (d fakeDeps) ActivityFlushOp(_ string)                        {}
-func (d fakeDeps) PollBatch(_ context.Context) (int, error)        { return 0, nil }
+func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string)) (bool, error) {
+	return false, nil
+}
+func (d fakeDeps) QuarantineKnownBadFiles(_ context.Context) (int, bool, error) { return 0, false, nil }
+func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int              { return 0 }
+func (d fakeDeps) CleanupTrashedVersions() int                                  { return 0 }
+func (d fakeDeps) ActivityFlushOp(_ string)                                     {}
+func (d fakeDeps) PollBatch(_ context.Context) (int, error)                     { return 0, nil }
 func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageReport, error) {
 	return &TriageReport{}, nil
 }

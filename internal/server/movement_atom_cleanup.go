@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 package server
 
@@ -40,8 +40,9 @@ var movementAtoms = []string{"SHOWWORKMOVEMENT", "MOVEMENTNUMBER", "MOVEMENTNAME
 // The function previously returned nothing, which made its walk unobservable:
 // a file inside an app directory is left byte-identical whether it was skipped
 // or visited-and-failed, so file state alone cannot tell a working guard from a
-// deleted one. Returning the counters gives the guard a real instrument. Both
-// production call sites use the call as a statement and are unaffected.
+// deleted one. Returning the counters gives the guard a real instrument.
+// AlreadyDone tells maintenance.movement-atom-cleanup that the done flag was
+// set before this call, so its run did nothing and is tagged a no-op.
 type movementAtomCleanupResult struct {
 	Stripped int
 	Clean    int
@@ -53,6 +54,7 @@ type movementAtomCleanupResult struct {
 	WalkErrs         int
 	Visited          int // Stripped + Clean + Failed + SkippedProtected: every file the walk accepted
 	Completed        bool
+	AlreadyDone      bool // the done flag was already set; nothing was walked
 }
 
 func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResult {
@@ -63,7 +65,7 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 
 	if setting, err := store.GetSetting(movementAtomCleanupKey); err == nil && setting != nil && setting.Value == "true" {
 		slog.Info("Movement atom cleanup already completed, skipping")
-		return movementAtomCleanupResult{Completed: true}
+		return movementAtomCleanupResult{Completed: true, AlreadyDone: true}
 	}
 
 	root := config.AppConfig.RootDir

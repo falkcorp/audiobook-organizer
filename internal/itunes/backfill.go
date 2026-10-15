@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-09-12
+// last-edited: 2026-10-15
 
 package itunes
 
@@ -130,24 +130,26 @@ func externalIDBackfillDone(store ExternalIDBackfillStore) (bool, string) {
 	return false, setting.Value
 }
 
-// BackfillExternalIDsOnce is the boot-time entry point: it runs
+// BackfillExternalIDsOnce is the if-needed entry point: it runs
 // BackfillExternalIDs only if no earlier run has recorded completion under
-// ExternalIDBackfillDoneKey (see that constant for what "completion" means).
-// Before this gate existed the full-library scan ran unconditionally at every
-// server start (SQ-04). Operator-triggered reruns should call
+// ExternalIDBackfillDoneKey (see that constant for what "completion" means),
+// and reports skipped=true when it did not run. Before this gate existed the
+// full-library scan ran unconditionally at every server start (SQ-04). Boot
+// reaches it through maintenance.external-id-backfill with
+// {"if_needed": true}; an operator's run without that param calls
 // BackfillExternalIDs directly, which ignores the flag.
-func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) error {
+func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) (skipped bool, err error) {
 	if store == nil {
-		return nil
+		return false, nil
 	}
 	if done, value := externalIDBackfillDone(store); done {
 		slog.Info("External ID backfill v4 already complete; skipping", "key", ExternalIDBackfillDoneKey, "value", value)
 		if progress != nil {
 			progress(0, 0, "External ID backfill already complete; skipped")
 		}
-		return nil
+		return true, nil
 	}
-	return BackfillExternalIDs(ctx, store, progress)
+	return false, BackfillExternalIDs(ctx, store, progress)
 }
 
 // BackfillExternalIDs scans all books and creates external ID mappings for any
@@ -162,7 +164,8 @@ func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore,
 // shutdown signal aborts the backfill quickly. Without ctx-awareness this
 // loop runs to completion (potentially minutes on a large library) and
 // crashes with "pebble: closed" if the store closes mid-iteration. The
-// caller (Server.Start's background goroutine) passes s.bgCtx.
+// caller passes the maintenance op's run context, which the registry
+// cancels on shutdown before the store closes.
 //
 // progress is called once per backfillChunkSize-book chunk of the book pass,
 // with the library size from the single snapshot read as total (the whole

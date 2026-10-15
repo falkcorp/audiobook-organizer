@@ -1,7 +1,7 @@
 // file: internal/remux/remux.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-14
+// last-edited: 2026-10-15
 
 package remux
 
@@ -134,6 +134,17 @@ func isRemuxCandidate(path string, d fs.DirEntry) bool {
 	return !strings.Contains(filepath.Base(path), ".tmp.")
 }
 
+// AlreadyDone reports whether a previous RemuxMalformedFiles run completed and set
+// RemuxKey, in which case RemuxMalformedFiles returns at once without walking.
+// maintenance.malformed-m4b-remux reads it to tag such a run a no-op.
+func (r *Remuxer) AlreadyDone() bool {
+	if r.store == nil {
+		return false
+	}
+	setting, err := r.store.GetSetting(RemuxKey)
+	return err == nil && setting != nil && setting.Value == "true"
+}
+
 // RemuxMalformedFiles walks the library once and re-muxes any M4B/M4A
 // file that taglib cannot parse (malformed atom structure). Re-muxing with
 // ffmpeg -c copy rewrites the atom layout without re-encoding audio, making
@@ -158,7 +169,7 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 		return nil
 	}
 
-	if setting, err := r.store.GetSetting(RemuxKey); err == nil && setting != nil && setting.Value == "true" {
+	if r.AlreadyDone() {
 		slog.Info("Malformed M4B remux already completed, skipping")
 		return nil
 	}

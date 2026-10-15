@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
-// last-edited: 2026-09-12
+// last-edited: 2026-10-15
 
 package itunes
 
@@ -164,7 +164,7 @@ func TestBackfillExternalIDsWithNilStore(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected nil error for nil store, got %v", err)
 	}
-	if err := BackfillExternalIDsOnce(context.Background(), nil, nil); err != nil {
+	if _, err := BackfillExternalIDsOnce(context.Background(), nil, nil); err != nil {
 		t.Errorf("expected nil error for nil store (Once), got %v", err)
 	}
 }
@@ -254,8 +254,8 @@ func TestBackfillExternalIDsOnceSkipsAfterCompletedRun(t *testing.T) {
 	pidValue := "test-pid-once"
 	mockStore.books["book1"] = database.Book{ID: "book1", Title: "Once", ITunesPersistentID: &pidValue}
 
-	if err := BackfillExternalIDsOnce(context.Background(), mockStore, nil); err != nil {
-		t.Fatalf("first run: unexpected error: %v", err)
+	if skipped, err := BackfillExternalIDsOnce(context.Background(), mockStore, nil); err != nil || skipped {
+		t.Fatalf("first run: skipped=%t err=%v, want a run with no error", skipped, err)
 	}
 	if mockStore.getAllBooksCalls == 0 {
 		t.Fatal("first run must scan the library")
@@ -266,8 +266,8 @@ func TestBackfillExternalIDsOnceSkipsAfterCompletedRun(t *testing.T) {
 	booksCalls, filesCalls, mappings := mockStore.getAllBooksCalls, mockStore.getAllBookFilesCalls, len(mockStore.externalIDMaps)
 
 	var lastMsg string
-	if err := BackfillExternalIDsOnce(context.Background(), mockStore, func(_, _ int, msg string) { lastMsg = msg }); err != nil {
-		t.Fatalf("second run: unexpected error: %v", err)
+	if skipped, err := BackfillExternalIDsOnce(context.Background(), mockStore, func(_, _ int, msg string) { lastMsg = msg }); err != nil || !skipped {
+		t.Fatalf("second run: skipped=%t err=%v, want skipped with no error", skipped, err)
 	}
 	if mockStore.getAllBooksCalls != booksCalls {
 		t.Errorf("second boot rescanned books: GetAllBooksCore calls went %d -> %d", booksCalls, mockStore.getAllBooksCalls)
@@ -293,7 +293,7 @@ func TestBackfillExternalIDsErrorDoesNotSetDoneFlag(t *testing.T) {
 	mockStore.books["book1"] = database.Book{ID: "book1", Title: "Err", ITunesPersistentID: &pidValue}
 	mockStore.failBulkCreate = true
 
-	if err := BackfillExternalIDsOnce(context.Background(), mockStore, nil); err == nil {
+	if _, err := BackfillExternalIDsOnce(context.Background(), mockStore, nil); err == nil {
 		t.Fatal("expected the bulk-write error to propagate")
 	}
 	if v, ok := mockStore.settings[ExternalIDBackfillDoneKey]; ok {
@@ -303,7 +303,7 @@ func TestBackfillExternalIDsErrorDoesNotSetDoneFlag(t *testing.T) {
 	// And the next boot runs again.
 	mockStore.failBulkCreate = false
 	before := mockStore.getAllBooksCalls
-	if err := BackfillExternalIDsOnce(context.Background(), mockStore, nil); err != nil {
+	if _, err := BackfillExternalIDsOnce(context.Background(), mockStore, nil); err != nil {
 		t.Fatalf("retry: unexpected error: %v", err)
 	}
 	if mockStore.getAllBooksCalls == before {
@@ -324,7 +324,7 @@ func TestBackfillExternalIDsCanceledDoesNotSetDoneFlag(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := BackfillExternalIDsOnce(ctx, mockStore, nil); err != nil {
+	if _, err := BackfillExternalIDsOnce(ctx, mockStore, nil); err != nil {
 		t.Fatalf("cancellation must return nil, got %v", err)
 	}
 	if v, ok := mockStore.settings[ExternalIDBackfillDoneKey]; ok {

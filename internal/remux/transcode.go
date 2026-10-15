@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-14
+// last-edited: 2026-10-15
 
 package remux
 
@@ -124,6 +124,17 @@ func isTranscodeCandidate(path string, d fs.DirEntry) bool {
 	return !strings.Contains(filepath.Base(path), ".tmp.")
 }
 
+// AlreadyDone reports whether a previous TranscodeMalformedFiles run completed and set
+// TranscodeKey, in which case TranscodeMalformedFiles returns at once without walking.
+// maintenance.malformed-m4b-transcode reads it to tag such a run a no-op.
+func (t *Transcoder) AlreadyDone() bool {
+	if t.store == nil {
+		return false
+	}
+	setting, err := t.store.GetSetting(TranscodeKey)
+	return err == nil && setting != nil && setting.Value == "true"
+}
+
 // TranscodeMalformedFiles walks the library and re-encodes any M4B/M4A
 // file that taglib cannot parse even after the remux pass. Full AAC transcode
 // at 64 kbps rebuilds the file from scratch, which fixes corruption that a
@@ -146,7 +157,7 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 		return nil
 	}
 
-	if setting, err := t.store.GetSetting(TranscodeKey); err == nil && setting != nil && setting.Value == "true" {
+	if t.AlreadyDone() {
 		slog.Info("Malformed M4B transcode already completed, skipping")
 		return nil
 	}
