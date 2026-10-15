@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.23.0
+// version: 1.23.1
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-15
 
@@ -219,11 +219,16 @@ describe('the lane comes from the URL', () => {
       expect(window.localStorage.getItem('review-repairs-fixer')).toBeNull();
     });
 
-    it('ignores an unknown ?fixer= and opens the first fixer', async () => {
-      renderWorkspace(['/review?lane=repairs&fixer=nope']);
+    it('ignores ?fixer= when the URL landed on another lane, then opened Repairs by click', async () => {
+      const user = userEvent.setup();
+      renderWorkspace(['/review?lane=dupes&fixer=fx-b']);
+      expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+      expect(api.listRepairFixers).not.toHaveBeenCalled();
+      await user.click(screen.getByTestId('lane-tab-repairs'));
       await waitFor(() =>
         expect(api.getRepairPlanRows).toHaveBeenCalledWith('fx-a', 'plan-a', expect.anything(), expect.anything())
       );
+      expect(api.getRepairPlanRows).not.toHaveBeenCalledWith('fx-b', expect.anything(), expect.anything(), expect.anything());
     });
   });
 
