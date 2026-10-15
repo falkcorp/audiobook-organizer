@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-10-15
 //
@@ -218,6 +218,7 @@ describe('useRepairsLane: loading', () => {
       vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
       const { result } = renderHook(() => useRepairsLane(toast, true, 'no.such-fixer'));
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('other'));
+      expect(result.current.selectedFixerId).toBe('other');
     });
 
     it('ignores an unknown id and falls back to the first fixer when nothing is stored', async () => {

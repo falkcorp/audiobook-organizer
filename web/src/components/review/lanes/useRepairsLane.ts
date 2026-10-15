@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.10.0
+// version: 1.10.1
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-15
 
@@ -287,9 +287,10 @@ export interface RepairsLane {
 /**
  * `seedFixerId` is the URL's `?fixer=<id>`: a seed, read once on the first
  * render and never mirrored back to the URL or into the per-viewer storage key
- * (only a reviewer's own click does that). It wins over the stored fixer; an id
- * the server does not list is ignored, and the stored fixer (then the first
- * listed one) is used instead.
+ * (only a reviewer's own click does that). It is held in a ref, not put into
+ * the selection, and applied once when the fixer list first loads, and only if
+ * the server lists that id; an unknown id is ignored, leaving the viewer's
+ * remembered fixer (or the first one listed).
  */
 export function useRepairsLane(
   toast: Toast,
@@ -302,9 +303,11 @@ export function useRepairsLane(
   const [fixersNonce, setFixersNonce] = useState(0);
   const [ownerStatus, setOwnerStatus] = useState<api.RepairOwnerStatus | null>(null);
 
-  const [selectedFixerId, setSelectedFixerId] = useState<string | null>(
-    () => seedFixerId || readStored(REPAIRS_FIXER_STORAGE_KEY)
+  const [selectedFixerId, setSelectedFixerId] = useState<string | null>(() =>
+    readStored(REPAIRS_FIXER_STORAGE_KEY)
   );
+  // The URL's `?fixer=`, consumed by the first successful fixer-list load.
+  const fixerSeedRef = useRef<string | null>(seedFixerId);
   const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
 
@@ -381,14 +384,12 @@ export function useRepairsLane(
           }
           return changed ? next : prev;
         });
-        setSelectedFixerId((cur) => {
-          if (cur && list.some((f) => f.id === cur)) return cur;
-          // `cur` may be an unknown ?fixer= seed: fall back to the viewer's own
-          // remembered fixer before the first one in the list.
-          const stored = readStored(REPAIRS_FIXER_STORAGE_KEY);
-          if (stored && list.some((f) => f.id === stored)) return stored;
-          return list[0]?.id ?? null;
-        });
+        const seed = fixerSeedRef.current;
+        fixerSeedRef.current = null;
+        const seeded = seed && list.some((f) => f.id === seed) ? seed : null;
+        setSelectedFixerId((cur) =>
+          seeded ?? (cur && list.some((f) => f.id === cur) ? cur : (list[0]?.id ?? null))
+        );
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
