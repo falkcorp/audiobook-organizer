@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-14
 
@@ -147,14 +147,15 @@ var retiredMerges = []struct {
 		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
 	// 04-P14e: the manual repair-missing-files job (settings.manage) retired in
 	// favour of two ops, so there is no alias (an alias names one target). Both
-	// survivors declared no Permissions before this PR and were reachable by any
-	// scan.trigger holder; they now declare settings.manage explicitly. The job's
-	// 4h DefaultPolicy budget is not carried over: the survivors bound their own
-	// work per item (LivenessRunItems) and the owner decision was to port nothing.
+	// survivors declare settings.manage explicitly; that changes no effective
+	// access (defPermissionsHeld already treats an empty list as settings.manage).
+	// The job's 4h DefaultPolicy budget carries over to both: LivenessRunItems is a
+	// stall watchdog, not a run-length bound, so without a declared Timeout the
+	// 120-minute registry default would apply.
 	{"maintenance.repair-missing-files", "maintenance.missing-file-repoint", []auth.Permission{auth.PermSettingsManage},
-		0, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
+		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
 	{"maintenance.repair-missing-files", "maintenance.recover-missing-files", []auth.Permission{auth.PermSettingsManage},
-		0, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
+		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
 }
 
 func TestTwinMerge_RetiredIDsAndSurvivorPermissions(t *testing.T) {
