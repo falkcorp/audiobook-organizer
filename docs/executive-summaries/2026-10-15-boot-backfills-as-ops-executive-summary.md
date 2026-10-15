@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-15-boot-backfills-as-ops-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9a4c7e12-6b3d-4f58-8e91-2d5f0b7c3a66 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -40,4 +40,12 @@ path-set index build and the activity-log filter check.
 
 If the re-encode job is interrupted, it waits for someone to confirm before
 it runs again. Startup now respects that: while an interrupted re-encode is
-waiting, startup does not begin a new one.
+waiting, startup does not begin a new one. And once the re-encode and the
+quarantine have both finished on a library, startup no longer queues the
+re-encode at all, since it would have nothing to do.
+
+## Stopping is now immediate
+
+Stopping a repair or re-encode job now ends the file it is working on right
+away, instead of waiting for that file's conversion to finish. An interrupted
+file is left exactly as it was and is not marked as broken.
