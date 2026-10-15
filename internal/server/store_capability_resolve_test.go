@@ -1,5 +1,5 @@
 // file: internal/server/store_capability_resolve_test.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
 // last-edited: 2026-10-15
 
@@ -255,15 +255,16 @@ func TestWarmupWaiterResolvesThroughDecorator(t *testing.T) {
 	w.WaitForWarmup()
 }
 
-// TestStoreExposesBookAtPathBackfill pins both halves of the
-// book_atpath: wiring through a store decorator:
+// TestStoreExposesBookAtPathBackfill pins that LiveBookIDsAtPath is on
+// database.Store, so a decorator forwards it with no capability lookup.
+// #3335's fs-regroup-xml apply asserts a narrow interface containing it against
+// OpsStore(); if the method ever leaves database.Store, that assertion misses
+// and the op refuses to run.
 //
-//   - LiveBookIDsAtPath is on database.Store, so a decorator forwards it with
-//     no capability lookup. #3335's fs-regroup-xml apply asserts a narrow
-//     interface containing it against OpsStore(); if the method ever leaves
-//     database.Store, that assertion misses and the op refuses to run.
-//   - The startup backfill (a *PebbleStore method outside Store) resolves
-//     through resolveBookAtPathBackfiller and actually builds the index.
+// The startup build's capability half moved to the maintenance package
+// (TestBookAtPathBackfill_IfNeededThroughStoreDecorator) in 04-P6 part 2: the
+// boot goroutine and resolveBookAtPathBackfiller are gone, and the production
+// resolution is now the op's own AsCapability call.
 func TestStoreExposesBookAtPathBackfill(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
@@ -274,25 +275,14 @@ func TestStoreExposesBookAtPathBackfill(t *testing.T) {
 
 	var wrapped database.Store = &embeddingDecorator{Store: inner}
 
-	if _, ok := wrapped.(bookAtPathBackfiller); ok {
-		t.Fatal("a bare assertion now resolves bookAtPathBackfiller through the " +
-			"decorator; this test no longer reproduces the production shape")
-	}
-	b, ok := resolveBookAtPathBackfiller(wrapped)
-	if !ok {
-		t.Fatal("resolveBookAtPathBackfiller through a decorator failed; the " +
-			"book_atpath index would never be built")
-	}
-
-	// Seed through the inner store.
+	// Seed and build through the inner store.
 	created, err := inner.CreateBook(&database.Book{Title: "At Path", FilePath: "/lib/a"})
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	b.WaitForWarmup()
-	res, err := b.BackfillBookAtPathIndex(context.Background(), nil)
+	res, err := inner.BackfillBookAtPathIndex(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("BackfillBookAtPathIndex through the decorator: %v", err)
+		t.Fatalf("BackfillBookAtPathIndex: %v", err)
 	}
 	if res.Skipped || res.Scanned != 1 {
 		t.Fatalf("backfill result = %+v, want one book scanned", res)
