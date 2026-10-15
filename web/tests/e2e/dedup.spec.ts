@@ -1,5 +1,5 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
 // last-edited: 2026-10-15
 
@@ -69,7 +69,7 @@ async function openDedupPage(page: Page, opts: {
   authorGroups?: MockAuthorDedupGroup[];
   seriesGroups?: MockSeriesDupGroup[];
   books?: ReturnType<typeof generateTestBooks>;
-  tab?: 'authors' | 'series' | 'books';
+  tab?: 'authors' | 'series';
 } = {}) {
   const books = opts.books || generateTestBooks(5);
 
@@ -89,8 +89,11 @@ async function openDedupPage(page: Page, opts: {
   });
 
 
+  // Straight at the Review URL the legacy /dedup?tab= redirect produces, so
+  // these Authors-lane tests do not depend on the redirect (which
+  // review-dupes-lane.spec.ts covers on its own).
   const tab = opts.tab ?? 'authors';
-  await page.goto(`/dedup?tab=${tab}`);
+  await page.goto(tab === 'series' ? '/review?lane=authors&view=series' : '/review?lane=authors');
   await page.waitForLoadState('networkidle');
 }
 
