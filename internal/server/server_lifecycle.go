@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.43.1
+// version: 4.43.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1391,11 +1391,18 @@ type opStatusLookup interface {
 // runs on a store that is still warming (correct, only competing for reads).
 //
 // Shutdown: the goroutines were in bgWG so shutdown waited for them before
-// CloseStore. Registry.Shutdown, which Server.Shutdown calls before bgCancel
-// and before any store closes, cancels every run's ctx and waits for the runs
-// to return (bounded by its caller's 10s, then a 2s goroutine escape). Each op
-// here runs on that ctx, including the external-id backfill and the
-// quarantine step, which used to watch only bgCtx or nothing.
+// CloseStore (up to 30s). Registry.Shutdown, which Server.Shutdown calls
+// before bgCancel and before any store closes, cancels every run's ctx and
+// waits for the runs to return: about 12s at most, the caller's 10s drain
+// (Server.Shutdown's regCtx) plus the registry's 2s goroutine escape
+// (registry.go). An op still iterating Pebble after that would race
+// CloseStore, so each op here runs on that ctx and checks it at a short
+// interval, including the external-id backfill and the quarantine step,
+// which used to watch only bgCtx or nothing. The opchange ensure checks it
+// at least every 10,000 journal rows (every 5,000-row backfill or rebuild
+// chunk, every 10,000 rows of the verify, each a point read per row) and
+// its wait for the index-pass slot is ctx-aware, so a cancel ends it well
+// inside the bound.
 //
 // Restart mid-run: the four ResumeDrop ops are dropped and the next boot
 // enqueues them again. The transcode is ResumeAsk: an interrupted (or
