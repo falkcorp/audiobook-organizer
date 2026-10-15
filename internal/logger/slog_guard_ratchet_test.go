@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-14
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 286
-	slogRatchetCallCeiling = 1609
+	slogRatchetFileCeiling = 285
+	slogRatchetCallCeiling = 1597
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -143,7 +143,6 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/refetch_missing_authors.go":       11,
 	"internal/maintenance/jobs/relink_missing_to_itunes.go":      7,
 	"internal/maintenance/jobs/relink_report.go":                 4,
-	"internal/maintenance/jobs/repair_missing_files.go":          12,
 	"internal/maintenance/jobs/retention_and_hygiene.go":         20,
 	"internal/maintenance/jobs/revert_metadata_fetch.go":         5,
 	"internal/maintenance/jobs/scan_composer_tags.go":            6,
