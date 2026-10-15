@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
 // last-edited: 2026-10-14
 
@@ -233,14 +233,15 @@ func TestMarkMissing_MultipleBooksUnderConcurrency(t *testing.T) {
 	// Proves the op actually CALLS prewriteHeartbeat, which the helper's own
 	// unit test cannot: one stamp per written row (books*perBook) PLUS one per
 	// book from the stat pass (perBook is under bookFileStatLivenessEvery, so
-	// the pass stamps once, at its first row), PLUS the plan phase's own three
-	// (one before and one after the full row read, one for the single books
-	// page). Drop the heartbeat wiring and this is books*perBook+3, not
-	// books*perBook+books+3.
+	// the pass stamps once, at its first row), PLUS the plan phase's own
+	// (one before and one after the full row read, one per books page). Drop the
+	// heartbeat wiring and the total loses the books term.
 	//
 	// This assertion exists because F1 was exactly this gap: liveness looked
 	// wired and was a no-op for a whole review round.
-	const planPhaseStamps = 3
+	// Two around the full row read, plus one per books page (bookPageSize books
+	// fit in a page, so ceil(books/bookPageSize)).
+	planPhaseStamps := 2 + (books+bookPageSize-1)/bookPageSize
 	require.Equal(t, int64(books*perBook+books+planPhaseStamps), rep.touches.Load(),
 		"one liveness stamp per written row, one per book's stat pass, plus the plan phase's")
 	require.Len(t, store.updates, books*perBook)
