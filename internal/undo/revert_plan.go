@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package undo
 
@@ -61,6 +61,12 @@ type RevertPlan struct {
 	// (Gate refuses them). A delete row that restored the author but not every
 	// alias (*AuthorPartlyRestoredError) does not count: the author is live.
 	refusedAuthor map[int]bool
+	// primaries: the primary AuthorID each book is predicted to carry once the
+	// rows recorded restored so far are reverted (a credits move or id repoint
+	// that changed it puts back its before value). Rows run newest-first, so an
+	// older row of the same book reads the primary a newer row restores, not
+	// the one stored now (PredictedPrimary).
+	primaries map[string]*int
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -75,7 +81,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
-		refusedAuthor: map[int]bool{}}
+		refusedAuthor: map[int]bool{}, primaries: map[string]*int{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -179,6 +185,9 @@ func (p *RevertPlan) Gate(c *database.OperationChange) error {
 func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 	if err == nil {
 		p.restored[c.ID] = true
+		if before, ok := primaryRestoredBy(c); ok {
+			p.primaries[c.BookID] = before
+		}
 		return
 	}
 	var partly *AuthorPartlyRestoredError
@@ -307,6 +316,40 @@ func creditsFromAuthor(c *database.OperationChange) (int, bool) {
 		return 0, false
 	}
 	return move.FromAuthorID, true
+}
+
+// PredictedPrimary is the primary AuthorID bookID carries once the rows
+// recorded restored so far are reverted, when one of them changed it; ok false
+// means none did and the stored primary stands. The preflight of an older row
+// that compare-and-sets the primary checks against this: author-id-repair's
+// phase (a) repoints a dangling primary onto an author its phase (b) then
+// merges away, and the newer merge row's revert puts the phase (a) value back
+// before the older repoint row runs.
+func (p *RevertPlan) PredictedPrimary(bookID string) (*int, bool) {
+	v, ok := p.primaries[bookID]
+	return v, ok
+}
+
+// primaryRestoredBy is the primary AuthorID reverting c writes back, for the
+// rows that change a book's primary: an author merge/reclassify credits move
+// that repointed it, and an author_id_repoint.
+func primaryRestoredBy(c *database.OperationChange) (*int, bool) {
+	switch c.ChangeType {
+	case ChangeTypeAuthorMergeCredits, ChangeTypeAuthorReclassifyCredits:
+		snap, move, err := decodeCreditsMove(c)
+		if err != nil || !move.PrimaryChanged {
+			return nil, false
+		}
+		return snap.AuthorID, true
+	case ChangeTypeAuthorIDRepoint:
+		old, _, err := DecodeAuthorIDRepoint(c)
+		if err != nil {
+			return nil, false
+		}
+		id := old.AuthorID
+		return &id, true
+	}
+	return nil, false
 }
 
 // deletedAuthor is the author an author_merge_delete / author_reclassify_delete
