@@ -1,7 +1,7 @@
 // file: internal/database/author_primary_repoint_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4d27e3-1c85-4b6f-8e02-5f3b7c9d1a46
-// last-edited: 2026-09-13
+// last-edited: 2026-10-14
 
 package database
 
@@ -193,5 +193,30 @@ func TestNextPrimaryAuthorID(t *testing.T) {
 	}
 	if got, ok := NextPrimaryAuthorID([]BookAuthor{{AuthorID: 1}}, 1, resolve); ok || got != 0 {
 		t.Fatalf("no successor must be (0,false), got %d,%v", got, ok)
+	}
+}
+
+// A merge refused because its target is not a live author leaves every book's
+// primary as it was: the repoint to the next author must not run first.
+func TestMergeDeleteAuthor_ARefusedMergeLeavesPrimariesAlone(t *testing.T) {
+	s, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	a := mustAuthor(t, s, "Refused Primary")
+	c := mustAuthor(t, s, "Refused Coauthor")
+	gone := mustAuthor(t, s, "Refused Target")
+	mustBook(t, s, "bk1", &a.ID, a.ID, c.ID)
+	if err := s.DeleteAuthor(gone.ID); err != nil {
+		t.Fatalf("DeleteAuthor: %v", err)
+	}
+
+	if _, err := MergeDeleteAuthorOf(s, a.ID, gone.ID); !errors.Is(err, ErrAuthorNotLive) {
+		t.Fatalf("MergeDeleteAuthor into a deleted author: got %v, want ErrAuthorNotLive", err)
+	}
+	book, err := s.GetBookByID("bk1")
+	if err != nil || book == nil || book.AuthorID == nil || *book.AuthorID != a.ID {
+		t.Fatalf("book bk1 primary must still be author %d, got %+v (err %v)", a.ID, book, err)
+	}
+	if got, _ := s.GetAuthorByID(a.ID); got == nil || got.ID != a.ID {
+		t.Fatalf("author %d must still be live, got %+v", a.ID, got)
 	}
 }
