@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.6.3
+// version: 1.7.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-10-03
+// last-edited: 2026-10-15
 
 package database
 
@@ -85,6 +85,10 @@ var ErrSkipBookWrite = errors.New("skip book write")
 // error from fn aborts without writing and is returned as-is, except
 // ErrSkipBookWrite, which returns the unmodified row and a nil error.
 //
+// Unlike UpdateBook, a nil Author that fn leaves is written as nil: fn was
+// handed the full row, so the nil is a deliberate clear, not a stripped
+// projection to fill back in (bookWriteOpts.authorAsGiven).
+//
 // fn runs while the stripe is held: see the LOCK RULES on bookLocks.
 func (p *PebbleStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
 	updated, before, err := p.modifyBookLocked(id, fn)
@@ -104,6 +108,9 @@ func (p *PebbleStore) modifyBookLocked(id string, fn func(*Book) error) (*Book, 
 // modifyBookLockedMode is the read-fn-write body shared by ModifyBook and
 // SeedLegacyBookRowForTest; opts selects the write variation.
 func (p *PebbleStore) modifyBookLockedMode(id string, fn func(*Book) error, opts bookWriteOpts) (*Book, string, error) {
+	// fn is handed the full stored row, so a nil Author it leaves is a
+	// deliberate clear (see bookWriteOpts.authorAsGiven).
+	opts.authorAsGiven = true
 	unlock := p.lockBook(id)
 	defer unlock()
 

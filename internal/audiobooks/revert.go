@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.74.0
+// version: 1.75.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-15
 
@@ -2254,10 +2254,13 @@ func (rs *RevertService) revertAuthorRename(c *database.OperationChange) error {
 }
 
 // revertAuthorIDRepoint puts back the primary AuthorID author-id-repair
-// replaced (an id naming no author), under the book's write lock and only
-// while the book still carries exactly the id the repair wrote.
+// replaced (an id naming no author) and the Author object the book carried
+// with it, under the book's write lock and only while the book still carries
+// exactly the id the repair wrote. The Author goes back exactly as journaled,
+// nil included: ModifyBook writes a nil Author as nil, so the book does not
+// keep displaying the successor the repair had named.
 func (rs *RevertService) revertAuthorIDRepoint(c *database.OperationChange) error {
-	from, to, err := undo.DecodeAuthorIDRepoint(c)
+	old, to, err := undo.DecodeAuthorIDRepoint(c)
 	if err != nil {
 		return err
 	}
@@ -2265,17 +2268,15 @@ func (rs *RevertService) revertAuthorIDRepoint(c *database.OperationChange) erro
 		return err
 	}
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
-		if err := undo.CheckAuthorIDRepoint(c.BookID, book.AuthorID, from, to); err != nil {
+		if err := undo.CheckAuthorIDRepoint(c.BookID, book.AuthorID, old.AuthorID, to); err != nil {
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				return database.ErrSkipBookWrite
 			}
 			return err
 		}
-		id := from
+		id := old.AuthorID
 		book.AuthorID = &id
-		// The old id named no author when the repair ran: there is no row to
-		// denormalize.
-		book.Author = nil
+		book.Author = old.Author
 		return nil
 	})
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.219.1
+// version: 1.220.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package database
 
@@ -3277,6 +3277,14 @@ type bookWriteOpts struct {
 	// book's credit lists through it (credits_store.go). An error aborts the
 	// write.
 	stage func(*GatedBatch) error
+	// authorAsGiven writes Book.Author exactly as the caller left it, nil
+	// included, instead of restoring the stored one when it is nil. The
+	// read-modify-write paths set it (modifyBookLockedMode, so ModifyBook and
+	// SeedLegacyBookRowForTest; ModifyBookCredits): their callback is handed
+	// the full stored row, so a nil Author there is a deliberate clear, never
+	// a stripped projection, and restoring it would put back a denormalized
+	// author naming a primary the write just moved away from.
+	authorAsGiven bool
 }
 
 // updateBookLockedMode is UpdateBook's body with the variations in opts. The
@@ -3341,15 +3349,23 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		book.BookSigVersion = oldBook.BookSigVersion
 	}
 	// Author/Series are denormalized display objects derived from
-	// AuthorID/SeriesID; they are recomputed on read, never user-cleared to
-	// nil (no empty-string-style sentinel exists for these pointer structs),
-	// so preserve-on-nil is correct for Author — the same class of fix as the seven
+	// AuthorID/SeriesID. The stored Author is NOT recomputed on read:
+	// GetBookByID returns whatever object was last written, and most readers
+	// (display, sort, organize paths) use Author.Name whenever it is non-nil,
+	// falling back to an AuthorID lookup only when it is nil. On the UpdateBook
+	// path a nil Author is usually a stripped projection (memdb, BookCore ->
+	// ToBook), so it is preserved here — the same class of fix as the seven
 	// fields above (STOREFID W5d-1 / #1887; the CreateOrganizedVersion write
 	// wiped these before the call-site hydrate landed). A write that
 	// legitimately changes the author must set BOTH AuthorID and a fresh
 	// Author object (see the author-split ops); this guard only stops the
 	// nil-projection wipe, it does not re-derive.
-	if book.Author == nil {
+	//
+	// The read-modify-write paths (opts.authorAsGiven) skip it: they hand
+	// their callback the full stored row, so a nil there was set on purpose
+	// (a primary cleared, or moved to an id with no author row), and keeping
+	// the old object would leave the book displaying the author it just left.
+	if book.Author == nil && !opts.authorAsGiven {
 		book.Author = oldBook.Author
 	}
 	//

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
 // last-edited: 2026-10-15
 
@@ -445,7 +445,20 @@ func (p *Plugin) authorIDRepairDangling(
 		// engine reverses (a metadata_update author_id row is record-only).
 		// A row that cannot be recorded means no write; a write that does not
 		// land voids its row.
-		void, jErr := authormerge.Step(store, opID, undo.NewAuthorIDRepointRow(c.ID, old, target.ID))
+		//
+		// The row also journals the Author object the book carries now (full,
+		// the Pebble re-read above), because the write below replaces it and
+		// the revert must put back exactly that. The write lands only while
+		// the row still carries that same object, so the journal never
+		// describes an Author the write did not overwrite.
+		row, rErr := undo.NewAuthorIDRepointRow(c.ID, old, full.Author, target.ID)
+		if rErr != nil {
+			ch.Error = "undo row not built: " + rErr.Error()
+			record(ch, "failed")
+			return nil
+		}
+		journaledAuthor := full.Author
+		void, jErr := authormerge.Step(store, opID, row)
 		if jErr != nil {
 			ch.Error = "undo row not recorded: " + jErr.Error()
 			record(ch, "failed")
@@ -459,7 +472,7 @@ func (p *Plugin) authorIDRepairDangling(
 		}
 		repointed := false
 		written, uErr := store.ModifyBook(c.ID, func(cur *database.Book) error {
-			if cur.AuthorID == nil || *cur.AuthorID != old {
+			if cur.AuthorID == nil || *cur.AuthorID != old || !sameAuthorObject(cur.Author, journaledAuthor) {
 				return database.ErrSkipBookWrite
 			}
 			cur.AuthorID = &target.ID
@@ -792,4 +805,16 @@ func (p *Plugin) authorIDMergeOne(
 		}
 	}
 	return ch, wrote, ledger
+}
+
+// sameAuthorObject reports whether two denormalized Author objects encode the
+// same (both nil counts as the same). Phase (a) journals the object it read and
+// writes only while the row still carries it.
+func sameAuthorObject(a, b *database.Author) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	aj, aerr := json.Marshal(a)
+	bj, berr := json.Marshal(b)
+	return aerr == nil && berr == nil && string(aj) == string(bj)
 }

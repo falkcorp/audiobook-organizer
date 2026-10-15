@@ -1,5 +1,5 @@
 // file: internal/undo/author_rename_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f3d9b25-8c4a-4e71-a02b-9d4f7a1c3e86
 // last-edited: 2026-10-15
 
@@ -50,10 +50,25 @@ func TestAuthorRenameRow_RoundTripsAndChecks(t *testing.T) {
 }
 
 func TestAuthorIDRepointRow_RoundTripsAndChecks(t *testing.T) {
-	row := NewAuthorIDRepointRow("b1", 99, 3)
-	from, to, err := DecodeAuthorIDRepoint(row)
-	if err != nil || from != 99 || to != 3 {
-		t.Fatalf("decode: %d %d %v", from, to, err)
+	row, err := NewAuthorIDRepointRow("b1", 99, nil, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, to, err := DecodeAuthorIDRepoint(row)
+	if err != nil || old.AuthorID != 99 || old.Author != nil || to != 3 {
+		t.Fatalf("decode: %+v %d %v", old, to, err)
+	}
+	from := old.AuthorID
+	// A non-nil Author object round-trips as itself, so the revert can put
+	// back exactly what the repair overwrote.
+	stale := &database.Author{ID: 99, Name: "Synthetic Gone Writer"}
+	withAuthor, err := NewAuthorIDRepointRow("b1", 99, stale, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := DecodeAuthorIDRepoint(withAuthor); err != nil || got.Author == nil ||
+		got.Author.ID != stale.ID || got.Author.Name != stale.Name {
+		t.Fatalf("decode with author: %+v %v", got.Author, err)
 	}
 	if NotRestorableLabel(row) != "" {
 		t.Fatalf("a well-formed repoint row must be restorable: %q", NotRestorableLabel(row))
@@ -70,7 +85,13 @@ func TestAuthorIDRepointRow_RoundTripsAndChecks(t *testing.T) {
 			t.Errorf("changed since must refuse: %v", err)
 		}
 	}
-	if NotRestorableLabel(&database.OperationChange{ChangeType: ChangeTypeAuthorIDRepoint, OldValue: "x", NewValue: "3", BookID: "b1"}) == "" {
-		t.Error("an unparsable repoint row must not be restorable")
+	for _, bad := range []*database.OperationChange{
+		{ChangeType: ChangeTypeAuthorIDRepoint, OldValue: "x", NewValue: `{"author_id":3}`, BookID: "b1"},
+		{ChangeType: ChangeTypeAuthorIDRepoint, OldValue: `{"author_id":99}`, NewValue: `{"author_id":0}`, BookID: "b1"},
+		{ChangeType: ChangeTypeAuthorIDRepoint, OldValue: `{"author_id":99}`, NewValue: `{"author_id":3}`},
+	} {
+		if NotRestorableLabel(bad) == "" {
+			t.Errorf("an unparsable repoint row must not be restorable: %+v", bad)
+		}
 	}
 }
