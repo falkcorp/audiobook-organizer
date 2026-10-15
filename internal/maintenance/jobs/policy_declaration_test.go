@@ -48,7 +48,12 @@ import (
 // 2026-10-14: 36 → 35. `fix-book-file-paths` was deleted (04-P14d): it only
 // set Missing=true, and maintenance.mark-missing-files sets and clears it. Its
 // op ID is in internal/server retiredOpIDs.
-const wantJobCount = 35
+//
+// 2026-10-14: 35 → 34. `repair-missing-files` was deleted (04-P14e): the
+// maintenance.missing-file-repoint and maintenance.recover-missing-files ops
+// replace it. Its op ID is in internal/server retiredOpIDs. It was one of the
+// CanResume()==true jobs, so the resumable count drops from 9 to 8.
+const wantJobCount = 34
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.
@@ -245,7 +250,7 @@ func TestPolicyAgreesWithCanResume(t *testing.T) {
 		}
 	}
 
-	if want := 9; resumable != want {
+	if want := 8; resumable != want {
 		t.Errorf("jobs with CanResume()==true = %d, want %d", resumable, want)
 	}
 	if want := len(gatedByDryRun); gated != want {

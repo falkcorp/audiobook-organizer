@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.21 -->
+<!-- version: 10.76.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -13799,6 +13799,8 @@ Explicitly LOW priority — per-book is fine for now.
   any other caller.
 
 ### `repair-missing-files` tier 2 can repoint a row at another book's audio
+
+**RESOLVED 2026-10-14 (04-P14e):** the `repair-missing-files` job was deleted, so tier 2 no longer exists. `maintenance.missing-file-repoint` and `maintenance.recover-missing-files` never accept a bare basename match; both require a unique, unclaimed target. The text below is kept as the record of the defect.
 
 `rmfr_repairOne` in `internal/maintenance/jobs/repair_missing_files.go` resolves a missing
 `book_file` row through four tiers. **Tier 2 (`:292-339`) accepts a unique basename match with no
