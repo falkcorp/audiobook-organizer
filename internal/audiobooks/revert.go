@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-14
 
@@ -283,6 +283,11 @@ type RevertResult struct {
 	// back only in part: a tag another tool changed after the operation was
 	// kept, and Kept names each one.
 	PartiallyRestored int `json:"partially_restored,omitempty"`
+	// AuthorsPartlyRestored counts Failed author delete rows whose author row
+	// DID come back but some of what the delete moved did not
+	// (undo.AuthorPartlyRestoredError). Nothing in RestoredTypes shows them, and
+	// the restored author is still a write a caller's caches must see.
+	AuthorsPartlyRestored int `json:"authors_partly_restored,omitempty"`
 	// Kept lists, per partially restored row, the tags left as they are
 	// because they changed since the operation.
 	Kept []string `json:"kept,omitempty"`
@@ -565,6 +570,10 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		if err != nil {
 			if c.ChangeType == undo.ChangeTypeBookPrimaryDemote {
 				refusedDemote[c.BookID] = true
+			}
+			var partlyAuthor *undo.AuthorPartlyRestoredError
+			if errors.As(err, &partlyAuthor) {
+				result.AuthorsPartlyRestored++
 			}
 			result.Failed++
 			switch undo.RefusalReason(err) {

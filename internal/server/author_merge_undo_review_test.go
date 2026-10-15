@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -485,4 +485,42 @@ func TestUndo_AnAuthorWhoseNameFailsTheCreationGateComesBack(t *testing.T) {
 		require.Equal(t, w.from.ID, back.ID)
 		require.Equal(t, "read by narrator", back.Name)
 	})
+}
+
+// An author with no books comes back from an undo whose alias could not: the
+// delete row fails (the alias is reported) and no restored type counts it. The
+// author is still back, so the author caches must still be dropped.
+func TestRevertOperation_APartlyRestoredAuthorWithNoBooksDropsTheAuthorCaches(t *testing.T) {
+	st := newRelinkOpStore(t)
+	keep, err := st.CreateAuthor("Bookless Keep")
+	require.NoError(t, err)
+	from, err := st.CreateAuthor("Bookless From")
+	require.NoError(t, err)
+	third, err := st.CreateAuthor("Bookless Third")
+	require.NoError(t, err)
+	_, err = st.CreateAuthorAlias(from.ID, "B. From", "pen_name")
+	require.NoError(t, err)
+	s := newRelinkOpServer(st)
+	def := relinkOpDef(t, s.RegisterAuthorMergeOp, "entities.author-merge")
+	raw, err := json.Marshal(entities.AuthorMergeOpParams{KeepID: keep.ID, MergeIDs: []int{from.ID}, KeepName: keep.Name})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-bookless"}))
+	// The carried alias moves to a third author meanwhile: it cannot come back.
+	carried, err := st.GetAuthorAliases(keep.ID)
+	require.NoError(t, err)
+	require.Len(t, carried, 1)
+	require.NoError(t, st.DeleteAuthorAlias(carried[0].ID))
+	_, err = st.CreateAuthorAlias(third.ID, "B. From", "pen_name")
+	require.NoError(t, err)
+	s.authorsCache.Set("authors-list", nil)
+	s.dedupCache.Set("author-duplicates", gin.H{"stale": true})
+
+	res, err := s.revertOperation("op-bookless")
+	require.Error(t, err, "the alias is reported")
+	require.Equal(t, 1, res.AuthorsPartlyRestored)
+	back, gerr := st.GetAuthorByID(from.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, from.ID, back.ID, "the author row is back")
+	require.Zero(t, s.authorsCache.Len(), "author list cache dropped")
+	require.Zero(t, s.dedupCache.Len(), "dedup cache dropped")
 }
