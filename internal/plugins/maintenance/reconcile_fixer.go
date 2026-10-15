@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-15
 
@@ -684,6 +684,18 @@ type rmStepOne struct {
 	// hashOld is what that operation's step 1 cleared, by field
 	// (rmFieldFileHash, rmFieldOrganizedHash): the values a revert puts back.
 	hashOld map[string]string
+	// handOff lists, per operation, the live rows of this fixer on the book
+	// of every operation whose live book_path_update is THIS move (old path
+	// to matched file): the cut-off op, and any later op cut off after its
+	// journal-only rows. The op that finishes step 2 takes them over
+	// (rmHandOff); an op listed here also wrote (or journaled) step 1.
+	handOff map[string][]string
+}
+
+// wroteStepOne reports whether op has a live step 1 of this move.
+func (st *rmStepOne) wroteStepOne(op string) bool {
+	_, ok := st.handOff[op]
+	return ok
 }
 
 // rmPathChangeTypes are the journal change types that move a book's path.
@@ -741,6 +753,21 @@ func rmStepOneOf(rd rmReader, c rmCandidate, book *database.Book, files []databa
 			continue
 		}
 		st.hashOld[ch.FieldName] = ch.OldValue
+	}
+	st.handOff = map[string][]string{}
+	for _, ch := range changes {
+		if ch != nil && !ch.Voided && ch.RevertedAt == nil && ch.Source == reconcileFixerID &&
+			ch.ChangeType == undo.ChangeTypeBookPathUpdate && ch.OldValue == c.OldPath && ch.NewValue == c.NewPath {
+			st.handOff[ch.OperationID] = nil
+		}
+	}
+	for _, ch := range changes {
+		if ch == nil || ch.Voided || ch.RevertedAt != nil || ch.Source != reconcileFixerID {
+			continue
+		}
+		if ids, ok := st.handOff[ch.OperationID]; ok {
+			st.handOff[ch.OperationID] = append(ids, ch.ID)
+		}
 	}
 	if rmKeepsHashes(c.MatchType) {
 		if len(st.hashOld) > 0 {
@@ -965,13 +992,48 @@ func rmFinishStepTwo(w *repairs.Writer, d *rmDecision, book *database.Book, st *
 		return done, nil
 	})
 	if err != nil {
-		if st.opID == w.OpID() {
+		if st.wroteStepOne(w.OpID()) {
 			return fmt.Errorf("%w: book %s points at %s but its file row %s was not repointed: %w",
 				repairs.ErrPartiallyApplied, d.bookID, d.newPath, d.fileID, err)
 		}
 		return fmt.Errorf("book %s: the file row of operation %s's unfinished apply not repointed: %w", d.bookID, st.opID, err)
 	}
+	rmHandOff(w, d.bookID, st)
 	return nil
+}
+
+// rmHandOff gives the op that just finished step 2 sole ownership of the
+// move. Every other op with a live step 1 of it (st.handOff) still holds its
+// own rows for the same changes, and this op journaled them again; left
+// live, whichever op is reverted first undoes the book's path and hashes and
+// the other op's rows stay live, so reverting only the cut-off op would put
+// the book back at the missing file while its row stays at the matched one.
+// Their rows (the path change, the hash clears, and any repoint row for a
+// write that op never made) are marked reverted with no write
+// (Writer.SupersedeChanges): that op's revert then counts them already
+// reverted and leaves this book alone, and this op's revert undoes the whole
+// move.
+//
+// Best-effort, after the write. A journal that cannot mark another op's rows,
+// or a failed mark, leaves both ops' rows live and is logged; so does a crash
+// between step 2 and the mark. That is the state before this hand-off
+// existed: reverting this op alone still restores everything, reverting the
+// other op alone does not.
+func rmHandOff(w *repairs.Writer, bookID string, st *rmStepOne) {
+	ops := make([]string, 0, len(st.handOff))
+	for op := range st.handOff {
+		if op != w.OpID() {
+			ops = append(ops, op)
+		}
+	}
+	sort.Strings(ops)
+	for _, op := range ops {
+		if err := w.SupersedeChanges(op, st.handOff[op]); err != nil {
+			rmLog.Warn("%s: book %s: operation %s's rows for this move not handed to operation %s; reverting %s alone will not undo it cleanly: %s",
+				reconcileFixerID, logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(op),
+				logger.SanitizeLogValue(w.OpID()), logger.SanitizeLogValue(op), logger.SanitizeLogValue(err.Error()))
+		}
+	}
 }
 
 // Book fields Apply clears, as their metadata_update rows name them (both

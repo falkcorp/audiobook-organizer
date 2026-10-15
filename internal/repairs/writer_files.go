@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package repairs
 
@@ -54,6 +54,18 @@ type ChangeJournal interface {
 	CreateOperationChange(change *database.OperationChange) error
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 }
+
+// ChangeReverter is the optional journal capability SupersedeChanges needs:
+// stamping RevertedAt on exactly the listed rows of an operation
+// (database.OperationChangeStore.MarkOperationChangesReverted). It is asked
+// for by type assertion on the ChangeJournal, so ChangeJournal does not grow.
+type ChangeReverter interface {
+	MarkOperationChangesReverted(operationID string, changeIDs []string) error
+}
+
+// ErrSupersedeUnsupported: the writer's journal cannot mark another
+// operation's rows (it is not a ChangeReverter), so nothing was marked.
+var ErrSupersedeUnsupported = errors.New("repairs: the op journal cannot mark another operation's rows")
 
 // BookFileWriter is the book_file surface Writer offers a fixer. It has no
 // delete method on purpose.
@@ -362,6 +374,29 @@ func (w *Writer) Step(bookID, changeType, field, oldV, newV string, write func()
 	}
 	w.Touch()
 	return write()
+}
+
+// SupersedeChanges marks the listed rows of ANOTHER operation (opID, never
+// this writer's own) reverted without writing anything: this writer's op has
+// journaled the same changes and now owns them, so reverting opID must not
+// undo them a second time, or half of them. The revert of opID counts them
+// already reverted. A journal that is not a ChangeReverter returns
+// ErrSupersedeUnsupported and marks nothing.
+func (w *Writer) SupersedeChanges(opID string, ids []string) error {
+	if err := w.denyTagsOnly("SupersedeChanges"); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if opID == "" || opID == w.opID {
+		return fmt.Errorf("repairs: SupersedeChanges marks another operation's rows, not %q", opID)
+	}
+	m, ok := w.journal.(ChangeReverter)
+	if !ok {
+		return ErrSupersedeUnsupported
+	}
+	return m.MarkOperationChangesReverted(opID, ids)
 }
 
 // Journaled is how many operation change rows were recorded.
