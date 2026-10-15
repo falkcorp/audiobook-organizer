@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle_boot_ops_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5b9e2a74-1c6d-4f38-8a07-3d4e6f2b9c18
 // last-edited: 2026-10-15
 
@@ -290,5 +290,21 @@ func TestEnqueueBootOps_SkipsTranscodeWhenBothDoneFlagsSet(t *testing.T) {
 				t.Errorf("enqueued %d ops, want at least the other %d", len(*got), want)
 			}
 		})
+	}
+}
+
+// The log line shows the params as the JSON the op receives, not the Go map
+// syntax (an empty map printed as "map[]").
+func TestBootParamsJSON(t *testing.T) {
+	for _, tc := range []struct {
+		in   map[string]any
+		want string
+	}{
+		{map[string]any{}, `{}`},
+		{map[string]any{"reconcile": true}, `{"reconcile":true}`},
+	} {
+		if got := bootParamsJSON(tc.in); got != tc.want {
+			t.Errorf("bootParamsJSON(%v) = %s, want %s", tc.in, got, tc.want)
+		}
 	}
 }
