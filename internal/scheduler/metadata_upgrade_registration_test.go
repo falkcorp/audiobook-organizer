@@ -1,7 +1,7 @@
 // file: internal/scheduler/metadata_upgrade_registration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c8f0a61-9e27-4d5b-b4c3-6f1a7e2d9b08
-// last-edited: 2026-09-27
+// last-edited: 2026-10-15
 
 package scheduler
 
@@ -40,7 +40,6 @@ func TestMetadataUpgradeOp_SingleRegistrationAnswersToFormerID(t *testing.T) {
 func TestMetadataUpgradeTask_NotInMaintenanceWindow(t *testing.T) {
 	ts := NewTaskScheduler(SchedulerDeps{
 		Store:               func() SchedulerStore { return nil },
-		HasDedupEngine:      func() bool { return false },
 		HasMetadataFetchSvc: func() bool { return true },
 		HasActivitySvc:      func() bool { return false },
 		HasBatchPoller:      func() bool { return false },

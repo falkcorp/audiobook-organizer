@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e8b2f1c-9a3d-4c07-b5e8-6f2a0d7c3b94
-// last-edited: 2026-06-16
+// last-edited: 2026-10-15
 
 package scheduler
 
@@ -18,7 +18,6 @@ import (
 func testDeps() SchedulerDeps {
 	return SchedulerDeps{
 		Store:               func() SchedulerStore { return nil },
-		HasDedupEngine:      func() bool { return false },
 		HasMetadataFetchSvc: func() bool { return false },
 		HasActivitySvc:      func() bool { return false },
 		HasBatchPoller:      func() bool { return false },

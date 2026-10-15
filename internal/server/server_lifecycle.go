@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.45.2
+// version: 4.45.3
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -360,9 +360,6 @@ func (s *Server) Start(cfg ServerConfig) error {
 			return st
 		},
 		OpRegistry: s.opRegistry,
-		HasDedupEngine: func() bool {
-			return s.dedupEngine != nil
-		},
 		// Same condition as the dedup plugin's Build (dedup/register.go).
 		HasDedupPlugin: func() bool {
 			return s.dedupEngine != nil && s.embeddingStore != nil

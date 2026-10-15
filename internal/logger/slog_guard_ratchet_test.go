@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 281
-	slogRatchetCallCeiling = 1563
+	slogRatchetCallCeiling = 1562
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called

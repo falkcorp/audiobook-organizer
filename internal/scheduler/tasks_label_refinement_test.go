@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks_label_refinement_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3f1a6c92-8d47-4b0e-9a25-1c7e6b4d0f83
 // last-edited: 2026-10-15
 
@@ -82,7 +82,6 @@ func TestLabelRefinementNeedsTheDedupPlugin(t *testing.T) {
 	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{Enabled: true, Interval: 60}
 
 	deps := testDeps()
-	deps.HasDedupEngine = func() bool { return true }
 	deps.HasDedupPlugin = nil
 	def, ok := NewTaskScheduler(deps).GetTask("label_refinement")
 	assert.True(t, ok)
