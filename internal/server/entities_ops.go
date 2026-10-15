@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-10-14
 
@@ -15,12 +15,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -29,8 +29,6 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // authorMergeOpParams holds the parameters for the entities.author-merge op. It is
@@ -188,36 +186,10 @@ type authorMergeOutcome struct {
 	Errors    []string
 }
 
-// journalStep writes one undo-ledger row BEFORE the write it describes and returns
-// the function that voids it when that write is refused, so a row that stands always
-// describes a write that happened. A failed journal write is returned: the caller
-// must not make the write (an unjournaled merge cannot be undone, and must never
-// happen silently).
+// journalStep is authormerge.Step: one undo-ledger row written BEFORE the write
+// it describes, with the function that voids it if that write is refused.
 func journalStep(store authorMergeJournalStore, opID string, row *database.OperationChange) (void func() error, err error) {
-	row.ID = ulid.Make().String()
-	row.OperationID = opID
-	if err := store.CreateOperationChange(row); err != nil {
-		return nil, err
-	}
-	return func() error {
-		voided := *row
-		now := time.Now()
-		voided.RevertedAt, voided.Voided = &now, true
-		return store.CreateOperationChange(&voided)
-	}, nil
-}
-
-// aliasSnapshots lists an author's aliases, with their ids, for its delete row.
-func aliasSnapshots(store authorMergeJournalStore, authorID int) ([]undo.AuthorAliasSnapshot, error) {
-	aliases, err := store.GetAuthorAliases(authorID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]undo.AuthorAliasSnapshot, 0, len(aliases))
-	for _, al := range aliases {
-		out = append(out, undo.AuthorAliasSnapshot{ID: al.ID, Name: al.AliasName, Type: al.AliasType})
-	}
-	return out, nil
+	return authormerge.Step(store, opID, row)
 }
 
 // mergeAuthorsInto folds spec.MergeIDs into spec.KeepID, one author at a time,
@@ -366,98 +338,27 @@ func mergeAuthorsInto(
 					newAuthors = append(newAuthors, ba)
 				}
 			}
-			// The scalar is repointed only when it names the merged author.
-			primaryChanged := book.AuthorID != nil && *book.AuthorID == mergeID
-			after := append([]database.BookAuthor{}, newAuthors...)
-			move := undo.AuthorCreditsMove{FromAuthorID: mergeID, IntoAuthorID: keepID, CreditsAfter: &after, PrimaryChanged: primaryChanged}
-			if primaryChanged {
-				k := keepID
-				move.PrimaryAfter = &k
-			}
-			var primaryBefore *int
-			if book.AuthorID != nil {
-				v := *book.AuthorID
-				primaryBefore = &v
-			}
-			row, rerr := undo.NewAuthorCreditsRow(undo.ChangeTypeAuthorMergeCredits, book.ID,
-				undo.TitleRelinkCreditsSnapshot{AuthorID: primaryBefore, Credits: append([]database.BookAuthor{}, bookAuthors...)}, move)
-			if rerr != nil {
-				moveFailures++
-				out.Errors = append(out.Errors, fmt.Sprintf("book %s: not moved off author %d: undo row not built: %v", book.ID, mergeID, rerr))
-				continue
-			}
-			void, jerr := journalStep(store, opID, row)
-			if jerr != nil {
-				// An unjournaled merge cannot be undone, so it does not happen.
-				moveFailures++
-				logging.Warn(ctx, "author merge: undo row not recorded; the book is not moved",
-					"book", book.ID, "from_author", mergeID, "err", jerr)
-				out.Errors = append(out.Errors, fmt.Sprintf("book %s: not moved off author %d: undo row not recorded: %v", book.ID, mergeID, jerr))
-				continue
-			}
-			if err := store.SetBookAuthors(book.ID, newAuthors); err != nil {
-				moveFailures++
-				if verr := void(); verr != nil {
-					logging.Warn(ctx, "author merge: could not void the undo row of a refused write", "book", book.ID, "err", verr)
-				}
-				out.Errors = append(out.Errors, fmt.Sprintf("failed to update book %s: %v", book.ID, err))
-				// The scalar is NOT repointed: the junction still credits the merged
-				// author, and a scalar already on the keep would make the book
-				// disagree with itself.
-				continue
-			}
-			// The store may normalize what it was given (positions); the revert is a
-			// compare-and-set against the stored junction, so journal what is stored.
-			if stored, gerr := store.GetBookAuthors(book.ID); gerr == nil && !undo.SameJunction(stored, after) {
-				after = append([]database.BookAuthor{}, stored...)
-				if nv, merr := json.Marshal(move); merr == nil {
-					row.NewValue = string(nv)
-					if uerr := store.CreateOperationChange(row); uerr != nil {
-						out.Errors = append(out.Errors, fmt.Sprintf("book %s: undo row not updated to the stored credits: %v", book.ID, uerr))
-					}
-				}
-			}
-
-			// Sync the denormalized `book.AuthorID` pointer on the Book row itself.
-			// SetBookAuthors above updates the join table, but callers that read the Book
-			// struct directly expect book.AuthorID to match the primary author in the join
-			// table. Without this sync, the field still points at the losing author ID.
-			//
-			// Backlog 7.11 — found while investigating the merge ITL cleanup bug (#251).
-			//
-			// ModifyBook re-reads the row under the book's write lock and
-			// sets only AuthorID, so a column another writer commits in the
-			// meantime is not reverted (audit A1#15). A vanished book is
-			// (nil, nil): nothing to sync, as before.
-			wrotePrimary := false
-			_, upErr := store.ModifyBook(book.ID, func(current *database.Book) error {
-				if current.AuthorID == nil || *current.AuthorID != mergeID {
-					wrotePrimary = false
-					return database.ErrSkipBookWrite
-				}
-				newID := keepID
-				current.AuthorID = &newID
-				wrotePrimary = true
-				return nil
+			// Journaled first (authormerge.MoveCredits): a book whose row cannot be
+			// recorded is not moved, and the primary is repointed only when it
+			// names the merged author.
+			moved, merr := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
+				BookID: book.ID, FromID: mergeID, IntoID: keepID,
+				Before: bookAuthors, After: newAuthors, PrimaryBefore: book.AuthorID,
 			})
-			if upErr != nil {
+			if merr != nil {
 				moveFailures++
-				logging.Warn(ctx, "author merge failed to sync denormalized AuthorID on book", "book", book.ID, "err", upErr)
-				out.Errors = append(out.Errors, fmt.Sprintf("book %s: credits moved but its primary author could not be repointed: %v", book.ID, upErr))
+				logging.Warn(ctx, "author merge: book not moved", "book", book.ID, "from_author", mergeID, "err", merr)
+				out.Errors = append(out.Errors, fmt.Sprintf("book %s: not moved off author %d: %v", book.ID, mergeID, merr))
+				continue
 			}
-			if move.PrimaryChanged && (upErr != nil || !wrotePrimary) {
-				// The credits moved but the primary did not (the write failed, the
-				// book is gone, or another writer repointed it meanwhile). A row that
-				// still claimed the repoint made the revert read the untouched
-				// primary as "already back" and then refuse the junction as changed
-				// since, so the credits could never go back. Journal what happened.
-				move.PrimaryChanged, move.PrimaryAfter = false, nil
-				if nv, merr := json.Marshal(move); merr == nil {
-					row.NewValue = string(nv)
-					if uerr := store.CreateOperationChange(row); uerr != nil {
-						out.Errors = append(out.Errors, fmt.Sprintf("book %s: undo row not updated after its primary author was not repointed: %v", book.ID, uerr))
-					}
-				}
+			if moved.PrimaryErr != nil {
+				// The credits moved but the primary write failed: the book still
+				// names the merged author, so it is not deleted.
+				moveFailures++
+				logging.Warn(ctx, "author merge failed to sync denormalized AuthorID on book", "book", book.ID, "err", moved.PrimaryErr)
+			}
+			for _, p := range moved.Problems {
+				out.Errors = append(out.Errors, fmt.Sprintf("book %s: %s", book.ID, p))
 			}
 		}
 
@@ -502,55 +403,16 @@ func mergeAuthorsInto(
 // locks (the stored-credits pattern above), so the undo moves back exactly the
 // aliases that moved and treats the name entry as the delete found it.
 func mergeFinish(ctx context.Context, store authorMergeStore, opID string, from, keep *database.Author, out *authorMergeOutcome) bool {
-	aliases, err := aliasSnapshots(store, from.ID)
+	del, err := authormerge.MergeDelete(store, opID, *from, *keep)
 	if err != nil {
-		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: its aliases could not be read for the undo row: %v", from.ID, err))
+		logging.Warn(ctx, "author merge: the author is not deleted", "author", from.ID, "err", err)
+		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: %v", from.ID, err))
 		return false
 	}
-	snap := undo.AuthorSnapshot{ID: from.ID, Name: from.Name, Aliases: aliases}
-	if holder, herr := store.GetAuthorByName(from.Name); herr != nil {
-		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: its name entry could not be read for the undo row: %v", from.ID, herr))
-		return false
-	} else if holder != nil && holder.ID != from.ID {
-		snap.SharedNameIndex = true
-	}
-	value := undo.AuthorMergeDelete{IntoAuthorID: keep.ID, IntoName: keep.Name}
-	row, err := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete, snap, value)
-	if err != nil {
-		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: undo row not built: %v", from.ID, err))
-		return false
-	}
-	void, err := journalStep(store, opID, row)
-	if err != nil {
-		logging.Warn(ctx, "author merge: undo row not recorded; the author is not deleted", "author", from.ID, "err", err)
-		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: undo row not recorded: %v", from.ID, err))
-		return false
-	}
-	res, err := database.MergeDeleteAuthorOf(store, from.ID, keep.ID)
-	if err != nil {
-		if verr := void(); verr != nil {
-			logging.Warn(ctx, "author merge: could not void the undo row of a refused delete", "author", from.ID, "err", verr)
-		}
-		out.Errors = append(out.Errors, fmt.Sprintf("failed to delete author %d: %v", from.ID, err))
-		return false
-	}
-	if exact := undo.MergeSnapshotFrom(*from, res); !sameAuthorSnapshot(exact, snap) {
-		if fixed, ferr := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete, exact, value); ferr != nil {
-			out.Errors = append(out.Errors, fmt.Sprintf("author %d: undo row not updated to what the delete moved: %v", from.ID, ferr))
-		} else {
-			row.OldValue = fixed.OldValue
-			if uerr := store.CreateOperationChange(row); uerr != nil {
-				out.Errors = append(out.Errors, fmt.Sprintf("author %d: undo row not updated to what the delete moved: %v", from.ID, uerr))
-			}
-		}
+	for _, p := range del.Problems {
+		out.Errors = append(out.Errors, fmt.Sprintf("author %d: %s", from.ID, p))
 	}
 	return true
-}
-
-// sameAuthorSnapshot compares two delete snapshots field by field.
-func sameAuthorSnapshot(a, b undo.AuthorSnapshot) bool {
-	return a.ID == b.ID && a.Name == b.Name && a.SharedNameIndex == b.SharedNameIndex &&
-		slices.Equal(a.Aliases, b.Aliases) && slices.Equal(a.InboundTombstones, b.InboundTombstones)
 }
 
 // AuthorMergeFailedIDsPrefix opens the list of author ids a failed

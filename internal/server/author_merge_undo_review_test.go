@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -557,7 +557,7 @@ func TestReclassify_UndoOfAnAuthorWhoseNameACaseVariantHoldsLeavesTheVariantTheE
 }
 
 // mergeFinish journals the delete row before the merge-delete and rewrites it
-// with what the delete reported (sameAuthorSnapshot). Only the delete knows the
+// with what the delete reported (authormerge.SameSnapshot). Only the delete knows the
 // ids whose redirects pointed at the merged author, so only the rewritten row can
 // point a flattened redirect back. C was merged into A, A into K, and redirect
 // flattening repointed C at K: undoing A->K points C at A again.
