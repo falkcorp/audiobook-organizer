@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-15
 
@@ -1288,4 +1288,46 @@ func TestReconcileFixer_FenceInTheBeatBeforeStepTwo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, r2.Failed, "%+v", r2)
 	assert.Equal(t, before, f.state(t, id))
+}
+
+// rmCutAtBeat runs op-1 with the run's fence revoked right after step 1, so
+// step 2's writer beat refuses before its row is journaled: op-1 holds step
+// 1 only and the row is canceled_skipped. A filename match, both hashes set.
+func rmCutAtBeat(t *testing.T, f *rmFixture, name string) (id string, before rmState, res *repairs.PlanResult, planned repairs.Row) {
+	t.Helper()
+	id = f.missingBook(t, "Book "+name, "old/"+name+".m4b", func(b *database.Book) {
+		cur, org := "cur-"+name, "org-"+name
+		b.FileHash, b.OrganizedFileHash = &cur, &org
+	})
+	f.file(t, "new/"+name+".m4b")
+	f.match(id, "Book "+name, "old/"+name+".m4b", "new/"+name+".m4b", "filename", "low")
+	before = f.state(t, id)
+	res = f.plan(t)
+	planned = rmRow(t, res, id)
+	fence, revoke := opswriter.NewFence(1, nil)
+	books := &rmHookedBooks{PebbleStore: f.s, after: revoke}
+	w1 := repairs.NewWriter(books, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-1")
+	out, err := repairs.RunApply(opswriter.WithFence(context.Background(), fence), f.fx, res, "plan-1",
+		[]string{planned.RowID}, false, repairs.ApplyDeps{Guard: f.s, Writer: w1, OpID: "op-1"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeCanceledSkip, rmOutcomes(out)[planned.RowID], "%+v", out.Rows)
+	return id, before, res, planned
+}
+
+// TestReconcileFixer_SameOpResumeRefusedStepTwoIsPartial (round-4 SF-2): the
+// op that wrote step 1 resumes and its step 2 is refused; its own step 1
+// stands, so the row is partially_applied, not changed_since_plan.
+func TestReconcileFixer_SameOpResumeRefusedStepTwoIsPartial(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id, _, _, planned := rmCutAtBeat(t, f, "P")
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	require.True(t, fresh.Applicable(), fresh.Reason)
+	rows, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	_, err = f.s.ModifyBookFile(id, rows[0].ID, func(bf *database.BookFile) error { bf.Missing = false; return nil })
+	require.NoError(t, err)
+	err = f.fx.Apply(context.Background(), f.writerFor("op-1", f.s), fresh)
+	assert.True(t, errors.Is(err, repairs.ErrPartiallyApplied), "%v", err)
 }
