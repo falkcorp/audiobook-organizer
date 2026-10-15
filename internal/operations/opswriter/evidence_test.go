@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.4.2
+// version: 2.4.4
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -1264,6 +1264,33 @@ func TestRowAppliedJournalMemoAges(t *testing.T) {
 	mustRowApplied(t, w, "r2", false)
 	if s.scans.Load() != 2 {
 		t.Fatalf("%d scans after the age; want 2", s.scans.Load())
+	}
+}
+
+// TestRowAppliedJournalMemoAgesFromTheScanStart (05-PR5b round 5 N1): a
+// scan's age counts from when it STARTED, not when it ended, so a slow scan
+// does not stretch how long a foreign write recorded during it can be
+// missed. The injected clock advances 50s inside the scan; a read 70s after
+// it started is 20s after it ended and must scan again.
+func TestRowAppliedJournalMemoAgesFromTheScanStart(t *testing.T) {
+	s := newEvidenceStore()
+	first := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, first, "r1", setTitle(first, "book-001", "mine"))
+	s.foreignJournal("f0", "book-003", "title") // a journal row, so the scan reads a row
+	w := New(Config{OpID: "op1", Mode: ops.Live, RowMarks: s, Changes: s, HistoryReader: s, ChangeScan: s})
+	now := time.Now()
+	w.journalMemo.now = func() time.Time { return now }
+	var once atomic.Bool
+	s.onScanRow = func() {
+		if once.CompareAndSwap(false, true) {
+			now = now.Add(50 * time.Second) // the scan is slow
+		}
+	}
+	mustRowApplied(t, w, "r1", true) // the slow scan: started at t0, ended at t0+50s
+	now = now.Add(20 * time.Second)  // t0+70s: past the age from the start, inside it from the end
+	mustRowApplied(t, w, "r1", true)
+	if s.scans.Load() != 2 {
+		t.Fatalf("%d scans; want 2 (the memo aged from the scan's start)", s.scans.Load())
 	}
 }
 
