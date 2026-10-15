@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.51.0
+// version: 1.51.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-15
 
@@ -258,7 +258,6 @@ func (d fakeDeps) QuarantineKnownBadFiles(_ context.Context) (int, bool, error) 
 func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int              { return 0 }
 func (d fakeDeps) CleanupTrashedVersions() int                                  { return 0 }
 func (d fakeDeps) ActivityFlushOp(_ string)                                     {}
-func (d fakeDeps) PollBatch(_ context.Context) (int, error)                     { return 0, nil }
 func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageReport, error) {
 	return &TriageReport{}, nil
 }
@@ -309,7 +308,6 @@ func (d fakeDeps) ReclaimMigratedActivity(_ context.Context, _ time.Duration, dr
 func (d fakeDeps) HasDedupEngine() bool          { return false }
 func (d fakeDeps) HasMetadataFetchService() bool { return false }
 func (d fakeDeps) HasAIParsing() bool            { return false }
-func (d fakeDeps) HasBatchPoller() bool          { return false }
 func (d fakeDeps) RootDir() string {
 	if d.root != "" {
 		return d.root

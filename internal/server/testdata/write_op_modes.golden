@@ -99,7 +99,6 @@ maintenance.author-split-scan	preview
 maintenance.author-strip-merge	preview
 maintenance.authority-build	preview
 maintenance.auto-match-transcribed	preview
-maintenance.batch-poller	no-mode
 maintenance.book-atpath-index-backfill	no-mode
 maintenance.booksig-recovery-audit	preview
 maintenance.booksig-sidecar-migrate	preview
