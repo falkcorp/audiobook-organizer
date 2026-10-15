@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-15-boot-backfills-as-ops-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 9a4c7e12-6b3d-4f58-8e91-2d5f0b7c3a66 -->
 <!-- last-edited: 2026-10-15 -->
 
 # Startup library jobs now show up on the Operations page
 
-**Pull request:** to be added when it opens (branch `task/04-p6`, task 04-P6, part 1 of 2).
+**Pull request:** to be added when it opens (branch `task/04-p6`, task 04-P6, part 1 of 2; branch `task/04-p7`, task 04-P7, the book history index check).
 
 ## Executive Summary
 
