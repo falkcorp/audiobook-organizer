@@ -1,5 +1,5 @@
 // file: internal/transcode/transcode_coverage_test.go
-// version: 1.2.0
+// version: 1.3.0
 // last-edited: 2026-10-15
 
 package transcode
@@ -220,7 +220,7 @@ func TestCoverage_CleanupStaleTempFiles(t *testing.T) {
 	}
 	os.Chtimes(regularPath, pastTime, pastTime)
 
-	cleaned := CleanupStaleTempFiles(tmpDir, pathutil.AppDirs{}, 1*time.Hour)
+	cleaned := CleanupStaleTempFiles(tmpDir, pathutil.AppDirs{}, 1*time.Hour, false)
 	if cleaned != 2 {
 		t.Errorf("expected 2 cleaned, got %d", cleaned)
 	}
@@ -244,14 +244,14 @@ func TestCoverage_CleanupStaleTempFiles(t *testing.T) {
 
 func TestCoverage_CleanupStaleTempFiles_EmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	cleaned := CleanupStaleTempFiles(tmpDir, pathutil.AppDirs{}, 1*time.Hour)
+	cleaned := CleanupStaleTempFiles(tmpDir, pathutil.AppDirs{}, 1*time.Hour, false)
 	if cleaned != 0 {
 		t.Errorf("expected 0 cleaned, got %d", cleaned)
 	}
 }
 
 func TestCoverage_CleanupStaleTempFiles_NonexistentDir(t *testing.T) {
-	cleaned := CleanupStaleTempFiles("/nonexistent/path", pathutil.AppDirs{}, 1*time.Hour)
+	cleaned := CleanupStaleTempFiles("/nonexistent/path", pathutil.AppDirs{}, 1*time.Hour, false)
 	if cleaned != 0 {
 		t.Errorf("expected 0 cleaned, got %d", cleaned)
 	}
@@ -276,5 +276,38 @@ func TestCoverage_FindFFprobe(t *testing.T) {
 	}
 	if path == "" {
 		t.Error("path should not be empty when ffprobe found")
+	}
+}
+
+// TestCleanupStaleTempFiles_DryRunCountsWithoutDeleting: the preview path
+// reports exactly what a live run would remove and removes nothing.
+func TestCleanupStaleTempFiles_DryRunCountsWithoutDeleting(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "a-transcode.tmp.m4b")
+	fresh := filepath.Join(dir, "b-transcode.tmp.m4b")
+	for _, p := range []string{stale, fresh} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-3 * time.Hour)
+	if err := os.Chtimes(stale, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := CleanupStaleTempFiles(dir, pathutil.AppDirs{}, time.Hour, true); got != 1 {
+		t.Fatalf("dry run counted %d, want 1", got)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("dry run deleted the stale file: %v", err)
+	}
+	if got := CleanupStaleTempFiles(dir, pathutil.AppDirs{}, time.Hour, false); got != 1 {
+		t.Fatalf("live run removed %d, want 1", got)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("live run left the stale file: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("fresh file removed: %v", err)
 	}
 }

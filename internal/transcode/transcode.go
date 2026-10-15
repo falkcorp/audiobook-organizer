@@ -1,5 +1,5 @@
 // file: internal/transcode/transcode.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
 // last-edited: 2026-10-15
 
@@ -439,6 +439,7 @@ func probeFileDuration(filePath string) int64 {
 }
 
 // CleanupStaleTempFiles removes transcode temp files older than maxAge from the given directory tree.
+// With dryRun it only counts the files a live run would remove and deletes none.
 // It is called hourly by the maintenance.temp-file-cleanup op (import_paths_only)
 // to catch orphans from crashed transcodes.
 //
@@ -453,7 +454,7 @@ func probeFileDuration(filePath string) int64 {
 //
 // transcode does not import internal/config; its caller already holds one and
 // builds the value with appdirs.Current().
-func CleanupStaleTempFiles(rootDir string, app pathutil.AppDirs, maxAge time.Duration) int {
+func CleanupStaleTempFiles(rootDir string, app pathutil.AppDirs, maxAge time.Duration, dryRun bool) int {
 	cleaned := 0
 	_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -471,6 +472,11 @@ func CleanupStaleTempFiles(rootDir string, app pathutil.AppDirs, maxAge time.Dur
 		name := info.Name()
 		if strings.Contains(name, "-transcode.tmp") || strings.HasSuffix(name, ".ch.m4b") {
 			if time.Since(info.ModTime()) > maxAge {
+				if dryRun {
+					// Preview: count what a live run would remove, touch nothing.
+					cleaned++
+					return nil
+				}
 				if err := os.Remove(path); err == nil {
 					slog.Info("transcode cleaned up stale temp file", "path", path, "age", time.Since(info.ModTime()).Round(time.Minute))
 					cleaned++
