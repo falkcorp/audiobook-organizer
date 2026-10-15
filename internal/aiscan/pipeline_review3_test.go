@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
 // last-edited: 2026-10-14
 
@@ -391,11 +391,17 @@ func TestRetryStore_StopsWaitingWhenTheContextEnds(t *testing.T) {
 	calls := 0
 	boom := errors.New("store unreadable")
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
-	start := time.Now()
-	err := pm.retryStore(ctx, 1, "testing", func() error { calls++; return boom })
-	require.ErrorIs(t, err, boom, "the last error comes back")
-	require.Equal(t, 1, calls, "no attempt after the context ended")
-	require.Less(t, time.Since(start), 10*time.Second)
+	// Its own deadline: a retryStore that ignored ctx would sleep an hour, and
+	// this test must fail by name rather than by the package timeout.
+	result := make(chan error, 1)
+	go func() { result <- pm.retryStore(ctx, 1, "testing", func() error { calls++; return boom }) }()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, boom, "the last error comes back")
+		require.Equal(t, 1, calls, "no attempt after the context ended")
+	case <-time.After(5 * time.Second):
+		t.Fatal("retryStore kept waiting after its context ended")
+	}
 }
 
 // retryStore makes one attempt more than it has delays, and no more.
