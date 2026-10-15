@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.22 -->
+<!-- version: 10.76.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -4823,7 +4823,7 @@ Given `internal/server` is the slowest package in the suite (~275s), unlocking
 ### Testing
 
 - [ ] **Five goroutine bodies converted to `wg.Go` in #2992 have ZERO test
-      coverage, and two of them are maintenance job entry points.** Measured at
+      coverage, and one of them is a maintenance job entry point.** Measured at
       block level from the raw coverage profile (not enclosing-function
       percentage), execution count 0:
 
@@ -4831,17 +4831,15 @@ Given `internal/server` is the slowest package in the suite (~275s), unlocking
   | --- | --- |
   | `internal/plugins/acoustid/fingerprint_rescan.go:175` | `runFingerprintRescan` |
   | `internal/plugins/maintenance/extract_wav_clips.go:109` | `runExtractWAVClips` |
-  | `internal/maintenance/jobs/repair_missing_files.go:176` | `(*repairMissingFilesJob).Run` |
   | `internal/maintenance/jobs/scan_composer_tags.go:160` | `(*scanComposerTagsJob).Run` |
   | `internal/metafetch/openlibrary.go:131` | `(*OpenLibraryService).Import` |
 
   There is no middle group — every block in a non-zero-coverage function did
   execute. The gap predates the conversion.
 
-  **The two `Run` methods are the ones to care about.** They are maintenance job
-  *entry points* that are entirely untested while their own helpers are partly
-  covered (`rmfr_buildFilenameIndex` 92.9%, `rmfr_repairOne` 48.0%). Testing the
-  helpers and not the entry point means nothing exercises the wiring that decides
+  **The `Run` method is the one to care about.** It is a maintenance job
+  *entry point* that is entirely untested while its own helpers are partly
+  covered. Testing the helpers and not the entry point means nothing exercises the wiring that decides
   whether those helpers are called at all — the shape that let
   `FilterBooksNeedingOrganization` return a confident success while organizing
   zero books.
@@ -13876,8 +13874,10 @@ shape, so repointing that population needs new candidate logic rather than a wir
 - tier 4 (`:366`, author + title-prefixed album dir): stats `<album>/131.mp3` (absent), and its
   single-audio-file fallback does not apply to books holding 130+ files.
 
-`repair_missing_files.go` remains the right model for the *write* (`:566` field set) and for
-dry-run-returns-a-plan (`res.Method` / `res.NewPath` per row); only the candidate search is unfit.
+`repair_missing_files.go` was the right model for the *write* (`:566` field set) and for
+dry-run-returns-a-plan (`res.Method` / `res.NewPath` per row); the job was retired in 04-P14e and
+the file deleted, so read the model from `internal/plugins/maintenance/missing_file_repoint.go`.
+Only the candidate search was unfit.
 
 ### `ResumeRequeue` has two live implementations that disagree about params
 
