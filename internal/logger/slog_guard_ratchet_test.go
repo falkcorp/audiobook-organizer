@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.28.1
+// version: 1.29.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-15
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 283
-	slogRatchetCallCeiling = 1578
+	slogRatchetFileCeiling = 281
+	slogRatchetCallCeiling = 1563
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -211,11 +211,10 @@ var slogRatchet = map[string]int{
 	"internal/reconcile/reconcile.go":                            15,
 	"internal/remux/remux.go":                                    5,
 	"internal/remux/transcode.go":                                7,
-	"internal/scheduler/extra_ops.go":                            2,
 	"internal/scheduler/full_sweep.go":                           2,
 	"internal/scheduler/interval_clock.go":                       3,
 	"internal/scheduler/scheduler.go":                            12,
-	"internal/scheduler/tasks.go":                                17,
+	"internal/scheduler/tasks.go":                                12,
 	"internal/search/bleve_index.go":                             3,
 	"internal/search/register.go":                                5,
 	"internal/server/absauth/audit.go":                           3,
@@ -243,7 +242,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/audiobooks/handler_files.go":       1,
 	"internal/server/handlers/audiobooks/handler_metadata.go":    1,
 	"internal/server/handlers/cache.go":                          2,
-	"internal/server/handlers/dedup/handler.go":                  19,
+	"internal/server/handlers/dedup/handler.go":                  12,
 	"internal/server/handlers/dedup/label_capture.go":            8,
 	"internal/server/handlers/diagnostics.go":                    2,
 	"internal/server/handlers/duplicates/handler.go":             1,
@@ -276,7 +275,6 @@ var slogRatchet = map[string]int{
 	"internal/server/plugins_init.go":                            1,
 	"internal/server/provider_throttle_wire.go":                  3,
 	"internal/server/quarantine_known_bad.go":                    3,
-	"internal/server/reconcile.go":                               1,
 	"internal/server/registry_wire.go":                           7,
 	"internal/server/search_coverage.go":                         10,
 	"internal/server/search_reconciler.go":                       1,

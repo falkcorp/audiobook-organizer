@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.33.2
+// version: 1.33.3
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-15
 
@@ -576,7 +576,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "dedup-llm-review"), nil
 		},
-		IsEnabled:              func() bool { return ts.deps.HasDedupEngine() },
+		// dedup.llm-review is registered by the dedup plugin, which is built
+		// only when the dedup engine AND the embedding store are wired
+		// (dedup/register.go); gating on the engine alone would enqueue an
+		// unregistered def id whenever the embedding store is missing.
+		IsEnabled:              func() bool { return ts.deps.HasDedupPlugin != nil && ts.deps.HasDedupPlugin() },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
