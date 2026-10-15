@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -196,7 +196,17 @@ func TestGetSystemAnnouncements_DuplicateAuthors(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	anns := resp["data"].(map[string]any)["announcements"].([]any)
-	assert.NotEmpty(t, anns)
+	require.NotEmpty(t, anns)
+	// The duplicate-authors notice opens the Review workspace's Authors lane;
+	// /dedup is only a redirect now.
+	var link string
+	for _, a := range anns {
+		m := a.(map[string]any)
+		if m["id"] == "duplicate-authors" {
+			link, _ = m["link"].(string)
+		}
+	}
+	assert.Equal(t, "/review?lane=authors", link)
 }
 
 func TestGetSystemAnnouncements_Empty(t *testing.T) {

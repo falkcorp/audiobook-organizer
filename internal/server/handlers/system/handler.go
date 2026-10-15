@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.5
+// version: 1.22.6
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -308,7 +308,7 @@ func (h *Handler) GetSystemAnnouncements(c *gin.Context) {
 				ID:       "duplicate-authors",
 				Severity: "warning",
 				Message:  fmt.Sprintf("You have %d group(s) of duplicate authors to review", len(groups)),
-				Link:     "/dedup?tab=authors",
+				Link:     "/review?lane=authors",
 			})
 		}
 	}
