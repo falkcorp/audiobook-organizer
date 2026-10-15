@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/label_refinement_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c3f1a95-2e7d-4b60-9a14-6d0b5e8c2f73
 // last-edited: 2026-10-15
 
@@ -40,6 +40,9 @@ func TestLabelRefinementChildrenGetEmptyParams(t *testing.T) {
 		if reg.parents[i] != "parent-op" {
 			t.Errorf("child %d parent = %q, want parent-op (child-of lineage)", i, reg.parents[i])
 		}
+	}
+	if got := rep.phases; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("phases = %v, want one per step %v", got, want)
 	}
 	res, ok := rep.result.(LabelRefinementResult)
 	if !ok || !res.DryRun || res.RebuildOp == "" || res.CalibrateOp == "" {
@@ -114,6 +117,12 @@ func TestLabelRefinementDefShape(t *testing.T) {
 	}
 	if len(found.Permissions) != 1 || found.Permissions[0] != auth.PermSettingsManage {
 		t.Errorf("Permissions = %v, want [settings.manage]", found.Permissions)
+	}
+	if found.ProgressTimeout < 15*time.Minute {
+		t.Errorf("ProgressTimeout = %v, want >= 15m: Follow only relays progress the child writes", found.ProgressTimeout)
+	}
+	if found.Liveness != sdk.LivenessManual || found.ResumePolicy != sdk.ResumeDrop {
+		t.Errorf("Liveness = %v, ResumePolicy = %v, want LivenessManual and ResumeDrop", found.Liveness, found.ResumePolicy)
 	}
 	if !found.Cancellable || found.Timeout != 2*time.Hour || found.ConcurrencyKey != LabelRefinementDefID {
 		t.Errorf("def = %+v", *found)

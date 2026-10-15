@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/label_refinement.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b8e2d7a-91c3-4f05-b6a8-3d0e5c7f1a92
 // last-edited: 2026-10-15
 
@@ -17,6 +17,10 @@
 // the child op directly. The Apply==false-on-empty-params guarantee is pinned by
 // canaries in rebuild_gold_labels_test.go and calibrate_composite_test.go, and
 // the empty bodies by TestLabelRefinementChildrenGetEmptyParams.
+//
+// DEDUPE. A child enqueue can join an already-queued or running manual `{}` run
+// of the same op through params dedupe; that child then has no parent row of its
+// own (it shows under whoever enqueued it first), though this op still follows it.
 //
 // CANCEL. Canceling this op stops the chain; like dedup.run-all it does NOT
 // cancel the child running at that moment (the registry has no parent->child
@@ -106,23 +110,28 @@ func (p *Plugin) runLabelRefinement(ctx context.Context, _ json.RawMessage, rep 
 
 	total := len(labelRefinementSteps) * labelRefinementStepUnits
 	childIDs := make([]string, len(labelRefinementSteps))
+	parentID := opsregistry.ReporterOpID(rep)
 	for i, step := range labelRefinementSteps {
-		var opts []sdk.EnqueueOption
-		if parentID := opsregistry.ReporterOpID(rep); parentID != "" {
-			// Lineage only: children show under this run in Operations.
-			opts = append(opts, sdk.WithParent(parentID))
-		}
-		childID, err := p.registry.EnqueueOp(ctx, step.DefID, labelRefinementChildParams{}, opts...)
+		// One phase per step, as dedup.run-all does, so the Operations page
+		// shows which step is running.
+		err := rep.RunPhase(ctx, step.DefID, func(ctx context.Context, _ opsregistry.Reporter) error {
+			var opts []sdk.EnqueueOption
+			if parentID != "" {
+				// Lineage only: children show under this run in Operations.
+				opts = append(opts, sdk.WithParent(parentID))
+			}
+			childID, err := p.registry.EnqueueOp(ctx, step.DefID, labelRefinementChildParams{}, opts...)
+			if err != nil {
+				return fmt.Errorf("%s: could not start %s: %w", step.Label, step.DefID, err)
+			}
+			if childID == "" {
+				return fmt.Errorf("%s: the registry returned no operation id for %s", step.Label, step.DefID)
+			}
+			childIDs[i] = childID
+			_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: started %s (%s)", step.Label, step.DefID, childID))
+			return p.followLabelRefinementChild(ctx, rep, step, childID, i*labelRefinementStepUnits, total)
+		})
 		if err != nil {
-			return fmt.Errorf("%s: could not start %s: %w", step.Label, step.DefID, err)
-		}
-		if childID == "" {
-			return fmt.Errorf("%s: the registry returned no operation id for %s", step.Label, step.DefID)
-		}
-		childIDs[i] = childID
-		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: started %s (%s)", step.Label, step.DefID, childID))
-
-		if err := p.followLabelRefinementChild(ctx, rep, step, childID, i*labelRefinementStepUnits, total); err != nil {
 			return err
 		}
 	}
