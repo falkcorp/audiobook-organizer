@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package database
 
@@ -465,7 +465,7 @@ func TestFilterIndex_RollbackGapIsDetectedAndReindexed(t *testing.T) {
 	// Rolled forward: a fresh store over the same DB, as at boot.
 	booted := NewPebbleActivityStore(s.db)
 	require.True(t, booted.FilterIndexBackfillDone(), "the sentinel survived the rollback — the hazard")
-	res, err := booted.ReconcileFilterIndexCoverage(context.Background())
+	res, err := booted.ReconcileFilterIndexCoverage(context.Background(), nil)
 	require.NoError(t, err)
 	assert.True(t, res.GapFound)
 	assert.Equal(t, 30, res.Reindexed)
@@ -482,7 +482,7 @@ func TestFilterIndex_RollbackGapIsDetectedAndReindexed(t *testing.T) {
 	_, err = booted.Record(ActivityEntry{Tier: "change", Source: "new-build", Summary: "after"})
 	require.NoError(t, err)
 	again := NewPebbleActivityStore(s.db)
-	res, err = again.ReconcileFilterIndexCoverage(context.Background())
+	res, err = again.ReconcileFilterIndexCoverage(context.Background(), nil)
 	require.NoError(t, err)
 	assert.False(t, res.GapFound)
 	assert.True(t, again.FilterIndexBackfillDone())
@@ -595,4 +595,108 @@ func BenchmarkActivityListFilter(b *testing.B) {
 			})
 		}
 	}
+}
+
+// TestFilterIndex_ReconcileChecksFromTheMarkAtOpen: the reconcile runs as an
+// op well after the store opened, and this boot's own writes (the activity
+// mirror's startup lines) advance the live mark past rows a rolled-back build
+// wrote, because those rows are older than the boot's. Checking from the live
+// mark would find no gap and leave the rolled-back rows unindexed behind a
+// "complete" sentinel. The check starts from the mark persisted at open.
+func TestFilterIndex_ReconcileChecksFromTheMarkAtOpen(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	now := time.Now().UTC()
+	seedBulk(t, s, 50, now.Add(-3*time.Hour), time.Second, func(int) ActivityEntry {
+		return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
+	})
+	require.NoError(t, s.MarkFilterIndexBackfillDone())
+	for i := 0; i < 30; i++ {
+		writeLegacyRow(t, s, now.Add(-2*time.Hour+time.Duration(i)*time.Second), "old-build")
+	}
+
+	booted := NewPebbleActivityStore(s.db)
+	// This boot writes a row newer than the rollback rows, as the activity
+	// mirror does within seconds of start.
+	_, err := booted.Record(ActivityEntry{Tier: "change", Source: "new-build", Summary: "boot line"})
+	require.NoError(t, err)
+	require.Greater(t, booted.seenThrough.Load(), booted.seenThroughAtOpen,
+		"precondition: this boot's write moved the live mark past the rollback rows")
+
+	res, err := booted.ReconcileFilterIndexCoverage(context.Background(), nil)
+	require.NoError(t, err)
+	assert.True(t, res.GapFound, "the rollback rows are above the mark at open, so the check must find them")
+	assert.GreaterOrEqual(t, res.Reindexed, 30)
+	assert.True(t, booted.FilterIndexBackfillDone())
+	assertFilterIndexConsistent(t, booted)
+
+	got, err := booted.QueryWithPartial(context.Background(), ActivityFilter{Source: "old-build", Limit: 100})
+	require.NoError(t, err)
+	assert.Len(t, got.Entries, 30)
+	assert.False(t, got.Partial)
+}
+
+// TestFilterIndex_ReconcileReportsProgress: the reconcile reports from the
+// gap check and from every committed reindex chunk, so the op's liveness clock
+// stays fresh through a long reindex.
+func TestFilterIndex_ReconcileReportsProgress(t *testing.T) {
+	prevInterval, prevCommit := activityCtxCheckInterval, activityFilterBackfillCommitEvery
+	activityCtxCheckInterval, activityFilterBackfillCommitEvery = 4, 10
+	t.Cleanup(func() { activityCtxCheckInterval, activityFilterBackfillCommitEvery = prevInterval, prevCommit })
+
+	type call struct {
+		phase string
+		rows  int
+	}
+	record := func(calls *[]call) FilterIndexProgress {
+		return func(phase string, rows int) { *calls = append(*calls, call{phase, rows}) }
+	}
+
+	t.Run("clean check", func(t *testing.T) {
+		s := newTestPebbleActivityStore(t)
+		now := time.Now().UTC()
+		seedBulk(t, s, 5, now.Add(-3*time.Hour), time.Second, func(int) ActivityEntry {
+			return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
+		})
+		require.NoError(t, s.MarkFilterIndexBackfillDone())
+		booted := NewPebbleActivityStore(s.db)
+		// Indexed rows above the mark at open: the check reads them and finds
+		// every filter key.
+		seedBulk(t, s, 20, now.Add(-time.Hour), time.Second, func(int) ActivityEntry {
+			return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
+		})
+		var calls []call
+		res, err := booted.ReconcileFilterIndexCoverage(context.Background(), record(&calls))
+		require.NoError(t, err)
+		require.False(t, res.GapFound)
+		require.NotEmpty(t, calls, "a check over 20 rows at interval 4 must report")
+		for _, c := range calls {
+			assert.Equal(t, "check", c.phase)
+		}
+	})
+
+	t.Run("gap reindex", func(t *testing.T) {
+		s := newTestPebbleActivityStore(t)
+		now := time.Now().UTC()
+		seedBulk(t, s, 5, now.Add(-3*time.Hour), time.Second, func(int) ActivityEntry {
+			return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
+		})
+		require.NoError(t, s.MarkFilterIndexBackfillDone())
+		for i := 0; i < 30; i++ {
+			writeLegacyRow(t, s, now.Add(-time.Hour+time.Duration(i)*time.Second), "old-build")
+		}
+		booted := NewPebbleActivityStore(s.db)
+		var calls []call
+		res, err := booted.ReconcileFilterIndexCoverage(context.Background(), record(&calls))
+		require.NoError(t, err)
+		require.True(t, res.GapFound)
+		var reindex []int
+		for _, c := range calls {
+			if c.phase == "reindex" {
+				reindex = append(reindex, c.rows)
+			}
+		}
+		require.GreaterOrEqual(t, len(reindex), 3, "30 rows in chunks of 10 report at least three times, got %v", reindex)
+		assert.IsNonDecreasing(t, reindex)
+		assert.Equal(t, res.Reindexed, reindex[len(reindex)-1], "the last report is the final count")
+	})
 }

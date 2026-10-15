@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package handlers
 
@@ -122,7 +122,7 @@ func goldenReviewStore(t testing.TB) (*database.PebbleStore, *metafetch.Service)
 		}
 		require.NoError(t, store.PutMetadataCache(entry))
 	}
-	_, err = store.BackfillBookAtPathIndex(t.Context())
+	_, err = store.BackfillBookAtPathIndex(t.Context(), nil)
 	require.NoError(t, err)
 	return store, metafetch.NewService(store)
 }

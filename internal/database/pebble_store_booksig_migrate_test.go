@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_migrate_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9e51c0d3-2a87-4f16-b74e-5c8203f9a1d6
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package database
 
@@ -434,7 +434,7 @@ func TestBookSigMigrate_RaceKeepsBookAtPathKey(t *testing.T) {
 	const id = "01MIGRATEATPATH000000000"
 	migrateSeedLegacyRow(t, store, id, "atpath", nil)
 	const pathA = "/tmp/migrate_atpath.m4b"
-	_, err := store.RebuildBookAtPathIndex(context.Background())
+	_, err := store.RebuildBookAtPathIndex(context.Background(), nil)
 	require.NoError(t, err)
 
 	defer func() { bookSigMigrateAfterRecheckHook = nil }()

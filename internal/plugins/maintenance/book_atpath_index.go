@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -42,7 +42,7 @@ type bookAtPathVerifier interface {
 }
 
 type bookAtPathRebuilder interface {
-	RebuildBookAtPathIndex(ctx context.Context) (database.BookAtPathBackfillResult, error)
+	RebuildBookAtPathIndex(ctx context.Context, progress database.BookAtPathProgress) (database.BookAtPathBackfillResult, error)
 }
 
 func (p *Plugin) bookAtPathIndexVerifyDef() sdk.OperationDef {
@@ -156,7 +156,7 @@ func (p *Plugin) runBookAtPathIndexBackfill(ctx context.Context, _ json.RawMessa
 			"(and no store in its decorator chain does)", store)
 	}
 	_ = reporter.UpdateProgress(0, 1, "rebuilding book_atpath: index")
-	res, err := r.RebuildBookAtPathIndex(ctx)
+	res, err := r.RebuildBookAtPathIndex(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("rebuild book_atpath index (scanned %d before failing; sentinel "+
 			"state unchanged by this run): %w", res.Scanned, err)

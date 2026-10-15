@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers_bench_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d81f5a-6e24-4b97-a0f2-1d9e7b45c8a0
-// last-edited: 2026-10-02
+// last-edited: 2026-10-15
 
 package database
 
@@ -74,7 +74,7 @@ func after50kUpdatesStore(b *testing.B) *PebbleStore {
 			}
 			ids = append(ids, bk.ID)
 		}
-		if _, err := s.BackfillBookAtPathIndex(context.Background()); err != nil {
+		if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
 			after50kErr = err
 			return
 		}
