@@ -1,5 +1,5 @@
 // file: internal/server/ai_author_reassign_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b1d3f27-6c94-4a05-9e21-3d7f0a58c4b6
 // last-edited: 2026-10-15
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -83,7 +84,10 @@ func TestReassignBooksFromAuthor_AllSucceed(t *testing.T) {
 			"b2": {{BookID: "b2", AuthorID: mergeID, Role: "author"}},
 		},
 	}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 0 {
+		t.Fatalf("booksFailed = %d, want 0", booksFailed)
+	}
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %v", errs)
 	}
@@ -106,7 +110,10 @@ func TestReassignBooksFromAuthor_SetFailureBlocksDelete(t *testing.T) {
 		},
 		setErr: map[string]error{"b2": errors.New("write failed")},
 	}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 1 {
+		t.Fatalf("booksFailed = %d, want 1", booksFailed)
+	}
 	if len(errs) == 0 {
 		t.Fatal("expected a non-empty error slice (must block author delete), got none")
 	}
@@ -119,7 +126,10 @@ func TestReassignBooksFromAuthor_AuthorsReadFailureBlocksDelete(t *testing.T) {
 		books:      []database.BookCore{{ID: "b1"}},
 		authorsErr: map[string]error{"b1": errors.New("read failed")},
 	}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 1 {
+		t.Fatalf("booksFailed = %d, want 1", booksFailed)
+	}
 	if len(errs) == 0 {
 		t.Fatal("expected an error when a book's authors can't be read")
 	}
@@ -128,7 +138,10 @@ func TestReassignBooksFromAuthor_AuthorsReadFailureBlocksDelete(t *testing.T) {
 // A failed book-list read blocks the delete too.
 func TestReassignBooksFromAuthor_BookListFailureBlocksDelete(t *testing.T) {
 	f := &fakeReassignStore{booksErr: errors.New("list failed")}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 0 {
+		t.Fatalf("booksFailed = %d, want 0", booksFailed)
+	}
 	if len(errs) != 1 {
 		t.Fatalf("expected exactly one error for a failed book list, got %v", errs)
 	}
@@ -146,7 +159,10 @@ func TestReassignBooksFromAuthor_DedupWhenAlreadyCreditsKeep(t *testing.T) {
 			},
 		},
 	}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 0 {
+		t.Fatalf("booksFailed = %d, want 0", booksFailed)
+	}
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %v", errs)
 	}
@@ -162,7 +178,10 @@ func TestReassignBooksFromAuthor_AGoneKeepAuthorMovesNothing(t *testing.T) {
 	f := &fakeReassignStore{keepGone: true,
 		books:   []database.BookCore{{ID: "b1"}},
 		authors: map[string][]database.BookAuthor{"b1": {{BookID: "b1", AuthorID: mergeID, Role: "author"}}}}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 0 {
+		t.Fatalf("booksFailed = %d, want 0", booksFailed)
+	}
 	if len(errs) != 1 {
 		t.Fatalf("want one error, got %v", errs)
 	}
@@ -178,11 +197,25 @@ func TestReassignBooksFromAuthor_ARedirectedKeepAuthorMovesNothing(t *testing.T)
 	f := &fakeReassignStore{keepRedirected: true,
 		books:   []database.BookCore{{ID: "b1"}},
 		authors: map[string][]database.BookAuthor{"b1": {{BookID: "b1", AuthorID: mergeID, Role: "author"}}}}
-	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	errs, _, booksFailed := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if booksFailed != 0 {
+		t.Fatalf("booksFailed = %d, want 0", booksFailed)
+	}
 	if len(errs) != 1 {
 		t.Fatalf("want one error, got %v", errs)
 	}
 	if len(f.setCalls) != 0 || len(f.ledger) != 0 {
 		t.Fatalf("nothing may move or be journaled: sets %v ledger %d", f.setCalls, len(f.ledger))
+	}
+}
+
+// The not-deleted line tells a reassign that never reached a book (the keep
+// author or the book list could not be read) apart from books that failed.
+func TestReassignBlockedMessage(t *testing.T) {
+	if got := reassignBlockedMessage("author", 7, 0); strings.Contains(got, "book(s)") || !strings.Contains(got, "did not start") {
+		t.Errorf("no books tried: got %q", got)
+	}
+	if got := reassignBlockedMessage("aliased author", 7, 3); !strings.Contains(got, "aliased author 7 NOT deleted: 3 book(s) could not be reassigned") {
+		t.Errorf("books failed: got %q", got)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/ai_author_reassign.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e8c1b53-9a27-4d60-bf14-7c9e0a35d2f1
 // last-edited: 2026-10-15
 
@@ -38,26 +38,30 @@ type authorReassignStore interface {
 // date (authormerge.MoveResult.Problems): reported, but they do not hold the
 // author back.
 //
-// It returns a slice of per-book error strings. An EMPTY slice means every book
+// It returns a slice of error strings and booksFailed, how many of those are
+// books that were tried and not moved. errs with booksFailed == 0 means the
+// reassign never reached a book (the keep author or the book list could not be
+// read); reassignBlockedMessage words the two cases apart.
+// An EMPTY errs slice means every book
 // that credited mergeID was successfully reassigned, so mergeID is safe to delete.
 // A NON-EMPTY slice means at least one book still credits mergeID — deleting
 // mergeID would leave a dangling BookAuthor row (lost author attribution), so the
 // caller MUST skip the delete. This is the fix for the prior code, which deleted
 // mergeID unconditionally even when a book's reassignment (or its author read)
 // had failed.
-func reassignBooksFromAuthor(store authorReassignStore, opID string, mergeID, keepID int) (errs, problems []string) {
+func reassignBooksFromAuthor(store authorReassignStore, opID string, mergeID, keepID int) (errs, problems []string, booksFailed int) {
 	keep, err := store.GetAuthorByID(keepID)
 	if err != nil {
-		return []string{fmt.Sprintf("read keep author %d: %v", keepID, err)}, nil
+		return []string{fmt.Sprintf("read keep author %d: %v", keepID, err)}, nil, 0
 	}
 	if keep == nil || keep.ID != keepID {
-		return []string{fmt.Sprintf("keep author %d no longer exists; nothing reassigned off author %d", keepID, mergeID)}, nil
+		return []string{fmt.Sprintf("keep author %d no longer exists; nothing reassigned off author %d", keepID, mergeID)}, nil, 0
 	}
 	// ForRelink includes the trash: the caller deletes mergeID afterwards,
 	// and DeleteAuthor sweeps trashed books' junction rows too.
 	books, err := store.GetBooksByAuthorIDForRelinkCore(mergeID)
 	if err != nil {
-		return []string{fmt.Sprintf("get books for author %d: %v", mergeID, err)}, nil
+		return []string{fmt.Sprintf("get books for author %d: %v", mergeID, err)}, nil, 0
 	}
 
 	// A book carrying two role rows for mergeID comes back once per row; it is
@@ -74,6 +78,7 @@ func reassignBooksFromAuthor(store authorReassignStore, opID string, mergeID, ke
 			// from it, so record the failure (blocks the delete) instead of the
 			// prior silent `continue`.
 			errs = append(errs, fmt.Sprintf("get authors for book %s: %v", book.ID, err))
+			booksFailed++
 			continue
 		}
 		hasKeep := false
@@ -101,16 +106,29 @@ func reassignBooksFromAuthor(store authorReassignStore, opID string, mergeID, ke
 		})
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("update book %s: %v", book.ID, err))
+			booksFailed++
 			continue
 		}
 		if moved.PrimaryErr != nil {
 			// The credits moved but the book still names mergeID as its primary.
 			errs = append(errs, fmt.Sprintf("book %s: credits moved but its primary author could not be repointed: %v", book.ID, moved.PrimaryErr))
+			booksFailed++
 			continue
 		}
 		for _, problem := range moved.Problems {
 			problems = append(problems, fmt.Sprintf("book %s: %s", book.ID, problem))
 		}
 	}
-	return errs, problems
+	return errs, problems, booksFailed
+}
+
+// reassignBlockedMessage says why mergeID was not deleted after a reassign that
+// returned errors. label is "author" or "aliased author". booksFailed == 0 means
+// no book was tried: the keep author or the book list could not be read, and the
+// errors above name which.
+func reassignBlockedMessage(label string, mergeID, booksFailed int) string {
+	if booksFailed == 0 {
+		return fmt.Sprintf("%s %d NOT deleted: the reassign did not start (see the error above)", label, mergeID)
+	}
+	return fmt.Sprintf("%s %d NOT deleted: %d book(s) could not be reassigned", label, mergeID, booksFailed)
 }
