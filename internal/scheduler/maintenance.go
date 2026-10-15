@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-10-15
 
@@ -212,6 +212,9 @@ func TaskV2DefIDs() map[string]string {
 // makes the window skip it instead; its own 24h interval runs it later.
 var taskConcurrencySiblings = map[string][]string{
 	"cleanup_activity_log": {"maintenance.nightly-compact-activity-log", "maintenance.compact-activity-log"},
+	// maintenance.transcode-temp-cleanup shares temp-file-cleanup's ConcurrencyKey
+	// (a separate def, so the registry does not dedupe the two).
+	"temp_file_cleanup": {"maintenance.transcode-temp-cleanup"},
 }
 
 // isTaskRunning is the internal implementation.
