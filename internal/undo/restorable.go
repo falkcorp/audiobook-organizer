@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.36.1
+// version: 1.37.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package undo
 
@@ -330,6 +330,11 @@ var revertableBookFields = map[string]string{
 	// the book unnumbered in its series. It is restored only paired with that
 	// link (CheckSequencePaired), never into another series.
 	"series_sequence": "SeriesSequence",
+	// Cleared by the Missing files repair (reconcile.missing-files) when it
+	// repoints a book at a file whose content those hashes do not name
+	// (OldValue is the hash it cleared); the revert puts it back.
+	"file_hash":           "FileHash",
+	"organized_file_hash": "OrganizedFileHash",
 }
 
 // IsRevertableBookField reports whether a metadata_update row for field names
