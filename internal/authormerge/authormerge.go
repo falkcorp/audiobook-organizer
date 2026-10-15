@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
 // last-edited: 2026-10-15
 
@@ -288,6 +288,16 @@ func MergeDelete(store DeleteStore, opID string, from, into database.Author) (De
 	// The holder is read the way the restore and the undo preflight read it
 	// (the raw entry, counted only for a live row), not through GetAuthorByName,
 	// which follows a redirect, so the row records what the restore will judge.
+	//
+	// This read is provisional: after the delete, MergeSnapshotFrom replaces it
+	// with what the delete itself saw under its locks (OwnedNameIndex). It stays
+	// strict anyway, refusing the merge on a store that cannot read the holder,
+	// because the provisional value is exactly what the undo reads when that
+	// rewrite fails (a Problem, the author already gone), and a guessed value
+	// there either drops the restored author's name entry or lets the restore
+	// claim one it never held. Strict costs no merge in practice: the stores that
+	// can merge-delete (database.AuthorMergeDeleter: PebbleStore, MockStore) can
+	// all read the holder.
 	names, ok := database.AsCapability[database.AuthorNameHolderReader](store)
 	if !ok {
 		return out, fmt.Errorf("this store cannot read the author name index for the undo row")
