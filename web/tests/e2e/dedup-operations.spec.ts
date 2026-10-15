@@ -1,5 +1,5 @@
 // file: web/tests/e2e/dedup-operations.spec.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-2c3d4e5f6a7b
 // last-edited: 2026-10-15
 
@@ -78,7 +78,7 @@ async function setupDedupWithOperations(page: Page, opts: {
 test.describe('Production Company Resolution', () => {
   test('Find Real Author button only appears on production company groups', async ({ page }) => {
     await setupDedupWithOperations(page);
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     const findBtns = page.getByRole('button', { name: /find real author/i });
@@ -89,7 +89,7 @@ test.describe('Production Company Resolution', () => {
 
   test('production company badge is distinguishable from other groups', async ({ page }) => {
     await setupDedupWithOperations(page);
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     const prodChips = page.getByText('Production Company');
@@ -138,7 +138,7 @@ test.describe('Production Company Resolution', () => {
     });
 
 
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     // Arm the waiter BEFORE clicking. waitForRequest only observes requests
@@ -159,7 +159,7 @@ test.describe('Production Company Resolution', () => {
 test.describe('Dedup Operation Progress', () => {
   test('merge operation shows success feedback', async ({ page }) => {
     await setupDedupWithOperations(page);
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /merge into "brandon sanderson"/i }).click();
@@ -170,7 +170,7 @@ test.describe('Dedup Operation Progress', () => {
 
   test('split operation shows feedback', async ({ page }) => {
     await setupDedupWithOperations(page);
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     const splitBtn = page.getByRole('button', { name: /split into 2 authors/i });
@@ -200,7 +200,7 @@ test.describe('Dedup Error Handling', () => {
     });
 
 
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByText(/error|failed/i).first()).toBeVisible();
@@ -208,7 +208,7 @@ test.describe('Dedup Error Handling', () => {
 
   test('handles merge failure gracefully', async ({ page }) => {
     await setupDedupWithOperations(page);
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     // Override merge to fail
@@ -238,7 +238,7 @@ test.describe('Dedup Error Handling', () => {
     });
 
 
-    await page.goto('/dedup?tab=authors');
+    await page.goto('/review?lane=authors');
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /find real author/i }).first().click();
