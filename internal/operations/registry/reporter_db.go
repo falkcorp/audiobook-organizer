@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 package registry
 
@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
@@ -828,6 +829,17 @@ func tierForLevel(level string) string {
 	return "change"
 }
 
+// NoOpAttrKey is the reporter.Log attribute that marks a line as reporting a
+// run that found nothing to do. recordActivity turns it into activity.NoOpTag
+// on the mirrored activity entry, which the activity feed hides by default, so
+// an op enqueued at every boot that is usually a no-op (the one-time backfills
+// startBackfills enqueues) does not add a visible line per restart. Pass it as
+// NoOpAttr().
+const NoOpAttrKey = "no_op"
+
+// NoOpAttr returns the NoOpAttrKey attribute for reporter.Log.
+func NoOpAttr() slog.Attr { return slog.Bool(NoOpAttrKey, true) }
+
 func (r *dbReporter) recordActivity(entry logEntry) {
 	if r.activityRecorder == nil {
 		return
@@ -845,6 +857,9 @@ func (r *dbReporter) recordActivity(entry logEntry) {
 	}
 	if phase, ok := details["phase"].(string); ok && phase != "" {
 		tags = append(tags, "phase:"+phase)
+	}
+	if noOp, ok := details[NoOpAttrKey].(bool); ok && noOp {
+		tags = append(tags, activity.NoOpTag)
 	}
 	_ = r.activityRecorder.Record(database.ActivityEntry{
 		Timestamp:   entry.createdAt,
