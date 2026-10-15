@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
 // last-edited: 2026-10-15
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -516,6 +517,40 @@ func TestActivityFilterIndexReconcile_ProgressStampsLiveness(t *testing.T) {
 	require.NoError(t, reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
 	if rep.stamps < 4 {
 		t.Fatalf("UpdateProgress calls = %d, want at least 4 (start and three callbacks)", rep.stamps)
+	}
+}
+
+// The gap check reports every few dozen rows; the op stamps liveness at most
+// once an interval for it (a reindex chunk always stamps), so a long check
+// does not rewrite the op row thousands of times.
+func TestActivityFilterIndexReconcile_CheckStampsAreThrottled(t *testing.T) {
+	prevEvery, prevNow := activityFilterIndexCheckStampEvery, activityFilterIndexNow
+	t.Cleanup(func() { activityFilterIndexCheckStampEvery, activityFilterIndexNow = prevEvery, prevNow })
+	now := time.Unix(1_700_000_000, 0)
+	activityFilterIndexCheckStampEvery = time.Second
+	activityFilterIndexNow = func() time.Time { return now }
+
+	f := &fakeReconcileStore{done: true, reconcile: func(_ context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+		for i := 1; i <= 10; i++ { // ten reports inside one interval
+			progress("check", i*64)
+		}
+		now = now.Add(2 * time.Second)
+		progress("check", 704) // the next interval
+		progress("reindex", 2000)
+		progress("reindex", 4000) // reindex is never throttled
+		return database.FilterIndexReconcileResult{}, nil
+	}}
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	// start stamp + first check + second-interval check + two reindex chunks
+	assert.Equal(t, 5, rep.stamps)
+}
+
+// The reconcile stamps liveness by hand, so the def must declare it: the
+// RunItems declaration was only true of the full backfill.
+func TestActivityFilterIndexBackfillDef_DeclaresManualLiveness(t *testing.T) {
+	if got := (&Plugin{}).activityFilterIndexBackfillDef().Liveness; got != sdk.LivenessManual {
+		t.Fatalf("Liveness = %v, want LivenessManual", got)
 	}
 }
 
