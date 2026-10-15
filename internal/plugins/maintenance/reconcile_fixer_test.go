@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-14
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -43,6 +44,21 @@ func (s *rmWarmingStore) BookFilesAtPath(path string) ([]database.BookFile, erro
 		return nil, fmt.Errorf("%w: memdb is not serving", database.ErrBookFilesAtPathUnavailable)
 	}
 	return s.PebbleStore.BookFilesAtPath(path)
+}
+
+// rmFencedFiles is the book_file store of a run whose fence fires at its next
+// book_file write: ModifyBookFile refuses with opswriter.ErrFenced while
+// fenced is set, as a stopped run's writer does.
+type rmFencedFiles struct {
+	*database.PebbleStore
+	fenced atomic.Bool
+}
+
+func (s *rmFencedFiles) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if s.fenced.Load() {
+		return nil, fmt.Errorf("modify book_file %s: %w", fileID, opswriter.ErrFenced)
+	}
+	return s.PebbleStore.ModifyBookFile(bookID, fileID, fn)
 }
 
 // rmFixture is a library with missing-file books and untracked files on
@@ -119,11 +135,17 @@ func (f *rmFixture) plan(t *testing.T) *repairs.PlanResult {
 	return res
 }
 
-// writer is an apply op's journaled Writer; opID names the op.
+// writer is a new apply op's journaled Writer; opID names the op.
 func (f *rmFixture) writer() (*repairs.Writer, string) {
 	f.applies++
 	opID := fmt.Sprintf("repairs-apply-%d", f.applies)
-	return repairs.NewWriter(f.s, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, opID), opID
+	return f.writerFor(opID, f.s), opID
+}
+
+// writerFor is the journaled Writer of op opID writing book_file rows
+// through files.
+func (f *rmFixture) writerFor(opID string, files repairs.BookFileWriter) *repairs.Writer {
+	return repairs.NewWriter(f.s, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(files, f.s, opID)
 }
 
 // apply runs a real (not dry-run) apply of rowIDs and returns its result
@@ -662,4 +684,58 @@ func TestReconcileFixer_StateRoundTrips(t *testing.T) {
 	var back rmCandidate
 	require.NoError(t, json.Unmarshal(raw, &back))
 	assert.Equal(t, c, back)
+}
+
+// TestReconcileFixer_ResumeFinishesARowCutOffBetweenItsTwoWrites (BL-1): a
+// run stopped after step 1 (the book's path) and before step 2 (its file
+// row) reports the row canceled_skipped with the book at the matched file
+// and the row still at the old path. Re-planning that state gives the
+// planned fingerprint, and the resumed apply (same op) writes step 2 only:
+// the row ends applied with both writes in place, and the revert of the op
+// puts both back.
+func TestReconcileFixer_ResumeFinishesARowCutOffBetweenItsTwoWrites(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	one := f.missingBook(t, "Book One", "old/One.m4b", nil)
+	f.file(t, "new/One.m4b")
+	f.match(one, "Book One", "old/One.m4b", "new/One.m4b", "hash", "high")
+	before := f.state(t, one)
+	res := f.plan(t)
+	planned := rmRow(t, res, one)
+	require.True(t, planned.Applicable(), planned.SkipReason)
+
+	files := &rmFencedFiles{PebbleStore: f.s}
+	files.fenced.Store(true)
+	const opID = "repairs-apply-cut"
+	run := func() *repairs.ApplyResult {
+		out, err := repairs.RunApply(context.Background(), f.fx, res, "plan-1", []string{planned.RowID}, false,
+			repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor(opID, files), OpID: opID}, &fakeReporter{})
+		require.NoError(t, err)
+		return out
+	}
+	out := run()
+	require.Equal(t, repairs.OutcomeCanceledSkip, rmOutcomes(out)[planned.RowID], "%+v", out.Rows)
+	mid := f.state(t, one)
+	assert.Equal(t, f.path("new/One.m4b"), mid.Path, "step 1 written")
+	assert.Equal(t, before.Files, mid.Files, "step 2 not written")
+
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	assert.True(t, fresh.Applicable(), fresh.Reason)
+	assert.Equal(t, planned.Fingerprint, fresh.Fingerprint, "the cut-off state re-plans as planned")
+
+	files.fenced.Store(false)
+	out = run()
+	require.Equal(t, repairs.OutcomeApplied, rmOutcomes(out)[planned.RowID], "%+v", out.Rows)
+	done := f.state(t, one)
+	assert.Equal(t, f.path("new/One.m4b"), done.Path)
+	require.Len(t, done.Files, 1)
+	for _, loc := range done.Files {
+		assert.Equal(t, f.path("new/One.m4b"), loc.Path)
+		assert.False(t, loc.Missing)
+	}
+
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation(opID)
+	require.NoError(t, err)
+	assert.Equal(t, before, f.state(t, one), "the revert puts the book and its row back")
 }
