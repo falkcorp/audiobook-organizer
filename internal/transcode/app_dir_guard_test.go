@@ -1,7 +1,7 @@
 // file: internal/transcode/app_dir_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a7f4b61-8c05-4d39-9e27-6b1d3a50f8c4
-// last-edited: 2026-08-30
+// last-edited: 2026-10-15
 
 package transcode
 
@@ -64,7 +64,7 @@ func TestCleanupStaleTempFiles_SkipsAppDirs(t *testing.T) {
 				}
 			}
 
-			cleaned := CleanupStaleTempFiles(root, tt.app(root), 1*time.Hour)
+			cleaned := CleanupStaleTempFiles(root, tt.app(root), 1*time.Hour, false)
 			if cleaned != tt.wantCleaned {
 				t.Errorf("cleaned = %d, want %d", cleaned, tt.wantCleaned)
 			}
