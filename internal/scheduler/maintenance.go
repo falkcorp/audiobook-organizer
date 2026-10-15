@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-10-15
 
@@ -171,7 +171,7 @@ var taskV2DefIDs = map[string]string{
 	"candidate_fetch":             "metadata.candidate-fetch",
 	"catalog_harvest":             "catalog.harvest-authors",
 	"temp_file_cleanup":           "maintenance.temp-file-cleanup",
-	"transcode_temp_cleanup":      "maintenance.temp-file-cleanup",
+	"transcode_temp_cleanup":      "maintenance.transcode-temp-cleanup",
 	"trash_cleanup":               "maintenance.trash-cleanup",
 	"metadata_upgrade":            "scheduler.metadata-upgrade",
 	"author_split_scan":           "maintenance.author-split-scan",

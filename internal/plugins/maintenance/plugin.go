@@ -143,6 +143,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.purgeDeletedDef(),
 		p.tombstoneCleanupDef(),
 		p.tempFileCleanupDef(),
+		p.transcodeTempCleanupDef(),
 		p.cleanupActivityLogDef(),
 		p.compactActivityLogDef(),
 		p.nightlyCompactActivityLogDef(),

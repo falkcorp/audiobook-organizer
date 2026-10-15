@@ -1,5 +1,5 @@
 // file: internal/scheduler/transcode_temp_cleanup_task_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d41c7e2-3a96-4f05-b7d8-2e6f90a1c354
 // last-edited: 2026-10-15
 
@@ -21,8 +21,8 @@ import (
 
 // TestTranscodeTempCleanupTask pins the task that replaced the per-import-path
 // transcode cleanup ticker goroutines: hourly, runs at start, outside the
-// maintenance window, and enqueues the SURVIVOR op id (never the alias) with
-// the import_paths_only params.
+// maintenance window, and enqueues its own def, maintenance.transcode-temp-cleanup (not the cron-scheduled
+// temp-file-cleanup, whose Schedule makes the registry dedupe on def id alone).
 func TestTranscodeTempCleanupTask(t *testing.T) {
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row
@@ -38,7 +38,7 @@ func TestTranscodeTempCleanupTask(t *testing.T) {
 
 	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
 	require.NoError(t, reg.RegisterOp(opsregistry.OperationDef{
-		ID:           "maintenance.temp-file-cleanup",
+		ID:           "maintenance.transcode-temp-cleanup",
 		Plugin:       "test",
 		ResumePolicy: opsregistry.ResumeDrop,
 		Liveness:     opsregistry.LivenessManual,
@@ -58,11 +58,10 @@ func TestTranscodeTempCleanupTask(t *testing.T) {
 	require.True(t, task.RunOnStart(), "the retired ticker ran once immediately")
 	require.False(t, task.RunInMaintenanceWindow(), "the hourly cadence is the interval, not the nightly window")
 	require.False(t, ts.inMaintenanceOrder("transcode_temp_cleanup"))
-	require.Equal(t, "maintenance.temp-file-cleanup", taskV2DefIDs["transcode_temp_cleanup"])
+	require.Equal(t, "maintenance.transcode-temp-cleanup", taskV2DefIDs["transcode_temp_cleanup"])
 
 	_, err := task.TriggerFn("test")
 	require.NoError(t, err)
 	require.Len(t, inserted, 1)
-	require.Equal(t, "maintenance.temp-file-cleanup", inserted[0].DefID)
-	require.JSONEq(t, `{"import_paths_only":true,"max_age_hours":2}`, inserted[0].Params)
+	require.Equal(t, "maintenance.transcode-temp-cleanup", inserted[0].DefID)
 }
