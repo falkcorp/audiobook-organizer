@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files_cancel_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c8e2a47-3d19-4b6f-a0e4-7f12b9d36c85
 // last-edited: 2026-10-14
 
@@ -139,7 +139,9 @@ func TestMarkMissing_CancelStopsApplyStatPass(t *testing.T) {
 
 // What the survivor inherited from the retired maintenance.fix-book-file-paths
 // job (04-P14d): its gate, its 4h budget and both library capabilities. The
-// undeclared defaults were any scan.trigger caller and 120 minutes.
+// gate is declared explicitly (the generic default already required
+// settings.manage, so access is unchanged); the undeclared timeout default was
+// 120 minutes.
 func TestMarkMissingFilesDef_CarriesRetiredJobBehaviour(t *testing.T) {
 	def := (&Plugin{}).markMissingFilesDef()
 	require.Equal(t, "maintenance.mark-missing-files", def.ID)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-10-14
 
@@ -186,10 +186,12 @@ func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
 		ResumePolicy: sdk.ResumeDrop,
 		Liveness:     sdk.LivenessRunItems,
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		// Declared, not inherited: this op WRITES the Missing flag on every book_file
-		// row. The retired job it replaced (maintenance.fix-book-file-paths, 04-P14d)
-		// was gated on settings.manage, and an op that declares nothing is reachable
-		// by any scan.trigger holder until the generic default covers it.
+		// Declared explicitly, not left to the default: this op WRITES the Missing flag
+		// on every book_file row. The retired job it replaced
+		// (maintenance.fix-book-file-paths, 04-P14d) was gated on settings.manage, and
+		// the generic operations endpoint already holds a def with no Permissions to
+		// settings.manage (defPermissionsHeld), so declaring it changes no effective
+		// access; it just states the gate on the def itself.
 		Permissions: []auth.Permission{auth.PermSettingsManage},
 		// 4h, the retired job's budget (maintenance.DefaultPolicy). The undeclared
 		// default is 120 minutes, which is a regression for the job's callers: the
