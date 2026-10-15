@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
 // last-edited: 2026-10-14
 
@@ -499,6 +499,10 @@ type itunesWireStore interface {
 	organizer.OrganizerStore
 }
 
+// isChildProcess reports whether this process is an operation-runner child. A
+// var so a test can run the child path in process.
+var isChildProcess = opsregistry.IsChildMode
+
 // wireScanApplyClaims makes an ai.author-scan-apply claim hold its scan only
 // while the claiming operation runs in this process, and drops the claims the
 // previous process left: a run that died without releasing used to hold its scan
@@ -510,10 +514,6 @@ type itunesWireStore interface {
 // read as dead. Clearing them would let a newer scan supersede a scan the parent
 // is applying, and judging liveness by that registry would do the same at claim
 // time. A child keeps the TTL rule alone.
-// isChildProcess reports whether this process is an operation-runner child. A
-// var so a test can run the child path in process.
-var isChildProcess = opsregistry.IsChildMode
-
 func wireScanApplyClaims(store *database.AIScanStore, reg *opsregistry.Registry) {
 	if reg == nil || isChildProcess() {
 		return

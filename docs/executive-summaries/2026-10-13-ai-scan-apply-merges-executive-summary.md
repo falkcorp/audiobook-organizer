@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-13-ai-scan-apply-merges-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 3c8e5b71-9a24-4d06-b7f3-6e1d2a94c850 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -22,11 +22,15 @@ There is no separate spec.
 - **Each suggestion says what it will do.** A merge row reads "keep X, merge Y,
   Z" with names. Only merge suggestions can be applied here. Renames, splits and
   the like are shown read-only, with a link to the Authors view.
-- **Author merges can be undone.** A merge used to delete the merged author
-  for good. Now each step is recorded first, so undoing the operation brings
-  the author, its pen names and its books' credits back. The undo still
-  refuses, and reports, the cases where putting things back would overwrite
-  something that changed since. Merges made before this change cannot be undone.
+- **Author merges can be undone, wherever they happen.** A merge used to delete
+  the merged author for good. Now every way the library merges authors records
+  each step first: the Authors view, the AI scan's Apply selected, the older AI
+  review's apply, and the four background clean-up jobs that merge duplicate
+  authors. Undoing the operation brings the author, its pen names and its
+  books' credits back, including authors with odd names such as "Epigraph".
+  The undo still refuses, and reports, the cases where putting things back would
+  overwrite something that changed since. Merges made before this change cannot
+  be undone.
 - **A narrator is no longer merged into the author.** The AI has two ways of
   flagging a name as a narrator. One of them was lost on the way to the review
   list, so the narrator's books were merged into the author. The flag is now
@@ -82,15 +86,28 @@ deleted B, reachable only through the redirect the merge left from B to A.
 many of, could only be repaired by hand, book by book, and B's pen names could
 not be handed back to a re-created B.
 
-**The fix.** Every way the library merges authors, including the background
-clean-up jobs, now moves the merged author's aliases to the surviving author,
-and every step is written to the undo history before it happens (a book whose
-history entry cannot be written is not moved).
+**The fix.** Every way the library merges authors now moves the merged
+author's aliases to the surviving author, and writes every step to the undo
+history before it happens (a book whose history entry cannot be written is not
+moved, and a merge with no operation to record it under does not run). That
+covers the Authors view, the AI scan's Apply selected, the older AI review's
+apply, and the background clean-up jobs that merge duplicate names, names with
+a stray "&", numbered names, and duplicate rows found by the id repair. The
+clean-up jobs used to keep only a note of what moved, which the undo could not
+act on.
 Undoing the operation recreates the author under its old identity, moves its
 aliases back, and puts each book's credits and main author back as they were.
-It does not overwrite later work: a book edited since the merge is left alone
-and reported, and the author is not restored if a different author has taken
-its name since. A preview of the undo shows the same refusals before anything
+Authors whose names the library would refuse to create today, such as
+"Epigraph" or "read by narrator", come back too. It does not overwrite later
+work: a book edited since the merge is left alone and reported, and the author
+is not restored if a different author has taken its name since. A pen name that
+was deleted since is put back; one that now belongs to another author is
+reported instead.
+
+Two things the older AI review's apply does are not undone: renaming the
+author it keeps, and, for its "alias" action, adding the merged name to the
+kept author as a pen name. After an undo the kept author keeps that name and
+that pen name. A preview of the undo shows the same refusals before anything
 runs. Names that differ only in capitals or spacing, which are exactly what a
 duplicate merge joins, are handled. An undo that stopped part way finishes when
 run again, and the restored author appears without restarting the server.
