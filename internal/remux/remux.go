@@ -1,5 +1,5 @@
 // file: internal/remux/remux.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-15
 
@@ -106,12 +106,14 @@ func (r *Remuxer) SetProtectedChecker(c ProtectedChecker) { r.protected = c }
 // remuxAndRecord rewrites path with remux and records the new bytes' hashes on
 // the file's book_file row. A remux rewrites the container, so every byte-level
 // hash of the file changes even though the audio does not.
-func (r *Remuxer) remuxAndRecord(path string, remux func(string) error) error {
+// ctx is passed to remux, which stops ffmpeg on cancel; a cancelled rewrite
+// returns an error, so no hash is recorded.
+func (r *Remuxer) remuxAndRecord(ctx context.Context, path string, remux func(context.Context, string) error) error {
 	var rec fileops.BookFileHashRecorder
 	if r.files != nil {
 		rec = r.files
 	}
-	return fileops.RecordRewrite(rec, path, func() error { return remux(path) })
+	return fileops.RecordRewrite(rec, path, func() error { return remux(ctx, path) })
 }
 
 // New creates a new Remuxer instance.
@@ -273,7 +275,12 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 		}
 
 		// taglib failed — attempt to remux with ffmpeg.
-		if err := r.remuxAndRecord(path, RemuxFile); err != nil {
+		if err := r.remuxAndRecord(ctx, path, RemuxFile); err != nil {
+			if ctx.Err() != nil {
+				// Cancelled mid-ffmpeg: not a failure of this file, and the
+				// original is untouched (the temp output is removed).
+				return fs.SkipAll
+			}
 			slog.Warn("malformed M4B remux failed for", "path", path, "err", err)
 			failed++
 			return nil
@@ -310,11 +317,13 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 
 // RemuxFile re-muxes an M4B/M4A file in-place using ffmpeg -c copy.
 // Writes to a temp file first, then atomically renames over the original.
-func RemuxFile(path string) error {
+// ffmpeg runs under ctx, and a ctx cancelled before the rename returns its
+// error with the original left in place.
+func RemuxFile(ctx context.Context, path string) error {
 	tmp := path + ".remux.tmp"
 	defer os.Remove(tmp)
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-nostdin", "-loglevel", "error", "-y",
 		"-i", path,
 		"-map", "0",
@@ -328,5 +337,8 @@ func RemuxFile(path string) error {
 		return fmt.Errorf("ffmpeg: %w — %s", err, strings.TrimSpace(string(out)))
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.Rename(tmp, path)
 }

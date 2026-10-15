@@ -1,5 +1,5 @@
 // file: internal/remux/remux_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-15
 
@@ -157,7 +157,7 @@ func TestRemuxMalformedFilesProgressCallback(t *testing.T) {
 }
 
 func TestRemuxFileErrorsOnNonexistentFile(t *testing.T) {
-	err := RemuxFile("/nonexistent/file.m4b")
+	err := RemuxFile(context.Background(), "/nonexistent/file.m4b")
 	if err == nil {
 		t.Errorf("RemuxFile() expected error for nonexistent file")
 	}
@@ -174,7 +174,7 @@ func TestRemuxFileTempFileCleanup(t *testing.T) {
 	}
 
 	// This will fail due to invalid m4b, but temp file should still be cleaned up
-	_ = RemuxFile(testFile)
+	_ = RemuxFile(context.Background(), testFile)
 
 	tmpFile := testFile + ".remux.tmp"
 	if _, err := os.Stat(tmpFile); err == nil {

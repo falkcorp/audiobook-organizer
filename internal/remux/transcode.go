@@ -1,5 +1,5 @@
 // file: internal/remux/transcode.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-15
 
@@ -51,12 +51,12 @@ func (t *Transcoder) SetProtectedChecker(c ProtectedChecker) { t.protected = c }
 // back empty (no ffprobe, an unreadable stream) leaves the stored one. The
 // fields are set with PatchBookFileFields, under the row's stripe, so a
 // concurrent writer's columns are not reverted.
-func (t *Transcoder) transcodeAndRecord(ctx context.Context, path string, transcode func(string) error, probe func(context.Context, string) diagnosis.FileDiagnostic) error {
+func (t *Transcoder) transcodeAndRecord(ctx context.Context, path string, transcode func(context.Context, string) error, probe func(context.Context, string) diagnosis.FileDiagnostic) error {
 	var rec fileops.BookFileHashRecorder
 	if t.files != nil {
 		rec = t.files
 	}
-	if err := fileops.RecordRewrite(rec, path, func() error { return transcode(path) }); err != nil {
+	if err := fileops.RecordRewrite(rec, path, func() error { return transcode(ctx, path) }); err != nil {
 		return err
 	}
 	if t.files == nil {
@@ -286,6 +286,11 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 
 		// taglib failed — attempt full AAC transcode.
 		if err := t.transcodeAndRecord(ctx, path, TranscodeFile, diagnosis.ProbeFile); err != nil {
+			if ctx.Err() != nil {
+				// Cancelled mid-ffmpeg: the file is not unfixable, so it must
+				// not get a skip key (the quarantine step would act on one).
+				return fs.SkipAll
+			}
 			slog.Warn("malformed M4B transcode failed for", "path", path, "err", err)
 			_ = t.store.SetSetting(TranscodeSkipKey(path), "true", "bool", false)
 			failed++
@@ -321,11 +326,13 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 
 // TranscodeFile re-encodes an M4B/M4A file to 64 kbps AAC in-place.
 // Writes to a temp file first, then atomically renames over the original.
-func TranscodeFile(path string) error {
+// ffmpeg runs under ctx, and a ctx cancelled before the rename returns its
+// error with the original left in place.
+func TranscodeFile(ctx context.Context, path string) error {
 	tmp := path + ".remux.tmp"
 	defer os.Remove(tmp)
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-nostdin", "-loglevel", "error", "-y",
 		"-i", path,
 		"-vn",
@@ -339,5 +346,8 @@ func TranscodeFile(path string) error {
 		return fmt.Errorf("ffmpeg: %w — %s", err, strings.TrimSpace(string(out)))
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.Rename(tmp, path)
 }
