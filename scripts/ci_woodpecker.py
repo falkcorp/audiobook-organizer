@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci_woodpecker.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7d41c2e8-5a93-4f16-b0e7-2c8a9f3d6b51
-# last-edited: 2026-09-26
+# last-edited: 2026-10-15
 """Run the current commit through Woodpecker CI and wait for the verdict.
 
 This is how `make ci` work is offloaded from the developer Mac onto the CI
@@ -10,8 +10,11 @@ agents (the prod host's docker agent, llm1, and the Mac's local agent; see
 docs/ci/woodpecker.md). It:
 
 1. pushes HEAD to its branch on origin (explicit SHA, lease-checked),
-2. starts a manual pipeline for that branch through the Woodpecker API, which
-   does not depend on the GitHub webhook getting through Cloudflare Access,
+2. reuses the pipeline the push already started when the branch has an open
+   PR (workflows run on pull_request since 2026-10-15; queueing a manual run
+   as well would run the same commit twice), and otherwise starts a manual
+   pipeline for that branch through the Woodpecker API, which does not depend
+   on the GitHub webhook getting through Cloudflare Access,
 3. polls until the pipeline finishes and checks the pipeline ran the SHA that
    was pushed, and
 4. prints every workflow and step, with the tail of each failed step's log,
@@ -92,12 +95,16 @@ def repo_slug() -> str:
 
 def step_log_tail(api: API, repo_id: int, number: int, step_id: int, n: int) -> list[str]:
     entries = api.call("GET", f"/repos/{repo_id}/logs/{number}/{step_id}") or []
-    lines = [base64.b64decode(e.get("data") or b"").decode(errors="replace").rstrip() for e in entries]
+    lines = [
+        base64.b64decode(e.get("data") or b"").decode(errors="replace").rstrip() for e in entries
+    ]
     return lines[-n:]
 
 
 def report(api: API, repo_id: int, p: dict, tail: int) -> None:
-    print(f"pipeline #{p['number']} {p['status']}  {api.url.split('//')[-1]}  commit {p['commit'][:9]}")
+    print(
+        f"pipeline #{p['number']} {p['status']}  {api.url.split('//')[-1]}  commit {p['commit'][:9]}"
+    )
     for w in p.get("workflows") or []:
         print(f"  {w['name']:22} {w['state']}")
         for c in w.get("children") or []:
@@ -109,11 +116,43 @@ def report(api: API, repo_id: int, p: dict, tail: int) -> None:
                     print("      | " + line[:240])
 
 
+def existing_pipeline(
+    api: API, repo_id: int, sha: str, since: float, wait: int, poll: int
+) -> dict | None:
+    """Return the pull_request pipeline the push just started for sha, waiting
+    up to wait seconds for the webhook to create it. Only pipelines created at
+    or after since (the push time) count, so a re-run never reuses an older
+    result. None means queue a manual run: the branch has no open PR, the push
+    was skipped, or the webhook never arrived."""
+    deadline = time.monotonic() + wait
+    while True:
+        for p in api.call("GET", f"/repos/{repo_id}/pipelines") or []:
+            if (
+                p.get("commit") == sha
+                and p.get("event") == "pull_request"
+                and p.get("created", 0) >= since - 5
+            ):
+                return p
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(min(poll, 10))
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Run HEAD through Woodpecker CI and wait for the verdict.")
-    ap.add_argument("--no-push", action="store_true", help="do not push HEAD first (branch already on origin)")
+    ap = argparse.ArgumentParser(
+        description="Run HEAD through Woodpecker CI and wait for the verdict."
+    )
+    ap.add_argument(
+        "--no-push", action="store_true", help="do not push HEAD first (branch already on origin)"
+    )
     ap.add_argument("--tail", type=int, default=40, help="log lines to show per failed step")
     ap.add_argument("--poll", type=int, default=20, help="seconds between status polls")
+    ap.add_argument(
+        "--webhook-wait",
+        type=int,
+        default=45,
+        help="seconds to wait for a pull_request pipeline on the pushed SHA before queueing a manual one (0 = never wait)",
+    )
     args = ap.parse_args()
 
     url, token = load_config()
@@ -123,15 +162,35 @@ def main() -> int:
         sys.exit("ci-woodpecker: detached HEAD; check out a branch first")
     sha = git("rev-parse", "HEAD")
 
+    pushed_at = time.time()
     if not args.no_push:
         remote_sha = git("ls-remote", "origin", f"refs/heads/{branch}").split("\t")[0]
-        lease = f"--force-with-lease=refs/heads/{branch}:{remote_sha}" if remote_sha else f"--force-with-lease=refs/heads/{branch}:"
-        subprocess.run(["git", "push", "-q", lease, "origin", f"+{sha}:refs/heads/{branch}"], check=True)
+        lease = (
+            f"--force-with-lease=refs/heads/{branch}:{remote_sha}"
+            if remote_sha
+            else f"--force-with-lease=refs/heads/{branch}:"
+        )
+        subprocess.run(
+            ["git", "push", "-q", lease, "origin", f"+{sha}:refs/heads/{branch}"], check=True
+        )
 
     repo = api.call("GET", f"/repos/lookup/{repo_slug()}")
-    p = api.call("POST", f"/repos/{repo['id']}/pipelines", {"branch": branch})
+    p = (
+        None
+        if args.no_push
+        else existing_pipeline(api, repo["id"], sha, pushed_at, args.webhook_wait, args.poll)
+    )
+    if p is not None:
+        print(
+            f"ci-woodpecker: following {p['event']} pipeline #{p['number']} already started for {sha[:9]}",
+            flush=True,
+        )
+    else:
+        p = api.call("POST", f"/repos/{repo['id']}/pipelines", {"branch": branch})
     if p["commit"] != sha:
-        sys.exit(f"ci-woodpecker: pipeline #{p['number']} took commit {p['commit'][:9]}, not HEAD {sha[:9]}; is the push on origin?")
+        sys.exit(
+            f"ci-woodpecker: pipeline #{p['number']} took commit {p['commit'][:9]}, not HEAD {sha[:9]}; is the push on origin?"
+        )
     print(f"ci-woodpecker: pipeline #{p['number']} started for {branch} @ {sha[:9]}", flush=True)
 
     start = time.monotonic()
