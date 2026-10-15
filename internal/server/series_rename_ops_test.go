@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package server
 
@@ -425,5 +425,23 @@ func TestSeriesWriters_DeclareSeriesWriteSet(t *testing.T) {
 	} {
 		def := relinkOpDef(t, tc.register, tc.id)
 		require.True(t, slices.Contains(def.Writes, opsregistry.ResSeries), "%s must declare Writes ResSeries", tc.id)
+	}
+}
+
+// Every author row type a revert can restore drops the author caches, the
+// author_id_repoint included (N-c); a revert that restored only book fields
+// does not.
+func TestRestoredAuthorRows_EveryAuthorRowTypeCounts(t *testing.T) {
+	for _, ct := range []string{undo.ChangeTypeAuthorMergeCredits, undo.ChangeTypeAuthorMergeDelete, undo.ChangeTypeAuthorRename,
+		undo.ChangeTypeAuthorIDRepoint, undo.ChangeTypeAuthorReclassifyCredits, undo.ChangeTypeAuthorReclassifyDelete} {
+		if !restoredAuthorRows(&audiobookspkg.RevertResult{RestoredTypes: map[string]int{ct: 1}}) {
+			t.Errorf("%s restored but the author caches are kept", ct)
+		}
+	}
+	if !restoredAuthorRows(&audiobookspkg.RevertResult{AuthorsPartlyRestored: 1}) {
+		t.Error("a partly restored author must drop the caches")
+	}
+	if restoredAuthorRows(&audiobookspkg.RevertResult{RestoredTypes: map[string]int{"metadata_update": 3}}) {
+		t.Error("book-only rows must not drop the author caches")
 	}
 }
