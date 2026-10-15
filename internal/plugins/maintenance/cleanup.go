@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
@@ -18,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
+	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -136,7 +138,7 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 		ProgressTimeout: tempFileCleanupProgressTimeout, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean orphaned temp files",
-		Description:     "Removes orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations.",
+		Description:     "Removes orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations. With import_paths_only, removes stale transcode temp files under each import path instead.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.temp-file-cleanup",
@@ -154,13 +156,68 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 // watchdog budget from this value (optimizeProgressTimeout).
 const tempFileCleanupProgressTimeout = 1 * time.Hour
 
-func (p *Plugin) runTempFileCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+// tempFileCleanupParams are the optional parameters of
+// maintenance.temp-file-cleanup. The zero value is the daily library-root sweep.
+type tempFileCleanupParams struct {
+	// ImportPathsOnly sweeps each import path for stale transcode temp files
+	// (transcode.CleanupStaleTempFiles) instead of the library-root sweep. It is
+	// what the hourly transcode_temp_cleanup scheduler task passes.
+	ImportPathsOnly bool `json:"import_paths_only"`
+	// MaxAgeHours is the age past which a transcode temp file is stale. Only
+	// read with ImportPathsOnly; zero or less means defaultTranscodeTempMaxAge.
+	MaxAgeHours int `json:"max_age_hours"`
+}
+
+// defaultTranscodeTempMaxAge is the age the retired per-import-path ticker used.
+const defaultTranscodeTempMaxAge = 2 * time.Hour
+
+func (p *Plugin) runTempFileCleanup(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
+	var prm tempFileCleanupParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &prm); err != nil {
+			return fmt.Errorf("temp-file-cleanup params: %w", err)
+		}
+	}
+	if prm.ImportPathsOnly {
+		return p.cleanImportPathTranscodeTemps(ctx, prm, reporter)
+	}
 	opID := ctxOpID(ctx)
 	// CleanupOrphanedTempFiles flushes the op's batched entries itself, before
 	// its summary entry, so no ActivityFlushOp call follows it here.
 	removed := p.deps.CleanupOrphanedTempFiles(p.deps.RootDir(), opID)
 	msg := fmt.Sprintf("Removed %d orphaned temp files", removed)
 	_ = reporter.Log(slog.LevelInfo, msg)
+	return nil
+}
+
+// cleanImportPathTranscodeTemps removes stale transcode temp files under every
+// import path. The import paths are read on each run, so one added after boot
+// is swept without a restart (the boot-time tickers this replaced never saw it).
+// Each import path is its own walk root and this DELETES, so appdirs.Current()
+// is passed exactly as the tickers did: an app directory configured inside an
+// import path is skipped. A path that is gone is skipped, not fatal.
+func (p *Plugin) cleanImportPathTranscodeTemps(ctx context.Context, prm tempFileCleanupParams, reporter sdk.Reporter) error {
+	maxAge := defaultTranscodeTempMaxAge
+	if prm.MaxAgeHours > 0 {
+		maxAge = time.Duration(prm.MaxAgeHours) * time.Hour
+	}
+	paths, err := p.deps.OpsStore().GetAllImportPaths()
+	if err != nil {
+		return fmt.Errorf("list import paths: %w", err)
+	}
+	app := appdirs.Current()
+	removed := 0
+	for _, ip := range paths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, statErr := os.Stat(ip.Path); statErr != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Skipping import path %q: %v", ip.Path, statErr))
+			continue
+		}
+		removed += transcode.CleanupStaleTempFiles(ip.Path, app, maxAge)
+	}
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Removed %d stale transcode temp files from %d import paths", removed, len(paths)))
 	return nil
 }
 
