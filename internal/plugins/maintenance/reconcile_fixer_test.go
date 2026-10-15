@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-15
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // The fixer reads the server's store through rmReader: database.Store must
@@ -995,4 +996,190 @@ func TestReconcileFixer_BookAtMatchWithTwoRowsAtOldIsPathChanged(t *testing.T) {
 	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
 	require.NoError(t, err)
 	assert.Equal(t, rmSkipPathChanged, fresh.Skipped, fresh.Reason)
+}
+
+// rmCutThenNewOp runs op-1, whose fence fires at step 2's book_file write,
+// then op-2, a NEW apply op that finishes the row, for a filename match on a
+// book with both current-file hashes set. It returns the book id and its
+// state before either op.
+func rmCutThenNewOp(t *testing.T, f *rmFixture) (string, rmState) {
+	t.Helper()
+	id := f.missingBook(t, "Book K", "old/K.m4b", func(b *database.Book) {
+		cur, org, orig := "cur-K", "org-K", "orig-K"
+		b.FileHash, b.OrganizedFileHash, b.OriginalFileHash = &cur, &org, &orig
+	})
+	f.file(t, "new/K.m4b")
+	f.match(id, "Book K", "old/K.m4b", "new/K.m4b", "filename", "medium")
+	before := f.state(t, id)
+	res := f.plan(t)
+	planned := rmRow(t, res, id)
+	require.True(t, planned.Applicable(), planned.SkipReason)
+	files := &rmFencedFiles{PebbleStore: f.s}
+	files.fenced.Store(true)
+	out, err := repairs.RunApply(context.Background(), f.fx, res, "plan-1", []string{planned.RowID}, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor("op-1", files), OpID: "op-1"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeCanceledSkip, rmOutcomes(out)[planned.RowID])
+	out, err = repairs.RunApply(context.Background(), f.fx, res, "plan-1", []string{planned.RowID}, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor("op-2", f.s), OpID: "op-2"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeApplied, rmOutcomes(out)[planned.RowID], "%+v", out.Rows)
+	return id, before
+}
+
+// rmHashesOf is a book's three hashes.
+func (f *rmFixture) rmHashesOf(t *testing.T, id string) [3]string {
+	t.Helper()
+	b, err := f.s.GetBookByID(id)
+	require.NoError(t, err)
+	return [3]string{rmStr(b.FileHash), rmStr(b.OrganizedFileHash), rmStr(b.OriginalFileHash)}
+}
+
+// TestRR3Probe_CancelThenNewApplyRevertSecondOpOnly (round-3 S-1): the op
+// that finishes a cut-off row journals the step-1 changes it depends on, so
+// reverting it ALONE restores the book's path, its row and its hashes (and
+// the hash index finds the book again). Reverting the first op afterwards
+// finds everything already restored and fails nothing.
+func TestRR3Probe_CancelThenNewApplyRevertSecondOpOnly(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id, before := rmCutThenNewOp(t, f)
+	assert.Equal(t, [3]string{"", "", "orig-K"}, f.rmHashesOf(t, id))
+
+	r2, err := audiobooks.NewRevertService(f.s).RevertOperation("op-2")
+	require.NoError(t, err)
+	assert.Zero(t, r2.Failed, "%+v", r2)
+	assert.Equal(t, before, f.state(t, id), "op-2 alone restores the book and its row")
+	assert.Equal(t, [3]string{"cur-K", "org-K", "orig-K"}, f.rmHashesOf(t, id), "and its hashes")
+	bh, err := f.s.GetBookByFileHash("cur-K")
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	assert.Equal(t, id, bh.ID)
+
+	r1, err := audiobooks.NewRevertService(f.s).RevertOperation("op-1")
+	require.NoError(t, err)
+	assert.Zero(t, r1.Failed, "%+v", r1)
+	assert.Equal(t, before, f.state(t, id))
+	assert.Equal(t, [3]string{"cur-K", "org-K", "orig-K"}, f.rmHashesOf(t, id))
+}
+
+// TestRR3Probe_CancelThenNewApplyRevertFirstOpFirst (round-3 S-1, probe 3):
+// the cut-off op-1 was fenced at step 2's book_file write, after its
+// repoint row was journaled (Writer.Step never voids). Reverting op-1 first
+// therefore reports 4 rows restored -- its path, two hashes, and that repoint
+// row, whose value op-2 later wrote -- and returns the book, row and hashes
+// to the state before either op. Reverting op-2 then finds everything
+// already restored and fails nothing.
+func TestRR3Probe_CancelThenNewApplyRevertFirstOpFirst(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id, before := rmCutThenNewOp(t, f)
+
+	r1, err := audiobooks.NewRevertService(f.s).RevertOperation("op-1")
+	require.NoError(t, err)
+	assert.Zero(t, r1.Failed, "%+v", r1)
+	assert.Equal(t, 4, r1.Restored, "%+v", r1)
+	assert.Equal(t, map[string]int{undo.ChangeTypeBookPathUpdate: 1, "metadata_update": 2,
+		database.ChangeTypeBookFileRepoint: 1}, r1.RestoredTypes)
+	assert.Equal(t, before, f.state(t, id))
+	assert.Equal(t, [3]string{"cur-K", "org-K", "orig-K"}, f.rmHashesOf(t, id))
+
+	r2, err := audiobooks.NewRevertService(f.s).RevertOperation("op-2")
+	require.NoError(t, err)
+	assert.Zero(t, r2.Failed, "%+v", r2)
+	assert.Equal(t, before, f.state(t, id))
+	assert.Equal(t, [3]string{"cur-K", "org-K", "orig-K"}, f.rmHashesOf(t, id))
+}
+
+// TestRR3Probe_ResumeFilenameMatchRestoresHashes: a resume within the SAME
+// op journals nothing twice, and that op's revert restores path, row and
+// every hash.
+func TestRR3Probe_ResumeFilenameMatchRestoresHashes(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id := f.missingBook(t, "Book G", "old/G.m4b", func(b *database.Book) {
+		cur, org, orig := "cur-G", "org-G", "orig-G"
+		b.FileHash, b.OrganizedFileHash, b.OriginalFileHash = &cur, &org, &orig
+	})
+	f.file(t, "new/G.m4b")
+	f.match(id, "Book G", "old/G.m4b", "new/G.m4b", "filename", "medium")
+	before := f.state(t, id)
+	res := f.plan(t)
+	planned := rmRow(t, res, id)
+	files := &rmFencedFiles{PebbleStore: f.s}
+	files.fenced.Store(true)
+	const opID = "repairs-apply-cut-g"
+	run := func() *repairs.ApplyResult {
+		out, err := repairs.RunApply(context.Background(), f.fx, res, "plan-1", []string{planned.RowID}, false,
+			repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor(opID, files), OpID: opID}, &fakeReporter{})
+		require.NoError(t, err)
+		return out
+	}
+	require.Equal(t, repairs.OutcomeCanceledSkip, rmOutcomes(run())[planned.RowID])
+	journaled, err := f.s.GetOperationChanges(opID)
+	require.NoError(t, err)
+	files.fenced.Store(false)
+	require.Equal(t, repairs.OutcomeApplied, rmOutcomes(run())[planned.RowID])
+	after, err := f.s.GetOperationChanges(opID)
+	require.NoError(t, err)
+	live := func(cs []*database.OperationChange, typ string) int {
+		n := 0
+		for _, c := range cs {
+			if c.ChangeType == typ && !c.Voided {
+				n++
+			}
+		}
+		return n
+	}
+	assert.Equal(t, live(journaled, undo.ChangeTypeBookPathUpdate), live(after, undo.ChangeTypeBookPathUpdate), "no second path row")
+	assert.Equal(t, live(journaled, "metadata_update"), live(after, "metadata_update"), "no second hash rows")
+
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation(opID)
+	require.NoError(t, err)
+	assert.Equal(t, before, f.state(t, id))
+	assert.Equal(t, [3]string{"cur-G", "org-G", "orig-G"}, f.rmHashesOf(t, id))
+}
+
+// TestReconcileFixer_RefusedStepTwoOfAnEarlierOpIsChangedNotPartial (N-2):
+// finishing an earlier op's cut-off row writes nothing of its own before
+// step 2, so a refused step 2 is changed_since_plan (not
+// partially_applied), and the journal-only rows it recorded are voided.
+func TestReconcileFixer_RefusedStepTwoOfAnEarlierOpIsChangedNotPartial(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id := f.missingBook(t, "Book Q", "old/Q.m4b", nil)
+	f.file(t, "new/Q.m4b")
+	f.match(id, "Book Q", "old/Q.m4b", "new/Q.m4b", "hash", "high")
+	res := f.plan(t)
+	planned := rmRow(t, res, id)
+	files := &rmFencedFiles{PebbleStore: f.s}
+	files.fenced.Store(true)
+	out, err := repairs.RunApply(context.Background(), f.fx, res, "plan-1", []string{planned.RowID}, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor("op-1", files), OpID: "op-1"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeCanceledSkip, rmOutcomes(out)[planned.RowID])
+
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	require.True(t, fresh.Applicable(), fresh.Reason)
+	// Another writer touches the row's location (a hash filled in does not
+	// count; its Missing flag does) between the re-plan and the write.
+	rows, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	_, err = f.s.ModifyBookFile(id, rows[0].ID, func(bf *database.BookFile) error { bf.Missing = false; return nil })
+	require.NoError(t, err)
+
+	w := f.writerFor("op-2", f.s)
+	err = f.fx.Apply(context.Background(), w, fresh)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+	assert.False(t, errors.Is(err, repairs.ErrPartiallyApplied), "%v", err)
+	changes, err := f.s.GetOperationChanges("op-2")
+	require.NoError(t, err)
+	for _, c := range changes {
+		if c.ChangeType != database.ChangeTypeBookFileRepoint {
+			assert.True(t, c.Voided, "journal-only row %s %s voided", c.ChangeType, c.FieldName)
+		}
+	}
 }
