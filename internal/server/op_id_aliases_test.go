@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-15
 
@@ -100,8 +100,10 @@ var retiredOpIDs = map[string]string{
 	// for the whole library. Two newer ops cover its halves: library.bulk-metadata-fetch
 	// (selection-driven fetch, takes prefer_audible and skip_cached) and
 	// metadata.candidate-fetch (candidate cache, plus its unfetched selection).
-	// Neither takes the job's whole-library no-argument shape and the job's params
-	// do not map onto either 1:1, so no single FormerIDs alias target is right.
+	// library.bulk-metadata-fetch with no selection is the whole-library fetch, but
+	// the job's params ({prefer_audible, skip_cached}, dry_run) do not map onto
+	// either op 1:1 (skip_cached defaults differently), so no single FormerIDs
+	// alias target is right.
 	"maintenance.bulk-fetch-metadata": "retired; library.bulk-metadata-fetch and metadata.candidate-fetch each cover part of it, so no single alias",
 }
 

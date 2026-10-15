@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.23.2
+// version: 1.23.3
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-10-15
 
@@ -88,11 +88,10 @@ type PermissionAware interface {
 // separate OperationDefs of PR-2 a wiring change rather than a design change.
 //
 // As of PR-2 the bridge is gone and RegisterMaintenanceJobOps reads this per job,
-// so a value here is now load-bearing rather than declarative. Four jobs
-// (backfill-file-hashes, bulk-fetch-metadata, recompute-book-aggregates,
-// retention-and-hygiene; bulk-fetch-metadata was retired in 04-P14f) declare
-// something other than DefaultPolicy(); the other
-// 33 assert the bridge's old behaviour was correct for them.
+// so a value here is now load-bearing rather than declarative. Three jobs
+// (backfill-file-hashes, recompute-book-aggregates, retention-and-hygiene)
+// declare something other than DefaultPolicy(); the other
+// 30 assert the bridge's old behaviour was correct for them.
 //
 // ⚠️ The zero value is INVALID and deliberately so: ResumeUnspecified and
 // LivenessUnspecified are both `= iota` = 0, and RegisterOp rejects each
@@ -339,8 +338,8 @@ type jobUserStateStore interface {
 // dispatcher's call went away with the v1 op minter (#2784), so from that point
 // every maintenance job calling it received nothing, silently, forever. Five
 // did: revert-metadata-fetch (which was thereby 100% non-functional, since its
-// fetch_op_ids is required), bulk-fetch-metadata, bulk-deluge-import,
-// scan-composer-tags and prune-book-snapshots.
+// fetch_op_ids is required), bulk-fetch-metadata (retired in 04-P14f),
+// bulk-deluge-import, scan-composer-tags and prune-book-snapshots; four remain.
 //
 // Removing the method from the interface is the part that makes this
 // unrepeatable. Converting the five call sites fixes five jobs; taking the method

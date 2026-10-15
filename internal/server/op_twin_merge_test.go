@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-15
 
@@ -161,6 +161,7 @@ var retiredMerges = []struct {
 	// there is no alias. Both survivors already declared library.edit_metadata and
 	// carry a larger timeout (6h, 8h), so nothing is tightened for editors, and
 	// neither requires settings.manage.
+	// The job's CapLibraryWrite is intentionally not required of the survivors: the job wrote only cache rows.
 	{"maintenance.bulk-fetch-metadata", "library.bulk-metadata-fetch", []auth.Permission{auth.PermLibraryEditMetadata},
 		4 * time.Hour, []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead}},
 	{"maintenance.bulk-fetch-metadata", "metadata.candidate-fetch", []auth.Permission{auth.PermLibraryEditMetadata},

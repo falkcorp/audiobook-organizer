@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.5.2
+// version: 2.5.3
 // guid: 55555555-5555-5555-5555-555555555555
 // last-edited: 2026-10-15
 
@@ -189,7 +189,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// Go's zero value.
 	//
 	// listMaintenanceJobs (above) publishes each job's DefaultParams() to clients
-	// as `default_params`, and 28 of the 34 registered jobs advertise
+	// as `default_params`, and 28 of the 33 registered jobs advertise
 	// {"dry_run": true} — including cleanup-series, cleanup-organize-mess
 	// and dedup-books. (fix-library-states was in this list
 	// until 2026-09-10; it was deleted, not merely unregistered, because it wrote
@@ -212,11 +212,11 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// applies — callers that mean it say so.
 	//
 	// Update 2026-09-25 (owner: preview by default for every writing op): the
-	// 10 jobs that advertised false or nothing but DO honor dryRun now advertise
-	// true, so 32 of 38 preview on omission. The 4 that still advertise false
-	// (relink-report and the three scan-* reports) ignore dryRun, and 1
-	// (scan-chapter-groups) advertises no dry_run key and also ignores it
-	// (bulk-fetch-metadata was the second until 04-P14f retired it).
+	// jobs that advertised false or nothing but DO honor dryRun now advertise
+	// true, so every registered job except 5 previews on omission. Those 5 ignore
+	// dryRun: 4 still advertise false (relink-report and the three scan-*
+	// reports) and 1 (scan-chapter-groups) advertises no dry_run key
+	// (bulk-fetch-metadata was a sixth until 04-P14f retired it).
 	// TestMaintenanceJobs_PreviewByDefault in
 	// internal/maintenance/jobs names each of the 5 with its reason and fails on
 	// any new one; TestMaintenanceJobs_NoPreviewModeJobsIgnoreDryRun fails if an
