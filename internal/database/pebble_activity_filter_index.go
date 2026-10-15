@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
 // last-edited: 2026-10-15
 
@@ -243,7 +243,9 @@ func (s *PebbleActivityStore) stageDeleteFilterIndexesForKey(batch *GatedBatch, 
 // primary row with a key timestamp at or below it was written by an indexing
 // build (or indexed by a backfill). Record and RecordBatch advance it in the
 // same batch as the rows; ReconcileFilterIndexCoverage reads it at boot to find
-// rows a ROLLED-BACK build wrote without filter keys.
+// rows a ROLLED-BACK build wrote without filter keys (together with
+// ActivityFilterIndexReconcileFromKey, which keeps that start point across a
+// restart).
 //
 // It may lag (two concurrent commits can land in either order, so the stored
 // value can go backwards by one batch); a lagging mark only widens the boot
@@ -280,7 +282,8 @@ func (s *PebbleActivityStore) FilterIndexBackfillDone() bool {
 // MarkFilterIndexBackfillDone persists the sentinel and advances the
 // seen-through mark to the newest stored row. Called only once every row
 // present has been indexed (the backfill op's open-ended last window, or the
-// boot reconcile), so every row at or below that mark is covered.
+// boot reconcile), so every row at or below that mark is covered. It also
+// clears ActivityFilterIndexReconcileFromKey: nothing is left to check.
 func (s *PebbleActivityStore) MarkFilterIndexBackfillDone() error {
 	s.filterIndexMu.Lock()
 	defer s.filterIndexMu.Unlock()
@@ -298,8 +301,18 @@ func (s *PebbleActivityStore) MarkFilterIndexBackfillDone() error {
 	if err := batch.Set([]byte(ActivityFilterIndexBackfillKey), []byte("1"), nil); err != nil {
 		return err
 	}
+	// Every row present is indexed, so no check is owed from the durable start
+	// mark: drop it in the same batch as the sentinel, and lift the in-memory
+	// one, or a reconcile queued behind this backfill would rescan from the
+	// old mark (the whole table, after a fresh build).
+	if err := batch.Delete([]byte(ActivityFilterIndexReconcileFromKey), nil); err != nil {
+		return err
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("pebble_activity_store: set filter index sentinel: %w", err)
+	}
+	if ok {
+		s.raiseReconcileFrom(newest)
 	}
 	s.filterIndexReady.Store(true)
 	return nil
@@ -317,6 +330,74 @@ func (s *PebbleActivityStore) ClearFilterIndexBackfillDone() error {
 		return fmt.Errorf("pebble_activity_store: clear filter index sentinel: %w", err)
 	}
 	return nil
+}
+
+// ActivityFilterIndexReconcileFromKey persists the mark the rollback check
+// starts from, for as long as a check from it may still be owed. The seen-
+// through mark alone cannot carry that: it advances with every Record, so a
+// restart before the reconcile op finished (it waits behind the registry's
+// warmup hold, then its queue, and a check can take minutes) would reload a
+// mark past the rows a rolled-back build wrote and lose the gap for good,
+// with the sentinel still saying "complete" and filters coming back short
+// without partial.
+//
+// initReconcileFrom writes it at open when rows exist above the persisted
+// mark (the signature of a rollback; keeping the lower of any existing value),
+// ReconcileFilterIndexCoverage and the check both read it, and it is deleted
+// only when the rows above it are known to be covered: a clean check, or
+// MarkFilterIndexBackfillDone. A failed or cancelled run leaves it.
+const ActivityFilterIndexReconcileFromKey = "system:activity_filter_index_reconcile_from"
+
+// initReconcileFrom sets reconcileFrom at construction. Called once, after
+// loadSeenThrough, before the store is shared.
+func (s *PebbleActivityStore) initReconcileFrom() {
+	mark := s.seenThrough.Load()
+	from := mark
+	stored, hasStored := s.loadReconcileFrom()
+	if hasStored && stored < from {
+		from = stored
+	}
+	newest, ok, err := s.newestPrimaryNanos()
+	suspect := err != nil || (ok && newest > mark)
+	if err != nil {
+		filterIndexLog.Warn("could not read the newest activity row at open (%v); treating the rows above the filter-index mark as unchecked", err)
+	}
+	s.reconcileFrom.Store(from)
+	if !suspect && !hasStored {
+		return // nothing above the mark and nothing owed: no durable state needed
+	}
+	if hasStored && stored == from {
+		return // the durable value is already the lower of the two
+	}
+	if err := s.db.Set([]byte(ActivityFilterIndexReconcileFromKey), []byte(strconv.FormatInt(from, 10)), pebble.Sync); err != nil {
+		// Degrades to the in-memory start: a restart before the reconcile ran
+		// would lose the gap, which is the pre-fix behaviour.
+		filterIndexLog.Warn("could not persist the filter-index reconcile start mark %d: %v", from, err)
+	}
+}
+
+// loadReconcileFrom reads the durable start mark.
+func (s *PebbleActivityStore) loadReconcileFrom() (int64, bool) {
+	val, closer, err := s.db.Get([]byte(ActivityFilterIndexReconcileFromKey))
+	if err != nil {
+		return 0, false
+	}
+	n, perr := strconv.ParseInt(string(val), 10, 64)
+	closer.Close()
+	if perr != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// raiseReconcileFrom lifts the in-memory start mark to at least nanos.
+func (s *PebbleActivityStore) raiseReconcileFrom(nanos int64) {
+	for {
+		cur := s.reconcileFrom.Load()
+		if nanos <= cur || s.reconcileFrom.CompareAndSwap(cur, nanos) {
+			return
+		}
+	}
 }
 
 // loadSeenThrough reads the persisted mark into memory (0 when absent).
@@ -395,7 +476,8 @@ type FilterIndexReconcileResult struct {
 
 // FilterIndexProgress receives progress from ReconcileFilterIndexCoverage so
 // the op running it can keep its liveness clock fresh. phase is "check" (the
-// read-only gap scan; rows is how many rows above the mark it has read) or
+// read-only gap scan; rows is how many rows above the mark it has read so
+// far, across all tiers) or
 // "reindex" (rows is how many rows the gap reindex has indexed so far). It is
 // called at least every activityCtxCheckInterval rows of the check and once
 // per committed reindex chunk, and may be nil.
@@ -414,11 +496,14 @@ type FilterIndexProgress func(phase string, rows int)
 // the sentinel (which advances the mark). Nothing happens when the sentinel is
 // not set: the backfill op has not finished and will cover those rows.
 //
-// The mark it starts from is the one persisted when this store was opened
-// (seenThroughAtOpen), not the live one: this boot's own writes advance the
-// live mark past the rollback rows, and the reconcile runs as an op well after
-// the store opened (behind the warmup hold), so the live mark would hide the
-// very gap this exists to find.
+// The mark it starts from is reconcileFrom, not the live one: this boot's own
+// writes advance the live mark past the rollback rows, and the reconcile runs
+// as an op well after the store opened (behind the warmup hold), so the live
+// mark would hide the very gap this exists to find. It is also durable
+// (ActivityFilterIndexReconcileFromKey), so a restart before the check ran, or
+// a check that failed, still finds the gap on the next boot. A clean check
+// deletes it; a gap found and indexed clears it with the sentinel
+// (MarkFilterIndexBackfillDone).
 //
 // If it fails or is cancelled after withdrawing the sentinel, the sentinel
 // stays withdrawn (safe: queries are partial, never silently short) and
@@ -430,11 +515,20 @@ func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context, 
 	if !s.FilterIndexBackfillDone() {
 		return res, nil
 	}
-	mark := s.seenThroughAtOpen
+	mark := s.reconcileFrom.Load()
 	res.SeenThrough = mark
 	gap, err := s.filterIndexGapAbove(ctx, mark, progress)
-	if err != nil || !gap {
+	if err != nil {
 		return res, err
+	}
+	if !gap {
+		// Every row above the start mark has its filter keys: nothing is owed.
+		// Drop the durable start mark so the next boot starts from its own.
+		if err := s.db.Delete([]byte(ActivityFilterIndexReconcileFromKey), pebble.Sync); err != nil {
+			return res, fmt.Errorf("pebble_activity_store: clear reconcile start mark: %w", err)
+		}
+		s.raiseReconcileFrom(s.seenThrough.Load())
+		return res, nil
 	}
 	res.GapFound = true
 	filterIndexLog.Warn("activity rows newer than the filter-index mark (%d) have no filter keys — a rollback to an older build wrote them; filtering falls back to the budgeted scan until they are indexed", mark)
@@ -460,6 +554,9 @@ func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context, 
 // filterIndexGapAbove reports whether any decodable row with a key timestamp
 // above mark lacks one of its filter-index keys.
 func (s *PebbleActivityStore) filterIndexGapAbove(ctx context.Context, mark int64, progress FilterIndexProgress) (bool, error) {
+	// seen is a running total across tiers, so the "check" progress the op
+	// shows only ever grows (a per-tier count would reset at each tier).
+	seen := 0
 	for _, tier := range actTiers {
 		it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: pactNanosKey(tier, mark+1), UpperBound: pactPrimaryUpperBound(tier)})
 		if err != nil {
@@ -467,7 +564,6 @@ func (s *PebbleActivityStore) filterIndexGapAbove(ctx context.Context, mark int6
 		}
 		gap, err := func() (bool, error) {
 			defer it.Close()
-			seen := 0
 			for it.First(); it.Valid(); it.Next() {
 				if seen%activityCtxCheckInterval == 0 {
 					if ctxErr := ctx.Err(); ctxErr != nil {

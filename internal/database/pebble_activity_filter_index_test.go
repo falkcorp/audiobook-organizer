@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
 // last-edited: 2026-10-15
 
@@ -619,7 +619,7 @@ func TestFilterIndex_ReconcileChecksFromTheMarkAtOpen(t *testing.T) {
 	// mirror does within seconds of start.
 	_, err := booted.Record(ActivityEntry{Tier: "change", Source: "new-build", Summary: "boot line"})
 	require.NoError(t, err)
-	require.Greater(t, booted.seenThrough.Load(), booted.seenThroughAtOpen,
+	require.Greater(t, booted.seenThrough.Load(), booted.reconcileFrom.Load(),
 		"precondition: this boot's write moved the live mark past the rollback rows")
 
 	res, err := booted.ReconcileFilterIndexCoverage(context.Background(), nil)

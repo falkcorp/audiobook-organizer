@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-10-15
 
@@ -247,8 +247,11 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 		mode = "rebuild"
 	}
 
-	// One run at a time, store-wide, including the startup backfill, which
-	// does not share the maintenance ops' ConcurrencyKey (atpathRunLock).
+	// One run at a time, store-wide (atpathRunLock). Every caller is a
+	// registered op now (the startup build stopped being a goroutine in 04-P6
+	// part 2) and the ops share ConcurrencyKey maintenance.book-atpath-index,
+	// so the registry already serializes them and this lock is never
+	// contended in production; it remains the backstop for a direct caller.
 	unlockRun, err := p.atpathRuns.lock(ctx)
 	if err != nil {
 		return res, fmt.Errorf("wait for book_atpath run lock: %w", err)

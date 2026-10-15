@@ -1,5 +1,5 @@
 // file: internal/activity/register.go
-// version: 1.12.0
+// version: 1.12.1
 // last-edited: 2026-10-15
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
@@ -59,7 +59,7 @@ func init() {
 			// (04-P6), where it shows on the Operations page, can be cancelled,
 			// and waits for the store's warmup. The store remembers the
 			// seen-through mark as of this construction for it
-			// (PebbleActivityStore.seenThroughAtOpen).
+			// (PebbleActivityStore.reconcileFrom, durable across a restart).
 			return s, nil
 		},
 	})
