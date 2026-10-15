@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-10-15
 
@@ -151,14 +151,17 @@ type PebbleActivityStore struct {
 	// seenThrough is the in-memory filter-index high-water mark (see
 	// ActivityFilterIndexSeenThroughKey).
 	seenThrough atomic.Int64
-	// seenThroughAtOpen is the persisted mark as this store was constructed,
-	// before this process wrote anything. ReconcileFilterIndexCoverage checks
-	// from it, not from seenThrough: Record advances seenThrough with every
-	// write this boot makes, and the reconcile now runs as an op minutes after
-	// construction, so by then the live mark can sit past rows a rolled-back
-	// build wrote (they are older than this boot's own rows) and a check from
-	// it would never see them. Set once in NewPebbleActivityStore.
-	seenThroughAtOpen int64
+	// reconcileFrom is the mark ReconcileFilterIndexCoverage checks from: rows
+	// with a key timestamp above it are suspect. It is NOT the live
+	// seenThrough: Record advances that with every write this boot makes, and
+	// the reconcile runs as an op minutes after construction, so by then the
+	// live mark can sit past rows a rolled-back build wrote (they are older
+	// than this boot's own rows) and a check from it would never see them. It
+	// starts as the persisted mark at open, lowered to the durable
+	// ActivityFilterIndexReconcileFromKey when a previous boot left one (see
+	// initReconcileFrom), and is raised only when the rows above it are known
+	// to be covered (a clean check, MarkFilterIndexBackfillDone).
+	reconcileFrom atomic.Int64
 }
 
 // pactSourcesCacheEntry is one memoized GetDistinctSources result.
@@ -174,7 +177,7 @@ func NewPebbleActivityStore(db *GatedDB) *PebbleActivityStore {
 	// Seed counter from current time so IDs don't collide across restarts.
 	s.counter.Store(time.Now().UnixNano())
 	s.loadSeenThrough()
-	s.seenThroughAtOpen = s.seenThrough.Load()
+	s.initReconcileFrom()
 	return s
 }
 
