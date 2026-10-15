@@ -1,5 +1,5 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
 // last-edited: 2026-10-15
 
@@ -12,11 +12,11 @@ package server
 
 import (
 	"context"
-	"strings"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
