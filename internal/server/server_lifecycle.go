@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.38.0
+// version: 4.39.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-14
 
@@ -1730,7 +1730,10 @@ func (s *Server) setupRoutes() {
 
 			// Result-getter GETs (not job triggers — these poll async results)
 			protected.GET("/maintenance/scan-composer-tags/:id", s.perm(auth.PermSettingsManage), s.handleGetComposerScanResults)
-			protected.GET("/maintenance/repair-missing-files/:id", s.perm(auth.PermSettingsManage), s.handleGetMissingFileRepairResults)
+			// Retired with the repair-missing-files job (04-P14e, D27/D9): 410 behind the
+			// same permission gate so only an allowed caller learns it is gone.
+			protected.GET("/maintenance/repair-missing-files/:id", s.perm(auth.PermSettingsManage),
+				gone("the maintenance.missing-file-repoint or maintenance.recover-missing-files operation (POST /api/v1/operations/v2)"))
 			// Hash stats endpoints
 			protected.GET("/maintenance/book-file-hash-stats", s.perm(auth.PermSettingsManage), s.handleGetBookFileHashStats)
 			protected.GET("/maintenance/book-metadata-hash-stats", s.perm(auth.PermSettingsManage), s.handleGetBookMetadataHashStats)

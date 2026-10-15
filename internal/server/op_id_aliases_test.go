@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-14
 
@@ -89,6 +89,13 @@ var retiredOpIDs = map[string]string{
 	// (it also CLEARS flags) under params it never sent, so a loud unknown-op
 	// error is safer than a silent reinterpretation.
 	"maintenance.fix-book-file-paths": "retired; maintenance.mark-missing-files takes {apply} and also clears stale flags, so no alias",
+	// Retired 2026-10-14 (04-P14e). The manual job tried five escalating
+	// strategies to relocate a missing file. Two newer ops replace it, each
+	// covering a different slice (maintenance.missing-file-repoint derives the
+	// flattened/padded name; maintenance.recover-missing-files matches by size),
+	// so no single FormerIDs alias target is right. An old enqueue ({dry_run})
+	// would also run a different contract ({apply}), so it fails loudly instead.
+	"maintenance.repair-missing-files": "retired; maintenance.missing-file-repoint and maintenance.recover-missing-files each cover part of it, so no single alias",
 }
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir

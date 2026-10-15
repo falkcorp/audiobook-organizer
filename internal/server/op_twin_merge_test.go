@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-14
 
@@ -145,13 +145,23 @@ var retiredMerges = []struct {
 	// declared neither a permission nor a timeout (so 120 minutes).
 	{"maintenance.fix-book-file-paths", "maintenance.mark-missing-files", []auth.Permission{auth.PermSettingsManage},
 		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
+	// 04-P14e: the manual repair-missing-files job (settings.manage) retired in
+	// favour of two ops, so there is no alias (an alias names one target). Both
+	// survivors declared no Permissions before this PR and were reachable by any
+	// scan.trigger holder; they now declare settings.manage explicitly. The job's
+	// 4h DefaultPolicy budget is not carried over: the survivors bound their own
+	// work per item (LivenessRunItems) and the owner decision was to port nothing.
+	{"maintenance.repair-missing-files", "maintenance.missing-file-repoint", []auth.Permission{auth.PermSettingsManage},
+		0, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
+	{"maintenance.repair-missing-files", "maintenance.recover-missing-files", []auth.Permission{auth.PermSettingsManage},
+		0, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
 }
 
 func TestTwinMerge_RetiredIDsAndSurvivorPermissions(t *testing.T) {
 	srv, _, _ := bootRegisteredOpIDs(t)
 
 	for _, row := range retiredMerges {
-		t.Run(row.old, func(t *testing.T) {
+		t.Run(row.old+"->"+row.survivor, func(t *testing.T) {
 			// The old ID resolves to nothing, and canonicalisation leaves it as
 			// itself so a timeline filter on it still finds its old rows.
 			_, ok := srv.opRegistry.Def(row.old)

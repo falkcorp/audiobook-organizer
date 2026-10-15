@@ -1,7 +1,7 @@
 // file: internal/server/gone_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a3d6f12-c405-4e97-b1d8-72f9e0a5c346
-// last-edited: 2026-10-12
+// last-edited: 2026-10-14
 
 package server
 
@@ -110,5 +110,36 @@ func TestWipeRoute_IsA410StubBehindAdminOnly(t *testing.T) {
 	t.Run("viewer session reaches a non-admin gone stub", func(t *testing.T) {
 		w := f.do(t, viewerSess.ID, http.MethodGet, "/api/v1/operations/active", nil)
 		assert.Equal(t, http.StatusGone, w.Code, w.Body.String())
+	})
+}
+
+// TestRepairMissingFilesResultRoute_IsA410StubNamingBothSuccessors: the result
+// getter for the retired maintenance.repair-missing-files job answers 410 to an
+// allowed caller and names both replacement ops, and a caller without
+// settings.manage still gets 403 first (04-P14e).
+func TestRepairMissingFilesResultRoute_IsA410StubNamingBothSuccessors(t *testing.T) {
+	f := setupCredGuardServer(t)
+
+	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
+	require.NoError(t, err)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	require.NoError(t, err)
+
+	const path = "/api/v1/maintenance/repair-missing-files/01SYNTHETICOPID0000000000"
+
+	t.Run("admin gets 410 naming both successors", func(t *testing.T) {
+		w := f.do(t, f.sessionToken, http.MethodGet, path, nil)
+		require.Equal(t, http.StatusGone, w.Code, w.Body.String())
+		var got map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.Equal(t, "gone", got["error"])
+		assert.Contains(t, got["message"], "maintenance.missing-file-repoint")
+		assert.Contains(t, got["message"], "maintenance.recover-missing-files")
+	})
+
+	t.Run("a caller without settings.manage is refused before the 410", func(t *testing.T) {
+		w := f.do(t, viewerSess.ID, http.MethodGet, path, nil)
+		assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+		assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 	})
 }

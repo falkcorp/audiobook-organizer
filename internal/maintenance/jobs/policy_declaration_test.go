@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
 // last-edited: 2026-10-14
 
@@ -128,7 +128,6 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 		"bulk-deluge-import":      opsregistry.ResumeRestart,
 		"cleanup-empty-folders":   opsregistry.ResumeRestart,
 		"refetch-missing-authors": opsregistry.ResumeRestart,
-		"repair-missing-files":    opsregistry.ResumeRestart,
 		"scan-composer-tags":      opsregistry.ResumeRestart,
 	}
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-09-19
+// last-edited: 2026-10-14
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -68,6 +68,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -256,6 +257,10 @@ func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 		// source file and clones it back into the tree. Branch A (in-tree repoint) writes only
 		// the DB, but the capability set is static per def, so both are declared regardless.
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesRead, sdk.CapFilesWrite},
+		// settings.manage, explicit: the retired repair-missing-files job required it, and
+		// until the 08 X2 role rework an undeclared Permissions leaves this op reachable by
+		// any scan.trigger holder (04-P14e).
+		Permissions: []auth.Permission{auth.PermSettingsManage},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 			return p.runRecoverMissingFiles(ctx, raw, reporter)
 		},
