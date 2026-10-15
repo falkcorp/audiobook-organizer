@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
 // last-edited: 2026-10-15
 
@@ -600,4 +600,28 @@ func hasLevel(rep *p6AttrReporter, level slog.Level) bool {
 		}
 	}
 	return false
+}
+
+// noOpChangeIndexStore is an ops store with no opchange_by_book index and no
+// Unwrap (not Pebble). Its embedded Store is nil and never called.
+type noOpChangeIndexStore struct{ database.Store }
+
+// Boot enqueues the ensure on every start; on a store with no index it must
+// not fail red every boot. It logs a Warn tagged no-op and succeeds. A
+// preview or rebuild an operator asks for still fails.
+func TestOpchangeBookIndexOp_StoreWithoutIndex(t *testing.T) {
+	p := New(fakeDeps{store: noOpChangeIndexStore{}})
+	rep := &p6AttrReporter{}
+	if err := p.runOpChangeBookIndexRebuild(context.Background(), json.RawMessage(`{"ensure":true}`), rep); err != nil {
+		t.Fatalf("ensure on a store with no index failed: %v", err)
+	}
+	if !hasLevel(rep, slog.LevelWarn) || rep.noOpLines() != 1 {
+		t.Fatalf("lines = %+v, want one Warn tagged no-op", rep.lines)
+	}
+	for _, raw := range []string{`{}`, `{"dry_run":false}`} {
+		err := p.runOpChangeBookIndexRebuild(context.Background(), json.RawMessage(raw), &fakeReporter{})
+		if err == nil || !strings.Contains(err.Error(), "has no opchange_by_book: index") {
+			t.Errorf("%s on a store with no index: err = %v, want it to fail as before", raw, err)
+		}
+	}
 }
