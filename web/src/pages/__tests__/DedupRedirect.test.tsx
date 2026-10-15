@@ -1,5 +1,5 @@
 // file: web/src/pages/__tests__/DedupRedirect.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 91b7d3a5-2c48-4e60-b5f9-0d1e7a8c3624
 // last-edited: 2026-10-15
 
@@ -48,11 +48,24 @@ describe('DedupRedirect', () => {
     expect(await landed(from)).toBe(to);
   });
 
-  it('with no tab lands on the exact layer, from all four legacy paths', async () => {
+  it('with no tab lands on the exact layer, from /dedup, /authors/dedup and /books/dedup', async () => {
     for (const p of ['/dedup', '/authors/dedup', '/books/dedup']) {
       document.body.innerHTML = '';
       expect(await landed(p)).toBe('/review?lane=dupes&layer=exact');
     }
+  });
+
+  it('matches the labels path case-insensitively, as the router does', async () => {
+    document.body.innerHTML = '';
+    render(
+      <MemoryRouter initialEntries={['/Dedup/Labels']}>
+        <Routes>
+          <Route path="/dedup/labels" element={<DedupRedirect />} />
+          <Route path="/review" element={<Where />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect((await screen.findByTestId('where')).textContent).toBe('/review?lane=dupes&view=labels');
   });
 
   it('an unknown tab keeps book and band and drops every other param', async () => {

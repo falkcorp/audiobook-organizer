@@ -1,5 +1,5 @@
 // file: web/src/pages/DedupRedirect.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c0d8e41-7a36-4b92-8f1d-3e6a9b2c4d70
 // last-edited: 2026-10-15
 
@@ -39,7 +39,7 @@ const KEPT_PARAMS = ['book', 'band'] as const;
 function dedupRedirectTarget(pathname: string, search: string): string {
   const params = new URLSearchParams(search);
   let base: string;
-  if (pathname.replace(/\/+$/, '').endsWith('/dedup/labels')) {
+  if (pathname.replace(/\/+$/, '').toLowerCase().endsWith('/dedup/labels')) {
     base = LABELS_TARGET;
   } else {
     const tab = params.get('tab');
