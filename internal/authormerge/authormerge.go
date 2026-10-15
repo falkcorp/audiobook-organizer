@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
 // last-edited: 2026-10-15
 
@@ -102,6 +102,13 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	var res MoveResult
 	primaryChanged := m.PrimaryBefore != nil && *m.PrimaryBefore == m.FromID
 	after := slices.Clone(m.After)
+	// A book whose primary moves to IntoID is credited to it too. A primary-only
+	// book (its junction never credited FromID) used to end up with a primary
+	// its credits did not name on every path but the maintenance merges, which
+	// already appended it (creditsMovedOnto). One rule for every merge now.
+	if primaryChanged && !slices.ContainsFunc(after, func(ba database.BookAuthor) bool { return ba.AuthorID == m.IntoID }) {
+		after = append(after, database.BookAuthor{BookID: m.BookID, AuthorID: m.IntoID, Role: "author", Position: len(after)})
+	}
 	move := undo.AuthorCreditsMove{FromAuthorID: m.FromID, IntoAuthorID: m.IntoID, CreditsAfter: &after, PrimaryChanged: primaryChanged}
 	if primaryChanged {
 		k := m.IntoID
@@ -123,8 +130,8 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	}
 	// A move that only repoints the primary (the book's junction never credited
 	// FromID) leaves the junction as it is rather than rewriting it unchanged.
-	if !undo.SameJunction(m.Before, m.After) {
-		if err := store.SetBookAuthors(m.BookID, m.After); err != nil {
+	if !undo.SameJunction(m.Before, after) {
+		if err := store.SetBookAuthors(m.BookID, slices.Clone(after)); err != nil {
 			if verr := void(); verr != nil {
 				return res, fmt.Errorf("set book authors: %w (and its undo row could not be voided: %v)", err, verr)
 			}
