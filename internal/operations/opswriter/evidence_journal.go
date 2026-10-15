@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_journal.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3d79460b-a54c-4691-ba04-dc81be729043
 // last-edited: 2026-10-14
 
@@ -55,7 +55,12 @@ func journalRowOf(c *database.OperationChange, opID string) journalRow {
 	return r
 }
 
-// stamp is the row's CreatedAt (the oldest instant when it had none).
+// stamp is the row's CreatedAt (the oldest instant when it had none). A row
+// with no CreatedAt therefore reads as the OLDEST write, never the newest: as
+// a foreign row it cannot defeat a stamped write, and as a named one every
+// stamped write defeats it (it fails closed). The two readings differ only
+// for a row nothing writes: CreateOperationChange always stamps CreatedAt,
+// so in practice no journal row lacks one.
 func (r journalRow) stamp() time.Time { return time.Unix(0, r.at) }
 
 // journalMemoMaxAge is how long one whole-journal scan serves a Writer
