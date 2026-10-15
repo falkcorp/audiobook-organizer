@@ -1,5 +1,5 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
 // last-edited: 2026-10-15
 
@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
@@ -837,6 +836,12 @@ func tierForLevel(level string) string {
 // NoOpAttr().
 const NoOpAttrKey = "no_op"
 
+// noOpActivityTag is activity.NoOpTag spelled out: registry is in pkg/plugin/sdk's
+// dependency closure (sdkguard), and importing internal/activity for one string
+// pulled most of the server into it. TestRecordActivity_NoOpAttrAddsNoOpTag
+// asserts the two stay equal.
+const noOpActivityTag = "no-op"
+
 // NoOpAttr returns the NoOpAttrKey attribute for reporter.Log.
 func NoOpAttr() slog.Attr { return slog.Bool(NoOpAttrKey, true) }
 
@@ -859,7 +864,7 @@ func (r *dbReporter) recordActivity(entry logEntry) {
 		tags = append(tags, "phase:"+phase)
 	}
 	if noOp, ok := details[NoOpAttrKey].(bool); ok && noOp {
-		tags = append(tags, activity.NoOpTag)
+		tags = append(tags, noOpActivityTag)
 	}
 	_ = r.activityRecorder.Record(database.ActivityEntry{
 		Timestamp:   entry.createdAt,
