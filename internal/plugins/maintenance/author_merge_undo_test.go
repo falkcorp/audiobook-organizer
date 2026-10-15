@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -672,6 +672,46 @@ func TestAuthorConjunctionRepair_ARenameOntoAHeldNameIsSkipped(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.True(t, rows[0].Voided, "the refused rename's undo row is voided")
 	require.Contains(t, strings.Join(rep.msgs, "\n"), "skip_name_taken:1", "the summary reports the skip")
+}
+
+// handEditStore hand-renames one author on its first twin lookup, as an editor
+// does between the run's read of the row and its rename, then reports no twin.
+type handEditStore struct {
+	*database.PebbleStore
+	authorID int
+	edited   bool
+}
+
+func (h *handEditStore) GetAuthorByName(string) (*database.Author, error) {
+	if !h.edited {
+		h.edited = true
+		if err := h.UpdateAuthorName(h.authorID, "Synthetic Hand Edit"); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
+}
+
+// The forward rename refuses a row that was renamed after the run read it: the
+// hand edit stands, the rename's undo row is voided, and the run counts a
+// failure (not a skip).
+func TestAuthorConjunctionRepair_ARenameOfAHandEditedRowIsRefused(t *testing.T) {
+	st := newRelinkTrashedStore(t)
+	solo := mustAuthorNamed(t, st, "& Probe Hand")
+	rep := &progressRecorder{opIDReporter: opIDReporter{id: "op-rr9"}}
+	p := New(&fakeDeps{store: &handEditStore{PebbleStore: st, authorID: solo.ID}})
+	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), rep))
+
+	got, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Synthetic Hand Edit", got.Name, "the hand edit is not overwritten")
+	rows, err := st.GetOperationChanges("op-rr9")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Voided, "the refused rename's undo row is voided")
+	summary := strings.Join(rep.msgs, "\n")
+	require.Contains(t, summary, "failed:1", "the summary reports the failure")
+	require.NotContains(t, summary, "skip_name_taken", "a renamed row is not a name-taken skip")
 }
 
 // progressRecorder keeps every progress message (the op's summary is the last).
