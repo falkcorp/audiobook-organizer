@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
 // last-edited: 2026-10-15
 
@@ -353,7 +353,18 @@ const ActivityFilterIndexReconcileFromKey = "system:activity_filter_index_reconc
 func (s *PebbleActivityStore) initReconcileFrom() {
 	mark := s.seenThrough.Load()
 	from := mark
-	stored, hasStored := s.loadReconcileFrom()
+	stored, hasStored, lerr := s.loadReconcileFrom()
+	forceWrite := false
+	if lerr != nil {
+		// Fail closed. An unreadable key means a check may be owed from a point
+		// we can no longer know, so check everything (from 0) rather than fall
+		// back to the live mark, which would find a clean table above it and
+		// delete the key: the rollback gap lost for good. The key is replaced by
+		// a readable 0 below and goes only on a clean full check or a completed
+		// backfill.
+		filterIndexLog.Error("the filter-index reconcile start mark is unreadable (%v); the next reconcile checks every activity row", lerr)
+		stored, hasStored, forceWrite = 0, true, true
+	}
 	if hasStored && stored < from {
 		from = stored
 	}
@@ -366,7 +377,7 @@ func (s *PebbleActivityStore) initReconcileFrom() {
 	if !suspect && !hasStored {
 		return // nothing above the mark and nothing owed: no durable state needed
 	}
-	if hasStored && stored == from {
+	if hasStored && stored == from && !forceWrite {
 		return // the durable value is already the lower of the two
 	}
 	if err := s.db.Set([]byte(ActivityFilterIndexReconcileFromKey), []byte(strconv.FormatInt(from, 10)), pebble.Sync); err != nil {
@@ -376,18 +387,24 @@ func (s *PebbleActivityStore) initReconcileFrom() {
 	}
 }
 
-// loadReconcileFrom reads the durable start mark.
-func (s *PebbleActivityStore) loadReconcileFrom() (int64, bool) {
-	val, closer, err := s.db.Get([]byte(ActivityFilterIndexReconcileFromKey))
-	if err != nil {
-		return 0, false
+// loadReconcileFrom reads the durable start mark. found=false with a nil error
+// means there is none (the common case). A Get failure other than not-found, or
+// a value that is not an integer, is an error: the caller must not treat it as
+// absent (see initReconcileFrom).
+func (s *PebbleActivityStore) loadReconcileFrom() (n int64, found bool, err error) {
+	val, closer, gerr := s.db.Get([]byte(ActivityFilterIndexReconcileFromKey))
+	if gerr != nil {
+		if errors.Is(gerr, pebble.ErrNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, gerr
 	}
+	defer closer.Close()
 	n, perr := strconv.ParseInt(string(val), 10, 64)
-	closer.Close()
 	if perr != nil {
-		return 0, false
+		return 0, false, fmt.Errorf("value %q is not an integer: %w", val, perr)
 	}
-	return n, true
+	return n, true, nil
 }
 
 // raiseReconcileFrom lifts the in-memory start mark to at least nanos.
