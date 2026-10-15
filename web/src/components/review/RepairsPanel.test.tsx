@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-14
 //
@@ -1186,7 +1186,12 @@ describe('RepairsPanel — missing files', () => {
     book_ids: ['B1'],
     title: 'Book One',
     current: { path: '/library/old/Book One.m4b (missing)' },
-    proposed: { path: '/library/new/Book One.m4b', match_type: 'hash', confidence: 'high' },
+    // The row proposes the path only; the match type is its class, and the
+    // match type and confidence are in its reason and evidence.
+    proposed: { path: '/library/new/Book One.m4b' },
+    reason:
+      'The file /library/old/Book One.m4b is missing; the scan matched the untracked file /library/new/Book One.m4b by hash (confidence high).',
+    evidence: ['reconcile scan scan-1 (completed 2026-10-14 03:00 UTC)', 'matched by hash, confidence high, score 1.00'],
     members: [{ book_id: 'B1', title: 'Book One', role: 'missing', files: 1, missing_files: 1 }],
   });
   const NO_CANDIDATE = row('missing:B2', {
@@ -1221,14 +1226,18 @@ describe('RepairsPanel — missing files', () => {
   });
 
   it('lists the fixer titled Missing files and shows book, file, match type and confidence', async () => {
+    const user = userEvent.setup();
     renderPanel();
     const fixer = await screen.findByTestId('repairs-fixer-reconcile.missing-files');
     expect(within(fixer).getByText('Missing files')).toBeInTheDocument();
     const r = await screen.findByTestId('repairs-row-missing:B1');
     expect(within(r).getByText('Book One')).toBeInTheDocument();
     expect(screen.getByTestId('repairs-row-summary-missing:B1')).toHaveTextContent(
-      'confidence: (none) → high; match_type: (none) → hash; path: /library/old/Book One.m4b (missing) → /library/new/Book One.m4b'
+      /^path: \/library\/old\/Book One\.m4b \(missing\) → \/library\/new\/Book One\.m4b$/
     );
+    expect(within(r).getByText(/by hash \(confidence high\)/)).toBeInTheDocument();
+    await user.click(screen.getByTestId('repairs-row-expand-missing:B1'));
+    expect(screen.getByTestId('repairs-row-evidence-missing:B1')).toHaveTextContent('matched by hash, confidence high');
   });
 
   it('lists a book with no candidate file as a skipped row with that reason and a clickable count', async () => {
