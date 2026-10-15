@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -23,6 +24,13 @@ func TestQuarantineKnownBadFiles_CancelLeavesFlagUnsetAndRunsOnce(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	// Unmarked books exercise the read pool without quarantining anything
+	// (quarantineSvc is nil here, so a marked book would panic the test).
+	for i := range 6 {
+		if _, err := store.CreateBook(&database.Book{Title: fmt.Sprintf("Synthetic %d", i), FilePath: fmt.Sprintf("/library/synthetic-%d.m4b", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := &Server{store: store}
 
 	ctx, cancel := context.WithCancel(context.Background())

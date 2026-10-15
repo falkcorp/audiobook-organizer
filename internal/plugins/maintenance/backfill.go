@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-10-15
 
@@ -61,7 +61,7 @@ func (p *Plugin) externalIDBackfillDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.external-id-backfill",
-		Cancellable:     false,
+		Cancellable:     true, // honours ctx at every book/file; a cancelled run leaves its done flag unset
 		Isolate:         false,
 		Timeout:         30 * time.Minute,
 		Schedule:        nil,
@@ -101,7 +101,7 @@ func (p *Plugin) movementAtomCleanupDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.movement-atom-cleanup",
-		Cancellable:     false,
+		Cancellable:     true,  // honours ctx at every book/file; a cancelled run leaves its done flag unset
 		Isolate:         false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
 		Timeout:         60 * time.Minute,
 		Schedule:        nil,
@@ -130,7 +130,7 @@ func (p *Plugin) malformedM4BRemuxDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.malformed-m4b-remux",
-		Cancellable:     false,
+		Cancellable:     true,  // honours ctx at every book/file; a cancelled run leaves its done flag unset
 		Isolate:         false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
 		Timeout:         120 * time.Minute,
 		Schedule:        nil,

@@ -1,5 +1,5 @@
 // file: internal/server/quarantine_known_bad.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-15
 
@@ -9,6 +9,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
@@ -48,18 +51,39 @@ func (s *Server) quarantineKnownBadFiles(ctx context.Context) (quarantined int, 
 		return 0, false, fmt.Errorf("quarantine known-bad files: list books: %w", err)
 	}
 
-	for _, b := range books {
+	// CONCURRENCY (CLAUDE.md): the whole-library part is one settings read
+	// per book, so it runs on a runtime.NumCPU() pool. Each worker reads only
+	// and writes its own slot of marked, so no two touch the same state. The
+	// quarantines that follow (a few dozen books, ever) stay sequential.
+	marked := make([]bool, len(books))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU())
+	for i := range books {
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			b := books[i]
+			if b.QuarantinedAt != nil {
+				return nil
+			}
+			setting, err := store.GetSetting(remux.TranscodeSkipKey(b.FilePath))
+			marked[i] = err == nil && setting != nil && setting.Value == "true"
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		quarantineLog.Info("quarantine of known-bad files interrupted before any book was quarantined; the done flag stays unset")
+		return 0, false, err
+	}
+
+	for i, b := range books {
+		if !marked[i] {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			quarantineLog.Info("quarantine of known-bad files interrupted after %d book(s); the done flag stays unset", quarantined)
 			return quarantined, false, err
-		}
-		if b.QuarantinedAt != nil {
-			continue
-		}
-		key := remux.TranscodeSkipKey(b.FilePath)
-		setting, err := store.GetSetting(key)
-		if err != nil || setting == nil || setting.Value != "true" {
-			continue
 		}
 		if err := s.quarantineSvc.QuarantineBook(b.ID, "taglib permanently unreadable after transcode attempt"); err != nil {
 			slog.Warn("quarantineKnownBadFiles quarantine", "b", b.FilePath, "err", err)
