@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package database
 
@@ -971,40 +971,41 @@ func TestGetOpLogsV2_TailMatchesFull(t *testing.T) {
 // runtime half is rejectOpv2OpRawKey on SetRaw/DeleteRaw/DeleteRawBatch, for
 // keys built where no AST check can follow them.
 var opv2OpKeyAllowlist = map[string]string{
-	"internal/database/pebble_store_ops_v2_timeline.go:const opv2OpPrefix":                          "read",
-	"internal/database/pebble_store_ops_v2.go:opv2OpKey":                                            "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:var opv2RawRefusedPrefixes":                  "read", // the raw-key guard's refused families
-	"internal/database/keyfamilies.go:var keyFamilies":                                              "read", // the db census registry's family prefix; declares the prefix, never writes a row
-	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).commitOpV2Row":                "stage",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).updateOperationV2Status":               "stage", // body of UpdateOperationV2Status and UpdateOperationV2StatusIf
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ResetOperationV2ForResume":             "stage",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).DeleteOperationV2":                     "stage",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SweepHollowOperationsV2":               "sweep",
-	"internal/database/pebble_store_ops_v2.go:stageOpV2RowWrite":                                    "stage", // the opv2 mirror row of a native opv3 write (05-PR4)
-	"internal/database/pebble_store_ops_v2.go:stageOpV2RowDelete":                                   "stage", // DeleteRunV3's mirror row delete (05-PR4)
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).listOpV2IDsPage":                       "read",  // migration 065's key-only pager (05-PR4)
-	"internal/database/pebble_store_ops_v3_migrate.go:(*PebbleStore).getOpV2Raw":                    "read",  // migration 065 / the opv3 reconcile hash the stored row bytes (05-PR4)
-	"internal/database/pebble_store_ops_v3_reconcile.go:(*PebbleStore).findStaleRunsV3":             "read",  // the opv3 boot reconcile's detection walk (05-PR4)
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).opv2RowExists":                         "read",  // the opv3 reconcile's orphan check
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).InsertOperationV2":                     "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).PromoteToQueued":                       "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOperationV2Result":                  "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOpQueuedProgressV2":                 "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).UpdateOperationV2Params":               "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).stampCompletedAtIfPhantom":             "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).getExistingOpV2":                       "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).GetOperationV2":                        "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListActiveOperationsV2":                "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListQueuedOperationsV2":                "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListResumableOperationsV2":             "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListWaitingDepsOps":                    "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).RepairOpsV2MissingCompletedAt":         "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:getOpV2FromSnapshot":                         "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).listOperationsV2SinceIndexed": "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).listOperationsV2SinceScan":    "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:opv2ULIDSeekBound":                           "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).detectOpsV2TimelineDrift":     "read",
-	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).readOpV2Raw":                  "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:const opv2OpPrefix":                           "read",
+	"internal/database/pebble_store_ops_v2.go:opv2OpKey":                                             "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:var opv2RawRefusedPrefixes":                   "read", // the raw-key guard's refused families
+	"internal/database/keyfamilies.go:var keyFamilies":                                               "read", // the db census registry's family prefix; declares the prefix, never writes a row
+	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).commitOpV2Row":                 "stage",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).updateOperationV2Status":                "stage", // body of UpdateOperationV2Status and UpdateOperationV2StatusIf
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ResetOperationV2ForResume":              "stage",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).DeleteOperationV2":                      "stage",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SweepHollowOperationsV2":                "sweep",
+	"internal/database/pebble_store_ops_v2.go:stageOpV2RowWrite":                                     "stage", // the opv2 mirror row of a native opv3 write (05-PR4)
+	"internal/database/pebble_store_ops_v2.go:stageOpV2RowDelete":                                    "stage", // DeleteRunV3's mirror row delete (05-PR4)
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).listOpV2IDsPage":                        "read",  // migration 065's key-only pager (05-PR4)
+	"internal/database/pebble_store_ops_v3_migrate.go:(*PebbleStore).getOpV2Raw":                     "read",  // migration 065 / the opv3 reconcile hash the stored row bytes (05-PR4)
+	"internal/database/pebble_store_ops_v3_reconcile.go:(*PebbleStore).findStaleRunsV3":              "read",  // the opv3 boot reconcile's detection walk (05-PR4)
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).opv2RowExists":                          "read",  // the opv3 reconcile's orphan check
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).InsertOperationV2":                      "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).PromoteToQueued":                        "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOperationV2Result":                   "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).SetOpQueuedProgressV2":                  "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).UpdateOperationV2Params":                "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).stampCompletedAtIfPhantom":              "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).getExistingOpV2":                        "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).GetOperationV2":                         "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListActiveOperationsV2":                 "read",
+	"internal/database/pebble_store_ops_v2_status_lookup.go:(*PebbleStore).HasOperationV2WithStatus": "read", // 04-P6 boot check for an interrupted_ask transcode; read-only scan
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListQueuedOperationsV2":                 "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListResumableOperationsV2":              "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListWaitingDepsOps":                     "read",
+	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).RepairOpsV2MissingCompletedAt":          "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:getOpV2FromSnapshot":                          "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).listOperationsV2SinceIndexed":  "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).listOperationsV2SinceScan":     "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:opv2ULIDSeekBound":                            "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).detectOpsV2TimelineDrift":      "read",
+	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).readOpV2Raw":                   "read",
 }
 
 // opv2PebbleWrites are pebble DB/Batch write methods (and pebbleSetJSON); a

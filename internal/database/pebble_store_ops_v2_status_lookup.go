@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_status_lookup.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c2f8a19-4d7e-4b53-9a01-8e5b3c7d2f40
 // last-edited: 2026-10-15
 
@@ -18,7 +18,7 @@ import (
 // while an interrupted_ask transcode row waits for an operator).
 func (p *PebbleStore) HasOperationV2WithStatus(defID, status string) (found bool, err error) {
 	defer recoverPebbleClosed("HasOperationV2WithStatus", &err)
-	prefix := []byte("opv2:op:")
+	prefix := []byte(opv2OpPrefix)
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
 	if err != nil {
 		return false, err
