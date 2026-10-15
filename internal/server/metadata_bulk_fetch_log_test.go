@@ -1,5 +1,5 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
 // last-edited: 2026-10-15
 
@@ -331,6 +331,39 @@ func TestBulkFetchByIDs_SkipsBooksMarkedNoMatch(t *testing.T) {
 		t.Errorf("ledger[b-plain] = %q, want %q (the unmarked book must be fetched)", got, metafetch.FetchStatusNotFound)
 	}
 	if !strings.Contains(rec.last(), "marked no-match 1") {
+		t.Errorf("final summary %q does not report the skipped count", rec.last())
+	}
+}
+
+// TestBulkFetchAll_SkipsBooksMarkedNoMatch drives the whole-library path with a
+// store holding only marked books and an already-cancelled context. With the
+// skip the work list is empty, so the run takes the "all books already cached"
+// exit and returns (false, nil) before it ever looks at the context; without
+// it the marked books reach the worker pool and the run returns
+// context.Canceled. The summary reports the skipped count (04-P14f).
+func TestBulkFetchAll_SkipsBooksMarkedNoMatch(t *testing.T) {
+	disableMetadataSourcesForTest(t)
+
+	store := &database.MockStore{
+		GetAllBooksCoreFunc: func(_, _ int) ([]database.BookCore, error) {
+			return []database.BookCore{
+				{ID: "b1", Title: "Synthetic Marked One", MetadataReviewStatus: strPtr("no_match")},
+				{ID: "b2", Title: "Synthetic Marked Two", MetadataReviewStatus: strPtr("no_match")},
+			}, nil
+		},
+		GetAllAuthorsFunc:       func() ([]database.Author, error) { return nil, nil },
+		GetOperationResultsFunc: func(string) ([]database.OperationResult, error) { return nil, nil },
+	}
+	srv := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+	rec := &recordingProgress{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	incomplete, err := srv.runBulkMetadataFetchAll(ctx, "op-all-nomatch", operations.BulkMetadataFetchParams{}, store, rec)
+	if err != nil || incomplete {
+		t.Fatalf("run = (%v, %v), want (false, nil): marked books must never reach the worker pool", incomplete, err)
+	}
+	if !strings.Contains(rec.last(), "marked no-match 2") {
 		t.Errorf("final summary %q does not report the skipped count", rec.last())
 	}
 }
