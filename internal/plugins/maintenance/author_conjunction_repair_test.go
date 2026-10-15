@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -55,6 +55,15 @@ func newConjRepairPlugin(
 			}
 			return nil, nil
 		},
+		// The rename reads the row back under its check (RenameAuthorChecked).
+		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
+			for i := range authors {
+				if authors[i].ID == id {
+					return &authors[i], nil
+				}
+			}
+			return nil, nil
+		},
 		GetBooksByAuthorIDWithRoleFunc: func(authorID int) ([]database.BookCore, error) {
 			return booksByAuthor[authorID], nil
 		},
@@ -103,6 +112,15 @@ func newConjRepairPluginWithDeps(
 		GetAuthorByNameFunc: func(name string) (*database.Author, error) {
 			for i := range authors {
 				if authors[i].Name == name {
+					return &authors[i], nil
+				}
+			}
+			return nil, nil
+		},
+		// The rename reads the row back under its check (RenameAuthorChecked).
+		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
+			for i := range authors {
+				if authors[i].ID == id {
 					return &authors[i], nil
 				}
 			}
