@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/boot_backfill_params_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c1e4d27-5b3a-4f69-9e02-7a6d3b8f1c45
 // last-edited: 2026-10-15
 
@@ -302,6 +302,9 @@ func TestBootOpDefs_WaitForWarmupAndKeepTheirPolicies(t *testing.T) {
 		}
 		if tc.def.ResumePolicy != tc.resume {
 			t.Errorf("%s: ResumePolicy = %v, want %v", tc.def.ID, tc.def.ResumePolicy, tc.resume)
+		}
+		if !tc.def.Cancellable {
+			t.Errorf("%s: Cancellable = false, but the run honours ctx and boot enqueues it; it must be cancellable", tc.def.ID)
 		}
 		if tc.def.DefaultPriority != sdk.PriorityLow {
 			t.Errorf("%s: DefaultPriority = %v, want PriorityLow so boot runs never get ahead of a user's op", tc.def.ID, tc.def.DefaultPriority)
