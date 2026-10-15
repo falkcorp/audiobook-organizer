@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.72.0
+// version: 1.73.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package audiobooks
 
@@ -730,6 +730,10 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertJunkAuthorCredits(c)
 	case undo.ChangeTypeJunkAuthorCreate:
 		return rs.revertJunkAuthorCreate(c)
+	case undo.ChangeTypeAuthorRename:
+		return rs.revertAuthorRename(c)
+	case undo.ChangeTypeAuthorIDRepoint:
+		return rs.revertAuthorIDRepoint(c)
 	case undo.ChangeTypeAuthorMergeCredits:
 		return rs.revertAuthorMergeCredits(c)
 	case undo.ChangeTypeAuthorMergeDelete:
@@ -2213,6 +2217,65 @@ func (rs *RevertService) revertCreditsMove(c *database.OperationChange, snap und
 			book.AuthorID = &id
 			book.Author = primary
 		}
+		return nil
+	})
+}
+
+// authorRenamer renames an author back (revertAuthorRename). Resolved as a
+// capability so the stores that implement revertServiceStore for other row
+// types are not widened.
+type authorRenamer interface {
+	UpdateAuthorName(id int, name string) error
+}
+
+// revertAuthorRename renames an author back to the name an in-place rename
+// replaced, only while it is live under its own id and still carries exactly
+// the name the rename wrote (undo.CheckAuthorRename).
+func (rs *RevertService) revertAuthorRename(c *database.OperationChange) error {
+	id, from, to, err := undo.DecodeAuthorRename(c)
+	if err != nil {
+		return err
+	}
+	cur, err := rs.db.GetAuthorByID(id)
+	if err != nil {
+		return fmt.Errorf("look up author %d: %w", id, err)
+	}
+	if err := undo.CheckAuthorRename(cur, id, from, to); err != nil {
+		return err
+	}
+	r, ok := database.AsCapability[authorRenamer](rs.db)
+	if !ok {
+		return fmt.Errorf("this store cannot rename author %d back", id)
+	}
+	if err := r.UpdateAuthorName(id, from); err != nil {
+		return fmt.Errorf("rename author %d back to %q: %w", id, from, err)
+	}
+	return nil
+}
+
+// revertAuthorIDRepoint puts back the primary AuthorID author-id-repair
+// replaced (an id naming no author), under the book's write lock and only
+// while the book still carries exactly the id the repair wrote.
+func (rs *RevertService) revertAuthorIDRepoint(c *database.OperationChange) error {
+	from, to, err := undo.DecodeAuthorIDRepoint(c)
+	if err != nil {
+		return err
+	}
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
+		if err := undo.CheckAuthorIDRepoint(c.BookID, book.AuthorID, from, to); err != nil {
+			if errors.Is(err, undo.ErrAlreadyRestored) {
+				return database.ErrSkipBookWrite
+			}
+			return err
+		}
+		id := from
+		book.AuthorID = &id
+		// The old id named no author when the repair ran: there is no row to
+		// denormalize.
+		book.Author = nil
 		return nil
 	})
 }

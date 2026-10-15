@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -254,7 +255,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 			outcomes[conjRepairWouldRename]++
 			log.Info("author-conjunction-repair: rename",
 				"dry_run", true, "author_id", author.ID, "from", author.Name, "to", cleaned)
-		} else if err := store.UpdateAuthorName(author.ID, cleaned); err != nil {
+		} else if err := renameAuthorJournaled(store, opID, author, cleaned); err != nil {
 			outcomes[conjRepairFailed]++
 			log.Warn("author-conjunction-repair: rename failed",
 				"author_id", author.ID, "from", author.Name, "to", cleaned, "err", err)
@@ -393,6 +394,28 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 		log.Warn("author merge: author deleted with a problem", "author_id", from.ID, "problem", problem)
 	}
 	return relinked, undoRows, nil
+}
+
+// renameAuthorJournaled renames author to name in place, journaled BEFORE the
+// write as the author_rename row the revert engine reverses (it renames the
+// author back while it still carries name). A row that cannot be recorded
+// means no rename; a refused rename voids its row.
+func renameAuthorJournaled(store OpsStore, opID string, author database.Author, name string) error {
+	row, err := undo.NewAuthorRenameRow(author.ID, author.Name, name)
+	if err != nil {
+		return fmt.Errorf("undo row not built: %w", err)
+	}
+	void, err := authormerge.Step(store, opID, row)
+	if err != nil {
+		return fmt.Errorf("undo row not recorded: %w", err)
+	}
+	if err := store.UpdateAuthorName(author.ID, name); err != nil {
+		if verr := void(); verr != nil {
+			return fmt.Errorf("%w (and its undo row could not be voided: %v)", err, verr)
+		}
+		return err
+	}
+	return nil
 }
 
 // creditsMovedOnto is bookAuthors with fromID's credit moved onto intoID: the

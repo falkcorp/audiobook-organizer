@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -197,4 +197,58 @@ func TestMergeAuthorInto_RefusesAnApplyWithNoOperationID(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, undo.SameJunction(w.credits[id], credits), "book %s was moved", id)
 	}
+}
+
+// conjunction-repair renames an "& Name" row with no twin in place; the rename
+// is journaled (author_rename) and undone with the op.
+func TestAuthorConjunctionRepair_UndoRenamesTheSoloRowBack(t *testing.T) {
+	st := newRelinkTrashedStore(t)
+	solo := mustAuthorNamed(t, st, "& Undo Solo Author")
+	p := New(&fakeDeps{store: st})
+	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-undo-conj-rename"}))
+	renamed, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Undo Solo Author", renamed.Name)
+
+	rows, err := st.GetOperationChanges("op-undo-conj-rename")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, undo.ChangeTypeAuthorRename, rows[0].ChangeType)
+	report, err := undo.PreflightUndoConflicts(st, "op-undo-conj-rename")
+	require.NoError(t, err)
+	require.Zero(t, report.NotRestorable)
+	require.Equal(t, 1, report.TotalChanges)
+	res, err := audiobooks.NewRevertService(st).RevertOperation("op-undo-conj-rename")
+	require.NoError(t, err)
+	require.Zero(t, res.Failed, "%+v", res)
+	require.Equal(t, 1, res.Restored)
+	back, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "& Undo Solo Author", back.Name)
+}
+
+// A mixed author-id-repair run (dangling scalars AND a duplicate merge) undoes
+// completely: the dangling primary goes back (author_id_repoint) and the merge
+// is undone (author_merge_*).
+func TestAuthorIDRepair_UndoOfAMixedRunRestoresBothPhases(t *testing.T) {
+	w := newMergeUndoWorld(t, "Undo Mixed Author", "UNDO MIXED AUTHOR", 0)
+	const dangling = 987654
+	b, err := w.st.CreateBook(&database.Book{Title: "undo-mixed-dangling", FilePath: "/relink-trashed/undo-mixed-dangling",
+		AuthorID: new(dangling), IsPrimaryVersion: new(true)})
+	require.NoError(t, err)
+	require.NoError(t, w.st.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: w.co.ID, Role: "author"}}))
+
+	res := runRepair(t, New(&fakeDeps{store: w.st}), `{"dry_run":false}`)
+	require.Equal(t, 1, res.DuplicateOutcomes[authorIDMergeMerged], "%+v", res.DuplicateChanges)
+	require.Equal(t, 1, res.DanglingOutcomes["repointed"], "%+v", res.DanglingChanges)
+	moved, err := w.st.GetBookByID(b.ID)
+	require.NoError(t, err)
+	require.Equal(t, w.co.ID, *moved.AuthorID)
+	w.requireMerged(t)
+
+	w.requireUndone(t, "op-id-repair")
+	back, err := w.st.GetBookByID(b.ID)
+	require.NoError(t, err)
+	require.NotNil(t, back.AuthorID)
+	require.Equal(t, dangling, *back.AuthorID, "the repair's repoint is undone")
 }

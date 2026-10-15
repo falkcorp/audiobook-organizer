@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -12,16 +12,14 @@ import (
 	"log/slog"
 	"runtime"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
-
-	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -231,6 +229,11 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	lost := func() bool { return scanStandDownLostForApply(p.deps, standDownHolder, standDownHeld) }
 
 	opID := registry.ReporterOpID(reporter)
+	if !dryRun && opID == "" {
+		// Every write is journaled under this id so the revert engine can undo
+		// it; rows under no id belong to no operation a revert can name.
+		return res, fmt.Errorf("author-id-repair: no operation id on the reporter to journal the undo rows under; refusing to write")
+	}
 	wrote := false
 
 	if !params.SkipDangling {
@@ -438,6 +441,22 @@ func (p *Plugin) authorIDRepairDangling(
 		// (ModifyBook), so a column another writer commits meanwhile is not
 		// reverted (audit A1#15). The row decides again: a book whose
 		// AuthorID moved off the dangling id meanwhile is left alone.
+		// Journaled BEFORE the write, as the author_id_repoint row the revert
+		// engine reverses (a metadata_update author_id row is record-only).
+		// A row that cannot be recorded means no write; a write that does not
+		// land voids its row.
+		void, jErr := authormerge.Step(store, opID, undo.NewAuthorIDRepointRow(c.ID, old, target.ID))
+		if jErr != nil {
+			ch.Error = "undo row not recorded: " + jErr.Error()
+			record(ch, "failed")
+			return nil
+		}
+		voidRow := func() {
+			if verr := void(); verr != nil {
+				log.Warn("author-id-repair: could not void the undo row of a write that did not land",
+					"book_id", c.ID, "err", verr)
+			}
+		}
 		repointed := false
 		written, uErr := store.ModifyBook(c.ID, func(cur *database.Book) error {
 			if cur.AuthorID == nil || *cur.AuthorID != old {
@@ -450,34 +469,24 @@ func (p *Plugin) authorIDRepairDangling(
 		})
 		switch {
 		case uErr != nil:
+			voidRow()
 			ch.Error = uErr.Error()
 			record(ch, "failed")
 			return nil
 		case written == nil:
+			voidRow()
 			ch.Error = "book vanished before the repoint"
 			record(ch, "failed")
 			return nil
 		case !repointed:
+			voidRow()
 			record(authorIDScalarChange{}, "changed_since_scan")
 			return nil
 		}
 		ch.Applied = true
-		if lErr := store.CreateOperationChange(&database.OperationChange{
-			ID:          ulid.Make().String(),
-			OperationID: opID,
-			BookID:      c.ID,
-			ChangeType:  "metadata_update",
-			FieldName:   "author_id",
-			OldValue:    strconv.Itoa(old),
-			NewValue:    strconv.Itoa(target.ID),
-		}); lErr != nil {
-			log.Warn("author-id-repair: undo-ledger write failed for a repointed book",
-				"book_id", c.ID, "from_id", old, "into_id", target.ID, "err", lErr)
-		} else {
-			mu.Lock()
-			res.UndoLedgerRows++
-			mu.Unlock()
-		}
+		mu.Lock()
+		res.UndoLedgerRows++
+		mu.Unlock()
 		record(ch, "repointed")
 		return nil
 	}, registry.RunItemsOptions{

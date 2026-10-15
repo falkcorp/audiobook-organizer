@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -300,6 +300,34 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
 		return verdictOf(CheckRestoreReferent(store, c))
+	case ChangeTypeAuthorRename:
+		// The revert renames the author back only while it is live under its
+		// own id and still carries the name the rename wrote.
+		id, from, to, err := DecodeAuthorRename(c)
+		if err != nil {
+			return rowVerdict{refusal: err}
+		}
+		r, ok := database.AsCapability[authorByIDReader](store)
+		if !ok {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot read author %d", id)}
+		}
+		cur, err := r.GetAuthorByID(id)
+		if err != nil {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author %d: %v", id, err)}
+		}
+		return verdictOf(CheckAuthorRename(cur, id, from, to))
+	case ChangeTypeAuthorIDRepoint:
+		// The revert puts the old primary back only while the book still
+		// carries the one the repair wrote.
+		from, to, err := DecodeAuthorIDRepoint(c)
+		if err != nil {
+			return rowVerdict{refusal: err}
+		}
+		book, refusal := CheckRestoreBook(store, c.BookID)
+		if refusal != nil {
+			return rowVerdict{refusal: refusal}
+		}
+		return verdictOf(CheckAuthorIDRepoint(c.BookID, book.AuthorID, from, to))
 	case ChangeTypeAuthorMergeDelete, ChangeTypeAuthorReclassifyDelete:
 		// The revert recreates the author under its id (RestoreAuthor), refused
 		// only when another author took the name entry it held
@@ -610,6 +638,11 @@ func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, hol
 		return refuse(ReasonChangedSince, "book_file %s changed since the operation", id)
 	}
 	return nil
+}
+
+// authorByIDReader is what the preflight of an author rename row reads.
+type authorByIDReader interface {
+	GetAuthorByID(id int) (*database.Author, error)
 }
 
 // authorRestoreReader is what the preflight of an author delete row reads. The

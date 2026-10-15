@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -184,7 +184,7 @@ func restoredAuthorRows(res *audiobookspkg.RevertResult) bool {
 	if res.AuthorsPartlyRestored > 0 {
 		return true
 	}
-	for _, t := range []string{undo.ChangeTypeAuthorMergeCredits, undo.ChangeTypeAuthorMergeDelete,
+	for _, t := range []string{undo.ChangeTypeAuthorMergeCredits, undo.ChangeTypeAuthorMergeDelete, undo.ChangeTypeAuthorRename,
 		undo.ChangeTypeAuthorReclassifyCredits, undo.ChangeTypeAuthorReclassifyDelete} {
 		if res.RestoredTypes[t] > 0 {
 			return true
