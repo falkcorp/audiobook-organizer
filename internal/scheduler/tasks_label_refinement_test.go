@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks_label_refinement_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f1a6c92-8d47-4b0e-9a25-1c7e6b4d0f83
 // last-edited: 2026-10-15
 
@@ -72,21 +72,27 @@ func TestLabelRefinementEnqueuesTheParentOp(t *testing.T) {
 	assert.Equal(t, "dedup.label-refinement", taskV2DefIDs["label_refinement"])
 }
 
-// TestLabelRefinementNeedsTheDedupEngine: the parent def is registered only when
-// the dedup engine is wired, so an enabled task without one must stay inert
-// rather than enqueue an unregistered def id.
-func TestLabelRefinementNeedsTheDedupEngine(t *testing.T) {
+// TestLabelRefinementNeedsTheDedupPlugin: the parent def is registered only when
+// the dedup plugin is built (engine AND embedding store), so an enabled task
+// without it must stay inert rather than enqueue an unregistered def id. The
+// engine alone is not enough, and an unwired dep counts as absent.
+func TestLabelRefinementNeedsTheDedupPlugin(t *testing.T) {
 	prev := config.AppConfig.Scheduled.LabelRefinement
 	t.Cleanup(func() { config.AppConfig.Scheduled.LabelRefinement = prev })
 	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{Enabled: true, Interval: 60}
 
 	deps := testDeps()
-	deps.HasDedupEngine = func() bool { return false }
+	deps.HasDedupEngine = func() bool { return true }
+	deps.HasDedupPlugin = nil
 	def, ok := NewTaskScheduler(deps).GetTask("label_refinement")
 	assert.True(t, ok)
-	assert.False(t, def.IsEnabled(), "enabled in config but no dedup engine must be inert")
+	assert.False(t, def.IsEnabled(), "an unwired HasDedupPlugin must read as absent")
 
-	deps.HasDedupEngine = func() bool { return true }
+	deps.HasDedupPlugin = func() bool { return false }
+	def, _ = NewTaskScheduler(deps).GetTask("label_refinement")
+	assert.False(t, def.IsEnabled(), "engine without the embedding store (no plugin) must be inert")
+
+	deps.HasDedupPlugin = func() bool { return true }
 	def, _ = NewTaskScheduler(deps).GetTask("label_refinement")
 	assert.True(t, def.IsEnabled())
 }
