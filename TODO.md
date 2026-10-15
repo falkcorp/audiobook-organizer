@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.23 -->
+<!-- version: 10.76.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-14 -->
+<!-- last-edited: 2026-10-15 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,180 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **05-PR5-FINISH-ON-DECLINE** Add a third decision, **Finish without
+      resuming**, next to Retry and Discard for a v3 run in
+      `awaiting_decision` (owner decision 2026-10-13; a follow-up, not part
+      of 05-PR5). Today a `ResumeAsk` run (the Fixer default) stopped by a
+      shutdown skips its `Finish`, so the resumed attempt can run it once
+      over every attempt's ledger. If a person then picks Discard, the
+      record, ledger and marks are deleted and `Finish` never runs: rows the
+      fixer already applied keep their writes but never get `AfterApply`.
+      The new decision dispatches an attempt under the same op id with a
+      fresh lease and fence that leases no chunks and runs only
+      `Finish`/`AfterApply` over the stored ledger and marks (the rows
+      already applied), then ends the run. Work: a registry decision event
+      and API route, the runner's finish-only mode, the button in the
+      decision UI, and a test that the follow-up runs once over exactly the
+      applied rows. The restart-strike force-drop needs nothing: it fires
+      only when no chunk ever completed, so its ledger is empty. See the
+      `batchConfig.resumes` comment in
+      `internal/operations/registry/batch_runner.go`.
+
+- [ ] **05-PR7-DEADCODE** 05-PR5 (#4008) added its v3 runner, chunk ledger,
+      adapter and Writer-host identifiers to `scripts/deadcode-baseline.txt`
+      in a one-time addition the owner approved on 2026-10-13, because
+      nothing registers a v3 definition in production until 05-PR7 wires the
+      catalog. The added names are every `internal/operations/registry.` line in
+      the baseline except the three that predate 05-PR5
+      (`ShutdownAllForStore`, `WithRequires`, `dbReporter.droppedLogCount`);
+      the block's "05-PR5 one-time addition" comment does not survive a
+      `--prune`, which rewrites the file sorted and without comments. When
+      05-PR7 lands, run `make lint-deadcode-ratchet` and
+      `python3 scripts/deadcode-ratchet.py --prune`, then confirm no
+      `internal/operations/registry.` line remains other than those three.
+      Any that remain unreachable are dead code to delete, not to keep.
+      Also 05-PR7: `make oplint` passes `./internal/plugins/...`, which oplint
+      cannot read (it takes directories); run on the directory it reports 586
+      stale import violations, and no CI workflow runs it. 05-PR5 only added
+      rule R21 (a `Deps` field typed `database.Store`).
+
+- [ ] **OPS-DIRTYSET-CAS** 02 PR 14: add the store primitive the v3 Batch
+      runner's `ops.DirtySet` reader needs, `CompareAndDeleteRaw(key, expect)`
+      on `*PebbleStore`, together with the marker that writes
+      `<prefix><subjectID>` -> 8-byte big-endian epoch under the same lock.
+      05-PR5 shipped the reader side (`internal/operations/registry`
+      `dirtySetStore`); a run over a DirtySet refuses to start until the store
+      has it.
+
+- [ ] **OPS-WRITER-CREDITS-TAGS-LOCKS** Add `ModifyCredits`, `ModifyTags` and
+      `LockFields` to the v3 `ops.Writer` (`internal/operations/opswriter`)
+      when the first port needs them. 05-PR5 dropped them from the sketch:
+      `database.BookCredits` and `database.BookTags` do not exist, there is no
+      atomic modify for narrators or tags, and no field-lock store method maps
+      to `LockFields`. Each needs the intent -> write-in-critical-section ->
+      history -> clear order the other Writer methods follow.
+
+- [ ] **OPS-WRITER-REVERT** Teach the operation revert to reverse the
+      record-only change types the v3 Writer writes: `book_file_modify`
+      (`ModifyBookFile`, one row per changed field) and `book_authors_modify`
+      (`ModifyBookAuthors`, the whole credit list before and after). Until then
+      the revert refuses them; `book_file_repoint_location` rows from
+      `RepointBookFile` already revert.
+
+- [ ] **Remove the `GET /api/v1/maintenance/repair-missing-files/:id` 410 stub one release after 04-P14e ships (D9).** The route answers 410 via `gone()` and names `maintenance.missing-file-repoint` and `maintenance.recover-missing-files`. Delete the route, its handler test and the `settings.manage` gate wiring once a release has gone out with the stub.
+
+- [ ] **AUTHOR-SCAN-CTX** `dedup.FindDuplicateAuthors` (`internal/dedup/author.go:604`) takes no context, so neither cancel nor the 1h timeout stops `dedup.author-scan`'s comparison loop. Thread a ctx through and check it in the outer loop; return the partial-work error to the op.
+
+- [ ] **05-PR5b follow-up: per-book_file change history for the Fixer resume check.** A
+      resumed v3 Fixer counts a row as applied only while no write its marker names was
+      followed, on what it wrote, by a later write of its book recorded in the metadata
+      history or the operation journal (`opswriter.standsIn`). That cannot see a write
+      recorded in NEITHER store, and many book_file writers outside the ops Writer record
+      nothing (the scanner, the AcoustID fingerprint and LSH backfills, the tag backfill, the
+      Deluge link backfill). The window is narrow: the resume also requires every
+      `Proposed` value to hold, so only a foreign write that set the same value is misread.
+      Closing it needs a new family, e.g. `bookfile_change:<book>:<file>:<field>:<nanos>`,
+      written in the same batch as the row by every book_file mutator in `internal/database`
+      (Update/Upsert, `ModifyBookFile`, the patch, merge, import-mark, scan-cache and
+      relocation paths: about ten store files, so no caller package changes), a key-family
+      registration and census test, a capability reader, a pruning op with a retention
+      setting (the scanner rewrites thousands of rows per scan, so it grows fast), and the
+      evidence check reading it as a third store. No migration: the family starts empty,
+      and a marker older than it reads as today. Owner call whether the write amplification
+      is worth it.
+
+- [ ] **05-PR5b follow-up: stamp order for journal-first writers in the Fixer resume check.**
+      `opswriter.standsIn` orders a run's write against later foreign writes by their rows'
+      timestamps. A journal-first writer (`internal/repairs.Writer`: `Step`, the book_file and
+      credit methods) stamps its journal row BEFORE making the write, and on a resumed
+      operation finds its earlier row and records nothing new, so a write made today can
+      carry a stamp from its first attempt and read as older than the run's write.
+      `CreateOperationChange` and `stageSeriesObjectDrop` also stamp before their batch
+      commits (a window of the commit's duration). Two ways to close it, owner's choice:
+      re-stamp the journal row after the write commits (touches `repairs.Writer`'s journal
+      index and dedup, and every revert reader that orders by `CreatedAt`), or record a
+      per-store commit sequence and compare that instead of the clock (a new counter key
+      written in every history and journal batch). Mitigated, like the item above, by the
+      resume also requiring every `Proposed` value to hold.
+
+- [ ] **New library-folder-only missing-file matcher: basename and author/title folder, with a same-book check.** The owner accepted on 2026-10-14 that retiring `maintenance.repair-missing-files` (04-P14e, #4025) drops its filename tier (8,128 rows in the 2026-08-17 prod dry run) and its author/title folder tier (4,486 rows), and asked for this follow-up instead of a port. Build it as extra candidate keys in `maintenance.recover-missing-files` or a sibling plugin op: match a missing `book_file` row to a file under RootDir only (never the iTunes tree, which newer ops refuse as frozen) by unique basename, then by an author folder containing the author's last name and an album folder starting with the title. Require a same-book check (size or hash) before any repoint; the old filename tier accepted one basename match with no such check and could attach the wrong book. Aim it at recover's leftover buckets (ambiguous, size-collision and no-size). Start with a read-only prod census of how many rows each key would match now, since about 41k rows were repaired after the 08-17 run.
+
+- [ ] **MAINT-TEST-BUDGET** `internal/plugins/maintenance` takes about 22 minutes under `-race` on a loaded agent, against test-rest's 25 minute budget. Slowest: `TestFragmentFixer_DemoteOnlyFirstOpRevertsToOnePrimaryInEitherOrder` (141-180s), `TestFragmentFixer_DeletedSurvivorIsNotAMerge`, `TestITunesClone_RollbackFailureKeepsStateOnListedBook`, `TestFragmentFixer_HeldRowActionsClearTheHold`. Speed those up or split the package before it crosses the budget.
+
+- [ ] **MISSING-FILES-ORIGINAL-HASH** The Missing files Repairs fixer (`reconcile.missing-files`, 03-PR9b) clears `Book.FileHash` and `Book.OrganizedFileHash` when it repoints a book on an `original_hash` or `filename` match (journaled, revertible), but never `Book.OriginalFileHash`: that is the import-time identity a later reconcile's `original_hash` pass finds the book by. After a `filename` match to a file with different content, it keeps naming content the book may no longer point at, and dedup's original-hash collectors could pair the book on it. Owner decides: keep it (current), clear it on a `filename` match too, or recompute all three from the file in a follow-up hash pass.
+
+- [ ] **P14A-SOAK** D27 soak for the `maintenance.author-dedup-scan` alias: check on or after 2026-10-28 that `audiobook_organizer_operation_deprecated_def_id_total{alias="maintenance.author-dedup-scan"}` has stopped increasing, then drop the `FormerIDs` entry on `dedup.author-scan` (and its `renamedOpIDs` row in `internal/server/op_id_aliases_test.go`). This is a separate PR; 04-P14a adds no flag.
+
+- [ ] **P14B-SOAK** D27 soak for the `scheduler.dedup-llm-review` alias: check on or after 2026-10-28 that `audiobook_organizer_operation_deprecated_def_id_total{alias="scheduler.dedup-llm-review"}` has stopped increasing, then drop the `FormerIDs` entry on `dedup.llm-review` (and its `renamedOpIDs` row in `internal/server/op_id_aliases_test.go`). This is a separate PR; 04-P14b adds no flag.
+
+- [ ] **P14C-SOAK** D27 soak for the `maintenance.reconcile-scan` alias: check on or after 2026-10-28 that `audiobook_organizer_operation_deprecated_def_id_total{alias="maintenance.reconcile-scan"}` has stopped increasing, then drop the `FormerIDs` entry on `reconcile.scan` (and its `renamedOpIDs` row in `internal/server/op_id_aliases_test.go`). Stored rows keep the old def ID and `recentReconcileScans` finds them only through the alias, so do not drop it while one of those rows can still be the newest scan. This is a separate PR; 04-P14c adds no flag.
+
+- [ ] **P14C-PREVIEW-ROUTE** `GET /api/v1/operations/reconcile/preview` runs a full-library stat, directory walk and hash sweep inline, on the request goroutine, and is admitted by `library.view`. A read-only user can start that sweep at will, nothing queues it, and it bypasses the `reconcile.scan` ConcurrencyKey, so it can run beside a nightly or manual scan and duplicate their file I/O. 04-P14c only made it stop when the request context is canceled. Owner to decide whether the route should exist: drop it (the `POST /api/v1/operations/reconcile/scan` op and the `scan/latest` read cover the reconcile tab), or gate it behind `scan.trigger` and run it as an op. Check the reconcile page and any script for callers first.
+
+- [ ] **Pathless `book_file` rows: nothing surfaces or clears them** — a row with
+      a `BookID` but an empty or whitespace `FilePath` is skipped by
+      `maintenance.mark-missing-files`, skipped by `dedupe_book_file_rows.go`
+      (its comment at ~line 362 said `orphan-book-files-cleanup` owns them; that
+      was false, and is now corrected), and not an orphan to
+      `orphan_book_files.go` (~line 178 tests only `BookID == ""`). No op
+      reports them or repairs them. Any such row the retired
+      `maintenance.fix-book-file-paths` job set `Missing=true` on (04-P14d)
+      stays flagged forever, because the survivor never revisits a pathless row.
+      First step: a read-only census of the prod library — total pathless
+      `book_file` rows, and how many of them have `Missing=true`. Then decide
+      between a review-tab finding with a repair (re-derive the path, or retire
+      the row) and having the Broken Files count include them.
+
+- [ ] **OPS-READONLY-DIRTYSET-DRY-RUN** A read-only v3 def (`Effects.IsReadOnly()`)
+      whose Batch source is a `DirtySet` deletes the dirty entries it
+      processes even when the operator asked for a dry run. `runV3`
+      (`internal/operations/registry/v3_adapter.go`) forces `ops.Live` for
+      every read-only def and never reads `dry_run` for it, and
+      `batch_runner.go` clears a DirtySet entry whenever the mode is not
+      Preview, so the preview 05-PR6 fixed for writing defs
+      (`TestDirtySetPreviewKeepsEntries`) does not apply to a def that
+      declares itself read-only: its entries are gone and the next real run
+      finds those subjects already clean. `ops.Compile` cannot reject the
+      combination, because a def's `Source` is built at run time and only
+      the built `ops.Source` says it is a DirtySet. Work: decide between
+      (a) a runtime refusal in `runBatch`: a DirtySet job whose def is
+      read-only returns an error before it leases anything, (b) clearing
+      entries only for a def that declares a write effect, or (c) a
+      read-only DirtySet def keeps its entries and the dirty set is cleared
+      by whatever writes. Add a registry test with a read-only DirtySet def
+      run with `dry_run` true, and have `opstest.Conformance` run one so the
+      harness catches the rest. Found in the round-2 review of 05-PR6.
+
+- [ ] **RECONCILE-APPLY-FILE-ROWS** `reconcile.apply` (`internal/reconcile/reconcile.go` `ExecuteReconcile`, still reachable from the old Reconcile tab and `POST /operations/reconcile`) sets only the book row's `file_path`; the book's `book_file` rows keep pointing at the missing path (still flagged Missing), and the scan itself decides "missing" and "untracked" from `book.file_path` alone, which is the stale field. The Missing files Repairs fixer (03-PR9b) no longer goes through this op: it repoints the book and its one `book_file` row itself (journaled, revertible). Decide whether `reconcile.apply` should do the same (never delete a row) or be retired with the Reconcile tab in 03-PR10, and whether the scan should read `book_file` rows.
+
+- [ ] **RECONCILE-APPLY-PERMISSION** `reconcile.apply` declares `settings.manage`, but that is enforced only on the generic `POST /operations/v2` trigger (`defPermissionsHeld`, `internal/server/handlers/operations_v2.go`); its own route `POST /operations/reconcile` is gated by `scan.trigger` (`internal/server/server_lifecycle.go` around :1673), which the seeded editor role holds, so an editor can repoint books there. The Missing files Repairs fixer (03-PR9b) requires `settings.manage`. Owner decides which is right: raise the route to `settings.manage`, or lower the def to `scan.trigger` (and the fixer with it).
+
+- [ ] **REPAIRS-LANE-NO-APPLY-CAP** The Repairs lane has no `applycap` / `BulkApplyMaxItems` limit: `repairs.apply` writes every selected row (Apply all applicable included). `reconcile.apply` refuses a selection over that cap (`internal/server/reconcile_ops.go` around :143), and the Missing files fixer (03-PR9b) used to inherit it through that op; since it now writes directly, a Missing files apply of thousands of rows is not capped. Owner question: should `repairs.apply` enforce `BulkApplyMaxItems` for every fixer, only for fixers that ask for it, or not at all (the lane already re-plans each row, journals every write and is revertible)?
+
+- [ ] **MISSING-FILES-SKIP-LABELS** The Missing files Repairs fixer (`reconcile.missing-files`, 03-PR9b) adds skip kinds `no_candidate`, `book_gone`, `path_changed`, `not_missing`, `file_gone`, `file_tracked`, `no_file_row`, `own_row_at_match`, `shared_match`, `index_warming` and `error` that `SKIP_KIND_LABEL` in `web/src/components/review/RepairsPanel.tsx` has no words for, so their chips show the raw kind (`no_candidate (12)`). 03-PR9b's brief allowed no frontend source edit beyond one command description; add the labels in 03-PR10 or after it.
+
+- [ ] **Owner question: a `library.bulk-metadata-fetch` selection that resolves to zero books falls through to a whole-library fetch.** A filter that matches nothing, or `book_ids: []`, leaves `bookIDs` empty, and the op then runs the whole-library path (`internal/server/metadata_ops.go`, around the `len(bookIDs) > 0` branch); `resolveFilterToBookIDs` only refuses filters with an empty value. Recommended fix: treat a given-but-empty selection as nothing to do (finish with a "0 books selected" summary) and keep the whole-library fetch for a genuinely absent selection. Pre-existing, found in the 04-P14f review; the owner decides whether any caller relies on the fall-through.
+
+- [ ] **MISSING-FILES-BOOK-HASH-REFILL** The Missing files Repairs fixer (`reconcile.missing-files`, 03-PR9b) clears `Book.FileHash` and `Book.OrganizedFileHash` on an `original_hash` or `filename` match (journaled, revertible). Nothing refills them on its own. `backfill-file-hashes` writes only `book_file` rows (and is manual, dry-run by default). The book fields are written only when the scanner re-reads the file (`applyScannerFields`), by organize (`scanner.ApplyOrganizedFileMetadata`) or by an iTunes import, and an ordinary scan skips a file whose scan-cache entry has the same mtime and size (`classifySkipFile`, scanner.go). So the book hashes stay empty until the file misses the cache, is marked NeedsRescan, changes, is seen by a `force_update` scan, or is organized. While they are empty, dedup's exact-hash collectors do not see the book. Owner decides: (a) leave as is; (b) have the fixer mark the NewPath scan-cache entry NeedsRescan so the next scan re-reads it; (c) have the fixer compute the hash from the file at apply time and write it in the same journaled step; or (d) teach `backfill-file-hashes` to fill empty book-level hashes from the book's single file row.
+
+- [ ] **STARTUP-GC-WAIT-INDEX** 06-P13 follow-up: `ListWaitingDepsOps`
+      (`pebble_store_ops_v2.go`) scans and decodes every `opv2:op:` row because
+      there is no status index. Add an `opv2:wait:` index written by `stageOpRow`
+      and read by `DepsScheduler.SweepTick`, `reevaluateSubject` and
+      `rebuildIndex`; this removes about 7 GB of allocation per 25 minutes on the
+      production heap. Brief it after 05-PR4 merges (same file, same writer).
+- [ ] **STARTUP-GC-MEMDB-SHRINK** 06-P13 follow-up: shrink the memdb live heap,
+      which sets the cost of every GC cycle. Strip `BookFile.RawTags` (447 MB of
+      maps plus a share of 862 MB of strings; `signal_coverage.go` needs
+      presence only), replace the 2.1 KB `BookFile` shallow copies (670 MB) with a
+      narrow row type, and review the 7 `book_file` indexes (radix nodes are 55
+      percent of the live objects). Needs an owner decision first.
+- [ ] **STARTUP-GC-DEDUP-CPU** 06-P13 follow-up: dedup CPU. Parallelize
+      `groupMetadataBucket` over disjoint buckets, score each pair once with
+      precomputed normalized forms instead of twice from scratch, and make
+      Jaro-Winkler and Levenshtein allocation-free (`matcher/fuzzy.go`,
+      `dedup/author.go`).
 
 - [ ] Owner: read the `catalog.coverage-report` number, then decide whether to turn on `metadata_fetch.catalog_stage` (shipped off with 02-PR7b). With it on, a book whose only usable candidate is a catalog (review-only) candidate counts as having a usable candidate, so the Open Library / Google Books fallback is not asked for it (metabatch.NoUsableCandidate); confirm that is wanted, or the calibration for B2-origin precision (spec 02 Q3) says to stop catalog candidates counting as usable.
 

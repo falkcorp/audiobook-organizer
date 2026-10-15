@@ -1,1 +1,0 @@
-- [ ] **AUTHOR-SCAN-CTX** `dedup.FindDuplicateAuthors` (`internal/dedup/author.go:604`) takes no context, so neither cancel nor the 1h timeout stops `dedup.author-scan`'s comparison loop. Thread a ctx through and check it in the outer loop; return the partial-work error to the op.
