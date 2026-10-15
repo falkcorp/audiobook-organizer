@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-15
 
@@ -1182,4 +1182,60 @@ func TestReconcileFixer_RefusedStepTwoOfAnEarlierOpIsChangedNotPartial(t *testin
 			assert.True(t, c.Voided, "journal-only row %s %s voided", c.ChangeType, c.FieldName)
 		}
 	}
+}
+
+// rmHookedBooks is the Writer's book store with hooks around ModifyBook:
+// before runs (once) ahead of the first call, after runs (once) after the
+// first call that succeeded.
+type rmHookedBooks struct {
+	*database.PebbleStore
+	before, after         func()
+	beforeDone, afterDone atomic.Bool
+}
+
+func (s *rmHookedBooks) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if s.before != nil && s.beforeDone.CompareAndSwap(false, true) {
+		s.before()
+	}
+	b, err := s.PebbleStore.ModifyBook(id, fn)
+	if err == nil && s.after != nil && s.afterDone.CompareAndSwap(false, true) {
+		s.after()
+	}
+	return b, err
+}
+
+// TestReconcileFixer_HashChangedBetweenPrecheckAndWriteIsRefused (S-3): a
+// book whose FileHash changes after the pre-write check and before step 1's
+// Modify is refused by that Modify's compare-and-set (changed_since_plan),
+// its journal rows are voided, and nothing of the fixer's is written.
+func TestReconcileFixer_HashChangedBetweenPrecheckAndWriteIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id := f.missingBook(t, "Book S", "old/S.m4b", func(b *database.Book) {
+		cur, org := "cur-S", "org-S"
+		b.FileHash, b.OrganizedFileHash = &cur, &org
+	})
+	f.file(t, "new/S.m4b")
+	f.match(id, "Book S", "old/S.m4b", "new/S.m4b", "filename", "low")
+	planned := rmRow(t, f.plan(t), id)
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	books := &rmHookedBooks{PebbleStore: f.s, before: func() {
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error { h := "raced"; b.FileHash = &h; return nil })
+		require.NoError(t, err)
+	}}
+	w := repairs.NewWriter(books, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-s3")
+	err = f.fx.Apply(context.Background(), w, fresh)
+	assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+	assert.Equal(t, 0, w.Journaled(), "every journal row voided")
+	changes, err := f.s.GetOperationChanges("op-s3")
+	require.NoError(t, err)
+	for _, c := range changes {
+		assert.True(t, c.Voided, "%s %s", c.ChangeType, c.FieldName)
+	}
+	b, err := f.s.GetBookByID(id)
+	require.NoError(t, err)
+	assert.Equal(t, f.path("old/S.m4b"), b.FilePath)
+	assert.Equal(t, "raced", rmStr(b.FileHash))
+	assert.Equal(t, "org-S", rmStr(b.OrganizedFileHash))
 }
