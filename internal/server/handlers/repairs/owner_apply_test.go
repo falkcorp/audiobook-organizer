@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
-// last-edited: 2026-10-07
+// last-edited: 2026-10-14
 
 package repairs
 
@@ -78,6 +78,9 @@ func ownerSetupWithEmail(t *testing.T, caller ownerCaller, ownerEmail string) (*
 			ctx = auth.WithUser(ctx, caller.user)
 		}
 		ctx = auth.WithMethod(ctx, caller.method)
+		// The routes' library.edit_metadata, which the handler checks again
+		// for the fixer (repairs.RequiredPermissions).
+		ctx = auth.WithPermissions(ctx, []auth.Permission{auth.PermLibraryEditMetadata})
 		if caller.accessEmail != "" {
 			ctx = auth.WithAccessEmail(ctx, caller.accessEmail)
 		}

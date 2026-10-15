@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-10-07
+// last-edited: 2026-10-14
 
 package middleware
 
@@ -443,27 +443,43 @@ func effectivePermissionsFor(store roleResolver, user *database.User) []auth.Per
 // is bypassed so the /setup wizard can run unauthenticated.
 func RequirePermission(store authSessionStore, p auth.Permission) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// First-run bypass — RequireAuth uses the same pattern.
-		if store != nil {
-			if n, err := store.CountUsers(); err == nil && n == 0 {
-				c.Next()
-				return
-			}
-		}
-		if !auth.Can(c.Request.Context(), p) {
-			// Distinguish unauth (no user on ctx) from authz fail
-			// (user present but missing perm) so API clients get a
-			// meaningful status code.
-			if _, ok := auth.UserFromContext(c.Request.Context()); !ok {
-				httputil.RespondWithUnauthorized(c, "authentication required")
-			} else {
-				httputil.RespondWithForbidden(c, "permission denied: "+string(p))
-			}
+		if !CheckPermission(store, c, p) {
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
+}
+
+// UserCounter is what CheckPermission reads for the first-run bypass.
+type UserCounter interface {
+	CountUsers() (int, error)
+}
+
+// CheckPermission is RequirePermission's check for a handler that learns
+// which permission it needs only after reading the request (a Repairs
+// fixer's RequiredPermissions). It reports whether the caller holds p and,
+// when not, writes the 401 (no user on the context) or 403 response; the
+// caller returns without writing anything else. The first-run bypass is the
+// same: with no users yet, every permission is held.
+func CheckPermission(store UserCounter, c *gin.Context, p auth.Permission) bool {
+	// First-run bypass — RequireAuth uses the same pattern.
+	if store != nil {
+		if n, err := store.CountUsers(); err == nil && n == 0 {
+			return true
+		}
+	}
+	if auth.Can(c.Request.Context(), p) {
+		return true
+	}
+	// Distinguish unauth (no user on ctx) from authz fail (user present but
+	// missing perm) so API clients get a meaningful status code.
+	if _, ok := auth.UserFromContext(c.Request.Context()); !ok {
+		httputil.RespondWithUnauthorized(c, "authentication required")
+	} else {
+		httputil.RespondWithForbidden(c, "permission denied: "+string(p))
+	}
+	return false
 }
 
 // RequireAdmin is a middleware that checks the authenticated user has the "admin" role.
