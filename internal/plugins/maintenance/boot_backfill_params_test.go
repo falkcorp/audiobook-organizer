@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/boot_backfill_params_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c1e4d27-5b3a-4f69-9e02-7a6d3b8f1c45
 // last-edited: 2026-10-15
 
@@ -298,6 +298,10 @@ func TestBootOpDefs_WaitForWarmupAndKeepTheirPolicies(t *testing.T) {
 		{p.movementAtomCleanupDef(), sdk.ResumeDrop},
 		{p.malformedM4BRemuxDef(), sdk.ResumeDrop},
 		{p.malformedM4BTranscodeDef(), sdk.ResumeAsk},
+		// 04-P7: boot enqueues it with {"ensure": true}. Its warmup wait
+		// lives here, in the dispatcher, since the goroutine's own wait was
+		// deleted.
+		{p.opChangeBookIndexRebuildDef(), sdk.ResumeDrop},
 	} {
 		if tc.def.NoWarmupWait {
 			t.Errorf("%s: NoWarmupWait must be false so the dispatcher holds it until warmup", tc.def.ID)
@@ -333,11 +337,16 @@ func TestBootOps_NoOpRunLogsNoUntaggedInfoLine(t *testing.T) {
 		"transcode": func(p *Plugin, rep *p6AttrReporter) error {
 			return p.runMalformedM4BTranscode(context.Background(), quarantineAfter, rep)
 		},
+		"opchange-ensure": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runOpChangeBookIndexRebuild(context.Background(), json.RawMessage(`{"ensure":true}`), rep)
+		},
 	}
 	for name, run := range runs {
 		t.Run(name, func(t *testing.T) {
 			rep := &p6AttrReporter{}
-			if err := run(New(&p6BootDeps{skipped: true}), rep); err != nil {
+			deps := &p6BootDeps{skipped: true}
+			deps.store = opChangeFakeStore{fakeOpChangeRebuilder: fakeOpChangeRebuilder{ensure: trustedNoOpEnsure}}
+			if err := run(New(deps), rep); err != nil {
 				t.Fatal(err)
 			}
 			for _, l := range rep.lines {
