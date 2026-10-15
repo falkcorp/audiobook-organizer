@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 // The opchange_by_book: secondary index over the operation-change journal.
 //
@@ -131,15 +131,17 @@ var opChangeByBookBackfillChunk = 5_000
 var opChangeIdxWaitHeartbeat = 30 * time.Second
 
 // OpChangeIndexProgress receives progress from the long opchange index passes.
-// phase is "waiting" (queued behind another index pass), "verify" or
-// "rebuild"; rows is how many journal rows the pass has read so far. It is
+// phase is "waiting" (queued behind another index pass), "backfill" (the
+// ensure's resumable first build), "verify" or "rebuild"; rows is how many
+// journal rows the pass has read so far. It is
 // called once per backfill chunk, every opChangeVerifyProgressRows rows of a
 // verify, and every opChangeIdxWaitHeartbeat while waiting. It may be nil.
 type OpChangeIndexProgress func(phase string, rows int)
 
 // opChangeVerifyProgressRows is how often a verify reports progress (and
-// checks its context).
-const opChangeVerifyProgressRows = 10_000
+// checks its context). A var only so tests can see a verify report without
+// writing 10,000 rows; never reassign in prod code.
+var opChangeVerifyProgressRows = 10_000
 
 // opChangeByBookBackfillAfterChunk, when non-nil, runs after each durable
 // chunk commit with the run's commit count so far. A non-nil return aborts the
@@ -475,31 +477,34 @@ type OpChangeByBookEnsureResult struct {
 	Trusted bool `json:"trusted"`
 }
 
-// EnsureOpChangeByBookIndex is the startup path: it runs (or resumes, or
-// skips) the one-time backfill, then a read-only verify, and trusts the index
-// only when the verify finds the sentinel set, no missing entry and no
-// unmarked undecodable row. Otherwise it logs at ERROR, rebuilds, and trusts
-// the index only if the rebuild succeeds. It holds the index-pass slot
-// throughout, so a rebuild op cannot interleave with it.
+// EnsureOpChangeByBookIndex is the startup path (the boot-enqueued
+// maintenance.opchange-book-index-rebuild {"ensure": true} run): it runs (or
+// resumes, or skips) the one-time backfill, then a read-only verify, and
+// trusts the index only when the verify finds the sentinel set, no missing
+// entry and no unmarked undecodable row. Otherwise it logs at ERROR, rebuilds,
+// and trusts the index only if the rebuild succeeds. It holds the index-pass
+// slot throughout, so a rebuild op cannot interleave with it. progress (may be
+// nil) is passed to every step: the slot wait, the backfill, the verify and
+// the rebuild, so an op running it keeps its liveness clock fresh.
 //
 // The generation is read once, under the slot, before the verify starts, and
 // trust is stored against that value: a Reset during the verify bumps the
 // generation, so the stored trust no longer matches and readers stay on the
 // scan.
-func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context) (OpChangeByBookEnsureResult, error) {
+func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookEnsureResult, error) {
 	var out OpChangeByBookEnsureResult
-	unlock, err := p.lockOpChangeIdxRun(ctx, nil)
+	unlock, err := p.lockOpChangeIdxRun(ctx, progress)
 	if err != nil {
 		return out, err
 	}
 	defer unlock()
 
-	out.Backfill, err = p.backfillOpChangeByBook(ctx, false, nil)
+	out.Backfill, err = p.backfillOpChangeByBook(ctx, false, progress)
 	if err != nil {
 		return out, err
 	}
 	gen := p.opChangeByBookGen.Load()
-	out.Verify, err = p.verifyOpChangeByBook(ctx, nil)
+	out.Verify, err = p.verifyOpChangeByBook(ctx, progress)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			opChangeIndexLog.Info("opchange-index-ensure: verify interrupted by shutdown; GetBookChanges reads the full scan until the next boot verifies: err=%s",
@@ -524,7 +529,7 @@ func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context) (OpChangeBy
 		rep.SentinelSet, rep.MissingEntries, rep.UnmarkedUndecodable,
 		logger.SanitizeLogValue(fmt.Sprintf("%v", rep.SampleMissing)))
 	out.Rebuilt = true
-	out.Rebuild, err = p.backfillOpChangeByBook(ctx, true, nil)
+	out.Rebuild, err = p.backfillOpChangeByBook(ctx, true, progress)
 	if err != nil {
 		return out, err
 	}

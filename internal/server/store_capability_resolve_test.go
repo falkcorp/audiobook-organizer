@@ -1,7 +1,7 @@
 // file: internal/server/store_capability_resolve_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package server
 
@@ -337,7 +337,7 @@ func TestStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateOperationChange: %v", err)
 	}
-	res, err := b.EnsureOpChangeByBookIndex(context.Background())
+	res, err := b.EnsureOpChangeByBookIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("EnsureOpChangeByBookIndex through the decorator: %v", err)
 	}
