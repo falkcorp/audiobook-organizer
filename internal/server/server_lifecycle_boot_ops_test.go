@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle_boot_ops_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b9e2a74-1c6d-4f38-8a07-3d4e6f2b9c18
 // last-edited: 2026-10-15
 
@@ -13,6 +13,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
+
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 )
@@ -68,6 +72,75 @@ func TestStartBackfills_EnqueuesBootOps(t *testing.T) {
 	}
 }
 
+// Owner decision 2026-10-15: when the activity filter-index sentinel is unset
+// (never built, or withdrawn by a reconcile that failed after it found a gap)
+// boot enqueues the full backfill, not the reconcile, which would return at
+// once and leave filters on the budgeted scan until an operator ran the op.
+func TestEnqueueBootOps_ActivityFullBackfillWhenTheIndexesAreIncomplete(t *testing.T) {
+	const id = "maintenance.activity-filter-index-backfill"
+	yes, no := func() bool { return true }, func() bool { return false }
+	for _, tc := range []struct {
+		name string
+		done func() bool
+		want string
+	}{
+		{"unknown keeps the reconcile", nil, `{"reconcile":true}`},
+		{"complete runs the reconcile", yes, `{"reconcile":true}`},
+		{"incomplete runs the full backfill", no, `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, enqueue := p6Recorder(nil)
+			enqueueBootOps(context.Background(), enqueue, bootOpChecks{filterIndexDone: tc.done})
+			for _, e := range *got {
+				if e.id == id {
+					if e.params != tc.want {
+						t.Fatalf("%s params = %s, want %s", id, e.params, tc.want)
+					}
+					return
+				}
+			}
+			t.Fatalf("%s was not enqueued: %v", id, *got)
+		})
+	}
+}
+
+// The check is wired to the real store: a fresh Pebble activity store has no
+// sentinel, a completed one does, and a server with no activity service has
+// no answer (so the reconcile stays).
+func TestActivityFilterIndexDoneCheck_ReadsTheStoresSentinel(t *testing.T) {
+	if (&Server{}).activityFilterIndexDoneCheck() != nil {
+		t.Fatal("no activity service must give no check")
+	}
+	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := database.NewPebbleActivityStore(database.NewGatedDB(db))
+	s := &Server{activityService: activity.NewService(store)}
+	check := s.activityFilterIndexDoneCheck()
+	if check == nil {
+		t.Fatal("a Pebble activity store must give a check")
+	}
+	if check() {
+		t.Fatal("a fresh store has no sentinel")
+	}
+	params, _ := activityFilterIndexBootParams(bootOpChecks{filterIndexDone: check})
+	if len(params) != 0 {
+		t.Fatalf("incomplete indexes: params = %v, want the full backfill {}", params)
+	}
+	if err := store.MarkFilterIndexBackfillDone(); err != nil {
+		t.Fatal(err)
+	}
+	if !check() {
+		t.Fatal("the check must see the sentinel once it is set")
+	}
+	params, _ = activityFilterIndexBootParams(bootOpChecks{filterIndexDone: check})
+	if params["reconcile"] != true {
+		t.Fatalf("complete indexes: params = %v, want the reconcile", params)
+	}
+}
+
 // A failed enqueue is logged and the remaining ops are still enqueued.
 func TestEnqueueBootOps_ContinuesPastAFailure(t *testing.T) {
 	got, enqueue := p6Recorder(map[string]bool{"maintenance.external-id-backfill": true})
@@ -109,6 +182,13 @@ func TestStartBackfills_NoBootGoroutineForConvertedOps(t *testing.T) {
 		if !strings.Contains(string(src), `bgWG.Go("`+name+`"`) {
 			t.Errorf("server_lifecycle.go lost the %q goroutine, which 04-P6 keeps", name)
 		}
+	}
+	// startBackfills builds a Server's checks inline (a bare Server cannot run
+	// it), so pin that it feeds the activity filter-index check to
+	// enqueueBootOps; without it boot silently keeps the reconcile on an
+	// unbuilt index.
+	if !strings.Contains(string(src), "checks.filterIndexDone = s.activityFilterIndexDoneCheck()") {
+		t.Error("startBackfills no longer wires checks.filterIndexDone, so boot would never enqueue the full activity backfill")
 	}
 	// The activity reconcile was started from the activity service's Build, not
 	// from this file.

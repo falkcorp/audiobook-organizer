@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.44.1
+// version: 4.45.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1122,6 +1122,7 @@ func (s *Server) startBackfills() {
 			st, err := s.Ops().GetSetting(key)
 			return err == nil && st != nil && st.Value == "true"
 		}}
+		checks.filterIndexDone = s.activityFilterIndexDoneCheck()
 		if l, ok := database.AsCapability[opStatusLookup](s.Ops()); ok {
 			checks.hasStatus = l.HasOperationV2WithStatus
 		} else {
@@ -1315,6 +1316,19 @@ type bootOp struct {
 	// skipWhenAllSet: do not enqueue when every one of these settings is
 	// "true" (the run's done flags), since the run would do nothing.
 	skipWhenAllSet []string
+	// paramsFor, when set, picks the params for this boot (and a note for the
+	// log line when it departs from params) instead of the static params.
+	paramsFor func(checks bootOpChecks) (params map[string]any, note string)
+}
+
+// activityFilterIndexDoneCheck is bootOpChecks.filterIndexDone for this server:
+// the Pebble activity store's sentinel read, or nil when there is no Pebble
+// activity store (the activity op then keeps the reconcile, which no-ops).
+func (s *Server) activityFilterIndexDoneCheck() func() bool {
+	if b := s.ActivityFilterIndexBackfiller(); b != nil {
+		return b.FilterIndexBackfillDone
+	}
+	return nil
 }
 
 // bootOpChecks answers the skip checks in enqueueBootOps. A nil func, or a
@@ -1322,6 +1336,9 @@ type bootOp struct {
 type bootOpChecks struct {
 	hasStatus   func(defID, status string) (bool, error)
 	settingTrue func(key string) bool
+	// filterIndexDone reports whether the activity filter indexes are complete
+	// (the sentinel is set). nil when there is no Pebble activity store.
+	filterIndexDone func() bool
 }
 
 // opStatusLookup is resolved through database.AsCapability, so it is not
@@ -1356,9 +1373,12 @@ type opStatusLookup interface {
 //     A first build is a full book scan and reports progress per chunk.
 //   - activity-filter-index-backfill {"reconcile": true} (04-P6 part 2, was
 //     reconcileFilterIndexAtBoot, started from the activity service's Build):
-//     ReconcileFilterIndexCoverage, which checks the rows above the
-//     seen-through mark the store recorded when it opened and indexes any gap
-//     a rolled-back build left. Without params the op is the full backfill.
+//     ReconcileFilterIndexCoverage, which checks the rows above the start mark
+//     the store keeps (persisted at open, so it survives a restart before the
+//     check ran) and indexes any gap a rolled-back build left. When the
+//     filter-index sentinel is unset (never built, or withdrawn by a reconcile
+//     that failed after it found a gap) boot enqueues the full backfill (no
+//     params) instead (owner decision 2026-10-15; activityFilterIndexBootParams).
 //
 // Every def is PriorityLow, so these never get ahead of a user's op. A run
 // with nothing to do logs with opsregistry.NoOpAttr, so the activity feed
@@ -1395,7 +1415,11 @@ type opStatusLookup interface {
 // Restart mid-run: the five ResumeDrop ops (the atpath one included) are
 // dropped and the next boot enqueues them again. The activity reconcile is
 // ResumeRestart: an interrupted run resumes with the same params, and since a
-// reconcile never checkpoints, it simply starts over from the open mark. The transcode is ResumeAsk: an interrupted (or
+// reconcile never checkpoints, it starts over from the store's start mark,
+// which is durable (ActivityFilterIndexReconcileFromKey: written at open when
+// rows sit above the persisted mark, deleted only by a clean check or a
+// completed backfill), so a restart before the check ran, or a failed run,
+// does not lose a rollback gap. The transcode is ResumeAsk: an interrupted (or
 // never-started queued) row becomes interrupted_ask and waits for an
 // operator. That row is not queued or running, so the enqueue dedupe does not
 // see it; enqueueBootOps therefore skips the transcode while such a row exists
@@ -1413,7 +1437,26 @@ var bootOps = []bootOp{
 	},
 	{id: "maintenance.opchange-book-index-rebuild", params: map[string]any{"ensure": true}},
 	{id: "maintenance.book-atpath-index-backfill", params: map[string]any{"if_needed": true}},
-	{id: "maintenance.activity-filter-index-backfill", params: map[string]any{"reconcile": true}},
+	{
+		id: "maintenance.activity-filter-index-backfill", params: map[string]any{"reconcile": true},
+		paramsFor: activityFilterIndexBootParams,
+	},
+}
+
+// activityFilterIndexBootParams picks the activity op's mode for this boot
+// (owner decision 2026-10-15). With the indexes complete it is the reconcile,
+// the rollback check. With the sentinel unset (never built, or withdrawn by a
+// reconcile that failed or was cancelled after it found a gap) the reconcile
+// would return at once and filters would stay on the budgeted scan until an
+// operator ran the op, so boot enqueues the full backfill instead, which
+// builds the indexes and sets the sentinel. An unknown answer (no Pebble
+// activity store) keeps the reconcile, which no-ops in that case.
+func activityFilterIndexBootParams(checks bootOpChecks) (map[string]any, string) {
+	if checks.filterIndexDone != nil && !checks.filterIndexDone() {
+		return map[string]any{}, "the activity filter indexes are not complete (never built, or withdrawn by a " +
+			"failed reconcile), so this is the full backfill rather than the reconcile"
+	}
+	return map[string]any{"reconcile": true}, ""
 }
 
 // enqueueBootOps enqueues each of bootOps. A failed enqueue is logged and the
@@ -1440,7 +1483,14 @@ func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id st
 				continue
 			}
 		}
-		opID, err := enqueue(ctx, op.id, op.params)
+		params := op.params
+		if op.paramsFor != nil {
+			var note string
+			if params, note = op.paramsFor(checks); note != "" {
+				lifecycleLog.Info("startup: enqueueing %s with params %v: %s", op.id, params, note)
+			}
+		}
+		opID, err := enqueue(ctx, op.id, params)
 		if err != nil {
 			lifecycleLog.Warn("startup: could not enqueue %s; it runs on the next boot or by hand: err=%s",
 				op.id, logger.SanitizeLogValue(err.Error()))
