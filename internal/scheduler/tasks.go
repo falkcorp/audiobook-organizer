@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.32.0
+// version: 1.32.1
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-15
 
@@ -541,10 +541,12 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "label_refinement"), nil
 		},
-		// The parent is registered only when the dedup engine is wired; without
-		// the gate the task could enqueue an unregistered def id.
+		// The parent is registered only when the dedup plugin is built, which
+		// needs the dedup engine AND the embedding store (dedup/register.go);
+		// without the gate the task could enqueue an unregistered def id.
 		IsEnabled: func() bool {
-			return config.AppConfig.Scheduled.LabelRefinement.Enabled && ts.deps.HasDedupEngine()
+			return config.AppConfig.Scheduled.LabelRefinement.Enabled &&
+				ts.deps.HasDedupPlugin != nil && ts.deps.HasDedupPlugin()
 		},
 		GetInterval: func() time.Duration {
 			mins := config.AppConfig.Scheduled.LabelRefinement.Interval
