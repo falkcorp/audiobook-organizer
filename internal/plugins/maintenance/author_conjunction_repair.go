@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-10-15
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -91,7 +92,12 @@ const (
 	conjRepairWouldRename = "would_rename_in_place"
 	conjRepairSkipNoop    = "skip_strip_changed_nothing"
 	conjRepairSkipListed  = "skip_explicitly_excluded"
-	conjRepairFailed      = "failed"
+	// conjRepairSkipNameTaken: the cleaned name was free when the twin lookup
+	// ran but another live author held it at the rename (renameAuthorJournaled
+	// checks under the author-name lock). Renaming would have taken that
+	// author's name entry over; the row is left as it is and its undo row voided.
+	conjRepairSkipNameTaken = "skip_name_taken"
+	conjRepairFailed        = "failed"
 )
 
 func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
@@ -255,7 +261,11 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 			outcomes[conjRepairWouldRename]++
 			log.Info("author-conjunction-repair: rename",
 				"dry_run", true, "author_id", author.ID, "from", author.Name, "to", cleaned)
-		} else if err := renameAuthorJournaled(store, opID, author, cleaned); err != nil {
+		} else if err := renameAuthorJournaled(store, opID, author, cleaned); errors.Is(err, errRenameNameTaken) {
+			outcomes[conjRepairSkipNameTaken]++
+			log.Warn("author-conjunction-repair: rename skipped, another author holds the name",
+				"author_id", author.ID, "from", author.Name, "to", cleaned, "err", err)
+		} else if err != nil {
 			outcomes[conjRepairFailed]++
 			log.Warn("author-conjunction-repair: rename failed",
 				"author_id", author.ID, "from", author.Name, "to", cleaned, "err", err)
@@ -396,11 +406,25 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 	return relinked, undoRows, nil
 }
 
+// errRenameNameTaken: another live author holds the name a rename would write.
+var errRenameNameTaken = errors.New("another author holds the name")
+
 // renameAuthorJournaled renames author to name in place, journaled BEFORE the
 // write as the author_rename row the revert engine reverses (it renames the
 // author back while it still carries name). A row that cannot be recorded
 // means no rename; a refused rename voids its row.
+//
+// The rename is checked and written under the author-name lock
+// (database.AuthorCheckedRenamer): the row must still be author, live under its
+// own id with the name the caller read, and no other live author may hold name
+// (errRenameNameTaken). UpdateAuthorName would instead take a held name entry
+// over and leave its holder unresolvable by name. A store without the
+// capability is refused rather than renamed unchecked.
 func renameAuthorJournaled(store OpsStore, opID string, author database.Author, name string) error {
+	renamer, ok := database.AsCapability[database.AuthorCheckedRenamer](store)
+	if !ok {
+		return fmt.Errorf("this store cannot rename author %d under a name check", author.ID)
+	}
 	row, err := undo.NewAuthorRenameRow(author.ID, author.Name, name)
 	if err != nil {
 		return fmt.Errorf("undo row not built: %w", err)
@@ -409,7 +433,17 @@ func renameAuthorJournaled(store OpsStore, opID string, author database.Author, 
 	if err != nil {
 		return fmt.Errorf("undo row not recorded: %w", err)
 	}
-	if err := store.UpdateAuthorName(author.ID, name); err != nil {
+	if err := renamer.RenameAuthorChecked(author.ID, name, func(cur *database.Author, holder int) error {
+		switch {
+		case cur == nil || cur.ID != author.ID:
+			return fmt.Errorf("author %d was deleted or merged since it was read", author.ID)
+		case cur.Name != author.Name:
+			return fmt.Errorf("author %d was renamed since it was read (now %q)", author.ID, cur.Name)
+		case holder != 0 && holder != author.ID:
+			return fmt.Errorf("%w: %q is held by author %d", errRenameNameTaken, name, holder)
+		}
+		return nil
+	}); err != nil {
 		if verr := void(); verr != nil {
 			return fmt.Errorf("%w (and its undo row could not be voided: %v)", err, verr)
 		}

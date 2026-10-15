@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.147.1
+// version: 1.148.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-15
 
@@ -139,6 +139,9 @@ type MockStore struct {
 	GetAuthorByIDFunc    func(id int) (*Author, error)
 	GetAuthorByNameFunc  func(name string) (*Author, error)
 	AuthorNameHolderFunc func(name string) (int, error)
+	// RenameAuthorCheckedFunc overrides RenameAuthorChecked
+	// (database.AuthorCheckedRenamer).
+	RenameAuthorCheckedFunc func(id int, name string, check func(cur *Author, nameHolder int) error) error
 	CreateAuthorFunc     func(name string) (*Author, error)
 	MintAuthorFunc       func(name string) (*Author, bool, error)
 	DeleteAuthorFunc     func(id int) error
@@ -814,6 +817,28 @@ func (m *MockStore) AuthorNameHolder(name string) (int, error) {
 		return 0, err
 	}
 	return a.ID, nil
+}
+
+// RenameAuthorChecked (database.AuthorCheckedRenamer) approximates the store's
+// locked check-and-rename: it reads the row (GetAuthorByID) and the holder
+// (AuthorNameHolder), runs check, and renames through UpdateAuthorName only
+// when check passes. There is no lock to hold in a mock.
+func (m *MockStore) RenameAuthorChecked(id int, name string, check func(cur *Author, nameHolder int) error) error {
+	if m.RenameAuthorCheckedFunc != nil {
+		return m.RenameAuthorCheckedFunc(id, name, check)
+	}
+	cur, err := m.GetAuthorByID(id)
+	if err != nil {
+		return err
+	}
+	holder, err := m.AuthorNameHolder(name)
+	if err != nil {
+		return err
+	}
+	if err := check(cur, holder); err != nil {
+		return err
+	}
+	return m.UpdateAuthorName(id, name)
 }
 
 func (m *MockStore) CreateAuthor(name string) (*Author, error) {

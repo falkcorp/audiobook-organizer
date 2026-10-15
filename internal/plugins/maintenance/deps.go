@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-15
 
@@ -186,7 +186,10 @@ type opsAuthorStore interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
-	UpdateAuthorName(id int, name string) error
+	// UpdateAuthorName is deliberately ABSENT. It takes over a name entry
+	// another author holds; conjunction-repair's rename, its only caller here,
+	// renames through database.AuthorCheckedRenamer instead, resolved as a
+	// capability, so the unchecked rename is out of reach of this package.
 }
 
 // opsAuthorAliasLister lists an author's aliases. An author merge journals the

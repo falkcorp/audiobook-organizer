@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -589,10 +590,10 @@ func TestAuthorIDRepair_UndoRefusesAPrimaryChangedSince(t *testing.T) {
 	require.Equal(t, later.ID, got.Author.ID)
 }
 
-// failRenameStore refuses every author rename.
+// failRenameStore refuses every checked author rename.
 type failRenameStore struct{ *database.PebbleStore }
 
-func (failRenameStore) UpdateAuthorName(int, string) error {
+func (failRenameStore) RenameAuthorChecked(int, string, func(*database.Author, int) error) error {
 	return errors.New("injected rename failure")
 }
 
@@ -641,4 +642,45 @@ func TestAuthorIDRepair_AnApplyWithNoOperationIDWritesNothing(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, id, a.ID, "no duplicate is merged")
 	}
+}
+
+// twinBlindStore misses every twin lookup, as a run does when another author
+// takes the cleaned name between its twin lookup and its rename.
+type twinBlindStore struct{ *database.PebbleStore }
+
+func (twinBlindStore) GetAuthorByName(string) (*database.Author, error) { return nil, nil }
+
+// The forward rename refuses a name another live author holds: it is skipped
+// (skip_name_taken), its undo row voided, and neither author is changed.
+// UpdateAuthorName would have taken the other author's name entry over.
+func TestAuthorConjunctionRepair_ARenameOntoAHeldNameIsSkipped(t *testing.T) {
+	st := newRelinkTrashedStore(t)
+	solo := mustAuthorNamed(t, st, "& Probe Held")
+	other := mustAuthorNamed(t, st, "Probe Held")
+	rep := &progressRecorder{opIDReporter: opIDReporter{id: "op-rr8"}}
+	p := New(&fakeDeps{store: twinBlindStore{st}})
+	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), rep))
+
+	got, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "& Probe Held", got.Name, "the solo row is not renamed")
+	holder, err := st.AuthorNameHolder("Probe Held")
+	require.NoError(t, err)
+	require.Equal(t, other.ID, holder, "the other author keeps its name entry")
+	rows, err := st.GetOperationChanges("op-rr8")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Voided, "the refused rename's undo row is voided")
+	require.Contains(t, strings.Join(rep.msgs, "\n"), "skip_name_taken:1", "the summary reports the skip")
+}
+
+// progressRecorder keeps every progress message (the op's summary is the last).
+type progressRecorder struct {
+	opIDReporter
+	msgs []string
+}
+
+func (r *progressRecorder) UpdateProgress(_, _ int, msg string) error {
+	r.msgs = append(r.msgs, msg)
+	return nil
 }
