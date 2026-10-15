@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files_cancel_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5c8e2a47-3d19-4b6f-a0e4-7f12b9d36c85
 // last-edited: 2026-10-14
 
@@ -135,7 +135,9 @@ func TestMarkMissing_CancelStopsApplyStatPass(t *testing.T) {
 	}
 
 	_, err := planMarkMissingFiles(ctx, st, nil, markMissingParams{Apply: true}, rep)
-	_ = err // RunItems may or may not surface the cancel for the last item; the writes are the contract
+	// The cancel lands inside the stat pass, which returns ctx.Err() before any
+	// write is planned, so the plan call itself must surface it.
+	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, st.updates, "nothing may be written after Cancel")
 	require.Zero(t, st.getFilesCalls.Load(), "the stat pass must stop at the cancel, before the rehydrate")
 	require.EqualValues(t, 4, rep.touches.Load(), "no stat-pass beat after the cancel")
