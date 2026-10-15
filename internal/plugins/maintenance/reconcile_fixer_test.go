@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-15
 
@@ -1288,12 +1288,18 @@ func TestReconcileFixer_FenceInTheBeatBeforeStepTwo(t *testing.T) {
 // 1 only and the row is canceled_skipped. A filename match, both hashes set.
 func rmCutAtBeat(t *testing.T, f *rmFixture, name string) (id string, before rmState, res *repairs.PlanResult, planned repairs.Row) {
 	t.Helper()
+	return rmCutAtBeatAs(t, f, name, "filename")
+}
+
+// rmCutAtBeatAs is rmCutAtBeat for a match of kind ("hash" keeps the hashes).
+func rmCutAtBeatAs(t *testing.T, f *rmFixture, name, kind string) (id string, before rmState, res *repairs.PlanResult, planned repairs.Row) {
+	t.Helper()
 	id = f.missingBook(t, "Book "+name, "old/"+name+".m4b", func(b *database.Book) {
 		cur, org := "cur-"+name, "org-"+name
 		b.FileHash, b.OrganizedFileHash = &cur, &org
 	})
 	f.file(t, "new/"+name+".m4b")
-	f.match(id, "Book "+name, "old/"+name+".m4b", "new/"+name+".m4b", "filename", "low")
+	f.match(id, "Book "+name, "old/"+name+".m4b", "new/"+name+".m4b", kind, "low")
 	before = f.state(t, id)
 	res = f.plan(t)
 	planned = rmRow(t, res, id)
@@ -1512,4 +1518,208 @@ func TestReconcileFixer_FinishRepointRefusedAtTheWriteIsVoided(t *testing.T) {
 	assert.Equal(t, 1, repoint, "the repoint row was journaled, then voided")
 	assert.Zero(t, f.rmHandedOff(t, "op-1"))
 	assert.Equal(t, f.path("old/W.m4b"), f.state(t, id).Files[rows[0].ID].Path)
+}
+
+// rmExtraChanges is the store as rmStepOneOf reads it, with extra journal
+// rows (crafted CreatedAt and ID, which the store would stamp itself) added
+// to every book's changes.
+type rmExtraChanges struct {
+	*database.PebbleStore
+	extra []*database.OperationChange
+}
+
+func (r *rmExtraChanges) GetBookChanges(id string) ([]*database.OperationChange, error) {
+	ch, err := r.PebbleStore.GetBookChanges(id)
+	return append(ch, r.extra...), err
+}
+
+// rmStepOneWith is rmStepOneOf for book id's NAME candidate (filename
+// match), reading the journal plus extra.
+func (f *rmFixture) rmStepOneWith(t *testing.T, id, name string, extra ...*database.OperationChange) *rmStepOne {
+	t.Helper()
+	b, err := f.s.GetBookByID(id)
+	require.NoError(t, err)
+	files, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	c := rmCandidate{BookID: id, OldPath: f.path("old/" + name + ".m4b"), NewPath: f.path("new/" + name + ".m4b"), MatchType: "filename"}
+	st, err := rmStepOneOf(&rmExtraChanges{PebbleStore: f.s, extra: extra}, c, b, files)
+	require.NoError(t, err)
+	return st
+}
+
+// rmReplanSkip re-plans planned and returns its skip kind ("" applicable).
+func (f *rmFixture) rmReplanSkip(t *testing.T, planned repairs.Row) string {
+	t.Helper()
+	again, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	if again.Applicable() {
+		return ""
+	}
+	return again.Skipped
+}
+
+// TestReconcileFixer_StepOneGuards (round-4 SF-3): every guard of
+// rmStepOneOf, each on op-1 cut in the beat before step 2. The latest path
+// change must be this fixer's (M1), unreverted (M2), for this move (M5),
+// the NEWEST by CreatedAt then ID (M6, M6b, M6c); the hashes must still be
+// as step 1 left them (M7).
+func TestReconcileFixer_StepOneGuards(t *testing.T) {
+	t.Parallel()
+	t.Run("baseline: op-1's step 1 is claimed", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		_, _, _, planned := rmCutAtBeat(t, f, "G")
+		assert.Equal(t, "", f.rmReplanSkip(t, planned))
+	})
+	t.Run("M6b: a later foreign path change wins (P5)", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		id, _, _, planned := rmCutAtBeat(t, f, "T")
+		f.rmLegacyMove(t, id, "new/T.m4b", "new/T.m4b", true)
+		assert.Equal(t, rmSkipPathChanged, f.rmReplanSkip(t, planned))
+	})
+	t.Run("M7: hashes refilled after step 1 (P6)", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		id, _, _, planned := rmCutAtBeat(t, f, "U")
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error { h := "rescanned"; b.FileHash = &h; return nil })
+		require.NoError(t, err)
+		assert.NotEqual(t, "", f.rmReplanSkip(t, planned))
+	})
+	t.Run("M1: another fixer's same move is not ours", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		id, _, _, planned := rmCutAtBeat(t, f, "X")
+		require.NoError(t, f.s.CreateOperationChange(&database.OperationChange{ID: "other-" + id, OperationID: "op-other",
+			BookID: id, ChangeType: undo.ChangeTypeBookPathUpdate, FieldName: "file_path",
+			OldValue: f.path("old/X.m4b"), NewValue: f.path("new/X.m4b"), Source: "some.other-fixer"}))
+		assert.Equal(t, rmSkipPathChanged, f.rmReplanSkip(t, planned))
+	})
+	t.Run("M2: our reverted row, then an unjournaled re-move (hash match)", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		id, before, _, planned := rmCutAtBeatAs(t, f, "Y", "hash")
+		assert.Equal(t, 1, f.rmRevert(t, "op-1"))
+		require.Equal(t, before, f.state(t, id))
+		f.rmLegacyMove(t, id, "old/Y.m4b", "new/Y.m4b", false)
+		assert.Equal(t, rmSkipPathChanged, f.rmReplanSkip(t, planned))
+	})
+	for _, mv := range []struct{ name, old, new string }{{"M5: old path differs", "elsewhere/Z.m4b", "new/Z.m4b"}, {"M5: new path differs", "old/Z.m4b", "elsewhere/Z.m4b"}} {
+		t.Run(mv.name, func(t *testing.T) {
+			t.Parallel()
+			f := newRMFixture(t)
+			id, _, _, planned := rmCutAtBeat(t, f, "Z")
+			w := f.writerFor("op-x", f.s)
+			require.NoError(t, w.Journal(id, undo.ChangeTypeBookPathUpdate, "file_path", f.path(mv.old), f.path(mv.new)))
+			assert.Equal(t, rmSkipPathChanged, f.rmReplanSkip(t, planned))
+		})
+	}
+	t.Run("M6, M6c: newest by CreatedAt, then by ID", func(t *testing.T) {
+		t.Parallel()
+		f := newRMFixture(t)
+		id, _, _, _ := rmCutAtBeat(t, f, "O")
+		op1, err := f.s.GetOperationChanges("op-1")
+		require.NoError(t, err)
+		var ours *database.OperationChange
+		for _, c := range op1 {
+			if c.ChangeType == undo.ChangeTypeBookPathUpdate {
+				ours = c
+			}
+		}
+		require.NotNil(t, ours)
+		foreign := func(at time.Time, cid string) *database.OperationChange {
+			return &database.OperationChange{ID: cid, OperationID: "legacy", BookID: id, ChangeType: "file_path_update",
+				FieldName: "file_path", OldValue: f.path("new/O.m4b"), NewValue: f.path("new/O.m4b"), CreatedAt: at}
+		}
+		require.NotNil(t, f.rmStepOneWith(t, id, "O"))
+		assert.Nil(t, f.rmStepOneWith(t, id, "O", foreign(ours.CreatedAt.Add(time.Second), "0")), "a later row wins")
+		assert.NotNil(t, f.rmStepOneWith(t, id, "O", foreign(ours.CreatedAt.Add(-time.Second), "~")), "an earlier row loses")
+		assert.Nil(t, f.rmStepOneWith(t, id, "O", foreign(ours.CreatedAt, ours.ID+"~")), "same time: the larger ID wins")
+		assert.NotNil(t, f.rmStepOneWith(t, id, "O", foreign(ours.CreatedAt, "0")), "same time: the smaller ID loses")
+	})
+}
+
+// TestReconcileFixer_FinishRaceBetweenPrecheckAndWrite (round-4 SF-3,
+// M10/M11): on the finish path after op-1's cut, the book's hash or path
+// changes after the pre-write check and before the no-change compare-and-
+// set; op-2 is refused (changed_since_plan, not partial), every row it
+// journaled is voided, op-1 keeps its rows, and the file row stays put.
+func TestReconcileFixer_FinishRaceBetweenPrecheckAndWrite(t *testing.T) {
+	t.Parallel()
+	for _, race := range []struct {
+		name string
+		mut  func(*rmFixture, *database.Book)
+	}{
+		{"M10 hash", func(_ *rmFixture, b *database.Book) { h := "raced"; b.FileHash = &h }},
+		{"M11 path", func(f *rmFixture, b *database.Book) { b.FilePath = f.path("elsewhere/F.m4b") }},
+	} {
+		t.Run(race.name, func(t *testing.T) {
+			t.Parallel()
+			f := newRMFixture(t)
+			id, _, _, planned := rmCutAtBeat(t, f, "F")
+			fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+			require.NoError(t, err)
+			require.True(t, fresh.Applicable(), fresh.Reason)
+			books := &rmHookedBooks{PebbleStore: f.s, before: func() {
+				_, merr := f.s.ModifyBook(id, func(b *database.Book) error { race.mut(f, b); return nil })
+				require.NoError(t, merr)
+			}}
+			w := repairs.NewWriter(books, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-2")
+			err = f.fx.Apply(context.Background(), w, fresh)
+			assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+			assert.False(t, errors.Is(err, repairs.ErrPartiallyApplied), "%v", err)
+			changes, err := f.s.GetOperationChanges("op-2")
+			require.NoError(t, err)
+			require.NotEmpty(t, changes)
+			for _, c := range changes {
+				assert.True(t, c.Voided, "%s %s voided", c.ChangeType, c.FieldName)
+			}
+			assert.Zero(t, f.rmHandedOff(t, "op-1"))
+			for _, loc := range f.state(t, id).Files {
+				assert.Equal(t, f.path("old/F.m4b"), loc.Path)
+			}
+		})
+	}
+}
+
+// TestReconcileFixer_ChangedRefusalThenThirdOpFinishes (round-4 SF-3): op-1
+// is cut; op-2 is refused (the row's Missing flag changed: N-2,
+// changed_since_plan) with its rows voided; op-3 re-plans and finishes,
+// taking op-1's rows over. Reverting op-1 restores nothing; reverting op-3
+// puts the book and its row back together at the old path.
+func TestReconcileFixer_ChangedRefusalThenThirdOpFinishes(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id, _, _, planned := rmCutAtBeat(t, f, "H")
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	rows, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	_, err = f.s.ModifyBookFile(id, rows[0].ID, func(bf *database.BookFile) error { bf.Missing = false; return nil })
+	require.NoError(t, err)
+	err = f.fx.Apply(context.Background(), f.writerFor("op-2", f.s), fresh)
+	require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+
+	res3 := f.plan(t)
+	p3 := rmRow(t, res3, id)
+	require.True(t, p3.Applicable(), p3.Reason)
+	out, err := repairs.RunApply(context.Background(), f.fx, res3, "plan-3", []string{p3.RowID}, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor("op-3", f.s), OpID: "op-3"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeApplied, rmOutcomes(out)[p3.RowID], "%+v", out.Rows)
+	op2, err := f.s.GetOperationChanges("op-2")
+	require.NoError(t, err)
+	for _, c := range op2 {
+		assert.True(t, c.Voided, "op-2's %s %s voided", c.ChangeType, c.FieldName)
+	}
+	assert.Equal(t, 3, f.rmHandedOff(t, "op-1"))
+
+	applied := f.state(t, id)
+	assert.Zero(t, f.rmRevert(t, "op-1"))
+	assert.Equal(t, applied, f.state(t, id))
+	assert.Equal(t, 4, f.rmRevert(t, "op-3"))
+	st := f.state(t, id)
+	assert.Equal(t, f.path("old/H.m4b"), st.Path)
+	f.rmConsistent(t, id)
+	assert.Equal(t, [3]string{"cur-H", "org-H", ""}, f.rmHashesOf(t, id))
 }
