@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.33.1
+// version: 1.33.2
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-15
 
@@ -927,7 +927,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.transcode-temp-cleanup", struct{}{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.transcode-temp-cleanup", map[string]any{"dry_run": false})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue maintenance.transcode-temp-cleanup: %w", enqErr)
 			}
