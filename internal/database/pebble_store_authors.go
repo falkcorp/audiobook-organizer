@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package database
 
@@ -521,7 +521,47 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 	if author == nil {
 		return fmt.Errorf("author %d not found", id)
 	}
+	return p.renameAuthorLocked(id, author, name)
+}
 
+// AuthorCheckedRenamer renames an author only when a caller's check of the row
+// and of the new name's holder passes, with both read under the same lock as
+// the write. *PebbleStore implements it; resolve it with AsCapability.
+type AuthorCheckedRenamer interface {
+	// RenameAuthorChecked reads author id (GetAuthorByID, so a merged-away id
+	// reads as its survivor) and the live holder of name's index entry
+	// (AuthorNameHolder; 0 when free), hands both to check, and renames id to
+	// name only when check returns nil. check's error is returned as-is.
+	RenameAuthorChecked(id int, name string, check func(cur *Author, nameHolder int) error) error
+}
+
+// RenameAuthorChecked implements AuthorCheckedRenamer. The read, the check and
+// the write all run under nameIdx.author, so no create or rename can take the
+// name, or rename the row, between the check and the commit.
+func (p *PebbleStore) RenameAuthorChecked(id int, name string, check func(cur *Author, nameHolder int) error) error {
+	p.nameIdx.author.Lock()
+	defer p.nameIdx.author.Unlock()
+
+	author, err := p.GetAuthorByID(id)
+	if err != nil {
+		return err
+	}
+	holder, err := p.liveAuthorNameHolder(name)
+	if err != nil {
+		return err
+	}
+	if err := check(author, holder); err != nil {
+		return err
+	}
+	if author == nil || author.ID != id {
+		return fmt.Errorf("author %d not found", id)
+	}
+	return p.renameAuthorLocked(id, author, name)
+}
+
+// renameAuthorLocked is UpdateAuthorName's write: author (the row of id, as
+// read under nameIdx.author, which the caller holds) renamed to name.
+func (p *PebbleStore) renameAuthorLocked(id int, author *Author, name string) error {
 	batch := p.db.NewBatch()
 	// Remove old name index, only where it still points at this author.
 	if err := p.deleteNameIndexIfOwned(batch, nil, authorNameIndexKey, author.Name, nameIndexOwner(id)); err != nil {

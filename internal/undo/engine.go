@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-15
 //
@@ -309,12 +309,15 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(CheckRestoreReferent(store, c))
 	case ChangeTypeAuthorRename:
 		// The revert renames the author back only while it is live under its
-		// own id and still carries the name the rename wrote.
+		// own id, still carries the name the rename wrote, and no other live
+		// author holds the name it goes back to. The holder is read as the
+		// revert reads it (AuthorNameHolder); a store that cannot read it
+		// fails closed, as the revert does.
 		id, from, to, err := DecodeAuthorRename(c)
 		if err != nil {
 			return rowVerdict{refusal: err}
 		}
-		r, ok := database.AsCapability[authorByIDReader](store)
+		r, ok := database.AsCapability[authorRestoreReader](store)
 		if !ok {
 			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot read author %d", id)}
 		}
@@ -322,7 +325,11 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		if err != nil {
 			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author %d: %v", id, err)}
 		}
-		return verdictOf(CheckAuthorRename(cur, id, from, to))
+		holder, err := r.AuthorNameHolder(from)
+		if err != nil {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author name %q: %v", from, err)}
+		}
+		return verdictOf(CheckAuthorRename(cur, holder, id, from, to))
 	case ChangeTypeAuthorIDRepoint:
 		// The revert puts the old primary back only while the book still
 		// carries the one the repair wrote. A newer row of this operation
@@ -660,12 +667,8 @@ func isBookMissing(err error) bool {
 	return errors.As(err, &re) && re.Reason == ReasonBookMissing
 }
 
-// authorByIDReader is what the preflight of an author rename row reads.
-type authorByIDReader interface {
-	GetAuthorByID(id int) (*database.Author, error)
-}
-
-// authorRestoreReader is what the preflight of an author delete row reads. The
+// authorRestoreReader is what the preflight of an author delete or author
+// rename row reads. The
 // name holder is read as the restore reads it (database.AuthorNameHolderReader),
 // not through GetAuthorByName, which follows tombstones.
 type authorRestoreReader interface {

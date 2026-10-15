@@ -1,5 +1,5 @@
 // file: internal/undo/author_rename.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2c8a14-7b39-4f60-9d1a-8c3e6f0b2d75
 // last-edited: 2026-10-15
 
@@ -65,14 +65,21 @@ func DecodeAuthorRename(c *database.OperationChange) (authorID int, from, to str
 
 // CheckAuthorRename is the revert's compare-and-set: the author must be live
 // under its own id (GetAuthorByID follows a redirect, so another id means it
-// was merged away) and still carry exactly to. Already back at from is
-// ErrAlreadyRestored.
-func CheckAuthorRename(cur *database.Author, authorID int, from, to string) error {
+// was merged away) and still carry exactly to, and the name it goes back to
+// must not be held by another live author (nameHolder, the live holder of
+// from's name index entry, 0 when free; the same rule as an author delete
+// restore, AuthorNameIndexOnRestore). Renaming back over another author's
+// entry would take it over and leave that author unresolvable by name.
+// Already back at from is ErrAlreadyRestored.
+func CheckAuthorRename(cur *database.Author, nameHolder, authorID int, from, to string) error {
 	if cur == nil || cur.ID != authorID {
 		return refuse(ReasonChangedSince, "author %d was deleted or merged since the rename", authorID)
 	}
 	switch cur.Name {
 	case to:
+		if nameHolder != 0 && nameHolder != authorID {
+			return refuse(ReasonChangedSince, "author %d cannot take back the name %q: author %d holds it now", authorID, from, nameHolder)
+		}
 		return nil
 	case from:
 		return ErrAlreadyRestored

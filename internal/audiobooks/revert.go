@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.75.0
+// version: 1.76.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-15
 
@@ -2221,36 +2221,36 @@ func (rs *RevertService) revertCreditsMove(c *database.OperationChange, snap und
 	})
 }
 
-// authorRenamer renames an author back (revertAuthorRename). Resolved as a
-// capability so the stores that implement revertServiceStore for other row
-// types are not widened.
-type authorRenamer interface {
-	UpdateAuthorName(id int, name string) error
-}
-
 // revertAuthorRename renames an author back to the name an in-place rename
-// replaced, only while it is live under its own id and still carries exactly
-// the name the rename wrote (undo.CheckAuthorRename).
+// replaced, only while it is live under its own id, still carries exactly the
+// name the rename wrote, and no other live author holds the name it goes back
+// to (undo.CheckAuthorRename). The check runs inside the store's rename, under
+// the author-name lock (database.AuthorCheckedRenamer), so nothing can take
+// the name or rename the row between the check and the write. A store without
+// that capability refuses: an unguarded rename could take another author's
+// name entry over.
 func (rs *RevertService) revertAuthorRename(c *database.OperationChange) error {
 	id, from, to, err := undo.DecodeAuthorRename(c)
 	if err != nil {
 		return err
 	}
-	cur, err := rs.db.GetAuthorByID(id)
-	if err != nil {
-		return fmt.Errorf("look up author %d: %w", id, err)
-	}
-	if err := undo.CheckAuthorRename(cur, id, from, to); err != nil {
-		return err
-	}
-	r, ok := database.AsCapability[authorRenamer](rs.db)
+	r, ok := database.AsCapability[database.AuthorCheckedRenamer](rs.db)
 	if !ok {
-		return fmt.Errorf("this store cannot rename author %d back", id)
+		return fmt.Errorf("this store cannot rename author %d back under a name check", id)
 	}
-	if err := r.UpdateAuthorName(id, from); err != nil {
-		return fmt.Errorf("rename author %d back to %q: %w", id, from, err)
+	var checkErr error
+	err = r.RenameAuthorChecked(id, from, func(cur *database.Author, nameHolder int) error {
+		checkErr = undo.CheckAuthorRename(cur, nameHolder, id, from, to)
+		return checkErr
+	})
+	switch {
+	case err == nil:
+		return nil
+	case checkErr != nil:
+		// The check's own answer (a refusal, or ErrAlreadyRestored), as-is.
+		return checkErr
 	}
-	return nil
+	return fmt.Errorf("rename author %d back to %q: %w", id, from, err)
 }
 
 // revertAuthorIDRepoint puts back the primary AuthorID author-id-repair
