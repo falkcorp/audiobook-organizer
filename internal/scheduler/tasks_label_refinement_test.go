@@ -1,12 +1,11 @@
 // file: internal/scheduler/tasks_label_refinement_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1a6c92-8d47-4b0e-9a25-1c7e6b4d0f83
-// last-edited: 2026-07-12
+// last-edited: 2026-10-15
 
 package scheduler
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -62,26 +61,32 @@ func TestLabelRefinementIntervalGuard(t *testing.T) {
 	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{} // reset
 }
 
-// TestLabelRefinementChainPassesNoApply asserts the params the scheduled chain
-// passes to BOTH dedup ops carry no "apply" key — the entire "the scheduled
-// loop never applies" guarantee.
-//
-// "No apply key" equals "dry-run" ONLY because both ops default Apply=false when
-// the key is absent. That default is pinned by the companion canaries
-// TestRebuildGoldLabelsParamsDefaultNoApply (rebuild_gold_labels_test.go) and
-// TestCalibrateCompositeParamsDefaultNoApply (calibrate_composite_test.go): if a
-// future edit flips either default, those canaries fail and this empty-params
-// chain is caught before it silently becomes a timed prod mutation.
-//
-// These are the exact param values runLabelRefinementChain passes to EnqueueOp.
-func TestLabelRefinementChainPassesNoApply(t *testing.T) {
-	rebuild, err := json.Marshal(labelRefinementRebuildParams{})
-	assert.NoError(t, err)
-	assert.JSONEq(t, "{}", string(rebuild), "rebuild params must be empty (no apply key)")
-	assert.NotContains(t, string(rebuild), "apply")
+// TestLabelRefinementEnqueuesTheParentOp pins the 04-P9 contract: the task is
+// one enqueue of the dedup.label-refinement parent, and taskV2DefIDs names it so
+// isTaskRunning sees the run. The enqueue itself (one v2 row, no legacy row,
+// returned id matches) is exercised for every taskV2DefIDs entry by
+// TestScheduledTasksDoNotWriteOrphanLegacyRows. The children's empty-params
+// (report-only) guarantee moved to the plugin: see
+// TestLabelRefinementChildrenGetEmptyParams in internal/plugins/dedup.
+func TestLabelRefinementEnqueuesTheParentOp(t *testing.T) {
+	assert.Equal(t, "dedup.label-refinement", taskV2DefIDs["label_refinement"])
+}
 
-	calibrate, err := json.Marshal(labelRefinementCalibrateParams{})
-	assert.NoError(t, err)
-	assert.JSONEq(t, "{}", string(calibrate), "calibrate params must be empty (no apply key)")
-	assert.NotContains(t, string(calibrate), "apply")
+// TestLabelRefinementNeedsTheDedupEngine: the parent def is registered only when
+// the dedup engine is wired, so an enabled task without one must stay inert
+// rather than enqueue an unregistered def id.
+func TestLabelRefinementNeedsTheDedupEngine(t *testing.T) {
+	prev := config.AppConfig.Scheduled.LabelRefinement
+	t.Cleanup(func() { config.AppConfig.Scheduled.LabelRefinement = prev })
+	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{Enabled: true, Interval: 60}
+
+	deps := testDeps()
+	deps.HasDedupEngine = func() bool { return false }
+	def, ok := NewTaskScheduler(deps).GetTask("label_refinement")
+	assert.True(t, ok)
+	assert.False(t, def.IsEnabled(), "enabled in config but no dedup engine must be inert")
+
+	deps.HasDedupEngine = func() bool { return true }
+	def, _ = NewTaskScheduler(deps).GetTask("label_refinement")
+	assert.True(t, def.IsEnabled())
 }
