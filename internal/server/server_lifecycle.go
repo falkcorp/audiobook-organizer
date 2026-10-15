@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.41.0
+// version: 4.42.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
+	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
@@ -1110,15 +1111,18 @@ func (s *Server) startBackfills() {
 	if s.opRegistry == nil {
 		lifecycleLog.Warn("startup: no operations registry; the one-time boot backfill ops were not enqueued")
 	} else {
-		var hasStatus func(defID, status string) (bool, error)
+		checks := bootOpChecks{settingTrue: func(key string) bool {
+			st, err := s.Ops().GetSetting(key)
+			return err == nil && st != nil && st.Value == "true"
+		}}
 		if l, ok := database.AsCapability[opStatusLookup](s.Ops()); ok {
-			hasStatus = l.HasOperationV2WithStatus
+			checks.hasStatus = l.HasOperationV2WithStatus
 		} else {
-			lifecycleLog.Debug("startup: store has no HasOperationV2WithStatus; boot enqueues the transcode without the interrupted_ask check")
+			lifecycleLog.Warn("startup: store has no HasOperationV2WithStatus; boot enqueues the transcode without the interrupted_ask check")
 		}
 		enqueueBootOps(s.bgCtx, func(ctx context.Context, id string, params any) (string, error) {
 			return s.opRegistry.EnqueueOp(ctx, id, params)
-		}, hasStatus)
+		}, checks)
 	}
 
 	// AcoustID fingerprint backfill. CONC-9 removed the serial server-side
@@ -1381,6 +1385,16 @@ type bootOp struct {
 	// skipWhileAsk: do not enqueue while a row of this def is interrupted_ask
 	// (an interrupted ResumeAsk run waiting for an operator).
 	skipWhileAsk bool
+	// skipWhenAllSet: do not enqueue when every one of these settings is
+	// "true" (the run's done flags), since the run would do nothing.
+	skipWhenAllSet []string
+}
+
+// bootOpChecks answers the skip checks in enqueueBootOps. A nil func, or a
+// lookup that fails, never skips: the op is enqueued as before (fail open).
+type bootOpChecks struct {
+	hasStatus   func(defID, status string) (bool, error)
+	settingTrue func(key string) bool
 }
 
 // opStatusLookup is resolved through database.AsCapability, so it is not
@@ -1421,26 +1435,35 @@ type opStatusLookup interface {
 // operator. That row is not queued or running, so the enqueue dedupe does not
 // see it; enqueueBootOps therefore skips the transcode while such a row exists
 // (owner decision 2026-10-15), so boot never runs around the confirmation.
+// It also skips the transcode when both of its done flags (remux.TranscodeKey
+// and the quarantine's) are set, so a ResumeAsk row is only ever created by a
+// boot that had real work to do (owner decision 2026-10-15).
 var bootOps = []bootOp{
 	{id: "maintenance.external-id-backfill", params: map[string]any{"if_needed": true}},
 	{id: "maintenance.movement-atom-cleanup", params: map[string]any{}},
 	{id: "maintenance.malformed-m4b-remux", params: map[string]any{}},
-	{id: "maintenance.malformed-m4b-transcode", params: map[string]any{"quarantine_after": true}, skipWhileAsk: true},
+	{
+		id: "maintenance.malformed-m4b-transcode", params: map[string]any{"quarantine_after": true},
+		skipWhileAsk: true, skipWhenAllSet: []string{remux.TranscodeKey, quarantineKnownBadKey},
+	},
 }
 
 // enqueueBootOps enqueues each of bootOps. A failed enqueue is logged and the
 // rest still go. enqueue is Registry.EnqueueOp in production; it is a
 // parameter because Server.opRegistry is a concrete *Registry with no fake.
-// hasStatus answers the skipWhileAsk check; nil (a store without the
-// capability) or a lookup error fails open and enqueues as before.
+// checks answers the skip checks (see bootOpChecks).
 func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id string, params any) (string, error),
-	hasStatus func(defID, status string) (bool, error)) {
+	checks bootOpChecks) {
 	for _, op := range bootOps {
 		if ctx.Err() != nil {
 			return
 		}
-		if op.skipWhileAsk && hasStatus != nil {
-			waiting, err := hasStatus(op.id, "interrupted_ask")
+		if len(op.skipWhenAllSet) > 0 && checks.settingTrue != nil && allSet(op.skipWhenAllSet, checks.settingTrue) {
+			lifecycleLog.Debug("startup: not enqueueing %s: its done flags are set, so it would do nothing", op.id)
+			continue
+		}
+		if op.skipWhileAsk && checks.hasStatus != nil {
+			waiting, err := checks.hasStatus(op.id, "interrupted_ask")
 			if err != nil {
 				lifecycleLog.Warn("startup: could not check for an interrupted %s waiting for confirmation; enqueueing it: err=%s",
 					op.id, logger.SanitizeLogValue(err.Error()))
@@ -1457,6 +1480,15 @@ func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id st
 		}
 		lifecycleLog.Info("startup: enqueued %s as op %s", op.id, opID)
 	}
+}
+
+func allSet(keys []string, settingTrue func(key string) bool) bool {
+	for _, k := range keys {
+		if !settingTrue(k) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
