@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -34,10 +34,10 @@ import (
 // maintenance.StoreProvider in #2612.
 //
 // Grouping is not decoration: `interfacebloat` caps an interface at 8 DECLARED
-// entries and the width ratchet's baseline has been 0 since #2603. 89 methods
-// therefore have to arrive as 20 leaves of <=8, composed into 7 mid-level
-// interfaces — 6 of which are direct members here, alongside 2 direct leaves,
-// giving this type exactly 8 entries. serverOperationWriter is the 7th: it
+// entries and the width ratchet's baseline has been 0 since #2603. Its methods
+// (102 by reflect.Type.NumMethod on 2026-10-15) therefore arrive as leaves of
+// <=8, composed into mid-level interfaces, with this type at no more than 8
+// entries. serverOperationWriter is the 7th: it
 // became a composite rather than a leaf when its 9th method tripped the cap.
 type ServerOpsStore interface {
 	serverBookStore

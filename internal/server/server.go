@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.94.1
+// version: 2.95.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -437,8 +437,8 @@ type ServerConfig struct {
 	StartupSteps *startup.Steps
 }
 
-// Ops returns the narrow view of the store: the 88 methods internal/server
-// actually invokes, out of database.Store's 398. This is the accessor ordinary
+// Ops returns the narrow view of the store: the methods internal/server
+// actually invokes (102 by reflect on 2026-10-15), out of database.Store's 398. This is the accessor ordinary
 // code should use.
 //
 // See server_ops_store.go for the measurement and for why narrowing this alone

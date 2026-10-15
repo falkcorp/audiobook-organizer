@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.91.0
+// version: 1.92.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-15
 
@@ -370,9 +370,10 @@ type opsPeopleStore interface {
 	// database.MergeDeleteAuthorOf, and a store without it refuses the merge.
 }
 
-// OpsStore is the 89 methods the maintenance ops need -- what they call directly
-// plus what the package's own helpers require of a store handed to them. Exported
-// so *server.Server can name it as a return type.
+// OpsStore is the 92 methods (reflect.Type.NumMethod, 2026-10-15) the
+// maintenance ops need -- what they call directly plus what the package's own
+// helpers require of a store handed to them. Exported so *server.Server can name
+// it as a return type.
 type OpsStore interface {
 	opsBookReader
 	opsBookWriter
@@ -419,7 +420,7 @@ type StoreProvider interface {
 // opsStoreProvider is the common path, OpsStore, plus the single-purpose
 // accessors that exist only because OpsStore itself is at the embed cap.
 type opsStoreProvider interface {
-	// OpsStore is the common path: 88 methods, used by 39 of the 41 sites.
+	// OpsStore is the common path: 92 methods, used by most of the sites.
 	OpsStore() OpsStore
 	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
 	// run must refuse while library.scan is queued or running, because a scan
