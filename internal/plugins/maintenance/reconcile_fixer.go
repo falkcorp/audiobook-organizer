@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-15
 
@@ -158,8 +158,10 @@ const (
 // step 1 written; the engine reports the row canceled_skipped or aborted, not
 // settled, so a resumed apply re-runs it, and evaluate and Apply recognise
 // the book already at the matched file with its row still at the old path
-// (rmStepOneOf) and write step 2 only. Any other refusal of step 2 after
-// step 1 is reported partially_applied. No book_file row is ever deleted or
+// (rmStepOneOf: the state AND this fixer's own journaled step 1) and write
+// step 2 only, journaling in the finishing op the step-1 changes it depends
+// on so that op reverts on its own (rmFinishStepTwo). Any other refusal of
+// step 2 after this op's own step 1 is reported partially_applied. No book_file row is ever deleted or
 // created. Reverting the apply operation puts the book's path and the row
 // back.
 type reconcileFixer struct{ p *Plugin }
@@ -840,9 +842,7 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 		return err
 	}
 	if stepOne != nil {
-		// A cut-off apply already wrote step 1 (journaled then); finish
-		// step 2 only.
-		return rmRepointRow(w, d)
+		return rmFinishStepTwo(w, d, book, stepOne)
 	}
 	// 1. The book's path, and (unless the match proves the content,
 	// rmKeepsHashes) its current-file hashes cleared, in ONE compare-and-set
@@ -890,6 +890,65 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	}
 	// 2. The file row at the old path, compare-and-set on its location.
 	return rmRepointRow(w, d)
+}
+
+// rmFinishStepTwo finishes a row whose step 1 an earlier, cut-off apply of
+// this fixer wrote (rmStepOneOf): it writes step 2 only.
+//
+// The operation finishing it must be revertible ON ITS OWN: a cancel and a
+// new apply leave step 1 in the first op's journal and step 2 in this one,
+// and reverting only this one would otherwise put the row back while the book
+// stayed at the matched file with its hashes cleared. So this op journals,
+// before step 2, the step-1 changes it depends on -- the book_path_update and
+// each hash the earlier op cleared, with that op's old values -- as
+// journal-only rows (nothing is written for them; the book already holds
+// their NewValue). Reverting this op then restores book, row and hashes; the
+// other op's rows find their values already restored, in either order. When
+// this op IS the earlier one (a resume of the same op), the rows are already
+// in its journal and the writer records nothing new.
+//
+// One JournalSteps call: a no-change compare-and-set Modify that the book is
+// still as step 1 left it, then the row repoint. A refusal of either voids
+// the journal-only rows and is reported as itself (changed_since_plan, a
+// fence, a lost lease), never partially_applied: this op wrote nothing.
+func rmFinishStepTwo(w *repairs.Writer, d *rmDecision, book *database.Book, st *rmStepOne) error {
+	steps := []repairs.BookStep{{BookID: d.bookID, Entry: repairs.UndoEntry{
+		ChangeType: undo.ChangeTypeBookPathUpdate, Field: "file_path", Old: d.oldPath, New: d.newPath}}}
+	for _, field := range []string{rmFieldFileHash, rmFieldOrganizedHash} {
+		if old, ok := st.hashOld[field]; ok {
+			steps = append(steps, repairs.BookStep{BookID: d.bookID, Entry: repairs.UndoEntry{
+				ChangeType: "metadata_update", Field: field, Old: old, New: ""}})
+		}
+	}
+	hash, organized := rmStr(book.FileHash), rmStr(book.OrganizedFileHash)
+	err := w.JournalSteps(steps, func() ([]bool, error) {
+		_, merr := w.Modify(d.bookID, func(b *database.Book) error {
+			switch {
+			case b.IsSoftDeleted():
+				return fmt.Errorf("%w: book %s was retired", repairs.ErrChangedSincePlan, d.bookID)
+			case b.FilePath != d.newPath:
+				return fmt.Errorf("%w: book %s now points at %q, not %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath, d.newPath)
+			case rmStr(b.FileHash) != hash || rmStr(b.OrganizedFileHash) != organized:
+				return fmt.Errorf("%w: book %s's file hashes changed", repairs.ErrChangedSincePlan, d.bookID)
+			}
+			return nil
+		})
+		if merr != nil {
+			return nil, merr
+		}
+		if rerr := w.RepointBookFile(d.bookID, d.fileID, d.was, d.to); rerr != nil {
+			return nil, rerr
+		}
+		done := make([]bool, len(steps))
+		for i := range done {
+			done[i] = true
+		}
+		return done, nil
+	})
+	if err != nil {
+		return fmt.Errorf("book %s: the file row of operation %s's unfinished apply not repointed: %w", d.bookID, st.opID, err)
+	}
+	return nil
 }
 
 // Book fields Apply clears, as their metadata_update rows name them (both
