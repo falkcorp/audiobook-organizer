@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-09-25
+// last-edited: 2026-10-15
 
 package server
 
@@ -130,7 +130,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// dropped right here, at the dispatcher, before it could reach the params
 	// blob. Five jobs take a custom parameter and all five silently received
 	// nothing on this route: revert-metadata-fetch (fetch_op_ids),
-	// bulk-fetch-metadata (prefer_audible, skip_cached), bulk-deluge-import
+	// bulk-fetch-metadata (prefer_audible, skip_cached; retired in 04-P14f), bulk-deluge-import
 	// (max_books), scan-composer-tags (fix_mode), prune-book-snapshots
 	// (keep_count).
 	//
@@ -214,10 +214,11 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// Update 2026-09-25 (owner: preview by default for every writing op): the
 	// 10 jobs that advertised false or nothing but DO honor dryRun now advertise
 	// true, so 32 of 38 preview on omission. The 4 that still advertise false
-	// (relink-report and the three scan-* reports) ignore dryRun, and 2
-	// (bulk-fetch-metadata, scan-chapter-groups) advertise no dry_run key and
-	// also ignore it. TestMaintenanceJobs_PreviewByDefault in
-	// internal/maintenance/jobs names each of the 6 with its reason and fails on
+	// (relink-report and the three scan-* reports) ignore dryRun, and 1
+	// (scan-chapter-groups) advertises no dry_run key and also ignores it
+	// (bulk-fetch-metadata was the second until 04-P14f retired it).
+	// TestMaintenanceJobs_PreviewByDefault in
+	// internal/maintenance/jobs names each of the 5 with its reason and fails on
 	// any new one; TestMaintenanceJobs_NoPreviewModeJobsIgnoreDryRun fails if an
 	// exempt job's Run starts reading dryRun.
 	//
