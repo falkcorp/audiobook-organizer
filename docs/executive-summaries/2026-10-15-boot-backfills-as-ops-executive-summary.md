@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-15-boot-backfills-as-ops-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9a4c7e12-6b3d-4f58-8e91-2d5f0b7c3a66 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -34,7 +34,10 @@
 ## Still to do
 
 Two more startup jobs get the same treatment in a follow-up: the book
-path-set index build and the activity-log filter check. One decision is
-open. If the re-encode job is interrupted, it waits for someone to confirm
-before it runs again, but the next startup currently starts a new run
-anyway, as the old background job did.
+path-set index build and the activity-log filter check.
+
+## Owner decision (2026-10-15)
+
+If the re-encode job is interrupted, it waits for someone to confirm before
+it runs again. Startup now respects that: while an interrupted re-encode is
+waiting, startup does not begin a new one.
