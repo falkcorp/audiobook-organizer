@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.4.4
+// version: 2.4.5
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
 // last-edited: 2026-10-14
 
@@ -1240,6 +1240,35 @@ func TestRowAppliedFileMovedToAnotherBook(t *testing.T) {
 	s.mu.Unlock()
 	s.foreignJournal("r2", "book-001", "book_file:file-001")
 	mustRowApplied(t, w, "track", false)
+}
+
+// failingFiles is the evidence store whose book_file point read fails.
+type failingFiles struct {
+	*evidenceStore
+	err error
+}
+
+func (f failingFiles) GetBookFileByID(string, string) (*database.BookFile, error) { return nil, f.err }
+
+// TestRowAppliedBookFileReadErrorPropagates (05-PR5b round 5 N2): a failed
+// read of a book_file a row wrote is an error from RowApplied, not a quiet
+// "does not stand": the caller cannot tell a file that moved from one that
+// could not be read, and a read failure must not be taken for an answer.
+func TestRowAppliedBookFileReadErrorPropagates(t *testing.T) {
+	s := newEvidenceStore()
+	w := evidenceWriter(s, "op1", ops.Live)
+	applyItem(t, w, "track", func(ctx context.Context) error {
+		_, err := w.ModifyBookFile(ctx, "book-001", "file-001", func(f *database.BookFile) error { f.TrackNumber = 3; return nil })
+		return err
+	})
+	mustRowApplied(t, w, "track", true)
+
+	boom := errors.New("book_file store unavailable")
+	broken := New(Config{OpID: "op1", Mode: ops.Live, Files: failingFiles{s, boom}, RowMarks: s, Changes: s, HistoryReader: s})
+	ok, err := broken.RowApplied(context.Background(), "track")
+	if ok || !errors.Is(err, boom) {
+		t.Fatalf("RowApplied with a failing book_file read = %v, %v; want false and the read error", ok, err)
+	}
 }
 
 // TestRowAppliedJournalMemoAges (05-PR5b round 4 S2): a scan serves the
