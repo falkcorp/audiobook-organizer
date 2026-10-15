@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -7,8 +7,8 @@ package maintenance
 
 import (
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -592,7 +592,9 @@ func TestAuthorIDRepair_UndoRefusesAPrimaryChangedSince(t *testing.T) {
 // failRenameStore refuses every author rename.
 type failRenameStore struct{ *database.PebbleStore }
 
-func (failRenameStore) UpdateAuthorName(int, string) error { return errors.New("injected rename failure") }
+func (failRenameStore) UpdateAuthorName(int, string) error {
+	return errors.New("injected rename failure")
+}
 
 // M4: a rename the store refuses voids its journaled row, so the undo finds no
 // row describing a write that never happened.
