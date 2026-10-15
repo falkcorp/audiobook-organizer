@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b1d3f27-6c94-4a05-9e21-3d7f0a58c4b6
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -22,6 +22,7 @@ type fakeReassignStore struct {
 	setErr     map[string]error
 	setCalls   map[string][]database.BookAuthor
 	ledger     []database.OperationChange
+	keepGone   bool
 }
 
 func (f *fakeReassignStore) CreateOperationChange(c *database.OperationChange) error {
@@ -32,6 +33,14 @@ func (f *fakeReassignStore) CreateOperationChange(c *database.OperationChange) e
 // ModifyBook: the fixture books carry no primary, so no primary is repointed.
 func (f *fakeReassignStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
 	return nil, nil
+}
+
+// GetAuthorByID: the keep author is live unless keepGone.
+func (f *fakeReassignStore) GetAuthorByID(id int) (*database.Author, error) {
+	if f.keepGone {
+		return nil, nil
+	}
+	return &database.Author{ID: id, Name: "Synthetic Keep"}, nil
 }
 
 func (f *fakeReassignStore) GetBooksByAuthorIDForRelinkCore(int) ([]database.BookCore, error) {
@@ -138,5 +147,20 @@ func TestReassignBooksFromAuthor_DedupWhenAlreadyCreditsKeep(t *testing.T) {
 	got := f.setCalls["b1"]
 	if len(got) != 1 || got[0].AuthorID != keepID {
 		t.Errorf("expected the mergeID credit dropped, leaving only keepID, got %+v", got)
+	}
+}
+
+// A keep author that is gone fails the reassign before any book moves or any
+// row is journaled.
+func TestReassignBooksFromAuthor_AGoneKeepAuthorMovesNothing(t *testing.T) {
+	f := &fakeReassignStore{keepGone: true,
+		books:   []database.BookCore{{ID: "b1"}},
+		authors: map[string][]database.BookAuthor{"b1": {{BookID: "b1", AuthorID: mergeID, Role: "author"}}}}
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
+	if len(errs) != 1 {
+		t.Fatalf("want one error, got %v", errs)
+	}
+	if len(f.setCalls) != 0 || len(f.ledger) != 0 {
+		t.Fatalf("nothing may move or be journaled: sets %v ledger %d", f.setCalls, len(f.ledger))
 	}
 }

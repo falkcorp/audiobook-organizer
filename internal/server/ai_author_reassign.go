@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e8c1b53-9a27-4d60-bf14-7c9e0a35d2f1
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -17,11 +17,16 @@ import (
 type authorReassignStore interface {
 	authormerge.CreditsStore
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
+	GetAuthorByID(id int) (*database.Author, error)
 }
 
 // reassignBooksFromAuthor re-points every book currently crediting mergeID so it
 // credits keepID instead (de-duplicating when a book already credits keepID),
-// and repoints the book's primary when it names mergeID.
+// and repoints the book's primary when it names mergeID. The keep author's row
+// is read once, up front, and written as a repointed book's denormalized
+// Author: without it the book kept an Author naming the merged-away author,
+// which every reader that shows Author.Name displayed. A keep author that is
+// gone (or redirects elsewhere) fails the reassign before anything moves.
 //
 // Each book's move is journaled under opID BEFORE it is made, through
 // authormerge.MoveCredits, as the author_merge_credits row the revert engine
@@ -41,6 +46,13 @@ type authorReassignStore interface {
 // mergeID unconditionally even when a book's reassignment (or its author read)
 // had failed.
 func reassignBooksFromAuthor(store authorReassignStore, opID string, mergeID, keepID int) (errs, problems []string) {
+	keep, err := store.GetAuthorByID(keepID)
+	if err != nil {
+		return []string{fmt.Sprintf("read keep author %d: %v", keepID, err)}, nil
+	}
+	if keep == nil || keep.ID != keepID {
+		return []string{fmt.Sprintf("keep author %d no longer exists; nothing reassigned off author %d", keepID, mergeID)}, nil
+	}
 	// ForRelink includes the trash: the caller deletes mergeID afterwards,
 	// and DeleteAuthor sweeps trashed books' junction rows too.
 	books, err := store.GetBooksByAuthorIDForRelinkCore(mergeID)
@@ -84,7 +96,7 @@ func reassignBooksFromAuthor(store authorReassignStore, opID string, mergeID, ke
 			}
 		}
 		moved, err := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
-			BookID: book.ID, FromID: mergeID, IntoID: keepID,
+			BookID: book.ID, FromID: mergeID, IntoID: keepID, Into: keep,
 			Before: bookAuthors, After: newAuthors, PrimaryBefore: book.AuthorID,
 		})
 		if err != nil {

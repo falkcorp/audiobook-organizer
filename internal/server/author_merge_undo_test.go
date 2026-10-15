@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_undo_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: d1a47c63-8e29-4f50-b6a3-90e5c2f1d784
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -468,4 +468,53 @@ func TestAuthorMergeOp_AnUnknownIDIsNotFoundAndNotCountedMerged(t *testing.T) {
 	err = def.Run(context.Background(), raw, &opReporter{id: "op-unknown-2"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "author 987654 was not found")
+}
+
+// staleAuthorWorld is newUndoWorld with the solo book's denormalized Author set
+// to the author the merge folds away, as a hydrated row carries it.
+func staleAuthorWorld(t *testing.T) *undoWorld {
+	t.Helper()
+	w := newUndoWorld(t)
+	from := *w.from
+	_, err := w.st.ModifyBook(w.soloBook, func(b *database.Book) error {
+		b.Author = &from
+		return nil
+	})
+	require.NoError(t, err)
+	return w
+}
+
+// requireNamesKeep: the repointed book's Author names the keep author, never the
+// merged-away one (readers display Author.Name whenever it is set).
+func (w *undoWorld) requireNamesKeep(t *testing.T) {
+	t.Helper()
+	b, err := w.st.GetBookByID(w.soloBook)
+	require.NoError(t, err)
+	require.NotNil(t, b.AuthorID)
+	require.Equal(t, w.keep.ID, *b.AuthorID, "the primary is repointed")
+	require.NotNil(t, b.Author, "the repointed book's Author is the keep author's row")
+	require.Equal(t, w.keep.ID, b.Author.ID)
+	require.Equal(t, w.keep.Name, b.Author.Name)
+}
+
+// The Authors-view merge writes the keep author as a repointed book's Author.
+func TestAuthorMergeOp_ARepointedBookNamesTheKeepAuthor(t *testing.T) {
+	w := staleAuthorWorld(t)
+	def := relinkOpDef(t, newRelinkOpServer(w.st).RegisterAuthorMergeOp, "entities.author-merge")
+	raw, err := json.Marshal(entities.AuthorMergeOpParams{KeepID: w.keep.ID, MergeIDs: []int{w.from.ID}, KeepName: w.keep.Name})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-names-keep"}))
+	w.requireNamesKeep(t)
+}
+
+// The AI merge apply (reassignBooksFromAuthor) does the same.
+func TestAIAuthorMergeApplyOp_ARepointedBookNamesTheKeepAuthor(t *testing.T) {
+	w := staleAuthorWorld(t)
+	def := relinkOpDef(t, newRelinkOpServer(w.st).RegisterAIAuthorMergeApplyOp, handlers.AIAuthorMergeApplyDefID)
+	raw, err := json.Marshal(handlers.AIMergeApplyOpParams{Suggestions: []handlers.AIMergeApplySuggestion{{
+		Action: "merge", CanonicalName: w.keep.Name, KeepID: w.keep.ID, MergeIDs: []int{w.from.ID},
+	}}})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-ai-names-keep"}))
+	w.requireNamesKeep(t)
 }

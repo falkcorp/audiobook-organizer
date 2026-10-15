@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
 // last-edited: 2026-10-15
 
@@ -343,5 +343,33 @@ func TestMergeDelete_AStoreThatCannotReadTheNameHolderIsRefused(t *testing.T) {
 	}
 	if len(f.order) != 0 || f.deletes != 0 {
 		t.Fatalf("nothing may be journaled or deleted: rows %d deletes %d", len(f.order), f.deletes)
+	}
+}
+
+// A repointed book whose move carries no Into gets its denormalized Author
+// cleared, not left naming the merged-away author, on both write paths.
+func TestMoveCredits_NoIntoClearsAStaleAuthor(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store func(*fakeStore) CreditsStore
+	}{
+		{"atomic", func(f *fakeStore) CreditsStore { return &creditsFake{fakeStore: f} }},
+		{"no capability", func(f *fakeStore) CreditsStore { return f }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			two := 2
+			f.books["b"] = &database.Book{ID: "b", AuthorID: &two, Author: &database.Author{ID: 2, Name: "Merged Away"}}
+			j := []database.BookAuthor{credit("b", 2, 0)}
+			f.junction["b"] = slices.Clone(j)
+			res, err := MoveCredits(tc.store(f), "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: j,
+				After: []database.BookAuthor{credit("b", 1, 0)}, PrimaryBefore: &two})
+			if err != nil || !res.PrimaryRepointed {
+				t.Fatalf("res %+v err %v", res, err)
+			}
+			if a := f.books["b"].Author; a != nil {
+				t.Fatalf("the Author must be cleared, not left naming the merged-away author: %+v", a)
+			}
+		})
 	}
 }
