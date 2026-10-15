@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-15
 
@@ -125,6 +125,17 @@ func (p *Plugin) runOpChangeBookIndexRebuild(ctx context.Context, raw json.RawMe
 	}
 	r, ok := database.AsCapability[opChangeIndexRebuilder](store)
 	if !ok {
+		if params.Ensure {
+			// Boot enqueues the ensure on every start. A store with no index
+			// (not Pebble) has nothing to check and GetBookChanges scans, as
+			// it always has, so this is not a failure: a red row on every
+			// boot would be noise. The goroutine logged the same Warn. An
+			// operator's preview or rebuild still fails below.
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("store is %T, which has no opchange_by_book: index "+
+				"(and no store in its decorator chain does); nothing to ensure, GetBookChanges uses the "+
+				"full journal scan", store), opsregistry.NoOpAttr())
+			return nil
+		}
 		return fmt.Errorf("cannot run: store is %T, which has no opchange_by_book: index "+
 			"(and no store in its decorator chain does)", store)
 	}
@@ -209,6 +220,9 @@ func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, rep
 //   - trusted with nothing written (backfill already done, verify clean, no
 //     rebuild): the usual boot outcome, logged with opsregistry.NoOpAttr so
 //     the default activity feed hides it.
+//
+// A store with no index at all (not Pebble) never reaches here: the run
+// logs a Warn tagged NoOpAttr and succeeds (runOpChangeBookIndexRebuild).
 func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelDebug, "Starting opchange_by_book index ensure (backfill if needed, verify, rebuild if dirty)")
 	_ = reporter.UpdateProgress(0, 1, "checking opchange_by_book: index")
