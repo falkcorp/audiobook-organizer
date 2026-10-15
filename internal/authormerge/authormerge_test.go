@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
 // last-edited: 2026-10-15
 
@@ -125,11 +125,33 @@ func TestMoveCredits_ARefusedJunctionWriteVoidsItsRow(t *testing.T) {
 	}
 }
 
-func TestMoveCredits_APrimaryOnlyMoveLeavesTheJunctionUnwritten(t *testing.T) {
+func TestMoveCredits_APrimaryOnlyMoveCreditsTheKeepAuthor(t *testing.T) {
 	f := newFake()
 	two := 2
 	f.books["b"] = &database.Book{ID: "b", AuthorID: &two}
 	j := []database.BookAuthor{credit("b", 5, 0)}
+	res, err := MoveCredits(f, "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: j, After: j, PrimaryBefore: &two})
+	if err != nil || !res.PrimaryRepointed {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	want := []database.BookAuthor{credit("b", 5, 0), credit("b", 1, 1)}
+	if !undo.SameJunction(f.junction["b"], want) {
+		t.Fatalf("the keep author must be credited with the primary: %+v", f.junction["b"])
+	}
+	var move undo.AuthorCreditsMove
+	if err := json.Unmarshal([]byte(f.only(t).NewValue), &move); err != nil {
+		t.Fatal(err)
+	}
+	if move.CreditsAfter == nil || !undo.SameJunction(*move.CreditsAfter, want) {
+		t.Fatalf("the row must journal the credits written: %+v", move.CreditsAfter)
+	}
+}
+
+func TestMoveCredits_APrimaryOnlyMoveLeavesTheJunctionUnwritten(t *testing.T) {
+	f := newFake()
+	two := 2
+	f.books["b"] = &database.Book{ID: "b", AuthorID: &two}
+	j := []database.BookAuthor{credit("b", 1, 0)}
 	res, err := MoveCredits(f, "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: j, After: j, PrimaryBefore: &two})
 	if err != nil || !res.PrimaryRepointed {
 		t.Fatalf("res %+v err %v", res, err)
