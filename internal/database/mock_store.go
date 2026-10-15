@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.147.0
+// version: 1.147.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-15
 
@@ -135,12 +135,13 @@ type MockStore struct {
 	DeleteWorkFunc      func(id string) error
 
 	// Author methods
-	GetAllAuthorsFunc   func() ([]Author, error)
-	GetAuthorByIDFunc   func(id int) (*Author, error)
-	GetAuthorByNameFunc func(name string) (*Author, error)
-	CreateAuthorFunc    func(name string) (*Author, error)
-	MintAuthorFunc      func(name string) (*Author, bool, error)
-	DeleteAuthorFunc    func(id int) error
+	GetAllAuthorsFunc    func() ([]Author, error)
+	GetAuthorByIDFunc    func(id int) (*Author, error)
+	GetAuthorByNameFunc  func(name string) (*Author, error)
+	AuthorNameHolderFunc func(name string) (int, error)
+	CreateAuthorFunc     func(name string) (*Author, error)
+	MintAuthorFunc       func(name string) (*Author, bool, error)
+	DeleteAuthorFunc     func(id int) error
 	// MergeDeleteAuthorFunc overrides MergeDeleteAuthor, which makes MockStore
 	// offer the AuthorMergeDeleter capability (it is not on Store). Unset, the
 	// test double approximates it with DeleteAuthor then CreateAuthorTombstone, so
@@ -805,6 +806,9 @@ func (m *MockStore) MergeDeleteAuthor(fromID, intoID int) (*AuthorMergeDeleteRes
 // AuthorNameHolder (database.AuthorNameHolderReader) approximates the raw name
 // index with GetAuthorByName: the holder's id, or 0.
 func (m *MockStore) AuthorNameHolder(name string) (int, error) {
+	if m.AuthorNameHolderFunc != nil {
+		return m.AuthorNameHolderFunc(name)
+	}
 	a, err := m.GetAuthorByName(name)
 	if err != nil || a == nil {
 		return 0, err
