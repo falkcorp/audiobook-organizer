@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-15 -->
 
 # Woodpecker CI: install runbook
 
@@ -22,11 +22,15 @@ Placeholders used throughout (never commit the real values; this repo is public)
 
 ## Pipeline layout
 
-**Triggers.** Every workflow runs on `push` to `main`, on `pull_request`, and
-on `manual` runs. A push to any other branch starts nothing: with an open PR
-the `pull_request` event already runs that commit, and running both doubled
-the agents' load (the doubled U1 load timed out web tests, 2026-09-29). To
-test a branch with no PR, use `make ci-woodpecker`.
+**Triggers.** Every workflow runs on `pull_request` and on `manual` runs
+(owner 2026-10-15). Between 2026-10-02 and 2026-10-15 they were manual-only,
+because parallel pipelines loaded U1 and U0 together; the owner reversed that
+so a PR gets CI without a LAN session queueing it. There is no global
+one-at-a-time cap: each agent runs as many workflows as its own capacity
+setting allows. The repo's `allow_pr` setting on the Woodpecker server must
+be on for `pull_request` events to start anything. A push to a branch with no
+PR starts nothing; use `make ci-woodpecker` for that. `test-native-taglib`
+is pinned to `host=u1`, so while U1 is down its run waits in the queue.
 
 | workflow | agent label | runs | measured time |
 |---|---|---|---|

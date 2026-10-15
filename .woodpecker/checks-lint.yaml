@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.7.0
+# version: 2.8.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
-# last-edited: 2026-10-11
+# last-edited: 2026-10-15
 #
 # The linter gates of `make ci`: staticcheck, the errcheck ratchet, the
 # deadcode ratchet and mocks-check, each as its own step so one failure does
@@ -33,13 +33,11 @@ labels:
   host: u0
 
 when:
-  # Manual only (owner 2026-10-02). Automatic push and pull_request runs let
-  # several pipelines start at once whenever agents pushed to several PRs,
-  # loading U1 and U0 (prod) together; the server has also crashed under
-  # parallel pipelines. CI is queued one pipeline at a time via the API
-  # (`make ci-woodpecker` / scripts/ci_woodpecker.py). The repo's allow_pr
-  # setting is off as well.
-  - event: manual
+  # Automatic on pull requests (owner 2026-10-15; reverses the 2026-10-02
+  # manual-only rule). Each agent runs as many workflows as its own
+  # capacity allows; there is no global one-at-a-time cap. manual stays
+  # so a pipeline can still be queued through the API.
+  - event: [pull_request, manual]
 
 clone:
   - name: clone
