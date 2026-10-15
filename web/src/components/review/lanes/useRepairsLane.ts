@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.9.1
+// version: 1.10.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -284,15 +284,26 @@ export interface RepairsLane {
   dispatch: (action: RepairsAction) => void;
 }
 
-export function useRepairsLane(toast: Toast, active = true): RepairsLane {
+/**
+ * `seedFixerId` is the URL's `?fixer=<id>`: a seed, read once on the first
+ * render and never mirrored back to the URL or into the per-viewer storage key
+ * (only a reviewer's own click does that). It wins over the stored fixer; an id
+ * the server does not list is ignored, and the stored fixer (then the first
+ * listed one) is used instead.
+ */
+export function useRepairsLane(
+  toast: Toast,
+  active = true,
+  seedFixerId: string | null = null
+): RepairsLane {
   const [fixers, setFixers] = useState<RepairFixer[]>([]);
   const [fixersLoading, setFixersLoading] = useState(false);
   const [fixersError, setFixersError] = useState<string | null>(null);
   const [fixersNonce, setFixersNonce] = useState(0);
   const [ownerStatus, setOwnerStatus] = useState<api.RepairOwnerStatus | null>(null);
 
-  const [selectedFixerId, setSelectedFixerId] = useState<string | null>(() =>
-    readStored(REPAIRS_FIXER_STORAGE_KEY)
+  const [selectedFixerId, setSelectedFixerId] = useState<string | null>(
+    () => seedFixerId || readStored(REPAIRS_FIXER_STORAGE_KEY)
   );
   const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
@@ -370,9 +381,14 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           }
           return changed ? next : prev;
         });
-        setSelectedFixerId((cur) =>
-          cur && list.some((f) => f.id === cur) ? cur : (list[0]?.id ?? null)
-        );
+        setSelectedFixerId((cur) => {
+          if (cur && list.some((f) => f.id === cur)) return cur;
+          // `cur` may be an unknown ?fixer= seed: fall back to the viewer's own
+          // remembered fixer before the first one in the list.
+          const stored = readStored(REPAIRS_FIXER_STORAGE_KEY);
+          if (stored && list.some((f) => f.id === stored)) return stored;
+          return list[0]?.id ?? null;
+        });
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
