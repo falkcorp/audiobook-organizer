@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.93.0
+// version: 1.93.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-15
 
@@ -736,12 +736,6 @@ type ActivityLogOps interface {
 	) (database.ActivityReclaimResult, error)
 }
 
-// WriteBackOps covers the iTunes write-back queue.
-type WriteBackOps interface {
-	// PollBatch polls OpenAI for completed batch jobs; returns processed count.
-	PollBatch(ctx context.Context) (int, error)
-}
-
 // DedupRunners runs the dedup review and triage operations.
 type DedupRunners interface {
 	// DedupTriageExactPending scans all pending book dedup candidates,
@@ -851,7 +845,6 @@ type CapabilityProbes interface {
 	HasDedupEngine() bool
 	HasMetadataFetchService() bool
 	HasAIParsing() bool
-	HasBatchPoller() bool
 }
 
 // RuntimeConfig exposes the retention and path settings the jobs read.
@@ -1078,7 +1071,6 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	MediaFileRunners
 	CleanupRunners
 	ActivityLogOps
-	WriteBackOps
 	DedupRunners
 	CacheInvalidator
 	TranscriptionRunners

@@ -1,7 +1,7 @@
 // file: internal/server/op_schedule_driver_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c47e92b1-5d08-4a3f-9e61-1b2f8d0a7c34
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -19,7 +19,6 @@ import (
 // below fail if a row outlives its reason.
 var scheduleDriverAllowList = map[string]string{
 	"deluge.protected-paths-sync": "protected list loads at boot and on Deluge changes; a half-hourly op row adds noise (revisit with D52)",
-	"maintenance.batch-poller":    "to be deleted by D26 / P12; the inline loop is the poller",
 }
 
 // TestScheduledOpsHaveADriver fails any op that declares a cron Schedule with

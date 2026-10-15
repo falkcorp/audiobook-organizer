@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.67.0
+// version: 1.67.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-15
 
@@ -244,13 +244,6 @@ func (s *Server) ActivityFlushOp(opID string) {
 	activity.FlushOperation(s.activityWriter, opID)
 }
 
-func (s *Server) PollBatch(ctx context.Context) (int, error) {
-	if s.batchPoller == nil {
-		return 0, nil
-	}
-	return s.batchPoller.Poll(ctx)
-}
-
 func (s *Server) InvalidateDedupCache() {
 	if s.dedupCache != nil {
 		s.dedupCache.Invalidate("author-duplicates")
@@ -438,10 +431,6 @@ func (s *Server) HasMetadataFetchService() bool {
 
 func (s *Server) HasAIParsing() bool {
 	return config.AppConfig.EnableAIParsing && config.AppConfig.OpenAIAPIKey != ""
-}
-
-func (s *Server) HasBatchPoller() bool {
-	return s.batchPoller != nil
 }
 
 func (s *Server) RootDir() string {
