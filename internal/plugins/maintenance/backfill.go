@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-10-15
 
@@ -26,8 +26,10 @@ import (
 // dispatcher holds every def without NoWarmupWait (D44, warmup_gate.go).
 //
 // A run that found nothing to do logs its summary with opsregistry.NoOpAttr,
-// so the six boot runs that are usually no-ops stay out of the default
-// activity feed.
+// and every op here logs its "Starting" line at Debug (the activity mirror
+// files it in the debug tier), so the boot runs that are usually no-ops add
+// no line to the default activity feed. A cancelled run returns ctx's error
+// instead of logging "complete".
 
 // bootBackfillParams is the params shape of the boot-enqueued ops in this
 // file. Absent params (an operator's run) decode to the zero value, which is
@@ -75,7 +77,7 @@ func (p *Plugin) runExternalIDBackfill(ctx context.Context, raw json.RawMessage,
 	if err != nil {
 		return err
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting external ID backfill", slog.Bool("if_needed", params.IfNeeded))
+	_ = reporter.Log(slog.LevelDebug, "Starting external ID backfill", slog.Bool("if_needed", params.IfNeeded))
 	skipped, err := p.deps.BackfillExternalIDs(ctx, params.IfNeeded, func(processed, total int, msg string) {
 		_ = reporter.UpdateProgress(processed, total, msg)
 	})
@@ -86,6 +88,9 @@ func (p *Plugin) runExternalIDBackfill(ctx context.Context, raw json.RawMessage,
 	if skipped {
 		_ = reporter.Log(slog.LevelInfo, "External ID backfill already complete; nothing to do", opsregistry.NoOpAttr())
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, "External ID backfill complete")
 	return nil
@@ -111,10 +116,13 @@ func (p *Plugin) movementAtomCleanupDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runMovementAtomCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	_ = reporter.Log(slog.LevelInfo, "Starting movement atom cleanup")
+	_ = reporter.Log(slog.LevelDebug, "Starting movement atom cleanup")
 	if p.deps.StripMovementAtoms(ctx) {
 		_ = reporter.Log(slog.LevelInfo, "Movement atom cleanup already complete; nothing to do", opsregistry.NoOpAttr())
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, "Movement atom cleanup complete")
 	return nil
@@ -140,7 +148,7 @@ func (p *Plugin) malformedM4BRemuxDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runMalformedM4BRemux(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	_ = reporter.Log(slog.LevelInfo, "Starting malformed M4B remux")
+	_ = reporter.Log(slog.LevelDebug, "Starting malformed M4B remux")
 	alreadyDone, err := p.deps.RemuxMalformedM4BFiles(ctx, func(processed, total int, msg string) {
 		_ = reporter.UpdateProgress(processed, total, msg)
 	})
@@ -151,6 +159,9 @@ func (p *Plugin) runMalformedM4BRemux(ctx context.Context, _ json.RawMessage, re
 	if alreadyDone {
 		_ = reporter.Log(slog.LevelInfo, "Malformed M4B remux already complete; nothing to do", opsregistry.NoOpAttr())
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, "Malformed M4B remux complete")
 	return nil
@@ -195,7 +206,7 @@ func (p *Plugin) runMalformedM4BTranscode(ctx context.Context, raw json.RawMessa
 	if err != nil {
 		return err
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting malformed M4B transcode", slog.Bool("quarantine_after", params.QuarantineAfter))
+	_ = reporter.Log(slog.LevelDebug, "Starting malformed M4B transcode", slog.Bool("quarantine_after", params.QuarantineAfter))
 	alreadyDone, transcodeErr := p.deps.TranscodeMalformedM4BFiles(ctx, func(processed, total int, msg string) {
 		_ = reporter.UpdateProgress(processed, total, msg)
 	})
@@ -221,6 +232,9 @@ func (p *Plugin) runMalformedM4BTranscode(ctx context.Context, raw json.RawMessa
 	if alreadyDone && quarantined == 0 {
 		_ = reporter.Log(slog.LevelInfo, "Malformed M4B transcode already complete; nothing to do", opsregistry.NoOpAttr())
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, "Malformed M4B transcode complete")
 	return nil
