@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -816,7 +816,7 @@ func TestReconcileFixer_PrecheckRefusesABookThatMovedOrWasRetired(t *testing.T) 
 			require.NoError(t, err)
 			_, done, err := rmPrecheck(rd, d)
 			require.NoError(t, err)
-			require.False(t, done)
+			require.Nil(t, done)
 
 			_, err = f.s.ModifyBook(one, func(b *database.Book) error { drift(b, f); return nil })
 			require.NoError(t, err)
@@ -910,4 +910,89 @@ func TestReconcileFixer_BookHashesFollowWhatTheMatchProves(t *testing.T) {
 		assert.Equal(t, bookHashes{"cur-" + k, "org-" + k, "orig-" + k}, read(id), "revert restores %s", k)
 		assert.Equal(t, before[id], f.state(t, id), "revert restores %s's path and row", k)
 	}
+}
+
+// rmLegacyMove does what the legacy reconcile.apply (ExecuteReconcile) does
+// to a book: its path to newRel, journaled as a file_path_update under its
+// own op, its book_file rows and hashes untouched.
+func (f *rmFixture) rmLegacyMove(t *testing.T, bookID, oldRel, newRel string, journal bool) {
+	t.Helper()
+	_, err := f.s.ModifyBook(bookID, func(b *database.Book) error { b.FilePath = f.path(newRel); return nil })
+	require.NoError(t, err)
+	if journal {
+		require.NoError(t, f.s.CreateOperationChange(&database.OperationChange{
+			ID: "legacy-" + bookID, OperationID: "reconcile-apply-legacy", BookID: bookID,
+			ChangeType: "file_path_update", FieldName: "file_path", OldValue: f.path(oldRel), NewValue: f.path(newRel)}))
+	}
+}
+
+// TestRR3Probe_LegacyReconcileMoveIsClaimed (round-3 B-1): the legacy
+// reconcile.apply leaves the book at the matched file with its row at the
+// old path, the same state as this fixer's cut-off step 1. With no journal
+// evidence that this fixer wrote it, the row is a path_changed skip showing
+// the book's real path, its fingerprint is not the planned one, the apply
+// refuses it (changed_since_plan) and nothing is written: the row stays at
+// the old path and the book's hashes are not cleared. Covered with and
+// without the legacy op's own journal row.
+func TestRR3Probe_LegacyReconcileMoveIsClaimed(t *testing.T) {
+	t.Parallel()
+	for _, journal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("journaled=%v", journal), func(t *testing.T) {
+			t.Parallel()
+			f := newRMFixture(t)
+			id := f.missingBook(t, "Book F", "old/F.m4b", func(b *database.Book) {
+				cur, org := "cur-F", "org-F"
+				b.FileHash, b.OrganizedFileHash = &cur, &org
+			})
+			f.file(t, "new/F.m4b")
+			f.match(id, "Book F", "old/F.m4b", "new/F.m4b", "filename", "medium")
+			res := f.plan(t)
+			planned := rmRow(t, res, id)
+			require.True(t, planned.Applicable(), planned.SkipReason)
+			fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+			require.NoError(t, err)
+
+			f.rmLegacyMove(t, id, "old/F.m4b", "new/F.m4b", journal)
+			moved := f.state(t, id)
+
+			// Between Replan and the write: the pre-write check refuses.
+			w, _ := f.writer()
+			err = f.fx.Apply(context.Background(), w, fresh)
+			assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+			assert.Equal(t, 0, w.Journaled())
+
+			again, err := f.fx.Replan(context.Background(), nil, planned, nil)
+			require.NoError(t, err)
+			assert.Equal(t, rmSkipPathChanged, again.Skipped, again.Reason)
+			assert.NotEqual(t, planned.Fingerprint, again.Fingerprint)
+			assert.Equal(t, f.path("new/F.m4b"), again.Current["path"], "Current shows where the book really points")
+
+			out, _ := f.apply(t, res, planned.RowID)
+			assert.Equal(t, repairs.OutcomeChangedSincePlan, rmOutcomes(out)[planned.RowID])
+			assert.Equal(t, moved, f.state(t, id), "nothing written")
+			b, err := f.s.GetBookByID(id)
+			require.NoError(t, err)
+			assert.Equal(t, "cur-F", rmStr(b.FileHash))
+			assert.Equal(t, "org-F", rmStr(b.OrganizedFileHash))
+		})
+	}
+}
+
+// TestReconcileFixer_BookAtMatchWithTwoRowsAtOldIsPathChanged (N-1): the
+// book at the matched file is step 1 only with exactly one row left at the
+// old path; with two it is path_changed.
+func TestReconcileFixer_BookAtMatchWithTwoRowsAtOldIsPathChanged(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id := f.missingBook(t, "Book N", "old/N.m4b", nil)
+	f.file(t, "new/N.m4b")
+	f.match(id, "Book N", "old/N.m4b", "new/N.m4b", "hash", "high")
+	planned := rmRow(t, f.plan(t), id)
+	require.True(t, planned.Applicable())
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: id, FilePath: f.path("old/N.m4b"), Missing: true}))
+	_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.FilePath = f.path("new/N.m4b"); return nil })
+	require.NoError(t, err)
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	assert.Equal(t, rmSkipPathChanged, fresh.Skipped, fresh.Reason)
 }

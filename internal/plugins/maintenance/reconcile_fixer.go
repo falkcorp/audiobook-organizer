@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -158,7 +158,7 @@ const (
 // step 1 written; the engine reports the row canceled_skipped or aborted, not
 // settled, so a resumed apply re-runs it, and evaluate and Apply recognise
 // the book already at the matched file with its row still at the old path
-// (rmStepOneDone) and write step 2 only. Any other refusal of step 2 after
+// (rmStepOneOf) and write step 2 only. Any other refusal of step 2 after
 // step 1 is reported partially_applied. No book_file row is ever deleted or
 // created. Reverting the apply operation puts the book's path and the row
 // back.
@@ -235,6 +235,9 @@ type rmReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
+	// GetBookChanges is the book's op journal: the evidence that a cut-off
+	// apply of this fixer, not another writer, moved the book (rmStepOne).
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 	database.BookFilePathLookup
 }
 
@@ -510,10 +513,20 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 	// planned fingerprint, so a resumed apply finishes step 2 (repairs.apply
 	// re-runs a canceled_skipped/aborted row and the fixer recognises its
 	// own finished steps).
-	stepOneDone := rmStepOneDone(c, book, files)
+	//
+	// The state alone is not evidence: the legacy reconcile.apply
+	// (ExecuteReconcile) leaves exactly that state too. rmStepOneOf requires
+	// the book's journal to show this fixer wrote it.
+	stepOne, err := rmStepOneOf(rd, c, book, files)
+	if err != nil {
+		fp.WriteString("|journal-unreadable")
+		return skip(rmSkipError, err.Error(), fmt.Sprintf("The change journal of %s could not be read: %v", c.BookID, err)), nil
+	}
 	bookPath := book.FilePath
-	if stepOneDone {
+	if stepOne != nil {
 		bookPath = c.OldPath
+		r.Evidence = append(r.Evidence, fmt.Sprintf("operation %s already pointed the book at the matched file; "+
+			"applying finishes its file row", stepOne.opID))
 	}
 	fmt.Fprintf(&fp, "|path=%s", bookPath)
 
@@ -542,6 +555,7 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 	}
 
 	if bookPath != c.OldPath {
+		r.Current["path"] = book.FilePath
 		return skip(rmSkipPathChanged, "the book's path changed since the scan",
 			fmt.Sprintf("The scan found %q missing; the book now points at %q.", c.OldPath, book.FilePath)), nil
 	}
@@ -643,12 +657,36 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 // longer point at (todo.d/2026-10-14-missing-files-original-hash.md).
 func rmKeepsHashes(matchType string) bool { return matchType == "hash" }
 
-// rmStepOneDone reports whether book is in the state a cut-off apply of c
-// leaves after step 1 only: the book points at the matched file, exactly one
-// of its rows is still at the old path and none is at the matched file.
-func rmStepOneDone(c rmCandidate, book *database.Book, files []database.BookFile) bool {
+// rmStepOne is the journal evidence that an apply of this fixer wrote step 1
+// for a candidate and was cut off before step 2.
+type rmStepOne struct {
+	// opID is the operation whose book_path_update is the book's latest
+	// path change.
+	opID string
+	// hashOld is what that operation's step 1 cleared, by field
+	// (rmFieldFileHash, rmFieldOrganizedHash): the values a revert puts back.
+	hashOld map[string]string
+}
+
+// rmPathChangeTypes are the journal change types that move a book's path.
+var rmPathChangeTypes = map[string]bool{
+	undo.ChangeTypeBookPathUpdate: true, "file_path_update": true, "file_move": true, "organize_rename": true,
+}
+
+// rmStepOneOf reports whether book is in the state a cut-off apply of c
+// leaves after step 1 only, written by this fixer: the book points at the
+// matched file, exactly one of its rows is still at the old path and none is
+// at the matched file, AND the book's latest path change in the op journal
+// is this fixer's book_path_update from the old path to the matched file,
+// not reverted. The legacy reconcile.apply (ExecuteReconcile) sets the book's
+// path and leaves its rows, the same state; without the journal check it
+// would be claimed as ours, finished, and its undo would move only the row.
+// Any operation counts (a cancel then a new apply starts a new op). The
+// hashes must be as that step 1 left them: cleared for a match that clears
+// them, and not cleared by it for a "hash" match. nil when not.
+func rmStepOneOf(rd rmReader, c rmCandidate, book *database.Book, files []database.BookFile) (*rmStepOne, error) {
 	if !c.hasMatch() || c.NewPath == c.OldPath || book.FilePath != c.NewPath || rmHasRowAt(files, c.NewPath) {
-		return false
+		return nil, nil
 	}
 	n := 0
 	for _, bf := range files {
@@ -656,7 +694,44 @@ func rmStepOneDone(c rmCandidate, book *database.Book, files []database.BookFile
 			n++
 		}
 	}
-	return n == 1
+	if n != 1 {
+		return nil, nil
+	}
+	changes, err := rd.GetBookChanges(book.ID)
+	if err != nil {
+		return nil, fmt.Errorf("journal of %s: %w", book.ID, err)
+	}
+	var latest *database.OperationChange
+	for _, ch := range changes {
+		if ch == nil || ch.Voided || !(rmPathChangeTypes[ch.ChangeType] || ch.FieldName == "file_path") {
+			continue
+		}
+		if latest == nil || ch.CreatedAt.After(latest.CreatedAt) ||
+			(ch.CreatedAt.Equal(latest.CreatedAt) && ch.ID > latest.ID) {
+			latest = ch
+		}
+	}
+	if latest == nil || latest.ChangeType != undo.ChangeTypeBookPathUpdate || latest.Source != reconcileFixerID ||
+		latest.OldValue != c.OldPath || latest.NewValue != c.NewPath || latest.RevertedAt != nil {
+		return nil, nil
+	}
+	st := &rmStepOne{opID: latest.OperationID, hashOld: map[string]string{}}
+	for _, ch := range changes {
+		if ch == nil || ch.Voided || ch.RevertedAt != nil || ch.OperationID != latest.OperationID ||
+			ch.Source != reconcileFixerID || ch.ChangeType != "metadata_update" || ch.NewValue != "" ||
+			(ch.FieldName != rmFieldFileHash && ch.FieldName != rmFieldOrganizedHash) {
+			continue
+		}
+		st.hashOld[ch.FieldName] = ch.OldValue
+	}
+	if rmKeepsHashes(c.MatchType) {
+		if len(st.hashOld) > 0 {
+			return nil, nil
+		}
+	} else if rmStr(book.FileHash) != "" || rmStr(book.OrganizedFileHash) != "" {
+		return nil, nil
+	}
+	return st, nil
 }
 
 // rmHasRowAt reports whether any of files is at path.
@@ -760,11 +835,11 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	if err != nil {
 		return err
 	}
-	book, stepOneDone, err := rmPrecheck(rd, d)
+	book, stepOne, err := rmPrecheck(rd, d)
 	if err != nil {
 		return err
 	}
-	if stepOneDone {
+	if stepOne != nil {
 		// A cut-off apply already wrote step 1 (journaled then); finish
 		// step 2 only.
 		return rmRepointRow(w, d)
@@ -849,29 +924,28 @@ func rmRepointRow(w *repairs.Writer, d *rmDecision) error {
 // file, the book, whether its old path is still missing and the iTunes
 // predicate, and checks the file is the one planned. The re-plan read all of it moments ago; this closes the window up
 // to the write. ErrChangedSincePlan on any change; ErrRetryLater while the
-// file index is warming up. stepOneDone reports a book a cut-off apply
-// already pointed at the matched file (rmStepOneDone), whose row is left.
-func rmPrecheck(rd rmReader, d *rmDecision) (book *database.Book, stepOneDone bool, err error) {
+// file index is warming up. stepOne is the evidence of this fixer's own
+// cut-off step 1 (rmStepOneOf) when the book already points at the matched
+// file; nil when it still points at the old path.
+func rmPrecheck(rd rmReader, d *rmDecision) (book *database.Book, stepOne *rmStepOne, err error) {
 	owners, err := rmPathOwners(rd, d.newPath, d.bookID)
 	switch {
 	case errors.Is(err, database.ErrOwnershipLookupIncomplete):
-		return nil, false, fmt.Errorf("%w: %s: %w", repairs.ErrRetryLater, rmReasonIndexWarming, err)
+		return nil, nil, fmt.Errorf("%w: %s: %w", repairs.ErrRetryLater, rmReasonIndexWarming, err)
 	case err != nil:
-		return nil, false, err
+		return nil, nil, err
 	case len(owners) > 0:
-		return nil, false, fmt.Errorf("%w: %s now belongs to book(s) %s", repairs.ErrChangedSincePlan, d.newPath, strings.Join(owners, ", "))
+		return nil, nil, fmt.Errorf("%w: %s now belongs to book(s) %s", repairs.ErrChangedSincePlan, d.newPath, strings.Join(owners, ", "))
 	}
 	b, err := rd.GetBookByID(d.bookID)
 	if err != nil {
-		return nil, false, fmt.Errorf("read book %s: %w", d.bookID, err)
+		return nil, nil, fmt.Errorf("read book %s: %w", d.bookID, err)
 	}
 	switch {
 	case b == nil || b.IsSoftDeleted():
-		return nil, false, fmt.Errorf("%w: book %s is gone or retired", repairs.ErrChangedSincePlan, d.bookID)
-	case b.FilePath == d.newPath:
-		stepOneDone = true
-	case b.FilePath != d.oldPath:
-		return nil, false, fmt.Errorf("%w: book %s now points at %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath)
+		return nil, nil, fmt.Errorf("%w: book %s is gone or retired", repairs.ErrChangedSincePlan, d.bookID)
+	case b.FilePath != d.oldPath && b.FilePath != d.newPath:
+		return nil, nil, fmt.Errorf("%w: book %s now points at %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath)
 	}
 	// The old file back on disk means there is nothing to repair; a path
 	// that cannot be stat'ed is not "missing" either (see rmOldPathMissing).
@@ -880,26 +954,39 @@ func rmPrecheck(rd rmReader, d *rmDecision) (book *database.Book, stepOneDone bo
 		if serr != nil {
 			why = "cannot be checked: " + serr.Error()
 		}
-		return nil, false, fmt.Errorf("%w: the book's old path %s %s", repairs.ErrChangedSincePlan, d.oldPath, why)
+		return nil, nil, fmt.Errorf("%w: the book's old path %s %s", repairs.ErrChangedSincePlan, d.oldPath, why)
 	}
 	files, err := rd.GetBookFiles(d.bookID)
 	if err != nil {
-		return nil, false, fmt.Errorf("files of %s: %w", d.bookID, err)
+		return nil, nil, fmt.Errorf("files of %s: %w", d.bookID, err)
+	}
+	if b.FilePath == d.newPath {
+		// Only this fixer's own cut-off step 1 (rmStepOneOf), never another
+		// writer's move to the same file.
+		stepOne, err = rmStepOneOf(rd, rmCandidate{BookID: d.bookID, OldPath: d.oldPath, NewPath: d.newPath,
+			MatchType: d.matchType}, b, files)
+		if err != nil {
+			return nil, nil, err
+		}
+		if stepOne == nil {
+			return nil, nil, fmt.Errorf("%w: book %s already points at %s, and not by this fixer's own unfinished apply",
+				repairs.ErrChangedSincePlan, d.bookID, d.newPath)
+		}
 	}
 	if rmHasRowAt(files, d.newPath) {
-		return nil, false, fmt.Errorf("%w: book %s now has a file row at %s", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
+		return nil, nil, fmt.Errorf("%w: book %s now has a file row at %s", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
 	}
 	why, unsure, err := rmITunesWhy(rd, repairs.NewPathResolver(), b, files, d.newPath)
 	switch {
 	case err != nil:
-		return nil, false, err
+		return nil, nil, err
 	case unsure:
-		return nil, false, fmt.Errorf("%w: could not tell whether book %s or %s is in the iTunes library", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
+		return nil, nil, fmt.Errorf("%w: could not tell whether book %s or %s is in the iTunes library", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
 	case why != "":
-		return nil, false, fmt.Errorf("%w: iTunes: %s", repairs.ErrChangedSincePlan, why)
+		return nil, nil, fmt.Errorf("%w: iTunes: %s", repairs.ErrChangedSincePlan, why)
 	}
 	if nf := rmNewFile(d.newPath); !nf.same(d.newFile) {
-		return nil, false, fmt.Errorf("%w: the matched file %s changed or is gone", repairs.ErrChangedSincePlan, d.newPath)
+		return nil, nil, fmt.Errorf("%w: the matched file %s changed or is gone", repairs.ErrChangedSincePlan, d.newPath)
 	}
-	return b, stepOneDone, nil
+	return b, stepOne, nil
 }
