@@ -1,5 +1,5 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
 // last-edited: 2026-10-15
 
@@ -51,11 +51,11 @@ const opIDLedgerPath = "testdata/op_ids.golden"
 // (canonicalDefID), which is what an alias would break by widening the
 // filter to every row of the op it points at.
 var retiredOpIDs = map[string]string{
-	// Retired 2026-10-15 (04-P12, D26). The op polled OpenAI every five minutes
-	// but nothing enqueued it (the scheduler's inline batch_poller task calls
-	// the poller service directly), so it only produced a no-op op row every
-	// run. Not aliased: there is no successor op; the inline task is the poller.
-	"maintenance.batch-poller": "inline batch_poller task is the poller; 288 rows a day for no value",
+	// Retired 2026-10-15 (04-P12, D26). The op never ran: nothing enqueued it
+	// and its declared */5 Schedule was never driven (OperationDef.Schedule is
+	// read by nothing). The scheduler's inline batch_poller task calls the
+	// poller service directly and is unchanged. Not aliased: there is no successor op; the inline task is the poller.
+	"maintenance.batch-poller": "unreached duplicate of the inline batch_poller task; no successor op",
 	// Absorbed 2026-09-28 into the Repairs-lane fixer of the SAME id
 	// (internal/plugins/maintenance/junk_title_fixer.go), planned and applied
 	// through repairs.plan / repairs.apply with fixer_id set to it. Aliasing

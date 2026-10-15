@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.32.2
+// version: 1.32.3
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-15
 
@@ -1288,8 +1288,8 @@ func (ts *TaskScheduler) registerAllTasks() {
 	//
 	// This inline task is the ONLY batch poller. There is deliberately no
 	// operation-registry twin: maintenance.batch-poller was deleted (D26,
-	// retiredOpIDs) because nothing enqueued it and its cron wrote an empty op
-	// row every five minutes.
+	// retiredOpIDs) because it never ran: nothing enqueued it and its declared
+	// */5 Schedule was never driven (Schedule is read by nothing, see below).
 	ts.registerTask(TaskDefinition{
 		Name:        "batch_poller",
 		Description: "Poll OpenAI for completed batch jobs",
