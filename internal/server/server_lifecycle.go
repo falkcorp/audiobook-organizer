@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.40.0
+// version: 4.41.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1110,9 +1110,15 @@ func (s *Server) startBackfills() {
 	if s.opRegistry == nil {
 		lifecycleLog.Warn("startup: no operations registry; the one-time boot backfill ops were not enqueued")
 	} else {
+		var hasStatus func(defID, status string) (bool, error)
+		if l, ok := database.AsCapability[opStatusLookup](s.Ops()); ok {
+			hasStatus = l.HasOperationV2WithStatus
+		} else {
+			lifecycleLog.Debug("startup: store has no HasOperationV2WithStatus; boot enqueues the transcode without the interrupted_ask check")
+		}
 		enqueueBootOps(s.bgCtx, func(ctx context.Context, id string, params any) (string, error) {
 			return s.opRegistry.EnqueueOp(ctx, id, params)
-		})
+		}, hasStatus)
 	}
 
 	// AcoustID fingerprint backfill. CONC-9 removed the serial server-side
@@ -1372,6 +1378,15 @@ func (s *Server) startBackfills() {
 type bootOp struct {
 	id     string
 	params map[string]any
+	// skipWhileAsk: do not enqueue while a row of this def is interrupted_ask
+	// (an interrupted ResumeAsk run waiting for an operator).
+	skipWhileAsk bool
+}
+
+// opStatusLookup is resolved through database.AsCapability, so it is not
+// part of Store (database/pebble_store_ops_v2_status_lookup.go).
+type opStatusLookup interface {
+	HasOperationV2WithStatus(defID, status string) (bool, error)
 }
 
 // bootOps are the ops startBackfills enqueues (04-P6). Each was a bgWG
@@ -1404,22 +1419,35 @@ type bootOp struct {
 // enqueues them again. The transcode is ResumeAsk: an interrupted (or
 // never-started queued) row becomes interrupted_ask and waits for an
 // operator. That row is not queued or running, so the enqueue dedupe does not
-// see it and the next boot enqueues a fresh transcode run anyway, as the
-// goroutine ran one at every boot.
+// see it; enqueueBootOps therefore skips the transcode while such a row exists
+// (owner decision 2026-10-15), so boot never runs around the confirmation.
 var bootOps = []bootOp{
 	{id: "maintenance.external-id-backfill", params: map[string]any{"if_needed": true}},
 	{id: "maintenance.movement-atom-cleanup", params: map[string]any{}},
 	{id: "maintenance.malformed-m4b-remux", params: map[string]any{}},
-	{id: "maintenance.malformed-m4b-transcode", params: map[string]any{"quarantine_after": true}},
+	{id: "maintenance.malformed-m4b-transcode", params: map[string]any{"quarantine_after": true}, skipWhileAsk: true},
 }
 
 // enqueueBootOps enqueues each of bootOps. A failed enqueue is logged and the
 // rest still go. enqueue is Registry.EnqueueOp in production; it is a
 // parameter because Server.opRegistry is a concrete *Registry with no fake.
-func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id string, params any) (string, error)) {
+// hasStatus answers the skipWhileAsk check; nil (a store without the
+// capability) or a lookup error fails open and enqueues as before.
+func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id string, params any) (string, error),
+	hasStatus func(defID, status string) (bool, error)) {
 	for _, op := range bootOps {
 		if ctx.Err() != nil {
 			return
+		}
+		if op.skipWhileAsk && hasStatus != nil {
+			waiting, err := hasStatus(op.id, "interrupted_ask")
+			if err != nil {
+				lifecycleLog.Warn("startup: could not check for an interrupted %s waiting for confirmation; enqueueing it: err=%s",
+					op.id, logger.SanitizeLogValue(err.Error()))
+			} else if waiting {
+				lifecycleLog.Info("startup: not enqueueing %s: an interrupted run is waiting for an operator to confirm or dismiss it", op.id)
+				continue
+			}
 		}
 		opID, err := enqueue(ctx, op.id, op.params)
 		if err != nil {
