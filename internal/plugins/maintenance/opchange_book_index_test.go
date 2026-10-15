@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
 // last-edited: 2026-10-15
 
@@ -283,6 +283,23 @@ func TestOpchangeBookIndexEnsure_UndecodableFails(t *testing.T) {
 	err := ensureOpChangeBookIndex(context.Background(), r, &p6AttrReporter{})
 	if err == nil || !strings.Contains(err.Error(), "cannot be decoded") {
 		t.Fatalf("err = %v, want the undecodable rows to fail the op", err)
+	}
+}
+
+// After a rebuild, the rebuild's own undecodable count is the current one:
+// the verify ran before the rebuild marked anything, and here it saw none.
+func TestOpchangeBookIndexEnsure_RebuildUndecodableFails(t *testing.T) {
+	r := fakeOpChangeRebuilder{ensure: func(context.Context) (database.OpChangeByBookEnsureResult, error) {
+		return database.OpChangeByBookEnsureResult{
+			Verify:  database.OpChangeByBookIndexReport{SentinelSet: true, Rows: 3, MissingEntries: 1},
+			Rebuilt: true,
+			Rebuild: database.OpChangeByBookBackfillResult{Scanned: 3, Indexed: 2, Undecodable: 1},
+			Trusted: true,
+		}, nil
+	}}
+	err := ensureOpChangeBookIndex(context.Background(), r, &p6AttrReporter{})
+	if err == nil || !strings.Contains(err.Error(), "1 journal row(s) cannot be decoded") {
+		t.Fatalf("err = %v, want the rebuild's undecodable row to fail the op", err)
 	}
 }
 
