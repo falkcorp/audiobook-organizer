@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -611,4 +611,34 @@ func TestRenameAuthorJournaled_ARefusedRenameVoidsItsRow(t *testing.T) {
 	got, gerr := st.GetAuthorByID(solo.ID)
 	require.NoError(t, gerr)
 	require.Equal(t, "& Probe Refused", got.Name)
+}
+
+// An apply with no operation id returns before any write: the dangling book
+// with no live credit would otherwise be repointed to Unknown Author, and that
+// row must not be created either (N-a).
+func TestAuthorIDRepair_AnApplyWithNoOperationIDWritesNothing(t *testing.T) {
+	s := newRepairPebble(t)
+	dangling := 424242
+	repairBook(t, s, "b1", &dangling)
+	x := repairAuthor(t, s, "Jane Doe")
+	y := repairAuthor(t, s, "jane twin")
+	require.NoError(t, s.UpdateAuthorName(y.ID, "JANE DOE"))
+	repairBook(t, s, "b2", &x.ID, x.ID)
+
+	_, err := New(&fakeDeps{store: s}).authorIDRepair(context.Background(),
+		decodeRepairParams(t, `{"dry_run":false}`), &opIDReporter{id: ""})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no operation id")
+
+	unknown, err := s.GetAuthorByName("Unknown Author")
+	require.NoError(t, err)
+	require.Nil(t, unknown, "no Unknown Author row is created by a refused apply")
+	b1, err := s.GetBookByID("b1")
+	require.NoError(t, err)
+	require.Equal(t, dangling, *b1.AuthorID)
+	for _, id := range []int{x.ID, y.ID} {
+		a, err := s.GetAuthorByID(id)
+		require.NoError(t, err)
+		require.Equal(t, id, a.ID, "no duplicate is merged")
+	}
 }
