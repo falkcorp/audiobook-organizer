@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-15
 
@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 283
-	slogRatchetCallCeiling = 1580
+	slogRatchetCallCeiling = 1578
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -296,7 +296,7 @@ var slogRatchet = map[string]int{
 	"internal/telemetry/telemetry.go":                            1,
 	"internal/tools/embed_queue.go":                              2,
 	"internal/tools/ollama_daemon.go":                            6,
-	"internal/transcode/transcode.go":                            8,
+	"internal/transcode/transcode.go":                            6,
 	"internal/transcribe/batch.go":                               1,
 	"internal/transcribe/capabilities.go":                        1,
 	"internal/transcribe/cuda.go":                                7,

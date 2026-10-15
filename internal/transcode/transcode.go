@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
-// last-edited: 2026-08-30
+// last-edited: 2026-10-15
 
 package transcode
 
@@ -439,13 +439,14 @@ func probeFileDuration(filePath string) int64 {
 }
 
 // CleanupStaleTempFiles removes transcode temp files older than maxAge from the given directory tree.
-// Call this periodically (e.g. on server start and via a ticker) to catch orphans from crashed transcodes.
+// It is called hourly by the maintenance.temp-file-cleanup op (import_paths_only)
+// to catch orphans from crashed transcodes.
 //
 // `app` names the application-owned directories that must not be swept, and is
 // REQUIRED for the reason pathutil.AppDirs documents: this function DELETES,
 // and an omitted-by-default parameter reproduces the bug silently at the next
-// new call site. rootDir here is an enabled import path (see
-// server_lifecycle.go), which is a walk root in its own right -- an app
+// new call site. rootDir here is an import path (see
+// internal/plugins/maintenance/cleanup.go), which is a walk root in its own right -- an app
 // directory configured inside one is reached exactly the same way it is under
 // the library root, and ShouldSkipDir's root exemption keeps an import path
 // that IS an app directory fully walked.
@@ -479,28 +480,4 @@ func CleanupStaleTempFiles(rootDir string, app pathutil.AppDirs, maxAge time.Dur
 		return nil
 	})
 	return cleaned
-}
-
-// StartCleanupTicker runs periodic temp file cleanup. Returns a stop function.
-func StartCleanupTicker(rootDir string, app pathutil.AppDirs, interval, maxAge time.Duration) func() {
-	ticker := time.NewTicker(interval)
-	done := make(chan struct{})
-	go func() {
-		// Run once immediately on start
-		if n := CleanupStaleTempFiles(rootDir, app, maxAge); n > 0 {
-			slog.Info("transcode startup cleanup removed stale temp files", "count", n)
-		}
-		for {
-			select {
-			case <-ticker.C:
-				if n := CleanupStaleTempFiles(rootDir, app, maxAge); n > 0 {
-					slog.Info("transcode periodic cleanup removed stale temp files", "count", n)
-				}
-			case <-done:
-				ticker.Stop()
-				return
-			}
-		}
-	}()
-	return func() { close(done) }
 }
