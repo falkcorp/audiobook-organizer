@@ -1,17 +1,20 @@
 // file: internal/server/ai_merge_apply_undo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4a7e21-3b58-4f06-8d1e-6a2f0b7c5e93
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -92,4 +95,83 @@ func TestAIAuthorMergeApplyOp_RefusesARunWithNoOperationID(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got, "book %s was moved", id)
 	}
+}
+
+// failPrimaryStore fails ModifyBook for one book: its primary cannot be
+// repointed.
+type failPrimaryStore struct {
+	*database.PebbleStore
+	failBook string
+}
+
+func (f failPrimaryStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id == f.failBook {
+		return nil, errors.New("injected ModifyBook failure")
+	}
+	return f.PebbleStore.ModifyBook(id, fn)
+}
+
+// A book whose primary could not be repointed still names the variant, so the
+// variant is not deleted, and the run says why.
+func TestAIAuthorMergeApplyOp_AFailedPrimaryRepointRefusesTheDelete(t *testing.T) {
+	w := newUndoWorld(t)
+	def := relinkOpDef(t, newRelinkOpServer(failPrimaryStore{PebbleStore: w.st, failBook: w.soloBook}).RegisterAIAuthorMergeApplyOp, handlers.AIAuthorMergeApplyDefID)
+	raw, err := json.Marshal(handlers.AIMergeApplyOpParams{Suggestions: []handlers.AIMergeApplySuggestion{{
+		Action: "merge", CanonicalName: w.keep.Name, KeepID: w.keep.ID, MergeIDs: []int{w.from.ID},
+	}}})
+	require.NoError(t, err)
+	rep := &opReporter{id: "op-ai-primary-fail"}
+	require.NoError(t, def.Run(context.Background(), raw, rep))
+	still, err := w.st.GetAuthorByID(w.from.ID)
+	require.NoError(t, err)
+	require.Equal(t, w.from.ID, still.ID, "the variant is not deleted while a book names it as primary")
+	logs := strings.Join(rep.logs, "\n")
+	require.Contains(t, logs, "credits moved but its primary author could not be repointed",
+		"the failed repoint is reported")
+	// Held back by the reassign's own failure count, before the delete's
+	// re-check is reached.
+	require.Contains(t, logs, "NOT deleted: 1 book(s) could not be reassigned")
+}
+
+// lateCreditStore credits mergeID on a new book just before the delete's
+// re-check (the second relink listing of mergeID), as a write landing between
+// the reassign and the delete would.
+type lateCreditStore struct {
+	*database.PebbleStore
+	t        *testing.T
+	mergeID  int
+	calls    *int
+	lateBook *string
+}
+
+func (l lateCreditStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error) {
+	if authorID == l.mergeID {
+		*l.calls++
+		if *l.calls == 2 {
+			*l.lateBook = mkRelinkOpBook(l.t, l.PebbleStore, "late-credit", l.mergeID, false)
+		}
+	}
+	return l.PebbleStore.GetBooksByAuthorIDForRelinkCore(authorID)
+}
+
+// A book credited to the variant after the reassign holds the delete back
+// (VerifyAuthorUnlinked): deleting would strip that late credit.
+func TestAIAuthorMergeApplyOp_ACreditAddedAfterTheReassignRefusesTheDelete(t *testing.T) {
+	w := newUndoWorld(t)
+	calls, late := 0, ""
+	st := lateCreditStore{PebbleStore: w.st, t: t, mergeID: w.from.ID, calls: &calls, lateBook: &late}
+	def := relinkOpDef(t, newRelinkOpServer(st).RegisterAIAuthorMergeApplyOp, handlers.AIAuthorMergeApplyDefID)
+	raw, err := json.Marshal(handlers.AIMergeApplyOpParams{Suggestions: []handlers.AIMergeApplySuggestion{{
+		Action: "merge", CanonicalName: w.keep.Name, KeepID: w.keep.ID, MergeIDs: []int{w.from.ID},
+	}}})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: "op-ai-late-credit"}))
+	require.NotEmpty(t, late, "fixture: the late credit was added")
+	still, err := w.st.GetAuthorByID(w.from.ID)
+	require.NoError(t, err)
+	require.Equal(t, w.from.ID, still.ID, "the variant is not deleted while a late book credits it")
+	credits, err := w.st.GetBookAuthors(late)
+	require.NoError(t, err)
+	require.Len(t, credits, 1)
+	require.Equal(t, w.from.ID, credits[0].AuthorID, "the late credit is intact")
 }
