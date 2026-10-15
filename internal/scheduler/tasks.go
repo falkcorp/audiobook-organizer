@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.32.3
+// version: 1.33.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-15
 
@@ -907,6 +907,36 @@ func (ts *TaskScheduler) registerAllTasks() {
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return true },
 		RunInMaintenanceWindow: func() bool { return true },
+	})
+
+	// Hourly sweep of stale transcode temp files under every import path. It
+	// replaces the per-import-path transcode cleanup ticker goroutines
+	// server_lifecycle.go used to start once at boot: the same predicate (temp
+	// files older than 2h) and cadence, now with an operation row, and the
+	// import paths are read on every run. It enqueues the SAME def as
+	// temp_file_cleanup, so the def's ConcurrencyKey serializes the two. Not in
+	// the maintenance window: the cadence is the hourly interval, and the
+	// nightly window must not run it a second time.
+	ts.registerTask(TaskDefinition{
+		Name:        "transcode_temp_cleanup",
+		Description: "Remove stale transcode temp files (older than 2h) under every import path",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			params := map[string]any{"import_paths_only": true, "max_age_hours": 2}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.temp-file-cleanup", params)
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue maintenance.temp-file-cleanup: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "temp-file-cleanup"), nil
+		},
+		IsEnabled:              func() bool { return true },
+		GetInterval:            func() time.Duration { return 1 * time.Hour },
+		RunOnStart:             func() bool { return true },
+		RunInMaintenanceWindow: func() bool { return false },
 	})
 
 	ts.registerTask(TaskDefinition{

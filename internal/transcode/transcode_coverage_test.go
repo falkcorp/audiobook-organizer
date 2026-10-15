@@ -1,6 +1,6 @@
 // file: internal/transcode/transcode_coverage_test.go
-// version: 1.1.1
-// last-edited: 2026-09-02
+// version: 1.2.0
+// last-edited: 2026-10-15
 
 package transcode
 
@@ -255,18 +255,6 @@ func TestCoverage_CleanupStaleTempFiles_NonexistentDir(t *testing.T) {
 	if cleaned != 0 {
 		t.Errorf("expected 0 cleaned, got %d", cleaned)
 	}
-}
-
-// --- StartCleanupTicker coverage ---
-
-func TestCoverage_StartCleanupTicker(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	stop := StartCleanupTicker(tmpDir, pathutil.AppDirs{}, 100*time.Millisecond, 1*time.Hour)
-	// Wait a bit for at least one tick
-	time.Sleep(250 * time.Millisecond)
-	stop()
-	// No panic = success
 }
 
 // --- FindFFmpeg / FindFFprobe coverage ---
