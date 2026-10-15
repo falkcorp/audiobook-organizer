@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -319,13 +319,11 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			// apply hold back exactly the same rows. A guard applied only on the
 			// write path would make the dry run a lie (author_purge_empty.go:189).
 			//
-			// It is a PRE-flight check rather than a post-move re-count because
-			// mergeAuthorInto's DeleteAuthor is its own last statement -- there is
-			// no seam between the move and the delete to check in, and prising one
-			// open would change a primitive two other ops already depend on. The
-			// invariant is the same either way: refuse when the unfiltered
-			// reference count exceeds what the merge is actually able to move,
-			// because the difference is exactly the set that would be stranded.
+			// It is a PRE-flight check: mergeAuthorInto re-checks after its moves
+			// (VerifyAuthorUnlinked) only against what the relink view can see,
+			// and this compares the UNFILTERED reference count with what the merge
+			// is actually able to move, because the difference is exactly the set
+			// that would be stranded.
 			//
 			// Dangling refs are excluded from the comparison (see refBuckets above)
 			// but still logged, so a held-back line accounts for every reference.
@@ -342,8 +340,9 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			// treat losing it as a hard abort of the REMAINING writes. A lapsed
 			// lease means the scanner has resumed, and a scan running alongside
 			// these writes rewrites the very book rows being relinked. Inert when
-			// the gate is not held (a dry run, or a direct call with no op id), so
-			// an op with no interlock is never spuriously aborted.
+			// the gate is not held (a dry run, or a stand-down controller that is
+			// not wired), so an op with no interlock is never spuriously aborted.
+			// An apply with no op id never gets here: it is refused above.
 			if scanStandDownLostForApply(p.deps, standDownHolder, standDownHeld) {
 				return fmt.Errorf("author-duplicate-merge: scan stand-down lease lost after %d merge(s), "+
 					"refusing to keep writing while the scanner is running", rowOutcomes[authorDupRowMerged])

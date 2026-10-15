@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-10-05
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -1374,7 +1374,8 @@ func (p *Plugin) authorPathLinkApplyOne(
 	// Adding author_id to that map would be wrong on its own -- a revert would
 	// clear the scalar and leave the credit behind, which is the dangling shape
 	// author-id-repair exists to clean up -- so the ledger row is left as the
-	// audit trail it actually is, exactly as author-id-repair's is.
+	// audit trail it actually is. (author-id-repair's own repoint now journals
+	// an author_id_repoint row the revert reverses.)
 	//
 	// Reversing a link by hand is therefore: clear the scalar and delete the
 	// credit for the book ids this op lists, then (for a row this op minted,

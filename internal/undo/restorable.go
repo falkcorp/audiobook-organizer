@@ -39,8 +39,9 @@ import (
 //     series merge. Nothing can recreate a deleted series row under its old
 //     id (CreateSeries mints a new one).
 //   - metadata_update on a field outside revertableBookFields, e.g. the
-//     author_id rows maintenance.author-duplicate-merge writes when it
-//     re-points a book at the canonical author. Two fields are left out on
+//     author_id rows maintenance.author-duplicate-merge and author-id-repair
+//     wrote before 2026-10-15 (they now journal author_merge_* and
+//     author_id_repoint rows) and author-path-link still writes. Two fields are left out on
 //     purpose because a field write cannot reverse what the row records:
 //   - version_group_id (organizer version-copy path): the row always says
 //     OldValue "" even when the book had already joined that group, so a
