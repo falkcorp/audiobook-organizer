@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b1d3f27-6c94-4a05-9e21-3d7f0a58c4b6
-// last-edited: 2026-09-12
+// last-edited: 2026-10-14
 
 package server
 
@@ -21,6 +21,17 @@ type fakeReassignStore struct {
 	authorsErr map[string]error
 	setErr     map[string]error
 	setCalls   map[string][]database.BookAuthor
+	ledger     []database.OperationChange
+}
+
+func (f *fakeReassignStore) CreateOperationChange(c *database.OperationChange) error {
+	f.ledger = append(f.ledger, *c)
+	return nil
+}
+
+// ModifyBook: the fixture books carry no primary, so no primary is repointed.
+func (f *fakeReassignStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, nil
 }
 
 func (f *fakeReassignStore) GetBooksByAuthorIDForRelinkCore(int) ([]database.BookCore, error) {
@@ -57,7 +68,7 @@ func TestReassignBooksFromAuthor_AllSucceed(t *testing.T) {
 			"b2": {{BookID: "b2", AuthorID: mergeID, Role: "author"}},
 		},
 	}
-	errs := reassignBooksFromAuthor(f, mergeID, keepID)
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %v", errs)
 	}
@@ -80,7 +91,7 @@ func TestReassignBooksFromAuthor_SetFailureBlocksDelete(t *testing.T) {
 		},
 		setErr: map[string]error{"b2": errors.New("write failed")},
 	}
-	errs := reassignBooksFromAuthor(f, mergeID, keepID)
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
 	if len(errs) == 0 {
 		t.Fatal("expected a non-empty error slice (must block author delete), got none")
 	}
@@ -93,7 +104,7 @@ func TestReassignBooksFromAuthor_AuthorsReadFailureBlocksDelete(t *testing.T) {
 		books:      []database.BookCore{{ID: "b1"}},
 		authorsErr: map[string]error{"b1": errors.New("read failed")},
 	}
-	errs := reassignBooksFromAuthor(f, mergeID, keepID)
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
 	if len(errs) == 0 {
 		t.Fatal("expected an error when a book's authors can't be read")
 	}
@@ -102,7 +113,7 @@ func TestReassignBooksFromAuthor_AuthorsReadFailureBlocksDelete(t *testing.T) {
 // A failed book-list read blocks the delete too.
 func TestReassignBooksFromAuthor_BookListFailureBlocksDelete(t *testing.T) {
 	f := &fakeReassignStore{booksErr: errors.New("list failed")}
-	errs := reassignBooksFromAuthor(f, mergeID, keepID)
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
 	if len(errs) != 1 {
 		t.Fatalf("expected exactly one error for a failed book list, got %v", errs)
 	}
@@ -120,7 +131,7 @@ func TestReassignBooksFromAuthor_DedupWhenAlreadyCreditsKeep(t *testing.T) {
 			},
 		},
 	}
-	errs := reassignBooksFromAuthor(f, mergeID, keepID)
+	errs, _ := reassignBooksFromAuthor(f, "op-reassign", mergeID, keepID)
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %v", errs)
 	}
