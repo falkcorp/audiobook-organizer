@@ -1,5 +1,5 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-10-15
 
@@ -84,6 +84,12 @@ func (s *Server) backfillExternalIDs(ctx context.Context, progress func(processe
 	}
 	if err != nil {
 		slog.Warn("backfillExternalIDs", "err", err)
+		return false, err
+	}
+	// itunes.BackfillExternalIDs returns nil when ctx is cancelled (it stops
+	// early and leaves the done flag unset); report the cancel so the op does
+	// not read as a completed run.
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	return skipped, nil
