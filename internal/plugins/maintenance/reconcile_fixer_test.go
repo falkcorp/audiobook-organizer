@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-15
 
@@ -1169,6 +1169,7 @@ func TestReconcileFixer_RefusedStepTwoOfAnEarlierOpIsChangedNotPartial(t *testin
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
 	assert.False(t, errors.Is(err, repairs.ErrPartiallyApplied), "%v", err)
+	assert.ErrorContains(t, err, "is marked missing=false, not true", "names the field that changed (N-a)")
 	changes, err := f.s.GetOperationChanges("op-2")
 	require.NoError(t, err)
 	for _, c := range changes {
@@ -1459,4 +1460,56 @@ func TestReconcileFixer_HandOffTakesEveryCutOp(t *testing.T) {
 	assert.Equal(t, 4, f.rmRevert(t, "op-3"))
 	assert.Equal(t, before, f.state(t, id))
 	assert.Equal(t, [3]string{"cur-S", "org-S", ""}, f.rmHashesOf(t, id))
+}
+
+// rmHookedFiles is the Writer's book_file store with a hook run once ahead of
+// the first ModifyBookFile.
+type rmHookedFiles struct {
+	*database.PebbleStore
+	before     func()
+	beforeDone atomic.Bool
+}
+
+func (s *rmHookedFiles) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if s.before != nil && s.beforeDone.CompareAndSwap(false, true) {
+		s.before()
+	}
+	return s.PebbleStore.ModifyBookFile(bookID, fileID, fn)
+}
+
+// TestReconcileFixer_FinishRepointRefusedAtTheWriteIsVoided (round-4 N-b):
+// op-2 finishes op-1's cut row, and the row's location changes after
+// RepointBookFile read it and before its compare-and-set write. The write is
+// refused (changed_since_plan: op-2 wrote nothing), and every row op-2
+// journaled -- the repoint row included -- is voided, so no revert reads a
+// repoint that never happened; op-1 keeps its rows (no hand-off).
+func TestReconcileFixer_FinishRepointRefusedAtTheWriteIsVoided(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id, _, _, planned := rmCutAtBeat(t, f, "W")
+	fresh, err := f.fx.Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	require.True(t, fresh.Applicable(), fresh.Reason)
+	rows, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	files := &rmHookedFiles{PebbleStore: f.s, before: func() {
+		_, merr := f.s.ModifyBookFile(id, rows[0].ID, func(bf *database.BookFile) error { bf.FileSize++; return nil })
+		require.NoError(t, merr)
+	}}
+	err = f.fx.Apply(context.Background(), f.writerFor("op-2", files), fresh)
+	assert.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "%v", err)
+	assert.False(t, errors.Is(err, repairs.ErrPartiallyApplied), "%v", err)
+	changes, err := f.s.GetOperationChanges("op-2")
+	require.NoError(t, err)
+	var repoint int
+	for _, c := range changes {
+		assert.True(t, c.Voided, "%s %s voided", c.ChangeType, c.FieldName)
+		if c.ChangeType == database.ChangeTypeBookFileRepoint {
+			repoint++
+		}
+	}
+	assert.Equal(t, 1, repoint, "the repoint row was journaled, then voided")
+	assert.Zero(t, f.rmHandedOff(t, "op-1"))
+	assert.Equal(t, f.path("old/W.m4b"), f.state(t, id).Files[rows[0].ID].Path)
 }

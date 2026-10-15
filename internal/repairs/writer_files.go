@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-10-15
 
@@ -411,7 +411,8 @@ func (w *Writer) Journaled() int { return int(w.journaled.Load()) }
 // write is then a compare-and-set against the location journaled. The
 // journaled after-location also names the row that held to.Path's
 // single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write:
-// the revert hands the key back to that row and no other.
+// the revert hands the key back to that row and no other. A compare-and-set
+// refusal at the write voids the row it journaled.
 func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.BookFileLocation) error {
 	if err := w.denyTagsOnly("RepointBookFile"); err != nil {
 		return err
@@ -428,7 +429,11 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.Book
 	}
 	was := database.BookFileLocationOf(cur)
 	if !database.SameFileLocation(was, expect) {
-		return fmt.Errorf("%w: book_file %s is at %q, not %q", ErrChangedSincePlan, fileID, was.Path, expect.Path)
+		if was.Path != expect.Path {
+			return fmt.Errorf("%w: book_file %s is at %q, not %q", ErrChangedSincePlan, fileID, was.Path, expect.Path)
+		}
+		return fmt.Errorf("%w: book_file %s at %q is marked missing=%t, not %t",
+			ErrChangedSincePlan, fileID, was.Path, was.Missing, expect.Missing)
 	}
 	to.KeyOwnerBook, to.KeyOwnerRow = "", ""
 	owner, err := w.files.GetBookFileByPath(to.Path)
@@ -438,23 +443,36 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.Book
 	if owner != nil && owner.ID != fileID {
 		to.KeyOwnerBook, to.KeyOwnerRow = owner.BookID, owner.ID
 	}
-	return w.Step(bookID, database.ChangeTypeBookFileRepoint, "book_file:"+fileID, was.Encode(), to.Encode(), func() error {
-		written, err := w.files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
-			if database.BookFileLocationOf(f) != was {
-				return ErrChangedSincePlan
-			}
-			to.Apply(f)
-			return nil
-		})
-		if err != nil {
-			return err
+	row, err := w.journalRow(bookID, database.ChangeTypeBookFileRepoint, "book_file:"+fileID, was.Encode(), to.Encode())
+	if err != nil {
+		return err
+	}
+	w.Touch()
+	written, werr := w.files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
+		if database.BookFileLocationOf(f) != was {
+			return fmt.Errorf("%w: book_file %s changed between the read and the write", ErrChangedSincePlan, fileID)
 		}
-		if written == nil {
-			return fmt.Errorf("%w: book_file %s vanished", ErrChangedSincePlan, fileID)
-		}
-		w.writes.Add(1)
+		to.Apply(f)
 		return nil
 	})
+	if werr == nil && written == nil {
+		werr = fmt.Errorf("%w: book_file %s vanished", ErrChangedSincePlan, fileID)
+	}
+	if werr != nil {
+		// A compare-and-set refusal (or a vanished row) wrote nothing: void
+		// the row, so no revert or later reader takes it for a repoint that
+		// happened. Any other error stands with its row (JOURNAL FIRST): a
+		// commit whose durability is unknown
+		// (database.ErrBookFileDurabilityUnknown) may have been applied.
+		if errors.Is(werr, ErrChangedSincePlan) {
+			if verr := w.voidRow(row); verr != nil {
+				return errors.Join(werr, verr)
+			}
+		}
+		return werr
+	}
+	w.writes.Add(1)
+	return nil
 }
 
 // MoveBookFiles journals one undo.ChangeTypeBookFileReassign row per file and
