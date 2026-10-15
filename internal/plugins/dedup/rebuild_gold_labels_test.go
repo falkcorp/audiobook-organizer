@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rebuild_gold_labels_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b8e5f14-6a37-4c92-9d05-3f7a8b1c6e40
-// last-edited: 2026-07-12
+// last-edited: 2026-10-15
 
 // Tests for the dedup.rebuild-gold-labels op against a real PebbleStore +
 // EmbeddingStore: dry-run diff reporting (changed/unchanged/unlabelable),
@@ -406,7 +406,7 @@ func TestRebuildGoldLabels_Apply_Idempotent(t *testing.T) {
 }
 
 // TestRebuildGoldLabelsParamsDefaultNoApply is the canary the scheduler's
-// label_refinement chain (internal/scheduler/tasks.go, TestLabelRefinementChainPassesNoApply)
+// dedup.label-refinement parent op (label_refinement.go, TestLabelRefinementChildrenGetEmptyParams)
 // relies on: empty params must default Apply=false so the op takes its guarded
 // dry-run no-write return. If this default ever flips, the scheduled chain's
 // empty-params call would silently become a timed prod mutation.

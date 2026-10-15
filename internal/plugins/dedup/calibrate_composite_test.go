@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
-// last-edited: 2026-09-02
+// last-edited: 2026-10-15
 
 package dedup
 
@@ -368,7 +368,7 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 }
 
 // TestCalibrateCompositeParamsDefaultNoApply is the canary the scheduler's
-// label_refinement chain (internal/scheduler/tasks.go, TestLabelRefinementChainPassesNoApply)
+// dedup.label-refinement parent op (label_refinement.go, TestLabelRefinementChildrenGetEmptyParams)
 // relies on: empty params must default Apply=false so calibrate-composite reports
 // without persisting band thresholds. If this default ever flips, the scheduled
 // chain's empty-params call would silently become a timed prod mutation.
