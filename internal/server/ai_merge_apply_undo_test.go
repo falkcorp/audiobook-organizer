@@ -1,5 +1,5 @@
 // file: internal/server/ai_merge_apply_undo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4a7e21-3b58-4f06-8d1e-6a2f0b7c5e93
 // last-edited: 2026-10-15
 
@@ -111,6 +111,15 @@ func (f failPrimaryStore) ModifyBook(id string, fn func(*database.Book) error) (
 	return f.PebbleStore.ModifyBook(id, fn)
 }
 
+// ModifyBookCredits fails the same book: authormerge.MoveCredits repoints a
+// primary through it, in one write with the credits.
+func (f failPrimaryStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	if id == f.failBook {
+		return nil, database.BookCreditsEdit{}, errors.New("injected ModifyBook failure")
+	}
+	return f.PebbleStore.ModifyBookCredits(id, fn)
+}
+
 // A book whose primary could not be repointed still names the variant, so the
 // variant is not deleted, and the run says why.
 func TestAIAuthorMergeApplyOp_AFailedPrimaryRepointRefusesTheDelete(t *testing.T) {
@@ -126,8 +135,11 @@ func TestAIAuthorMergeApplyOp_AFailedPrimaryRepointRefusesTheDelete(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, w.from.ID, still.ID, "the variant is not deleted while a book names it as primary")
 	logs := strings.Join(rep.logs, "\n")
-	require.Contains(t, logs, "credits moved but its primary author could not be repointed",
+	require.Contains(t, logs, "move credits and primary author: injected ModifyBook failure",
 		"the failed repoint is reported")
+	unmoved, err := w.st.GetBookAuthors(w.soloBook)
+	require.NoError(t, err)
+	require.Equal(t, w.before[w.soloBook], unmoved, "the credits and the primary are one write: neither moved")
 	// Held back by the reassign's own failure count, before the delete's
 	// re-check is reached.
 	require.Contains(t, logs, "NOT deleted: 1 book(s) could not be reassigned")

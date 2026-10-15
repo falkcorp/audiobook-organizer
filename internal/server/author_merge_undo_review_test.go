@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -225,8 +225,8 @@ func TestAIAuthorMergeApplyOp_PenNameOfAMergedAuthorResolvesToTheKeep(t *testing
 	}
 }
 
-// failModifyBookStore fails the primary-author write for one book: the credits
-// move, the primary does not.
+// failModifyBookStore fails the primary-author write for one book (ModifyBook,
+// and ModifyBookCredits, which writes a repointed primary with its credits).
 type failModifyBookStore struct {
 	*database.PebbleStore
 	failBook string
@@ -239,10 +239,22 @@ func (f failModifyBookStore) ModifyBook(id string, fn func(*database.Book) error
 	return f.PebbleStore.ModifyBook(id, fn)
 }
 
-// The credits of a book moved but its primary author could not be repointed. The
-// row used to still claim the repoint, so the revert read the untouched primary as
-// "already back", refused the junction as changed since, and the credits could
-// never go back. It now journals what happened, and the undo puts them back.
+// ModifyBookCredits fails the same book: authormerge.MoveCredits repoints a
+// primary through it, in one write with the credits, so neither moves.
+func (f failModifyBookStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	if id == f.failBook {
+		return nil, database.BookCreditsEdit{}, errors.New("injected primary write failure")
+	}
+	return f.PebbleStore.ModifyBookCredits(id, fn)
+}
+
+// A book whose primary author could not be repointed. On Pebble the credits and
+// the primary are one write (authormerge.MoveCredits through ModifyBookCredits),
+// so a failed write moves neither and its row is voided; the merge reports the
+// failure, keeps the author, and the undo of what did move is clean. (A store
+// without that capability moves the credits and then the primary as two writes;
+// authormerge's TestMoveCredits_AFailedPrimaryRewritesTheRowAsUnchanged covers
+// the row it journals when only the second fails.)
 func TestAuthorMergeOp_APrimaryThatWasNotRepointedDoesNotBlockTheUndo(t *testing.T) {
 	w := newUndoWorld(t)
 	s := newRelinkOpServer(failModifyBookStore{PebbleStore: w.st, failBook: w.soloBook})
@@ -250,12 +262,19 @@ func TestAuthorMergeOp_APrimaryThatWasNotRepointedDoesNotBlockTheUndo(t *testing
 	raw, err := json.Marshal(entities.AuthorMergeOpParams{KeepID: w.keep.ID, MergeIDs: []int{w.from.ID}, KeepName: w.keep.Name})
 	require.NoError(t, err)
 	require.Error(t, def.Run(context.Background(), raw, &opReporter{id: "op-primary-stuck"}))
-	moved, err := w.st.GetBookAuthors(w.soloBook)
+	unmoved, err := w.st.GetBookAuthors(w.soloBook)
 	require.NoError(t, err)
-	require.Equal(t, w.keep.ID, moved[0].AuthorID, "the credit moved")
+	require.Equal(t, w.before[w.soloBook], unmoved, "the credit did not move without its primary")
 	book, err := w.st.GetBookByID(w.soloBook)
 	require.NoError(t, err)
-	require.Equal(t, w.from.ID, *book.AuthorID, "the primary did not")
+	require.Equal(t, w.from.ID, *book.AuthorID, "the primary did not move")
+	rows, err := w.st.GetOperationChanges("op-primary-stuck")
+	require.NoError(t, err)
+	for _, r := range rows {
+		if r.BookID == w.soloBook {
+			require.True(t, r.Voided, "the row of the failed write is voided")
+		}
+	}
 
 	res, err := revertOp(t, w.st, "op-primary-stuck")
 	require.NoError(t, err)
