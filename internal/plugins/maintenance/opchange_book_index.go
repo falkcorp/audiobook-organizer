@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-15
 
@@ -222,8 +222,11 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 			_ = reporter.Log(slog.LevelInfo, "opchange_by_book index check interrupted; GetBookChanges "+
 				"uses the full journal scan until the next boot checks it",
 				slog.String("error", err.Error()))
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return fmt.Errorf("opchange_by_book index ensure interrupted: %w", ctxErr)
+			// Keep the store's error when it already carries ctx's (it names
+			// the step that stopped); otherwise return ctx's, so the
+			// registry still sees the cancel.
+			if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+				return fmt.Errorf("opchange_by_book index ensure interrupted (%s): %w", err.Error(), ctxErr)
 			}
 			return fmt.Errorf("opchange_by_book index ensure interrupted: %w", err)
 		}

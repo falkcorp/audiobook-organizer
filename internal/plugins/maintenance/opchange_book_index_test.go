@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
 // last-edited: 2026-10-15
 
@@ -439,20 +439,71 @@ func TestOpchangeBookIndexEnsure_CancelWhileWaitingReturnsPromptly(t *testing.T)
 	defer func() { close(release); <-rebuildDone }()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	rep := &p6AttrReporter{}
+	rep := &enteringReporter{entered: make(chan struct{})}
 	ensureDone := make(chan error, 1)
 	go func() {
 		ensureDone <- New(fakeDeps{store: store}).runOpChangeBookIndexRebuild(ctx, json.RawMessage(`{"ensure":true}`), rep)
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The op stamps "checking" immediately before it calls the store's
+	// ensure, whose first step is the slot wait; the rebuild holds the slot,
+	// so from here the ensure can only be waiting for it.
+	select {
+	case <-rep.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ensure never reached the store")
+	}
+	select {
+	case err := <-ensureDone:
+		t.Fatalf("the ensure returned (%v) while the rebuild held the slot", err)
+	default:
+	}
 	cancel()
 	select {
 	case err := <-ensureDone:
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
+		// The store's slot-wait error: the cancel ended the wait, not a
+		// later step.
+		if !strings.Contains(err.Error(), "waiting for another opchange_by_book index pass") {
+			t.Fatalf("err = %v, want it to come from the slot wait", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the waiting ensure did not return within 2s of its ctx being cancelled")
+	}
+	if hasLevel(&rep.p6AttrReporter, slog.LevelError) {
+		t.Error("a cancelled ensure logged an Error line")
+	}
+}
+
+// enteringReporter closes entered on the ensure's "checking" stamp, the last
+// thing the op does before it calls EnsureOpChangeByBookIndex.
+type enteringReporter struct {
+	p6AttrReporter
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (r *enteringReporter) UpdateProgress(done, total int, msg string) error {
+	if strings.HasPrefix(msg, "checking opchange_by_book") {
+		r.once.Do(func() { close(r.entered) })
+	}
+	return r.p6AttrReporter.UpdateProgress(done, total, msg)
+}
+
+// A store error that does not wrap ctx's, returned after a cancel, still
+// reports the cancel (so the registry records canceled) and keeps the
+// store's text.
+func TestOpchangeBookIndexEnsure_CancelWithUnwrappedStoreError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := fakeOpChangeRebuilder{ensure: func(context.Context) (database.OpChangeByBookEnsureResult, error) {
+		return database.OpChangeByBookEnsureResult{}, errors.New("synthetic iterator closed")
+	}}
+	rep := &p6AttrReporter{}
+	err := ensureOpChangeBookIndex(ctx, r, rep)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "synthetic iterator closed") {
+		t.Fatalf("err = %v, want context.Canceled wrapped with the store's text", err)
 	}
 	if hasLevel(rep, slog.LevelError) {
 		t.Error("a cancelled ensure logged an Error line")
