@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -538,4 +539,74 @@ func TestAuthorConjunctionRepair_UndoRefusesANameAnotherAuthorTookSince(t *testi
 	holder, err = st.AuthorNameHolder("& Probe Solo")
 	require.NoError(t, err)
 	require.Equal(t, other.ID, holder, "the other author keeps its name entry")
+}
+
+// Undoing a solo rename is compare-and-set: an author renamed again since the
+// op is a later edit, and the revert refuses rather than overwrite it.
+func TestAuthorConjunctionRepair_UndoRefusesAnAuthorRenamedSince(t *testing.T) {
+	st := newRelinkTrashedStore(t)
+	solo := mustAuthorNamed(t, st, "& Probe Edited")
+	p := New(&fakeDeps{store: st})
+	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-rr6"}))
+	require.NoError(t, st.UpdateAuthorName(solo.ID, "Synthetic Hand Edit"))
+
+	report, err := undo.PreflightUndoConflicts(st, "op-rr6")
+	require.NoError(t, err)
+	require.Len(t, report.CheckFailed, 1, "%+v", report)
+	_, err = audiobooks.NewRevertService(st).RevertOperation("op-rr6")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "renamed since")
+	got, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Synthetic Hand Edit", got.Name, "the later edit stands")
+}
+
+// Undoing an author_id_repoint is compare-and-set: a book whose primary was
+// moved again since the repair is a later edit, and the revert refuses rather
+// than put the dangling id back over it.
+func TestAuthorIDRepair_UndoRefusesAPrimaryChangedSince(t *testing.T) {
+	s := newRepairPebble(t)
+	real := repairAuthor(t, s, "Real Person")
+	later := repairAuthor(t, s, "Synthetic Later Pick")
+	dangling := 424242
+	repairBook(t, s, "b1", &dangling, real.ID)
+	runRepair(t, New(&fakeDeps{store: s}), `{"dry_run":false,"skip_duplicates":true}`)
+	_, err := s.ModifyBook("b1", func(b *database.Book) error {
+		b.AuthorID, b.Author = &later.ID, later
+		return nil
+	})
+	require.NoError(t, err)
+
+	report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+	require.NoError(t, err)
+	require.Len(t, report.CheckFailed, 1, "%+v", report)
+	_, err = audiobooks.NewRevertService(s).RevertOperation("op-id-repair")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "changed since")
+	got, err := s.GetBookByID("b1")
+	require.NoError(t, err)
+	require.Equal(t, later.ID, *got.AuthorID, "the later edit stands")
+	require.Equal(t, later.ID, got.Author.ID)
+}
+
+// failRenameStore refuses every author rename.
+type failRenameStore struct{ *database.PebbleStore }
+
+func (failRenameStore) UpdateAuthorName(int, string) error { return errors.New("injected rename failure") }
+
+// M4: a rename the store refuses voids its journaled row, so the undo finds no
+// row describing a write that never happened.
+func TestRenameAuthorJournaled_ARefusedRenameVoidsItsRow(t *testing.T) {
+	st := newRelinkTrashedStore(t)
+	solo := mustAuthorNamed(t, st, "& Probe Refused")
+	err := renameAuthorJournaled(failRenameStore{st}, "op-rr7", *solo, "Probe Refused")
+	require.Error(t, err)
+	rows, gerr := st.GetOperationChanges("op-rr7")
+	require.NoError(t, gerr)
+	require.Len(t, rows, 1)
+	require.Equal(t, undo.ChangeTypeAuthorRename, rows[0].ChangeType)
+	require.True(t, rows[0].Voided, "the row of a refused rename is voided")
+	got, gerr := st.GetAuthorByID(solo.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, "& Probe Refused", got.Name)
 }

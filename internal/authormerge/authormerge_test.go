@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
 // last-edited: 2026-10-15
 
@@ -26,6 +26,7 @@ type fakeStore struct {
 	modifyErr error
 	deleteErr error
 	sets      int
+	deletes   int
 	aliases   []database.AuthorAlias
 }
 
@@ -70,6 +71,7 @@ func (f *fakeStore) ModifyBook(id string, fn func(*database.Book) error) (*datab
 func (f *fakeStore) GetAuthorAliases(int) ([]database.AuthorAlias, error) { return f.aliases, nil }
 func (f *fakeStore) AuthorNameHolder(string) (int, error)                 { return 0, nil }
 func (f *fakeStore) MergeDeleteAuthor(fromID, intoID int) (*database.AuthorMergeDeleteResult, error) {
+	f.deletes++
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
@@ -315,5 +317,31 @@ func TestMoveCredits_ARefusedAtomicWriteVoidsItsRow(t *testing.T) {
 	}
 	if f.sets != 0 || !undo.SameJunction(f.junction["b"], j) || *f.books["b"].AuthorID != 2 {
 		t.Fatalf("nothing may move: junction %+v primary %d", f.junction["b"], *f.books["b"].AuthorID)
+	}
+}
+
+// noHolderStore can journal and merge-delete but cannot read who holds a name
+// entry (no database.AuthorNameHolderReader).
+type noHolderStore struct{ f *fakeStore }
+
+func (n noHolderStore) CreateOperationChange(c *database.OperationChange) error {
+	return n.f.CreateOperationChange(c)
+}
+func (n noHolderStore) GetAuthorAliases(id int) ([]database.AuthorAlias, error) {
+	return n.f.GetAuthorAliases(id)
+}
+func (n noHolderStore) MergeDeleteAuthor(fromID, intoID int) (*database.AuthorMergeDeleteResult, error) {
+	return n.f.MergeDeleteAuthor(fromID, intoID)
+}
+
+// M5: a store that cannot read the name holder is refused before anything is
+// journaled or deleted (fail closed), not merged with a guessed holder.
+func TestMergeDelete_AStoreThatCannotReadTheNameHolderIsRefused(t *testing.T) {
+	f := newFake()
+	if _, err := MergeDelete(noHolderStore{f}, "op", database.Author{ID: 2, Name: "B"}, database.Author{ID: 1, Name: "A"}); err == nil {
+		t.Fatal("want a refusal")
+	}
+	if len(f.order) != 0 || f.deletes != 0 {
+		t.Fatalf("nothing may be journaled or deleted: rows %d deletes %d", len(f.order), f.deletes)
 	}
 }
