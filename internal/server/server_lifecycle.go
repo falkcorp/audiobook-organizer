@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.44.0
+// version: 4.44.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1372,8 +1372,9 @@ type opStatusLookup interface {
 // competing for reads). The activity reconcile used to run the moment the
 // activity service was built, before any warmup hold; it now waits for it, so
 // rows a rolled-back build wrote without filter keys stay unindexed behind a
-// complete sentinel for that window (the planner's budgeted scan still answers
-// and reports partial).
+// complete sentinel for that window, so a source/type/level filter omits them
+// (an unfiltered view still lists them) until the check withdraws the sentinel
+// and reindexes.
 //
 // Shutdown: the goroutines were in bgWG so shutdown waited for them before
 // CloseStore (up to 30s). Registry.Shutdown, which Server.Shutdown calls
