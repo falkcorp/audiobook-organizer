@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-14
 //
@@ -612,10 +612,12 @@ func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, hol
 	return nil
 }
 
-// authorRestoreReader is what the preflight of an author delete row reads.
+// authorRestoreReader is what the preflight of an author delete row reads. The
+// name holder is read as the restore reads it (database.AuthorNameHolderReader),
+// not through GetAuthorByName, which follows tombstones.
 type authorRestoreReader interface {
 	GetAuthorByID(id int) (*database.Author, error)
-	GetAuthorByName(name string) (*database.Author, error)
+	database.AuthorNameHolderReader
 }
 
 // preflightAuthorDelete predicts revertAuthorMergeDelete /
@@ -639,7 +641,7 @@ func preflightAuthorDelete(store ConflictChecker, c *database.OperationChange) r
 		}
 		snap = s
 	}
-	r, ok := store.(authorRestoreReader)
+	r, ok := database.AsCapability[authorRestoreReader](store)
 	if !ok {
 		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot read author %d", snap.ID)}
 	}
@@ -647,11 +649,9 @@ func preflightAuthorDelete(store ConflictChecker, c *database.OperationChange) r
 	if err != nil {
 		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author %d: %v", snap.ID, err)}
 	}
-	holder := 0
-	if h, herr := r.GetAuthorByName(snap.Name); herr != nil {
+	holder, herr := r.AuthorNameHolder(snap.Name)
+	if herr != nil {
 		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "look up author name %q: %v", snap.Name, herr)}
-	} else if h != nil {
-		holder = h.ID
 	}
 	already, refusal := AuthorDeleteRestoreRefusal(snap, cur != nil && cur.ID == snap.ID, holder, into)
 	return rowVerdict{refusal: refusal, already: already}

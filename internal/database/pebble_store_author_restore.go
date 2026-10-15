@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_author_restore.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e8a1c37-95b2-4d60-a3f9-7c2d0b6e1f58
 // last-edited: 2026-10-14
 
@@ -226,6 +226,22 @@ func (p *PebbleStore) RestoreAuthor(id int, name string, opts AuthorRestoreOptio
 	}
 	p.notifyAuthorRenamed(id)
 	return res, nil
+}
+
+// AuthorNameHolderReader reads who holds an author name the way RestoreAuthor's
+// name rule does (AuthorNameIndexOnRestore): the raw author:name: entry, counted
+// only when it names a live row of that id. The undo preflight reads it so its
+// prediction matches the restore; GetAuthorByName follows a tombstone, so a
+// leftover entry naming a merged-away id would read as held by its survivor.
+// *PebbleStore implements it; resolve it with AsCapability.
+type AuthorNameHolderReader interface {
+	// AuthorNameHolder is that live holder's id, or 0.
+	AuthorNameHolder(name string) (int, error)
+}
+
+// AuthorNameHolder implements AuthorNameHolderReader.
+func (p *PebbleStore) AuthorNameHolder(name string) (int, error) {
+	return p.liveAuthorNameHolder(name)
 }
 
 // liveAuthorNameHolder is the id of the live author that holds name's
