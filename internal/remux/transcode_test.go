@@ -1,5 +1,5 @@
 // file: internal/remux/transcode_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-15
 
@@ -150,7 +150,7 @@ func TestTranscodeSkipKey(t *testing.T) {
 }
 
 func TestTranscodeFileErrorsOnNonexistentFile(t *testing.T) {
-	err := TranscodeFile("/nonexistent/file.m4b")
+	err := TranscodeFile(context.Background(), "/nonexistent/file.m4b")
 	if err == nil {
 		t.Errorf("TranscodeFile() expected error for nonexistent file")
 	}
@@ -167,7 +167,7 @@ func TestTranscodeFileTempFileCleanup(t *testing.T) {
 	}
 
 	// This will fail due to invalid m4b, but temp file should still be cleaned up
-	_ = TranscodeFile(testFile)
+	_ = TranscodeFile(context.Background(), testFile)
 
 	tmpFile := testFile + ".remux.tmp"
 	if _, err := os.Stat(tmpFile); err == nil {
