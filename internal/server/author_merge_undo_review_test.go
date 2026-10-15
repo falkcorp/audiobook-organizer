@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -351,6 +351,24 @@ func TestWireScanApplyClaims_AClaimOfARunThatIsNotRunningDoesNotHoldTheScan(t *t
 	require.Empty(t, got.ApplyingOpID, "cleared at startup")
 	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-crashed"))
 	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-next"), "op-crashed is not running, so it holds nothing")
+}
+
+// An operation-runner child's registry knows only the op the child runs. Its
+// wiring must not clear, or judge, the claims the parent's runs hold.
+func TestWireScanApplyClaims_AChildProcessLeavesTheParentsClaimsAlone(t *testing.T) {
+	old := isChildProcess
+	isChildProcess = func() bool { return true }
+	t.Cleanup(func() { isChildProcess = old })
+	f := newApplyFixture(t)
+	require.NoError(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-running-in-the-parent"))
+	reg := opsregistry.New(dbmocks.NewMockStore(t), slog.New(slog.DiscardHandler), 1, nil)
+
+	wireScanApplyClaims(f.scanStore, reg)
+
+	got, err := f.scanStore.GetScan(f.scan.ID)
+	require.NoError(t, err)
+	require.Equal(t, "op-running-in-the-parent", got.ApplyingOpID, "not cleared")
+	require.Error(t, f.scanStore.ClaimScanForApply(f.scan.ID, "op-other"), "and it still holds the scan")
 }
 
 // noMergeDeleteStore is a Store without the AuthorMergeDeleter capability:
