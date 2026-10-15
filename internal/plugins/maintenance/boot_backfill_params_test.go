@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/boot_backfill_params_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c1e4d27-5b3a-4f69-9e02-7a6d3b8f1c45
 // last-edited: 2026-10-15
 
@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -86,8 +87,9 @@ type p6AttrReporter struct {
 }
 
 type p6LogLine struct {
-	msg  string
-	noOp bool
+	level slog.Level
+	msg   string
+	noOp  bool
 }
 
 func (r *p6AttrReporter) Log(level slog.Level, msg string, attrs ...slog.Attr) error {
@@ -98,7 +100,7 @@ func (r *p6AttrReporter) Log(level slog.Level, msg string, attrs ...slog.Attr) e
 		}
 	}
 	r.mu.Lock()
-	r.lines = append(r.lines, p6LogLine{msg: msg, noOp: noOp})
+	r.lines = append(r.lines, p6LogLine{level: level, msg: msg, noOp: noOp})
 	r.mu.Unlock()
 	return r.fakeReporter.Log(level, msg, attrs...)
 }
@@ -309,5 +311,68 @@ func TestBootOpDefs_WaitForWarmupAndKeepTheirPolicies(t *testing.T) {
 		if tc.def.DefaultPriority != sdk.PriorityLow {
 			t.Errorf("%s: DefaultPriority = %v, want PriorityLow so boot runs never get ahead of a user's op", tc.def.ID, tc.def.DefaultPriority)
 		}
+	}
+}
+
+// SF-1: a boot run with nothing to do must add no line to the default activity
+// feed: every Info-or-above line it logs carries the no-op tag (the "Starting"
+// lines are Debug, which the mirror files in the hidden debug tier).
+func TestBootOps_NoOpRunLogsNoUntaggedInfoLine(t *testing.T) {
+	ifNeeded := p6Params(t, map[string]bool{"if_needed": true})
+	quarantineAfter := p6Params(t, map[string]bool{"quarantine_after": true})
+	runs := map[string]func(p *Plugin, rep *p6AttrReporter) error{
+		"external-id": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runExternalIDBackfill(context.Background(), ifNeeded, rep)
+		},
+		"movement-atom": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runMovementAtomCleanup(context.Background(), json.RawMessage(`{}`), rep)
+		},
+		"remux": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runMalformedM4BRemux(context.Background(), json.RawMessage(`{}`), rep)
+		},
+		"transcode": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runMalformedM4BTranscode(context.Background(), quarantineAfter, rep)
+		},
+	}
+	for name, run := range runs {
+		t.Run(name, func(t *testing.T) {
+			rep := &p6AttrReporter{}
+			if err := run(New(&p6BootDeps{skipped: true}), rep); err != nil {
+				t.Fatal(err)
+			}
+			for _, l := range rep.lines {
+				if l.level >= slog.LevelInfo && !l.noOp {
+					t.Errorf("no-op run logged an untagged %s line %q", l.level, l.msg)
+				}
+			}
+		})
+	}
+}
+
+// A run cancelled mid-walk returns ctx's error and never logs "complete".
+func TestBootOps_CancelledRunDoesNotLogComplete(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runs := map[string]func(p *Plugin, rep *p6AttrReporter) error{
+		"movement-atom": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runMovementAtomCleanup(ctx, nil, rep)
+		},
+		"remux": func(p *Plugin, rep *p6AttrReporter) error { return p.runMalformedM4BRemux(ctx, nil, rep) },
+		"transcode": func(p *Plugin, rep *p6AttrReporter) error {
+			return p.runMalformedM4BTranscode(ctx, nil, rep)
+		},
+	}
+	for name, run := range runs {
+		t.Run(name, func(t *testing.T) {
+			rep := &p6AttrReporter{}
+			if err := run(New(&p6BootDeps{}), rep); !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want context.Canceled", err)
+			}
+			for _, l := range rep.lines {
+				if strings.Contains(l.msg, "complete") {
+					t.Errorf("cancelled run logged %q", l.msg)
+				}
+			}
+		})
 	}
 }
