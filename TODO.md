@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.20 -->
+<!-- version: 10.76.21 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -3428,8 +3428,8 @@ escape hatch). Move Core-only callers to `GetBookFilesForIDsCore` instead.
       `fix_read_by_narrator.go:56` (serial), `recompute_book_aggregates.go:180/187`
       (serial), `regroup_shattered_ai.go:160/164`, plus the `GetBookFiles` and
       `GetBookByID` rows in the audit's table.
-- [ ] **Group-by-BookID, not a batch swap** — `fix_book_file_paths.go:56`,
-      `enrich_book_files.go:69`, `recompute_itunes_paths.go:56`,
+- [ ] **Group-by-BookID, not a batch swap** — `enrich_book_files.go:69`,
+      `recompute_itunes_paths.go:56`,
       `lsh_backfill.go:122`, `tag_backfill.go:147`, `dedupe_book_file_rows.go:253`
       each refetch a book's whole file list once per file.
 
