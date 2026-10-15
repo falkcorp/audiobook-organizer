@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
 // last-edited: 2026-10-15
 
@@ -8,6 +8,7 @@ package authormerge
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -75,6 +76,33 @@ func (f *fakeStore) MergeDeleteAuthor(fromID, intoID int) (*database.AuthorMerge
 	return &database.AuthorMergeDeleteResult{}, nil
 }
 
+// creditsFake is a fakeStore with the BookCreditsModifier capability: the row
+// and the junction are written together, or neither is.
+type creditsFake struct {
+	*fakeStore
+	creditsErr error
+	calls      int
+}
+
+func (f *creditsFake) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	f.calls++
+	if f.creditsErr != nil {
+		return nil, database.BookCreditsEdit{}, f.creditsErr
+	}
+	b := f.books[id]
+	if b == nil {
+		return nil, database.BookCreditsEdit{}, nil
+	}
+	cp := *b
+	edit := database.BookCreditsEdit{Authors: slices.Clone(f.junction[id])}
+	if err := fn(&cp, &edit); err != nil {
+		return nil, database.BookCreditsEdit{}, err
+	}
+	*b = cp
+	f.junction[id] = edit.Authors
+	return b, edit, nil
+}
+
 func (f *fakeStore) only(t *testing.T) database.OperationChange {
 	t.Helper()
 	if len(f.order) != 1 {
@@ -126,7 +154,7 @@ func TestMoveCredits_ARefusedJunctionWriteVoidsItsRow(t *testing.T) {
 }
 
 func TestMoveCredits_APrimaryOnlyMoveCreditsTheKeepAuthor(t *testing.T) {
-	f := newFake()
+	f := &creditsFake{fakeStore: newFake()}
 	two := 2
 	f.books["b"] = &database.Book{ID: "b", AuthorID: &two}
 	j := []database.BookAuthor{credit("b", 5, 0)}
@@ -209,5 +237,83 @@ func TestMergeDelete_JournalsTheAuthorAndItsAliases(t *testing.T) {
 	}
 	if snap.ID != 2 || snap.Name != "B" {
 		t.Fatalf("snapshot %+v", snap)
+	}
+}
+
+// P5: the keep author is credited only when the primary repoint lands. A book
+// another writer moved off FromID since the caller read it keeps its junction:
+// crediting IntoID there would name an author its primary never moved to.
+func TestMoveCredits_ABookWhosePrimaryMovedIsNotCreditedToTheKeepAuthor(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store func(*fakeStore) CreditsStore
+	}{
+		{"atomic", func(f *fakeStore) CreditsStore { return &creditsFake{fakeStore: f} }},
+		{"no capability", func(f *fakeStore) CreditsStore { return f }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			two, nine := 2, 9
+			f.books["b"] = &database.Book{ID: "b", AuthorID: &nine}
+			j := []database.BookAuthor{credit("b", 5, 0)}
+			f.junction["b"] = slices.Clone(j)
+			res, err := MoveCredits(tc.store(f), "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: j, After: j, PrimaryBefore: &two})
+			if err != nil || res.PrimaryRepointed {
+				t.Fatalf("res %+v err %v", res, err)
+			}
+			if slices.ContainsFunc(f.junction["b"], func(ba database.BookAuthor) bool { return ba.AuthorID == 1 }) {
+				t.Fatalf("the keep author was credited on a book whose primary never moved to it: %+v", f.junction["b"])
+			}
+			if *f.books["b"].AuthorID != 9 {
+				t.Fatal("the other writer's primary must stand")
+			}
+			var move undo.AuthorCreditsMove
+			if err := json.Unmarshal([]byte(f.only(t).NewValue), &move); err != nil {
+				t.Fatal(err)
+			}
+			if move.PrimaryChanged || move.CreditsAfter == nil || !undo.SameJunction(*move.CreditsAfter, j) {
+				t.Fatalf("the row must journal what was stored and no repoint: %+v", move)
+			}
+		})
+	}
+}
+
+// Without the capability the keep author is not appended at all (no unsafe
+// two-step): the primary is still repointed, the junction left as the caller
+// asked.
+func TestMoveCredits_WithoutTheCapabilityTheKeepAuthorIsNotAppended(t *testing.T) {
+	f := newFake()
+	two := 2
+	f.books["b"] = &database.Book{ID: "b", AuthorID: &two}
+	j := []database.BookAuthor{credit("b", 5, 0)}
+	f.junction["b"] = slices.Clone(j)
+	res, err := MoveCredits(f, "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: j, After: j, PrimaryBefore: &two})
+	if err != nil || !res.PrimaryRepointed {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if !undo.SameJunction(f.junction["b"], j) || f.sets != 0 {
+		t.Fatalf("the junction must be left as asked: %+v (sets %d)", f.junction["b"], f.sets)
+	}
+	if *f.books["b"].AuthorID != 1 {
+		t.Fatal("primary not repointed")
+	}
+}
+
+// The atomic write is one write: refused, nothing moved, and its row is voided.
+func TestMoveCredits_ARefusedAtomicWriteVoidsItsRow(t *testing.T) {
+	f := &creditsFake{fakeStore: newFake(), creditsErr: errors.New("refused")}
+	two := 2
+	f.books["b"] = &database.Book{ID: "b", AuthorID: &two}
+	j := []database.BookAuthor{credit("b", 2, 0)}
+	f.junction["b"] = slices.Clone(j)
+	if _, err := MoveCredits(f, "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: j,
+		After: []database.BookAuthor{credit("b", 1, 0)}, PrimaryBefore: &two}); err == nil {
+		t.Fatal("want the write error")
+	}
+	if !f.only(t).Voided {
+		t.Fatal("the row of a refused write must be voided")
+	}
+	if f.sets != 0 || !undo.SameJunction(f.junction["b"], j) || *f.books["b"].AuthorID != 2 {
+		t.Fatalf("nothing may move: junction %+v primary %d", f.junction["b"], *f.books["b"].AuthorID)
 	}
 }

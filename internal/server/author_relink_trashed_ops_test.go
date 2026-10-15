@@ -1,7 +1,7 @@
 // file: internal/server/author_relink_trashed_ops_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f2a9c41-7d38-4e05-b1a6-93c8e2d05f17
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -151,6 +151,15 @@ func (f failSetBookAuthorsStore) SetBookAuthors(bookID string, authors []databas
 		return errors.New("injected SetBookAuthors failure")
 	}
 	return f.PebbleStore.SetBookAuthors(bookID, authors)
+}
+
+// ModifyBookCredits fails the same book: authormerge.MoveCredits writes a
+// repointed book's junction through it, in one write with the primary.
+func (f failSetBookAuthorsStore) ModifyBookCredits(bookID string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	if bookID == f.failBook {
+		return nil, database.BookCreditsEdit{}, errors.New("injected ModifyBookCredits failure")
+	}
+	return f.PebbleStore.ModifyBookCredits(bookID, fn)
 }
 
 // runAuthorMergeOpIDs runs the merge op and returns what the run returned: nil

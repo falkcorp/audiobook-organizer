@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -267,6 +267,18 @@ type primaryRecordingStore struct {
 func (s primaryRecordingStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	return s.PebbleStore.ModifyBook(id, func(b *database.Book) error {
 		err := fn(b)
+		if err == nil {
+			s.authors[id] = b.Author
+		}
+		return err
+	})
+}
+
+// ModifyBookCredits records the same way: authormerge.MoveCredits repoints a
+// primary through it (the keep author is credited in the same write).
+func (s primaryRecordingStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	return s.PebbleStore.ModifyBookCredits(id, func(b *database.Book, c *database.BookCreditsEdit) error {
+		err := fn(b, c)
 		if err == nil {
 			s.authors[id] = b.Author
 		}

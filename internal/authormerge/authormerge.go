@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
 // last-edited: 2026-10-15
 
@@ -20,6 +20,7 @@ package authormerge
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -94,22 +95,49 @@ type MoveResult struct {
 	PrimaryErr error
 }
 
+// BookCreditsModifier writes a book row and its credit lists in one locked
+// write (database.PebbleStore.ModifyBookCredits). MoveCredits resolves it as a
+// capability (database.AsCapability), so CreditsStore and Store stay as wide
+// as they are.
+type BookCreditsModifier interface {
+	ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error)
+}
+
+// errPrimaryMoved aborts MoveCredits' locked write when the book's primary no
+// longer names FromID: the credits then move on their own, without the keep
+// author the repoint would have brought.
+var errPrimaryMoved = errors.New("primary no longer names the merged author")
+
 // MoveCredits journals the move as an author_merge_credits row, writes After,
-// then repoints the primary when it names FromID. An error means nothing was
-// written (the row could not be built or recorded, or the junction write was
-// refused and the row voided).
+// and repoints the primary when it names FromID. An error means nothing was
+// written (the row could not be built or recorded, or the write was refused
+// and the row voided).
+//
+// A book whose primary moves to IntoID is credited to it too (IntoID appended
+// to After when absent): a primary-only book, whose junction never credited
+// FromID, otherwise ends with a primary its credits do not name. That append
+// is made only when the repoint lands, so it goes through the store's
+// BookCreditsModifier, which writes the junction and the row under the same
+// locks: the primary is checked, repointed and credited in one write, and a
+// book another writer moved off FromID meanwhile gets After alone. A store
+// without that capability gets no append (the junction is written, then the
+// primary repointed, as two writes): appending in a separate write ahead of
+// the repoint is what credited IntoID on books whose primary never moved to it.
 func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, error) {
 	var res MoveResult
 	primaryChanged := m.PrimaryBefore != nil && *m.PrimaryBefore == m.FromID
 	after := slices.Clone(m.After)
-	// A book whose primary moves to IntoID is credited to it too. A primary-only
-	// book (its junction never credited FromID) used to end up with a primary
-	// its credits did not name on every path but the maintenance merges, which
-	// already appended it (creditsMovedOnto). One rule for every merge now.
-	if primaryChanged && !slices.ContainsFunc(after, func(ba database.BookAuthor) bool { return ba.AuthorID == m.IntoID }) {
-		after = append(after, database.BookAuthor{BookID: m.BookID, AuthorID: m.IntoID, Role: "author", Position: len(after)})
+	modifier, atomic := database.AsCapability[BookCreditsModifier](store)
+	atomic = atomic && primaryChanged
+	withKeep := after
+	if atomic && !slices.ContainsFunc(after, func(ba database.BookAuthor) bool { return ba.AuthorID == m.IntoID }) {
+		withKeep = append(slices.Clone(after), database.BookAuthor{BookID: m.BookID, AuthorID: m.IntoID, Role: "author", Position: len(after)})
 	}
-	move := undo.AuthorCreditsMove{FromAuthorID: m.FromID, IntoAuthorID: m.IntoID, CreditsAfter: &after, PrimaryChanged: primaryChanged}
+	// Journaled as the write is expected to land (keep credited, primary
+	// repointed), BEFORE it; rewritten below to what was stored when it lands
+	// differently.
+	journaled := slices.Clone(withKeep)
+	move := undo.AuthorCreditsMove{FromAuthorID: m.FromID, IntoAuthorID: m.IntoID, CreditsAfter: &journaled, PrimaryChanged: primaryChanged}
 	if primaryChanged {
 		k := m.IntoID
 		move.PrimaryAfter = &k
@@ -128,15 +156,11 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	if err != nil {
 		return res, fmt.Errorf("undo row not recorded: %w", err)
 	}
-	// A move that only repoints the primary (the book's junction never credited
-	// FromID) leaves the junction as it is rather than rewriting it unchanged.
-	if !undo.SameJunction(m.Before, after) {
-		if err := store.SetBookAuthors(m.BookID, slices.Clone(after)); err != nil {
-			if verr := void(); verr != nil {
-				return res, fmt.Errorf("set book authors: %w (and its undo row could not be voided: %v)", err, verr)
-			}
-			return res, fmt.Errorf("set book authors: %w", err)
+	refused := func(what string, err error) (MoveResult, error) {
+		if verr := void(); verr != nil {
+			return res, fmt.Errorf("%s: %w (and its undo row could not be voided: %v)", what, err, verr)
 		}
+		return res, fmt.Errorf("%s: %w", what, err)
 	}
 	rewrite := func(what string) {
 		nv, merr := json.Marshal(move)
@@ -148,18 +172,63 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 			res.Problems = append(res.Problems, fmt.Sprintf("undo row not updated %s: %v", what, merr))
 		}
 	}
+	// notRepointed: the row must not claim a repoint that did not happen. A
+	// row that still claimed it made the revert read the untouched primary as
+	// "already back" and then refuse the junction as changed since.
+	notRepointed := func() {
+		move.PrimaryChanged, move.PrimaryAfter = false, nil
+		journaled = append(journaled[:0], after...)
+	}
+
+	wrote := false
+	if atomic {
+		book, _, merr := modifier.ModifyBookCredits(m.BookID, func(cur *database.Book, credits *database.BookCreditsEdit) error {
+			if cur.AuthorID == nil || *cur.AuthorID != m.FromID {
+				return errPrimaryMoved
+			}
+			id := m.IntoID
+			cur.AuthorID = &id
+			if m.Into != nil {
+				into := *m.Into
+				cur.Author = &into
+			}
+			credits.Authors = slices.Clone(withKeep)
+			return nil
+		})
+		switch {
+		case merr == nil && book != nil:
+			wrote = true
+			res.PrimaryRepointed = true
+		case merr != nil && !errors.Is(merr, errPrimaryMoved):
+			// One write: nothing moved, so the row describes nothing.
+			return refused("move credits and primary author", merr)
+		default:
+			// The primary moved off FromID meanwhile, or the book row is gone
+			// (a ghost's junction outlives it): the credits move alone.
+			notRepointed()
+		}
+	}
+	// A move that only repoints the primary (the book's junction never credited
+	// FromID) leaves the junction as it is rather than rewriting it unchanged.
+	if !wrote && !undo.SameJunction(m.Before, after) {
+		if err := store.SetBookAuthors(m.BookID, slices.Clone(after)); err != nil {
+			return refused("set book authors", err)
+		}
+	}
 	// The store may normalize what it was given (positions); the revert is a
 	// compare-and-set against the stored junction, so journal what is stored.
-	if stored, gerr := store.GetBookAuthors(m.BookID); gerr == nil && !undo.SameJunction(stored, after) {
-		after = append(after[:0], stored...)
+	if stored, gerr := store.GetBookAuthors(m.BookID); gerr == nil && !undo.SameJunction(stored, journaled) {
+		journaled = append(journaled[:0], stored...)
 		rewrite("to the stored credits")
+	} else if atomic && !wrote {
+		rewrite("after its primary author was not repointed")
 	}
-	if !primaryChanged {
+	if !primaryChanged || atomic {
 		return res, nil
 	}
-	// Under the book's write lock, only when it still names FromID, so a column
-	// another writer commits meanwhile is not reverted (audit A1#15).
-	wrote := false
+	// No BookCreditsModifier: the primary is its own write, under the book's
+	// write lock, only when it still names FromID, so a column another writer
+	// commits meanwhile is not reverted (audit A1#15).
 	_, upErr := store.ModifyBook(m.BookID, func(cur *database.Book) error {
 		if cur.AuthorID == nil || *cur.AuthorID != m.FromID {
 			return database.ErrSkipBookWrite
@@ -181,9 +250,7 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 		res.PrimaryErr = upErr
 		res.Problems = append(res.Problems, fmt.Sprintf("credits moved but its primary author could not be repointed: %v", upErr))
 	}
-	// A row that still claimed the repoint made the revert read the untouched
-	// primary as "already back" and then refuse the junction as changed since.
-	move.PrimaryChanged, move.PrimaryAfter = false, nil
+	notRepointed()
 	rewrite("after its primary author was not repointed")
 	return res, nil
 }
