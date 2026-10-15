@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
 // last-edited: 2026-10-14
 
@@ -55,7 +55,8 @@ func repairBook(t *testing.T, s database.Store, id string, scalar *int, joins ..
 
 func runRepair(t *testing.T, p *Plugin, params string) *authorIDRepairResult {
 	t.Helper()
-	res, err := p.authorIDRepair(context.Background(), decodeRepairParams(t, params), &fakeReporter{})
+	// An apply journals each merge under the op's id and refuses one without it.
+	res, err := p.authorIDRepair(context.Background(), decodeRepairParams(t, params), &opIDReporter{id: "op-id-repair"})
 	if err != nil {
 		t.Fatalf("authorIDRepair(%s): %v", params, err)
 	}

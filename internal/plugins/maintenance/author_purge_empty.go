@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -446,10 +446,11 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		// {ID, Name}, so "id:name" is the whole row, and the name exists nowhere
 		// else once the row is gone -- a post-delete journal failure would be
 		// exactly the loss this op must not cause. So a failed ledger write skips
-		// the delete (fail closed). Same change_type/field/format as
-		// journalAuthorMerge in author_duplicate_merge.go; like that row, the undo
-		// engine does not replay "author_delete" -- it is a durable record from
-		// which the author can be recreated, not a one-click restore.
+		// the delete (fail closed). The undo engine does not replay
+		// "author_delete" -- it is a durable record from which the author can be
+		// recreated, not a one-click restore. (The author merges no longer write
+		// this shape: they journal author_merge_delete rows the engine reverses,
+		// through internal/authormerge.)
 		//
 		// The ledger row can describe a delete that then fails. That is the right
 		// trade (a stray record of an author that still exists is harmless; a

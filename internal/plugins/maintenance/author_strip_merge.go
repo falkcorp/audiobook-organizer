@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-10-14
 
@@ -458,6 +458,9 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		}
 	}
 	log := reporter.Logger()
+	// The undo ledger keys the title relink's rows and each merge's rows
+	// (mergeAuthorInto) by this id.
+	opID := registry.ReporterOpID(reporter)
 	log.Info("author-strip-merge start",
 		"apply", params.Apply, "delete_junk", params.deleteJunk(),
 		"delete_unmatched", params.DeleteUnmatched, "delete_title_as_author", params.DeleteTitleAsAuthor,
@@ -678,7 +681,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		// The owner-manual check's readers; tags come from their own accessor
 		// (OpsStore does not carry them).
 		mo := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()}
-		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, mo, creator, junkRows, &idx, relinkWrite, params.Limit, registry.ReporterOpID(reporter), log)
+		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, mo, creator, junkRows, &idx, relinkWrite, params.Limit, opID, log)
 		if rErr != nil {
 			return rErr
 		}
@@ -792,7 +795,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			// and only then deletes. Reused rather than reimplemented: the
 			// AuthorID step is exactly the one whose absence stranded ~212
 			// authors' books in the 2026-08-24 dangling-AuthorID incident.
-			n, err := p.mergeAuthorInto(ctx, pl.from, *pl.into, false, log)
+			n, _, err := p.mergeAuthorInto(ctx, pl.from, *pl.into, false, opID, log)
 			report.BooksTouched += n
 			if err != nil {
 				report.Failed++

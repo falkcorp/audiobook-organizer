@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-10-14
 
@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -145,6 +147,8 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	}
 
 	log := reporter.Logger()
+	// The undo ledger keys each merge's rows by this id (mergeAuthorInto).
+	opID := registry.ReporterOpID(reporter)
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -222,7 +226,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 		}
 
 		if twin != nil && twin.ID != author.ID {
-			relinked, err := p.mergeAuthorInto(ctx, author, *twin, dryRun, log)
+			relinked, _, err := p.mergeAuthorInto(ctx, author, *twin, dryRun, opID, log)
 			if err != nil {
 				outcomes[conjRepairFailed]++
 				log.Warn("author-conjunction-repair: merge failed",
@@ -288,7 +292,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 
 // mergeAuthorInto moves every book link from `from` onto `into` and then deletes
 // the `from` row. It returns the number of books whose author slice was
-// rewritten.
+// rewritten and the number of undo-ledger rows it wrote.
 //
 // The link that matters is the BookAuthor join slice, not Book.AuthorID: all 46
 // stranded rows sit at position 1+ of a credit list, which is why every one of
@@ -302,57 +306,128 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 // database.VerifyAuthorUnlinked, so a link this loop could not move (including
 // a primary-author rewrite that only logged its failure) keeps the author row
 // instead of being destroyed with it.
-func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author, dryRun bool, log *slog.Logger) (int, error) {
+//
+// Every write is journaled under opID BEFORE it is made, through the same
+// authormerge path the Authors view merge uses: one author_merge_credits row
+// per book and one author_merge_delete row for the author, which the revert
+// engine reverses (credits, primary, the author, its aliases and redirects). An
+// apply with no operation id is refused: its merge could never be undone.
+func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author, dryRun bool, opID string, log *slog.Logger) (relinked, undoRows int, err error) {
 	store := p.deps.OpsStore()
 	// The delete at the end is the store's merge-delete capability. Without it
 	// the merged author could only be deleted with its aliases, so refuse before
 	// any credit moves (a preview too: it must not promise a merge the apply
 	// refuses). No DeleteAuthor fallback.
 	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
-		return 0, fmt.Errorf("merge author %d into %d: %w", from.ID, into.ID, database.ErrAuthorMergeDeleteUnsupported)
+		return 0, 0, fmt.Errorf("merge author %d into %d: %w", from.ID, into.ID, database.ErrAuthorMergeDeleteUnsupported)
+	}
+	if !dryRun && opID == "" {
+		return 0, 0, fmt.Errorf("merge author %d into %d: no operation id to journal its undo rows under, so it could not be undone", from.ID, into.ID)
 	}
 
 	books, err := store.GetBooksByAuthorIDForRelinkCore(from.ID)
 	if err != nil {
-		return 0, fmt.Errorf("get books for author %d: %w", from.ID, err)
+		return 0, 0, fmt.Errorf("get books for author %d: %w", from.ID, err)
 	}
 
-	relinked := 0
+	// A book carrying two role rows for the author comes back once per row; its
+	// credits move (and are journaled) once.
+	seen := make(map[string]struct{}, len(books))
 	for _, book := range books {
 		if ctx.Err() != nil {
-			return relinked, ctx.Err()
+			return relinked, undoRows, ctx.Err()
 		}
+		if _, dup := seen[book.ID]; dup {
+			continue
+		}
+		seen[book.ID] = struct{}{}
 
-		primaryErr, err := relinkBookCredit(store, book, from, into, dryRun)
+		before, err := store.GetBookAuthors(book.ID)
 		if err != nil {
-			// Do NOT fall through to DeleteAuthor after this: dropping the row
+			return relinked, undoRows, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+		}
+		if dryRun {
+			// The junction read above still ran, so a dry run surfaces the same
+			// read failure the apply would hit.
+			relinked++
+			continue
+		}
+		into := into
+		moved, err := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
+			BookID: book.ID, FromID: from.ID, IntoID: into.ID, Into: &into,
+			Before: before, After: creditsMovedOnto(book.ID, before, from.ID, into.ID),
+			PrimaryBefore: book.AuthorID,
+		})
+		if err != nil {
+			// Do NOT fall through to the delete after this: dropping the row
 			// while a book still points at it orphans that book's author
 			// reference. Same failure H8 documented on the split scan.
-			return relinked, err
+			return relinked, undoRows, fmt.Errorf("book %s: %w", book.ID, err)
 		}
-		if primaryErr != nil {
+		undoRows++
+		for _, problem := range moved.Problems {
 			// Logged, not returned: VerifyAuthorUnlinked below still refuses
 			// the delete while the primary names the row.
-			log.Warn("author-conjunction-repair: primary author rewrite failed",
-				"book_id", book.ID, "err", primaryErr)
+			log.Warn("author merge: book credits moved with a problem",
+				"book_id", book.ID, "from_id", from.ID, "into_id", into.ID, "problem", problem)
 		}
 		relinked++
 	}
 
 	if dryRun {
-		return relinked, nil
+		return relinked, undoRows, nil
 	}
 	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
-		return relinked, err
+		return relinked, undoRows, err
 	}
 	// MergeDeleteAuthor, not DeleteAuthor: the merged author's aliases (pen
 	// names) move to the survivor and the tombstone redirecting the old id is
 	// written in the same batch. DeleteAuthor cascades the aliases away, so a pen
 	// name of a merged author resolved to nobody.
-	if _, err := database.MergeDeleteAuthorOf(store, from.ID, into.ID); err != nil {
-		return relinked, fmt.Errorf("delete author %d: %w", from.ID, err)
+	del, err := authormerge.MergeDelete(store, opID, from, into)
+	if err != nil {
+		return relinked, undoRows, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
-	return relinked, nil
+	undoRows++
+	for _, problem := range del.Problems {
+		log.Warn("author merge: author deleted with a problem", "author_id", from.ID, "problem", problem)
+	}
+	return relinked, undoRows, nil
+}
+
+// creditsMovedOnto is bookAuthors with fromID's credit moved onto intoID: the
+// role the from row carried is kept, and intoID is not duplicated when the book
+// already credits it.
+func creditsMovedOnto(bookID string, bookAuthors []database.BookAuthor, fromID, intoID int) []database.BookAuthor {
+	// Preserve the role the from row carried, and note whether the target is
+	// already on this book — a credit list can name both.
+	role := "author"
+	targetAlreadyLinked := false
+	for _, ba := range bookAuthors {
+		if ba.AuthorID == fromID {
+			role = ba.Role
+		}
+		if ba.AuthorID == intoID {
+			targetAlreadyLinked = true
+		}
+	}
+
+	var updated []database.BookAuthor
+	for _, ba := range bookAuthors {
+		if ba.AuthorID == fromID {
+			continue
+		}
+		updated = append(updated, ba)
+	}
+	if !targetAlreadyLinked {
+		updated = append(updated, database.BookAuthor{
+			BookID:   bookID,
+			AuthorID: intoID,
+			Role:     role,
+			Position: len(updated),
+		})
+	}
+	return updated
 }
 
 // relinkBookCredit moves one book's credit from `from` to `into`: the
@@ -370,10 +445,11 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 //
 // err is a junction failure: nothing about the credit changed that a re-run
 // would not redo. primaryErr is a failed primary rewrite AFTER the junction
-// was written; the caller decides whether that is fatal. Shared by
-// mergeAuthorInto (every book of a row) and author-strip-merge's
-// title-as-author relink (one book at a time), so both write a credit move
-// the same way.
+// was written; the caller decides whether that is fatal. Its caller is
+// author-strip-merge's title-as-author relink (one book at a time), which
+// journals the move itself (titleRelinkJournal). mergeAuthorInto computes the
+// same credits (creditsMovedOnto) but writes them through authormerge, which
+// journals each book before its write.
 func relinkBookCredit(store interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
@@ -384,34 +460,7 @@ func relinkBookCredit(store interface {
 		return nil, fmt.Errorf("get book authors for %s: %w", book.ID, err)
 	}
 
-	// Preserve the role the from row carried, and note whether the target is
-	// already on this book — a credit list can name both.
-	role := "author"
-	targetAlreadyLinked := false
-	for _, ba := range bookAuthors {
-		if ba.AuthorID == from.ID {
-			role = ba.Role
-		}
-		if ba.AuthorID == into.ID {
-			targetAlreadyLinked = true
-		}
-	}
-
-	var updated []database.BookAuthor
-	for _, ba := range bookAuthors {
-		if ba.AuthorID == from.ID {
-			continue
-		}
-		updated = append(updated, ba)
-	}
-	if !targetAlreadyLinked {
-		updated = append(updated, database.BookAuthor{
-			BookID:   book.ID,
-			AuthorID: into.ID,
-			Role:     role,
-			Position: len(updated),
-		})
-	}
+	updated := creditsMovedOnto(book.ID, bookAuthors, from.ID, into.ID)
 	if dryRun {
 		// The junction read above still ran, so a dry run surfaces the same
 		// read failure the apply would hit.

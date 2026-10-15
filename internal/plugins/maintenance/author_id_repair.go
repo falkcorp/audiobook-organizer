@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
 // last-edited: 2026-10-14
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sort"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -638,12 +640,18 @@ func rewriteJoinsOnto(joins []database.BookAuthor, from, into int) ([]database.B
 // authorIDMergeOne moves one duplicate's credits onto canonical and deletes it
 // when -- and only when -- a re-read through BOTH stores finds nothing left.
 // Returns the change record, whether it wrote, and undo-ledger rows written.
+//
+// Each book's move (join rewrite and scalar repoint together) and the delete
+// are journaled under opID BEFORE they are made, through authormerge, as the
+// author_merge_credits / author_merge_delete rows the revert engine reverses:
+// the same rows the Authors view merge writes. An apply with no operation id
+// is refused, as its merge could never be undone.
 func (p *Plugin) authorIDMergeOne(
 	store OpsStore,
 	dryRun bool,
 	opID, norm string,
 	dup, canonical database.Author,
-	log logWarner,
+	log *slog.Logger,
 ) (authorIDMergeChange, bool, int) {
 	ch := authorIDMergeChange{
 		NormalizedName: norm, DuplicateID: dup.ID, DuplicateName: dup.Name, CanonicalID: canonical.ID,
@@ -654,6 +662,10 @@ func (p *Plugin) authorIDMergeOne(
 	// moves, in a preview too. No DeleteAuthor fallback.
 	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
 		ch.Outcome, ch.Error = authorIDMergeFailed, database.ErrAuthorMergeDeleteUnsupported.Error()
+		return ch, false, 0
+	}
+	if !dryRun && opID == "" {
+		ch.Outcome, ch.Error = authorIDMergeFailed, "no operation id to journal the undo rows under; not merged"
 		return ch, false, 0
 	}
 
@@ -683,7 +695,7 @@ func (p *Plugin) authorIDMergeOne(
 	sort.Strings(bookIDs)
 
 	wrote := false
-	var moved []database.BookCore
+	ledger := 0
 	for _, bookID := range bookIDs {
 		joins, jErr := store.GetBookAuthors(bookID)
 		if jErr != nil {
@@ -706,42 +718,27 @@ func (p *Plugin) authorIDMergeOne(
 		if dryRun || (!joinChanged && !scalarHit) {
 			continue
 		}
-		bookMoved := false
+		after := joins
 		if joinChanged {
-			if sErr := store.SetBookAuthors(bookID, newJoins); sErr != nil {
-				ch.Error = sErr.Error()
-				log.Warn("author-id-repair: join rewrite failed", "book_id", bookID, "err", sErr)
-			} else {
-				wrote, bookMoved = true, true
-			}
+			after = newJoins
 		}
-		if scalarHit {
-			target := canonical
-			// Repoint only AuthorID/Author, under the book's write lock
-			// (ModifyBook), so a column another writer commits meanwhile is
-			// not reverted (audit A1#15); a row moved off the duplicate
-			// meanwhile is left alone.
-			written, uErr := store.ModifyBook(bookID, func(cur *database.Book) error {
-				if cur.AuthorID == nil || *cur.AuthorID != dup.ID {
-					return database.ErrSkipBookWrite
-				}
-				cur.AuthorID = &target.ID
-				cur.Author = &target
-				return nil
-			})
-			switch {
-			case uErr != nil:
-				ch.Error = uErr.Error()
-				log.Warn("author-id-repair: scalar repoint failed", "book_id", bookID, "err", uErr)
-			case written == nil:
-				ch.Error = "book vanished before the scalar repoint"
-				log.Warn("author-id-repair: scalar repoint skipped, book gone", "book_id", bookID)
-			default:
-				wrote, bookMoved = true, true
-			}
+		target := canonical
+		res, mErr := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
+			BookID: bookID, FromID: dup.ID, IntoID: canonical.ID, Into: &target,
+			Before: joins, After: after, PrimaryBefore: full.AuthorID,
+		})
+		if mErr != nil {
+			ch.Error = mErr.Error()
+			log.Warn("author-id-repair: book not moved", "book_id", bookID, "err", mErr)
+			continue
 		}
-		if bookMoved {
-			moved = append(moved, database.BookCore{ID: bookID})
+		ledger++
+		if joinChanged || res.PrimaryRepointed {
+			wrote = true
+		}
+		for _, problem := range res.Problems {
+			ch.Error = problem
+			log.Warn("author-id-repair: book moved with a problem", "book_id", bookID, "problem", problem)
 		}
 	}
 
@@ -753,7 +750,6 @@ func (p *Plugin) authorIDMergeOne(
 	// 🔴 DELETE ONLY WHEN EMPTY, re-read through BOTH stores after the moves.
 	// Either one still seeing a credit -- a failed write above, a book written
 	// concurrently, memdb and Pebble disagreeing -- holds the row back.
-	deleted := false
 	var still []string
 	if vErr := database.VerifyAuthorUnlinked(store, dup.ID); vErr != nil {
 		still = append(still, "relink-view: "+vErr.Error())
@@ -767,16 +763,17 @@ func (p *Plugin) authorIDMergeOne(
 		ch.Outcome, ch.StillCrediting = authorIDMergeHeld, still
 		log.Warn("author-id-repair: duplicate still credited after moves, NOT deleted",
 			"author_id", dup.ID, "name", dup.Name, "canonical_id", canonical.ID, "still", still)
-	} else if _, delErr := database.MergeDeleteAuthorOf(store, dup.ID, canonical.ID); delErr != nil {
+	} else if del, delErr := authormerge.MergeDelete(store, opID, dup, canonical); delErr != nil {
 		// MergeDeleteAuthor: the duplicate's aliases move to the canonical row and
 		// the tombstone is written with the delete (DeleteAuthor dropped both).
 		ch.Outcome, ch.Error = authorIDMergeFailed, delErr.Error()
 	} else {
-		deleted, wrote = true, true
+		wrote, ledger = true, ledger+1
 		ch.Outcome = authorIDMergeMerged
+		for _, problem := range del.Problems {
+			ch.Error = problem
+			log.Warn("author-id-repair: duplicate deleted with a problem", "author_id", dup.ID, "problem", problem)
+		}
 	}
-	// Journal every book that moved, on every path, plus the author delete when
-	// it happened. Same ledger shape as author-duplicate-merge.
-	ledger := p.journalAuthorMerge(store, opID, dup, canonical, moved, len(moved), deleted, log)
 	return ch, wrote, ledger
 }

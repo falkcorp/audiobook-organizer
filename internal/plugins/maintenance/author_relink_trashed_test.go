@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
 // last-edited: 2026-10-14
 
@@ -97,7 +97,7 @@ func TestMergeAuthorInto_MovesTrashedBookCredit(t *testing.T) {
 	trashed := mkRelinkTrashedBook(t, s, "merge-trashed", from.ID, true)
 
 	p := &Plugin{deps: fakeDeps{store: s}}
-	n, err := p.mergeAuthorInto(context.Background(), *from, *into, false, slog.Default())
+	n, _, err := p.mergeAuthorInto(context.Background(), *from, *into, false, "op-relink-merge", slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "both the live and the trashed book must be relinked")
 
@@ -147,7 +147,7 @@ func TestAuthorSplitScan_RelinksTrashedBook(t *testing.T) {
 	trashed := mkRelinkTrashedBook(t, s, "split-trashed", composite.ID, true)
 
 	p := &Plugin{deps: fakeDeps{store: s}}
-	require.NoError(t, p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}))
+	require.NoError(t, p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
 
 	requireAuthorGone(t, s, composite.ID)
 	alice, err := s.GetAuthorByName("Alice Smith")
@@ -186,7 +186,7 @@ func TestAuthorDuplicateMerge_DanglingRefsDoNotHoldBack(t *testing.T) {
 		}, nil
 	}
 	require.NoError(t, p.runAuthorDuplicateMerge(context.Background(),
-		[]byte(`{"names":["Raymond L. Weil"],"dry_run":false}`), &fakeReporter{}))
+		[]byte(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
 	require.Equal(t, []int{2}, w.deletedAuthors, "dangling-only extra refs must not hold the row back")
 }
 
@@ -202,7 +202,7 @@ func TestAuthorDuplicateMerge_UnmovableTrashedRefStillHoldsBack(t *testing.T) {
 		return map[int]database.AuthorRefBuckets{1: {Live: 2}, 2: {Live: 1, Trashed: 1}}, nil
 	}
 	require.NoError(t, p.runAuthorDuplicateMerge(context.Background(),
-		[]byte(`{"names":["Raymond L. Weil"],"dry_run":false}`), &fakeReporter{}))
+		[]byte(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
 	require.Empty(t, w.deletedAuthors)
 	require.Zero(t, w.total())
 }
@@ -295,7 +295,7 @@ func TestMergePaths_AStoreWithoutTheMergeDeleteCapabilityRefuses(t *testing.T) {
 		s, from, into, book := world(t, "merge")
 		hidden := noMergeDeleteStore{Store: s}
 		p := &Plugin{deps: fakeDeps{store: hidden}}
-		n, err := p.mergeAuthorInto(context.Background(), *from, *into, false, slog.Default())
+		n, _, err := p.mergeAuthorInto(context.Background(), *from, *into, false, "op-capless", slog.Default())
 		require.ErrorIs(t, err, database.ErrAuthorMergeDeleteUnsupported)
 		require.Zero(t, n, "no credit moved")
 		untouched(t, s, from, book)

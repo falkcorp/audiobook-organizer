@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 47ea834f-d1ec-4c9f-a8c5-e26626311d2e
-// last-edited: 2026-09-12
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // authorDupWrites records every mutating call the op makes, so a dry-run test can
@@ -29,13 +30,22 @@ func (w *authorDupWrites) total() int {
 	return len(w.setBookAuthors) + len(w.deletedAuthors) + len(w.updatedBooks)
 }
 
-// ledgerFor returns the ledger rows recorded for one book id.
+// ledgerFor returns the ledger rows recorded for one book id. A write under an
+// id already recorded replaces that row, as the store's does (a journaled row is
+// rewritten in place once the write it describes has landed).
 func (w *authorDupWrites) ledgerFor(bookID string) []database.OperationChange {
 	var out []database.OperationChange
+	at := map[string]int{}
 	for _, c := range w.ledger {
-		if c.BookID == bookID {
-			out = append(out, c)
+		if c.BookID != bookID {
+			continue
 		}
+		if i, seen := at[c.ID]; seen {
+			out[i] = c
+			continue
+		}
+		at[c.ID] = len(out)
+		out = append(out, c)
 	}
 	return out
 }
@@ -104,7 +114,12 @@ func newAuthorDupPlugin(
 		GetAllAuthorBookCountsFunc:     func() (map[int]int, error) { return bookCounts, nil },
 		GetAllAuthorBookRefCountsFunc:  func() (map[int]int, error) { return refCounts, nil },
 		GetBooksByAuthorIDWithRoleFunc: func(id int) ([]database.BookCore, error) { return booksByAuthor[id], nil },
-		GetBookAuthorsFunc:             func(bookID string) ([]database.BookAuthor, error) { return joins[bookID], nil },
+		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
+			if written, ok := w.setBookAuthors[bookID]; ok {
+				return written, nil
+			}
+			return joins[bookID], nil
+		},
 		SetBookAuthorsFunc: func(bookID string, ba []database.BookAuthor) error {
 			w.setBookAuthors[bookID] = ba
 			return nil
@@ -134,7 +149,8 @@ func runAuthorDup(t *testing.T, params string, w *authorDupWrites) {
 	if params != "" {
 		raw = json.RawMessage(params)
 	}
-	if err := p.runAuthorDuplicateMerge(context.Background(), raw, &fakeReporter{}); err != nil {
+	// An apply journals its undo rows under the op's id and refuses without one.
+	if err := p.runAuthorDuplicateMerge(context.Background(), raw, &opIDReporter{id: "op-dup-merge"}); err != nil {
 		t.Fatalf("runAuthorDuplicateMerge(%s): %v", params, err)
 	}
 }
@@ -229,28 +245,40 @@ func TestAuthorDuplicateMerge_JournalsOneRowPerMovedBook(t *testing.T) {
 	var w authorDupWrites
 	runAuthorDup(t, `{"names":["Raymond L. Weil"],"dry_run":false}`, &w)
 
+	// The rows are the ones the revert engine reverses (undo/author_merge.go),
+	// the same shape the Authors view merge writes: one author_merge_credits row
+	// per moved book, naming the ids it moved between.
 	rows := w.ledgerFor("b3")
 	if len(rows) != 1 {
 		t.Fatalf("expected exactly 1 undo-ledger row for the one moved book, got %d (%+v)", len(rows), w.ledger)
 	}
-	if rows[0].ChangeType != "metadata_update" || rows[0].FieldName != "author_id" {
+	if rows[0].ChangeType != undo.ChangeTypeAuthorMergeCredits || rows[0].OperationID != "op-dup-merge" {
 		t.Fatalf("unexpected ledger row shape: %+v", rows[0])
 	}
-	if rows[0].OldValue != "2" || rows[0].NewValue != "1" {
-		t.Fatalf("ledger row must name the ids it moved between, got old=%q new=%q", rows[0].OldValue, rows[0].NewValue)
+	var move undo.AuthorCreditsMove
+	if err := json.Unmarshal([]byte(rows[0].NewValue), &move); err != nil {
+		t.Fatalf("decode the credits row: %v", err)
 	}
-	// Plus one row recording the deleted author, whose NAME survives nowhere else.
+	if move.FromAuthorID != 2 || move.IntoAuthorID != 1 {
+		t.Fatalf("ledger row must name the ids it moved between, got from=%d into=%d", move.FromAuthorID, move.IntoAuthorID)
+	}
+	// Plus one row recording the deleted author, whose NAME survives nowhere
+	// else, so the undo can bring it back.
 	var deleteRows int
 	for _, c := range w.ledger {
-		if c.ChangeType == "author_delete" {
+		if c.ChangeType == undo.ChangeTypeAuthorMergeDelete {
 			deleteRows++
-			if c.OldValue != "2:RAYMOND L. WEIL" {
-				t.Fatalf("author_delete row must preserve the deleted name, got %q", c.OldValue)
+			var snap undo.AuthorSnapshot
+			if err := json.Unmarshal([]byte(c.OldValue), &snap); err != nil {
+				t.Fatalf("decode the delete row: %v", err)
+			}
+			if snap.ID != 2 || snap.Name != "RAYMOND L. WEIL" {
+				t.Fatalf("author_merge_delete row must preserve the deleted author, got %+v", snap)
 			}
 		}
 	}
 	if deleteRows != 1 {
-		t.Fatalf("expected 1 author_delete ledger row, got %d", deleteRows)
+		t.Fatalf("expected 1 author_merge_delete ledger row, got %d", deleteRows)
 	}
 	// No books were moved for the unlisted group, so no rows exist for them.
 	for _, id := range []string{"b4", "b5", "b6"} {
@@ -272,7 +300,7 @@ func TestAuthorDuplicateMerge_RefusesDeleteWhileStillReferenced(t *testing.T) {
 	var w authorDupWrites
 	p := newAuthorDupPlugin(authors, books, joins, counts, refs, &w)
 	if err := p.runAuthorDuplicateMerge(context.Background(),
-		json.RawMessage(`{"names":["Raymond L. Weil"],"dry_run":false}`), &fakeReporter{}); err != nil {
+		json.RawMessage(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}); err != nil {
 		t.Fatalf("runAuthorDuplicateMerge: %v", err)
 	}
 	if len(w.deletedAuthors) != 0 {
@@ -313,7 +341,7 @@ func TestAuthorDuplicateMerge_AbortsWhenRefCountUnavailable(t *testing.T) {
 	}
 	p := New(&fakeDeps{store: store})
 	err := p.runAuthorDuplicateMerge(context.Background(),
-		json.RawMessage(`{"names":["Raymond L. Weil"],"dry_run":false}`), &fakeReporter{})
+		json.RawMessage(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"})
 	if err == nil {
 		t.Fatal("expected the op to abort when the unfiltered ref count is unavailable")
 	}
