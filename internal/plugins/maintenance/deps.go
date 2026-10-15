@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-15
 
@@ -186,6 +186,9 @@ type opsAuthorStore interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
+	// GetAuthorAliases: an author merge journals the aliases its delete moves
+	// onto the survivor (authormerge.MergeDelete), so the undo can move them back.
+	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 	UpdateAuthorName(id int, name string) error
 }
 

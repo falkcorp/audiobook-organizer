@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-09-12
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -10,11 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -233,11 +230,11 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	}
 
 	opID := registry.ReporterOpID(reporter)
-	if opID == "" {
-		// Matches series_dedup.go's precedent: journal anyway rather than refuse to
-		// write. A ledger row with no operation id is still a record of what moved;
-		// refusing the write because the record is imperfect would be worse.
-		log.Warn("author-duplicate-merge: no operation id on the reporter, undo-ledger rows will be unattributed")
+	if !dryRun && opID == "" {
+		// Every merge is journaled under this id so the revert engine can undo it
+		// (mergeAuthorInto). Rows under no id belong to no operation a revert can
+		// name, so an apply without one would be a merge nobody can undo.
+		return fmt.Errorf("author-duplicate-merge: no operation id on the reporter to journal the undo rows under; refusing to merge")
 	}
 
 	rowOutcomes := map[string]int{}
@@ -296,15 +293,12 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			}
 
 			// movable is what mergeAuthorInto will iterate. It is fetched here as
-			// well as inside the primitive so the guard below and the undo-ledger
-			// rows further down can both name the specific books -- which assumes
-			// the two reads agree within the run, true for a sequential op holding
-			// the scan stand-down.
-			//
-			// Both reads use GetBooksByAuthorIDForRelinkCore, which includes the
-			// trash. They must stay the same getter: the ledger slices
-			// movable[:relinked] by position, so a guard list that differed from
-			// the primitive's list would journal the wrong books.
+			// well as inside the primitive so the guard below can count the books
+			// the merge is able to move -- which assumes the two reads agree
+			// within the run, true for a sequential op holding the scan
+			// stand-down. Both reads use GetBooksByAuthorIDForRelinkCore, which
+			// includes the trash; they must stay the same getter, or the guard
+			// would judge a different set than the merge moves.
 			movable, mErr := store.GetBooksByAuthorIDForRelinkCore(src.ID)
 			if mErr != nil {
 				rowOutcomes[authorDupRowFailed]++
@@ -355,16 +349,12 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 					"refusing to keep writing while the scanner is running", rowOutcomes[authorDupRowMerged])
 			}
 
-			relinked, err := p.mergeAuthorInto(ctx, src, canonical, dryRun, log)
-			// Journal FIRST, and on the error path too: mergeAuthorInto can fail
-			// partway through, and the books it moved before failing are moved. A
-			// mutation without a ledger row is a defect, so the partial case is
-			// precisely the one that must not be skipped. relinked counts the
-			// primitive's own iterations over the same ordered slice, so
-			// movable[:relinked] names exactly the books it rewrote.
-			if !dryRun {
-				ledgerRows += p.journalAuthorMerge(store, opID, src, canonical, movable, relinked, err == nil, log)
-			}
+			// mergeAuthorInto journals each write before making it (one
+			// author_merge_credits row per book, one author_merge_delete row for
+			// the source), so a merge that fails partway leaves exactly the
+			// books it moved journaled, and the revert engine can undo the lot.
+			relinked, undoRows, err := p.mergeAuthorInto(ctx, src, canonical, dryRun, opID, log)
+			ledgerRows += undoRows
 			if err != nil {
 				rowOutcomes[authorDupRowFailed]++
 				log.Warn("author-duplicate-merge: merge failed",
@@ -403,77 +393,4 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 		"books_relinked", booksRelinked, "undo_rows", ledgerRows, "authors_total", len(authors))
 	prog.Done(summary)
 	return nil
-}
-
-// journalAuthorMerge writes the undo-ledger rows for one source row's merge and
-// returns how many it wrote. One row per book whose author link actually moved,
-// plus one for the deleted author row when the merge completed.
-//
-// 🔴 WHAT THE LEDGER CAN AND CANNOT UNDO. internal/undo/engine.go replays
-// change_type "metadata_update" (engine.go:141), so the per-book rows are in the
-// vocabulary it understands, though "author_id" is not one of the field names its
-// metadata path switches on -- these rows are a durable record of what moved, not
-// a one-click restore. The author-delete row uses change_type "author_delete",
-// mirroring series_dedup.go's "series_delete", which the engine likewise does not
-// replay: an author's name lives only in the deleted row, so the ledger records
-// it precisely because nothing else will. This is why dry_run defaults to true.
-func (p *Plugin) journalAuthorMerge(
-	store OpsStore,
-	opID string,
-	src, canonical database.Author,
-	movable []database.BookCore,
-	relinked int,
-	deleted bool,
-	log logWarner,
-) int {
-	if relinked > len(movable) {
-		relinked = len(movable)
-	}
-	written := 0
-	journaled := make(map[string]struct{}, relinked)
-	for _, b := range movable[:relinked] {
-		if _, dup := journaled[b.ID]; dup {
-			continue
-		}
-		journaled[b.ID] = struct{}{}
-		if err := store.CreateOperationChange(&database.OperationChange{
-			ID:          ulid.Make().String(),
-			OperationID: opID,
-			BookID:      b.ID,
-			ChangeType:  "metadata_update",
-			FieldName:   "author_id",
-			OldValue:    strconv.Itoa(src.ID),
-			NewValue:    strconv.Itoa(canonical.ID),
-		}); err != nil {
-			// Logged, never swallowed: an unjournaled mutation is the defect this
-			// call exists to prevent, so a failure to record one has to be visible.
-			log.Warn("author-duplicate-merge: undo-ledger write failed for a moved book",
-				"book_id", b.ID, "from_id", src.ID, "into_id", canonical.ID, "err", err)
-			continue
-		}
-		written++
-	}
-	if !deleted {
-		return written
-	}
-	if err := store.CreateOperationChange(&database.OperationChange{
-		ID:          ulid.Make().String(),
-		OperationID: opID,
-		ChangeType:  "author_delete",
-		FieldName:   "author",
-		OldValue:    fmt.Sprintf("%d:%s", src.ID, src.Name),
-		NewValue:    fmt.Sprintf("merged_into:%d", canonical.ID),
-	}); err != nil {
-		log.Warn("author-duplicate-merge: undo-ledger write failed for the deleted author row",
-			"author_id", src.ID, "name", src.Name, "err", err)
-		return written
-	}
-	return written + 1
-}
-
-// logWarner is the one method journalAuthorMerge needs from the reporter's
-// logger, declared rather than taking *slog.Logger so the helper's dependency is
-// the method it calls.
-type logWarner interface {
-	Warn(msg string, args ...any)
 }

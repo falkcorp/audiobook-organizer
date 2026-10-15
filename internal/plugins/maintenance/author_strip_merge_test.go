@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-09-26
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -172,6 +172,10 @@ type summaryReporter struct {
 	fakeReporter
 	buf bytes.Buffer
 }
+
+// OpID: an apply journals each merge's undo rows under the op's id and refuses
+// a merge without one (mergeAuthorInto).
+func (r *summaryReporter) OpID() string { return "op-strip-merge" }
 
 func (r *summaryReporter) Logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&r.buf, nil))

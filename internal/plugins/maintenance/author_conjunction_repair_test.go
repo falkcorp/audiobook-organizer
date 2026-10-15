@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
-// last-edited: 2026-09-12
+// last-edited: 2026-10-14
 
 package maintenance
 
@@ -158,7 +158,7 @@ func TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite(t *testing.T) {
 		var w conjRepairWrites
 		deps := &conjRepairDeps{}
 		p := newConjRepairPluginWithDeps(authors, nil, nil, &w, deps)
-		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-conj-repair"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if deps.authorsInvalidated != 1 {
@@ -170,7 +170,7 @@ func TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite(t *testing.T) {
 		var w conjRepairWrites
 		deps := &conjRepairDeps{}
 		p := newConjRepairPluginWithDeps(authors, nil, nil, &w, deps)
-		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(true), &fakeReporter{}); err != nil {
+		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(true), &opIDReporter{id: "op-conj-repair"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if deps.authorsInvalidated != 0 {
@@ -182,7 +182,7 @@ func TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite(t *testing.T) {
 		var w conjRepairWrites
 		deps := &conjRepairDeps{}
 		p := newConjRepairPluginWithDeps([]database.Author{{ID: 1, Name: "Dan Simmons"}}, nil, nil, &w, deps)
-		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-conj-repair"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if deps.authorsInvalidated != 0 {
@@ -229,7 +229,7 @@ func TestAuthorConjunctionRepair_SkipAuthorIDs(t *testing.T) {
 
 	var w conjRepairWrites
 	p := newConjRepairPlugin(authors, booksByAuthor, joins, &w)
-	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParamsSkip(false, 46627), &fakeReporter{}); err != nil {
+	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParamsSkip(false, 46627), &opIDReporter{id: "op-conj-repair"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestAuthorConjunctionRepair_MergesIntoExistingTwin(t *testing.T) {
 
 	var w conjRepairWrites
 	p := newConjRepairPlugin(authors, booksByAuthor, joins, &w)
-	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-conj-repair"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -336,7 +336,7 @@ func TestAuthorConjunctionRepair_RenamesWhenNoTwin(t *testing.T) {
 	}
 	var w conjRepairWrites
 	p := newConjRepairPlugin(authors, nil, nil, &w)
-	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-conj-repair"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -378,7 +378,7 @@ func TestAuthorConjunctionRepair_DryRunWritesNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var w conjRepairWrites
 			p := newConjRepairPlugin(authors, booksByAuthor, joins, &w)
-			if err := p.runAuthorConjunctionRepair(context.Background(), tc.params, &fakeReporter{}); err != nil {
+			if err := p.runAuthorConjunctionRepair(context.Background(), tc.params, &opIDReporter{id: "op-conj-repair"}); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if len(w.setBookAuthors) != 0 {
@@ -426,7 +426,7 @@ func TestAuthorConjunctionRepair_LeavesNonAmpersandRowsAlone(t *testing.T) {
 	}
 	var w conjRepairWrites
 	p := newConjRepairPlugin(authors, nil, nil, &w)
-	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &fakeReporter{}); err != nil {
+	if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-conj-repair"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(w.renamedAuthors) != 0 {

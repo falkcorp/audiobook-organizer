@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
 // last-edited: 2026-10-14
 
@@ -121,11 +121,15 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	if err != nil {
 		return res, fmt.Errorf("undo row not recorded: %w", err)
 	}
-	if err := store.SetBookAuthors(m.BookID, m.After); err != nil {
-		if verr := void(); verr != nil {
-			return res, fmt.Errorf("set book authors: %w (and its undo row could not be voided: %v)", err, verr)
+	// A move that only repoints the primary (the book's junction never credited
+	// FromID) leaves the junction as it is rather than rewriting it unchanged.
+	if !undo.SameJunction(m.Before, m.After) {
+		if err := store.SetBookAuthors(m.BookID, m.After); err != nil {
+			if verr := void(); verr != nil {
+				return res, fmt.Errorf("set book authors: %w (and its undo row could not be voided: %v)", err, verr)
+			}
+			return res, fmt.Errorf("set book authors: %w", err)
 		}
-		return res, fmt.Errorf("set book authors: %w", err)
 	}
 	rewrite := func(what string) {
 		nv, merr := json.Marshal(move)
