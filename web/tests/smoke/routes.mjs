@@ -1,7 +1,7 @@
 // file: web/tests/smoke/routes.mjs
-// version: 1.0.0
+// version: 1.0.1
 // guid: 18d11aa3-09de-42e9-9350-eb5fe5660c2f
-// last-edited: 2026-08-19
+// last-edited: 2026-10-15
 //
 // Per-route bundle smoke test. Loads every route against a running server and
 // fails on any uncaught page error.
@@ -25,6 +25,7 @@
 import { chromium } from 'playwright';
 
 const base = process.argv[2] || 'https://localhost:9797';
+// /authors/dedup, /books/dedup, /dedup and /dedup/labels are redirects into /review.
 const ROUTES = [
   '/', '/dashboard', '/library', '/series', '/authors', '/authors/dedup',
   '/books/dedup', '/dedup', '/dedup/labels', '/files', '/works', '/playlists',

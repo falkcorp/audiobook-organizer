@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: edade879-0563-463d-bc62-bd740239b04b
-// last-edited: 2026-08-21
+// last-edited: 2026-10-15
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
@@ -102,5 +102,25 @@ describe('Sidebar (collapsed mode — Library sub-nav)', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Library' })).toHaveClass('Mui-selected');
+  });
+});
+
+describe('Sidebar (retired dedup entries)', () => {
+  // /dedup and /dedup/labels redirect into /review, so the two sidebar entries
+  // that pointed at them are gone; Review is the one way in.
+  it.each([
+    ['collapsed', true],
+    ['expanded', false],
+  ])('has no Dedup or Gold Labels entry (%s) and still has Review', (_mode, collapsed) => {
+    renderWithProviders(
+      <Sidebar open={!collapsed} onClose={vi.fn()} drawerWidth={240} collapsed={collapsed} />,
+      { initialEntries: ['/dashboard'] },
+    );
+
+    expect(screen.queryAllByRole('button', { name: 'Dedup' })).toHaveLength(0);
+    expect(screen.queryAllByRole('button', { name: 'Gold Labels' })).toHaveLength(0);
+    expect(screen.queryAllByText('Dedup')).toHaveLength(0);
+    expect(screen.queryAllByText('Gold Labels')).toHaveLength(0);
+    expect(screen.queryAllByRole('button', { name: /^Review/ }).length).toBeGreaterThan(0);
   });
 });

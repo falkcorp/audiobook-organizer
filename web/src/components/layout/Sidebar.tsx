@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.22.0
+// version: 1.23.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-08
+// last-edited: 2026-10-15
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -30,7 +30,6 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import MonitorIcon from '@mui/icons-material/Monitor';
 import SettingsIcon from '@mui/icons-material/Settings';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import MergeTypeIcon from '@mui/icons-material/MergeType';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import CollectionsBookmarkIcon from '@mui/icons-material/CollectionsBookmark';
 import PeopleIcon from '@mui/icons-material/People';
@@ -91,9 +90,7 @@ const menuItems = [
   { text: 'Works', icon: <MenuBookIcon />, path: '/works' },
   { text: 'Playlists', icon: <MenuBookIcon />, path: '/playlists' },
   { text: 'Activity', icon: <TimelineIcon />, path: '/activity' },
-  { text: 'Dedup', icon: <MergeTypeIcon />, path: '/dedup' },
   { text: 'Review', icon: <FactCheckIcon />, path: '/review' },
-  { text: 'Gold Labels', icon: <LibraryBooksIcon />, path: '/dedup/labels' },
   { text: 'Diagnostics', icon: <BugReportIcon />, path: '/diagnostics' },
   { text: 'System', icon: <MonitorIcon />, path: '/system' },
   { text: 'Users', icon: <PeopleIcon />, path: '/users' },
