@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-10-07
+// last-edited: 2026-10-14
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -28,6 +28,12 @@
 // mints a one-shot grant and enqueues repairs.apply naming it; 403 for any
 // other caller, nothing enqueued. GET /repairs/owner-status says whether the
 // caller passes the owner proof, and why not, so the page can say it first.
+//
+// Per-fixer permission (owner decision 2026-10-14): the routes are gated by
+// library.edit_metadata; starting a fixer's plan, apply or owner-apply also
+// requires every permission repairs.RequiredPermissions(fixer) names (a
+// repairs.PermissionScoped fixer can ask for more, e.g. settings.manage).
+// 401/403 as the route middleware answers, nothing enqueued.
 package repairs
 
 import (
@@ -83,12 +89,54 @@ type Handler struct {
 	// ownerEmail returns the configured owner_email, read per request so a
 	// change takes effect without a restart.
 	ownerEmail func() string
+	// permCheck reports whether the caller holds a permission, writing the
+	// 401/403 when not (PermissionCheck).
+	permCheck PermissionCheck
 }
 
+// PermissionCheck reports whether the request's caller holds p; when it does
+// not, it has written the 401/403 response and the handler stops.
+type PermissionCheck func(c *gin.Context, p auth.Permission) bool
+
 // New builds the handler. enqueuer may be nil: plan/apply then answer 503.
+// The permission check defaults to the strict one (StrictPermissionCheck);
+// the server installs its own with WithPermissionCheck.
 func New(fixers *repairs.Registry, enqueuer Enqueuer, ops OpStore) *Handler {
 	return &Handler{fixers: fixers, enqueuer: enqueuer, ops: ops,
-		ownerEmail: func() string { return config.Snapshot().OwnerEmail }}
+		ownerEmail: func() string { return config.Snapshot().OwnerEmail },
+		permCheck:  StrictPermissionCheck}
+}
+
+// WithPermissionCheck sets how the per-fixer permissions are checked: the
+// server passes the same semantics as its route middleware (auth disabled,
+// first-run bypass). nil keeps the strict check.
+func (h *Handler) WithPermissionCheck(check PermissionCheck) *Handler {
+	if check != nil {
+		h.permCheck = check
+	}
+	return h
+}
+
+// StrictPermissionCheck is servermiddleware.CheckPermission with no
+// first-run bypass: the caller must hold p. It fails closed for a handler the
+// server did not wire.
+func StrictPermissionCheck(c *gin.Context, p auth.Permission) bool {
+	return servermiddleware.CheckPermission(nil, c, p)
+}
+
+// fixerPermitted checks every permission f requires
+// (repairs.RequiredPermissions); false means the 401/403 is written.
+func (h *Handler) fixerPermitted(c *gin.Context, f repairs.Fixer) bool {
+	check := h.permCheck
+	if check == nil {
+		check = StrictPermissionCheck
+	}
+	for _, p := range repairs.RequiredPermissions(f) {
+		if !check(c, p) {
+			return false
+		}
+	}
+	return true
 }
 
 // ownerWhyNot is why the request is not the owner ("" when it is): a
@@ -252,6 +300,9 @@ func (h *Handler) StartPlan(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !h.fixerPermitted(c, f) {
+		return
+	}
 	if h.enqueuer == nil {
 		httputil.RespondWithServiceUnavailable(c, "operations registry not initialized")
 		return
@@ -309,6 +360,9 @@ func (h *Handler) StartApply(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !h.fixerPermitted(c, f) {
+		return
+	}
 	if h.enqueuer == nil {
 		httputil.RespondWithServiceUnavailable(c, "operations registry not initialized")
 		return
@@ -356,6 +410,9 @@ func (h *Handler) StartApply(c *gin.Context) {
 func (h *Handler) OwnerApply(c *gin.Context) {
 	f, ok := h.fixer(c)
 	if !ok {
+		return
+	}
+	if !h.fixerPermitted(c, f) {
 		return
 	}
 	ctx := c.Request.Context()

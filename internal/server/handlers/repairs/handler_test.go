@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
-// last-edited: 2026-10-07
+// last-edited: 2026-10-14
 
 package repairs
 
@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -162,12 +163,23 @@ func setup(t *testing.T) (*gin.Engine, *fakeEnqueuer, *fakeOps) {
 	}}
 	h := New(reg, enq, ops)
 	r := gin.New()
+	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
 	g := r.Group("/api/v1")
 	g.GET("/repairs", h.ListFixers)
 	g.POST("/repairs/:fixer/plan", h.StartPlan)
 	g.GET("/repairs/:fixer/plan/:op_id/rows", h.ListPlanRows)
 	g.POST("/repairs/:fixer/apply", h.StartApply)
 	return r, enq, ops
+}
+
+// callerWith stands in for the auth middleware: it binds user (nil: none)
+// and the permission set perms to the request.
+func callerWith(user *database.User, perms ...auth.Permission) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := auth.WithPermissions(auth.WithUser(c.Request.Context(), user), perms)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
 }
 
 func do(r *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
@@ -342,8 +354,93 @@ func TestPlanAndApply_NoRegistryIs503(t *testing.T) {
 	require.NoError(t, reg.Register(stubFixer{id: "x"}))
 	h := New(reg, nil, &fakeOps{rows: map[string]*database.OperationV2Row{}, settings: map[string]string{}})
 	r := gin.New()
+	r.Use(callerWith(&database.User{ID: "u-editor"}, auth.PermLibraryEditMetadata))
 	r.POST("/repairs/:fixer/plan", h.StartPlan)
 	r.POST("/repairs/:fixer/apply", h.StartApply)
 	require.Equal(t, http.StatusServiceUnavailable, do(r, http.MethodPost, "/repairs/x/plan", "").Code)
 	require.Equal(t, http.StatusServiceUnavailable, do(r, http.MethodPost, "/repairs/x/apply", `{"plan_op_id":"p","row_ids":["a"]}`).Code)
+}
+
+// scopedFixer is a stub fixer that needs settings.manage
+// (repairs.PermissionScoped), like the missing-files fixer.
+type scopedFixer struct{ stubFixer }
+
+func (scopedFixer) RequiredPermissions() []auth.Permission {
+	return []auth.Permission{auth.PermSettingsManage}
+}
+
+// TestFixerPermissions_ScopedFixerNeedsItsPermission: starting a plan, an
+// apply or an owner-apply of a fixer that requires settings.manage is a 403
+// for a caller holding only library.edit_metadata (nothing enqueued), a 401
+// with no user, and goes through for a caller holding settings.manage. A
+// fixer that declares nothing keeps the lane's library.edit_metadata.
+func TestFixerPermissions_ScopedFixerNeedsItsPermission(t *testing.T) {
+	editor := &database.User{ID: "u-editor", Username: "editor"}
+	admin := &database.User{ID: "u-admin", Username: "admin"}
+	serve := func(user *database.User, perms ...auth.Permission) (*gin.Engine, *fakeEnqueuer) {
+		reg := repairs.NewRegistry()
+		require.NoError(t, reg.Register(scopedFixer{stubFixer{id: "scoped"}}))
+		require.NoError(t, reg.Register(stubFixer{id: "plain"}))
+		enq := &fakeEnqueuer{}
+		ops := &fakeOps{rows: map[string]*database.OperationV2Row{
+			"op-scoped-plan": {ID: "op-scoped-plan", DefID: repairs.PlanOpID, Status: "completed",
+				Params: `{"fixer_id":"scoped"}`, ResultData: storedPlan(t, "scoped", planRows(2))},
+		}, settings: map[string]string{}}
+		h := New(reg, enq, ops)
+		h.ownerEmail = func() string { return testOwnerEmail }
+		r := gin.New()
+		r.Use(callerWith(user, perms...))
+		r.POST("/repairs/:fixer/plan", h.StartPlan)
+		r.POST("/repairs/:fixer/apply", h.StartApply)
+		r.POST("/repairs/:fixer/owner-apply", h.OwnerApply)
+		return r, enq
+	}
+	applyBody := `{"plan_op_id":"op-scoped-plan","row_ids":["vg-000"]}`
+	ownerBody := `{"plan_op_id":"op-scoped-plan","row_id":"vg-000"}`
+
+	require.ElementsMatch(t, []auth.Permission{auth.PermSettingsManage}, repairs.RequiredPermissions(scopedFixer{}))
+	require.ElementsMatch(t, []auth.Permission{auth.PermLibraryEditMetadata}, repairs.RequiredPermissions(stubFixer{}))
+
+	r, enq := serve(editor, auth.PermLibraryEditMetadata)
+	for path, body := range map[string]string{
+		"/repairs/scoped/plan": "", "/repairs/scoped/apply": applyBody, "/repairs/scoped/owner-apply": ownerBody,
+	} {
+		w := do(r, http.MethodPost, path, body)
+		require.Equal(t, http.StatusForbidden, w.Code, path+": "+w.Body.String())
+		require.Contains(t, w.Body.String(), "permission denied: settings.manage", path)
+	}
+	require.Empty(t, enq.calls, "a refused caller enqueued nothing")
+	w := do(r, http.MethodPost, "/repairs/plain/plan", "")
+	require.Equal(t, http.StatusAccepted, w.Code, "a fixer that declares nothing keeps library.edit_metadata: "+w.Body.String())
+
+	r, enq = serve(nil)
+	require.Equal(t, http.StatusUnauthorized, do(r, http.MethodPost, "/repairs/scoped/plan", "").Code)
+	require.Equal(t, http.StatusUnauthorized, do(r, http.MethodPost, "/repairs/plain/plan", "").Code,
+		"the strict default check fails closed with no caller")
+	require.Empty(t, enq.calls)
+
+	r, enq = serve(admin, auth.PermLibraryEditMetadata, auth.PermSettingsManage)
+	w = do(r, http.MethodPost, "/repairs/scoped/plan", "")
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	w = do(r, http.MethodPost, "/repairs/scoped/apply", applyBody)
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.Len(t, enq.calls, 2)
+	// Owner-apply passes the permission and stops at the owner proof (this
+	// caller is not the Cloudflare Access owner): a 403 for that reason, not
+	// for the permission.
+	w = do(r, http.MethodPost, "/repairs/scoped/owner-apply", ownerBody)
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.NotContains(t, w.Body.String(), "permission denied")
+
+	// The server's check (WithPermissionCheck) replaces the strict one.
+	allow := 0
+	reg := repairs.NewRegistry()
+	require.NoError(t, reg.Register(scopedFixer{stubFixer{id: "scoped"}}))
+	enq2 := &fakeEnqueuer{}
+	h := New(reg, enq2, &fakeOps{rows: map[string]*database.OperationV2Row{}, settings: map[string]string{}}).
+		WithPermissionCheck(func(_ *gin.Context, p auth.Permission) bool { allow++; return p == auth.PermSettingsManage })
+	r2 := gin.New()
+	r2.POST("/repairs/:fixer/plan", h.StartPlan)
+	require.Equal(t, http.StatusAccepted, do(r2, http.MethodPost, "/repairs/scoped/plan", "").Code)
+	require.Equal(t, 1, allow)
 }

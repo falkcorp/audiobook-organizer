@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-10-07
+// last-edited: 2026-10-14
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -198,4 +199,28 @@ type Fixer interface {
 // outlives the run.
 type ApplyScoped interface {
 	BeginApply(ctx context.Context, dryRun bool) (scoped context.Context, end func())
+}
+
+// DefaultPermission is what starting a fixer's plan or apply requires when
+// the fixer does not say otherwise (PermissionScoped): the lane's routes are
+// library.edit_metadata.
+const DefaultPermission = auth.PermLibraryEditMetadata
+
+// PermissionScoped is implemented by a fixer whose writes need more than the
+// lane's default permission (owner decision 2026-10-14). The HTTP routes that
+// start its plan or apply check every permission it returns, on top of the
+// route's own gate.
+type PermissionScoped interface {
+	RequiredPermissions() []auth.Permission
+}
+
+// RequiredPermissions is what starting f's plan or apply requires: f's own
+// list when it is PermissionScoped and non-empty, else DefaultPermission.
+func RequiredPermissions(f Fixer) []auth.Permission {
+	if ps, ok := f.(PermissionScoped); ok {
+		if perms := ps.RequiredPermissions(); len(perms) > 0 {
+			return perms
+		}
+	}
+	return []auth.Permission{DefaultPermission}
 }
