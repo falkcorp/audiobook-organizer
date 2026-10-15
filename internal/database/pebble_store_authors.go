@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-10-14
 
@@ -270,6 +270,27 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	return err
 }
 
+// mergeRowsLive reports ErrAuthorNotLive unless both id and intoID are live rows
+// of those ids (GetAuthorByID follows a tombstone, so an answer under another id
+// is an author merged away already).
+func (p *PebbleStore) mergeRowsLive(id, intoID int) error {
+	from, err := p.GetAuthorByID(id)
+	if err != nil {
+		return err
+	}
+	if from == nil || from.ID != id {
+		return fmt.Errorf("merge author %d into %d: %w", id, intoID, ErrAuthorNotLive)
+	}
+	into, err := p.GetAuthorByID(intoID)
+	if err != nil {
+		return err
+	}
+	if into == nil || into.ID != intoID {
+		return fmt.Errorf("merge author %d into %d: the target %w", id, intoID, ErrAuthorNotLive)
+	}
+	return nil
+}
+
 // deleteAuthor is DeleteAuthor (intoID 0) and MergeDeleteAuthor (intoID > 0).
 // A merge moves the aliases onto intoID instead of deleting them, and writes the
 // tombstone, in the same batch as the delete; it also reports what its undo needs.
@@ -277,6 +298,14 @@ func (p *PebbleStore) deleteAuthor(id, intoID int) (*AuthorMergeDeleteResult, er
 	merge := intoID > 0
 	if merge && intoID == id {
 		return nil, fmt.Errorf("merge author %d into itself", id)
+	}
+	// A merge checks both rows BEFORE the primary repoint below writes
+	// anything: a merge refused for a dead target must leave every book as it
+	// was. The same checks run again under the name locks, against a race.
+	if merge {
+		if err := p.mergeRowsLive(id, intoID); err != nil {
+			return nil, err
+		}
 	}
 	// Only a live row of THIS id has books to repoint. A tombstoned id
 	// resolves to its canonical row on read, so its scalars are not dangling
