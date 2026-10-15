@@ -1,5 +1,5 @@
 // file: internal/undo/author_rename.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2c8a14-7b39-4f60-9d1a-8c3e6f0b2d75
 // last-edited: 2026-10-15
 
@@ -8,7 +8,6 @@ package undo
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -20,12 +19,13 @@ import (
 const ChangeTypeAuthorRename = "author_rename"
 
 // ChangeTypeAuthorIDRepoint: a book's primary AuthorID repointed off an id that
-// names no author (author-id-repair phase a). OldValue and NewValue are the ids
-// before and after. The revert puts the old id back, only while the book still
-// carries exactly the new one. A metadata_update row cannot carry this:
-// "author_id" is deliberately not a revertable book field (see
-// revertableBookFields), because other ops' author_id rows record a scalar
-// write whose credit is not journaled with it.
+// names no author (author-id-repair phase a). OldValue is AuthorIDRepointOld
+// JSON: the id before and the book's denormalized Author object as it was (nil
+// included); NewValue is AuthorIDRepointNew JSON, the id after. The revert puts
+// both back exactly, only while the book still carries exactly the new id. A
+// metadata_update row cannot carry this: "author_id" is deliberately not a
+// revertable book field (see revertableBookFields), because other ops'
+// author_id rows record a scalar write whose credit is not journaled with it.
 const ChangeTypeAuthorIDRepoint = "author_id_repoint"
 
 // AuthorName is one side of an author_rename row.
@@ -80,21 +80,47 @@ func CheckAuthorRename(cur *database.Author, authorID int, from, to string) erro
 	return refuse(ReasonChangedSince, "author %d was renamed since (now %q)", authorID, cur.Name)
 }
 
-// NewAuthorIDRepointRow builds the row for repointing bookID's primary from
-// from to to.
-func NewAuthorIDRepointRow(bookID string, from, to int) *database.OperationChange {
-	return &database.OperationChange{BookID: bookID, ChangeType: ChangeTypeAuthorIDRepoint, FieldName: "author_id",
-		OldValue: strconv.Itoa(from), NewValue: strconv.Itoa(to)}
+// AuthorIDRepointOld is an author_id_repoint row's OldValue: the primary id the
+// repair replaced and the Author object the book carried with it. Author is
+// journaled because the repair overwrites it (with the successor's row) and
+// the book's display name comes from it whenever it is non-nil; restoring only
+// the id would leave the book named after the successor.
+type AuthorIDRepointOld struct {
+	AuthorID int              `json:"author_id"`
+	Author   *database.Author `json:"author"`
 }
 
-// DecodeAuthorIDRepoint reads an author_id_repoint row.
-func DecodeAuthorIDRepoint(c *database.OperationChange) (from, to int, err error) {
-	from, ferr := strconv.Atoi(c.OldValue)
-	to, terr := strconv.Atoi(c.NewValue)
-	if ferr != nil || terr != nil || c.BookID == "" {
-		return 0, 0, refuse(ReasonOldValueUnparsable, "author id repoint row: old %q new %q book %q", c.OldValue, c.NewValue, c.BookID)
+// AuthorIDRepointNew is an author_id_repoint row's NewValue.
+type AuthorIDRepointNew struct {
+	AuthorID int `json:"author_id"`
+}
+
+// NewAuthorIDRepointRow builds the row for repointing bookID's primary from
+// from to to. fromAuthor is the book's Author object before the write, nil
+// included; the revert writes it back as-is.
+func NewAuthorIDRepointRow(bookID string, from int, fromAuthor *database.Author, to int) (*database.OperationChange, error) {
+	old, err := json.Marshal(AuthorIDRepointOld{AuthorID: from, Author: fromAuthor})
+	if err != nil {
+		return nil, err
 	}
-	return from, to, nil
+	nv, err := json.Marshal(AuthorIDRepointNew{AuthorID: to})
+	if err != nil {
+		return nil, err
+	}
+	return &database.OperationChange{BookID: bookID, ChangeType: ChangeTypeAuthorIDRepoint, FieldName: "author_id",
+		OldValue: string(old), NewValue: string(nv)}, nil
+}
+
+// DecodeAuthorIDRepoint reads an author_id_repoint row: the old side (id and
+// Author object) and the id the repair wrote.
+func DecodeAuthorIDRepoint(c *database.OperationChange) (old AuthorIDRepointOld, to int, err error) {
+	var n AuthorIDRepointNew
+	oerr := json.Unmarshal([]byte(c.OldValue), &old)
+	nerr := json.Unmarshal([]byte(c.NewValue), &n)
+	if oerr != nil || nerr != nil || c.BookID == "" || old.AuthorID <= 0 || n.AuthorID <= 0 {
+		return AuthorIDRepointOld{}, 0, refuse(ReasonOldValueUnparsable, "author id repoint row: old %q new %q book %q", c.OldValue, c.NewValue, c.BookID)
+	}
+	return old, n.AuthorID, nil
 }
 
 // CheckAuthorIDRepoint is the revert's compare-and-set on the book's primary:

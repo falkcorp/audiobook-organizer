@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -342,4 +342,106 @@ func TestAuthorIDRepair_UndoRestoresAGhostBooksCredit(t *testing.T) {
 	back, err := s.GetAuthorByID(x.ID)
 	require.NoError(t, err)
 	require.Equal(t, x.ID, back.ID)
+}
+
+// Undoing an author_id_repoint puts back the book's denormalized Author exactly
+// as the repair found it, not just the id: the repair writes the successor's
+// object, and a revert that left it would keep the book displaying the
+// successor's name under the restored id. Both pre-states are covered: no
+// object at all (nil), and a stale object for the dangling id.
+func TestAuthorIDRepair_UndoRestoresTheDenormalizedAuthorExactly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pre  *database.Author
+	}{
+		{"nil", nil},
+		{"stale object", &database.Author{ID: 424242, Name: "Synthetic Gone Writer"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newRepairPebble(t)
+			real := repairAuthor(t, s, "Real Person")
+			dangling := 424242
+			repairBook(t, s, "b1", &dangling, real.ID)
+			_, err := s.ModifyBook("b1", func(b *database.Book) error {
+				b.Author = tc.pre
+				return nil
+			})
+			require.NoError(t, err)
+			before, err := s.GetBookByID("b1")
+			require.NoError(t, err)
+			require.Equal(t, tc.pre, before.Author, "fixture")
+
+			runRepair(t, New(&fakeDeps{store: s}), `{"dry_run":false,"skip_duplicates":true}`)
+			moved, err := s.GetBookByID("b1")
+			require.NoError(t, err)
+			require.Equal(t, real.ID, *moved.AuthorID)
+			require.NotNil(t, moved.Author)
+			require.Equal(t, real.ID, moved.Author.ID, "the repair names the successor")
+
+			report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+			require.NoError(t, err)
+			require.Empty(t, report.CheckFailed)
+			rv, err := audiobooks.NewRevertService(s).RevertOperation("op-id-repair")
+			require.NoError(t, err)
+			require.Zero(t, rv.Failed, "%+v", rv)
+			require.Equal(t, 1, rv.Restored, "%+v", rv)
+
+			back, err := s.GetBookByID("b1")
+			require.NoError(t, err)
+			require.NotNil(t, back.AuthorID)
+			require.Equal(t, dangling, *back.AuthorID)
+			require.Equal(t, before.Author, back.Author, "the Author object is back exactly as it was")
+		})
+	}
+}
+
+// authorDriftStore changes a book's denormalized Author once, just before the
+// first ModifyBook of that book: another writer landing between phase (a)'s
+// read (which it journals) and its write.
+type authorDriftStore struct {
+	*database.PebbleStore
+	drifted map[string]bool
+}
+
+func (s authorDriftStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if !s.drifted[id] {
+		s.drifted[id] = true
+		if _, err := s.PebbleStore.ModifyBook(id, func(b *database.Book) error {
+			b.Author = &database.Author{ID: 31337, Name: "Synthetic Drift Writer"}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
+}
+
+// Phase (a) journals the Author object it read and writes only while the row
+// still carries it: when another writer changed the object in between, the
+// repoint is not made, its row is voided, and nothing is left for a revert.
+func TestAuthorIDRepair_AnAuthorChangedSinceTheReadIsNotRepointed(t *testing.T) {
+	s := newRepairPebble(t)
+	real := repairAuthor(t, s, "Real Person")
+	dangling := 424242
+	repairBook(t, s, "b1", &dangling, real.ID)
+	st := authorDriftStore{PebbleStore: s, drifted: map[string]bool{}}
+
+	res := runRepair(t, New(&fakeDeps{store: st}), `{"dry_run":false,"skip_duplicates":true}`)
+	require.Zero(t, res.DanglingOutcomes["repointed"], "%+v", res.DanglingChanges)
+	require.Equal(t, 1, res.DanglingOutcomes["changed_since_scan"], "%+v", res.DanglingOutcomes)
+	got, err := s.GetBookByID("b1")
+	require.NoError(t, err)
+	require.Equal(t, dangling, *got.AuthorID, "the book is left on its id")
+	require.Equal(t, 31337, got.Author.ID, "the other writer's object stands")
+
+	rows, err := s.GetOperationChanges("op-id-repair")
+	require.NoError(t, err)
+	seen := 0
+	for _, r := range rows {
+		if r.ChangeType == undo.ChangeTypeAuthorIDRepoint {
+			seen++
+			require.True(t, r.Voided, "the row of a repoint that did not land is voided: %+v", r)
+		}
+	}
+	require.Equal(t, 1, seen, "the repoint was journaled before the write")
 }

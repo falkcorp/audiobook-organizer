@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.27.0
+// version: 2.28.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package database
 
@@ -285,7 +285,9 @@ type BookMutator interface {
 	// returning ErrSkipBookWrite writes nothing. fn must not write any book.
 	// Prefer it over GetBookByID -> mutate -> UpdateBook; for a caller that
 	// must do slow work between read and write, pair it with SnapshotBook and
-	// MergeBookChanges.
+	// MergeBookChanges. A nil Author fn leaves is written as nil (fn holds the
+	// full row, so it is a deliberate clear); UpdateBook instead keeps the
+	// stored Author when handed nil.
 	ModifyBook(id string, fn func(*Book) error) (*Book, error)
 	// ClearBookSignature deletes the book's stored signature (all BookSig*
 	// fields) under the book's write lock. Passing nil fields through

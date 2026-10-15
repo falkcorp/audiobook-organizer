@@ -1,7 +1,7 @@
 // file: internal/database/credits_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package database
 
@@ -171,7 +171,7 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 		}
 		return nil
 	}
-	updated, err := p.updateBookLockedMode(bookID, fresh, bookWriteOpts{stage: stage})
+	updated, err := p.updateBookLockedMode(bookID, fresh, bookWriteOpts{stage: stage, authorAsGiven: true})
 	if err != nil {
 		return nil, BookCreditsEdit{}, err
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_book_preserve_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 9a2f1c6e-4d3b-4a71-8e2c-6b7d8f9012ab
-// last-edited: 2026-10-03
+// last-edited: 2026-10-15
 
 package database
 
@@ -146,9 +146,10 @@ func TestUpdateBook_ExplicitClearStillOverwrites(t *testing.T) {
 // row leaves them nil (STOREFID W5d-1 / #1887). Author/Series carry
 // json:",omitempty" and Pebble persists them (db:"-" only suppresses SQLite),
 // so a BookCore->ToBook or memdb-projection write-back with them nil erased
-// them from the stored Pebble row before this guard existed. They are
-// recomputed display objects, never user-cleared to nil, so preserve-on-nil is
-// correct — the same class of fix as the seven memdb-stripped fields above.
+// them from the stored Pebble row before this guard existed. On UpdateBook a
+// nil there is a projection, not a clear, so preserve-on-nil is correct — the
+// same class of fix as the seven memdb-stripped fields above. ModifyBook is
+// the other way round: TestModifyBook_NilAuthorIsWrittenAsNil.
 func TestUpdateBook_PreservesAuthorSeriesOnNilIncoming(t *testing.T) {
 	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
@@ -210,5 +211,75 @@ func TestUpdateBook_PreservesAuthorSeriesOnNilIncoming(t *testing.T) {
 	}
 	if got.Series.ID != seriesID || got.Series.Name != series.Name {
 		t.Errorf("Series corrupted: got %+v, want %+v", got.Series, series)
+	}
+}
+
+// ModifyBook and ModifyBookCredits hand their callback the full stored row, so
+// a nil Author the callback leaves is a deliberate clear and must be written as
+// nil. Before bookWriteOpts.authorAsGiven the UpdateBook guard put the old
+// object back: a revert that moved a primary back to an id with no author row
+// left the book displaying the author it had just been moved off.
+func TestModifyBook_NilAuthorIsWrittenAsNil(t *testing.T) {
+	s, err := NewPebbleStoreInMemory("db")
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+
+	authorID := 42
+	seed := func(title string) string {
+		t.Helper()
+		book, err := s.CreateBook(&Book{Title: title})
+		if err != nil {
+			t.Fatalf("CreateBook: %v", err)
+		}
+		if _, err := s.UpdateBook(book.ID, &Book{ID: book.ID, Title: title, AuthorID: &authorID,
+			Author: &Author{ID: authorID, Name: "Synthetic Writer"}}); err != nil {
+			t.Fatalf("UpdateBook (seed): %v", err)
+		}
+		return book.ID
+	}
+	stored := func(id string) *Book {
+		t.Helper()
+		got, err := s.GetBookByID(id)
+		if err != nil || got == nil {
+			t.Fatalf("GetBookByID(%s): err=%v got=%v", id, err, got)
+		}
+		return got
+	}
+
+	viaModify := seed("Modify Book")
+	dangling := 424242
+	if _, err := s.ModifyBook(viaModify, func(b *Book) error {
+		b.AuthorID, b.Author = &dangling, nil
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+	if got := stored(viaModify); got.Author != nil || got.AuthorID == nil || *got.AuthorID != dangling {
+		t.Fatalf("ModifyBook clear: AuthorID=%v Author=%+v, want %d and nil", got.AuthorID, got.Author, dangling)
+	}
+
+	viaCredits := seed("Credits Book")
+	if _, _, err := s.ModifyBookCredits(viaCredits, func(b *Book, _ *BookCreditsEdit) error {
+		b.AuthorID, b.Author = nil, nil
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBookCredits: %v", err)
+	}
+	if got := stored(viaCredits); got.Author != nil || got.AuthorID != nil {
+		t.Fatalf("ModifyBookCredits clear: AuthorID=%v Author=%+v, want both nil", got.AuthorID, got.Author)
+	}
+
+	// A callback that leaves Author alone keeps it: only an explicit nil clears.
+	untouched := seed("Untouched Book")
+	if _, err := s.ModifyBook(untouched, func(b *Book) error {
+		b.Title = "Untouched Book Renamed"
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyBook (title only): %v", err)
+	}
+	if got := stored(untouched); got.Author == nil || got.Author.ID != authorID {
+		t.Fatalf("title-only ModifyBook lost Author: %+v", got.Author)
 	}
 }
