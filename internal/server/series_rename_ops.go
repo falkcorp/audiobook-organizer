@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
 // last-edited: 2026-10-15
 
@@ -176,16 +176,18 @@ func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error)
 	return res, err
 }
 
-// restoredAuthorRows reports whether a revert wrote any author merge or
-// reclassify row: one it restored, or an author delete row that brought the
-// author back but failed over an alias (AuthorsPartlyRestored), which no
-// restored type counts even when the author has no books to restore.
+// restoredAuthorRows reports whether a revert wrote any author row the author
+// caches read: a merge or reclassify row, an author rename, or an
+// author_id_repoint (a book's primary going back to a dangling id moves it out
+// of its successor's book count) that it restored, or an author delete row that
+// brought the author back but failed over an alias (AuthorsPartlyRestored),
+// which no restored type counts even when the author has no books to restore.
 func restoredAuthorRows(res *audiobookspkg.RevertResult) bool {
 	if res.AuthorsPartlyRestored > 0 {
 		return true
 	}
 	for _, t := range []string{undo.ChangeTypeAuthorMergeCredits, undo.ChangeTypeAuthorMergeDelete, undo.ChangeTypeAuthorRename,
-		undo.ChangeTypeAuthorReclassifyCredits, undo.ChangeTypeAuthorReclassifyDelete} {
+		undo.ChangeTypeAuthorIDRepoint, undo.ChangeTypeAuthorReclassifyCredits, undo.ChangeTypeAuthorReclassifyDelete} {
 		if res.RestoredTypes[t] > 0 {
 			return true
 		}
