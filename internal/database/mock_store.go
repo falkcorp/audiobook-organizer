@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.146.0
+// version: 1.147.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package database
 
@@ -800,6 +800,16 @@ func (m *MockStore) MergeDeleteAuthor(fromID, intoID int) (*AuthorMergeDeleteRes
 		return nil, err
 	}
 	return &AuthorMergeDeleteResult{OwnedNameIndex: true}, nil
+}
+
+// AuthorNameHolder (database.AuthorNameHolderReader) approximates the raw name
+// index with GetAuthorByName: the holder's id, or 0.
+func (m *MockStore) AuthorNameHolder(name string) (int, error) {
+	a, err := m.GetAuthorByName(name)
+	if err != nil || a == nil {
+		return 0, err
+	}
+	return a.ID, nil
 }
 
 func (m *MockStore) CreateAuthor(name string) (*Author, error) {

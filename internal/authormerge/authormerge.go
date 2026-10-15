@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 // Package authormerge is the journaled write path every author merge shares:
 // moving one book's credits off the merged author, and removing the merged author
@@ -182,11 +182,11 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 }
 
 // DeleteStore is what MergeDelete reads and writes. The merge-delete itself is
-// the store's database.AuthorMergeDeleter capability.
+// the store's database.AuthorMergeDeleter capability, and the name entry's
+// holder is read through its database.AuthorNameHolderReader capability.
 type DeleteStore interface {
 	JournalStore
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
-	GetAuthorByName(name string) (*database.Author, error)
 }
 
 // DeleteResult reports a MergeDelete that removed the author.
@@ -211,11 +211,18 @@ func MergeDelete(store DeleteStore, opID string, from, into database.Author) (De
 	for _, al := range aliases {
 		snap.Aliases = append(snap.Aliases, undo.AuthorAliasSnapshot{ID: al.ID, Name: al.AliasName, Type: al.AliasType})
 	}
-	holder, err := store.GetAuthorByName(from.Name)
+	// The holder is read the way the restore and the undo preflight read it
+	// (the raw entry, counted only for a live row), not through GetAuthorByName,
+	// which follows a redirect, so the row records what the restore will judge.
+	names, ok := database.AsCapability[database.AuthorNameHolderReader](store)
+	if !ok {
+		return out, fmt.Errorf("this store cannot read the author name index for the undo row")
+	}
+	holder, err := names.AuthorNameHolder(from.Name)
 	if err != nil {
 		return out, fmt.Errorf("its name entry could not be read for the undo row: %w", err)
 	}
-	snap.SharedNameIndex = holder != nil && holder.ID != from.ID
+	snap.SharedNameIndex = holder != 0 && holder != from.ID
 	value := undo.AuthorMergeDelete{IntoAuthorID: into.ID, IntoName: into.Name}
 	row, err := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete, snap, value)
 	if err != nil {
