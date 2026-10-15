@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.5.1
+// version: 3.5.2
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
 // last-edited: 2026-10-15
 
@@ -95,8 +95,8 @@ func maintenanceOpID(jobID string) string { return "maintenance." + jobID }
 // enforce OperationDef.Permissions, so the hardcoded value became the operative
 // one, and bulkFetchMetadataJob -- then the single job that implemented
 // PermissionAware (retired in 04-P14f; no real job implements it now, and
-// TestMaintenanceOpPermissionsMatchTheV1Rule drives the branch with a fake) -- was reachable only by settings.manage despite asking for
-// library.edit_metadata. That is stricter than intended, not laxer, but it is
+// TestMaintenanceOpPermissionsMatchTheV1Rule drives the branch with a fake) --
+// was reachable only by settings.manage despite asking for library.edit_metadata. That is stricter than intended, not laxer, but it is
 // still the wrong permission, and it diverges from the v1 route that phase 1
 // deletes.
 func (s *Server) RegisterMaintenanceJobOps(reg *opsregistry.Registry) error {

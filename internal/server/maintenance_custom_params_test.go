@@ -20,9 +20,9 @@ import (
 // runMaintenanceJob → EnqueueOp → the registry's op Run closure →
 // maintenance.WithRawParams → the job's own Run.
 //
-// That whole-path shape is the point. The five jobs that take a custom parameter
-// (revert-metadata-fetch, bulk-fetch-metadata, bulk-deluge-import,
-// scan-composer-tags, prune-book-snapshots) all read
+// That whole-path shape is the point. The four jobs that take a custom parameter
+// (revert-metadata-fetch, bulk-deluge-import, scan-composer-tags,
+// prune-book-snapshots; bulk-fetch-metadata was a fifth until 04-P14f) all read
 // store.GetOperationParams(opID) — a Pebble key whose only writer,
 // operations.SaveParams, lost its last maintenance-path caller when the v1 op
 // minter was retired (#2784). The read survived its writer, so every one of them
