@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-15
 
@@ -1238,4 +1238,54 @@ func TestReconcileFixer_HashChangedBetweenPrecheckAndWriteIsRefused(t *testing.T
 	assert.Equal(t, f.path("old/S.m4b"), b.FilePath)
 	assert.Equal(t, "raced", rmStr(b.FileHash))
 	assert.Equal(t, "org-S", rmStr(b.OrganizedFileHash))
+}
+
+// TestReconcileFixer_FenceInTheBeatBeforeStepTwo (N-4): the run's fence is
+// revoked right after step 1, so step 2's writer beat refuses before any
+// journal row of it is recorded. The row is canceled_skipped; a NEW op
+// finishes it; reverting the first op restores the book's path and hashes
+// (3 rows; the row stays where op-2 put it), and reverting op-2 then
+// restores the row: the state before both.
+func TestReconcileFixer_FenceInTheBeatBeforeStepTwo(t *testing.T) {
+	t.Parallel()
+	f := newRMFixture(t)
+	id := f.missingBook(t, "Book V", "old/V.m4b", func(b *database.Book) {
+		cur, org := "cur-V", "org-V"
+		b.FileHash, b.OrganizedFileHash = &cur, &org
+	})
+	f.file(t, "new/V.m4b")
+	f.match(id, "Book V", "old/V.m4b", "new/V.m4b", "filename", "low")
+	before := f.state(t, id)
+	res := f.plan(t)
+	planned := rmRow(t, res, id)
+
+	fence, revoke := opswriter.NewFence(1, nil)
+	books := &rmHookedBooks{PebbleStore: f.s, after: revoke}
+	w1 := repairs.NewWriter(books, f.s, reconcileFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-1")
+	out, err := repairs.RunApply(opswriter.WithFence(context.Background(), fence), f.fx, res, "plan-1",
+		[]string{planned.RowID}, false, repairs.ApplyDeps{Guard: f.s, Writer: w1, OpID: "op-1"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeCanceledSkip, rmOutcomes(out)[planned.RowID], "%+v", out.Rows)
+	op1, err := f.s.GetOperationChanges("op-1")
+	require.NoError(t, err)
+	for _, c := range op1 {
+		assert.NotEqual(t, database.ChangeTypeBookFileRepoint, c.ChangeType, "no step-2 row journaled")
+	}
+
+	out, err = repairs.RunApply(context.Background(), f.fx, res, "plan-1", []string{planned.RowID}, false,
+		repairs.ApplyDeps{Guard: f.s, Writer: f.writerFor("op-2", f.s), OpID: "op-2"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.OutcomeApplied, rmOutcomes(out)[planned.RowID], "%+v", out.Rows)
+
+	r1, err := audiobooks.NewRevertService(f.s).RevertOperation("op-1")
+	require.NoError(t, err)
+	assert.Zero(t, r1.Failed, "%+v", r1)
+	assert.Equal(t, 3, r1.Restored, "%+v", r1)
+	assert.Equal(t, before.Path, f.state(t, id).Path)
+	assert.Equal(t, [3]string{"cur-V", "org-V", ""}, f.rmHashesOf(t, id))
+
+	r2, err := audiobooks.NewRevertService(f.s).RevertOperation("op-2")
+	require.NoError(t, err)
+	assert.Zero(t, r2.Failed, "%+v", r2)
+	assert.Equal(t, before, f.state(t, id))
 }
