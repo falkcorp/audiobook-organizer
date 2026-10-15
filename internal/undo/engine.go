@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-15
 //
@@ -297,6 +297,13 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// author_merge_credits / author_reclassify_credits are exact like
 		// junk_author_credits, and also need their author restored first.
 		_, refusal := CheckRestoreBook(store, c.BookID)
+		if refusal != nil && c.ChangeType == ChangeTypeAuthorMergeCredits && isBookMissing(refusal) {
+			// A ghost book's credit move (no book row, no primary changed) is
+			// reverted junction-only (revertGhostJunction).
+			if _, move, err := DecodeAuthorMergeCredits(c); err == nil && !move.PrimaryChanged {
+				return rowVerdict{}
+			}
+		}
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
 		return verdictOf(CheckRestoreReferent(store, c))
@@ -638,6 +645,12 @@ func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, hol
 		return refuse(ReasonChangedSince, "book_file %s changed since the operation", id)
 	}
 	return nil
+}
+
+// isBookMissing reports a CheckRestoreBook refusal for a book with no row.
+func isBookMissing(err error) bool {
+	var re *ReferentError
+	return errors.As(err, &re) && re.Reason == ReasonBookMissing
 }
 
 // authorByIDReader is what the preflight of an author rename row reads.

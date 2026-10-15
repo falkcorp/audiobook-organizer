@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -308,4 +308,38 @@ func TestMergeAuthorInto_ABookListedTwiceIsJournaledOnce(t *testing.T) {
 	ledger, err := w.st.GetOperationChanges("op-twice")
 	require.NoError(t, err)
 	require.Len(t, ledger, len(w.books)+1)
+}
+
+// A ghost book's credit move (no book row: author-id-repair moves its credit
+// with no primary) reverts junction-only, and a second revert finds nothing
+// left to fail.
+func TestAuthorIDRepair_UndoRestoresAGhostBooksCredit(t *testing.T) {
+	s := newRepairPebble(t)
+	x := repairAuthor(t, s, "Jane Doe")
+	y := repairAuthor(t, s, "jane twin")
+	require.NoError(t, s.UpdateAuthorName(y.ID, "JANE DOE"))
+	repairBook(t, s, "real", &x.ID, x.ID)
+	require.NoError(t, s.SetBookAuthors("ghost", []database.BookAuthor{{BookID: "ghost", AuthorID: x.ID, Role: "author"}}))
+	before, err := s.GetBookAuthors("ghost")
+	require.NoError(t, err)
+	res := runRepair(t, New(&fakeDeps{store: s}), `{"dry_run":false,"skip_dangling":true}`)
+	require.Equal(t, 1, res.DuplicateOutcomes[authorIDMergeMerged])
+
+	report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+	require.NoError(t, err)
+	require.Empty(t, report.CheckFailed, "the ghost row is restorable")
+	for range 2 {
+		rv, err := audiobooks.NewRevertService(s).RevertOperation("op-id-repair")
+		if err != nil {
+			require.Contains(t, err.Error(), "already been reverted")
+			continue
+		}
+		require.Zero(t, rv.Failed, "%+v", rv)
+	}
+	after, err := s.GetBookAuthors("ghost")
+	require.NoError(t, err)
+	require.True(t, undo.SameJunction(before, after), "ghost credits: want %+v got %+v", before, after)
+	back, err := s.GetAuthorByID(x.ID)
+	require.NoError(t, err)
+	require.Equal(t, x.ID, back.ID)
 }
