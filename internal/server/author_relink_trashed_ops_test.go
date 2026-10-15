@@ -1,7 +1,7 @@
 // file: internal/server/author_relink_trashed_ops_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f2a9c41-7d38-4e05-b1a6-93c8e2d05f17
-// last-edited: 2026-10-13
+// last-edited: 2026-10-14
 
 package server
 
@@ -38,6 +38,10 @@ type relinkOpReporter struct {
 	opsregistry.Reporter // nil: any method not overridden below panics
 	logs                 []string
 }
+
+// OpID gives the merges an operation to journal their undo rows under: a merge
+// with none is refused (authormerge.Step), as it could never be undone.
+func (r *relinkOpReporter) OpID() string { return "op-relink-test" }
 
 func (r *relinkOpReporter) UpdateProgress(_, _ int, _ string) error { return nil }
 func (r *relinkOpReporter) IsCanceled() bool                        { return false }
