@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/04-operations-census.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.3.2 -->
 <!-- guid: 3b8e1f52-6c4d-4a97-9e20-7d1c5a4f8b63 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-14 -->
 
 # 04: Operations census, prune list and non-op jobs
 
@@ -144,7 +144,7 @@ Re-checked at HEAD `ebda30d47` on 2026-10-09; the code is identical to the measu
 
 **C. Near-duplicates: decided by D27 (keep the newer op, one small PR each after P4, 2-week soak before any flag is retired).**
 
-Dates are when the ID first appears in `internal/` (`git log -S'"<id>"' --date=short --reverse | head -1`). The four `internal/maintenance/jobs` jobs build their ID as `"maintenance." + ID()`, so their date is the file's first commit (`git log --diff-filter=A`): all four were added 2026-05-01. The `usage` column of the census shows prod runs only for `mark-missing-files`, `missing-file-repoint` and `recover-missing-files`; none of the four jobs has a recorded prod run.
+Dates are when the ID first appears in `internal/` (`git log -S'"<id>"' --date=short --reverse | head -1`). The four `internal/maintenance/jobs` jobs build their ID as `"maintenance." + ID()`, so their date is the file's first commit (`git log --diff-filter=A`): all four were added 2026-05-01. The `usage` column of the census shows prod runs only for `mark-missing-files`, `missing-file-repoint` and `recover-missing-files`; of the four jobs only `repair-missing-files` has a recorded prod run: the 2026-08-17 dry run, op `01M08FE40VYSMXC7HG2THFHJ6H` (`docs/audits/2026-08-17-missing-file-audit-full-population.md` §9).
 
 | # | Older op (retire → `retiredOpIDs`, or alias) | Newer survivor | Dates (old / new) | What the PR must carry over | PR |
 |---|---|---|---|---|---|
@@ -153,7 +153,7 @@ Dates are when the ID first appears in `internal/` (`git log -S'"<id>"' --date=s
 | C3 | `maintenance.reconcile-scan` (`reconcile.go:27`, nightly `reconcile_scan` task) | **`reconcile.scan`** (`reconcile_ops.go:42`, UI) | 2026-05-07 / 2026-05-10 | **Behaviour port:** the old op calls `BuildReconcilePreviewWithProgress` and saves results; `/operations/reconcile/scan/latest` (`server/reconcile.go:68`) and 03 PR 9b read them. The survivor must save results too, the task retargets, and the op type `recentReconcileScans` filters on must be updated. 03 PR 9b waits for this PR. | P14c |
 | C4 | `maintenance.cleanup-backups` (job, `jobs/cleanup_backups.go:28`) | **`maintenance.cleanup-old-backups`** (`cleanup.go:346`), after P4f | 2026-05-01 / 2026-05-07 | Its `.backup` + `.bak` regex, if P3b's shared helper does not already cover it. This is P3b, not a separate PR. | P3b |
 | C5 | `maintenance.fix-book-file-paths` (job, `jobs/fix_book_file_paths.go:22`) | **`maintenance.mark-missing-files`** (`mark_missing_files.go:166`) | 2026-05-01 / 2026-09-05 | Nothing: the survivor clears stale flags in both directions (`mark_missing_files.go:364`), the job only sets them. The `/maintenance/jobs` UI entry goes with it. | P14d |
-| C6 | `maintenance.repair-missing-files` (job, `jobs/repair_missing_files.go:32`) | **`maintenance.missing-file-repoint`** + **`maintenance.recover-missing-files`** | 2026-05-01 / 2026-08-20 and 2026-09-05 | Nothing: the two survivors hold the scan stand-down and have prod runs. Also retire `GET /maintenance/repair-missing-files/:id` (01 appendix C lists it) and the `/maintenance/jobs` entry. | P14e |
+| C6 | `maintenance.repair-missing-files` (job, `jobs/repair_missing_files.go:32`) | **`maintenance.missing-file-repoint`** + **`maintenance.recover-missing-files`** | 2026-05-01 / 2026-08-20 and 2026-09-05 | The two survivors hold the scan stand-down and have prod runs, but they do not reproduce the job's matching tiers (iTunes PID, unique basename, truncation, author+title); the 08-17 dry run of the job matched rows only through those tiers, so what is lost is an owner decision, not "nothing". Also retire `GET /maintenance/repair-missing-files/:id` (01 appendix C lists it) and the `/maintenance/jobs` entry. | P14e |
 | C7 | `maintenance.bulk-fetch-metadata` (job, `jobs/bulk_fetch_metadata.go:38`) | **`library.bulk-metadata-fetch`** (`metadata_ops.go:593`, web) and **`metadata.candidate-fetch`** (`metadata_candidate_op.go:113`, task + 2 fixers) | 2026-05-01 / both 2026-05-10 | Nothing: both survivors are reachable and do different halves (apply vs candidate cache). Only the job retires. | P14f |
 | C8 | `maintenance.author-title-fragment-scan` (`author_title_fragment_report.go:157`) | **itself** (2026-09-12; nothing older overlaps it) | — | Not a prune. D27's rule keeps it. Turning it into a Repairs fixer (precedent `maintenance.repair-junk-titles`, `op_id_aliases_test.go:58`) is a 03/Repairs follow-up, not census work. | — |
 
