@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
 // last-edited: 2026-10-14
 
@@ -378,6 +378,7 @@ func TestReconcileFixer_DriftBetweenReplanAndWriteIsRefused(t *testing.T) {
 		{"book gained a file row at the match", func(t *testing.T, f *rmFixture, id string) {
 			require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: id, FilePath: f.path("new/One.m4b")}))
 		}},
+		{"old file back on disk", func(t *testing.T, f *rmFixture, _ string) { f.file(t, "old/One.m4b") }},
 		{"book became an iTunes book", func(t *testing.T, f *rmFixture, id string) {
 			pid := "FEDCBA9876543210"
 			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })

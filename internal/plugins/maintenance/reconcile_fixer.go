@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-14
 
@@ -786,8 +786,8 @@ func rmRepointRow(w *repairs.Writer, d *rmDecision) error {
 }
 
 // rmPrecheck re-reads, just before the first write, who holds the matched
-// file, the book and the iTunes predicate, and checks the file is the one
-// planned. The re-plan read all of it moments ago; this closes the window up
+// file, the book, whether its old path is still missing and the iTunes
+// predicate, and checks the file is the one planned. The re-plan read all of it moments ago; this closes the window up
 // to the write. ErrChangedSincePlan on any change; ErrRetryLater while the
 // file index is warming up. stepOneDone reports a book a cut-off apply
 // already pointed at the matched file (rmStepOneDone), whose row is left.
@@ -812,6 +812,15 @@ func rmPrecheck(rd rmReader, d *rmDecision) (stepOneDone bool, err error) {
 		stepOneDone = true
 	case b.FilePath != d.oldPath:
 		return false, fmt.Errorf("%w: book %s now points at %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath)
+	}
+	// The old file back on disk means there is nothing to repair; a path
+	// that cannot be stat'ed is not "missing" either (see rmOldPathMissing).
+	if missing, serr := rmOldPathMissing(d.oldPath); serr != nil || !missing {
+		why := "is on disk again"
+		if serr != nil {
+			why = "cannot be checked: " + serr.Error()
+		}
+		return false, fmt.Errorf("%w: the book's old path %s %s", repairs.ErrChangedSincePlan, d.oldPath, why)
 	}
 	files, err := rd.GetBookFiles(d.bookID)
 	if err != nil {
