@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-09-26
 
@@ -359,7 +359,10 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	for i := range cores {
 		c := cores[i]
 		if c.BookID == "" || strings.TrimSpace(c.FilePath) == "" {
-			continue // orphan / pathless rows belong to orphan-book-files-cleanup
+			// Orphan (empty BookID) and pathless rows are not this op's. No other op
+			// owns the pathless ones either: orphan-book-files-cleanup tests only
+			// BookID == "". Tracked in TODO.md as "Pathless book_file rows".
+			continue
 		}
 		if len(inScope) > 0 && !inScope[c.BookID] {
 			continue // book_ids scope: nothing outside it is even counted
