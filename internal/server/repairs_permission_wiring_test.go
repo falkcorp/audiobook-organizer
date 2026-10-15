@@ -1,7 +1,7 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 // The Repairs lane's per-fixer permission check as the server wires it
 // (wireRepairsRoutes + permCheck): the same semantics as s.perm, driven
@@ -12,6 +12,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,7 +79,17 @@ func repairsPermServer(t *testing.T, enableAuth, withUsers bool) (srv *Server, e
 }
 
 func postPlan(srv *Server, token string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, missingFilesPlanPath, nil)
+	return postRepairs(srv, token, missingFilesPlanPath, "")
+}
+
+func postRepairs(srv *Server, token, path, body string) *httptest.ResponseRecorder {
+	var req *http.Request
+	if body == "" {
+		req = httptest.NewRequest(http.MethodPost, path, nil)
+	} else {
+		req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -111,4 +122,34 @@ func TestRepairsRoutes_MissingFilesNeedsSettingsManage(t *testing.T) {
 		w := postPlan(srv, "")
 		require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 	})
+}
+
+// TestRepairsRoutes_MissingFilesApplyNeedsSettingsManage: apply and
+// owner-apply go through the same per-fixer check as plan. An editor gets
+// 403 naming settings.manage on both. An admin passes the check: apply
+// reaches the handler (404, unknown plan) and owner-apply reaches the next
+// gate, the owner check, which refuses because no owner email is set and the
+// request carries no Cloudflare Access identity (auth/owner.go).
+// Not parallel: it swaps the process-wide config.
+func TestRepairsRoutes_MissingFilesApplyNeedsSettingsManage(t *testing.T) {
+	const (
+		applyPath = "/api/v1/repairs/reconcile.missing-files/apply"
+		ownerPath = "/api/v1/repairs/reconcile.missing-files/owner-apply"
+	)
+	srv, editor, admin := repairsPermServer(t, true, true)
+
+	w := postRepairs(srv, editor, applyPath, `{"plan_op_id":"nope","row_ids":["x"]}`)
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "permission denied: settings.manage")
+	w = postRepairs(srv, admin, applyPath, `{"plan_op_id":"nope","row_ids":["x"]}`)
+	require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), "permission denied")
+
+	w = postRepairs(srv, editor, ownerPath, `{"plan_op_id":"nope","row_id":"x"}`)
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "permission denied: settings.manage")
+	w = postRepairs(srv, admin, ownerPath, `{"plan_op_id":"nope","row_id":"x"}`)
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), "permission denied")
+	require.Contains(t, w.Body.String(), "Owner actions are turned off")
 }
