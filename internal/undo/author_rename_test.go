@@ -1,5 +1,5 @@
 // file: internal/undo/author_rename_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f3d9b25-8c4a-4e71-a02b-9d4f7a1c3e86
 // last-edited: 2026-10-15
 
@@ -27,17 +27,20 @@ func TestAuthorRenameRow_RoundTripsAndChecks(t *testing.T) {
 	cases := []struct {
 		name    string
 		cur     *database.Author
+		holder  int
 		ok      bool
 		already bool
 	}{
-		{"still renamed", &database.Author{ID: 7, Name: "Old"}, true, false},
-		{"already back", &database.Author{ID: 7, Name: "& Old"}, false, true},
-		{"renamed since", &database.Author{ID: 7, Name: "Other"}, false, false},
-		{"merged away", &database.Author{ID: 8, Name: "Old"}, false, false},
-		{"gone", nil, false, false},
+		{"still renamed", &database.Author{ID: 7, Name: "Old"}, 0, true, false},
+		{"still renamed, holds its old name", &database.Author{ID: 7, Name: "Old"}, 7, true, false},
+		{"old name taken by another author", &database.Author{ID: 7, Name: "Old"}, 9, false, false},
+		{"already back", &database.Author{ID: 7, Name: "& Old"}, 7, false, true},
+		{"renamed since", &database.Author{ID: 7, Name: "Other"}, 0, false, false},
+		{"merged away", &database.Author{ID: 8, Name: "Old"}, 0, false, false},
+		{"gone", nil, 0, false, false},
 	}
 	for _, tc := range cases {
-		err := CheckAuthorRename(tc.cur, id, from, to)
+		err := CheckAuthorRename(tc.cur, tc.holder, id, from, to)
 		switch {
 		case tc.ok && err != nil, tc.already && !errors.Is(err, ErrAlreadyRestored), !tc.ok && !tc.already && (err == nil || errors.Is(err, ErrAlreadyRestored)):
 			t.Errorf("%s: %v", tc.name, err)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
 // last-edited: 2026-10-15
 
@@ -486,4 +486,44 @@ func TestAuthorIDRepair_PreflightFollowsANewerMergeOfTheSameBook(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, back.AuthorID)
 	require.Equal(t, dangling, *back.AuthorID)
+}
+
+// Undoing a solo rename refuses when another live author now holds the name it
+// would go back to: renaming over it would take that author's name entry and
+// leave it unresolvable by name. The preflight predicts the refusal.
+func TestAuthorConjunctionRepair_UndoRefusesANameAnotherAuthorTookSince(t *testing.T) {
+	st := newRelinkTrashedStore(t)
+	solo := mustAuthorNamed(t, st, "& Probe Solo")
+	p := New(&fakeDeps{store: st})
+	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-rr5"}))
+	renamed, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Probe Solo", renamed.Name)
+
+	other, err := st.CreateAuthor("Synthetic Name Taker")
+	require.NoError(t, err)
+	require.NoError(t, st.UpdateAuthorName(other.ID, "& Probe Solo"))
+	holder, err := st.AuthorNameHolder("& Probe Solo")
+	require.NoError(t, err)
+	require.Equal(t, other.ID, holder, "fixture: another author holds the old name")
+
+	report, err := undo.PreflightUndoConflicts(st, "op-rr5")
+	require.NoError(t, err)
+	require.Len(t, report.CheckFailed, 1, "%+v", report)
+	require.Equal(t, undo.ChangeTypeAuthorRename, report.CheckFailed[0].ChangeType)
+	require.Zero(t, report.Safe)
+
+	res, err := audiobooks.NewRevertService(st).RevertOperation("op-rr5")
+	require.Error(t, err, "the revert refuses the rename")
+	require.Contains(t, err.Error(), "cannot take back the name")
+	if res != nil {
+		require.Equal(t, 1, res.Failed, "%+v", res)
+		require.Zero(t, res.Restored, "%+v", res)
+	}
+	still, err := st.GetAuthorByID(solo.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Probe Solo", still.Name, "the solo row keeps its repaired name")
+	holder, err = st.AuthorNameHolder("& Probe Solo")
+	require.NoError(t, err)
+	require.Equal(t, other.ID, holder, "the other author keeps its name entry")
 }
