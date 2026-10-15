@@ -1,5 +1,5 @@
 // file: internal/server/store_capability_resolve_test.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
 // last-edited: 2026-10-15
 
@@ -307,54 +307,10 @@ func TestStoreExposesBookAtPathBackfill(t *testing.T) {
 	}
 }
 
-// TestStoreExposesOpChangeIndexBackfill pins the opchange_by_book:
-// startup wiring through a store decorator: the ensure (a
-// *PebbleStore method outside Store) resolves through
-// resolveOpChangeIndexBackfiller, builds and verifies the index, trusts it,
-// and GetBookChanges through the decorator returns the indexed rows.
-func TestStoreExposesOpChangeIndexBackfill(t *testing.T) {
-	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
-	if err != nil {
-		t.Fatalf("open pebble: %v", err)
-	}
-	t.Cleanup(func() { _ = inner.Close() })
-	inner.WaitForWarmup()
-
-	var wrapped database.Store = &embeddingDecorator{Store: inner}
-
-	if _, ok := wrapped.(opChangeIndexBackfiller); ok {
-		t.Fatal("a bare assertion now resolves opChangeIndexBackfiller through the " +
-			"decorator; this test no longer reproduces the production shape")
-	}
-	b, ok := resolveOpChangeIndexBackfiller(wrapped)
-	if !ok {
-		t.Fatal("resolveOpChangeIndexBackfiller through a decorator failed; the " +
-			"opchange_by_book index would never be built")
-	}
-
-	if err := inner.CreateOperationChange(&database.OperationChange{
-		OperationID: "op1", BookID: "book-a", ChangeType: "metadata_update", FieldName: "title",
-	}); err != nil {
-		t.Fatalf("CreateOperationChange: %v", err)
-	}
-	res, err := b.EnsureOpChangeByBookIndex(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("EnsureOpChangeByBookIndex through the decorator: %v", err)
-	}
-	if res.Backfill.Skipped || res.Backfill.Scanned != 1 || res.Backfill.Indexed != 1 {
-		t.Fatalf("backfill result = %+v, want one row scanned and indexed", res.Backfill)
-	}
-	if !res.Trusted || res.Rebuilt || res.Verify.MissingEntries != 0 {
-		t.Fatalf("ensure result = %+v, want a clean verify and a trusted index without a rebuild", res)
-	}
-	got, err := wrapped.GetBookChanges("book-a")
-	if err != nil {
-		t.Fatalf("GetBookChanges through the decorator: %v", err)
-	}
-	if len(got) != 1 || got[0].OperationID != "op1" {
-		t.Fatalf("GetBookChanges = %+v, want the one op1 row", got)
-	}
-}
+// The opchange_by_book: ensure's decorator case moved to the maintenance
+// package (TestOpchangeBookIndexEnsure_ThroughStoreDecorator) in 04-P7: the
+// boot goroutine and resolveOpChangeIndexBackfiller are gone, and the
+// production resolution is now the op's own AsCapability call.
 
 // TestDecoratedStoreResolvesStrictUserLister pins the fail-closed user listing
 // the hard deletes rely on (#3769 review NIT c). merge.NewUserStateProbe
