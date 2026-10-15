@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
 // last-edited: 2026-10-15
 
@@ -78,7 +78,7 @@ func (f *fakeStore) MergeDeleteAuthor(fromID, intoID int) (*database.AuthorMerge
 	return &database.AuthorMergeDeleteResult{}, nil
 }
 
-// creditsFake is a fakeStore with the BookCreditsModifier capability: the row
+// creditsFake is a fakeStore with the database.BookCreditsModifier capability: the row
 // and the junction are written together, or neither is.
 type creditsFake struct {
 	*fakeStore
@@ -103,6 +103,12 @@ func (f *creditsFake) ModifyBookCredits(id string, fn func(*database.Book, *data
 	*b = cp
 	f.junction[id] = edit.Authors
 	return b, edit, nil
+}
+
+// ModifyBookNarrators completes database.BookCreditsModifier; no merge path
+// reaches it.
+func (f *creditsFake) ModifyBookNarrators(string, func([]database.BookNarrator) ([]database.BookNarrator, error)) ([]database.BookNarrator, error) {
+	return nil, errors.New("creditsFake: narrators are not modelled")
 }
 
 func (f *fakeStore) only(t *testing.T) database.OperationChange {

@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
 // last-edited: 2026-10-15
 
@@ -97,14 +97,6 @@ type MoveResult struct {
 	PrimaryErr error
 }
 
-// BookCreditsModifier writes a book row and its credit lists in one locked
-// write (database.PebbleStore.ModifyBookCredits). MoveCredits resolves it as a
-// capability (database.AsCapability), so CreditsStore and Store stay as wide
-// as they are.
-type BookCreditsModifier interface {
-	ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error)
-}
-
 // errPrimaryMoved aborts MoveCredits' locked write when the book's primary no
 // longer names FromID: the credits then move on their own, without the keep
 // author the repoint would have brought.
@@ -119,7 +111,7 @@ var errPrimaryMoved = errors.New("primary no longer names the merged author")
 // to After when absent): a primary-only book, whose junction never credited
 // FromID, otherwise ends with a primary its credits do not name. That append
 // is made only when the repoint lands, so it goes through the store's
-// BookCreditsModifier, which writes the junction and the row under the same
+// database.BookCreditsModifier (ModifyBookCredits), which writes the junction and the row under the same
 // locks: the primary is checked, repointed and credited in one write, and a
 // book another writer moved off FromID meanwhile gets After alone. A store
 // without that capability gets no append (the junction is written, then the
@@ -129,7 +121,7 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	var res MoveResult
 	primaryChanged := m.PrimaryBefore != nil && *m.PrimaryBefore == m.FromID
 	after := slices.Clone(m.After)
-	modifier, atomic := database.AsCapability[BookCreditsModifier](store)
+	modifier, atomic := database.AsCapability[database.BookCreditsModifier](store)
 	atomic = atomic && primaryChanged
 	withKeep := after
 	if atomic && !slices.ContainsFunc(after, func(ba database.BookAuthor) bool { return ba.AuthorID == m.IntoID }) {
