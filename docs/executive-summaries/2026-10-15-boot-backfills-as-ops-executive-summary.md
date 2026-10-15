@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-15-boot-backfills-as-ops-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9a4c7e12-6b3d-4f58-8e91-2d5f0b7c3a66 -->
 <!-- last-edited: 2026-10-15 -->
 
@@ -49,3 +49,17 @@ re-encode at all, since it would have nothing to do.
 Stopping a repair or re-encode job now ends the file it is working on right
 away, instead of waiting for that file's conversion to finish. An interrupted
 file is left exactly as it was and is not marked as broken.
+
+## A fifth startup job: the book history index check (04-P7)
+
+Every restart, the server also checked a lookup table that lets a book's
+change history load quickly. That check reads the whole history of changes,
+which can take minutes, and it ran with no progress and no way to stop it. It
+now runs as an operation too, on every restart, with a progress bar and a
+cancel button. It has to run every time: if the server is ever rolled back to
+an older version, that version adds history without updating the lookup
+table, and only this check can notice. Until it finishes, book history still
+loads correctly, only more slowly. If the check cannot make the table
+trustworthy, the operation now shows as failed instead of only writing a
+line to the server log. On a library where the table is already correct, the
+run is hidden from the activity feed by default.
