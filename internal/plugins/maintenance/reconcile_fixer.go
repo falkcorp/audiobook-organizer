@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
 // last-edited: 2026-10-14
 
@@ -138,18 +138,25 @@ const (
 // who holds the matched file (the strict book_file read and the live-book
 // read), the book, and the iTunes predicate, and checks the file is still the
 // one planned (size and modification time); any change refuses the row with
-// nothing written. Then, through the Writer (scan stand-down held, fenced,
-// journaled first and voided on refusal):
+// nothing written. Then two separate compare-and-set writes through the
+// Writer (scan stand-down held, fenced, each journaled first):
 //
-//  1. the book's path, as a restorable book_path_update, compare-and-set:
-//     the book must still be live and still point at the scan's old path;
+//  1. the book's path, as a restorable book_path_update (Writer.JournalStep:
+//     a refusal voids its journal row): the book must still be live and
+//     still point at the scan's old path;
 //  2. the book_file row at the old path, as a restorable
-//     book_file_repoint_location (Writer.RepointBookFile), compare-and-set on
-//     the row's location; nothing moves on disk.
+//     book_file_repoint_location (Writer.RepointBookFile, through
+//     Writer.Step: its journal row stands even when the write is refused),
+//     compare-and-set on the row's location; nothing moves on disk.
 //
-// A refusal of step 2 after step 1 is reported partially_applied. No
-// book_file row is ever deleted or created. Reverting the apply operation
-// puts the book's path and the row back.
+// A run stopped between the two (cancel, watchdog, lost lease, crash) leaves
+// step 1 written; the engine reports the row canceled_skipped or aborted, not
+// settled, so a resumed apply re-runs it, and evaluate and Apply recognise
+// the book already at the matched file with its row still at the old path
+// (rmStepOneDone) and write step 2 only. Any other refusal of step 2 after
+// step 1 is reported partially_applied. No book_file row is ever deleted or
+// created. Reverting the apply operation puts the book's path and the row
+// back.
 type reconcileFixer struct{ p *Plugin }
 
 func newReconcileFixer(p *Plugin) *reconcileFixer { return &reconcileFixer{p: p} }
@@ -452,7 +459,19 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 		}
 	}
 	r.Members = []repairs.RowMember{member}
-	fmt.Fprintf(&fp, "|path=%s", book.FilePath)
+	// A cut-off apply (fenced, lease lost, crash) can stop between step 1
+	// and step 2: the book already points at the matched file while its one
+	// file row is still at the old path. That is this fixer's own unfinished
+	// write, not drift: decide it exactly as the planned state, with the
+	// planned fingerprint, so a resumed apply finishes step 2 (repairs.apply
+	// re-runs a canceled_skipped/aborted row and the fixer recognises its
+	// own finished steps).
+	stepOneDone := rmStepOneDone(c, book, files)
+	bookPath := book.FilePath
+	if stepOneDone {
+		bookPath = c.OldPath
+	}
+	fmt.Fprintf(&fp, "|path=%s", bookPath)
 
 	// iTunes first: a row whose book or matched file is iTunes is skipped as
 	// iTunes whatever else holds.
@@ -478,20 +497,20 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 		return skip(repairs.SkipITunes, rmReasonITunes, "iTunes books and iTunes files are never written: "+why), nil
 	}
 
-	if book.FilePath != c.OldPath {
+	if bookPath != c.OldPath {
 		return skip(rmSkipPathChanged, "the book's path changed since the scan",
 			fmt.Sprintf("The scan found %q missing; the book now points at %q.", c.OldPath, book.FilePath)), nil
 	}
-	missing, serr := rmOldPathMissing(book.FilePath)
+	missing, serr := rmOldPathMissing(c.OldPath)
 	if serr != nil {
 		fp.WriteString("|old-unreadable")
 		return skip(rmSkipError, serr.Error(),
-			fmt.Sprintf("Could not tell whether %s is missing: %v", book.FilePath, serr)), nil
+			fmt.Sprintf("Could not tell whether %s is missing: %v", c.OldPath, serr)), nil
 	}
 	fmt.Fprintf(&fp, "|old-missing=%t", missing)
 	if !missing {
 		return skip(rmSkipNotMissing, "the book's file is on disk again",
-			fmt.Sprintf("%s is on disk again; there is nothing to repair.", book.FilePath)), nil
+			fmt.Sprintf("%s is on disk again; there is nothing to repair.", c.OldPath)), nil
 	}
 	r.Current["path"] = c.OldPath + " (missing)"
 	if !c.hasMatch() {
@@ -561,6 +580,22 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 		fileID: row.ID, was: was, to: to}
 	r.Fingerprint = rmFingerprint(r, fp.String())
 	return r, nil
+}
+
+// rmStepOneDone reports whether book is in the state a cut-off apply of c
+// leaves after step 1 only: the book points at the matched file, exactly one
+// of its rows is still at the old path and none is at the matched file.
+func rmStepOneDone(c rmCandidate, book *database.Book, files []database.BookFile) bool {
+	if !c.hasMatch() || c.NewPath == c.OldPath || book.FilePath != c.NewPath || rmHasRowAt(files, c.NewPath) {
+		return false
+	}
+	n := 0
+	for _, bf := range files {
+		if bf.FilePath == c.OldPath {
+			n++
+		}
+	}
+	return n == 1
 }
 
 // rmHasRowAt reports whether any of files is at path.
@@ -664,8 +699,14 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	if err != nil {
 		return err
 	}
-	if err := rmPrecheck(rd, d); err != nil {
+	stepOneDone, err := rmPrecheck(rd, d)
+	if err != nil {
 		return err
+	}
+	if stepOneDone {
+		// A cut-off apply already wrote step 1 (journaled then); finish
+		// step 2 only.
+		return rmRepointRow(w, d)
 	}
 	// 1. The book's path, compare-and-set, journaled first (voided on a
 	// refusal).
@@ -687,8 +728,17 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 		return err
 	}
 	// 2. The file row at the old path, compare-and-set on its location.
+	return rmRepointRow(w, d)
+}
+
+// rmRepointRow is step 2: the book's file row at the old path, repointed at
+// the matched file (journaled, compare-and-set on its location). Its error
+// keeps the engine's classification: a fence or a lost lease is reported as
+// such (the row is re-run on resume, and evaluate recognises step 1 as
+// done); any other refusal after step 1 is partially_applied.
+func rmRepointRow(w *repairs.Writer, d *rmDecision) error {
 	if err := w.RepointBookFile(d.bookID, d.fileID, d.was, d.to); err != nil {
-		return fmt.Errorf("%w: book %s now points at %s but its file row %s was not repointed: %w",
+		return fmt.Errorf("%w: book %s points at %s but its file row %s was not repointed: %w",
 			repairs.ErrPartiallyApplied, d.bookID, d.newPath, d.fileID, err)
 	}
 	return nil
@@ -698,45 +748,48 @@ func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 // file, the book and the iTunes predicate, and checks the file is the one
 // planned. The re-plan read all of it moments ago; this closes the window up
 // to the write. ErrChangedSincePlan on any change; ErrRetryLater while the
-// file index is warming up.
-func rmPrecheck(rd rmReader, d *rmDecision) error {
+// file index is warming up. stepOneDone reports a book a cut-off apply
+// already pointed at the matched file (rmStepOneDone), whose row is left.
+func rmPrecheck(rd rmReader, d *rmDecision) (stepOneDone bool, err error) {
 	owners, err := rmPathOwners(rd, d.newPath, d.bookID)
 	switch {
 	case errors.Is(err, database.ErrOwnershipLookupIncomplete):
-		return fmt.Errorf("%w: %s: %w", repairs.ErrRetryLater, rmReasonIndexWarming, err)
+		return false, fmt.Errorf("%w: %s: %w", repairs.ErrRetryLater, rmReasonIndexWarming, err)
 	case err != nil:
-		return err
+		return false, err
 	case len(owners) > 0:
-		return fmt.Errorf("%w: %s now belongs to book(s) %s", repairs.ErrChangedSincePlan, d.newPath, strings.Join(owners, ", "))
+		return false, fmt.Errorf("%w: %s now belongs to book(s) %s", repairs.ErrChangedSincePlan, d.newPath, strings.Join(owners, ", "))
 	}
 	b, err := rd.GetBookByID(d.bookID)
 	if err != nil {
-		return fmt.Errorf("read book %s: %w", d.bookID, err)
+		return false, fmt.Errorf("read book %s: %w", d.bookID, err)
 	}
 	switch {
 	case b == nil || b.IsSoftDeleted():
-		return fmt.Errorf("%w: book %s is gone or retired", repairs.ErrChangedSincePlan, d.bookID)
+		return false, fmt.Errorf("%w: book %s is gone or retired", repairs.ErrChangedSincePlan, d.bookID)
+	case b.FilePath == d.newPath:
+		stepOneDone = true
 	case b.FilePath != d.oldPath:
-		return fmt.Errorf("%w: book %s now points at %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath)
+		return false, fmt.Errorf("%w: book %s now points at %q", repairs.ErrChangedSincePlan, d.bookID, b.FilePath)
 	}
 	files, err := rd.GetBookFiles(d.bookID)
 	if err != nil {
-		return fmt.Errorf("files of %s: %w", d.bookID, err)
+		return false, fmt.Errorf("files of %s: %w", d.bookID, err)
 	}
 	if rmHasRowAt(files, d.newPath) {
-		return fmt.Errorf("%w: book %s now has a file row at %s", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
+		return false, fmt.Errorf("%w: book %s now has a file row at %s", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
 	}
 	why, unsure, err := rmITunesWhy(rd, repairs.NewPathResolver(), b, files, d.newPath)
 	switch {
 	case err != nil:
-		return err
+		return false, err
 	case unsure:
-		return fmt.Errorf("%w: could not tell whether book %s or %s is in the iTunes library", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
+		return false, fmt.Errorf("%w: could not tell whether book %s or %s is in the iTunes library", repairs.ErrChangedSincePlan, d.bookID, d.newPath)
 	case why != "":
-		return fmt.Errorf("%w: iTunes: %s", repairs.ErrChangedSincePlan, why)
+		return false, fmt.Errorf("%w: iTunes: %s", repairs.ErrChangedSincePlan, why)
 	}
 	if nf := rmNewFile(d.newPath); !nf.same(d.newFile) {
-		return fmt.Errorf("%w: the matched file %s changed or is gone", repairs.ErrChangedSincePlan, d.newPath)
+		return false, fmt.Errorf("%w: the matched file %s changed or is gone", repairs.ErrChangedSincePlan, d.newPath)
 	}
-	return nil
+	return stepOneDone, nil
 }

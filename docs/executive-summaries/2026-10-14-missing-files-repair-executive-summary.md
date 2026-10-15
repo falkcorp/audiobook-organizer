@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-14-missing-files-repair-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9b3fe5ba-cb9d-49bf-b3da-0b4222fff839 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -34,10 +34,13 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
 - **iTunes is left alone.** A book that came from iTunes, or a match onto a
   file inside the iTunes library, is listed as skipped with the reason "iTunes"
   and is never applied.
-- **Applying fixes the book and its file record together, and can be undone.**
-  (Owner decision 2026-10-14.) Applying a row points the book at the matched
-  file and moves the book's file record to it in the same step, each change
-  recorded so that undoing the apply on the Operations page puts both back.
+- **Applying fixes the book and then its file record, and can be undone.**
+  (Owner decision 2026-10-14.) Applying a row makes two checked changes, one
+  after the other: it points the book at the matched file, then moves the
+  book's file record to it. Each change is recorded so that undoing the apply
+  on the Operations page puts both back. If the apply is stopped between the
+  two (cancelled, or the server restarts), resuming it finishes the second
+  change instead of refusing the row.
   Nothing is moved on disk and no file record is created or deleted. The
   repair no longer goes through the old "Reconcile Apply" job, which only
   updated the book and left its file record pointing at the missing file.
