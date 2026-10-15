@@ -1,5 +1,5 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
 // last-edited: 2026-10-14
 
@@ -554,4 +554,48 @@ func TestReclassify_UndoOfAnAuthorWhoseNameACaseVariantHoldsLeavesTheVariantTheE
 	h, err = w.st.GetAuthorByName("undo keep")
 	require.NoError(t, err)
 	require.Equal(t, w.keep.ID, h.ID, "and the variant still holds the entry")
+}
+
+// mergeFinish journals the delete row before the merge-delete and rewrites it
+// with what the delete reported (sameAuthorSnapshot). Only the delete knows the
+// ids whose redirects pointed at the merged author, so only the rewritten row can
+// point a flattened redirect back. C was merged into A, A into K, and redirect
+// flattening repointed C at K: undoing A->K points C at A again.
+func TestAuthorMergeOp_UndoPointsAFlattenedRedirectBackThroughTheRewrittenRow(t *testing.T) {
+	st := newRelinkOpStore(t)
+	c, err := st.CreateAuthor("Chain Oldest")
+	require.NoError(t, err)
+	a, err := st.CreateAuthor("Chain Middle")
+	require.NoError(t, err)
+	k, err := st.CreateAuthor("Chain Keep")
+	require.NoError(t, err)
+	mkRelinkOpBook(t, st, "chain-middle", a.ID, false)
+	s := newRelinkOpServer(st)
+	merge := func(opID string, keep *database.Author, from int) {
+		t.Helper()
+		def := relinkOpDef(t, s.RegisterAuthorMergeOp, "entities.author-merge")
+		raw, err := json.Marshal(entities.AuthorMergeOpParams{KeepID: keep.ID, MergeIDs: []int{from}, KeepName: keep.Name})
+		require.NoError(t, err)
+		require.NoError(t, def.Run(context.Background(), raw, &opReporter{id: opID}))
+	}
+	merge("op-chain-1", a, c.ID)
+	merge("op-chain-2", k, a.ID)
+	_, err = st.ResolveTombstoneChains()
+	require.NoError(t, err)
+	flat, err := st.GetAuthorTombstone(c.ID)
+	require.NoError(t, err)
+	require.Equal(t, k.ID, flat, "fixture: C's redirect was flattened onto K")
+
+	res, err := revertOp(t, st, "op-chain-2")
+	require.NoError(t, err)
+	require.Zero(t, res.Failed)
+	back, err := st.GetAuthorByID(a.ID)
+	require.NoError(t, err)
+	require.Equal(t, a.ID, back.ID, "A is back")
+	redirect, err := st.GetAuthorTombstone(c.ID)
+	require.NoError(t, err)
+	require.Equal(t, a.ID, redirect, "C redirects to A again")
+	viaC, err := st.GetAuthorByID(c.ID)
+	require.NoError(t, err)
+	require.Equal(t, a.ID, viaC.ID)
 }
