@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
 // last-edited: 2026-10-14
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 func newRepairPebble(t *testing.T) *database.PebbleStore {
@@ -346,5 +347,45 @@ func TestRewriteJoinsOnto(t *testing.T) {
 	}
 	if _, changed := rewriteJoinsOnto([]database.BookAuthor{{AuthorID: 5}}, 2, 1); changed {
 		t.Fatalf("no-op rewrite reported a change")
+	}
+}
+
+// A credit row whose book row is gone (a ghost book: the durable scan lists it,
+// GetBookByID returns nil, nil) is moved and journaled like any other, with no
+// primary to repoint. It used to panic on the nil book.
+func TestAuthorIDRepair_AGhostBookCreditIsMovedWithoutAPrimary(t *testing.T) {
+	s := newRepairPebble(t)
+	x := repairAuthor(t, s, "Jane Doe")
+	y := repairAuthor(t, s, "jane twin")
+	if err := s.UpdateAuthorName(y.ID, "JANE DOE"); err != nil {
+		t.Fatal(err)
+	}
+	repairBook(t, s, "real", &x.ID, x.ID)
+	if err := s.SetBookAuthors("ghost", []database.BookAuthor{{BookID: "ghost", AuthorID: x.ID, Role: "author"}}); err != nil {
+		t.Fatalf("SetBookAuthors ghost: %v", err)
+	}
+	if b, _ := s.GetBookByID("ghost"); b != nil {
+		t.Fatalf("fixture: ghost must have no book row")
+	}
+	res := runRepair(t, New(&fakeDeps{store: s}), `{"dry_run":false,"skip_dangling":true}`)
+	if res.DuplicateOutcomes[authorIDMergeMerged] != 1 {
+		t.Fatalf("outcomes %+v changes %+v", res.DuplicateOutcomes, res.DuplicateChanges)
+	}
+	ghost, err := s.GetBookAuthors("ghost")
+	if err != nil || len(ghost) != 1 || ghost[0].AuthorID != y.ID {
+		t.Fatalf("ghost credit not moved onto canonical %d: %+v %v", y.ID, ghost, err)
+	}
+	rows, err := s.GetOperationChanges("op-id-repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journaled := false
+	for _, r := range rows {
+		if r.BookID == "ghost" && r.ChangeType == undo.ChangeTypeAuthorMergeCredits {
+			journaled = true
+		}
+	}
+	if !journaled {
+		t.Fatalf("the ghost book's move was not journaled: %+v", rows)
 	}
 }
