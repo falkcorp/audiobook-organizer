@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.39.0
+// version: 4.40.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -1097,27 +1097,23 @@ func (s *Server) seedRolesAndTokens() {
 	}
 }
 
-// startBackfills launches the one-time, idempotent bgWG-tracked backfill and
-// maintenance goroutines. Extracted verbatim from Start; every goroutine stays
-// enrolled in s.bgWG so shutdown drains them before the store closes (SYS-1).
+// startBackfills launches the one-time, idempotent backfill and maintenance
+// work. Each goroutine here is enrolled in s.bgWG so shutdown drains it before
+// the store closes (SYS-1); the work that runs as registered ops (bootOps,
+// acoustid.backfill) is drained by Registry.Shutdown instead.
 func (s *Server) startBackfills() {
-	// Backfill external ID mappings from existing iTunes PIDs (one-time,
-	// idempotent — force=false routes through BackfillExternalIDsOnce, which
-	// skips the full-library scan once a prior run has recorded completion;
-	// SQ-04). Tracked via bgWG for the same reason as the embedding
-	// backfill: we can't let it hold Pebble iterators while CloseStore runs.
-	s.bgWG.Go("external-id-backfill", func() {
-		// This startup-goroutine path has no op reporter (only the UOS plugin
-		// op maintenance.external-id-backfill does), so progress is surfaced
-		// via a plain slog.Info instead of reporter.UpdateProgress — this is
-		// the path that actually runs at every boot, so it's the one that
-		// needs the "more than one log line" fix (H7), not just the UOS
-		// plugin op (unclear whether that path is ever enqueued). The error
-		// is no longer silently swallowed either.
-		if err := s.backfillExternalIDs(startupProgressLogger("external-id-backfill"), false); err != nil {
-			slog.Warn("startup external-id-backfill failed", "err", err)
-		}
-	})
+	// One-time whole-library backfills and file repairs run as registered ops
+	// (04-P6), not as bgWG goroutines: they show on the Operations page with
+	// progress, can be cancelled, and wait for the memdb warmup in the
+	// registry's dispatcher (D44). See enqueueBootOps for the list and for
+	// how shutdown still drains them before the store closes.
+	if s.opRegistry == nil {
+		lifecycleLog.Warn("startup: no operations registry; the one-time boot backfill ops were not enqueued")
+	} else {
+		enqueueBootOps(s.bgCtx, func(ctx context.Context, id string, params any) (string, error) {
+			return s.opRegistry.EnqueueOp(ctx, id, params)
+		})
+	}
 
 	// AcoustID fingerprint backfill. CONC-9 removed the serial server-side
 	// duplicate (backfillAcoustIDs) in favor of the parallel plugin op
@@ -1335,27 +1331,6 @@ func (s *Server) startBackfills() {
 		}
 	})
 
-	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
-	// classical-music atoms crash Apple Devices for Windows at sync.
-	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
-	// of blowing the 30s grace period on a first-run walk over a large
-	// library; a canceled run resumes on the next startup.
-	s.bgWG.Go("strip-movement-atoms", func() {
-		s.stripMovementAtoms(s.bgCtx)
-	})
-
-	// Re-mux M4B/M4A files with malformed atom structures so taglib,
-	// AtomicParsley, and Apple Devices can read them (one-time).
-	// Checks bgCtx per file (SYS-1); same early-stop behavior as
-	// stripMovementAtoms above.
-	s.bgWG.Go("remux-malformed-m4b", func() {
-		// See the external-id-backfill goroutine above for why this logs
-		// progress via slog rather than a reporter (C2).
-		if err := s.remuxMalformedM4BFiles(s.bgCtx, startupProgressLogger("remux-malformed-m4b")); err != nil {
-			slog.Warn("startup remux-malformed-m4b failed", "err", err)
-		}
-	})
-
 	// Build the search index on first startup (or if it got wiped).
 	// Tracked via bgWG so shutdown can wait for in-flight indexing
 	// instead of letting it run under a closing DB.
@@ -1390,31 +1365,69 @@ func (s *Server) startBackfills() {
 		})
 	}
 
-	// One-time startup jobs: transcode malformed M4B files, then quarantine any
-	// that remained permanently unreadable. Run sequentially in a bgWG goroutine
-	// so shutdown waits for them and they don't race against the HTTP server.
-	// transcodeMalformedM4BFiles checks bgCtx per file (SYS-1); same
-	// early-stop behavior as stripMovementAtoms above.
-	s.bgWG.Go("transcode+quarantine", func() {
-		// See the external-id-backfill goroutine above for why this logs
-		// progress via slog rather than a reporter (C2).
-		if err := s.transcodeMalformedM4BFiles(s.bgCtx, startupProgressLogger("transcode-malformed-m4b")); err != nil {
-			slog.Warn("startup transcode-malformed-m4b failed", "err", err)
-		}
-		s.quarantineKnownBadFiles()
-	})
 }
 
-// startupProgressLogger returns a C2/H7 progress callback that logs via slog,
-// for use by the raw startBackfills goroutines above, which run outside the
-// UOS op registry and so have no reporter.UpdateProgress to call. Without
-// this, these ops — which run unconditionally at every boot — would still
-// show only a single "starting"/"complete" log line across a multi-hour run,
-// even after threading progress through the dep layer, because nil progress
-// is a no-op.
-func startupProgressLogger(op string) func(processed, total int, msg string) {
-	return func(processed, total int, msg string) {
-		slog.Info("startup progress", "op", op, "processed", processed, "total", total, "msg", msg)
+// bootOp is one whole-library maintenance op enqueued at every boot, with the
+// params that give it the behaviour of the goroutine it replaced.
+type bootOp struct {
+	id     string
+	params map[string]any
+}
+
+// bootOps are the ops startBackfills enqueues (04-P6). Each was a bgWG
+// goroutine with no progress and no cancel. The registered ops were the
+// operator's FORCE variants, so each takes a param for the boot behaviour:
+//
+//   - external-id-backfill {"if_needed": true}: the sentinel-gated pass
+//     (itunes.BackfillExternalIDsOnce); without it the op rescans in full.
+//   - movement-atom-cleanup, malformed-m4b-remux: no params; the op calls the
+//     same once-gated function the goroutine did.
+//   - malformed-m4b-transcode {"quarantine_after": true}: the transcode, then
+//     quarantineKnownBadFiles, the goroutine's two steps.
+//
+// Every def is PriorityLow, so these never get ahead of a user's op. A run
+// with nothing to do logs with opsregistry.NoOpAttr, so the activity feed
+// hides it by default.
+//
+// Readiness: the registry's dispatcher holds every def without NoWarmupWait
+// (all four) until the memdb warmup finishes, bounded by
+// registry.WarmupWaitTimeout. The goroutines did not wait for it at all.
+//
+// Shutdown: the goroutines were in bgWG so shutdown waited for them before
+// CloseStore. Registry.Shutdown, which Server.Shutdown calls before bgCancel
+// and before any store closes, cancels every run's ctx and waits for the runs
+// to return (bounded by its caller's 10s, then a 2s goroutine escape). Each op
+// here runs on that ctx, including the external-id backfill and the
+// quarantine step, which used to watch only bgCtx or nothing.
+//
+// Restart mid-run: the three ResumeDrop ops are dropped and the next boot
+// enqueues them again. The transcode is ResumeAsk: an interrupted (or
+// never-started queued) row becomes interrupted_ask and waits for an
+// operator. That row is not queued or running, so the enqueue dedupe does not
+// see it and the next boot enqueues a fresh transcode run anyway, as the
+// goroutine ran one at every boot.
+var bootOps = []bootOp{
+	{id: "maintenance.external-id-backfill", params: map[string]any{"if_needed": true}},
+	{id: "maintenance.movement-atom-cleanup", params: map[string]any{}},
+	{id: "maintenance.malformed-m4b-remux", params: map[string]any{}},
+	{id: "maintenance.malformed-m4b-transcode", params: map[string]any{"quarantine_after": true}},
+}
+
+// enqueueBootOps enqueues each of bootOps. A failed enqueue is logged and the
+// rest still go. enqueue is Registry.EnqueueOp in production; it is a
+// parameter because Server.opRegistry is a concrete *Registry with no fake.
+func enqueueBootOps(ctx context.Context, enqueue func(ctx context.Context, id string, params any) (string, error)) {
+	for _, op := range bootOps {
+		if ctx.Err() != nil {
+			return
+		}
+		opID, err := enqueue(ctx, op.id, op.params)
+		if err != nil {
+			lifecycleLog.Warn("startup: could not enqueue %s; it runs on the next boot or by hand: err=%s",
+				op.id, logger.SanitizeLogValue(err.Error()))
+			continue
+		}
+		lifecycleLog.Info("startup: enqueued %s as op %s", op.id, opID)
 	}
 }
 

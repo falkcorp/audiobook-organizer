@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.66.2
+// version: 1.67.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -180,23 +180,32 @@ func (s *Server) RunAutoPurgeSoftDeleted(ctx context.Context, opID string) {
 
 // ---- one-shot startup ops ----
 
-// BackfillExternalIDs backs the manual maintenance.external-id-backfill op.
-// force=true: an operator asked for it, so it runs in full even when the
-// boot-time pass has already recorded completion (the boot path passes false).
-func (s *Server) BackfillExternalIDs(progress func(processed, total int, msg string)) error {
-	return s.backfillExternalIDs(progress, true)
+// BackfillExternalIDs backs maintenance.external-id-backfill. ifNeeded=false
+// (an operator's run) runs in full even when an earlier pass recorded
+// completion; ifNeeded=true (the boot enqueue) skips once it has, and reports
+// skipped. See backfillExternalIDs.
+func (s *Server) BackfillExternalIDs(ctx context.Context, ifNeeded bool, progress func(processed, total int, msg string)) (skipped bool, err error) {
+	return s.backfillExternalIDs(ctx, progress, ifNeeded)
 }
 
-func (s *Server) StripMovementAtoms(ctx context.Context) {
-	s.stripMovementAtoms(ctx)
+// StripMovementAtoms backs maintenance.movement-atom-cleanup and reports
+// whether the cleanup's done flag was already set (nothing to do).
+func (s *Server) StripMovementAtoms(ctx context.Context) (alreadyDone bool) {
+	return s.stripMovementAtoms(ctx).AlreadyDone
 }
 
-func (s *Server) RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
+func (s *Server) RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) (alreadyDone bool, err error) {
 	return s.remuxMalformedM4BFiles(ctx, progress)
 }
 
-func (s *Server) TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
+func (s *Server) TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) (alreadyDone bool, err error) {
 	return s.transcodeMalformedM4BFiles(ctx, progress)
+}
+
+// QuarantineKnownBadFiles backs the quarantine_after step of
+// maintenance.malformed-m4b-transcode. See quarantineKnownBadFiles.
+func (s *Server) QuarantineKnownBadFiles(ctx context.Context) (quarantined int, alreadyDone bool, err error) {
+	return s.quarantineKnownBadFiles(ctx)
 }
 
 // ---- store helpers ----

@@ -1,11 +1,12 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-09-11
+// last-edited: 2026-10-15
 
 package server
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -42,46 +43,50 @@ func asExternalIDStore(s any) ExternalIDStore {
 }
 
 // backfillExternalIDs delegates to the itunes domain package, which
-// coordinates book-level, file-level, and track-level PID registration.
+// coordinates book-level, file-level, and track-level PID registration. It
+// backs maintenance.external-id-backfill and runs on that op's ctx.
 //
-// force selects the entry point. false (the boot path in startBackfills)
-// goes through itunes.BackfillExternalIDsOnce, which skips the whole
-// full-library scan when a previous run recorded completion under
-// itunes.ExternalIDBackfillDoneKey — before that gate existed the scan ran
-// at every server start (SQ-04). true (the manual maintenance op) calls
-// itunes.BackfillExternalIDs directly so an operator's explicit request is
-// never silently skipped; the writes are idempotent either way.
+// ifNeeded selects the entry point. true (boot enqueues the op with
+// {"if_needed": true}) goes through itunes.BackfillExternalIDsOnce, which
+// skips the whole full-library scan when a previous run recorded completion
+// under itunes.ExternalIDBackfillDoneKey -- before that gate existed the scan
+// ran at every server start (SQ-04) -- and reports skipped=true when it did.
+// false (an operator's run) calls itunes.BackfillExternalIDs directly so an
+// explicit request is never silently skipped; the writes are idempotent
+// either way.
+//
+// ctx is the op's run context, not s.bgCtx: the registry cancels it at the
+// start of its shutdown drain, which runs BEFORE bgCtx is cancelled, so a run
+// that watched bgCtx would keep writing CreateExternalIDMapping through the
+// whole drain and could outlive it into CloseStore ("pebble: closed").
 //
 // progress is forwarded straight to itunes.BackfillExternalIDs so the
 // whole-library pagination reports live progress (H7). The domain error is
-// now returned to the caller instead of being demoted to a Warn log — a
-// failure here (e.g. a write error mid-backfill) used to leave the op
-// reporting success unconditionally.
-func (s *Server) backfillExternalIDs(progress func(processed, total int, msg string), force bool) error {
+// returned to the caller, so a failure (e.g. a write error mid-backfill)
+// fails the op.
+func (s *Server) backfillExternalIDs(ctx context.Context, progress func(processed, total int, msg string), ifNeeded bool) (skipped bool, err error) {
 	store := s.Ops()
 	if store == nil {
-		return nil
+		return false, nil
 	}
 
 	eidStore := asExternalIDStore(store)
 	if eidStore == nil {
 		slog.Debug("backfillExternalIDs store does not implement ExternalIDStore, skipping")
-		return nil
+		return false, nil
 	}
 
-	// Delegate to the itunes domain package. s.bgCtx aborts the backfill
-	// on shutdown so it can't outlive the store and crash on
-	// "pebble: closed" in CreateExternalIDMapping.
 	adapter := &externalIDStoreAdapter{eidStore: eidStore, store: store}
-	run := itunes.BackfillExternalIDsOnce
-	if force {
-		run = itunes.BackfillExternalIDs
+	if ifNeeded {
+		skipped, err = itunes.BackfillExternalIDsOnce(ctx, adapter, progress)
+	} else {
+		err = itunes.BackfillExternalIDs(ctx, adapter, progress)
 	}
-	if err := run(s.bgCtx, adapter, progress); err != nil {
+	if err != nil {
 		slog.Warn("backfillExternalIDs", "err", err)
-		return err
+		return false, err
 	}
-	return nil
+	return skipped, nil
 }
 
 // externalIDStoreAdapter adapts ExternalIDStore and database.Store to

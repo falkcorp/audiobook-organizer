@@ -1,7 +1,7 @@
 // file: internal/remux/remux_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-15
 
 package remux
 
@@ -75,8 +75,17 @@ func TestRemuxMalformedFilesAlreadyCompleted(t *testing.T) {
 		},
 	}
 	remuxer := New(store)
+	if !remuxer.AlreadyDone() {
+		t.Error("AlreadyDone() = false with the done flag set, want true")
+	}
 	if err := remuxer.RemuxMalformedFiles(context.Background(), nil); err != nil {
 		t.Errorf("RemuxMalformedFiles() already-completed should return nil, got %v", err)
+	}
+	if New(&MockStore{}).AlreadyDone() {
+		t.Error("AlreadyDone() = true with no done flag, want false")
+	}
+	if (&Remuxer{}).AlreadyDone() {
+		t.Error("AlreadyDone() = true with no store, want false")
 	}
 }
 

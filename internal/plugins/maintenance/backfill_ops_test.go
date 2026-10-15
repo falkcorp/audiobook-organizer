@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill_ops_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-07-18
+// last-edited: 2026-10-15
 
 // Package maintenance tests for T09 (C2/H7): proves runExternalIDBackfill,
 // runMalformedM4BRemux, and runMalformedM4BTranscode thread the op reporter's
@@ -28,25 +28,25 @@ type t09OpsFakeDeps struct {
 	transcodeErr error
 }
 
-func (d t09OpsFakeDeps) BackfillExternalIDs(progress func(processed, total int, msg string)) error {
+func (d t09OpsFakeDeps) BackfillExternalIDs(_ context.Context, _ bool, progress func(processed, total int, msg string)) (bool, error) {
 	if progress != nil {
 		progress(1, 2, "half done")
 	}
-	return d.backfillErr
+	return false, d.backfillErr
 }
 
-func (d t09OpsFakeDeps) RemuxMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string)) error {
+func (d t09OpsFakeDeps) RemuxMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string)) (bool, error) {
 	if progress != nil {
 		progress(5, 10, "remuxing")
 	}
-	return d.remuxErr
+	return false, d.remuxErr
 }
 
-func (d t09OpsFakeDeps) TranscodeMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string)) error {
+func (d t09OpsFakeDeps) TranscodeMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string)) (bool, error) {
 	if progress != nil {
 		progress(3, 7, "transcoding")
 	}
-	return d.transcodeErr
+	return false, d.transcodeErr
 }
 
 var _ ServerDeps = t09OpsFakeDeps{}
