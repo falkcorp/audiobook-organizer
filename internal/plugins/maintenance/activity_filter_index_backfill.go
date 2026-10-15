@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -29,6 +30,14 @@ const ActivityFilterIndexBackfillDefID = "maintenance.activity-filter-index-back
 // hundred thousand rows), so a restart repeats little.
 const activityFilterIndexWindow = 24 * time.Hour
 
+// activityFilterIndexReconciler is the boot mode's whole need from the store,
+// asserted on the store ActivityFilterIndexBackfiller returns so that interface
+// stays narrow (the full backfill never needs it). *PebbleActivityStore
+// implements it.
+type activityFilterIndexReconciler interface {
+	ReconcileFilterIndexCoverage(ctx context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error)
+}
+
 // activityFilterIndexBackfillParams is both the op's params and its checkpoint:
 // the registry merges the checkpoint back into params on ResumeRestart.
 //
@@ -41,6 +50,14 @@ type activityFilterIndexBackfillParams struct {
 	// Force re-runs even when the sentinel says the indexes are complete (after
 	// a rollback to a build that wrote rows without them, for instance).
 	Force bool `json:"force,omitempty"`
+
+	// Reconcile is the boot mode (04-P6): instead of the full backfill, run
+	// ReconcileFilterIndexCoverage, which indexes only rows a rolled-back build
+	// wrote without filter keys. The default (non-force) path returns "already
+	// complete" without looking at such a gap, so it is NOT equivalent. It
+	// cannot be combined with Force. It never checkpoints: a reconcile is
+	// idempotent, and a resumed one starts over.
+	Reconcile bool `json:"reconcile,omitempty"`
 
 	// Workers sizes the window worker pool; 0 (the default) means
 	// runtime.NumCPU(). Lower it to leave cores free on a busy host.
@@ -64,6 +81,14 @@ type ActivityFilterIndexBackfillResult struct {
 }
 
 // activityFilterIndexBackfillDef — see ActivityFilterIndexBackfillDefID.
+//
+// BOOT. {"reconcile": true} is the mode Server.startBackfills enqueues on every
+// start (bootOps; 04-P6 replaced the reconcileFilterIndexAtBoot goroutine in
+// internal/activity/register.go): normally it finds nothing above the
+// seen-through mark and is a no-op tagged with opsregistry.NoOpAttr. Its
+// liveness is manual (the store's progress callback stamps UpdateProgress per
+// gap-check interval and per reindexed chunk); the full backfill uses RunItems.
+// A restart mid-reconcile resumes it (ResumeRestart) with the same params.
 //
 // GATE. The query planner ignores the new indexes until this op has covered
 // every window and set database.ActivityFilterIndexBackfillKey; until then
@@ -96,7 +121,7 @@ func (p *Plugin) activityFilterIndexBackfillDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Backfill activity filter indexes",
-		Description:     "Builds the source, type and level indexes of the Pebble activity log over rows recorded before they existed, then enables indexed filtering. Until it completes, activity filters other than operation and book only search the newest 20,000 entries.",
+		Description:     "Builds the source, type and level indexes of the Pebble activity log over rows recorded before they existed, then enables indexed filtering. Until it completes, activity filters other than operation and book only search the newest 20,000 entries. Enqueued with {\"reconcile\": true} (as boot does) it only indexes rows a rolled-back build wrote without filter keys.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -138,7 +163,16 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 			return fmt.Errorf("activity-filter-index-backfill: params: %w", err)
 		}
 	}
+	if params.Reconcile && params.Force {
+		return errors.New("activity-filter-index-backfill: reconcile=true cannot be combined with force; " +
+			"send {\"reconcile\": true} (index only rows written without filter keys) or {\"force\": true} (full rebuild)")
+	}
 	store := p.deps.ActivityFilterIndexBackfiller()
+	if params.Reconcile {
+		// Before the "already complete" return below: the usual boot has the
+		// sentinel set, and that return would skip the reconcile entirely.
+		return runActivityFilterIndexReconcile(ctx, store, reporter)
+	}
 	if store == nil {
 		return errors.New("activity-filter-index-backfill: no Pebble activity store is wired")
 	}
@@ -248,6 +282,105 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 	}
 	if runErr != nil {
 		return fmt.Errorf("activity-filter-index-backfill: %w", runErr)
+	}
+	return nil
+}
+
+// activityFilterIndexProgressTo turns the reconcile's progress callbacks into
+// liveness stamps. The row total is unknown up front, so total is 0 and the
+// message carries the count.
+func activityFilterIndexProgressTo(reporter sdk.Reporter) database.FilterIndexProgress {
+	return func(phase string, rows int) {
+		_ = reporter.UpdateProgress(rows, 0, fmt.Sprintf("activity filter-index reconcile %s: %d rows", phase, rows))
+	}
+}
+
+// runActivityFilterIndexReconcile is the boot mode ({"reconcile": true}): the
+// work reconcileFilterIndexAtBoot did, as an op. The outcomes:
+//
+//   - no Pebble activity store (nil, a non-Pebble backend): nothing to
+//     reconcile. A Warn tagged opsregistry.NoOpAttr, success, so boot is not
+//     red every start. The full backfill still refuses in that case.
+//   - sentinel not set: the indexes are not complete, so every filtered query
+//     already uses the budgeted scan and says partial, and the full backfill
+//     covers every row when it runs. Nothing to reconcile; tagged no-op, and
+//     the line names the op to run.
+//   - nothing above the seen-through mark lacks filter keys: the usual boot,
+//     tagged no-op.
+//   - a gap was found and indexed: a Warn (not tagged), the result persisted.
+//   - failed or cancelled after the gap was found: the store withdrew the
+//     sentinel first, so queries are partial, never silently short, and they
+//     stay so: the next reconcile, like a resumed one, returns at once on a
+//     withdrawn sentinel. The Error line and the returned error therefore name
+//     maintenance.activity-filter-index-backfill, on the cancel path too.
+//   - cancelled before anything was withdrawn: an interruption, Info, ctx's
+//     error returned.
+func runActivityFilterIndexReconcile(ctx context.Context, store database.ActivityFilterIndexBackfiller, reporter sdk.Reporter) error {
+	_ = reporter.Log(slog.LevelDebug, "Starting activity filter-index reconcile")
+	if store == nil {
+		_ = reporter.Log(slog.LevelWarn, "no Pebble activity store is wired; nothing to reconcile",
+			opsregistry.NoOpAttr())
+		return nil
+	}
+	rec, ok := store.(activityFilterIndexReconciler)
+	if !ok {
+		return fmt.Errorf("activity-filter-index-backfill: cannot reconcile: the activity store is %T, which has no "+
+			"ReconcileFilterIndexCoverage", store)
+	}
+	_ = reporter.UpdateProgress(0, 1, "checking activity rows for missing filter-index keys")
+	if !store.FilterIndexBackfillDone() {
+		_ = reporter.Log(slog.LevelInfo, "activity filter indexes are not complete (never built, or withdrawn by a "+
+			"failed reconcile), so filtered activity queries use the budgeted scan and report partial; run "+
+			"maintenance.activity-filter-index-backfill to build them. Nothing to reconcile.", opsregistry.NoOpAttr())
+		return nil
+	}
+
+	res, err := rec.ReconcileFilterIndexCoverage(ctx, activityFilterIndexProgressTo(reporter))
+	if err != nil {
+		withdrawn := !store.FilterIndexBackfillDone()
+		cancelled := errors.Is(ctx.Err(), context.Canceled) || (ctx.Err() == nil && errors.Is(err, context.Canceled))
+		switch {
+		case cancelled && !withdrawn:
+			_ = reporter.Log(slog.LevelInfo, "activity filter-index reconcile interrupted before it changed "+
+				"anything; the next boot reconciles again", slog.String("error", err.Error()))
+		case cancelled:
+			_ = reporter.Log(slog.LevelError, fmt.Sprintf("activity filter-index reconcile interrupted after it "+
+				"withdrew the indexed-filtering sentinel (seen-through=%d, reindexed=%d); filtered activity queries "+
+				"report partial until maintenance.activity-filter-index-backfill re-enables indexed filtering",
+				res.SeenThrough, res.Reindexed), slog.String("error", err.Error()))
+		default:
+			_ = reporter.Log(slog.LevelError, fmt.Sprintf("activity filter-index reconcile failed (seen-through=%d, "+
+				"reindexed=%d); run maintenance.activity-filter-index-backfill to re-enable indexed filtering",
+				res.SeenThrough, res.Reindexed), slog.String("error", err.Error()))
+		}
+		if cancelled {
+			if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+				return fmt.Errorf("activity-filter-index-backfill: reconcile interrupted (%s): %w", err.Error(), ctxErr)
+			}
+			if withdrawn {
+				return fmt.Errorf("activity-filter-index-backfill: reconcile interrupted with the sentinel withdrawn "+
+					"(seen-through=%d, reindexed=%d); run maintenance.activity-filter-index-backfill to re-enable "+
+					"indexed filtering: %w", res.SeenThrough, res.Reindexed, err)
+			}
+			return fmt.Errorf("activity-filter-index-backfill: reconcile interrupted: %w", err)
+		}
+		return fmt.Errorf("activity-filter-index-backfill: reconcile failed (seen-through=%d, reindexed=%d): %w "+
+			"- run maintenance.activity-filter-index-backfill to re-enable indexed filtering",
+			res.SeenThrough, res.Reindexed, err)
+	}
+	if !res.GapFound {
+		_ = reporter.Log(slog.LevelInfo, "no activity rows above the filter-index mark lack filter keys; nothing to do",
+			opsregistry.NoOpAttr())
+		return nil
+	}
+	msg := fmt.Sprintf("activity filter-index reconcile indexed %d row(s) written without filter keys after "+
+		"seen-through=%d; indexed filtering is enabled again", res.Reindexed, res.SeenThrough)
+	_ = reporter.UpdateProgress(1, 1, msg)
+	_ = reporter.Log(slog.LevelWarn, msg)
+	if setErr := opsregistry.ReporterSetResult(reporter, ActivityFilterIndexBackfillResult{
+		RowsIndexed: int64(res.Reindexed), SentinelMarked: true,
+	}); setErr != nil {
+		return fmt.Errorf("activity-filter-index-backfill: persist result: %w", setErr)
 	}
 	return nil
 }

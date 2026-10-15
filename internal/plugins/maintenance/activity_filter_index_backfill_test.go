@@ -1,15 +1,18 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -231,4 +234,313 @@ func TestActivityFilterIndexWindowBounds_CoverEverything(t *testing.T) {
 	assert.False(t, o0)
 	assert.False(t, o1)
 	assert.True(t, o2, "the last window is open-ended")
+}
+
+// --- reconcile mode (04-P6 part 2) ---
+
+// reconcileSpy is a reporter that keeps each line's level and no-op tag, counts
+// the liveness stamps and records the persisted result.
+type reconcileSpy struct {
+	p6AttrReporter
+	smu    sync.Mutex
+	stamps int
+	result any
+}
+
+func (r *reconcileSpy) UpdateProgress(_, _ int, _ string) error {
+	r.smu.Lock()
+	r.stamps++
+	r.smu.Unlock()
+	return nil
+}
+
+func (r *reconcileSpy) SetResult(v any) error {
+	r.smu.Lock()
+	r.result = v
+	r.smu.Unlock()
+	return nil
+}
+
+func (r *reconcileSpy) text() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var b strings.Builder
+	for _, l := range r.lines {
+		b.WriteString(l.msg + "\n")
+	}
+	return b.String()
+}
+
+// fakeReconcileStore is the activity store as the reconcile sees it: the
+// sentinel, and ReconcileFilterIndexCoverage's answer. The embedded interface
+// is nil; the reconcile mode never calls the backfill methods.
+type fakeReconcileStore struct {
+	database.ActivityFilterIndexBackfiller
+	mu        sync.Mutex
+	done      bool
+	reconcile func(ctx context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error)
+	calls     int
+}
+
+func (f *fakeReconcileStore) FilterIndexBackfillDone() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.done
+}
+
+func (f *fakeReconcileStore) withdraw() {
+	f.mu.Lock()
+	f.done = false
+	f.mu.Unlock()
+}
+
+func (f *fakeReconcileStore) ReconcileFilterIndexCoverage(ctx context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	if f.reconcile == nil {
+		return database.FilterIndexReconcileResult{}, nil
+	}
+	return f.reconcile(ctx, progress)
+}
+
+func reconcilePlugin(store database.ActivityFilterIndexBackfiller) *Plugin {
+	return New(&afibDeps{store: store})
+}
+
+var reconcileParams = json.RawMessage(`{"reconcile":true}`)
+
+// The reconcile is not the full backfill with a different name: with the
+// sentinel set (the usual boot) the full backfill's early return says
+// "already complete" and never looks for a gap. The reconcile branch comes
+// first, so the store is asked.
+func TestActivityFilterIndexReconcile_RunsBeforeTheAlreadyCompleteReturn(t *testing.T) {
+	f := &fakeReconcileStore{done: true}
+	rep := &reconcileSpy{}
+	if err := reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 1 {
+		t.Fatalf("ReconcileFilterIndexCoverage calls = %d, want 1 (a sentinel-set store must still be reconciled)", f.calls)
+	}
+	if strings.Contains(rep.text(), "already complete") {
+		t.Errorf("the reconcile took the full backfill's already-complete path: %s", rep.text())
+	}
+}
+
+func TestActivityFilterIndexReconcile_RefusesForce(t *testing.T) {
+	f := &fakeReconcileStore{done: true}
+	err := reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(),
+		json.RawMessage(`{"reconcile":true,"force":true}`), &reconcileSpy{})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined with force") {
+		t.Fatalf("err = %v, want reconcile+force refused", err)
+	}
+	if f.calls != 0 {
+		t.Fatalf("a refused run reached the store (%d calls)", f.calls)
+	}
+}
+
+// Absent reconcile keeps the full backfill exactly as before: a completed
+// sentinel is "already complete", and the reconcile is never called.
+func TestActivityFilterIndexReconcile_AbsentParamIsTheFullBackfill(t *testing.T) {
+	s, _ := newAfibStore(t, 3)
+	require.NoError(t, s.MarkFilterIndexBackfillDone())
+	spy := &fakeReconcileStore{ActivityFilterIndexBackfiller: s, done: true}
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(spy).runActivityFilterIndexBackfill(context.Background(), json.RawMessage(`{}`), rep))
+	assert.Equal(t, 0, spy.calls, "the full backfill must not reconcile")
+	assert.Contains(t, rep.text(), "already complete")
+}
+
+func TestActivityFilterIndexReconcile_NoGapIsATaggedNoOp(t *testing.T) {
+	f := &fakeReconcileStore{done: true, reconcile: func(_ context.Context, _ database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+		return database.FilterIndexReconcileResult{SeenThrough: 42}, nil
+	}}
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	assert.Equal(t, 1, rep.noOpLines())
+	assert.False(t, hasLevel(&rep.p6AttrReporter, slog.LevelError))
+	assert.False(t, hasLevel(&rep.p6AttrReporter, slog.LevelWarn))
+	assert.Nil(t, rep.result)
+}
+
+func TestActivityFilterIndexReconcile_GapFoundWarnsAndPersistsResult(t *testing.T) {
+	f := &fakeReconcileStore{done: true, reconcile: func(_ context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+		progress("reindex", 30)
+		return database.FilterIndexReconcileResult{SeenThrough: 42, GapFound: true, Reindexed: 30}, nil
+	}}
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	assert.Equal(t, 0, rep.noOpLines(), "a run that indexed rows is not a no-op")
+	assert.True(t, hasLevel(&rep.p6AttrReporter, slog.LevelWarn))
+	res, ok := rep.result.(ActivityFilterIndexBackfillResult)
+	require.True(t, ok, "result = %#v", rep.result)
+	assert.Equal(t, int64(30), res.RowsIndexed)
+	assert.True(t, res.SentinelMarked)
+}
+
+// Sentinel not set: nothing to reconcile (the full backfill covers every row),
+// but the line names the op so the standing state is findable.
+func TestActivityFilterIndexReconcile_SentinelNotSetIsATaggedNoOpNamingTheOp(t *testing.T) {
+	f := &fakeReconcileStore{done: false}
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	assert.Equal(t, 0, f.calls)
+	assert.Equal(t, 1, rep.noOpLines())
+	assert.Contains(t, rep.text(), "maintenance.activity-filter-index-backfill")
+}
+
+// A non-Pebble activity backend has no filter index: boot must not be red every
+// start. The full backfill still refuses.
+func TestActivityFilterIndexReconcile_NoStoreIsATaggedNoOp(t *testing.T) {
+	p := reconcilePlugin(nil)
+	rep := &reconcileSpy{}
+	require.NoError(t, p.runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	assert.True(t, hasLevel(&rep.p6AttrReporter, slog.LevelWarn))
+	assert.Equal(t, 1, rep.noOpLines())
+	err := p.runActivityFilterIndexBackfill(context.Background(), json.RawMessage(`{}`), &reconcileSpy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no Pebble activity store is wired")
+}
+
+// A store that cannot reconcile is a wiring bug, not a quiet success.
+func TestActivityFilterIndexReconcile_StoreWithoutReconcileFails(t *testing.T) {
+	type bare struct {
+		database.ActivityFilterIndexBackfiller
+	}
+	err := reconcilePlugin(bare{}).runActivityFilterIndexBackfill(context.Background(), reconcileParams, &reconcileSpy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ReconcileFilterIndexCoverage")
+}
+
+// A failure, or a cancel, after the store withdrew the sentinel leaves indexed
+// filtering off, and nothing re-enables it but the full backfill: both the Error
+// line and the returned error say which op to run.
+func TestActivityFilterIndexReconcile_FailureAndCancelNameTheOp(t *testing.T) {
+	const opName = "maintenance.activity-filter-index-backfill"
+	t.Run("failure", func(t *testing.T) {
+		boom := errors.New("boom")
+		f := &fakeReconcileStore{done: true, reconcile: func(context.Context, database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+			return database.FilterIndexReconcileResult{SeenThrough: 7, GapFound: true, Reindexed: 3}, boom
+		}}
+		rep := &reconcileSpy{}
+		err := reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep)
+		require.ErrorIs(t, err, boom)
+		assert.Contains(t, err.Error(), opName)
+		assert.Contains(t, err.Error(), "seen-through=7")
+		assert.True(t, hasLevel(&rep.p6AttrReporter, slog.LevelError))
+		assert.Contains(t, rep.text(), opName)
+	})
+	t.Run("cancel after the sentinel was withdrawn", func(t *testing.T) {
+		started := make(chan struct{})
+		f := &fakeReconcileStore{done: true}
+		f.reconcile = func(ctx context.Context, _ database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+			f.withdraw()
+			close(started)
+			<-ctx.Done()
+			return database.FilterIndexReconcileResult{SeenThrough: 7, GapFound: true, Reindexed: 3},
+				fmt.Errorf("pebble_activity_store: reindex rollback gap: %w", ctx.Err())
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		rep := &reconcileSpy{}
+		done := make(chan error, 1)
+		go func() { done <- reconcilePlugin(f).runActivityFilterIndexBackfill(ctx, reconcileParams, rep) }()
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			cancel()
+			t.Fatal("the reconcile never started")
+		}
+		cancel()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Contains(t, err.Error(), opName, "the cancel path must name the op to run")
+		case <-time.After(2 * time.Second):
+			t.Fatal("the reconcile did not return within 2s of its ctx being cancelled")
+		}
+		assert.True(t, hasLevel(&rep.p6AttrReporter, slog.LevelError), "a withdrawn sentinel is an Error line")
+		assert.Contains(t, rep.text(), opName)
+	})
+	t.Run("cancel before anything was withdrawn", func(t *testing.T) {
+		started := make(chan struct{})
+		f := &fakeReconcileStore{done: true, reconcile: func(ctx context.Context, _ database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+			close(started)
+			<-ctx.Done()
+			return database.FilterIndexReconcileResult{SeenThrough: 7}, ctx.Err()
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		rep := &reconcileSpy{}
+		done := make(chan error, 1)
+		go func() { done <- reconcilePlugin(f).runActivityFilterIndexBackfill(ctx, reconcileParams, rep) }()
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			cancel()
+			t.Fatal("the reconcile never started")
+		}
+		cancel()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(2 * time.Second):
+			t.Fatal("the reconcile did not return within 2s of its ctx being cancelled")
+		}
+		assert.False(t, hasLevel(&rep.p6AttrReporter, slog.LevelError), "an interruption that changed nothing is not an Error")
+		assert.True(t, hasLevel(&rep.p6AttrReporter, slog.LevelInfo))
+	})
+	t.Run("timeout is a failure", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		f := &fakeReconcileStore{done: true, reconcile: func(ctx context.Context, _ database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+			return database.FilterIndexReconcileResult{GapFound: true}, fmt.Errorf("reindex: %w", ctx.Err())
+		}}
+		rep := &reconcileSpy{}
+		err := reconcilePlugin(f).runActivityFilterIndexBackfill(ctx, reconcileParams, rep)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.NotContains(t, rep.text(), "interrupted")
+		assert.True(t, hasLevel(&rep.p6AttrReporter, slog.LevelError))
+	})
+}
+
+// The reconcile's progress callback stamps the watchdog's liveness clock, so a
+// long reindex is never silent: the start stamp plus one per callback.
+func TestActivityFilterIndexReconcile_ProgressStampsLiveness(t *testing.T) {
+	f := &fakeReconcileStore{done: true, reconcile: func(_ context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+		progress("check", 64)
+		progress("reindex", 2000)
+		progress("reindex", 4000)
+		return database.FilterIndexReconcileResult{}, nil
+	}}
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(f).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	if rep.stamps < 4 {
+		t.Fatalf("UpdateProgress calls = %d, want at least 4 (start and three callbacks)", rep.stamps)
+	}
+}
+
+// End to end on a real store: a store written by an older build (rows, no
+// filter keys, no seen-through mark) under a completed sentinel, booted, and
+// this boot has already written a newer row before the op runs. The op still
+// finds and indexes the older rows (the check starts from the mark at open),
+// after which a filtered query answers in full with partial=false.
+func TestActivityFilterIndexReconcile_RealStoreAfterABootWrite(t *testing.T) {
+	s, _ := newAfibStore(t, 6)
+	require.NoError(t, s.MarkFilterIndexBackfillDone())
+	// A rollback wrote these rows after the mark: the mark is gone, the
+	// sentinel stays.
+	db := s.DB()
+	require.NoError(t, db.Delete([]byte(database.ActivityFilterIndexSeenThroughKey), pebble.Sync))
+	booted := database.NewPebbleActivityStore(db)
+	require.True(t, booted.FilterIndexBackfillDone())
+	_, err := booted.Record(database.ActivityEntry{Tier: "change", Type: "t", Level: "info", Source: "src0", Summary: "boot line"})
+	require.NoError(t, err)
+
+	rep := &reconcileSpy{}
+	require.NoError(t, reconcilePlugin(booted).runActivityFilterIndexBackfill(context.Background(), reconcileParams, rep))
+	assert.Equal(t, 0, rep.noOpLines(), "rows were indexed")
+	assert.True(t, booted.FilterIndexBackfillDone())
+	total, partial := countSource(t, booted, "src0")
+	assert.False(t, partial)
+	assert.Equal(t, 9, total, "8 older rows of src0 plus the boot line")
 }
