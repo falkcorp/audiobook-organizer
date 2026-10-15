@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-14-missing-files-repair-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9b3fe5ba-cb9d-49bf-b3da-0b4222fff839 -->
 <!-- last-edited: 2026-10-14 -->
 
@@ -26,21 +26,34 @@ Branch `task/03-pr9b`. Spec: `docs/proposals/2026-10-holistic/03-dedup-page-reti
   scan that was stopped or failed does not hide the last good one.
 - **Every match is checked again before it is used.** A match is offered only
   while the book still points at the missing file, that file is still gone, the
-  matched file is still on disk, and no other book already uses it. The check
-  runs again at apply time, and a row that changed in between is refused rather
-  than applied.
+  matched file is still on disk (and has not been changed), and no other book
+  already uses it. A folder that has come back counts as present, and a place
+  the server cannot read is reported as an error, never as "missing". The
+  check runs again when you apply, and once more just before anything is
+  written; a row that changed in between is refused with nothing written.
 - **iTunes is left alone.** A book that came from iTunes, or a match onto a
   file inside the iTunes library, is listed as skipped with the reason "iTunes"
   and is never applied.
-- **Applying uses the existing apply job, with only the rows picked.** Applying
-  starts one "Reconcile Apply" job carrying exactly the selected matches,
-  never the rest of the scan. Very large selections are split into several jobs
-  so none of them exceeds the safety limit on bulk changes. That job's result,
-  including any match it could not apply, is on the Operations page. No file
-  record is deleted.
+- **Applying fixes the book and its file record together, and can be undone.**
+  (Owner decision 2026-10-14.) Applying a row points the book at the matched
+  file and moves the book's file record to it in the same step, each change
+  recorded so that undoing the apply on the Operations page puts both back.
+  Nothing is moved on disk and no file record is created or deleted. The
+  repair no longer goes through the old "Reconcile Apply" job, which only
+  updated the book and left its file record pointing at the missing file.
+- **Right after a restart it waits instead of guessing.** For a few minutes
+  after the server starts, it cannot yet tell for certain whether another book
+  already uses a file. During that time the repair says "file index warming
+  up; retry in a few minutes" instead of offering rows it cannot check.
+- **Only administrators can run it.** Repointing books at files needs the
+  "manage settings" permission, the same as the old apply job. Repairs can now
+  ask for a stronger permission than the usual "edit metadata" one, and this
+  is the first that does.
 
 ## What is not changed
 
-- The scan and the apply job themselves are unchanged. The apply job updates
-  only the book's main file location, not the book's per-file records; that gap
-  is recorded as a follow-up in the TODO list rather than changed here.
+- The scan itself is unchanged, and so is the old "Reconcile Apply" job used
+  by the old Reconcile tab: it still updates only the book's main file
+  location. That gap, and a mismatch between the permission that job declares
+  and the one its own button checks, are recorded in the TODO list for the
+  owner to decide.
