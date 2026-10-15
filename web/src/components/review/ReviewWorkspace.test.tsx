@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.22.0
+// version: 1.23.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -181,6 +181,50 @@ describe('the lane comes from the URL', () => {
     // shows, and it must not have fetched on the way past.
     expect(screen.queryByTestId('compare-spine')).not.toBeInTheDocument();
     expect(api.getCachedReviewResults).not.toHaveBeenCalled();
+  });
+
+  describe('?fixer= seeds the repairs lane', () => {
+    const plan = (id: string) => ({
+      operation_id: `plan-${id}`,
+      status: 'completed' as const,
+      queued_at: '2026-10-01T00:00:00Z',
+      total: 1,
+      applicable: 1,
+    });
+    beforeEach(() => {
+      vi.mocked(api.listRepairFixers).mockResolvedValue([
+        { id: 'fx-a', title: 'Fixer A', description: '', last_plan: plan('a') },
+        { id: 'fx-b', title: 'Fixer B', description: '', last_plan: plan('b') },
+      ]);
+      vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => ({
+        plan_op_id: planOpId,
+        fixer_id: fixerId,
+        planned_at: '2026-10-01T00:00:00Z',
+        filter: q.filter,
+        offset: q.offset,
+        limit: q.limit,
+        total: 0,
+        applicable: 0,
+        skipped_by_kind: {},
+        rows: [],
+      }));
+    });
+
+    it('preselects the fixer named by ?fixer=, without writing it back', async () => {
+      renderWorkspace(['/review?lane=repairs&fixer=fx-b']);
+      await waitFor(() =>
+        expect(api.getRepairPlanRows).toHaveBeenCalledWith('fx-b', 'plan-b', expect.anything(), expect.anything())
+      );
+      expect(api.getRepairPlanRows).not.toHaveBeenCalledWith('fx-a', expect.anything(), expect.anything(), expect.anything());
+      expect(window.localStorage.getItem('review-repairs-fixer')).toBeNull();
+    });
+
+    it('ignores an unknown ?fixer= and opens the first fixer', async () => {
+      renderWorkspace(['/review?lane=repairs&fixer=nope']);
+      await waitFor(() =>
+        expect(api.getRepairPlanRows).toHaveBeenCalledWith('fx-a', 'plan-a', expect.anything(), expect.anything())
+      );
+    });
   });
 
   it('keeps the repairs lane silent while another lane is showing', async () => {

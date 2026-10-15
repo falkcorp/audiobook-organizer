@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -198,6 +198,33 @@ describe('useRepairsLane: loading', () => {
     ]);
     const { result } = renderHook(() => useRepairsLane(toast, true));
     await waitFor(() => expect(result.current.selectedFixerId).toBe('other'));
+  });
+
+  describe('?fixer= seed', () => {
+    const OTHER = { id: 'other', title: 'Other', description: '' };
+    const THIRD = { id: 'third', title: 'Third', description: '' };
+
+    it('preselects the seeded fixer over the one the viewer had open', async () => {
+      window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'other');
+      vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER, THIRD]);
+      const { result } = renderHook(() => useRepairsLane(toast, true, 'third'));
+      await waitFor(() => expect(result.current.selectedFixer?.id).toBe('third'));
+      // A seed is never saved as the viewer's own choice.
+      expect(window.localStorage.getItem(REPAIRS_FIXER_STORAGE_KEY)).toBe('other');
+    });
+
+    it('ignores an unknown id and falls back to the stored fixer', async () => {
+      window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'other');
+      vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
+      const { result } = renderHook(() => useRepairsLane(toast, true, 'no.such-fixer'));
+      await waitFor(() => expect(result.current.selectedFixer?.id).toBe('other'));
+    });
+
+    it('ignores an unknown id and falls back to the first fixer when nothing is stored', async () => {
+      vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
+      const { result } = renderHook(() => useRepairsLane(toast, true, 'no.such-fixer'));
+      await waitFor(() => expect(result.current.selectedFixer?.id).toBe('vg-primary'));
+    });
   });
 });
 

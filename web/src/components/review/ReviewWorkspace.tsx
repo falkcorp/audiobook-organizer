@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.27.1
+// version: 1.28.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, author and series merges, and library repairs.
@@ -243,7 +243,13 @@ export function ReviewWorkspace() {
   const [confirmRefetchStale, setConfirmRefetchStale] = useState(false);
   const regroup = useRegroupLane(toast, lane === 'regroup');
   // Gated like the others: no fixer list, rows or trial polls unless visible.
-  const repairs = useRepairsLane(toast, lane === 'repairs');
+  // `?fixer=<id>` preselects a fixer, but only when the URL landed on the
+  // repairs lane (read once at mount by the hook, never written back).
+  const repairs = useRepairsLane(
+    toast,
+    lane === 'repairs',
+    initialLaneFrom(searchParams) === 'repairs' ? searchParams.get('fixer') : null,
+  );
   // Authors & series: fetches only while visible, like the others. `?author=` is
   // a seed (focus that author's group on the first load), read here so the hook
   // has it on its first render, and never written back. `?view=series` seeds the
