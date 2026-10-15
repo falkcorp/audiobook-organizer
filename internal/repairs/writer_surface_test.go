@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_surface_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0f69b17c-331b-4c43-9317-c7276540fe70
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package repairs
 
@@ -44,6 +44,7 @@ var (
 	_ func(*Writer, string, string, int, int) error                                                        = (*Writer).SetTrackNumber
 	_ func(*Writer, context.Context, string, string, undo.UserStateSnapshot, undo.UserStateSnapshot) error = (*Writer).SetUserState
 	_ func(*Writer, string, string, string, string, string, func() error) error                            = (*Writer).Step
+	_ func(*Writer, string, []string) error                                                                = (*Writer).SupersedeChanges
 	_ func(*Writer)                                                                                        = (*Writer).Touch
 	_ func(*Writer, CreditStore) *Writer                                                                   = (*Writer).WithCredits
 	_ func(*Writer, FieldStateStore) *Writer                                                               = (*Writer).WithFieldStates
@@ -63,7 +64,7 @@ func TestWriterMethodSetPinned(t *testing.T) {
 	want := []string{"AddBookTag", "Beat", "ClearBookFileITunesPath", "ClearBookITunesPath", "HistoryFailed",
 		"HistoryRows", "Journal", "JournalStep", "JournalSteps", "Journaled", "JournaledValue", "LockFields",
 		"LockWaiting", "Modify", "ModifyCredits", "MoveBookFiles", "OpID", "Recompute", "RecordChange",
-		"RepointBookFile", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "Step", "Touch", "WithCredits",
+		"RepointBookFile", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "Step", "SupersedeChanges", "Touch", "WithCredits",
 		"WithFieldStates", "WithJournal", "WithLiveness", "WithTags", "WithUserState", "Writes"}
 	typ := reflect.TypeOf(&Writer{})
 	got := make([]string, 0, typ.NumMethod())
