@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.73.0
+// version: 1.74.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-15
 
@@ -2293,7 +2293,39 @@ func (rs *RevertService) revertAuthorMergeCredits(c *database.OperationChange) e
 	if err := undo.CheckAuthorLive(rs.db.GetAuthorByID, move.FromAuthorID, "author merge"); err != nil {
 		return err
 	}
+	if !move.PrimaryChanged {
+		// A ghost book (a credit row whose book row is gone; author-id-repair
+		// moves its credit) has no primary to restore and no book to load: put
+		// the junction back alone, compare-and-set as revertCreditsMove does.
+		book, err := rs.db.GetBookByID(c.BookID)
+		if err != nil {
+			return fmt.Errorf("look up book %s: %w", c.BookID, err)
+		}
+		if book == nil {
+			return rs.revertGhostJunction(c, snap, move.CreditsAfter, "author merge")
+		}
+	}
 	return rs.revertCreditsMove(c, snap, move.CreditsAfter, move.PrimaryChanged, move.PrimaryAfter, "author merge")
+}
+
+// revertGhostJunction puts back the junction of a book with no book row: the
+// stored credits must be exactly after (or already the snapshot's).
+func (rs *RevertService) revertGhostJunction(c *database.OperationChange, snap undo.TitleRelinkCreditsSnapshot,
+	after *[]database.BookAuthor, what string) error {
+	if _, err := rs.db.ModifyBookAuthors(c.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		if undo.SameJunction(cur, snap.Credits) {
+			return nil, database.ErrSkipBookAuthorsWrite
+		}
+		if err := undo.CheckJunctionIs(c.BookID, cur, after, what); err != nil {
+			return nil, err
+		}
+		out := make([]database.BookAuthor, len(snap.Credits))
+		copy(out, snap.Credits)
+		return out, nil
+	}); err != nil && !errors.Is(err, database.ErrSkipBookAuthorsWrite) {
+		return err
+	}
+	return nil
 }
 
 // revertAuthorReclassifyCredits puts one book's author credit back and drops the
