@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.40.1
+// version: 1.41.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -787,12 +787,21 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		identity   string
 	}
 	var work []bookWork
+	noMatchSkipped := 0 // marked-no-match books left out of work; reported in the summary
 	for _, id := range bookIDs {
 		if done[id] {
 			continue
 		}
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil {
+			continue
+		}
+		// The owner marked this book "no match": fetching would only spend
+		// provider quota on candidates nothing may apply. The retired
+		// maintenance.bulk-fetch-metadata job skipped these too (04-P14f). No
+		// ledger row is written, so a continuation re-skips it the same way.
+		if metafetch.IsMarkedNoMatch(b.MetadataReviewStatus) {
+			noMatchSkipped++
 			continue
 		}
 		author := ""
@@ -831,6 +840,9 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	alreadyDone := len(existingResults)
 	totalBooks := alreadyDone + len(work)
 	logging.Info(ctx, "bulk-metadata-fetch-ids total, done, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
+	if noMatchSkipped > 0 {
+		logging.Info(ctx, "bulk-metadata-fetch-ids: skipped books marked no-match", "no_match_skipped", noMatchSkipped)
+	}
 	_ = progress.UpdateProgress(alreadyDone, totalBooks,
 		fmt.Sprintf("resuming: %d/%d already done", alreadyDone, totalBooks))
 
@@ -866,7 +878,11 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	// be folded into notFound.
 	var found, notFound, skipped, errored atomic.Int64
 	counts := func() string {
-		return bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load())
+		c := bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load())
+		if noMatchSkipped > 0 {
+			c += fmt.Sprintf(", marked no-match %d", noMatchSkipped)
+		}
+		return c
 	}
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers, built from the
@@ -1001,7 +1017,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
 	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
-		"errors", errored.Load(), "stopped_early", stoppedEarly.Load())
+		"errors", errored.Load(), "no_match_skipped", noMatchSkipped, "stopped_early", stoppedEarly.Load())
 	return stoppedEarly.Load(), nil
 }
 
