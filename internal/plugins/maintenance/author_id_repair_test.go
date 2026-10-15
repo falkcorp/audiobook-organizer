@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
 // version: 1.3.0
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package maintenance
 
