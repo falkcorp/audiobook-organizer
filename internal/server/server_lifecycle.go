@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.42.0
+// version: 4.42.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-15
 
@@ -1328,7 +1328,7 @@ func (s *Server) startBackfills() {
 			lifecycleLog.Info("opchange-index-backfill: shutdown before memdb warmup finished; will run next boot")
 			return
 		}
-		if _, err := b.EnsureOpChangeByBookIndex(s.bgCtx); err != nil {
+		if _, err := b.EnsureOpChangeByBookIndex(s.bgCtx, nil); err != nil {
 			// GetBookChanges stays on the full scan (correct, only slower);
 			// the next boot retries. Error, not Warn: the index is not in use.
 			// A cancelled bgCtx is a clean shutdown interrupting the check,
@@ -2037,7 +2037,7 @@ func resolveOpsV2TimelineReconciler(s any) (opsV2TimelineReconciler, bool) {
 // methods outside database.Store.
 type opChangeIndexBackfiller interface {
 	WaitForWarmup()
-	EnsureOpChangeByBookIndex(ctx context.Context) (database.OpChangeByBookEnsureResult, error)
+	EnsureOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookEnsureResult, error)
 }
 
 // resolveOpChangeIndexBackfiller finds the opchange_by_book: backfill through

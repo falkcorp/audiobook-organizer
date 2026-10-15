@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package database
 
@@ -97,7 +97,7 @@ func mustBackfillOpChange(t testing.TB, p *PebbleStore) OpChangeByBookBackfillRe
 // the indexed path rather than the scan.
 func mustTrustOpChange(t testing.TB, p *PebbleStore) OpChangeByBookEnsureResult {
 	t.Helper()
-	res, err := p.EnsureOpChangeByBookIndex(context.Background())
+	res, err := p.EnsureOpChangeByBookIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -1221,5 +1221,99 @@ func TestOpchangeIndex_FailedRebuildLeavesUntrusted(t *testing.T) {
 	}
 	if got, err := p.GetBookChanges("b1"); err != nil || len(got) != 6 {
 		t.Fatalf("GetBookChanges after a failed rebuild = %v, %v; want all 6 rows (scan)", changeIDs(got), err)
+	}
+}
+
+// TestOpchangeIndex_EnsureReportsEveryStep: the boot ensure runs as an op
+// with manual liveness, so it must report progress from each step: the slot
+// wait, the backfill, the verify and the rebuild. With nil progress (as at
+// HEAD before 04-P7) a long first backfill or verify went silent past the
+// watchdog's budget.
+func TestOpchangeIndex_EnsureReportsEveryStep(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	oldBeat := opChangeIdxWaitHeartbeat
+	opChangeIdxWaitHeartbeat = 5 * time.Millisecond
+	oldVerifyRows := opChangeVerifyProgressRows
+	opChangeVerifyProgressRows = 1
+	t.Cleanup(func() { opChangeIdxWaitHeartbeat = oldBeat; opChangeVerifyProgressRows = oldVerifyRows })
+
+	// Two rows so the verify (which reports from its second row on) speaks.
+	if err := p.CreateOperationChange(&OperationChange{OperationID: "op0", BookID: "b0"}); err != nil {
+		t.Fatal(err)
+	}
+	// A row the index does not know about, so the verify is dirty and a
+	// rebuild runs after the backfill.
+	mustBackfillOpChange(t, p)
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "b1"})
+
+	// Hold the slot so the ensure has to wait, as behind a manual rebuild.
+	unlock, err := p.lockOpChangeIdxRun(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	phases := map[string]int{}
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.EnsureOpChangeByBookIndex(context.Background(), func(phase string, _ int) {
+			mu.Lock()
+			phases[phase]++
+			mu.Unlock()
+		})
+		done <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		w := phases["waiting"]
+		mu.Unlock()
+		if w > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ensure reported no wait heartbeat while another pass held the slot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("ensure returned (%v) while another index pass held the slot", err)
+	default:
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, phase := range []string{"waiting", "verify", "rebuild"} {
+		if phases[phase] == 0 {
+			t.Errorf("ensure reported no %q progress; got %v", phase, phases)
+		}
+	}
+	if !p.opChangeByBookIndexTrusted() {
+		t.Fatal("ensure finished without trusting the index")
+	}
+
+	// A store with no sentinel yet: the ensure's first build reports as
+	// "backfill" (per committed chunk).
+	fresh, err := NewPebbleStoreInMemory("db2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fresh.Close() })
+	if err := fresh.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	backfill := 0
+	if _, err := fresh.EnsureOpChangeByBookIndex(context.Background(), func(phase string, _ int) {
+		if phase == "backfill" {
+			backfill++
+		}
+	}); err != nil {
+		t.Fatalf("ensure on a fresh store: %v", err)
+	}
+	if backfill == 0 {
+		t.Fatal("the ensure's first build reported no \"backfill\" progress")
 	}
 }
