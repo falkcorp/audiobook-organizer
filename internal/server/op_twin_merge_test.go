@@ -1,7 +1,7 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package server
 
@@ -156,6 +156,15 @@ var retiredMerges = []struct {
 		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
 	{"maintenance.repair-missing-files", "maintenance.recover-missing-files", []auth.Permission{auth.PermSettingsManage},
 		4 * time.Hour, []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite}},
+	// 04-P14f: the manual bulk-fetch-metadata job (library.edit_metadata via
+	// PermissionAware, 4h DefaultPolicy budget) retired in favour of two ops, so
+	// there is no alias. Both survivors already declared library.edit_metadata and
+	// carry a larger timeout (6h, 8h), so nothing is tightened for editors, and
+	// neither requires settings.manage.
+	{"maintenance.bulk-fetch-metadata", "library.bulk-metadata-fetch", []auth.Permission{auth.PermLibraryEditMetadata},
+		4 * time.Hour, []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead}},
+	{"maintenance.bulk-fetch-metadata", "metadata.candidate-fetch", []auth.Permission{auth.PermLibraryEditMetadata},
+		4 * time.Hour, []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead}},
 }
 
 func TestTwinMerge_RetiredIDsAndSurvivorPermissions(t *testing.T) {

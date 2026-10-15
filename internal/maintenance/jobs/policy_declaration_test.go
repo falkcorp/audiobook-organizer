@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 package jobs_test
 
@@ -53,7 +53,12 @@ import (
 // maintenance.missing-file-repoint and maintenance.recover-missing-files ops
 // replace it. Its op ID is in internal/server retiredOpIDs. It was one of the
 // CanResume()==true jobs, so the resumable count drops from 9 to 8.
-const wantJobCount = 34
+//
+// 2026-10-15: 34 → 33. `bulk-fetch-metadata` was deleted (04-P14f):
+// library.bulk-metadata-fetch (apply) and metadata.candidate-fetch (candidate
+// cache) replace it. Its op ID is in internal/server retiredOpIDs. It was one of
+// the CanResume()==true jobs, so the resumable count drops from 8 to 7.
+const wantJobCount = 33
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.
@@ -121,10 +126,6 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 		"backfill-file-hashes":      opsregistry.ResumeRestart,
 		"recompute-book-aggregates": opsregistry.ResumeRestart,
 		"retention-and-hygiene":     opsregistry.ResumeRestart,
-		// Was ResumeRequeue until 2026-08-23. Requeue mints a new op id, and this
-		// job's skip-set is keyed on the op id via GetOperationResults, so requeue
-		// moved its own resume anchor.
-		"bulk-fetch-metadata": opsregistry.ResumeRestart,
 		// Added 2026-08-23. These five declared CanResume()==true while returning
 		// the bridge's ResumeDrop; they were resumed by server.resumeLegacyOp's
 		// default branch off the v1 row, so the declaration never had to be right.
@@ -250,7 +251,7 @@ func TestPolicyAgreesWithCanResume(t *testing.T) {
 		}
 	}
 
-	if want := 8; resumable != want {
+	if want := 7; resumable != want {
 		t.Errorf("jobs with CanResume()==true = %d, want %d", resumable, want)
 	}
 	if want := len(gatedByDryRun); gated != want {

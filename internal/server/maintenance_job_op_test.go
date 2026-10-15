@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d6fc8245-22c3-4636-a194-c57f613cf3af
-// last-edited: 2026-09-02
+// last-edited: 2026-10-15
 
 package server
 
@@ -121,27 +121,41 @@ func TestMaintenanceOpIDIsRegistrable(t *testing.T) {
 // the value registered here did not matter. It matters now: TriggerOperationV2
 // enforces it. These tests cover the two halves of the rule.
 
-// TestBulkFetchMetadataOpRequiresEditMetadata is the mutation-sensitive one, and
-// the reason it hardcodes the expected permission instead of deriving it from
-// the job: a test that asks the job what it wants and compares that to what the
-// def declares mirrors the production logic exactly, so it passes even when both
-// are wrong. Writing library.edit_metadata out in full is what makes this able
-// to fail.
+// TestMetadataFetchOpsRequireEditMetadata is the mutation-sensitive one, and the
+// reason it hardcodes the expected permission instead of deriving it from
+// anything: a test that asks the registration what it wants and compares that to
+// what the def declares mirrors the production logic exactly, so it passes even
+// when both are wrong. Writing library.edit_metadata out in full is what makes
+// this able to fail.
 //
-// bulkFetchMetadataJob is the only job implementing PermissionAware
-// (bulk_fetch_metadata.go:43). Before this change its def declared
-// settings.manage, so a caller holding exactly the permission the job asks for
-// was refused.
-func TestBulkFetchMetadataOpRequiresEditMetadata(t *testing.T) {
-	reg := maintReg(t)
-	require.NoError(t, (&Server{}).RegisterMaintenanceJobOps(reg))
+// It pins the invariant the retired maintenance.bulk-fetch-metadata job used to
+// carry (the one job implementing PermissionAware, 04-P14f): an editor holding
+// library.edit_metadata can run a metadata fetch without settings.manage. The two
+// ops that replaced it carry that gate themselves.
+func TestMetadataFetchOpsRequireEditMetadata(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
 
-	def, ok := reg.Def("maintenance.bulk-fetch-metadata")
-	require.True(t, ok, "bulk-fetch-metadata has no OperationDef")
-	require.Equal(t, []auth.Permission{auth.PermLibraryEditMetadata}, def.Permissions)
-	require.NotContains(t, def.Permissions, auth.PermSettingsManage,
-		"settings.manage must no longer be what this job requires")
+	for _, id := range []string{"library.bulk-metadata-fetch", "metadata.candidate-fetch"} {
+		t.Run(id, func(t *testing.T) {
+			def, ok := srv.opRegistry.Def(id)
+			require.True(t, ok, "%s has no OperationDef", id)
+			require.Equal(t, []auth.Permission{auth.PermLibraryEditMetadata}, def.Permissions)
+			require.NotContains(t, def.Permissions, auth.PermSettingsManage,
+				"settings.manage must not be what a metadata fetch requires")
+		})
+	}
 }
+
+// permissionAwareProbeJob is a minimal job that implements
+// maintenance.PermissionAware. No real job does since 04-P14f deleted the last
+// one, so the interface's wiring in registerMaintenanceJobOp is exercised with
+// this fake instead.
+type permissionAwareProbeJob struct {
+	customParamsProbeJob
+	perm string
+}
+
+func (j *permissionAwareProbeJob) Permission() string { return j.perm }
 
 // TestMaintenanceOpPermissionsMatchTheV1Rule covers the other half: every job
 // that does NOT implement PermissionAware keeps settings.manage. The v1
@@ -149,20 +163,20 @@ func TestBulkFetchMetadataOpRequiresEditMetadata(t *testing.T) {
 // phase 1 deletes that route, so any divergence here silently changes who can
 // run what at the moment the route goes.
 //
-// Both branches are asserted non-vacuous: if no job implemented PermissionAware,
-// the interesting half of this test would assert nothing at all.
+// The PermissionAware branch is driven by a fake job (permissionAwareProbeJob)
+// registered directly, because no real job implements the interface any more
+// (04-P14f). Both branches are asserted non-vacuous.
 func TestMaintenanceOpPermissionsMatchTheV1Rule(t *testing.T) {
 	reg := maintReg(t)
 	require.NoError(t, (&Server{}).RegisterMaintenanceJobOps(reg))
 
-	var aware, plain int
+	var plain int
 	for _, job := range maintenance.All() {
 		def, ok := reg.Def("maintenance." + job.ID())
 		require.Truef(t, ok, "job %q has no def", job.ID())
 		require.Lenf(t, def.Permissions, 1, "job %q should declare exactly one permission", job.ID())
 
 		if pa, isAware := job.(maintenance.PermissionAware); isAware && pa.Permission() != "" {
-			aware++
 			require.Equalf(t, auth.Permission(pa.Permission()), def.Permissions[0],
 				"job %q implements PermissionAware but its def declares something else", job.ID())
 			continue
@@ -171,7 +185,19 @@ func TestMaintenanceOpPermissionsMatchTheV1Rule(t *testing.T) {
 		require.Equalf(t, auth.PermSettingsManage, def.Permissions[0],
 			"job %q does not implement PermissionAware and must default to settings.manage", job.ID())
 	}
-
-	require.Positive(t, aware, "no job implements PermissionAware — the PermissionAware branch asserted nothing")
 	require.Positive(t, plain, "every job implements PermissionAware — the default branch asserted nothing")
+
+	// The PermissionAware branch, with a synthetic job.
+	aware := &permissionAwareProbeJob{customParamsProbeJob: customParamsProbeJob{id: "synthetic-aware"}, perm: string(auth.PermLibraryEditMetadata)}
+	require.NoError(t, (&Server{}).registerMaintenanceJobOp(reg, aware))
+	def, ok := reg.Def("maintenance.synthetic-aware")
+	require.True(t, ok)
+	require.Equal(t, []auth.Permission{auth.PermLibraryEditMetadata}, def.Permissions)
+
+	// An empty Permission() falls back to the default rather than declaring "".
+	blank := &permissionAwareProbeJob{customParamsProbeJob: customParamsProbeJob{id: "synthetic-blank"}}
+	require.NoError(t, (&Server{}).registerMaintenanceJobOp(reg, blank))
+	def, ok = reg.Def("maintenance.synthetic-blank")
+	require.True(t, ok)
+	require.Equal(t, []auth.Permission{auth.PermSettingsManage}, def.Permissions)
 }
