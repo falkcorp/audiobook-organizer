@@ -1,5 +1,5 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
 // last-edited: 2026-10-15
 
@@ -399,4 +399,18 @@ func TestStrongCriteria_MatchesRefusesAnswerBeyondPartialBound(t *testing.T) {
 
 	none := newStrongCriteria(p, p.Title, "Zeta Quest", "", "Ann Writer", localRuntime{})
 	assert.True(t, none.matches(long), "no runtime at all: unchanged")
+}
+
+// A stored own ASIN does not vouch for an answer the files cannot hold: the
+// ASIN may be the earlier bad match that stored it.
+func TestStrongCriteria_OwnASINBeyondPartialBoundIsNotStrong(t *testing.T) {
+	p := parseSearchTitle("Zeta Quest", "Ann Writer", "")
+	long := metadata.BookMetadata{Title: "Zeta Quest", Author: "Ann Writer", ASIN: "B000TEST01", DurationSec: 14*3600 + 42*60}
+	fits := long
+	fits.DurationSec = 1000
+
+	c := newStrongCriteria(p, p.Title, "Zeta Quest", "B000TEST01", "Ann Writer", runtimeOf(ownerCaseFiles()))
+	require.True(t, c.ownASINAgrees(fits), "fixture: own ASIN inside the bound agrees")
+	assert.False(t, c.ownASINAgrees(long))
+	assert.False(t, c.matches(long))
 }
