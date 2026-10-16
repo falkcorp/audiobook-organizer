@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 package metafetch
 
@@ -72,6 +72,13 @@ func (mfs *Service) wireOpenLibrary(ol *OpenLibraryService) {
 // SetDedupEngine sets the dedup engine for post-apply dedup checks.
 func (mfs *Service) SetDedupEngine(engine *dedup.Engine) {
 	mfs.dedupEngine = engine
+}
+
+// SetOpEnqueuer wires the op registry so post-apply dedup checks can go
+// through dedup.check-book when dedup.on_import_via_scheduler is on. Call it
+// before the registry starts, like SetDedupEngine.
+func (mfs *Service) SetOpEnqueuer(enq dedup.OpEnqueuer) {
+	mfs.opEnqueuer = enq
 }
 
 // SetMetadataScorer injects the pluggable metadata candidate scorer. A nil

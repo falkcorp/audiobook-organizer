@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 package importer
 
@@ -350,7 +350,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		normalizedArtist := dedup.NormalizeAuthorName(meta.Artist)
 		// Creation gate (C413): copyright fragments and entity shrapnel from
 		// artist tags must not become author rows. A book with NO author is
-		// honest; an author named "&#169" is a repair job.
+		// accurate; an author named "&#169" is a repair job.
 		//
 		// The shared gate (personname.PrepareAuthorNameForCreation) also runs
 		// here, so "read by narrator", "14 BBY" and friends are refused the
@@ -686,9 +686,8 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	//   flag OFF (default):
 	//     Eager goroutine — existing behavior, unchanged for instant rollback.
 	if config.AppConfig.Dedup.OnImportViaScheduler && is.opRegistry != nil {
-		if _, err := is.opRegistry.EnqueueOp(context.Background(), "dedup.check-book",
-			map[string]any{"book_id": created.ID}); err != nil {
-			slog.Warn("dedup-on-import: EnqueueOp dedup.check-book", "id", created.ID, "err", err)
+		if err := dedup.EnqueueCheckBook(context.Background(), is.opRegistry, created.ID); err != nil {
+			slog.Warn("dedup-on-import: enqueue failed", "id", created.ID, "err", err)
 		}
 	} else if is.dedupEngine != nil {
 		go func(id string) {
