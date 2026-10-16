@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_orphan_row_test.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 2d6a14f8-9c05-4e73-b8a1-3f70e2d54c69
-// last-edited: 2026-08-23
+// last-edited: 2026-10-16
 
 package server
 
@@ -53,7 +53,7 @@ func (j *blockingProbeJob) Run(ctx context.Context, _ maintenance.JobStore, _ ma
 }
 
 var probeBlocking = &blockingProbeJob{
-	id:      "orphan-row-blocking-probe",
+	id:      "test-probe-orphan-row-blocking",
 	release: make(chan struct{}),
 }
 

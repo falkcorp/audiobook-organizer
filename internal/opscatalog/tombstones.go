@@ -1,5 +1,5 @@
 // file: internal/opscatalog/tombstones.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: edcda6da-4fec-40a7-9b72-643a33849960
 // last-edited: 2026-10-16
 
@@ -79,4 +79,11 @@ var Tombstones = map[string]string{
 	// either op 1:1 (skip_cached defaults differently), so no single FormerIDs
 	// alias target is right.
 	"maintenance.bulk-fetch-metadata": "retired; library.bulk-metadata-fetch and metadata.candidate-fetch each cover part of it, so no single alias",
+	// Never existed in a production build. It was a blocking probe job that
+	// only internal/server/maintenance_orphan_row_test.go registered, from a
+	// test init(), so the ledger picked it up from a test boot. The startup
+	// check runs in the real binary, where nothing registers it, and refused to
+	// boot on it. The probe now uses a maintenance.test-probe-* ID, which
+	// TestOpIDs_NoRenameWithoutAlias already treats as test-only.
+	"maintenance.orphan-row-blocking-probe": "test-only probe that no production build registers; now maintenance.test-probe-orphan-row-blocking",
 }
