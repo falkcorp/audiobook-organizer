@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
-// last-edited: 2026-10-13
+// last-edited: 2026-10-16
 
 // End-to-end coverage for the Authors & series lane of /review (Authors and Series
 // sub-views).
@@ -451,13 +451,13 @@ test.describe('Dedup Bulk Actions', () => {
 test.describe('Production Company Resolution', () => {
   test('Find Real Author appears only on production-company groups', async ({ page }) => {
     await openLane(page);
-    expect(await page.getByRole('button', { name: /find real author/i }).count()).toBe(2);
+    await expect(page.getByRole('button', { name: /find real author/i })).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Merge into "Author A"', exact: true })).toBeVisible();
   });
 
   test('the production-company badge is distinguishable from other groups', async ({ page }) => {
     await openLane(page);
-    expect(await page.getByText('Production Company').count()).toBe(2);
+    await expect(page.getByText('Production Company')).toHaveCount(2);
     await expect(page.getByText('Author C', { exact: true })).toBeVisible();
   });
 });
