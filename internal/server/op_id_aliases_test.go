@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.18.3
+// version: 1.19.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 // Guard tests for operation-ID renames.
 //
@@ -20,9 +20,10 @@
 package server
 
 import (
-	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -30,91 +31,21 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
-	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
-	delugeplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
-	itunesplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
-	metafetchplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/opscatalog"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 )
 
 const opIDLedgerPath = "testdata/op_ids.golden"
 
-// retiredOpIDs are ledger IDs that deliberately resolve to NO op, each with
-// why no FormerIDs alias points it somewhere. The ledger line stays (it is
-// append-only); an entry here is the explicit decision the guard asks for.
-//
-// A timeline filter on a retired ID still finds its old rows: an ID the
-// registry does not know is matched verbatim against each row's def_id
-// (canonicalDefID), which is what an alias would break by widening the
-// filter to every row of the op it points at.
-var retiredOpIDs = map[string]string{
-	// Retired 2026-10-15 (04-P12, D26). The op never ran: nothing enqueued it
-	// and its declared */5 Schedule was never driven (OperationDef.Schedule is
-	// read by nothing). The scheduler's inline batch_poller task calls the
-	// poller service directly and is unchanged. Not aliased: there is no successor op; the inline task is the poller.
-	"maintenance.batch-poller": "unreached duplicate of the inline batch_poller task; no successor op",
-	// Absorbed 2026-09-28 into the Repairs-lane fixer of the SAME id
-	// (internal/plugins/maintenance/junk_title_fixer.go), planned and applied
-	// through repairs.plan / repairs.apply with fixer_id set to it. Aliasing
-	// the old op to repairs.plan would send an old-style enqueue ({dryRun})
-	// to an op that needs fixer_id, and the alias guard below would then
-	// forbid the fixer from naming its own id.
-	"maintenance.repair-junk-titles": "absorbed into the junk-title Repairs fixer",
-	// Removed 2026-10-07 with iTunes write-back (iTunes is import-only). Both
-	// rewrote locations in the iTunes library; nothing replaces them.
-	"itunes.path-reconcile": "removed with iTunes write-back; no successor",
-	"itunes.path-repair":    "removed with iTunes write-back; no successor",
-	// It generated synthetic .itl files for testing the removed writers.
-	"maintenance.generate-itl-tests": "removed with iTunes write-back; no successor",
-	// Removed 2026-10-08: iTunes import is manual only. Re-running
-	// itunes.import links each album to its existing book, which is what the
-	// incremental sync did. Not aliased to itunes.import: an old sync enqueue
-	// ({library_path, path_mappings}) is not an import request.
-	"itunes.sync": "removed; itunes.import (manual, re-runnable) replaces it",
-	// Stubs since 2026-10-02 that only returned a "retired" error; removed
-	// 2026-10-09. Not aliased to metafetch.asin-backfill: it takes different
-	// params, so an old enqueue is not an asin-backfill request.
-	"scheduler.isbn-enrichment":   "stub since 2026-10-02; metafetch.asin-backfill replaces it, params differ",
-	"maintenance.isbn-enrichment": "stub since 2026-10-02; metafetch.asin-backfill replaces it, params differ",
-	// Retired 2026-10-13 (04-P3b). The manual job deleted every *.backup / *.bak
-	// file under the library root with no age test (dry_run default true); the
-	// surviving maintenance.cleanup-old-backups deletes only the .bak-<unix>[-N]
-	// names fileops writes, and only past the retention window. Not aliased: an
-	// old enqueue would run a different deleter with different params. The
-	// suffix cleanup is dropped; whether it returns as an opt-in, age-gated,
-	// preview-default param is an open owner question (todo.d).
-	"maintenance.cleanup-backups": "retired; maintenance.cleanup-old-backups is a different, age-gated deleter, so no alias",
-	// Retired 2026-10-14 (04-P14d). The manual job only ever set Missing=true
-	// (dry_run default true); maintenance.mark-missing-files reconciles the flag
-	// both ways, takes {apply} instead of {dry_run}, and writes through a scan
-	// stand-down. Not aliased: an old enqueue would run a different contract
-	// (it also CLEARS flags) under params it never sent, so a loud unknown-op
-	// error is safer than a silent reinterpretation.
-	"maintenance.fix-book-file-paths": "retired; maintenance.mark-missing-files takes {apply} and also clears stale flags, so no alias",
-	// Retired 2026-10-14 (04-P14e). The manual job tried five escalating
-	// strategies to relocate a missing file. Two newer ops replace it, each
-	// covering a different slice (maintenance.missing-file-repoint derives the
-	// flattened/padded name; maintenance.recover-missing-files matches by size),
-	// so no single FormerIDs alias target is right. An old enqueue ({dry_run})
-	// would also run a different contract ({apply}), so it fails loudly instead.
-	"maintenance.repair-missing-files": "retired; maintenance.missing-file-repoint and maintenance.recover-missing-files each cover part of it, so no single alias",
-	// Retired 2026-10-15 (04-P14f). The manual job fetched and cached candidates
-	// for the whole library. Two newer ops cover its halves: library.bulk-metadata-fetch
-	// (selection-driven fetch, takes prefer_audible and skip_cached) and
-	// metadata.candidate-fetch (candidate cache, plus its unfetched selection).
-	// library.bulk-metadata-fetch with no selection is the whole-library fetch, but
-	// the job's params ({prefer_audible, skip_cached}, dry_run) do not map onto
-	// either op 1:1 (skip_cached defaults differently), so no single FormerIDs
-	// alias target is right.
-	"maintenance.bulk-fetch-metadata": "retired; library.bulk-metadata-fetch and metadata.candidate-fetch each cover part of it, so no single alias",
-}
+// The retired-ID map moved to opscatalog.Tombstones (05-PR7), where the
+// production startup check (opCatalogGate) reads it too. Each entry still
+// carries why no FormerIDs alias points the ID somewhere.
 
-// bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir
-// does and returns its registry's canonical IDs and alias table.
-func bootRegisteredOpIDs(t *testing.T) (*Server, map[string]bool, map[string]string) {
+// bootServerForOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir
+// does: a mock store and no plugin dependencies, so the service-registry
+// plugins' gated ops are not registered.
+func bootServerForOpIDs(t *testing.T) *Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -136,6 +67,15 @@ func bootRegisteredOpIDs(t *testing.T) (*Server, map[string]bool, map[string]str
 			srv.fileIOPool.Stop()
 		}
 	})
+	return srv
+}
+
+// bootRegisteredOpIDs boots a server with bootServerForOpIDs, registers the
+// plugins' static op lists, and returns its registry's canonical IDs and alias
+// table.
+func bootRegisteredOpIDs(t *testing.T) (*Server, map[string]bool, map[string]string) {
+	t.Helper()
+	srv := bootServerForOpIDs(t)
 
 	// The sdk plugins register from serviceregistry PostInit and only when
 	// their dependencies are wired (a dedup engine, a Deluge client, an enabled
@@ -143,14 +83,9 @@ func bootRegisteredOpIDs(t *testing.T) (*Server, map[string]bool, map[string]str
 	// are dependency-free, so register them here: that both enumerates their
 	// IDs for the ledger and proves their FormerIDs do not collide with
 	// anything the server registered.
-	pluginDefs := [][]opsregistry.OperationDef{
-		(&acoustidplugin.Plugin{}).OperationDefs(),
-		(&dedupplugin.Plugin{}).OperationDefs(),
-		(&delugeplugin.Plugin{}).OperationDefs(),
-		(&itunesplugin.Plugin{}).OperationDefs(),
-		(&metafetchplugin.Plugin{}).OperationDefs(),
-	}
-	for _, defs := range pluginDefs {
+	// opscatalog.StaticPluginDefs is the same five lists the startup check
+	// resolves ledger IDs against.
+	for _, defs := range opscatalog.StaticPluginDefs() {
 		for _, d := range defs {
 			if got, ok := srv.opRegistry.Def(d.ID); ok && got.ID == d.ID {
 				continue // ungated plugin (metafetch) already registered at boot
@@ -171,27 +106,32 @@ func bootRegisteredOpIDs(t *testing.T) (*Server, map[string]bool, map[string]str
 	return srv, registered, srv.opRegistry.Aliases()
 }
 
-// readOpIDLedger returns the ledger's IDs (comments and blank lines skipped).
+// readOpIDLedger returns the ledger's IDs, parsed by opscatalog.ParseLedger
+// (comments and blank lines skipped), the parser the startup check uses.
 func readOpIDLedger(t *testing.T) []string {
 	t.Helper()
-	f, err := os.Open(opIDLedgerPath)
+	b, err := os.ReadFile(opIDLedgerPath)
 	if err != nil {
-		t.Fatalf("open %s: %v", opIDLedgerPath, err)
-	}
-	defer f.Close()
-	var out []string
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "<!--") {
-			continue
-		}
-		out = append(out, line)
-	}
-	if err := sc.Err(); err != nil {
 		t.Fatalf("read %s: %v", opIDLedgerPath, err)
 	}
-	return out
+	return opscatalog.ParseLedger(b)
+}
+
+// TestOpLedgerEmbedMatchesFile: the startup check reads the embedded copy of
+// the ledger; this test and every census PR read the file on disk. They are
+// the same bytes by construction (go:embed), so a failure here means the
+// embed directive points somewhere else.
+func TestOpLedgerEmbedMatchesFile(t *testing.T) {
+	b, err := os.ReadFile(opIDLedgerPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", opIDLedgerPath, err)
+	}
+	if !bytes.Equal(b, embeddedOpLedger) {
+		t.Fatalf("embedded op-ID ledger (%d bytes) differs from %s (%d bytes)", len(embeddedOpLedger), opIDLedgerPath, len(b))
+	}
+	if got, want := opscatalog.ParseLedger(embeddedOpLedger), readOpIDLedger(t); !slices.Equal(got, want) {
+		t.Fatalf("embedded ledger parses to %d IDs, the file to %d", len(got), len(want))
+	}
 }
 
 // TestOpIDs_NoRenameWithoutAlias is the guard the naming audit asked for: every
@@ -205,12 +145,12 @@ func TestOpIDs_NoRenameWithoutAlias(t *testing.T) {
 	for _, id := range ledger {
 		inLedger[id] = true
 		if _, ok := srv.opRegistry.Def(id); ok {
-			if why, retired := retiredOpIDs[id]; retired {
-				t.Errorf("op ID %q is listed as retired (%s) but resolves again; drop it from retiredOpIDs", id, why)
+			if why, retired := opscatalog.Tombstones[id]; retired {
+				t.Errorf("op ID %q is listed as retired (%s) but resolves again; drop it from opscatalog.Tombstones", id, why)
 			}
 			continue
 		}
-		if _, retired := retiredOpIDs[id]; retired {
+		if _, retired := opscatalog.Tombstones[id]; retired {
 			continue
 		}
 		t.Errorf("op ID %q was registered before and no longer resolves.\n"+
@@ -253,9 +193,9 @@ func TestOpIDs_RetiredIDsAreLedgerIDs(t *testing.T) {
 	for _, id := range readOpIDLedger(t) {
 		inLedger[id] = true
 	}
-	for id := range retiredOpIDs {
+	for id := range opscatalog.Tombstones {
 		if !inLedger[id] {
-			t.Errorf("retiredOpIDs lists %q, which is not in %s", id, opIDLedgerPath)
+			t.Errorf("opscatalog.Tombstones lists %q, which is not in %s", id, opIDLedgerPath)
 		}
 	}
 }

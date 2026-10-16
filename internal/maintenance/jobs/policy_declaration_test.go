@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package jobs_test
 
@@ -43,20 +43,20 @@ import (
 // 2026-10-13: 37 → 36. `cleanup-backups` was deleted (04-P3b): it removed every
 // *.backup / *.bak file with no age test, and the nightly
 // maintenance.cleanup-old-backups is the one backup sweep. Its op ID is in
-// internal/server retiredOpIDs.
+// opscatalog.Tombstones.
 //
 // 2026-10-14: 36 → 35. `fix-book-file-paths` was deleted (04-P14d): it only
 // set Missing=true, and maintenance.mark-missing-files sets and clears it. Its
-// op ID is in internal/server retiredOpIDs.
+// op ID is in opscatalog.Tombstones.
 //
 // 2026-10-14: 35 → 34. `repair-missing-files` was deleted (04-P14e): the
 // maintenance.missing-file-repoint and maintenance.recover-missing-files ops
-// replace it. Its op ID is in internal/server retiredOpIDs. It was one of the
+// replace it. Its op ID is in opscatalog.Tombstones. It was one of the
 // CanResume()==true jobs, so the resumable count drops from 9 to 8.
 //
 // 2026-10-15: 34 → 33. `bulk-fetch-metadata` was deleted (04-P14f):
 // library.bulk-metadata-fetch (apply) and metadata.candidate-fetch (candidate
-// cache) replace it. Its op ID is in internal/server retiredOpIDs. It was one of
+// cache) replace it. Its op ID is in opscatalog.Tombstones. It was one of
 // the CanResume()==true jobs, so the resumable count drops from 8 to 7.
 const wantJobCount = 33
 

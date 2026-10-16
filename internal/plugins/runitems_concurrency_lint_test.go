@@ -1,7 +1,7 @@
 // file: internal/plugins/runitems_concurrency_lint_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6b0f7a3e-2c9d-4d58-8e41-a7c5d9f1b2e3
-// last-edited: 2026-10-13
+// last-edited: 2026-10-16
 
 package plugins
 
@@ -20,6 +20,11 @@ import (
 
 	"golang.org/x/tools/go/packages"
 )
+
+// modulePath is this module's import path. It was declared in
+// plugins_wiring_test.go until 05-PR7 replaced that test with
+// internal/opscatalog TestCatalogLinkedIntoBinary.
+const modulePath = "github.com/falkcorp/audiobook-organizer"
 
 const (
 	// runItemsImportPath is the package that owns RunItems.

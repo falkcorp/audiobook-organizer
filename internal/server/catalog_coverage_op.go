@@ -1,7 +1,7 @@
 // file: internal/server/catalog_coverage_op.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5b8e2c61-0d7f-4a93-b1c4-e9a3f6d82b07
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 //
 // Registers catalog.coverage-report, the read-only measurement that precedes
 // the local-catalog matching stage (02-filter-identification-pipeline.md
@@ -9,7 +9,7 @@
 // identified, how many have a credited author with a harvested catalog block?
 // It lives beside catalog.harvest-authors in internal/server because the
 // catalog ops are registered here; a separate plugin package would also need
-// a blank import in internal/plugins/plugins.go or the op would silently not
+// to be listed in internal/opscatalog/catalog.go or the op would silently not
 // exist in the binary.
 
 package server
