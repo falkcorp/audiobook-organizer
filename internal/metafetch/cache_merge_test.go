@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
-// last-edited: 2026-10-07
+// last-edited: 2026-10-15
 
 // The candidate fetch's provider fallback MERGES its answer into the book's
 // cached candidates (SearchOptions.MergeWithCached). These pin the rows a
@@ -140,7 +140,7 @@ func TestCacheSearchResponse_MergeIntoLegacyRowKeepsItFiltered(t *testing.T) {
 		}))
 	}
 	p := parseSearchTitle(title, "", "")
-	c := newStrongCriteria(p, p.Title, title, "", "", 0)
+	c := newStrongCriteria(p, p.Title, title, "", "", localRuntime{})
 	merge := func() *MetadataCandidateCache {
 		return f.mfs.cacheSearchResponse(b.ID, book.Title, "", "", "", &SearchMetadataResponse{
 			Results:          []MetadataCandidate{{Source: "Open Library", Title: title, Score: 0.4}},

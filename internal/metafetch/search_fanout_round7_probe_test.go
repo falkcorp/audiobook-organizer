@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_round7_probe_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5681c68e-3c68-4920-971d-5dbd61de2aef
-// last-edited: 2026-10-01
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -73,7 +73,7 @@ func TestSearchFanoutProbe_NameWithoutPositionIsNotStrong(t *testing.T) {
 			assert.Greater(t, src.callCount(), 1)
 
 			p := parseSearchTitle(tc.book, author, "")
-			c := newStrongCriteria(p, p.Title, tc.book, "", author, 36000)
+			c := newStrongCriteria(p, p.Title, tc.book, "", author, knownRuntime(36000))
 			assert.False(t, c.positionNamed(metadata.BookMetadata{Title: tc.answer, DurationSec: 37500}))
 			// Within positionOverrideTolerance the name still vouches: the
 			// provider-numbering case only the runtime can tell.
@@ -99,7 +99,7 @@ func TestSearchFanoutProbe_SiblingASINWithinFifteenPercentIsNotStrong(t *testing
 	assert.Greater(t, src.callCount(), 1, "a sibling's ASIN 4%% off the runtime never stops the search")
 
 	p := parseSearchTitle(title, author, "")
-	c := newStrongCriteria(p, p.Title, title, asin, author, 36000)
+	c := newStrongCriteria(p, p.Title, title, asin, author, knownRuntime(36000))
 	assert.False(t, c.ownASINAgrees(prog))
 	// Its own series restating the extra word does not excuse it: the book
 	// names its series, and "Progressive" is another one.
@@ -164,7 +164,7 @@ func TestNormPosition_RangeIsNoSinglePosition(t *testing.T) {
 	box := metadata.BookMetadata{Title: "Rogue Ascension Box Set", Author: raAuthor, SeriesPosition: "8-10",
 		DurationSec: 36300, CoverURL: "c", ASIN: asin}
 	p := parseSearchTitle(title, raAuthor, "")
-	c := newStrongCriteria(p, p.Title, title, asin, raAuthor, 36000)
+	c := newStrongCriteria(p, p.Title, title, asin, raAuthor, knownRuntime(36000))
 	assert.False(t, c.positionNamed(box))
 	assert.False(t, c.ownASINAgrees(box))
 }
@@ -178,7 +178,7 @@ func TestParseSearchTitle_DecimalPosition(t *testing.T) {
 	assert.Equal(t, "Stormlight Archive", p.Series)
 	assert.Equal(t, "Edgedancer", p.Title)
 
-	c := newStrongCriteria(p, p.Title, "Stormlight Archive 2.5: Edgedancer", "", "Brandon Sanderson", 0)
+	c := newStrongCriteria(p, p.Title, "Stormlight Archive 2.5: Edgedancer", "", "Brandon Sanderson", localRuntime{})
 	assert.True(t, c.positionConflicts(metadata.BookMetadata{Title: "Stormlight Archive 3: Oathbringer"}))
 	assert.False(t, c.positionConflicts(metadata.BookMetadata{Title: "Edgedancer", SeriesPosition: "2.5"}))
 }
@@ -243,7 +243,7 @@ func TestStrongCriteria_StoredSequenceRuntimeExcuse(t *testing.T) {
 	criteria := func(title string, seq string) strongCriteria {
 		p := parseSearchTitle(title, "Ann Author", "")
 		p.StoredPosition = seq
-		return newStrongCriteria(p, p.Title, title, asin, "Ann Author", 36000)
+		return newStrongCriteria(p, p.Title, title, asin, "Ann Author", knownRuntime(36000))
 	}
 	tower := criteria("The Tower of the Swallow", "4")
 	assert.True(t, tower.ownASINAgrees(metadata.BookMetadata{Title: "The Tower of the Swallow", SeriesPosition: "6", DurationSec: 36100, ASIN: asin}))
@@ -264,13 +264,13 @@ func TestStrongCriteria_StoredSequenceRuntimeExcuse(t *testing.T) {
 func TestStrongCriteria_StoredSequenceCarriesNumbers(t *testing.T) {
 	p := parseSearchTitle("Overlord", "Ann Author", "")
 	p.StoredPosition = "8"
-	c := newStrongCriteria(p, p.Title, "Overlord", "", "Ann Author", 36000)
+	c := newStrongCriteria(p, p.Title, "Overlord", "", "Ann Author", knownRuntime(36000))
 	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Overlord 8", SeriesPosition: "1", DurationSec: 40000}))
 	assert.True(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Overlord", SeriesPosition: "1", DurationSec: 40000}))
 
 	p = parseSearchTitle("Metro 2033", "Ann Author", "")
 	p.StoredPosition = "1"
-	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", 36000)
+	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", knownRuntime(36000))
 	assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro 2033", SeriesPosition: "3", DurationSec: 40000}))
 	assert.True(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "Metro 2034", SeriesPosition: "3", DurationSec: 40000}))
 }
@@ -281,7 +281,7 @@ func TestStrongCriteria_StoredSequenceCarriesNumbers(t *testing.T) {
 func TestStrongCriteria_StoredSequenceNoPositionAnswerIsNotNamed(t *testing.T) {
 	p := parseSearchTitle("Overlord", "Ann Author", "")
 	p.StoredPosition = "8"
-	c := newStrongCriteria(p, p.Title, "Overlord", "", "Ann Author", 36000)
+	c := newStrongCriteria(p, p.Title, "Overlord", "", "Ann Author", knownRuntime(36000))
 	assert.False(t, c.positionNamed(metadata.BookMetadata{Title: "Overlord", DurationSec: 50000}),
 		"a bare series name names no number")
 	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "Overlord", SeriesPosition: "8", DurationSec: 50000}))
@@ -289,7 +289,7 @@ func TestStrongCriteria_StoredSequenceNoPositionAnswerIsNotNamed(t *testing.T) {
 
 	p = parseSearchTitle("Metro 2033", "Ann Author", "")
 	p.StoredPosition = "1"
-	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", 36000)
+	c = newStrongCriteria(p, p.Title, "Metro 2033", "", "Ann Author", knownRuntime(36000))
 	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "Metro 2033", DurationSec: 50000}),
 		"the title's own number still names the book")
 }

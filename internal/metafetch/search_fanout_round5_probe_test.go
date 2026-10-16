@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_round5_probe_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b6f2a8e-4c1d-4e7a-9f35-8d2c61e0a4b7
-// last-edited: 2026-10-01
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -56,7 +56,7 @@ func TestParseSearchTitle_PositionFormats(t *testing.T) {
 		{"The Book Club", "", false},
 	} {
 		p := parseSearchTitle(tc.title, raAuthor, "")
-		c := newStrongCriteria(p, p.Title, tc.title, "", raAuthor, 0)
+		c := newStrongCriteria(p, p.Title, tc.title, "", raAuthor, localRuntime{})
 		assert.Equal(t, tc.pos, c.position, "%q position", tc.title)
 		assert.Equal(t, tc.bare, p.BareSlot, "%q bare", tc.title)
 	}
@@ -208,7 +208,7 @@ func TestSearchFanoutProbe_ExplicitPositionOutsideTheTitlesNumbers(t *testing.T)
 	// The own-ASIN rule: "Metro" at #2 carries none of the book's numbers.
 	const title, author = "Metro 2033", "Dmitry Glukhovsky"
 	p := parseSearchTitle(title, author, "")
-	c := newStrongCriteria(p, p.Title, title, "B0METRO001", author, 36000)
+	c := newStrongCriteria(p, p.Title, title, "B0METRO001", author, knownRuntime(36000))
 	other := metadata.BookMetadata{Title: "Metro", Author: author, SeriesPosition: "2", DurationSec: 34000, ASIN: "B0METRO001"}
 	require.True(t, c.numbersFit(other.Title))
 	assert.False(t, c.ownASINAgrees(other), "series_position 2, and no 2033 in the title")
@@ -231,7 +231,7 @@ func TestSearchFanoutProbe_ExplicitPositionOutsideTheTitlesNumbers(t *testing.T)
 func TestStrongCriteria_OwnASINNeedsTheNumbersToFit(t *testing.T) {
 	const title = "Hyperion"
 	p := parseSearchTitle(title, "Dan Simmons", "")
-	c := newStrongCriteria(p, p.Title, title, "B0HYPERION", "Dan Simmons", 72000)
+	c := newStrongCriteria(p, p.Title, title, "B0HYPERION", "Dan Simmons", knownRuntime(72000))
 	r := metadata.BookMetadata{Title: "Hyperion 2", Author: "Dan Simmons", ASIN: "B0HYPERION", DurationSec: 71000}
 	assert.False(t, c.ownASINAgrees(r))
 	r.Title = "Hyperion"
@@ -308,7 +308,7 @@ func TestSharesPerson_PlaceholdersNameNobody(t *testing.T) {
 		assert.False(t, sharesPerson(name, name), "%q", name)
 	}
 	p := parseSearchTitle("Gone", "", "")
-	c := newStrongCriteria(p, p.Title, "Gone", "", "Various Authors", 0)
+	c := newStrongCriteria(p, p.Title, "Gone", "", "Various Authors", localRuntime{})
 	assert.False(t, c.matches(metadata.BookMetadata{Title: "Gone", Author: "Various Authors"}))
 }
 
@@ -422,7 +422,7 @@ func TestSearchFanoutProbe_WrittenNumberIsTheSamePosition(t *testing.T) {
 func TestStrongCriteria_OwnASINNeedsNoOtherPosition(t *testing.T) {
 	const raw = "Rogue Ascension 8: The 7 Gates"
 	p := parseSearchTitle(raw, raAuthor, "")
-	c := newStrongCriteria(p, p.Title, raw, "B00SIBLNG7", raAuthor, 36000)
+	c := newStrongCriteria(p, p.Title, raw, "B00SIBLNG7", raAuthor, knownRuntime(36000))
 	sib := metadata.BookMetadata{Title: "Rogue Ascension 7: The 7 Gates", Author: raAuthor, ASIN: "B00SIBLNG7", DurationSec: 38000}
 	require.True(t, c.numbersFit(sib.Title))
 	require.False(t, c.explicitPositionConflicts(sib))
@@ -457,7 +457,7 @@ func TestCacheSearchResponse_CarryFiltersEveryOldRow(t *testing.T) {
 	}
 	sib, right := cand("Rogue Ascension 7", "7"), cand(title, "8")
 	p := parseSearchTitle(title, raAuthor, "")
-	c := newStrongCriteria(p, p.Title, title, "", raAuthor, 0)
+	c := newStrongCriteria(p, p.Title, title, "", raAuthor, localRuntime{})
 	for name, fp := range map[string]string{
 		"no fingerprint":   "",
 		"other inputs' fp": typed.legacyFingerprint(book.Title),

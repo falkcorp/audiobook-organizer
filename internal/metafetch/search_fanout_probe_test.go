@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_probe_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8bda3876-c00e-45e0-aae3-0f7e50356f5e
-// last-edited: 2026-10-01
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -493,7 +493,7 @@ func TestLegacyCandidatesAreFiltered(t *testing.T) {
 	// Carried over an empty refetch.
 	put(legacy, sib, right)
 	p := parseSearchTitle(title, "", "")
-	c := newStrongCriteria(p, p.Title, title, "", "", 0)
+	c := newStrongCriteria(p, p.Title, title, "", "", localRuntime{})
 	got := f.mfs.cacheSearchResponse(b.ID, book.Title, "", "", "", &SearchMetadataResponse{
 		InputFingerprint: current, LegacyFingerprint: legacy, SourcesAnswered: []string{"A"}, carryFilter: c.filterCarried,
 	})
@@ -516,7 +516,7 @@ func TestLegacyCandidatesAreFiltered(t *testing.T) {
 func TestStrongCriteria_PositionConflictIsNeverStrong(t *testing.T) {
 	const raw, author = "Rogue Ascension 8: A Progression LitRPG", "Hunter Mythos"
 	p := parseSearchTitle(raw, author, "")
-	c := newStrongCriteria(p, p.Title, raw, "B00SIBLNG7", author, 36000)
+	c := newStrongCriteria(p, p.Title, raw, "B00SIBLNG7", author, knownRuntime(36000))
 	sib := metadata.BookMetadata{Title: "Rogue Ascension 7: A Progression LitRPG", Author: author, DurationSec: 37000}
 	assert.False(t, c.matches(sib))
 	sib.ASIN = "B00SIBLNG7"

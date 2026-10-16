@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-15
 
@@ -563,9 +563,9 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 // Audnexus. Only when the book's own runtime is known: otherwise a runtime
 // cannot change the ranking, and the lookup would make the book wait on
 // Audnexus for nothing. A partial runtime with a size-derived upper bound
-// counts as known here: a candidate beyond it is penalised. Audible's own answers always carry a runtime, so in
-// practice this is the only way Audnexus is asked about an ASIN another
-// source found.
+// counts as known here: a candidate beyond it is penalised. Audible's own
+// answers always carry a runtime, so in practice this is the only way Audnexus
+// is asked about an ASIN another source found.
 func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookRuntime localRuntime) {
 	ctx := p.ctx
 	if !bookRuntime.informative() {

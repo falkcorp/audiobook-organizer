@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.57.1
+// version: 5.57.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -359,9 +359,12 @@ type MetadataCandidate struct {
 	// CategoryTags holds Audible category ladder node names (e.g. "Science Fiction").
 	// Only populated for Audible-sourced candidates. Applied as book_tags on apply.
 	CategoryTags []string `json:"category_tags,omitempty"`
-	// DurationMismatch is true when DurationDeltaSec exceeds 600 s (10 min).
-	// The review UI already renders a warning chip when duration_delta_sec > 600;
-	// this flag makes the threshold decision explicit in the API response.
+	// DurationMismatch is true when DurationDeltaSec exceeds 600 s (10 min), or
+	// when the local runtime is only partly measured and the candidate is longer
+	// than the upper bound the files' total size allows (DurationDeltaSec is 0
+	// then: the true delta is unknown). The review UI already renders a warning
+	// chip when duration_delta_sec > 600; this flag makes the decision explicit
+	// in the API response.
 	DurationMismatch bool `json:"duration_mismatch,omitempty"`
 	// DurationScore is the additive score component from the duration signal.
 	// Positive when the candidate runtime closely matches the local file duration;
