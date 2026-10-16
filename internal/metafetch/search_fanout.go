@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -562,12 +562,13 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 // to maxASINEnrich pooled answers that carry an ASIN but no runtime, from
 // Audnexus. Only when the book's own runtime is known: otherwise a runtime
 // cannot change the ranking, and the lookup would make the book wait on
-// Audnexus for nothing. Audible's own answers always carry a runtime, so in
+// Audnexus for nothing. A partial runtime with a size-derived upper bound
+// counts as known here: a candidate beyond it is penalised. Audible's own answers always carry a runtime, so in
 // practice this is the only way Audnexus is asked about an ASIN another
 // source found.
-func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookDurationSec int) {
+func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookRuntime localRuntime) {
 	ctx := p.ctx
-	if bookDurationSec <= 0 {
+	if !bookRuntime.informative() {
 		return
 	}
 	enabled := false
@@ -631,10 +632,10 @@ func rankOf(score float64, bd *ScoreBreakdown) float64 {
 	return score
 }
 
-func newSearchCandidate(r metadata.BookMetadata, source string, score float64, breakdown *ScoreBreakdown, bookDurationSec int, transcriptionBoosted bool) MetadataCandidate {
+func newSearchCandidate(r metadata.BookMetadata, source string, score float64, breakdown *ScoreBreakdown, bookRuntime localRuntime, transcriptionBoosted bool) MetadataCandidate {
 	durationDelta := 0
-	if bookDurationSec > 0 && r.DurationSec > 0 {
-		durationDelta = bookDurationSec - r.DurationSec
+	if bookRuntime.Sec > 0 && r.DurationSec > 0 {
+		durationDelta = bookRuntime.Sec - r.DurationSec
 		if durationDelta < 0 {
 			durationDelta = -durationDelta
 		}
@@ -666,9 +667,9 @@ func newSearchCandidate(r metadata.BookMetadata, source string, score float64, b
 		ScoreBreakdown:          breakdown,
 		DurationSec:             r.DurationSec,
 		DurationDeltaSec:        durationDelta,
-		DurationScore:           computeDurationScore(bookDurationSec, r.DurationSec),
+		DurationScore:           bookRuntime.score(r.DurationSec),
 		CategoryTags:            r.CategoryTags,
-		DurationMismatch:        durationDelta > 600,
+		DurationMismatch:        durationDelta > 600 || bookRuntime.exceedsUpper(r.DurationSec),
 		TranscriptionBoosted:    transcriptionBoosted,
 		AudibleRatingOverall:    r.AudibleRatingOverall,
 		AudibleRatingCount:      r.AudibleRatingCount,

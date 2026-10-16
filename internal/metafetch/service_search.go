@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -1198,8 +1198,10 @@ func (mfs *Service) searchMetadataForBook(
 
 	// Runtime of the local audiobook files (seconds). Used to score candidates
 	// by how closely their Audible runtime matches our files. Zero = unknown,
-	// which includes a partial runtime (see bookRuntimeSec).
-	bookDurationSec := mfs.bookRuntimeSec(book)
+	// which includes a partial runtime (see bookRuntimeSec); bookRuntime also
+	// carries the upper bound a partial runtime's file sizes allow.
+	bookRuntime := mfs.bookRuntime(book)
+	bookDurationSec := bookRuntime.Sec
 	th := hintsFromBook(book)
 
 	// The ASIN to look up directly: the whole query is one, or the query
@@ -1258,7 +1260,7 @@ func (mfs *Service) searchMetadataForBook(
 	needOwnASIN := asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup) &&
 		asinLookupAllowed(opts, sources)
 	if !needOwnASIN {
-		mfs.enrichRuntimeByASIN(fp, states, bookDurationSec)
+		mfs.enrichRuntimeByASIN(fp, states, bookRuntime)
 	}
 
 	type sourceFetch struct {
@@ -1434,11 +1436,11 @@ func (mfs *Service) searchMetadataForBook(
 
 			// Duration-based scoring: compare candidate runtime vs. local file duration.
 			rec.mul("duration", "Runtime comparison",
-				durationScoreMultiplier(bookDurationSec, r.DurationSec),
-				durationStepDetail(bookDurationSec, r.DurationSec))
+				bookRuntime.multiplier(r.DurationSec),
+				durationStepDetail(bookRuntime, r.DurationSec))
 			score = rec.score
 
-			candidates = append(candidates, newSearchCandidate(r, srcName, score, rec.breakdown(), bookDurationSec, transcriptionBoosted))
+			candidates = append(candidates, newSearchCandidate(r, srcName, score, rec.breakdown(), bookRuntime, transcriptionBoosted))
 		}
 	}
 
@@ -1522,9 +1524,9 @@ func (mfs *Service) searchMetadataForBook(
 							"title/author score was overridden.")
 				}
 				asinRec.mul("duration", "Runtime comparison",
-					durationScoreMultiplier(bookDurationSec, result.DurationSec),
-					durationStepDetail(bookDurationSec, result.DurationSec))
-				candidates = append(candidates, newSearchCandidate(*result, "Audnexus (Audible)", asinRec.score, asinRec.breakdown(), bookDurationSec, false))
+					bookRuntime.multiplier(result.DurationSec),
+					durationStepDetail(bookRuntime, result.DurationSec))
+				candidates = append(candidates, newSearchCandidate(*result, "Audnexus (Audible)", asinRec.score, asinRec.breakdown(), bookRuntime, false))
 			}
 		} else {
 			searchFanoutLog.Debug("search ASIN lookup failed: asin=%s err=%v", logger.SanitizeLogValue(asinToLookup), err)

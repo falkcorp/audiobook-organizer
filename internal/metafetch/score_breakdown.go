@@ -1,13 +1,14 @@
 // file: internal/metafetch/score_breakdown.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 6c81e35a-2b47-4d19-90fa-7e5c3d81b026
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 package metafetch
 
 import (
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // Score breakdown types for the review UI's evidence panel.
@@ -317,12 +318,30 @@ func baseTierDetail(tier string) string {
 // durationStepDetail explains the runtime comparison in the reviewer's terms.
 // An unknown duration is never treated as evidence -- the multiplier is 1.0 and
 // the step is therefore not recorded at all -- but when it IS recorded the row
-// should say which way it cut.
-func durationStepDetail(bookSec, candSec int) string {
-	if bookSec <= 0 || candSec <= 0 {
+// should say which way it cut. For a partial local runtime that was penalised
+// it names the estimate the candidate exceeded.
+func durationStepDetail(rt localRuntime, candSec int) string {
+	if rt.exceedsUpper(candSec) {
+		b := rt.Partial
+		return "Only " + strconv.Itoa(b.FilesKnown) + " of " + strconv.Itoa(b.FilesCounted) +
+			" local files have a measured runtime (at least " + formatRuntime(b.LowerSec) +
+			"). Their combined size suggests about " + formatRuntime(b.EstimateSec) +
+			" (at most " + formatRuntime(b.UpperSec) + " allowing for bitrate variation), " +
+			"so the candidate's " + formatRuntime(candSec) + " is far longer than the files can hold."
+	}
+	if rt.Sec <= 0 || candSec <= 0 {
 		return "One side has no known runtime, so duration was not used."
 	}
 	return "Candidate runtime compared against the local file's duration."
+}
+
+// formatRuntime renders seconds as "14h42m" / "8m" for a step detail.
+func formatRuntime(sec int) string {
+	m := (sec + 30) / 60
+	if m < 60 {
+		return strconv.Itoa(m) + "m"
+	}
+	return strconv.Itoa(m/60) + "h" + fmt.Sprintf("%02d", m%60) + "m"
 }
 
 // recordRerank appends the LLM rerank to a candidate's breakdown.

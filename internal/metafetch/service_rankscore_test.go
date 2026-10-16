@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_rankscore_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 61e828ea-550f-4785-ab97-1e894be5a182
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -130,7 +130,7 @@ func TestScoreRecorder_MulAbsenceRecomposes(t *testing.T) {
 
 func TestScoreBrowseAnswer_MissingAuthorRanksNeutral(t *testing.T) {
 	r := metadata.BookMetadata{ASIN: "B0SYNTH021", Title: "Sample Field Notes"}
-	c := scoreBrowseAnswer(r, "Audible", "", nil, "Author 07", "", 0)
+	c := scoreBrowseAnswer(r, "Audible", "", nil, "Author 07", "", localRuntime{})
 	assert.InDelta(t, browseNoTitleBase*0.75, c.Score, 1e-12, "Score keeps the 0.75")
 	assert.InDelta(t, browseNoTitleBase, c.RankScore, 1e-12)
 	assert.InDelta(t, c.RankScore, RecomposeRankScore(c.ScoreBreakdown.Steps), 1e-12)

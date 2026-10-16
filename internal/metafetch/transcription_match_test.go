@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_match_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d3f1a6c-2b85-4e07-bc41-7a8e0f2d5c39
-// last-edited: 2026-06-28
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -29,7 +29,7 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		words := SignificantWords("The Way of Kings")
 		th := transcriptionHints{title: "The Way of Kings"}
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0, th)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, th)
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "The Way of Kings", matched[0].Title)
 	})
@@ -43,7 +43,7 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		words := SignificantWords("Mistborn")
 		th := transcriptionHints{author: "Brandon Sanderson"}
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0, th)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, th)
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Brandon Sanderson", matched[0].Author)
 	})
@@ -58,8 +58,8 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 
 		// Empty variadic (no hints) and an explicit-empty hint must both match
 		// the pre-feature result: highest base score wins.
-		withoutArg := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0)
-		withEmpty := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0, transcriptionHints{})
+		withoutArg := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
+		withEmpty := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, transcriptionHints{})
 		require.NotEmpty(t, withoutArg)
 		require.NotEmpty(t, withEmpty)
 		assert.Equal(t, "Mistborn", withoutArg[0].Title)
