@@ -1,3 +1,0 @@
-- Settings, Dedup section: AcoustID.org API key field (masked, saved on its own with a Save key button).
-- Review workspace Dedup menu, Maintenance group: new "Look up fingerprints online" command.
-- Compare drawer: new "Audio match" section; the comparison runs only when "Check audio match" is clicked, and is cancelled if the drawer closes.

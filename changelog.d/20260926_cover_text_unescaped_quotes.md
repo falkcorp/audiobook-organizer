@@ -1,1 +1,0 @@
-- Cover text read: recover vision replies whose JSON contains unescaped quote marks copied from a cover blurb (3 of 1,099 pilot reads failed this way).

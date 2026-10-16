@@ -1,2 +1,0 @@
-- Woodpecker: `test-rest` now runs on the llm1 agent instead of the developer Mac, which is short on disk; the Mac agent is retired. llm1 runs two workflows at once, so `test-rest` and `test-server-scanner` still run in parallel.
-- Woodpecker local-backend cleanup now removes `woodpecker-local-*` workdirs older than 3 hours. The agent's own teardown removal had been failing on the read-only per-run Go module cache (fixed by the shared GOMODCACHE on 2026-09-28), leaving 114 workdirs holding 93 GB on llm1; the sweep is the backstop.
