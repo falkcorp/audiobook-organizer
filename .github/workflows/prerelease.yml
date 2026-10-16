@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.2.0
+# version: 3.3.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-09-22
+# last-edited: 2026-10-16
 
 name: Prerelease on Merge
 
@@ -31,7 +31,7 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@66924760e0c0eeee3212789dd77f0a337e675f26 # main 2026-08-30: EPIPE-under-pipefail guard fixes (github-common#353, #355) — collection was silently skipping
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@1f0d70e877c89a21a597db5a24e2775d3015ddda # main 2026-10-16: release notes by file, capped under GitHub's body limit (github-common#374); move with .github/ghcommon-ref.txt
     with:
       release-type: 'auto'
       prerelease: true
