@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
@@ -407,7 +408,7 @@ func (s *Server) fireDedupOnImport(bookID string) {
 	}
 	if config.AppConfig.Dedup.OnImportViaScheduler && s.opRegistry != nil {
 		if err := dedup.EnqueueCheckBook(s.bgCtx, s.opRegistry, bookID); err != nil {
-			slog.Warn("dedup-on-import: enqueue failed", "bookID", bookID, "err", err)
+			logging.Warn(s.bgCtx, "dedup-on-import: enqueue failed", "bookID", bookID, "err", err)
 		}
 		return
 	}

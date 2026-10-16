@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -1093,7 +1094,7 @@ func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _
 	// Trigger dedup check after metadata apply
 	if mfs.dedupEngine != nil && config.AppConfig.Dedup.OnImportViaScheduler && mfs.opEnqueuer != nil {
 		if err := dedup.EnqueueCheckBook(context.Background(), mfs.opEnqueuer, id); err != nil {
-			slog.Warn("dedup re-check enqueue failed after metadata apply", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
+			logging.Warn(context.Background(), "dedup re-check enqueue failed after metadata apply", "id", id, "error", err)
 		}
 	} else if mfs.dedupEngine != nil {
 		go func() {
