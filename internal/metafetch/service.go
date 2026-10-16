@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.57.2
+// version: 5.58.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package metafetch
 
@@ -208,6 +208,7 @@ type Service struct {
 	asinBackfillQueue atomic.Pointer[ASINBackfillQueue]
 	activityService   *activity.Service
 	dedupEngine       *dedup.Engine
+	opEnqueuer        dedup.OpEnqueuer           // nil = post-apply dedup check runs in a goroutine
 	metadataScorer    ai.MetadataCandidateScorer // optional; nil = fallback to F1
 	llmScorer         ai.MetadataCandidateScorer // optional; nil = no LLM rerank tier
 	// safeWriteDeps guards tag/cover writes against Deluge-protected paths.
@@ -1090,7 +1091,11 @@ func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _
 	organizer.ClearApplyRenameFailure(mfs.db, id)
 
 	// Trigger dedup check after metadata apply
-	if mfs.dedupEngine != nil {
+	if mfs.dedupEngine != nil && config.AppConfig.Dedup.OnImportViaScheduler && mfs.opEnqueuer != nil {
+		if err := dedup.EnqueueCheckBook(context.Background(), mfs.opEnqueuer, id); err != nil {
+			slog.Warn("dedup re-check enqueue failed after metadata apply", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
+		}
+	} else if mfs.dedupEngine != nil {
 		go func() {
 			if _, err := mfs.dedupEngine.CheckBook(context.Background(), id); err != nil {
 				slog.Warn("dedup re-check failed for book after metadata apply", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))

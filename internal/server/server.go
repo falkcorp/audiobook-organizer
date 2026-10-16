@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.95.0
+// version: 2.96.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package server
 
@@ -1030,6 +1030,9 @@ func NewServer(store database.Store) *Server {
 	// M4: wire the UOS registry so the importer can enqueue dedup.check-book
 	// when DedupOnImportViaScheduler is enabled in config (default false).
 	server.importService.SetRegistry(server.opRegistry)
+	if server.metadataFetchService != nil && server.opRegistry != nil {
+		server.metadataFetchService.SetOpEnqueuer(server.opRegistry)
+	}
 
 	// Register file-op recovery handler (uses server closure instead of globalServer)
 	RegisterFileOpRecovery("apply_metadata", func(bookID string) {

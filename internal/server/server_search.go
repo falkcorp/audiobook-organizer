@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-09-30
+// last-edited: 2026-10-16
 
 package server
 
@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -397,8 +398,17 @@ func (h *serverOrganizeHooks) OnCollision(currentBookID, occupantPath string) {
 // records a pending dedup candidate that surfaces in the UI.
 //
 // Safe to call even when the dedup engine is disabled — it's a no-op.
+//
+// With dedup.on_import_via_scheduler on, the check is enqueued as the
+// batchable dedup.check-book op instead of the goroutine below.
 func (s *Server) fireDedupOnImport(bookID string) {
 	if s.dedupEngine == nil || bookID == "" {
+		return
+	}
+	if config.AppConfig.Dedup.OnImportViaScheduler && s.opRegistry != nil {
+		if err := dedup.EnqueueCheckBook(s.bgCtx, s.opRegistry, bookID); err != nil {
+			slog.Warn("dedup-on-import: enqueue failed", "bookID", bookID, "err", err)
+		}
 		return
 	}
 	s.bgWG.Go("dedup-on-import", func() {
