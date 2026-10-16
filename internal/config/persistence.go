@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 
 package config
 
@@ -1516,6 +1516,10 @@ func applySetting(key, value, typ string) error {
 		case "metadata_fetch_cache_ttl_days":
 			if i, err := strconv.Atoi(value); err == nil {
 				c.MetadataFetchCacheTTLDays = i
+			}
+		case "identification_advance_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.IdentificationAdvanceEnabled = b
 			}
 		case "metadata_fetch.shared_cache":
 			if b, err := strconv.ParseBool(value); err == nil {

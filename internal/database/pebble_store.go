@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.220.0
+// version: 1.221.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package database
 
@@ -3734,6 +3734,14 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	}
 	if cacheRowChanged {
 		p.bumpMetadataCacheGeneration(id)
+	}
+	// The same chokepoint that marks the cached candidates Stale also marks
+	// the book for the identification driver (identification.advance): a
+	// retitle or re-credit changed the question the book asks, so it must be
+	// asked again. After the cache stripe is released (MarkIdentDirty takes
+	// it). Best effort: a failed mark is logged and never fails the write.
+	if identityChanged {
+		MarkIdentDirtyBestEffort(p, id, "retitle")
 	}
 	if markerMayExist {
 		p.forgetUndecodableMarker(id, markerGen)

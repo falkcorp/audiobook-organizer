@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.47.1
+// version: 1.48.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 package merge
 
@@ -494,7 +494,26 @@ func refuseSharedAudioPaths(books []*database.Book, filesByID map[string][]datab
 
 // MergeBooksWithOptions is MergeBooks with MergeOptions; MergeBooks is this
 // with the zero value.
-func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (_ *Result, retErr error) {
+//
+// After a successful merge the surviving primary is marked for the
+// identification driver (identification.advance): the merge changed which
+// row stands for the book. Both the survivor and the book holding the
+// group's primary flag are marked when they differ (the driver re-derives
+// and skips a book outside the primary scope). Best effort, after the merge
+// lock is released: a failed mark never fails the merge.
+func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (*Result, error) {
+	res, err := ms.mergeBooksWithOptions(bookIDs, primaryID, opts)
+	if err == nil && res != nil {
+		database.MarkIdentDirtyBestEffort(ms.db, res.PrimaryID, "merge")
+		if res.GroupPrimaryID != "" && res.GroupPrimaryID != res.PrimaryID {
+			database.MarkIdentDirtyBestEffort(ms.db, res.GroupPrimaryID, "merge")
+		}
+	}
+	return res, err
+}
+
+// mergeBooksWithOptions is MergeBooksWithOptions' body.
+func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (_ *Result, retErr error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
 	// /audiobooks/duplicates/link handler passes req.BookIDs straight through) — if

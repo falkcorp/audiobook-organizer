@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-14
+// last-edited: 2026-10-16
 
 package database
 
@@ -124,6 +124,7 @@ var keyFamilies = []KeyFamily{
 	{"ident:by:", "book identification membership by state, keys only plus a primary-scope byte", "internal/database/ident_state.go"},
 	{"ident:dirty:", "book identification dirty set (epoch per book)", "internal/database/ident_state.go"},
 	{"ident:meta:", "book identification index format marker", "internal/database/ident_state.go"},
+	{"ident:reason:", "identification driver's reason per book with the question fingerprint it answers", "internal/database/ident_state.go"},
 	{"metadata_change:", "metadata change records", "internal/database/pebble_store_metadata.go"},
 	{"metadata_fetch_cache:", "metadata fetch cache per book and source", "internal/database/metadata_fetch_cache.go"},
 	{"metadata_rejection:", "rejected metadata candidates", "internal/database/pebble_store_metadata.go"},

@@ -1,19 +1,22 @@
 // file: internal/database/ident_state.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 
 package database
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +41,10 @@ import (
 //	                                 recounted from the keys alone, without
 //	                                 reading state rows.
 //	ident:dirty:<bookID>          -> 8-byte big-endian epoch (the dirty set)
+//	ident:reason:<bookID>         -> identReasonRow JSON {reason, question_fp}:
+//	                                 why the identification driver left the
+//	                                 book where it is, for the reasons the
+//	                                 derivation cannot see (SetIdentReason)
 //	ident:meta:built              -> the index format version, as decimal text
 //
 // The counters are NOT stored. They live in memory only (identIndex.published)
@@ -89,8 +96,9 @@ const (
 	IdentHeld IdentState = "held"
 )
 
-// Reasons this package emits. Later work adds others (fragment,
-// manual_only, quota_deferred, no_usable_title).
+// Reasons this package emits. deriveIdent emits the first two; the
+// identification driver (internal/identification) records the other four
+// through SetIdentReason, and IdentStateFor attaches them.
 const (
 	// IdentReasonStale: has_candidates from a row marked Stale (the book was
 	// retitled or re-credited after its candidates were fetched; D29).
@@ -101,6 +109,18 @@ const (
 	// emits it yet: there is no book-level rejection marker, only
 	// per-candidate metadata_rejection rows. See deriveIdent.
 	IdentReasonRejected = "rejected"
+	// IdentReasonNoUsableTitle: the book has no title worth searching (empty,
+	// a placeholder, a section heading) and no stand-in, so it was not asked.
+	IdentReasonNoUsableTitle = "no_usable_title"
+	// IdentReasonFragment: the title is a chapter fragment (a sibling part of
+	// a shattered book), so it was not asked on its own.
+	IdentReasonFragment = "fragment"
+	// IdentReasonManualOnly: the best candidate belongs to the owner's
+	// manual-only libraries; it is never applied without a person.
+	IdentReasonManualOnly = "manual_only"
+	// IdentReasonQuotaDeferred: a provider step was put off (a daily quota
+	// spent, a throttle hold); a later run asks it.
+	IdentReasonQuotaDeferred = "quota_deferred"
 )
 
 // AllIdentStates lists the states in counter order.
@@ -133,11 +153,12 @@ var ErrIdentIndexBuilding = errors.New("identification index is being built; ret
 const identIndexVersion = 1
 
 const (
-	identStatePrefix = "ident:state:"
-	identByPrefix    = "ident:by:"
-	identDirtyPrefix = "ident:dirty:"
-	identMetaPrefix  = "ident:meta:"
-	identBuiltKey    = identMetaPrefix + "built"
+	identStatePrefix  = "ident:state:"
+	identByPrefix     = "ident:by:"
+	identDirtyPrefix  = "ident:dirty:"
+	identReasonPrefix = "ident:reason:"
+	identMetaPrefix   = "ident:meta:"
+	identBuiltKey     = identMetaPrefix + "built"
 )
 
 // identScopeAll and identScopePrimary index identIndex.published.
@@ -157,6 +178,8 @@ func identByKey(s IdentState, bookID string) []byte {
 func identByStatePrefix(s IdentState) []byte { return []byte(identByPrefix + string(s) + ":") }
 
 func identDirtyKey(bookID string) []byte { return []byte(identDirtyPrefix + bookID) }
+
+func identReasonKey(bookID string) []byte { return []byte(identReasonPrefix + bookID) }
 
 var identLog = logger.New("database")
 
@@ -317,6 +340,161 @@ type IdentIndexReader interface {
 }
 
 var _ IdentIndexReader = (*PebbleStore)(nil)
+
+// IdentDirtyMarker is the capability a writer needs to mark a book for the
+// identification driver. Writers reach it through database.AsCapability, so a
+// store without the index (a test double, another backend) simply marks
+// nothing.
+type IdentDirtyMarker interface {
+	MarkIdentDirty(bookID string) (uint64, error)
+}
+
+// MarkIdentDirtyBestEffort marks bookID dirty through store's
+// IdentDirtyMarker capability. It is nil-safe and never fails its caller: a
+// scan, a merge or a harvest that could not mark a book has still done its
+// own work, and the 6-hour candidate_fetch safety net finds the book later. A
+// failure is logged with why (the writer's name). It reports whether a mark
+// was written.
+//
+// The caller must not hold the book's metadataCacheLock stripe (MarkIdentDirty
+// takes it).
+func MarkIdentDirtyBestEffort(store any, bookID, why string) bool {
+	if store == nil || bookID == "" {
+		return false
+	}
+	m, ok := AsCapability[IdentDirtyMarker](store)
+	if !ok {
+		return false
+	}
+	if _, err := m.MarkIdentDirty(bookID); err != nil {
+		identLog.Warn("mark ident:dirty:%s (%s) failed; the candidate_fetch safety net will find it: %v",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(why), err)
+		return false
+	}
+	return true
+}
+
+// --- driver reasons ---
+
+// identReasonRow is the stored value of ident:reason:<bookID>.
+type identReasonRow struct {
+	Reason     string `json:"r"`
+	QuestionFP string `json:"q,omitempty"`
+}
+
+// IdentQuestionFP is the fingerprint of the identity inputs a driver reason
+// answers: the book's title and author. A reason recorded under one
+// fingerprint stops applying once the book is retitled or re-credited (the
+// writers mark such a book dirty, and the driver records a new reason or none).
+func IdentQuestionFP(b *Book) string {
+	if b == nil {
+		return ""
+	}
+	author := ""
+	if b.AuthorID != nil {
+		author = strconv.Itoa(*b.AuthorID)
+	}
+	sum := sha256.Sum256([]byte("v1\x00" + b.Title + "\x00" + author))
+	return hex.EncodeToString(sum[:16])
+}
+
+// SetIdentReason records why the identification driver left bookID where it
+// is, under the question fingerprint the reason answers (IdentQuestionFP of
+// the book as the driver read it). An empty reason removes the record.
+// Only the driver writes it; it is never an input of deriveIdent, so it moves
+// no counter.
+func (p *PebbleStore) SetIdentReason(bookID, reason, questionFP string) error {
+	if err := ValidateBookID(bookID); err != nil || bookID == "" {
+		return fmt.Errorf("SetIdentReason: invalid book id %q", bookID)
+	}
+	key := identReasonKey(bookID)
+	if reason == "" {
+		// Most books never carry a reason: look first, so clearing one that
+		// is not there writes no tombstone and costs no fsync.
+		_, closer, err := p.db.Get(key)
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read ident:reason:%s: %w", bookID, err)
+		}
+		closer.Close()
+		if err := p.db.Delete(key, pebble.Sync); err != nil {
+			return fmt.Errorf("clear ident:reason:%s: %w", bookID, err)
+		}
+		return nil
+	}
+	data, err := json.Marshal(identReasonRow{Reason: reason, QuestionFP: questionFP})
+	if err != nil {
+		return fmt.Errorf("encode ident:reason:%s: %w", bookID, err)
+	}
+	if err := p.db.Set(key, data, pebble.Sync); err != nil {
+		return fmt.Errorf("write ident:reason:%s: %w", bookID, err)
+	}
+	return nil
+}
+
+// readIdentReason reads bookID's driver reason record.
+func (p *PebbleStore) readIdentReason(bookID string) (identReasonRow, bool, error) {
+	val, closer, err := p.db.Get(identReasonKey(bookID))
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return identReasonRow{}, false, nil
+		}
+		return identReasonRow{}, false, fmt.Errorf("read ident:reason:%s: %w", bookID, err)
+	}
+	defer closer.Close()
+	var r identReasonRow
+	if err := json.Unmarshal(val, &r); err != nil || r.Reason == "" {
+		return identReasonRow{}, false, nil
+	}
+	return r, true, nil
+}
+
+// IdentStateView is one book's identification state as IdentStateFor reads
+// it: the indexed state and reason, with a driver reason attached.
+type IdentStateView struct {
+	State IdentState
+	// Reason is the derivation's reason when it has one (stale, no_match),
+	// else the driver's recorded reason when its question fingerprint is
+	// still the book's (IdentQuestionFP), else "".
+	Reason string
+	// Primary is the book's membership of the primary scope
+	// (InLibraryDefaultView), as indexed.
+	Primary bool
+}
+
+// IdentStateFor reads bookID's identification state from the index (ok is
+// false when the book has no state row: no book, or one the index does not
+// hold) and attaches the driver's reason for the reasons the derivation
+// cannot see, only while the book's current question fingerprint equals the
+// one the reason was recorded under. It returns ErrIdentIndexBuilding while
+// the index is not ready.
+func (p *PebbleStore) IdentStateFor(bookID string) (IdentStateView, bool, error) {
+	if !p.ident.ready.Load() {
+		return IdentStateView{}, false, ErrIdentIndexBuilding
+	}
+	row, ok, err := p.readIdentRow(bookID)
+	if err != nil || !ok {
+		return IdentStateView{}, false, err
+	}
+	v := IdentStateView(row)
+	if v.Reason != "" {
+		return v, true, nil
+	}
+	rr, has, err := p.readIdentReason(bookID)
+	if err != nil || !has {
+		return v, true, err
+	}
+	book, err := p.GetBookByID(bookID)
+	if err != nil {
+		return v, true, err
+	}
+	if book != nil && IdentQuestionFP(book) == rr.QuestionFP {
+		v.Reason = rr.Reason
+	}
+	return v, true, nil
+}
 
 // IdentCounts returns the counters. O(1) and lock-free: it reads the
 // in-memory counters, never waiting on identMu. A read that races a write can

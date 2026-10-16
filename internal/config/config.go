@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.157.2
+// version: 1.158.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-14
+// last-edited: 2026-10-16
 
 package config
 
@@ -1429,6 +1429,15 @@ type Config struct {
 	// budget (server.candidateFetchWorkers); any other value is used as is,
 	// clamped to 1-64.
 	MetadataCandidateFetchWorkers int `json:"metadata_candidate_fetch_workers"`
+	// IdentificationAdvanceEnabled turns on the identification driver
+	// (identification.advance, spec 02 PR 14). On, a 5-minute scheduler tick
+	// enqueues the driver while the identification dirty set
+	// (ident:dirty:) holds a book, and the 6-hour candidate_fetch tick only
+	// MARKS the books its selection finds (logging safety_net_marked=N)
+	// instead of fetching them itself. Off (the default), candidate_fetch
+	// fetches exactly as before and nothing enqueues the driver; the marks
+	// writers leave are inert keys.
+	IdentificationAdvanceEnabled bool `json:"identification_advance_enabled"`
 	// GoogleBooksDailyLimit is the ONE Google Books daily lookup counter's
 	// total (quota day: midnight Pacific; internal/metadata/dailyquota),
 	// shared by every Google Books caller: the candidate fetch's fallback, the
@@ -2738,6 +2747,7 @@ func InitConfig() {
 	viper.SetDefault("cache_size", 1000)
 	viper.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
 	viper.SetDefault("metadata_fetch.shared_cache", true)
+	viper.SetDefault("identification_advance_enabled", false)
 	viper.SetDefault("metadata_fetch.catalog_stage", false)
 	viper.SetDefault("metadata_fetch.folder_parse_person_title", true)
 	viper.SetDefault("metadata_fetch.negative_ttl_days.audible", DefaultNegativeTTLDaysAudible)
@@ -3231,6 +3241,7 @@ func InitConfig() {
 			RepairChapterMaxMin:                 viper.GetInt("repair_chapter_max_min"),
 			FragmentWindowContainmentMin:        viper.GetFloat64("fragment_window_containment_min"),
 			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
+			IdentificationAdvanceEnabled:        viper.GetBool("identification_advance_enabled"),
 			GoogleBooksFallbackDailyLimit:       viper.GetInt("google_books_fallback_daily_limit"),
 			GoogleBooksDailyLimit:               viper.GetInt("google_books_daily_limit"),
 			GoogleBooksBackgroundDailyLimit:     viper.GetInt("google_books_background_daily_limit"),

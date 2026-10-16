@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.132.1
+// version: 1.133.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 
 package scanner
 
@@ -3901,6 +3901,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					if createdBook != nil {
 						creditScannedAuthors(getStore(), createdBook.ID, createdBook.AuthorID, authorIDs)
 					}
+					// A new primary book has never been asked about: mark it
+					// for the identification driver (identification.advance).
+					markNewPrimaryIdentDirty(createdBook, dbBook)
 					// After both stripes are released: the hand-off takes the
 					// group lock and then each member's write stripe.
 					handOffLinkedGroup(ctx, linkedVersionGroup, rootDir)
@@ -3977,12 +3980,17 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		guard := newIdentityGuard(existing, scanned)
 		var heldKeys map[string]bool
 		kept := 0
+		// The row's title and author link at write time, before the overlay:
+		// a change to either marks the book for the identification driver.
+		var beforeTitle string
+		var beforeAuthor *int
 		written, uerr := modifyBookRecorded(existing.ID, scanHistorySource, func(cur *database.Book) error {
 			locks := mergeLocks
 			heldKeys = nil
 			if !createdHere {
 				locks, heldKeys = identityMergeLocks(mergeLocks, cur, guard)
 			}
+			beforeTitle, beforeAuthor = cur.Title, cur.AuthorID
 			kept = mergeScannedKeepingForeignEdits(cur, dbBook, locks, snap)
 			return nil
 		})
@@ -4002,6 +4010,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				existing.ID, kept)
 		}
 		book.rememberRow(written)
+		markRescanIdentDirty(written, beforeTitle, beforeAuthor)
 		if !createdHere {
 			userLocked := locked
 			if !ok {
@@ -4027,6 +4036,37 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 	}
 
 	return fmt.Errorf("database store not initialized")
+}
+
+// markNewPrimaryIdentDirty marks a book the scan just created for the
+// identification driver (identification.advance), when it is a primary book
+// in the library's default view. created is CreateBook's result (nil when the
+// store returned none), fallback the row the scan built. Best effort and
+// nil-safe (database.MarkIdentDirtyBestEffort): never fails the import.
+func markNewPrimaryIdentDirty(created, fallback *database.Book) {
+	b := created
+	if b == nil {
+		b = fallback
+	}
+	if b == nil || b.ID == "" || !database.InLibraryDefaultView(b) {
+		return
+	}
+	database.MarkIdentDirtyBestEffort(getStore(), b.ID, "scan: new primary book")
+}
+
+// markRescanIdentDirty marks a rescanned primary book for the identification
+// driver when applyScannerFields changed its title or its author link: the
+// question its identification asks changed. The store's retitle chokepoint
+// marks a title change as well; a second mark only carries a newer epoch.
+// Best effort and nil-safe: never fails the scan.
+func markRescanIdentDirty(written *database.Book, beforeTitle string, beforeAuthor *int) {
+	if written == nil || !database.InLibraryDefaultView(written) {
+		return
+	}
+	if written.Title == beforeTitle && eqInt(written.AuthorID, beforeAuthor) {
+		return
+	}
+	database.MarkIdentDirtyBestEffort(getStore(), written.ID, "scan: title or author changed")
 }
 
 // followSyncIdentityOnVersionLink carries a superseded book's ABS sync identity

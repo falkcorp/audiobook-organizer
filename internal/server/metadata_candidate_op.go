@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.16.0
+// version: 3.17.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -135,9 +135,10 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 		// result-row filter below stays as a second, independent guard.
 		ResumePolicy:   opsregistry.ResumeRestart,
 		ConcurrencyKey: "metadata.candidate-fetch",
-		// The author-catalog harvest shares Audible's token bucket. DependsOn
-		// is one-directional, so each op lists the other.
-		DependsOn:    []string{catalogHarvestOpID},
+		// The author-catalog harvest and the identification driver share
+		// Audible's token bucket. DependsOn is one-directional, so each op
+		// lists the other.
+		DependsOn:    []string{catalogHarvestOpID, identificationAdvanceOpID},
 		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
 		Run:          s.runMetadataCandidateFetchOp,
@@ -167,6 +168,9 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		sel, err := s.selectUnfetchedBooks(ctx, reporter)
 		if err != nil {
 			return err
+		}
+		if p.MarkDirtyOnly {
+			return markCandidateSafetyNet(store, reporter, sel.IDs)
 		}
 		if len(sel.IDs) == 0 {
 			_ = progress.UpdateProgress(0, 0, "completed: no unfetched books")
@@ -387,6 +391,28 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	summary := fmt.Sprintf("completed %d/%d books — %s", finalCount, totalBooks, tally.counts())
 	_ = progress.UpdateProgress(int(finalCount), totalBooks, summary)
 	candidateFetchLog.Info("done: opID=%s force=%v %s", logger.SanitizeLogValue(opID), p.Force, summary)
+	return nil
+}
+
+// markCandidateSafetyNet is an Unfetched run with MarkDirtyOnly: the
+// identification driver (identification.advance) is on, so the scheduled
+// tick marks the books its whole-library selection found in the
+// identification dirty set instead of fetching them. safety_net_marked=N is
+// the count of books the writers did not mark themselves; it should trend
+// to 0 once every writer marks correctly. A failed mark is logged by
+// MarkIdentDirtyBestEffort and the next tick tries again.
+func markCandidateSafetyNet(store any, reporter opsregistry.Reporter, ids []string) error {
+	marked := 0
+	for _, id := range ids {
+		if database.MarkIdentDirtyBestEffort(store, id, "candidate_fetch safety net") {
+			marked++
+		}
+	}
+	msg := fmt.Sprintf("completed: safety_net_marked=%d of %d selected books (identification_advance_enabled: marked for identification.advance, not fetched)",
+		marked, len(ids))
+	_ = reporter.Log(slog.LevelInfo, msg)
+	candidateFetchLog.Info("%s", msg)
+	_ = reporter.UpdateProgress(len(ids), len(ids), msg)
 	return nil
 }
 
