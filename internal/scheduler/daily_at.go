@@ -1,7 +1,7 @@
 // file: internal/scheduler/daily_at.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 965c3488-7ec4-4dd5-bad3-4edc9c3c1fb0
-// last-edited: 2026-09-13
+// last-edited: 2026-10-16
 
 package scheduler
 
@@ -132,14 +132,4 @@ func (ts *TaskScheduler) runDailyAtCheck(name string, hour, minute int, loc *tim
 	} else if op != nil {
 		schedLog.Info("Scheduled task started operation: taskName=%s op=%s", name, op.ID)
 	}
-}
-
-// selfScheduled reports whether the task has a timer of its own: a daily
-// wall-clock time or a positive interval. A task without one can run only via
-// the maintenance window, a manual trigger, or RunOnStart.
-func (d *TaskDefinition) selfScheduled() bool {
-	if d.DailyAt != "" {
-		return true
-	}
-	return d.GetInterval != nil && d.GetInterval() > 0
 }

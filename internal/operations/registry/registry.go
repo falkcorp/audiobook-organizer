@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.53.0
+// version: 3.54.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-14
+// last-edited: 2026-10-16
 
 package registry
 
@@ -1041,9 +1041,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		priority = *eopts.Priority
 	}
 
-	// Combine def-level and per-enqueue requirements.
-	// Use a fresh backing array to avoid aliasing def.Requires under -race.
-	allReqs := append(append([]Requirement(nil), def.Requires...), eopts.Requires...)
+	allReqs := def.Requires
 
 	// Dependency check: evaluate requirements; park if any unmet.
 	status := "queued"

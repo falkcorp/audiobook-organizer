@@ -1,6 +1,7 @@
 // file: internal/operations/trigger_source.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7f9e21-b4c6-4d8a-9e0f-1b2c3d4e5f6a
+// last-edited: 2026-10-16
 
 package operations
 
@@ -32,10 +33,4 @@ func TriggerSourceFromContext(ctx context.Context) string {
 		return v
 	}
 	return TriggerScheduled
-}
-
-// IsManual reports whether ctx carries a manual trigger source.
-// Use this in task functions to decide whether to emit AlwaysShow activity entries.
-func IsManual(ctx context.Context) bool {
-	return TriggerSourceFromContext(ctx) == TriggerManual
 }

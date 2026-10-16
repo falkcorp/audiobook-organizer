@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package registry
 
@@ -633,14 +633,6 @@ func (r *dbReporter) markTerminal() {
 		slog.Default().Warn("dbReporter: reporter marked terminal after abandonment; buffered op logs discarded",
 			"op_id", r.opID, "dropped_over_cap", dropped, "buffered_unflushed", buffered)
 	}
-}
-
-// droppedLogCount returns the number of log entries dropped after the buffer
-// hit its cap. Used by tests. (R-3)
-func (r *dbReporter) droppedLogCount() uint64 {
-	r.logMu.Lock()
-	defer r.logMu.Unlock()
-	return r.droppedLogs
 }
 
 // Checkpoint implements Reporter.

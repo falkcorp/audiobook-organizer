@@ -1,7 +1,7 @@
 // file: internal/scheduler/task_reachability_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1d84f2b7-6c03-4e91-a7d5-9b02e6f41c38
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package scheduler
 
@@ -183,4 +183,15 @@ func TestReachabilityHelpersRequireBothConditions(t *testing.T) {
 			"maintenanceOrder must NOT count as reachable — this is exactly the dead " +
 			"config that hid four broken tasks in production")
 	}
+}
+
+// selfScheduled mirrors the two timer branches of TaskScheduler.Start
+// (DailyAt, then a positive interval) for the reachability tests: whether the
+// task has a timer of its own. A task without one can run only via the
+// maintenance window, a manual trigger, or RunOnStart.
+func (d *TaskDefinition) selfScheduled() bool {
+	if d.DailyAt != "" {
+		return true
+	}
+	return d.GetInterval != nil && d.GetInterval() > 0
 }

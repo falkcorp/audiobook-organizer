@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/dryrun.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ea2e7a99-5038-479b-a7f2-19a6153feecd
-// last-edited: 2026-09-25
+// last-edited: 2026-10-16
 
 // Package opmode resolves the preview/live mode of an operation from its params.
 //
@@ -94,10 +94,4 @@ func ParseDryRun(opID string, raw json.RawMessage) (bool, error) {
 func Live() *bool {
 	f := false
 	return &f
-}
-
-// Preview returns a pointer to true.
-func Preview() *bool {
-	t := true
-	return &t
 }

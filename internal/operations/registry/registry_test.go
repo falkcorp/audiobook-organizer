@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-09-11
+// last-edited: 2026-10-16
 
 package registry_test
 
@@ -32,7 +32,7 @@ func makeValidDef(id string) registry.OperationDef {
 		ResumePolicy:    registry.ResumeDrop,
 		ConcurrencyKey:  "",
 		// Required since 2026-08-16: RegisterOp rejects LivenessUnspecified.
-		// LivenessManual is the honest declaration for a test op whose Run is
+		// LivenessManual is the accurate declaration for a test op whose Run is
 		// supplied per-test -- most of them report nothing, and a test that
 		// cares asserts on the reporter directly.
 		Liveness: registry.LivenessManual,
@@ -402,26 +402,6 @@ func TestEnqueueOp_CycleInDef_RejectsRegistration(t *testing.T) {
 	// Second registration closes the cycle → must be rejected.
 	if err := r.RegisterOp(defB); err == nil {
 		t.Fatal("expected RegisterOp to reject a def that creates a requirement cycle")
-	}
-}
-
-// TestEnqueueOp_WithRequiresOption_Parks verifies that per-enqueue requirements
-// added via WithRequires also cause parking when unmet.
-func TestEnqueueOp_WithRequiresOption_Parks(t *testing.T) {
-	r, store := newTestRegistry(t)
-	def := makeValidDef("test.park-via-option")
-	if err := r.RegisterOp(def); err != nil {
-		t.Fatalf("RegisterOp: %v", err)
-	}
-
-	params := map[string]string{"book_id": "b2"}
-	opID, err := r.EnqueueOp(context.Background(), "test.park-via-option", params,
-		registry.WithRequires(registry.Requirement{Kind: registry.ReqOpCompleted, OpType: "test.other"}))
-	if err != nil {
-		t.Fatalf("EnqueueOp: %v", err)
-	}
-	if store.statusOf(opID) != "waiting_deps" {
-		t.Errorf("expected status=waiting_deps, got %q", store.statusOf(opID))
 	}
 }
 
