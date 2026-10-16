@@ -1,1 +1,0 @@
-- The Audiobookshelf library list now honours "Collapse series": each series shows as one tile carrying the series name, its book count and its books' ids, sorted under the series name and paged after the collapse. A series drill-down still lists its books. AudioBooth's toggle did nothing before.

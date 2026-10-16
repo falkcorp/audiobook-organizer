@@ -1,3 +1,0 @@
-### Changed
-
-- The scheduled gold-label refinement task now runs as one visible, cancellable "Label refinement (report only)" operation on the Operations page, with its two steps (rebuild gold labels, calibrate composite scorer) shown as child operations, instead of a hidden background job. It is still report-only and still off by default: nothing is written, and a step that does not complete stops the run with the reason shown.

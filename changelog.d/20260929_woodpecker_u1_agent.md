@@ -1,1 +1,0 @@
-- Woodpecker: U1 (Ubuntu, amd64) joins as a local-backend agent (`host=u1`) and takes `test-rest` from llm1. Its caches live on its `tank/ci` ZFS dataset.

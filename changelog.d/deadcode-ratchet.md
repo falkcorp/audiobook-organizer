@@ -1,1 +1,0 @@
-- A new CI check stops dead code from growing back: the build now fails when a production function becomes unreachable from every program entry point, using a checked-in baseline (`scripts/deadcode-baseline.txt`). Only a rise fails; removing dead code is always fine. A non-blocking `knip` report lists unused frontend files and exports.
