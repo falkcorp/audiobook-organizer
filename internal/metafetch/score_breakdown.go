@@ -1,5 +1,5 @@
 // file: internal/metafetch/score_breakdown.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c81e35a-2b47-4d19-90fa-7e5c3d81b026
 // last-edited: 2026-10-15
 
@@ -326,7 +326,7 @@ func durationStepDetail(rt localRuntime, candSec int) string {
 		return "Only " + strconv.Itoa(b.FilesKnown) + " of " + strconv.Itoa(b.FilesCounted) +
 			" local files have a measured runtime (at least " + formatRuntime(b.LowerSec) +
 			"). Their combined size suggests about " + formatRuntime(b.EstimateSec) +
-			" (at most " + formatRuntime(b.UpperSec) + " allowing for bitrate variation), " +
+			" (no more than " + formatRuntime(b.UpperSec) + " at any plausible bitrate), " +
 			"so the candidate's " + formatRuntime(candSec) + " is far longer than the files can hold."
 	}
 	if rt.Sec <= 0 || candSec <= 0 {

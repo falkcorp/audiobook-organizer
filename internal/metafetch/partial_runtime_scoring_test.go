@@ -1,5 +1,5 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
 // last-edited: 2026-10-15
 
@@ -21,7 +21,8 @@ import (
 // Synthetic fixtures only: sizes and durations are made up.
 
 // ownerCaseFiles: two files of ~4 MB, only the first measured (8 min). The
-// size-derived estimate is ~16 min, upper bound ~48 min.
+// size-derived estimate is ~16 min; the bound is the physical floor, 8 MB at
+// 1000 B/s = 8000 s.
 func ownerCaseFiles() []database.BookFile {
 	return []database.BookFile{
 		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: 480},
@@ -48,7 +49,7 @@ func runtimeOf(files []database.BookFile) localRuntime {
 func TestLocalRuntime_PartialUpperBound(t *testing.T) {
 	owner := runtimeOf(ownerCaseFiles())
 	require.Zero(t, owner.Sec, "a partial runtime is still not a total")
-	require.Equal(t, 2880, owner.Partial.UpperSec, "fixture: 4 MB per 480 s over 8 MB, x3")
+	require.Equal(t, 8000, owner.Partial.UpperSec, "fixture: 8 MB at the 1000 B/s physical floor")
 	upper := owner.Partial.UpperSec
 
 	t.Run("owner case: a 14h42m candidate is penalised as a >100% mismatch", func(t *testing.T) {
@@ -83,6 +84,7 @@ func TestLocalRuntime_TenHourBookWithTwoChaptersMeasured(t *testing.T) {
 	ten := runtimeOf(tenHourFiles())
 	require.Zero(t, ten.Sec)
 	require.Equal(t, 36000, ten.Partial.EstimateSec)
+	require.Equal(t, 576000, ten.Partial.UpperSec, "fixture: 576 MB at the 1000 B/s physical floor")
 	// A 10 h candidate - and a 10 h 30 m one, and a 20 h one - are plausible
 	// for 576 MB of audio: none may be penalised.
 	for _, cand := range []int{36000, 37800, 72000, ten.Partial.UpperSec} {
@@ -306,4 +308,58 @@ func TestSearch_PartialRuntimePenalisesDirectASINAnswer(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "a duration step with x0.50")
+}
+
+// coverArtIntroFiles: a 10 h 64 kbps book with 500 KB of cover art in every
+// file; only the 25 s intro file is measured. The measured bytes-per-second is
+// 3.5x the book's, so x3 over the estimate (~3 h) is far below the real 10 h.
+func coverArtIntroFiles() []database.BookFile {
+	files := []database.BookFile{{ID: "intro", BookID: "b1", FileSize: 25*8000 + 500_000, Duration: 25}}
+	for i := 0; i < 20; i++ {
+		files = append(files, database.BookFile{ID: fmt.Sprintf("ch%02d", i), BookID: "b1", FileSize: 1800*8000 + 500_000})
+	}
+	return files
+}
+
+// mixedEncodeFiles: two measured 30 min parts at 128 kbps, 18 unmeasured at
+// 32 kbps; 10 h in all, measured rate 4x the rest.
+func mixedEncodeFiles() []database.BookFile {
+	files := []database.BookFile{
+		{ID: "p0", BookID: "b1", FileSize: 1800 * 16000, Duration: 1800},
+		{ID: "p1", BookID: "b1", FileSize: 1800 * 16000, Duration: 1800},
+	}
+	for i := 0; i < 18; i++ {
+		files = append(files, database.BookFile{ID: fmt.Sprintf("q%02d", i), BookID: "b1", FileSize: 1800 * 4000})
+	}
+	return files
+}
+
+// Regression: a sample denser than the book must not make the RIGHT 10 h
+// candidate a mismatch, in scoring and through the search path.
+func TestPartialRuntime_NonRepresentativeSampleDoesNotPenaliseTheRightCandidate(t *testing.T) {
+	for name, files := range map[string][]database.BookFile{
+		"cover art in every file, only the intro measured": coverArtIntroFiles(),
+		"measured parts denser than the rest":              mixedEncodeFiles(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt := runtimeOf(files)
+			require.Greater(t, rt.Partial.UpperSec, 36000, "the bound must cover the real 10 h")
+			assert.Equal(t, 1.0, rt.multiplier(36000))
+			assert.Zero(t, rt.score(36000))
+			assert.False(t, rt.exceedsUpper(36000))
+
+			audible := &fakeProvider{id: metadata.SourceIDAudible, name: "Audible", answer: func(string, string) []metadata.BookMetadata {
+				return []metadata.BookMetadata{{Title: "Zeta Quest", Author: "Ann Writer", Narrator: "Bo Reader", ASIN: "B0TEN00001", DurationSec: 36000, CoverURL: "c"}}
+			}}
+			svc := fanoutHarnessFiles(t, &database.Book{ID: "b1", Title: "Zeta Quest"}, files, audible)
+			resp, err := svc.SearchMetadataForBookWithOptions("b1", "", "Ann Writer", "", "", SearchOptions{})
+			require.NoError(t, err)
+			require.Len(t, resp.Results, 1)
+			assert.Zero(t, resp.Results[0].DurationScore)
+			assert.False(t, resp.Results[0].DurationMismatch)
+			for _, st := range resp.Results[0].ScoreBreakdown.Steps {
+				assert.NotEqual(t, "duration", st.ID)
+			}
+		})
+	}
 }

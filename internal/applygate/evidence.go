@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-10-15
 
@@ -241,8 +241,9 @@ func checkRuntime(rt database.BookRuntime, c *metafetch.MetadataCandidate, overw
 		if upper, ok := upperBoundContradicts(rt, c.DurationSec); ok {
 			est, _ := rt.EstimatedSeconds()
 			r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
-			r.Detail = "files at least " + mins(rt.Seconds) + " (" + runtimeDesc(rt) + "); their combined size suggests about " +
-				mins(est) + " (at most " + mins(upper) + "), candidate " + mins(c.DurationSec) + " is longer than the files can hold"
+			r.Detail = "files " + runtimeDesc(rt) + "; their combined size suggests about " + mins(est) +
+				" and no more than " + mins(upper) + " at any plausible bitrate, candidate " + mins(c.DurationSec) +
+				" is longer than the files can hold"
 			return r
 		}
 		r.Outcome = OutcomeUnknown
@@ -767,8 +768,9 @@ func lowerBoundContradicts(rt database.BookRuntime, candSec int) (lb int, ratio 
 // upperBoundContradicts reports whether a partial runtime still PROVES a
 // runtime_mismatch from the other direction: the candidate is longer than the
 // upper bound the total size of ALL the book's files allows
-// (database.BookRuntime.EstimatedUpperSeconds: the measured files'
-// bytes-per-second applied to every file's bytes, with 3x headroom for VBR).
+// (database.BookRuntime.EstimatedUpperSeconds: the larger of the measured
+// files' bytes-per-second applied to every file's bytes with 3x headroom, and
+// the physical floor of the total size at 1000 B/s).
 // A 14 h candidate for two files totalling 8 MB cannot be this book. A
 // candidate at or below the bound proves nothing, so a 10 h book with two of
 // twenty chapters measured still accepts its 10 h candidate; with no estimate

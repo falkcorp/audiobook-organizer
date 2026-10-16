@@ -1,5 +1,5 @@
 // file: internal/applygate/partial_upper_bound_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b4e1d27-5c93-4a60-b7f2-0d6a9e3c1f58
 // last-edited: 2026-10-15
 
@@ -17,7 +17,7 @@ import (
 // Synthetic fixtures only.
 
 // ownerCaseRows: two ~4 MB files, only the first measured (8 min). The size
-// estimate is ~16 min, the upper bound 48 min (2880 s).
+// estimate is ~16 min, the upper bound the physical floor 8 MB / 1000 B/s = 8000 s.
 func ownerCaseRows() []database.BookFile {
 	return []database.BookFile{
 		{ID: "f1", BookID: "b", FileSize: 4_000_000, Duration: 480},
@@ -45,8 +45,8 @@ func TestCheckRuntime_PartialUpperBound(t *testing.T) {
 	noSize[1].FileSize = 0
 	noSizeRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(480)}, noSize)
 	upper, ok := ownerRT.EstimatedUpperSeconds()
-	if !ok || upper != 2880 {
-		t.Fatalf("fixture: owner upper = %d, %v, want 2880", upper, ok)
+	if !ok || upper != 8000 {
+		t.Fatalf("fixture: owner upper = %d, %v, want 8000", upper, ok)
 	}
 	tenUpper, _ := tenRT.EstimatedUpperSeconds()
 
@@ -64,7 +64,7 @@ func TestCheckRuntime_PartialUpperBound(t *testing.T) {
 		{"boundary: one second over the upper bound blocks", ownerRT, upper + 1, false, OutcomeBlock, ReasonRuntimeMismatch},
 		{"a candidate near the estimate is unknown, not blocked", ownerRT, 960, false, OutcomeUnknown, ""},
 		{"10h book, 2 of 20 chapters measured: a 10h candidate is unknown", tenRT, 36000, false, OutcomeUnknown, ""},
-		{"10h book: 20h is still inside the 3x headroom", tenRT, 72000, false, OutcomeUnknown, ""},
+		{"10h book: 20h is still inside the bound", tenRT, 72000, false, OutcomeUnknown, ""},
 		{"10h book: the bound itself passes", tenRT, tenUpper, false, OutcomeUnknown, ""},
 		{"10h book: past the bound blocks", tenRT, tenUpper + 1, false, OutcomeBlock, ReasonRuntimeMismatch},
 		{"missing sizes: unchanged, a 14h42m candidate is unknown", noSizeRT, 14*3600 + 42*60, false, OutcomeUnknown, ""},
@@ -81,10 +81,16 @@ func TestCheckRuntime_PartialUpperBound(t *testing.T) {
 
 	t.Run("the reason names the estimate", func(t *testing.T) {
 		got := checkRuntime(ownerRT, &metafetch.MetadataCandidate{DurationSec: 14*3600 + 42*60}, false)
-		for _, want := range []string{"1 of 2 files", "about 16 min", "at most 48 min", "882 min"} {
+		for _, want := range []string{"8 min from 1 of 2 files (partial)", "about 16 min", "no more than 133 min", "882 min"} {
 			if !strings.Contains(got.Detail, want) {
 				t.Errorf("detail %q does not mention %q", got.Detail, want)
 			}
+		}
+	})
+	t.Run("the reason does not repeat the lower bound", func(t *testing.T) {
+		got := checkRuntime(ownerRT, &metafetch.MetadataCandidate{DurationSec: 14*3600 + 42*60}, false)
+		if strings.Contains(got.Detail, "files at least") {
+			t.Errorf("detail %q repeats what runtimeDesc says", got.Detail)
 		}
 	})
 	t.Run("an unknown candidate runtime is never blocked", func(t *testing.T) {
@@ -117,4 +123,51 @@ func TestCheckEvidenceInBatch_PartialUpperBound(t *testing.T) {
 	if v := CheckEvidenceInBatch(tenBook, snap(tenBook), tenRT, ten, false, nil); v.Reason == ReasonRuntimeMismatch {
 		t.Fatalf("10h candidate for a 10h book with 2 of 20 chapters measured was blocked: %+v", v)
 	}
+}
+
+func coverArtIntroRows() []database.BookFile {
+	files := []database.BookFile{{ID: "intro", BookID: "b", FileSize: 25*8000 + 500_000, Duration: 25}}
+	for i := 0; i < 20; i++ {
+		files = append(files, database.BookFile{ID: fmt.Sprintf("ch%02d", i), BookID: "b", FileSize: 1800*8000 + 500_000})
+	}
+	return files
+}
+
+func mixedEncodeRows() []database.BookFile {
+	files := []database.BookFile{
+		{ID: "p0", BookID: "b", FileSize: 1800 * 16000, Duration: 1800},
+		{ID: "p1", BookID: "b", FileSize: 1800 * 16000, Duration: 1800},
+	}
+	for i := 0; i < 18; i++ {
+		files = append(files, database.BookFile{ID: fmt.Sprintf("q%02d", i), BookID: "b", FileSize: 1800 * 4000})
+	}
+	return files
+}
+
+// Regression: when the measured sample is denser than the book (cover art in
+// every file; two 128 kbps parts of a book whose other 18 are 32 kbps) the
+// x3 extrapolation alone sits below the real 10 h. The right 10 h candidate
+// must not be blocked.
+func TestCheckRuntime_NonRepresentativeSampleDoesNotBlockTheRightCandidate(t *testing.T) {
+	for name, files := range map[string][]database.BookFile{
+		"cover art in every file, only the intro measured": coverArtIntroRows(),
+		"measured parts denser than the rest":              mixedEncodeRows(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(rt0(files))}, files)
+			got := checkRuntime(rt, &metafetch.MetadataCandidate{DurationSec: 36000}, false)
+			if got.Outcome != OutcomeUnknown || got.Reason != "" {
+				t.Fatalf("10h candidate for a 10h book: %+v, want unknown (not blocked)", got)
+			}
+		})
+	}
+}
+
+// rt0 is the partial known sum of files, as Book.Duration stores it.
+func rt0(files []database.BookFile) int {
+	sum := 0
+	for _, f := range files {
+		sum += f.Duration
+	}
+	return sum
 }
