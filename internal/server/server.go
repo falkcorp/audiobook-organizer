@@ -65,9 +65,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
-
-	// The one list of service-registry plugins (internal/plugins/plugins.go).
-	_ "github.com/falkcorp/audiobook-organizer/internal/plugins"
+	// opscatalog is the one list of op bundles and of service-registry
+	// plugins (it replaced internal/plugins/plugins.go, 05-PR7): importing it
+	// links the five plugin packages, whose init() registers them.
+	"github.com/falkcorp/audiobook-organizer/internal/opscatalog"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
@@ -815,37 +816,11 @@ func NewServer(store database.Store) *Server {
 		ScanStandDown:        server,
 	})
 
-	// UOS-12: maintenance plugin — 26 ops migrated from scheduler_tasks.go.
-	//
-	// Registration is UNCONDITIONAL. It used to be gated on
-	// config.AppConfig.RootDir != "" purely for test convenience (the mock
-	// store had no UpsertOpDefinitionV2 expectations), which made an unset
-	// RootDir silently drop the maintenance plugin AND every registrar in
-	// opRegistrars — a server with no operations at all, still reporting
-	// healthy. The tests now set up the expectation instead; see
-	// expectOpDefinitionUpserts in the server test helpers.
-	maintPlugin := maintenanceplugin.New(server)
-	// The Repairs lane's fixers live in the maintenance plugin; the
-	// /api/v1/repairs handlers read the same registry the repairs.plan /
-	// repairs.apply ops run.
-	server.repairFixers = maintPlugin.Repairs()
-	if err := maintPlugin.Register(server.opRegistry); err != nil {
-		slog.Error("maintenance plugin register", "err", err)
-		server.opRegistrationErrs = append(server.opRegistrationErrs,
-			fmt.Errorf("maintenance plugin register: %w", err))
-	}
-	// Iterate all op registrars. Each file calls addOpRegistrar in its init()
-	// so new ops never require touching this block.
-	//
-	// Every one of the ~55 RegisterOp call sites correctly returns its
-	// error; this loop was the single place that threw them away. Collect
-	// instead, and let Start() decide -- see opRegistrationErrs.
-	for _, reg := range opRegistrars {
-		if err := reg(server, server.opRegistry); err != nil {
-			slog.Error("op registrar", "err", err)
-			server.opRegistrationErrs = append(server.opRegistrationErrs, err)
-		}
-	}
+	// Every op registration path -- the maintenance plugin, the adapted v2
+	// registrars and the native bundles of opscatalog.All -- runs through
+	// registerAll. Failures are collected, and Start() refuses to come up
+	// with any (see opRegistrationErrs).
+	server.opRegistrationErrs = append(server.opRegistrationErrs, registerAll(server, server.opRegistry)...)
 
 	// iTunes service + plugin are both container-built and registered via
 	// PostInit. See internal/server/registry_wire.go ("itunes") and
@@ -1538,4 +1513,63 @@ func compressionMiddleware() gin.HandlerFunc {
 		gzip.WithExcludedPaths([]string{"/api/events", "/metrics"}),
 		gzip.WithExcludedPathsRegexs([]string{`^/api/v1/operations/v2/[^/]+/logs/download$`}),
 	)
+}
+
+// registerAll registers every operation the server owns, in the order that
+// existed before 05-PR7, and returns every failure (never just the first):
+//
+//  1. the maintenance plugin (UOS-12). Registration is UNCONDITIONAL. It
+//     used to be gated on config.AppConfig.RootDir != "" purely for test
+//     convenience (the mock store had no UpsertOpDefinitionV2 expectations),
+//     which made an unset RootDir silently drop the maintenance plugin AND
+//     every registrar in opRegistrars -- a server with no operations at all,
+//     still reporting healthy. The tests set up the expectation instead; see
+//     expectOpDefinitionUpserts in the server test helpers.
+//  2. the adapted v2 registrars (op_registrars.go), each file's init()
+//     appending one, so new v2 ops never touch this function. Every one of
+//     the RegisterOp call sites returns its error; this loop was once the
+//     single place that threw them away.
+//  3. the native ops v3 bundles of opscatalog.All, built from the server's
+//     catalog Deps (none exist yet; each port wave adds one).
+//
+// The service-registry plugins are not here: they register from the
+// container's PostInit. The startup catalog check (opCatalogGate) reads the
+// whole registry after that, with every v2 def wrapped by registry.FromV2
+// (Registry.Catalog), so adapted and native defs are validated together.
+func registerAll(s *Server, reg *opsregistry.Registry) []error {
+	var errs []error
+	maintPlugin := maintenanceplugin.New(s)
+	// The Repairs lane's fixers live in the maintenance plugin; the
+	// /api/v1/repairs handlers read the same registry the repairs.plan /
+	// repairs.apply ops run.
+	s.repairFixers = maintPlugin.Repairs()
+	if err := maintPlugin.Register(reg); err != nil {
+		slog.Error("maintenance plugin register", "err", err)
+		errs = append(errs, fmt.Errorf("maintenance plugin register: %w", err))
+	}
+	for _, r := range opRegistrars {
+		if err := r(s, reg); err != nil {
+			slog.Error("op registrar", "err", err)
+			errs = append(errs, err)
+		}
+	}
+	bundles, err := opscatalog.Build(s.catalogDeps())
+	if err != nil {
+		lifecycleLog.Error("op catalog build: %v", err)
+		return append(errs, err)
+	}
+	for _, b := range bundles {
+		if err := opsregistry.RegisterBundle(reg, b); err != nil {
+			lifecycleLog.Error("op bundle %s register: %v", b.Plugin, err)
+			errs = append(errs, fmt.Errorf("bundle %s: %w", b.Plugin, err))
+		}
+	}
+	return errs
+}
+
+// catalogDeps builds the catalog's Deps from the server. It is empty until
+// the first native bundle needs a narrow store interface or a service; each
+// port wave adds the fields its bundles use, taken from s.store here.
+func (s *Server) catalogDeps() opscatalog.Deps {
+	return opscatalog.Deps{}
 }

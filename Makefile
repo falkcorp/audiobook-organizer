@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.45.1
+# version: 2.46.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-12
+# last-edited: 2026-10-16
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -513,11 +513,11 @@ staticcheck: staticcheck-install
 	@$(STATICCHECK) ./...
 	@echo "✅ staticcheck passed"
 
-## oplint: Run plugin import lint
+## oplint: Type-aware ops v3 definition lint (tools/cmd/oplint; a gate of make ci)
 oplint:
-	@echo "🔍 Running plugin import lint..."
-	@go run ./tools/cmd/oplint ./internal/plugins/...
-	@echo "✅ Plugin import lint passed"
+	@echo "🔍 Running oplint..."
+	@go run ./tools/cmd/oplint ./...
+	@echo "✅ oplint passed"
 
 ## reconcile-paths: Build the reconcile-paths dry-run CSV tool
 reconcile-paths:
@@ -752,7 +752,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard ops-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck oplint sdkguard ops-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool

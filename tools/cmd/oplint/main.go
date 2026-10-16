@@ -1,239 +1,109 @@
 // file: tools/cmd/oplint/main.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: d0e1f2a3-b4c5-6789-3456-789abcdef012
-// last-edited: 2026-10-13
+// last-edited: 2026-10-16
 
-// Package main implements oplint, a plugin linter. It takes directories and
-// walks them. Two rules:
+// Command oplint checks ops v3 definitions with a type-aware go/analysis
+// analyzer (analyzer.go; the rules are in Analyzer.Doc and sdk-api.md §11).
+// It replaced, in 05-PR7, an import-path walker whose "walled garden" import
+// rule reported 538 forbidden imports and which `make oplint` could not run
+// (it lstat'ed ./internal/plugins/... as a path, finding F29).
 //
-//   - imports: operations code only imports internal/operations/registry,
-//     internal/database/iface, internal/auth, the stdlib and third-party
-//     packages (the "walled garden").
-//   - deps-store (R21, 05-PR5): a field of a struct type named Deps may not
-//     be typed database.Store, nor an interface that embeds it. An op names
-//     the narrow interface it calls instead (sdk-api.md §11.1).
+// Usage:
 //
-// The deps-store rule is syntactic. It resolves an interface declared in the
-// same directory (package), transitively; it cannot see through an interface
-// declared in another package. The full rewrite onto go/analysis is 05-PR7.
+//	go run ./tools/cmd/oplint [-probe-v2] [packages]   (default ./...)
+//
+// -probe-v2 also applies the writer-bypass rule to v2 registry.OperationDef
+// Run funcs. It is informational (how much v2 code a port must move behind
+// the Writer); make oplint never passes it.
+//
+// Every finding is printed as file:line:col: [category] message, then a
+// count per category on stderr. The exit status is 1 when any finding other
+// than a missing-help warning remains, 2 when the packages cannot be loaded
+// or analyzed, and 0 otherwise.
+//
+// It drives the analyzer through go/analysis/checker rather than
+// singlechecker because singlechecker fails on every diagnostic, and the
+// missing-help rule is a warning.
 package main
 
 import (
+	"flag"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"io"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
-)
 
-const (
-	modulePrefix    = "github.com/falkcorp/audiobook-organizer/internal/"
-	databaseImport  = "github.com/falkcorp/audiobook-organizer/internal/database"
-	depsStoreRuleID = "R21"
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/checker"
+	"golang.org/x/tools/go/packages"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: %s <dir1> [dir2] ...\n", os.Args[0])
-		os.Exit(2)
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: %s [-probe-v2] [packages]   (default ./...)\n\n%s\n", os.Args[0], Analyzer.Doc)
 	}
-
-	var violations []string
-
-	for _, startDir := range os.Args[1:] {
-		if err := walkDir(startDir, &violations); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	if len(violations) > 0 {
-		for _, v := range violations {
-			fmt.Println(v)
-		}
-		os.Exit(1)
-	}
+	Analyzer.Flags.VisitAll(func(f *flag.Flag) { flag.Var(f.Value, f.Name, f.Usage) })
+	flag.Parse()
+	os.Exit(run(flag.Args(), os.Stdout, os.Stderr))
 }
 
-// walkDir lints every directory under dir, one package at a time.
-func walkDir(dir string, violations *[]string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			return nil
-		}
-		return checkPackage(path, violations)
-	})
-}
+// warnings are the categories that do not fail the run.
+var warnings = map[string]bool{catMissingHelp: true}
 
-// checkPackage parses a directory's non-test Go files and runs both rules.
-func checkPackage(dir string, violations *[]string) error {
-	entries, err := os.ReadDir(dir)
+func run(patterns []string, stdout, stderr io.Writer) int {
+	if len(patterns) == 0 {
+		patterns = []string{"./..."}
+	}
+	cfg := &packages.Config{Mode: packages.LoadSyntax}
+	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
-		return err
+		fmt.Fprintf(stderr, "oplint: load: %v\n", err)
+		return 2
 	}
-	fset := token.NewFileSet()
-	var files []*ast.File
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			// Skip files that can't be parsed (build tags, invalid syntax during linting)
-			continue
-		}
-		files = append(files, f)
-		checkImports(path, f, violations)
+	if n := packages.PrintErrors(pkgs); n > 0 {
+		fmt.Fprintf(stderr, "oplint: %d package error(s)\n", n)
+		return 2
 	}
-	*violations = append(*violations, checkDepsStore(fset, files)...)
-	return nil
-}
-
-func checkImports(path string, f *ast.File, violations *[]string) {
-	for _, imp := range f.Imports {
-		importPath := strings.Trim(imp.Path.Value, `"`)
-
-		// Allow stdlib (no dots) and third-party packages (have dots but don't start with "github.com/jdfalk/...")
-		if !strings.Contains(importPath, "/") {
-			// Stdlib — allowed
-			continue
+	graph, err := checker.Analyze([]*analysis.Analyzer{Analyzer}, pkgs, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "oplint: %v\n", err)
+		return 2
+	}
+	type finding struct {
+		pos, cat, msg string
+	}
+	var found []finding
+	counts := map[string]int{}
+	for _, act := range graph.Roots {
+		if act.Err != nil {
+			fmt.Fprintf(stderr, "oplint: %s: %v\n", act.Package.PkgPath, act.Err)
+			return 2
 		}
-
-		// Reject imports from the falkcorp/audiobook-organizer internal/ except allowed ones.
-		if strings.HasPrefix(importPath, modulePrefix) {
-			if importPath == "github.com/falkcorp/audiobook-organizer/internal/operations/registry" ||
-				importPath == "github.com/falkcorp/audiobook-organizer/internal/database/iface" ||
-				importPath == "github.com/falkcorp/audiobook-organizer/internal/auth" {
-				// Allowed
-				continue
-			}
-			*violations = append(*violations, fmt.Sprintf("%s: imports forbidden internal package: %s", path, importPath))
+		for _, d := range act.Diagnostics {
+			found = append(found, finding{act.Package.Fset.Position(d.Pos).String(), d.Category, d.Message})
+			counts[d.Category]++
 		}
 	}
-}
-
-// databaseAlias returns the name f refers to internal/database by, or "".
-func databaseAlias(f *ast.File) string {
-	for _, imp := range f.Imports {
-		if strings.Trim(imp.Path.Value, `"`) != databaseImport {
-			continue
-		}
-		if imp.Name != nil {
-			if imp.Name.Name == "_" || imp.Name.Name == "." {
-				return ""
-			}
-			return imp.Name.Name
-		}
-		return "database"
-	}
-	return ""
-}
-
-// isDatabaseStore reports whether expr names database.Store in file f.
-func isDatabaseStore(expr ast.Expr, alias string) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok || alias == "" {
-		return false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == alias && sel.Sel.Name == "Store"
-}
-
-// checkDepsStore reports every field of a struct type named Deps whose type
-// is database.Store, an inline interface embedding it, or an interface
-// declared in this package that embeds it (transitively).
-func checkDepsStore(fset *token.FileSet, files []*ast.File) []string {
-	type ifaceDecl struct {
-		embeds []ast.Expr
-		alias  string
-	}
-	ifaces := map[string]ifaceDecl{}
-	type depsDecl struct {
-		st    *ast.StructType
-		alias string
-	}
-	var deps []depsDecl
-	for _, f := range files {
-		alias := databaseAlias(f)
-		ast.Inspect(f, func(n ast.Node) bool {
-			ts, ok := n.(*ast.TypeSpec)
-			if !ok {
-				return true
-			}
-			switch t := ts.Type.(type) {
-			case *ast.InterfaceType:
-				var embeds []ast.Expr
-				for _, m := range t.Methods.List {
-					if len(m.Names) == 0 {
-						embeds = append(embeds, m.Type)
-					}
-				}
-				ifaces[ts.Name.Name] = ifaceDecl{embeds: embeds, alias: alias}
-			case *ast.StructType:
-				if ts.Name.Name == "Deps" {
-					deps = append(deps, depsDecl{st: t, alias: alias})
-				}
-			}
-			return true
-		})
-	}
-
-	// embedsStore resolves an embedded type: database.Store itself, an inline
-	// interface, or a same-package interface name (visited guards cycles).
-	var embedsStore func(expr ast.Expr, alias string, visited map[string]bool) bool
-	embedsStore = func(expr ast.Expr, alias string, visited map[string]bool) bool {
-		switch e := expr.(type) {
-		case *ast.StarExpr:
-			return embedsStore(e.X, alias, visited)
-		case *ast.SelectorExpr:
-			return isDatabaseStore(e, alias)
-		case *ast.InterfaceType:
-			for _, m := range e.Methods.List {
-				if len(m.Names) == 0 && embedsStore(m.Type, alias, visited) {
-					return true
-				}
-			}
-		case *ast.Ident:
-			decl, ok := ifaces[e.Name]
-			if !ok || visited[e.Name] {
-				return false
-			}
-			visited[e.Name] = true
-			for _, em := range decl.embeds {
-				if embedsStore(em, decl.alias, visited) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-
-	var out []string
-	for _, d := range deps {
-		for _, field := range d.st.Fields.List {
-			if !embedsStore(field.Type, d.alias, map[string]bool{}) {
-				continue
-			}
-			names := make([]string, 0, len(field.Names))
-			for _, n := range field.Names {
-				names = append(names, n.Name)
-			}
-			if len(names) == 0 {
-				names = append(names, "(embedded)")
-			}
-			pos := fset.Position(field.Pos())
-			out = append(out, fmt.Sprintf("%s:%d: %s: Deps.%s is typed database.Store or an interface embedding it; declare the narrow interface the op calls",
-				pos.Filename, pos.Line, depsStoreRuleID, strings.Join(names, ", ")))
+	sort.Slice(found, func(i, j int) bool { return found[i].pos < found[j].pos })
+	failing := 0
+	for _, f := range found {
+		fmt.Fprintf(stdout, "%s: [%s] %s\n", f.pos, f.cat, f.msg)
+		if !warnings[f.cat] {
+			failing++
 		}
 	}
-	sort.Strings(out)
-	return out
+	cats := make([]string, 0, len(counts))
+	for c := range counts {
+		cats = append(cats, c)
+	}
+	sort.Strings(cats)
+	fmt.Fprintf(stderr, "oplint: %d package(s), %d finding(s), %d failing\n", len(pkgs), len(found), failing)
+	for _, c := range cats {
+		fmt.Fprintf(stderr, "oplint:   %s: %d\n", c, counts[c])
+	}
+	if failing > 0 {
+		return 1
+	}
+	return 0
 }

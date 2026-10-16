@@ -208,6 +208,7 @@ var layerOf = map[string]int{
 	"internal/maintenance/jobs":         4, // family: jobs
 	"internal/metabatch":                4, // computed: max of imports=4, floored at 3
 	"internal/operations/registry":      4, // table: jobs
+	"internal/opscatalog":               4, // computed: max of imports=4 (registry, internal/plugins/*); the one list of op bundles (05-PR7)
 	"internal/plugins":                  4, // family: internal/plugins/* is jobs
 	"internal/plugins/acoustid":         4, // family: internal/plugins/* is jobs
 	"internal/plugins/dedup":            4, // family: internal/plugins/* is jobs

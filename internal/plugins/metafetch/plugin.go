@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -12,7 +12,8 @@
 // READ-ONLY scoring calibration harness (see calibrate_scoring.go). The
 // package deliberately mirrors internal/plugins/dedup's structure — a thin
 // Plugin wrapper, a register.go that self-registers via serviceregistry +
-// PostInit, and a blank import in internal/plugins/plugins.go — rather than
+// PostInit, and an entry in internal/opscatalog/catalog.go (until 05-PR7, a
+// blank import in internal/plugins/plugins.go) — rather than
 // inventing a new op framework.
 package metafetch
 

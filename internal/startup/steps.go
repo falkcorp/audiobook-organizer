@@ -1,7 +1,7 @@
 // file: internal/startup/steps.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b4c26097-4214-45ff-a1a8-d434f6b64fb1
-// last-edited: 2026-10-10
+// last-edited: 2026-10-16
 
 // Package startup holds the one reviewed table that says, for every step of
 // server startup, whether its failure stops the process (Fatal) or leaves the
@@ -85,6 +85,7 @@ const (
 //   - config.Validate:             (*config.Config).Validate, internal/config/config.go:3510
 //   - opRegistrationGate:          internal/server/server_lifecycle.go (*Server).opRegistrationGate
 //   - container.Start:             internal/server/server_lifecycle.go (*Server).Start
+//   - opCatalogGate:               internal/server/server_lifecycle.go (*Server).opCatalogGate (05-PR7)
 //   - searchindex:                 search.(*IndexService).Start, internal/search/register.go:41 (logs and leaves Index() nil)
 //   - http:                        internal/server/server_lifecycle.go (*Server).configureAndStartHTTP
 var Table = []Step{
@@ -106,6 +107,8 @@ var Table = []Step{
 		Reason: "a hole in the operations registry makes ops vanish silently (existing behaviour)"},
 	{Name: "container.Start", Class: Fatal,
 		Reason: "service start failures roll back the started services (existing behaviour)"},
+	{Name: "opCatalogGate", Class: Fatal,
+		Reason: "an invalid op catalog (opscatalog.ValidateCatalog) or an op-ID ledger line that resolves to no def, alias or tombstone is a rename without an alias; serving would strand every stored row that carries it"},
 	{Name: "searchindex", Class: Degraded, Token: TokenSearchIndex,
 		Reason: "the server already runs without Bleve; search falls back, nothing is written wrong"},
 	{Name: "http", Class: Fatal,

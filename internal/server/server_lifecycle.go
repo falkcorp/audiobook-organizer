@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.45.3
+// version: 4.46.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package server
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/opscatalog"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -67,6 +68,39 @@ func (s *Server) opRegistrationGate() error {
 	}
 	return fmt.Errorf("operation registration failed for %d op(s), refusing to start: %w",
 		len(s.opRegistrationErrs), errors.Join(s.opRegistrationErrs...))
+}
+
+// opCatalogGate is the startup op-catalog check (05-PR7). It runs after
+// container.Start, because the service-registry plugins register their ops
+// from PostInit and opRegistrationGate, which runs first, cannot see them.
+//
+// It validates the whole live catalog (every v2 def wrapped by
+// registry.FromV2, every native def as registered) with
+// opscatalog.ValidateCatalog and resolves every line of the embedded op-ID
+// ledger. A ledger ID resolves when it is a live def or alias, a def or
+// FormerID of a plugin's static OperationDefs() list, a native bundle def
+// built with zero Deps, or a tombstone. The static lists are what let a
+// correctly configured server with no Deluge client (so no Deluge ops in its
+// live registry) start; an ID in none of them is a renamed op without an
+// alias, and the server refuses to start rather than strand every stored row
+// that carries it.
+func (s *Server) opCatalogGate() error {
+	return s.checkOpCatalog(opscatalog.ParseLedger(embeddedOpLedger))
+}
+
+// checkOpCatalog is opCatalogGate with the ledger as a parameter, so a test
+// can inject one.
+func (s *Server) checkOpCatalog(ledger []string) error {
+	if s.opRegistry == nil {
+		return errors.New("op catalog check: no operations registry, refusing to start")
+	}
+	reg := s.opRegistry
+	u := opscatalog.BuildUniverse(reg.ActiveDefs(), reg.Aliases(),
+		opscatalog.StaticPluginDefs(), opscatalog.Bundles(opscatalog.Deps{}))
+	if err := opscatalog.ValidateCatalog(reg.Catalog(), u, ledger); err != nil {
+		return fmt.Errorf("op catalog check failed, refusing to start: %w", err)
+	}
+	return nil
 }
 
 // startSearchIndexing switches search indexing live once the Bleve index is
@@ -249,6 +283,13 @@ func (s *Server) Start(cfg ServerConfig) error {
 			s.flushDeferredActivity()
 			return err
 		}
+	}
+
+	// The second registry gate: the whole catalog and the op-ID ledger,
+	// once PostInit has registered the service-registry plugins' ops.
+	if err := steps.Run("opCatalogGate", s.opCatalogGate); err != nil {
+		s.flushDeferredActivity()
+		return err
 	}
 
 	// Delete what the removed iTunes write-back left in the store (its
