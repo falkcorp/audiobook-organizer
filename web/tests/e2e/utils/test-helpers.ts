@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.21.1
+// version: 2.21.2
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 import { Page } from '@playwright/test';
 
@@ -268,9 +268,9 @@ export interface MockApiOptions {
   systemStatus?: Record<string, unknown>;
   authorDedup?: { groups: MockAuthorDedupGroup[]; needs_refresh?: boolean };
   seriesDedup?: { groups: MockSeriesDupGroup[]; total_series?: number };
-  /** Rows for GET /dedup/stats — the Dedup page fetches this on mount. */
+  /** Rows for GET /dedup/stats — the Duplicates lane of /review fetches this on mount. */
   dedupStats?: Array<{ entity_type: string; layer: string; status: string; count: number }>;
-  /** Rows for GET /dedup/candidates — also fetched on mount by the Dedup page. */
+  /** Rows for GET /dedup/candidates — also fetched on mount by the Duplicates lane. */
   dedupCandidates?: unknown[];
   aiBackendsStatus?: {
     embedding_mode?: string;
@@ -937,12 +937,10 @@ export async function setupMockApiRoutes(
       }));
     }
 
-    // Page-level data for the Dedup page (pages/BookDedup.tsx). These are NOT
-    // optional extras: the page fetches both on mount, above the tab content,
-    // so leaving them unhandled meant the page never rendered and every tab —
-    // including Authors, whose own endpoint was mocked correctly — failed with
-    // "element(s) not found". They were logged 27 times per run as
-    // "Unhandled endpoint" and that warning was the only visible symptom.
+    // Lane-level data for the Duplicates lane of /review. These are NOT
+    // optional extras: the lane fetches both on mount, so leaving them
+    // unhandled logs an "Unhandled endpoint" warning on every run and can
+    // leave the lane without its rail counts.
     if (pathname === '/api/v1/dedup/stats' && method === 'GET') {
       return route.fulfill(jsonResponse({ stats: mockState.dedupStats ?? [] }));
     }

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.182.0
+// version: 2.183.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -2087,24 +2087,9 @@ export async function resolveProductionAuthor(authorId: number): Promise<Operati
 }
 
 // Book dedup — uses existing /audiobooks/duplicates endpoint which returns Book[][] groups
-export interface DuplicatesResponse {
-  groups: Book[][];
-  group_count: number;
-  duplicate_count: number;
-}
-
 export interface MergeBooksResult {
   merged: number;
   errors: string[];
-}
-
-export async function getBookDuplicates(): Promise<DuplicatesResponse> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch book duplicates');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 // linkBooks links a set of books into one version group (no files move; the
@@ -2165,78 +2150,6 @@ export async function combineBooks(
   }
   const body = await response.json();
   return body.data ?? body;
-}
-
-// Book dedup scan — advanced duplicate detection with confidence levels
-export interface BookDedupGroup {
-  books: Book[];
-  confidence: 'high' | 'medium' | 'low';
-  reason: string;
-  group_key: string;
-}
-
-export interface BookDedupScanResponse {
-  groups: BookDedupGroup[];
-  group_count: number;
-  duplicate_count: number;
-  needs_refresh?: boolean;
-}
-
-export async function getBookDedupScanResults(): Promise<BookDedupScanResponse> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/scan-results`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch book dedup scan results');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function scanBookDuplicates(): Promise<Operation> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/scan`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to start book dedup scan');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-// linkBookDuplicatesAsVersions links a group of duplicate books into a
-// version group. Renamed from mergeBookDuplicatesAsVersions (naming-audit
-// class "merge vs link verbs",
-// docs/audits/2026-09-25-interface-naming-consistency.md class 2).
-export async function linkBookDuplicatesAsVersions(
-  bookIds: string[]
-): Promise<{ message: string; version_group_id: string; primary_id: string }> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/link`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ book_ids: bookIds }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to link book duplicates as versions');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-// rejectBookDuplicateGroup marks a book duplicate group as not-duplicates.
-// Renamed from dismissBookDuplicateGroup (naming-audit class "dismiss vs
-// reject vs undo",
-// docs/audits/2026-09-25-interface-naming-consistency.md class 3) to match
-// the review-queue/metadata-candidate "reject" vocabulary.
-export async function rejectBookDuplicateGroup(groupKey: string): Promise<{ message: string }> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/duplicates/reject`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ group_key: groupKey }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to reject duplicate group');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 // Series
@@ -6647,19 +6560,6 @@ export interface SplitBookMergeResult {
   [key: string]: unknown;
 }
 
-export interface BulkSplitBookMergeRequest {
-  candidate_ids: string[];
-  keep_ids?: Record<string, string>;
-  /** Defaults to true server-side; pass false only after explicit review. */
-  dry_run?: boolean;
-}
-
-export interface BulkSplitBookMergeResponse {
-  op_id: string;
-  dry_run: boolean;
-  candidate_count: number;
-}
-
 // Trigger the split-book backfill scan (dedup.split-book-scan op).
 // Backend returns {op_id: "..."} — normalized to an Operation-shaped
 // object so the caller can drop it into useOperationsStore.startPolling.
@@ -6710,24 +6610,6 @@ export async function mergeSplitBookCandidate(
   }
   const responseData = await response.json();
   return responseData.data;
-}
-
-// Queue one preflighted batch from reviewed, persisted candidate IDs. This
-// helper intentionally does not accept raw book IDs: candidate generation and
-// destructive repair must remain separate workflows.
-export async function queueBulkSplitBookMerge(
-  request: BulkSplitBookMergeRequest
-): Promise<BulkSplitBookMergeResponse> {
-  const response = await apiFetch(`${API_BASE}/dedup/split-book-candidates/bulk-merge`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to queue split-book merge batch');
-  }
-  const responseData = await response.json();
-  return responseData.data as BulkSplitBookMergeResponse;
 }
 
 // The /dedup/scan, /dedup/scan-llm and /dedup/embed handlers answer
