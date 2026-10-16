@@ -1,5 +1,5 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
 // last-edited: 2026-10-15
 
@@ -280,4 +280,30 @@ func repeat64(n int, v int64) []int64 {
 		out[i] = v
 	}
 	return out
+}
+
+// The gate and the scorers read the runtime through GetBookFiles; the
+// estimate needs FileSize to survive that round trip. This is the production
+// path, not a hand-built row set.
+func TestBookRuntimeEstimateThroughTheStore(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	b, err := store.CreateBook(&Book{Title: "Estimate Probe", FilePath: "/lib/Estimate Probe/01.mp3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []*BookFile{
+		{ID: "e1", BookID: b.ID, FilePath: "/lib/Estimate Probe/01.mp3", Duration: 480, FileSize: 4_000_000},
+		{ID: "e2", BookID: b.ID, FilePath: "/lib/Estimate Probe/02.mp3", FileSize: 4_000_000},
+	}
+	if err := store.BatchUpsertBookFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := LoadBookRuntime(store, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up, ok := rt.EstimatedUpperSeconds(); !ok || up != 2880 {
+		t.Fatalf("upper = %d, %v from %+v; want 2880 through the store", up, ok, rt)
+	}
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: b3e6a1c8-9d24-4f57-8a06-1c2d3e4f5a61
-// last-edited: 2026-09-19
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -86,7 +86,7 @@ func TestEvaluateBook_AppliedRanksFirst(t *testing.T) {
 	book := &database.Book{ID: "b1", Title: "The Way of Kings", Duration: new(1000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 3)
-	ev, skip := evaluateBook(book, bookSec(book), []metafetch.MetadataCandidate{applied, distractor}, "auto", defaultSweepKnobs(), grid)
+	ev, skip := evaluateBook(book, bookRuntime(book), []metafetch.MetadataCandidate{applied, distractor}, "auto", defaultSweepKnobs(), grid)
 	if skip != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
@@ -111,7 +111,7 @@ func TestEvaluateBook_DurationDemotesApplied(t *testing.T) {
 	book := &database.Book{ID: "b2", Title: "Elantris", Duration: new(2000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 2)
-	ev, skip := evaluateBook(book, bookSec(book), []metafetch.MetadataCandidate{applied, distractor}, "manual", defaultSweepKnobs(), grid)
+	ev, skip := evaluateBook(book, bookRuntime(book), []metafetch.MetadataCandidate{applied, distractor}, "manual", defaultSweepKnobs(), grid)
 	if skip != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
@@ -127,7 +127,7 @@ func TestEvaluateBook_Unmatchable(t *testing.T) {
 	book := &database.Book{ID: "b3", Title: "A", MetadataSourceHash: new("deadbeefdeadbeef")}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 2)
-	ev, skip := evaluateBook(book, bookSec(book), []metafetch.MetadataCandidate{c1, c2}, "auto", defaultSweepKnobs(), grid)
+	ev, skip := evaluateBook(book, bookRuntime(book), []metafetch.MetadataCandidate{c1, c2}, "auto", defaultSweepKnobs(), grid)
 	if skip != "unmatchable" {
 		t.Fatalf("skip = %q, want unmatchable", skip)
 	}
@@ -319,9 +319,45 @@ func TestRunCalibrateScoring_Race(t *testing.T) {
 	}
 }
 
-// bookSec is the runtime a test book with no file rows gets from the
+// bookRuntime is the runtime a test book with no file rows gets from the
 // canonical function (its Book.Duration via the single-file fallback).
-func bookSec(b *database.Book) int {
-	sec, _ := database.ComputeBookRuntime(b, nil).KnownSeconds()
-	return sec
+func bookRuntime(b *database.Book) database.BookRuntime {
+	return database.ComputeBookRuntime(b, nil)
+}
+
+// A candidate longer than a PARTIAL runtime's size-derived upper bound is
+// ranked below one that fits, as production scoring does; without a bound
+// (a file size missing) the two tie, so the applied one keeps rank 1.
+func TestEvaluateBook_PartialRuntimeUpperBoundDemotesTooLongCandidate(t *testing.T) {
+	long := metafetch.MetadataCandidate{Title: "The Way of Kings", Author: "Sanderson", Source: "audible", ASIN: "B00LONG001", DurationSec: 14*3600 + 42*60, CoverURL: "http://c"}
+	fits := metafetch.MetadataCandidate{Title: "The Way of Kings", Author: "Sanderson", Source: "audible", ASIN: "B00FITS001", DurationSec: 1000, CoverURL: "http://c"}
+	hash := candidateSourceHash(long)
+	book := &database.Book{ID: "b1", Title: "The Way of Kings", MetadataSourceHash: &hash}
+	files := []database.BookFile{
+		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: 480},
+		{ID: "f2", BookID: "b1", FileSize: 4_000_000},
+	}
+	grid := buildSweepGrid(defaultSweepKnobs(), 3)
+
+	rt := database.ComputeBookRuntime(book, files)
+	if _, ok := rt.EstimatedUpperSeconds(); !ok {
+		t.Fatalf("fixture: no upper bound for %+v", rt)
+	}
+	ev, skip := evaluateBook(book, rt, []metafetch.MetadataCandidate{long, fits}, "auto", defaultSweepKnobs(), grid)
+	if skip != "" {
+		t.Fatalf("unexpected skip %q", skip)
+	}
+	if ev.currentRank != 2 {
+		t.Fatalf("applied (too-long) candidate rank = %d, want 2 under the partial upper bound", ev.currentRank)
+	}
+
+	files[1].FileSize = 0
+	rt = database.ComputeBookRuntime(book, files)
+	ev, skip = evaluateBook(book, rt, []metafetch.MetadataCandidate{long, fits}, "auto", defaultSweepKnobs(), grid)
+	if skip != "" {
+		t.Fatalf("unexpected skip %q", skip)
+	}
+	if ev.currentRank != 1 {
+		t.Fatalf("no bound: applied candidate rank = %d, want 1 (tie)", ev.currentRank)
+	}
 }
