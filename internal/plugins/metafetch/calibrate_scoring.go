@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
-// last-edited: 2026-09-19
+// last-edited: 2026-10-15
 
 // Package metafetch — op metafetch.calibrate-scoring (INIT-3-T1).
 //
@@ -65,6 +65,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"runtime"
 	"sort"
@@ -480,7 +481,7 @@ func transcriptionBoost(score float64, f candFields, th transcriptionHints, k sw
 // book under knobs k. Composition order (harness-defined, documented in the
 // package comment): core (pinned) → F1 floor → duration → transcription →
 // series-number. Every swept knob participates so a sweep moves ranks.
-func rankScore(f candFields, book *database.Book, runtimeSec int, searchWords map[string]bool, hints transcriptionHints, k sweepKnobs) float64 {
+func rankScore(f candFields, book *database.Book, rt database.BookRuntime, searchWords map[string]bool, hints transcriptionHints, k sweepKnobs) float64 {
 	score := scoreCore(f, searchWords, k)
 	if score < k.F1MinScore {
 		// Below the F1 floor a candidate is disqualified (mirrors the min-score
@@ -490,9 +491,13 @@ func rankScore(f candFields, book *database.Book, runtimeSec int, searchWords ma
 
 	// Duration: multiplicative tier multiplier plus the additive tier Score,
 	// scaled to the base-score magnitude so both DurationTier knobs matter.
-	// runtimeSec is the book's canonical runtime when complete, else 0
-	// (unknown) — exactly what production scoring compares (bookRuntimeSec).
-	bookDur := runtimeSec
+	// The book's canonical runtime compares as a total only when complete,
+	// else it is unknown -- exactly what production scoring compares
+	// (bookRuntimeSec). A PARTIAL runtime still bounds the total from above by
+	// the files' sizes (rt.EstimatedUpperSeconds), and production scores a
+	// candidate beyond that bound as a >100% mismatch (localRuntime.multiplier
+	// in internal/metafetch), so this does too.
+	bookDur, _ := rt.KnownSeconds()
 	if bookDur > 0 && f.DurationSec > 0 {
 		delta := bookDur - f.DurationSec
 		if delta < 0 {
@@ -500,6 +505,9 @@ func rankScore(f candFields, book *database.Book, runtimeSec int, searchWords ma
 		}
 		ratio := float64(delta) / float64(bookDur)
 		mult, addScore := durationTierValues(ratio, k)
+		score = score*mult + addScore/100.0
+	} else if upper, ok := rt.EstimatedUpperSeconds(); ok && f.DurationSec > upper {
+		mult, addScore := durationTierValues(math.Inf(1), k)
 		score = score*mult + addScore/100.0
 	}
 
@@ -729,7 +737,7 @@ type bookEval struct {
 // Pure aside from reading nothing mutable — all inputs are values/read-only.
 func evaluateBook(
 	book *database.Book,
-	runtimeSec int,
+	rt database.BookRuntime,
 	cands []metafetch.MetadataCandidate,
 	origin string,
 	current sweepKnobs,
@@ -758,13 +766,13 @@ func evaluateBook(
 	}
 
 	rankUnder := func(k sweepKnobs) int {
-		appliedScore := rankScore(fields[appliedIdx], book, runtimeSec, searchWords, hints, k)
+		appliedScore := rankScore(fields[appliedIdx], book, rt, searchWords, hints, k)
 		strictlyBetter := 0
 		for i := range fields {
 			if i == appliedIdx {
 				continue
 			}
-			if rankScore(fields[i], book, runtimeSec, searchWords, hints, k) > appliedScore {
+			if rankScore(fields[i], book, rt, searchWords, hints, k) > appliedScore {
 				strictlyBetter++
 			}
 		}
@@ -887,10 +895,10 @@ func emptySweep(grid []sweepConfig, steps int) []knobSweep {
 // pooled loop needs, so all store I/O happens on the enumerating goroutine and
 // the pooled workers touch only in-memory values.
 type appliedBook struct {
-	book       *database.Book
-	runtimeSec int // canonical runtime when complete, else 0 (unknown)
-	cands      []metafetch.MetadataCandidate
-	origin     string
+	book    *database.Book
+	runtime database.BookRuntime // canonical runtime; scoring reads its total only when complete, and a partial one's upper bound
+	cands   []metafetch.MetadataCandidate
+	origin  string
 }
 
 // runCalibrateScoring implements the op. READ-ONLY: it enumerates books, reads
@@ -994,12 +1002,11 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 			// other store read (see appliedBook). A read error leaves it
 			// unknown (0), never Book.Duration.
 			rt, _ := database.LoadBookRuntime(p.store, &bookCopy)
-			runtimeSec, _ := rt.KnownSeconds()
 			work = append(work, appliedBook{
-				book:       &bookCopy,
-				runtimeSec: runtimeSec,
-				cands:      cands,
-				origin:     p.applyOrigin(&bookCopy),
+				book:    &bookCopy,
+				runtime: rt,
+				cands:   cands,
+				origin:  p.applyOrigin(&bookCopy),
 			})
 			if sampleLimit > 0 && len(work) >= sampleLimit {
 				break
@@ -1029,7 +1036,7 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 	evals := make([]*bookEval, 0, sampleSize)
 
 	err := registry.RunItems(ctx, reporter, work, func(_ context.Context, item appliedBook) error {
-		ev, skip := evaluateBook(item.book, item.runtimeSec, item.cands, item.origin, current, grid)
+		ev, skip := evaluateBook(item.book, item.runtime, item.cands, item.origin, current, grid)
 		if skip != "" {
 			countSkip(skip)
 			return nil
