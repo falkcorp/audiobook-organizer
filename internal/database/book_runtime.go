@@ -1,5 +1,5 @@
 // file: internal/database/book_runtime.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 64a8ba17-7539-4be1-a2f7-1ee0f0e0cc44
 // last-edited: 2026-10-15
 
@@ -122,9 +122,32 @@ func (r BookRuntime) KnownSeconds() (int, bool) {
 // measured sample can make the true runtime several times the estimate, and
 // the estimate exists to rule out only a candidate that is absurdly long for
 // the bytes on disk (a 14 h candidate for 8 MB), never to second-guess a
-// plausible one. 3x keeps a 10 h book whose measured chapters happen to be 2x
-// denser than the rest inside the bound.
+// plausible one. The factor alone is not enough when the measured sample is
+// much denser than the rest of the book (see PartialMinBytesPerSecond).
 const PartialUpperFactor = 3
+
+// PartialMinBytesPerSecond is the physical floor under the upper bound: no
+// audiobook is stored below 1000 bytes per second (8 kbps), so TotalBytes /
+// 1000 is a runtime the files cannot exceed whatever the measured sample
+// looked like. It is what keeps a sample that is NOT representative -- a short
+// intro file, or two 128 kbps parts of a book whose other 18 are 32 kbps, or
+// per-file cover art inflating the measured bytes-per-second -- from
+// extrapolating to a bound below the book's real length. The factor of 3 over
+// the estimate still tightens the bound when the sample is representative.
+const PartialMinBytesPerSecond = 1000
+
+// maxEstimatedSeconds caps the estimate and the bound so a huge size over a
+// tiny measured sample converts to an int without overflow.
+const maxEstimatedSeconds = math.MaxInt32
+
+// clampSeconds converts a positive float runtime to int seconds, saturating at
+// maxEstimatedSeconds.
+func clampSeconds(v float64) int {
+	if v >= maxEstimatedSeconds {
+		return maxEstimatedSeconds
+	}
+	return int(math.Round(v))
+}
 
 // EstimatedSeconds extrapolates a PARTIAL runtime to the whole book: the
 // measured files' bytes-per-second applied to the total size of every counted
@@ -136,20 +159,24 @@ func (r BookRuntime) EstimatedSeconds() (int, bool) {
 	if !r.Partial() || !r.SizesComplete || r.TotalBytes <= 0 || r.RateBytes <= 0 || r.RateSeconds <= 0 {
 		return 0, false
 	}
-	est := int(math.Round(float64(r.TotalBytes) * float64(r.RateSeconds) / float64(r.RateBytes)))
+	est := clampSeconds(float64(r.TotalBytes) * float64(r.RateSeconds) / float64(r.RateBytes))
 	return max(est, r.Seconds), true
 }
 
 // EstimatedUpperSeconds is the conservative upper bound a candidate runtime is
-// compared against: EstimatedSeconds times PartialUpperFactor. EstimatedSeconds
-// is already floored at the known lower bound, so the upper bound is too. A candidate longer than this is longer than the files
-// on disk can plausibly hold; one at or below it proves nothing.
+// compared against: the larger of EstimatedSeconds times PartialUpperFactor and
+// the physical floor TotalBytes / PartialMinBytesPerSecond. EstimatedSeconds is
+// already floored at the known lower bound, so the upper bound is too. A
+// candidate longer than this is longer than the files on disk can hold; one at
+// or below it proves nothing.
 func (r BookRuntime) EstimatedUpperSeconds() (int, bool) {
 	est, ok := r.EstimatedSeconds()
 	if !ok {
 		return 0, false
 	}
-	return est * PartialUpperFactor, true
+	scaled := float64(est) * PartialUpperFactor
+	physical := float64(r.TotalBytes) / PartialMinBytesPerSecond
+	return clampSeconds(max(scaled, physical)), true
 }
 
 // Status is a one-word description for logs and UI: "complete", "partial",
