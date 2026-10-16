@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -132,7 +132,7 @@ func (mfs *Service) GetCachedCandidates(bookID string) (*MetadataCandidateCache,
 			return nil, false, berr
 		}
 		if book != nil {
-			filtered, ferr := mfs.filterLegacyForBook(entry, book, mfs.db, mfs.bookRuntimeSec(book))
+			filtered, ferr := mfs.filterLegacyForBook(entry, book, mfs.db, mfs.bookRuntime(book))
 			if ferr != nil {
 				return nil, false, ferr
 			}
@@ -168,8 +168,7 @@ func (mfs *Service) GetCachedCandidatesPreloaded(bookID string, book *database.B
 		if rerr != nil {
 			cachePreloadLog.Warn("book files unreadable; runtime treated as unknown: book_id=%s err=%v", book.ID, rerr)
 		}
-		sec, _ := rt.KnownSeconds()
-		filtered, ferr := mfs.filterLegacyForBook(entry, book, authors, sec)
+		filtered, ferr := mfs.filterLegacyForBook(entry, book, authors, localRuntimeOf(rt))
 		if ferr != nil {
 			return nil, false, ferr
 		}
@@ -182,8 +181,8 @@ var cachePreloadLog = logger.New("metafetch.cache")
 
 // filterLegacyForBook is the GetCachedCandidates legacy filter for a resolved
 // book: the search author hint is the book's first live author, read through
-// authors, and runtimeSec is the book's known runtime (bookRuntimeSec).
-func (mfs *Service) filterLegacyForBook(entry *MetadataCandidateCache, book *database.Book, authors database.BookAuthorReader, runtimeSec int) (*MetadataCandidateCache, error) {
+// authors, and runtime is the book's local runtime (bookRuntime).
+func (mfs *Service) filterLegacyForBook(entry *MetadataCandidateCache, book *database.Book, authors database.BookAuthorReader, runtime localRuntime) (*MetadataCandidateCache, error) {
 	live, err := database.LiveBookAuthorNames(authors, book)
 	if err != nil {
 		return nil, err
@@ -192,7 +191,7 @@ func (mfs *Service) filterLegacyForBook(entry *MetadataCandidateCache, book *dat
 	if len(live) > 0 {
 		author = SearchAuthorHint(live[0])
 	}
-	return mfs.filterLegacyCandidatesRuntime(entry, book, book.Title, author, runtimeSec), nil
+	return mfs.filterLegacyCandidatesRuntime(entry, book, book.Title, author, runtime), nil
 }
 
 // filterLegacyCandidates returns entry with its candidates filtered by this
@@ -214,17 +213,17 @@ func (mfs *Service) filterLegacyCandidates(entry *MetadataCandidateCache, book *
 	if entry == nil || len(entry.Candidates) == 0 || isCurrentFingerprint(entry.SearchFingerprint) {
 		return entry
 	}
-	return mfs.filterLegacyCandidatesRuntime(entry, book, query, author, mfs.bookRuntimeSec(book))
+	return mfs.filterLegacyCandidatesRuntime(entry, book, query, author, mfs.bookRuntime(book))
 }
 
 // filterLegacyCandidatesRuntime is filterLegacyCandidates with the book's
 // runtime already known, for a caller that holds the book's file rows.
-func (mfs *Service) filterLegacyCandidatesRuntime(entry *MetadataCandidateCache, book *database.Book, query, author string, runtimeSec int) *MetadataCandidateCache {
+func (mfs *Service) filterLegacyCandidatesRuntime(entry *MetadataCandidateCache, book *database.Book, query, author string, runtime localRuntime) *MetadataCandidateCache {
 	if entry == nil || len(entry.Candidates) == 0 || isCurrentFingerprint(entry.SearchFingerprint) {
 		return entry
 	}
 	in := mfs.resolveSearchInputs(book, query, author, "")
-	c := newStrongCriteria(in.parsed, in.title, in.literal, in.asin, in.author, runtimeSec)
+	c := newStrongCriteria(in.parsed, in.title, in.literal, in.asin, in.author, runtime)
 	cp := *entry
 	cp.Candidates = c.filterCarried(entry.Candidates)
 	return &cp

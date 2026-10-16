@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-15
 
@@ -1201,7 +1201,6 @@ func (mfs *Service) searchMetadataForBook(
 	// which includes a partial runtime (see bookRuntimeSec); bookRuntime also
 	// carries the upper bound a partial runtime's file sizes allow.
 	bookRuntime := mfs.bookRuntime(book)
-	bookDurationSec := bookRuntime.Sec
 	th := hintsFromBook(book)
 
 	// The ASIN to look up directly: the whole query is one, or the query
@@ -1228,7 +1227,7 @@ func (mfs *Service) searchMetadataForBook(
 	variants := buildQueryVariants(in.parsed, in.literal, in.rawQuery, searchAuthor, bookNarrator)
 	// "; "-separated, so sharesPerson can tell the names apart.
 	people := strings.Trim(searchAuthor+"; "+bookNarrator, "; ")
-	strong := newStrongCriteria(in.parsed, searchTitle, in.literal, asinToLookup, searchAuthor, bookDurationSec)
+	strong := newStrongCriteria(in.parsed, searchTitle, in.literal, asinToLookup, searchAuthor, bookRuntime)
 	fp := fanoutParams{
 		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
 	}

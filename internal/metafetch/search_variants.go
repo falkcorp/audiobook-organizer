@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-06
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -838,8 +838,11 @@ type strongCriteria struct {
 	// authors is the book's author credit ("; "-separated names). Only an
 	// author match satisfies the person leg (authorAgrees); a narrator in
 	// common never does on its own.
-	authors    string
-	bookDur    int
+	authors string
+	// runtime is the book's local runtime: its complete total (Sec, 0 =
+	// unknown) or, for a partial one, the upper bound its file sizes allow.
+	// A candidate beyond that bound is no strong match.
+	runtime    localRuntime
 	slotSeries string
 	slotPos    string
 	// position is the series position read from the title (normPosition);
@@ -872,8 +875,8 @@ type strongCriteria struct {
 
 // newStrongCriteria builds the criteria for one search from its parse, the
 // title it searches by and literal, the title as written.
-func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookDur int) strongCriteria {
-	c := strongCriteria{asin: asin, authors: author, bookDur: bookDur, position: normPosition(p.Position),
+func newStrongCriteria(p parsedTitle, title, literal, asin, author string, runtime localRuntime) strongCriteria {
+	c := strongCriteria{asin: asin, authors: author, runtime: runtime, position: normPosition(p.Position),
 		bareSlot: p.BareSlot, nameIsTagline: &atomic.Bool{}}
 	if !p.Junk {
 		c.ownNums = titleNumbers(title)
@@ -995,7 +998,7 @@ func (c strongCriteria) positionConflicts(r metadata.BookMetadata) bool {
 	if titleOther && len(c.seriesWords) > 0 && coversWords(r.Title, c.seriesWords) {
 		return true
 	}
-	if c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance {
+	if c.runtime.Sec > 0 && r.DurationSec > 0 && durationDeltaRatio(c.runtime.Sec, r.DurationSec) <= positionOverrideTolerance {
 		return false
 	}
 	var other bool
@@ -1104,14 +1107,14 @@ func (c strongCriteria) titleAgrees(r metadata.BookMetadata) bool {
 }
 
 func (c strongCriteria) runtimeAgrees(r metadata.BookMetadata) bool {
-	return c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= strongRuntimeTolerance
+	return c.runtime.Sec > 0 && r.DurationSec > 0 && durationDeltaRatio(c.runtime.Sec, r.DurationSec) <= strongRuntimeTolerance
 }
 
 // runtimeExact reports whether r runs within positionOverrideTolerance of the
 // book: close enough to tell the book from a sibling of its series, which
 // strongRuntimeTolerance is not.
 func (c strongCriteria) runtimeExact(r metadata.BookMetadata) bool {
-	return c.bookDur > 0 && r.DurationSec > 0 && durationDeltaRatio(c.bookDur, r.DurationSec) <= positionOverrideTolerance
+	return c.runtime.Sec > 0 && r.DurationSec > 0 && durationDeltaRatio(c.runtime.Sec, r.DurationSec) <= positionOverrideTolerance
 }
 
 // ownASINAgrees reports whether r carries the book's own ASIN AND is this
@@ -1285,7 +1288,12 @@ func (c strongCriteria) matches(r metadata.BookMetadata) bool {
 	if c.positionConflicts(r) || c.explicitPositionConflicts(r) || !c.positionNamed(r) || !c.identifies(r) || !c.titleSubset(r) {
 		return false
 	}
-	return c.bookDur <= 0 || c.runtimeAgrees(r)
+	if c.runtime.exceedsUpper(r.DurationSec) {
+		// A partial runtime cannot confirm a match, but it can refute one: the
+		// files cannot hold this much audio.
+		return false
+	}
+	return c.runtime.Sec <= 0 || c.runtimeAgrees(r)
 }
 
 // identifies reports whether r's title names this book: the series slot when

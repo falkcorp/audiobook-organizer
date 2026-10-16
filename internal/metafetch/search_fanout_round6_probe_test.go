@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_round6_probe_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0c7e3a-91b4-4f26-8a1e-2c6b9f04d7e3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -62,7 +62,7 @@ func TestSearchFanoutProbe_NoPositionSiblingOwnASIN(t *testing.T) {
 			assert.Greater(t, src.callCount(), 1, "the stored sibling ASIN never stops the search")
 
 			p := parseSearchTitle(tc.book, tc.author, "")
-			c := newStrongCriteria(p, p.Title, tc.book, sibASIN, tc.author, 36000)
+			c := newStrongCriteria(p, p.Title, tc.book, sibASIN, tc.author, knownRuntime(36000))
 			assert.False(t, c.ownASINAgrees(sib))
 			right := metadata.BookMetadata{Title: tc.right, Author: tc.author, DurationSec: 36500, ASIN: sibASIN}
 			assert.True(t, c.ownASINAgrees(right), "the book itself under its ASIN still agrees")
@@ -76,7 +76,7 @@ func TestSearchFanoutProbe_NoPositionSiblingOwnASIN(t *testing.T) {
 func TestStrongCriteria_PositionNamed(t *testing.T) {
 	const book = "Rogue Ascension VIII"
 	p := parseSearchTitle(book, raAuthor, "")
-	c := newStrongCriteria(p, p.Title, book, "", raAuthor, 36000)
+	c := newStrongCriteria(p, p.Title, book, "", raAuthor, knownRuntime(36000))
 	for _, r := range []metadata.BookMetadata{
 		{Title: "Rogue Ascension", SeriesPosition: "8", DurationSec: 37000},
 		{Title: "Rogue Ascension 8", DurationSec: 37000},
@@ -94,14 +94,14 @@ func TestStrongCriteria_PositionNamed(t *testing.T) {
 
 	// No parsed position: the title's own numbers.
 	p = parseSearchTitle("The Final Four", "Some Author", "")
-	c = newStrongCriteria(p, p.Title, "The Final Four", "", "Some Author", 0)
+	c = newStrongCriteria(p, p.Title, "The Final Four", "", "Some Author", localRuntime{})
 	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "The Final Four"}))
 	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "The Final 4"}))
 	assert.False(t, c.positionNamed(metadata.BookMetadata{Title: "The Final"}))
 
 	const named = "Witcher 4: The Tower of the Swallow"
 	p = parseSearchTitle(named, "Andrzej Sapkowski", "")
-	c = newStrongCriteria(p, p.Title, named, "", "Andrzej Sapkowski", 36000)
+	c = newStrongCriteria(p, p.Title, named, "", "Andrzej Sapkowski", knownRuntime(36000))
 	assert.False(t, c.positionNamed(metadata.BookMetadata{Title: "The Tower of the Swallow", DurationSec: 40000}),
 		"the book's own name, with no position, is not enough: siblings can share a name (round 7, S1)")
 	assert.True(t, c.positionNamed(metadata.BookMetadata{Title: "The Tower of the Swallow", DurationSec: 36300}),
@@ -171,7 +171,7 @@ func TestParseSearchTitle_JunkTitleHasNoPosition(t *testing.T) {
 		p := parseSearchTitle(title, "Ann Author", "")
 		assert.Empty(t, p.Position, "%q", title)
 		assert.False(t, p.BareSlot, "%q", title)
-		c := newStrongCriteria(p, p.Title, title, "", "Ann Author", 0)
+		c := newStrongCriteria(p, p.Title, title, "", "Ann Author", localRuntime{})
 		assert.False(t, c.explicitPositionConflicts(metadata.BookMetadata{Title: "The Real Title", SeriesPosition: "3"}), "%q", title)
 	}
 	// Not junk: a real title keeps its position.

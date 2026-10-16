@@ -1,5 +1,5 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
 // last-edited: 2026-10-15
 
@@ -362,4 +362,41 @@ func TestPartialRuntime_NonRepresentativeSampleDoesNotPenaliseTheRightCandidate(
 			}
 		})
 	}
+}
+
+// A strong match stops the fan-out. With a partial runtime and no way to
+// confirm the runtime, an otherwise strong answer still stops it (as before),
+// but one longer than the files can hold is no strong match: asking goes on.
+func TestFanout_PartialRuntimeTooLongAnswerIsNotStrong(t *testing.T) {
+	run := func(t *testing.T, dur int, files []database.BookFile) int {
+		t.Helper()
+		audible := &fakeProvider{id: metadata.SourceIDAudible, name: "Audible", answer: func(title, author string) []metadata.BookMetadata {
+			return []metadata.BookMetadata{{Title: "Zeta Quest", Author: "Ann Writer", Narrator: "Bo Reader", DurationSec: dur, CoverURL: "c"}}
+		}}
+		svc := fanoutHarnessFiles(t, &database.Book{ID: "b1", Title: "Zeta Quest (Bo Reader)"}, files, audible)
+		_, err := svc.SearchMetadataForBookWithOptions("b1", "Zeta Quest (Bo Reader)", "Ann Writer", "", "", SearchOptions{})
+		require.NoError(t, err)
+		return audible.callCount()
+	}
+	assert.Equal(t, 1, run(t, 1000, ownerCaseFiles()), "inside the bound: strong, the fan-out stops")
+	assert.Greater(t, run(t, 14*3600+42*60, ownerCaseFiles()), 1, "beyond the bound: not strong, later variants are asked")
+
+	sizeless := ownerCaseFiles()
+	sizeless[1].FileSize = 0
+	assert.Equal(t, 1, run(t, 14*3600+42*60, sizeless), "no bound: behaves as before")
+}
+
+// strongCriteria.matches itself, through the carried runtime.
+func TestStrongCriteria_MatchesRefusesAnswerBeyondPartialBound(t *testing.T) {
+	p := parseSearchTitle("Zeta Quest", "Ann Writer", "")
+	long := metadata.BookMetadata{Title: "Zeta Quest", Author: "Ann Writer", Narrator: "Bo Reader", DurationSec: 14*3600 + 42*60}
+	fits := long
+	fits.DurationSec = 1000
+
+	partial := newStrongCriteria(p, p.Title, "Zeta Quest", "", "Ann Writer", runtimeOf(ownerCaseFiles()))
+	require.True(t, partial.matches(fits), "fixture: an answer inside the bound is strong")
+	assert.False(t, partial.matches(long))
+
+	none := newStrongCriteria(p, p.Title, "Zeta Quest", "", "Ann Writer", localRuntime{})
+	assert.True(t, none.matches(long), "no runtime at all: unchanged")
 }
