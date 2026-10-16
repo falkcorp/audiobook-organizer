@@ -1,5 +1,5 @@
 // file: internal/identification/item.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d14d647-d925-4db9-8df1-4aac425555bf
 // last-edited: 2026-10-16
 
@@ -103,6 +103,11 @@ func NewItem(d ItemDeps) ItemFunc {
 		// fetch: a reason recorded under it stops applying as soon as the
 		// book is retitled or re-credited.
 		fp := database.IdentQuestionFP(book)
+		// Checked again after the load: a run cancelled meanwhile must not
+		// start a provider fetch; the mark stays for the next run.
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		res := d.FetchOne(ctx, book)
 		if err := ctx.Err(); err != nil {
 			return "", err

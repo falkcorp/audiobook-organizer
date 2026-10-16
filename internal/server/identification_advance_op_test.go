@@ -1,5 +1,5 @@
 // file: internal/server/identification_advance_op_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e7a545a5-fab9-47d7-9f05-5851bcf6cdb8
 // last-edited: 2026-10-16
 
@@ -147,8 +147,12 @@ func TestAdvance_DrainsDirtySetUnderRestart(t *testing.T) {
 	if n := identDirtyCount(t, ps); n != 0 {
 		t.Fatalf("%d marks remain after the restarted run", n)
 	}
-	if calls > int64(total)+inflight || calls > total+workers {
-		t.Fatalf("FetchOne called %d times; bound %d + %d in flight", calls, total, inflight)
+	// The guaranteed bound is total + Concurrency: each worker can hold at
+	// most one item that passed Item's cancellation checks before cancel().
+	// The in-flight snapshot only counts fetches already running at that
+	// instant, so it is logged above, not asserted.
+	if calls > total+workers {
+		t.Fatalf("FetchOne called %d times; bound %d + %d workers", calls, total, workers)
 	}
 	if calls < total {
 		t.Fatalf("FetchOne called %d times for %d marks: work was lost", calls, total)
