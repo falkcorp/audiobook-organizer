@@ -1,5 +1,5 @@
 // file: internal/server/identification_advance_op_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e7a545a5-fab9-47d7-9f05-5851bcf6cdb8
 // last-edited: 2026-10-16
 
@@ -188,38 +188,28 @@ func TestAdvance_ReMarkDuringItemSurvives(t *testing.T) {
 	}
 }
 
-// The adapter passes RunItems an explicit Concurrency equal to
-// candidateFetchWorkers for the budget: for Audible's 8/s it is > 1. This
-// is the "sequential loop wearing a worker-pool API" guard: it records what
-// the real call site passes.
+// The options the adapter passes RunItems carry an explicit Concurrency equal
+// to candidateFetchWorkers for the budget: for Audible's 8/s it is > 1. This
+// is the "sequential loop wearing a worker-pool API" guard. That the call
+// site passes exactly these options is proven by
+// internal/plugins TestRunItemsCallsDeclareConcurrency, which traces the
+// direct RunItems call to identAdvanceRunOptions.
 func TestAdvance_RunItemsConcurrencySetExplicitly(t *testing.T) {
 	prevCfg := config.AppConfig.MetadataCandidateFetchWorkers
 	config.AppConfig.MetadataCandidateFetchWorkers = 0
 	t.Cleanup(func() { config.AppConfig.MetadataCandidateFetchWorkers = prevCfg })
 	budget := metafetch.SourcesBudget{RPS: 8, Burst: 8}
-	n := identificationAdvanceWorkers(budget)
-
-	var mu sync.Mutex
-	var seen []opsregistry.RunItemsOptions
-	prev := identAdvanceRunItems
-	identAdvanceRunItems = func(ctx context.Context, r opsregistry.Reporter, items []identification.Mark, fn func(context.Context, identification.Mark) error, opts ...opsregistry.RunItemsOptions) error {
-		mu.Lock()
-		seen = append(seen, opts...)
-		mu.Unlock()
-		return prev(ctx, r, items, fn, opts...)
-	}
-	t.Cleanup(func() { identAdvanceRunItems = prev })
 
 	ps := identTestStore(t)
-	markBooks(t, ps, 10)
 	cf := &countingFetch{}
-	if err := runIdentificationAdvance(context.Background(), &resumeRecorder{opID: "op-conc"}, testAdvance(ps, cf.fetch, n, nil), &identification.Tally{}); err != nil {
-		t.Fatal(err)
-	}
+	adv := testAdvance(ps, cf.fetch, identificationAdvanceWorkers(budget), nil)
+	page := []identification.Mark{{BookID: "book-a", Epoch: 1}, {BookID: "book-b", Epoch: 1}}
+	opts := identAdvanceRunOptions(adv, page, 0)
+
 	want := candidateFetchWorkers(budget, 0)
-	t.Logf("concurrency passed to RunItems: %d (candidateFetchWorkers for 8 rps = %d)", seen[0].Concurrency, want)
-	if len(seen) != 1 || seen[0].Concurrency <= 1 || seen[0].Concurrency != want {
-		t.Fatalf("RunItems options %+v; want Concurrency=%d (> 1)", seen, want)
+	t.Logf("concurrency passed to RunItems: %d (candidateFetchWorkers for 8 rps = %d)", opts.Concurrency, want)
+	if opts.Concurrency <= 1 || opts.Concurrency != want {
+		t.Fatalf("RunItems options %+v; want Concurrency=%d (> 1)", opts, want)
 	}
 }
 
