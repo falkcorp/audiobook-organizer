@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.13.0
+# version: 2.14.0
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-10-10
+# last-edited: 2026-10-16
 
 name: Frontend CI
 
@@ -61,30 +61,18 @@ jobs:
     name: Frontend Build and Test
     needs: frontend-config
     if: needs.frontend-config.outputs.has-frontend == 'true'
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@eae0c5a6bce08e99eb6a1ffac7420f18c0367b9a # main 2026-10-05 (github-common#369: force-all; schedule/dispatch run every present language)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@98a9b653a9e5c2fff6b0b4d59880dbb57956467d # github-common#376: go-test-timeout input
     with:
       go-version: '1.27.2'
       node-version: ${{ needs.frontend-config.outputs.node-version }}
       system-packages: 'libtag1-dev'
       coverage-threshold: '30'  # repo gate is 30% (coverage-check-short); reusable default of 80 is aspirational
-    # Go test budget: 10 minutes PER PACKAGE, and it cannot be raised from
-    # here. The reusable workflow's "Go CI" job runs the go-test command of
-    # falkcorp/gha-ci-workflow-helpers (the Python embedded in its action.yml,
-    # pinned 4b5f4d4 inside reusable-ci.yml), which is
-    # `go test -v -race -coverprofile=coverage.out ./...` with no -timeout, so
-    # Go's default 10m applies. A caller cannot pass env or GOFLAGS into a
-    # reusable workflow, and the workflow has no timeout input. Every other Go
-    # test run in this repo sets -timeout explicitly (Makefile and Woodpecker:
-    # 25m; Woodpecker's internal/database shards: 50m).
-    #
-    # So the fix for a package that outgrows it is to make it faster, not a
-    # flag: internal/plugins/maintenance hit it on 2026-10-06 (600.6s, run
-    # 37411545286; the last green run was 555s), and its fragment-fixer tests
-    # now run in parallel (their fixers read the root from deps.RootDir()
-    # instead of a swapped global). The
-    # durable fix is a go-test-timeout input upstream in github-common and
-    # gha-ci-workflow-helpers; nightly.yml calls the same workflow and has the
-    # same budget.
+      # Per test binary. Without it the go-test helper falls back to Go's 10m
+      # default, and internal/database alone runs 510-600s under -race here.
+      # 25m matches the Makefile and ci.yml. reusable-ci's Go CI job cap (60m)
+      # covers values up to 30m; above that it must be raised upstream first.
+      # nightly.yml passes the same value; keep them together.
+      go-test-timeout: '25m'
     secrets: inherit
 
   # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an

@@ -1,7 +1,7 @@
 # file: .github/workflows/nightly.yml
-# version: 1.4.0
+# version: 1.5.0
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-# last-edited: 2026-10-10
+# last-edited: 2026-10-16
 
 # Nightly full CI: property tests, coverage check, E2E, staticcheck.
 # Runs the complete reusable-ci.yml suite on a schedule.
@@ -28,7 +28,7 @@ permissions:
 jobs:
   full-ci:
     name: Full CI Suite
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@eae0c5a6bce08e99eb6a1ffac7420f18c0367b9a # main 2026-10-05 (github-common#369: force-all; schedule/dispatch run every present language)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@98a9b653a9e5c2fff6b0b4d59880dbb57956467d # github-common#376: go-test-timeout input
     with:
       go-version: '1.27.2'
       node-version: '26'
@@ -42,4 +42,6 @@ jobs:
       # every scheduled run until 2026-10-05. 'true' states the intent even
       # though reusable-ci's 'auto' default would also force on these events.
       force-all: 'true'
+      # Same per-test-binary timeout as frontend-ci.yml; see the comment there.
+      go-test-timeout: '25m'
     secrets: inherit
