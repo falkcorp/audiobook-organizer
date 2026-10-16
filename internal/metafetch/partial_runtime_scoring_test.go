@@ -1,7 +1,7 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package metafetch
 
@@ -414,3 +414,7 @@ func TestStrongCriteria_OwnASINBeyondPartialBoundIsNotStrong(t *testing.T) {
 	assert.False(t, c.ownASINAgrees(long))
 	assert.False(t, c.matches(long))
 }
+
+// knownRuntime is a localRuntime with a complete total (or 0 for unknown).
+// Test-only: production builds localRuntime through bookRuntime.
+func knownRuntime(sec int) localRuntime { return localRuntime{Sec: sec} }

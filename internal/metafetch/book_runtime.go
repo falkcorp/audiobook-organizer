@@ -1,7 +1,7 @@
 // file: internal/metafetch/book_runtime.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ebab5e13-aa16-4d7d-84e0-773a72bc717e
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 package metafetch
 
@@ -52,9 +52,6 @@ type localRuntime struct {
 	Sec     int
 	Partial partialBound
 }
-
-// knownRuntime is a localRuntime with a complete total (or 0 for unknown).
-func knownRuntime(sec int) localRuntime { return localRuntime{Sec: sec} }
 
 // bookRuntime is bookRuntimeSec plus the partial bound; see localRuntime.
 func (mfs *Service) bookRuntime(book *database.Book) localRuntime {
