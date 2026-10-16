@@ -61,7 +61,7 @@ jobs:
     name: Frontend Build and Test
     needs: frontend-config
     if: needs.frontend-config.outputs.has-frontend == 'true'
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@98a9b653a9e5c2fff6b0b4d59880dbb57956467d # github-common#376: go-test-timeout input
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@49028321ec682a0eda781494aa034bec5c83c15d # main 2026-10-16 (github-common#376: go-test-timeout input)
     with:
       go-version: '1.27.2'
       node-version: ${{ needs.frontend-config.outputs.node-version }}
