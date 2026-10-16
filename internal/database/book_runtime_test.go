@@ -1,5 +1,5 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
 // last-edited: 2026-10-15
 
@@ -8,6 +8,7 @@ package database
 import (
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -229,8 +230,8 @@ func TestBookRuntimeEstimate(t *testing.T) {
 		wantUpper int
 		wantOK    bool
 	}{
-		{"owner case: 2 files, one measured", ownerCase, 960, 2880, true},
-		{"10h book with 2 of 20 chapters measured", tenHour, 36000, 108000, true},
+		{"owner case: 2 files, one measured (physical floor 8 MB / 1000 B/s)", ownerCase, 960, 8000, true},
+		{"10h book with 2 of 20 chapters measured (floor 576 MB / 1000 B/s)", tenHour, 36000, 576000, true},
 		{"an unmeasured row without a size: no estimate", noSize, 0, 0, false},
 		{"the measured row has no size: no rate", measuredNoSize, 0, 0, false},
 		{"complete runtime has nothing to estimate", complete, 0, 0, false},
@@ -303,7 +304,91 @@ func TestBookRuntimeEstimateThroughTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if up, ok := rt.EstimatedUpperSeconds(); !ok || up != 2880 {
-		t.Fatalf("upper = %d, %v from %+v; want 2880 through the store", up, ok, rt)
+	if up, ok := rt.EstimatedUpperSeconds(); !ok || up != 8000 {
+		t.Fatalf("upper = %d, %v from %+v; want 8000 through the store", up, ok, rt)
+	}
+}
+
+// coverArtIntroBook: a 10 h 64 kbps book (8000 B/s) with 500 KB of cover art
+// embedded in every file; only the 25 s intro file is measured, so the
+// measured bytes-per-second (28000) is 3.5x the book's real one.
+func coverArtIntroBook() []BookFile {
+	files := []BookFile{{ID: "intro", FileSize: 25*8000 + 500_000, Duration: 25}}
+	for i := 0; i < 20; i++ {
+		files = append(files, BookFile{ID: fmt.Sprintf("ch%02d", i), FileSize: 1800*8000 + 500_000})
+	}
+	return files
+}
+
+// mixedEncodeBook: 2 measured 30 min parts at 128 kbps, 18 unmeasured 30 min
+// parts at 32 kbps; 10 h in all. The measured rate is 4x the rest.
+func mixedEncodeBook() []BookFile {
+	files := []BookFile{
+		{ID: "p0", FileSize: 1800 * 16000, Duration: 1800},
+		{ID: "p1", FileSize: 1800 * 16000, Duration: 1800},
+	}
+	for i := 0; i < 18; i++ {
+		files = append(files, BookFile{ID: fmt.Sprintf("q%02d", i), FileSize: 1800 * 4000})
+	}
+	return files
+}
+
+// A measured sample denser than the book (cover art in every file, a mix of
+// encodes) used to extrapolate to a bound below the book's real 10 h, so the
+// RIGHT 10 h candidate was penalised and blocked. The physical floor
+// (TotalBytes / PartialMinBytesPerSecond) keeps the bound above any runtime
+// the bytes can hold.
+func TestBookRuntimeUpperBoundNonRepresentativeSample(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		files     []BookFile
+		wantEst   int
+		wantUpper int
+	}{
+		{"cover art in every file, only the intro measured", coverArtIntroBook(), 10668, 298_700},
+		{"two dense parts measured, the rest 4x sparser", mixedEncodeBook(), 11700, 187_200},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := ComputeBookRuntime(nil, c.files)
+			est, _ := rt.EstimatedSeconds()
+			up, ok := rt.EstimatedUpperSeconds()
+			if !ok || est != c.wantEst || up != c.wantUpper {
+				t.Fatalf("estimate/upper = %d/%d ok=%v, want %d/%d", est, up, ok, c.wantEst, c.wantUpper)
+			}
+			if up < 36000 {
+				t.Fatalf("upper %d is below the book's real 36000 s", up)
+			}
+			if est*PartialUpperFactor >= 36000 {
+				t.Fatalf("fixture: the factor alone (%d) must NOT cover 36000, or this test proves nothing", est*PartialUpperFactor)
+			}
+		})
+	}
+}
+
+// A huge size over a tiny sample must saturate, not wrap: int(+Inf) and
+// out-of-range float conversions are MinInt64 on amd64.
+func TestBookRuntimeEstimateSaturates(t *testing.T) {
+	rt := BookRuntime{
+		Seconds: 1, Source: RuntimeSourceFiles, FilesCounted: 2, FilesKnown: 1,
+		SizesComplete: true, TotalBytes: 1 << 62, RateBytes: 1, RateSeconds: 1 << 30,
+	}
+	est, ok := rt.EstimatedSeconds()
+	up, uok := rt.EstimatedUpperSeconds()
+	if !ok || !uok || est != math.MaxInt32 || up != math.MaxInt32 {
+		t.Fatalf("estimate/upper = %d/%d, want both saturated at %d", est, up, math.MaxInt32)
+	}
+}
+
+// The x3 factor, not the floor, sets the bound when the measured sample is so
+// sparse (2000 B/s = 16 kbps) that est x3 exceeds TotalBytes / 1000.
+func TestBookRuntimeUpperBoundFactorDominatesForSparseSample(t *testing.T) {
+	rt := ComputeBookRuntime(nil, []BookFile{
+		{ID: "a", FileSize: 2_000_000, Duration: 1000},
+		{ID: "b", FileSize: 2_000_000},
+	})
+	est, _ := rt.EstimatedSeconds()
+	up, ok := rt.EstimatedUpperSeconds()
+	if !ok || est != 2000 || up != 6000 {
+		t.Fatalf("estimate/upper = %d/%d ok=%v, want 2000/6000 (factor 3 over the floor 4000)", est, up, ok)
 	}
 }
