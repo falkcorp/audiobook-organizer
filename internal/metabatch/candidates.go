@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -50,6 +50,11 @@ type CandidateBookInfo struct {
 	// RuntimeLowerBoundSec is the known-file sum of a PARTIAL runtime: a
 	// lower bound for display, never a total to compare.
 	RuntimeLowerBoundSec int `json:"runtime_lower_bound_seconds,omitempty"`
+	// RuntimeUpperBoundSec is the most a PARTIAL runtime can be, from the
+	// files' total size (database.BookRuntime.EstimatedUpperSeconds); 0 when
+	// no estimate is possible. A candidate longer than this cannot be the
+	// book, which the apply gate refuses as runtime_mismatch.
+	RuntimeUpperBoundSec int `json:"runtime_upper_bound_seconds,omitempty"`
 	// Language is the book's current language as stored on the
 	// Book row (ISO code or full name, whatever was last applied).
 	// Used by the review dialog's language filter to hide
@@ -455,5 +460,8 @@ func applyRuntimeInfo(info *CandidateBookInfo, rt database.BookRuntime, readErr 
 		info.Duration = sec
 	} else if rt.Partial() {
 		info.RuntimeLowerBoundSec = rt.Seconds
+		if upper, ok := rt.EstimatedUpperSeconds(); ok {
+			info.RuntimeUpperBoundSec = upper
+		}
 	}
 }

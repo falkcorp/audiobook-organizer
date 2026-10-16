@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-15
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -258,6 +258,44 @@ describe('what the reviewer must be able to see', () => {
     });
     renderSpine({ rows: [mismatched], viewMode: 'compact', ctx });
     expect(screen.getByText(/runtime differs by 1h 0m/)).toBeInTheDocument();
+  });
+
+  it('warns when a candidate is longer than a partial runtime\'s files can hold', () => {
+    // Two files with one never measured: the book has no total runtime, so the
+    // candidate's duration_delta_sec is 0 and the ten-minute chip stays silent.
+    // The files' size still caps the runtime, and a 14 h candidate is past it.
+    const { ctx } = makeCtx();
+    const base = row('b1');
+    const partial = row('b1', {
+      book: {
+        ...base.book,
+        duration_seconds: undefined,
+        runtime_status: 'partial',
+        runtime_lower_bound_seconds: 480,
+        runtime_upper_bound_seconds: 8000,
+      },
+      candidate: { ...candidate, duration_sec: 52920, duration_delta_sec: 0 } as MetadataCandidate,
+    });
+    renderSpine({ rows: [partial], viewMode: 'compact', ctx });
+    expect(screen.getByText(/runtime longer than the files can hold \(at most 2h 13m\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/runtime differs by/)).not.toBeInTheDocument();
+  });
+
+  it('does not warn when a partial runtime candidate is within the bound', () => {
+    const { ctx } = makeCtx();
+    const base = row('b1');
+    const partial = row('b1', {
+      book: {
+        ...base.book,
+        duration_seconds: undefined,
+        runtime_status: 'partial',
+        runtime_lower_bound_seconds: 480,
+        runtime_upper_bound_seconds: 8000,
+      },
+      candidate: { ...candidate, duration_sec: 3000, duration_delta_sec: 0 } as MetadataCandidate,
+    });
+    renderSpine({ rows: [partial], viewMode: 'compact', ctx });
+    expect(screen.queryByText(/longer than the files can hold/)).not.toBeInTheDocument();
   });
 
   it('marks a book with no match, distinctly from one with an error', () => {

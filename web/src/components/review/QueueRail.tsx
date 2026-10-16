@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.17.0
+// version: 1.17.1
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -101,9 +101,10 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
     label: 'Hide runtime differences',
     help:
       'Hide every candidate showing the "runtime differs" warning (more than 10 ' +
-      "minutes off the book's runtime) and any candidate more than 10% off, which " +
-      'the apply gate refuses. Rows with an unknown runtime on either side stay ' +
-      'visible. Part of In-depth and Strict review.',
+      "minutes off the book's runtime), any candidate more than 10% off, and any " +
+      "candidate longer than the book's files can hold when only some of them were " +
+      'measured, all of which the apply gate refuses. Rows with an unknown runtime ' +
+      'on either side stay visible. Part of In-depth and Strict review.',
   },
   {
     key: 'hideMultiBook',

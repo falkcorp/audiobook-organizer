@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-15
 
 package handlers
 
@@ -719,20 +719,22 @@ const (
 
 // reviewRuntimeInputs is what the API row carries for the runtime rule:
 // duration_seconds (the complete canonical runtime, else 0) and
-// runtime_lower_bound_seconds (the known part of a partial one, else 0),
-// derived as metabatch's applyRuntimeInfo derives them -- a failed file read
-// is an unknown runtime.
-func reviewRuntimeInputs(f metabatch.BookFileFacts) (complete, lowerBound int) {
+// runtime_lower_bound_seconds (the known part of a partial one, else 0) and
+// runtime_upper_bound_seconds (the most a partial one can be from the files'
+// sizes, else 0), derived as metabatch's applyRuntimeInfo derives them -- a
+// failed file read is an unknown runtime.
+func reviewRuntimeInputs(f metabatch.BookFileFacts) (complete, lowerBound, upperBound int) {
 	if f.Err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	if sec, ok := f.Runtime.KnownSeconds(); ok {
-		return sec, 0
+		return sec, 0, 0
 	}
 	if f.Runtime.Partial() {
-		return 0, f.Runtime.Seconds
+		upper, _ := f.Runtime.EstimatedUpperSeconds()
+		return 0, f.Runtime.Seconds, upper
 	}
-	return 0, 0
+	return 0, 0, 0
 }
 
 // reviewRuntimeHidden is rowState.ts runtimeHiddenBySwitch: the warning
@@ -749,7 +751,7 @@ func reviewRuntimeHidden(c *metafetch.MetadataCandidate, f metabatch.BookFileFac
 	if cand <= 0 {
 		return false
 	}
-	book, lb := reviewRuntimeInputs(f)
+	book, lb, ub := reviewRuntimeInputs(f)
 	if book > 0 {
 		diff := book - cand
 		if diff < 0 {
@@ -760,7 +762,9 @@ func reviewRuntimeHidden(c *metafetch.MetadataCandidate, f metabatch.BookFileFac
 	if lb > cand {
 		return float64(lb-cand)/float64(lb) > reviewRuntimeBlockRatio
 	}
-	return false
+	// The files' total size caps a partial runtime from above: a candidate
+	// longer than that cannot be the book (applygate upperBoundContradicts).
+	return ub > 0 && cand > ub
 }
 
 // --- evaluation -----------------------------------------------------------------

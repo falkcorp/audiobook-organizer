@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -150,7 +150,11 @@ export const RUNTIME_BLOCK_RATIO = 0.1;
 
 /** The runtime inputs `runtimeDiffersFromBook` reads off a review row. */
 export interface RuntimeRow {
-  book: { duration_seconds?: number; runtime_lower_bound_seconds?: number };
+  book: {
+    duration_seconds?: number;
+    runtime_lower_bound_seconds?: number;
+    runtime_upper_bound_seconds?: number;
+  };
   candidate?: { duration_sec?: number; duration_delta_sec?: number } | null;
 }
 
@@ -164,6 +168,9 @@ export interface RuntimeRow {
  *    least the lower bound, so it proves a mismatch in one direction only --
  *    the bound exceeds the candidate by more than 10% of the bound
  *    (applygate lowerBoundContradicts).
+ *  - Partial runtime with an upper bound (`runtime_upper_bound_seconds`, from
+ *    the files' total size): a candidate LONGER than that cannot fit on the
+ *    book's files (applygate upperBoundContradicts), so it differs.
  *  - Anything else -- no candidate, no candidate runtime, no book runtime --
  *    is unknown, and unknown is never hidden: it is not evidence of a
  *    mismatch.
@@ -179,7 +186,21 @@ export function runtimeDiffersFromBook(r: RuntimeRow): boolean {
   if (lb > cand) {
     return (lb - cand) / lb > RUNTIME_BLOCK_RATIO;
   }
-  return false;
+  return runtimeExceedsUpperBound(r);
+}
+
+/**
+ * Whether the candidate's runtime is longer than a partial book runtime can
+ * be, from the files' total size (`runtime_upper_bound_seconds`; absent when
+ * no estimate is possible, which is never evidence). Strictly greater, as in
+ * applygate upperBoundContradicts. The spine shows its own chip for it: the
+ * candidate's `duration_delta_sec` is 0 here (a partial runtime has no total
+ * to take a delta from), so the ten-minute chip never fires.
+ */
+export function runtimeExceedsUpperBound(r: RuntimeRow): boolean {
+  const cand = r.candidate?.duration_sec ?? 0;
+  const ub = r.book.runtime_upper_bound_seconds ?? 0;
+  return cand > 0 && ub > 0 && cand > ub;
 }
 
 /**
