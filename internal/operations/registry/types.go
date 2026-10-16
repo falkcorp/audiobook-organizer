@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See
@@ -251,7 +251,7 @@ const (
 // Requiring a declaration does not by itself make an op report. What it does is
 // remove the option of not answering the question: a new OperationDef cannot
 // reach the registry without its author stating which of these three it is, and
-// the two honest answers both leave a trail.
+// the two truthful answers both leave a trail.
 type LivenessMode int
 
 const (
@@ -431,7 +431,6 @@ type EnqueueOptions struct {
 	SpanID          string
 	ParentSpanID    string
 	Priority        *Priority
-	Requires        []Requirement // per-enqueue requirements added on top of the def's Requires
 }
 
 // WithParent sets the parent run ID for trigger lineage.
@@ -454,11 +453,4 @@ func WithActorAuthMethod(method string) EnqueueOption {
 // WithPriority overrides the OperationDef's DefaultPriority for this run.
 func WithPriority(p Priority) EnqueueOption {
 	return func(o *EnqueueOptions) { o.Priority = &p }
-}
-
-// WithRequires adds per-enqueue requirements on top of the def's Requires.
-// These are evaluated together with OperationDef.Requires before the op is
-// admitted to the queue.
-func WithRequires(reqs ...Requirement) EnqueueOption {
-	return func(o *EnqueueOptions) { o.Requires = append(o.Requires, reqs...) }
 }

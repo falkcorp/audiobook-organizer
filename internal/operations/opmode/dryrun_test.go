@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/dryrun_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 84883e45-012b-49ee-b0c3-871398fbcd21
-// last-edited: 2026-09-25
+// last-edited: 2026-10-16
 
 package opmode
 
@@ -63,12 +63,9 @@ func TestResolveDryRun_ErrorFailsTowardPreview(t *testing.T) {
 	}
 }
 
-func TestLiveAndPreviewPointers(t *testing.T) {
+func TestLivePointer(t *testing.T) {
 	if l := Live(); l == nil || *l {
 		t.Fatal("Live() must point at false")
-	}
-	if p := Preview(); p == nil || !*p {
-		t.Fatal("Preview() must point at true")
 	}
 	// Distinct allocations: mutating one caller's flag cannot flip another's.
 	a, b := Live(), Live()

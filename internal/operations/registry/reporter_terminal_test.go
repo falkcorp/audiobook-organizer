@@ -1,13 +1,13 @@
 // file: internal/operations/registry/reporter_terminal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9b1c4e7a-3d52-4a68-b0f1-6c2d3e4f5a6b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-16
 
 package registry
 
 // White-box tests for R-3: the abandoned-reporter log-buffer guards. Kept in
 // package registry (not registry_test) so they can construct a bare dbReporter
-// and reach the unexported markTerminal / droppedLogCount without a store or
+// and reach the unexported markTerminal and droppedLogs without a store or
 // flush goroutine.
 
 import (
@@ -74,13 +74,13 @@ func TestReporterR3_BufferCapDropsOldest(t *testing.T) {
 	}
 
 	r.logMu.Lock()
-	got := len(r.logBuf)
+	got, dropped := len(r.logBuf), r.droppedLogs
 	r.logMu.Unlock()
 	if got != maxBufferedLogEntries {
 		t.Errorf("logBuf len: got %d want cap %d", got, maxBufferedLogEntries)
 	}
-	if dropped := r.droppedLogCount(); dropped != extra {
-		t.Errorf("droppedLogCount: got %d want %d", dropped, extra)
+	if dropped != extra {
+		t.Errorf("droppedLogs: got %d want %d", dropped, extra)
 	}
 }
 
