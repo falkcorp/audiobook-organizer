@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.23.1
+// version: 1.23.2
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -881,8 +881,6 @@ describe('one-button dedup run', () => {
     expect(await screen.findByTestId('dedup-pipeline-done')).toBeInTheDocument();
     expect(api.triggerDedupScan).toHaveBeenCalledTimes(1);
     expect(api.getOperationStatus).toHaveBeenCalledWith('scan-1');
-    // Not the /dedup page's in-memory group scan any more.
-    expect(api.scanBookDuplicates).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true')
     );

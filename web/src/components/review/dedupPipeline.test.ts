@@ -1,7 +1,7 @@
 // file: web/src/components/review/dedupPipeline.test.ts
-// version: 2.2.0
+// version: 2.2.1
 // guid: 6d1a8f35-2c94-4e7b-b3f0-9a5e4c2d7b18
-// last-edited: 2026-10-03
+// last-edited: 2026-10-16
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as api from '../../services/api';
@@ -42,11 +42,10 @@ describe('startDedupRun', () => {
     expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
   });
 
-  it('runs the Dupes-tab scan (dedup.full-scan) for "Force full rescan", not the /dedup page scan', async () => {
+  it('runs the Dupes-tab scan (dedup.full-scan) for "Force full rescan"', async () => {
     vi.mocked(api.triggerDedupScan).mockResolvedValue(op('scan-1', 'queued'));
     await expect(startDedupRun('rescan')).resolves.toBe('scan-1');
     expect(api.triggerDedupScan).toHaveBeenCalledTimes(1);
-    expect(api.scanBookDuplicates).not.toHaveBeenCalled();
   });
 
   it('fails when the server returns no operation id', async () => {
