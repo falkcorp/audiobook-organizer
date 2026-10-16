@@ -1,5 +1,5 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
 // last-edited: 2026-10-16
 //
@@ -235,12 +235,6 @@ func identFetchResultOf(res CandidateResult, skipStatus func() string) identific
 	return out
 }
 
-// identAdvanceRunItems is the v2 runner. A variable so a test can record the
-// options the adapter really passes (the "sequential loop wearing a
-// worker-pool API" failure is a missing Concurrency, which only the real call
-// site can show).
-var identAdvanceRunItems = opsregistry.RunItems[identification.Mark]
-
 // identAdvanceRunOptions builds the RunItems options for one page.
 //
 // Concurrency is set explicitly: RunItems defaults to 1. Label reads only the
@@ -278,7 +272,7 @@ func runIdentificationAdvance(ctx context.Context, reporter opsregistry.Reporter
 		if len(page) == 0 {
 			break
 		}
-		err = identAdvanceRunItems(ctx, reporter, page, func(ctx context.Context, m identification.Mark) error {
+		err = opsregistry.RunItems(ctx, reporter, page, func(ctx context.Context, m identification.Mark) error {
 			o, err := adv.Item(ctx, m)
 			tally.Record(o)
 			if err != nil {
