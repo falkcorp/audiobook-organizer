@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_bookinfo_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 52b4b4c0-7157-4e40-901c-2a88bddf805e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-15
 
 package metabatch_test
 
@@ -120,4 +120,46 @@ func TestResolveSeriesNames_NoReadWhenNothingMissingAndSafeOnFailure(t *testing.
 	}
 	var none metabatch.SeriesBatchGetter
 	metabatch.ResolveSeriesNames(none, failing) // nil store: no panic
+}
+
+// A partial runtime whose files carry sizes reports the most it can be, so the
+// review row can warn about (and hide) a candidate the files cannot hold. Two
+// 4 MB files with one measured at 480 s: the upper bound is the physical floor,
+// 8 MB at 1000 B/s = 8000 s, which beats three times the 960 s estimate.
+func TestBuildCandidateBookInfo_PartialRuntimeUpperBound(t *testing.T) {
+	book := &database.Book{ID: "b1"}
+	sized := &mockBookFileStore{files: []database.BookFile{
+		{ID: "f1", FileSize: 4_000_000, Duration: 480},
+		{ID: "f2", FileSize: 4_000_000},
+	}}
+	info := metabatch.BuildCandidateBookInfo(sized, book)
+	if info.Duration != 0 || info.RuntimeLowerBoundSec != 480 || info.RuntimeUpperBoundSec != 8000 {
+		t.Errorf("duration/lower/upper = %d/%d/%d, want 0/480/8000", info.Duration, info.RuntimeLowerBoundSec, info.RuntimeUpperBoundSec)
+	}
+
+	// No sizes: no estimate, so no upper bound; the lower bound still shows.
+	unsized := &mockBookFileStore{files: []database.BookFile{
+		{ID: "f1", Duration: 480},
+		{ID: "f2"},
+	}}
+	info = metabatch.BuildCandidateBookInfo(unsized, book)
+	if info.RuntimeLowerBoundSec != 480 || info.RuntimeUpperBoundSec != 0 {
+		t.Errorf("unsized lower/upper = %d/%d, want 480/0", info.RuntimeLowerBoundSec, info.RuntimeUpperBoundSec)
+	}
+
+	// A complete runtime is a total, not a bound.
+	complete := &mockBookFileStore{files: []database.BookFile{
+		{ID: "f1", FileSize: 4_000_000, Duration: 480},
+		{ID: "f2", FileSize: 4_000_000, Duration: 500},
+	}}
+	info = metabatch.BuildCandidateBookInfo(complete, book)
+	if info.Duration != 980 || info.RuntimeLowerBoundSec != 0 || info.RuntimeUpperBoundSec != 0 {
+		t.Errorf("complete duration/lower/upper = %d/%d/%d, want 980/0/0", info.Duration, info.RuntimeLowerBoundSec, info.RuntimeUpperBoundSec)
+	}
+
+	// A failed read is an unknown runtime.
+	info = metabatch.BuildCandidateBookInfo(&mockBookFileStore{files: sized.files, err: errors.New("boom")}, book)
+	if info.RuntimeLowerBoundSec != 0 || info.RuntimeUpperBoundSec != 0 {
+		t.Errorf("failed read lower/upper = %d/%d, want 0/0", info.RuntimeLowerBoundSec, info.RuntimeUpperBoundSec)
+	}
 }

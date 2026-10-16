@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.181.0
+// version: 2.182.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-14
+// last-edited: 2026-10-15
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -4271,6 +4271,9 @@ export interface CandidateBookInfo {
   runtime_files_counted?: number;
   // Known-file sum of a PARTIAL runtime: a lower bound, not the book's length.
   runtime_lower_bound_seconds?: number;
+  // The most a PARTIAL runtime can be, from the files' total size; absent when
+  // no estimate is possible. A candidate longer than this cannot be the book.
+  runtime_upper_bound_seconds?: number;
   file_size_bytes?: number;
   // Book's current language (ISO code or full name). Used by
   // the review dialog's language filter to hide candidates

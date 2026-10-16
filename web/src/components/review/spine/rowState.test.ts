@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +13,8 @@ import {
   isRowActionable,
   noCandidateLabel,
   runtimeDiffers,
+  runtimeDiffersFromBook,
+  runtimeExceedsUpperBound,
   runtimeHiddenBySwitch,
   scoreColor,
   type RowState,
@@ -175,6 +177,53 @@ describe('runtimeHiddenBySwitch', () => {
 
   it('keeps a row whose runtime is unknown', () => {
     expect(runtimeHiddenBySwitch({ book: {}, candidate: null })).toBe(false);
+  });
+});
+
+// A partial runtime (some files never measured) with sizes on every file has an
+// upper bound; the server derives it as applygate does (internal/database
+// BookRuntime.EstimatedUpperSeconds). Two 4 MB files, one measured at 480 s:
+// the bound is 8000 s. The candidate's duration_delta_sec is 0 for such a row.
+describe('a partial runtime upper bound', () => {
+  const partial = { runtime_lower_bound_seconds: 480, runtime_upper_bound_seconds: 8000 };
+
+  it('differs when the candidate is longer than the files can hold', () => {
+    const r = { book: partial, candidate: { duration_sec: 52920, duration_delta_sec: 0 } };
+    expect(runtimeExceedsUpperBound(r)).toBe(true);
+    expect(runtimeDiffersFromBook(r)).toBe(true);
+    // Hide switch: the row is hidden although the ten-minute chip rule is silent.
+    expect(runtimeDiffers(r.candidate.duration_delta_sec)).toBe(false);
+    expect(runtimeHiddenBySwitch(r)).toBe(true);
+  });
+
+  it('is strict: a candidate exactly at the bound is kept', () => {
+    const at = { book: partial, candidate: { duration_sec: 8000 } };
+    expect(runtimeExceedsUpperBound(at)).toBe(false);
+    expect(runtimeHiddenBySwitch(at)).toBe(false);
+    const past = { book: partial, candidate: { duration_sec: 8001 } };
+    expect(runtimeExceedsUpperBound(past)).toBe(true);
+    expect(runtimeHiddenBySwitch(past)).toBe(true);
+  });
+
+  it('keeps a candidate between the known part and the bound', () => {
+    const r = { book: partial, candidate: { duration_sec: 3000 } };
+    expect(runtimeDiffersFromBook(r)).toBe(false);
+    expect(runtimeHiddenBySwitch(r)).toBe(false);
+  });
+
+  it('proves nothing without an upper bound or without a candidate runtime', () => {
+    const noBound = { book: { runtime_lower_bound_seconds: 480 }, candidate: { duration_sec: 52920 } };
+    expect(runtimeExceedsUpperBound(noBound)).toBe(false);
+    expect(runtimeHiddenBySwitch(noBound)).toBe(false);
+    const noCand = { book: partial, candidate: { duration_sec: 0 } };
+    expect(runtimeExceedsUpperBound(noCand)).toBe(false);
+    expect(runtimeExceedsUpperBound({ book: partial, candidate: null })).toBe(false);
+  });
+
+  it('keeps the lower-bound rule: a candidate far below the known part still differs', () => {
+    const r = { book: partial, candidate: { duration_sec: 100 } };
+    expect(runtimeExceedsUpperBound(r)).toBe(false);
+    expect(runtimeDiffersFromBook(r)).toBe(true);
   });
 });
 

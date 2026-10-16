@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-15
 
@@ -498,12 +498,26 @@ func TestReviewQuery_RuntimeRule(t *testing.T) {
 	partial := func(sec int) metabatch.BookFileFacts {
 		return metabatch.BookFileFacts{Runtime: database.BookRuntime{Seconds: sec, Source: database.RuntimeSourceFiles, FilesCounted: 2, FilesKnown: 1}}
 	}
+	// sized is a partial runtime whose files carry sizes: 2 files of 4 MB
+	// each, one of them measured at 480 s. The estimate is 960 s and the upper
+	// bound max(960*3, 8 MB / 1000 B/s) = 8000 s, as applygate computes it.
+	sized := metabatch.BookFileFacts{Runtime: database.BookRuntime{
+		Seconds: 480, Source: database.RuntimeSourceFiles, FilesCounted: 2, FilesKnown: 1,
+		SizesComplete: true, TotalBytes: 8_000_000, RateBytes: 4_000_000, RateSeconds: 480,
+	}}
 	cases := []struct {
 		name  string
 		cand  *metafetch.MetadataCandidate
 		facts metabatch.BookFileFacts
 		want  bool
 	}{
+		// The files' size caps a partial runtime from above.
+		{"partial upper bound: a candidate beyond it is hidden", &metafetch.MetadataCandidate{DurationSec: 52920}, sized, true},
+		{"partial upper bound: a candidate at it is kept", &metafetch.MetadataCandidate{DurationSec: 8000}, sized, false},
+		{"partial upper bound: a candidate one second past it is hidden", &metafetch.MetadataCandidate{DurationSec: 8001}, sized, true},
+		{"partial upper bound: a candidate between estimate and bound is kept", &metafetch.MetadataCandidate{DurationSec: 3000}, sized, false},
+		{"partial without sizes has no upper bound", &metafetch.MetadataCandidate{DurationSec: 52920}, partial(480), false},
+		{"a failed read drops the upper bound", &metafetch.MetadataCandidate{DurationSec: 52920}, metabatch.BookFileFacts{Runtime: sized.Runtime, Err: errors.New("read failed")}, false},
 		// rowState.test.ts runtimeHiddenBySwitch.
 		{"hides a warned row the 10% rule alone would keep", &metafetch.MetadataCandidate{DurationSec: 36000 - 3180, DurationDeltaSec: 3180}, complete(36000), true},
 		{"hides a row over 10% off", &metafetch.MetadataCandidate{DurationSec: 3500}, complete(3000), true},
