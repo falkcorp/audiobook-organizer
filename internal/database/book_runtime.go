@@ -1,5 +1,5 @@
 // file: internal/database/book_runtime.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 64a8ba17-7539-4be1-a2f7-1ee0f0e0cc44
 // last-edited: 2026-10-15
 
@@ -133,7 +133,8 @@ const PartialUpperFactor = 3
 // intro file, or two 128 kbps parts of a book whose other 18 are 32 kbps, or
 // per-file cover art inflating the measured bytes-per-second -- from
 // extrapolating to a bound below the book's real length. The factor of 3 over
-// the estimate still tightens the bound when the sample is representative.
+// the estimate only decides the bound for a very low-bitrate sample (under
+// about 24 kbps, 3000 B/s); for nearly every real book the floor is the bound.
 const PartialMinBytesPerSecond = 1000
 
 // maxEstimatedSeconds caps the estimate and the bound so a huge size over a

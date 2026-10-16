@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
 // last-edited: 2026-10-15
 
@@ -1127,9 +1127,14 @@ func (c strongCriteria) runtimeExact(r metadata.BookMetadata) bool {
 // off "Sword Art Online, Vol. 8"). A stored ASIN is
 // sometimes wrong -- an earlier bad match stored a sibling's ("Rogue
 // Ascension 7" on book 8) -- and an answer that carries it but fails that
-// gets no ASIN multiplier, no first-place tier and no early stop.
+// gets no ASIN multiplier, no first-place tier and no early stop. The same
+// holds for an answer longer than a partial runtime's files can hold
+// (exceedsUpper): the stored ASIN may be the bad match that put it there.
 func (c strongCriteria) ownASINAgrees(r metadata.BookMetadata) bool {
 	if c.asin == "" || !strings.EqualFold(strings.TrimSpace(r.ASIN), c.asin) {
+		return false
+	}
+	if c.runtime.exceedsUpper(r.DurationSec) {
 		return false
 	}
 	return !c.positionConflicts(r) && !c.explicitPositionConflicts(r) && c.positionNamed(r) &&
