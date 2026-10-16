@@ -1,7 +1,7 @@
 // file: internal/catalog/scope.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5b9d3f27-8c1a-4e6b-9f42-1d7c0a8e3b56
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 
 package catalog
 
@@ -73,6 +73,10 @@ type ScopeAuthor struct {
 	// OwnedASINs are the ASINs of this author's in-scope books, sorted.
 	OwnedASINs []string
 	Books      int
+	// AuthorIDs are the library author rows whose names fold to this key,
+	// sorted: the authors whose books a completed harvest that changed the
+	// catalog marks for the identification driver.
+	AuthorIDs []int
 }
 
 // ScopeCensus is the step-0 count the dry run reports.
@@ -353,6 +357,9 @@ func BuildScope(ctx context.Context, store any, rd ScopeReader) ([]ScopeAuthor, 
 				keyASINs[key] = map[string]bool{}
 			}
 			sa.Books += a.books
+			if !slices.Contains(sa.AuthorIDs, id) {
+				sa.AuthorIDs = append(sa.AuthorIDs, id)
+			}
 			for asin := range a.asins {
 				keyASINs[key][asin] = true
 			}
@@ -369,6 +376,7 @@ func BuildScope(ctx context.Context, store any, rd ScopeReader) ([]ScopeAuthor, 
 			sa.OwnedASINs = append(sa.OwnedASINs, asin)
 		}
 		slices.Sort(sa.OwnedASINs)
+		slices.Sort(sa.AuthorIDs)
 		if len(sa.OwnedASINs) > 0 {
 			census.AuthorsWithASIN++
 		}

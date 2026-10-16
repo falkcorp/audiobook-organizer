@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 
 package database
 
@@ -223,8 +223,13 @@ type CatalogAuthorState struct {
 	// A zero-total streak is accepted only once it spans a minimum window.
 	ShortSince *time.Time `json:"short_since,omitempty"`
 	// Conflict: owned books named more than one author ASIN for this name.
-	Conflict       bool       `json:"conflict,omitempty"`
-	MarkedStale    int        `json:"marked_stale,omitempty"`
+	Conflict    bool `json:"conflict,omitempty"`
+	MarkedStale int  `json:"marked_stale,omitempty"`
+	// Created counts the entries this run filed for the first time
+	// (UpsertResult.Created). With MarkedStale it says whether the author's
+	// catalog changed, which is when the harvest marks the author's
+	// unanswered books for the identification driver.
+	Created        int        `json:"created,omitempty"`
 	LastAttemptAt  time.Time  `json:"last_attempt_at"`
 	LastCompleteAt *time.Time `json:"last_complete_at,omitempty"`
 	LastError      string     `json:"last_error,omitempty"`

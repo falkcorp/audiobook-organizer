@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-10-12
+// last-edited: 2026-10-16
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).
@@ -106,16 +106,17 @@ func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 		ResumePolicy:          opsregistry.ResumeRestart,
 		MinCheckpointInterval: catalogHarvestMinCheckpointInterval,
 		ConcurrencyKey:        "catalog.harvest",
-		// The harvest, metadata.candidate-fetch and metafetch.asin-backfill
-		// all spend Audible's token bucket; DependsOn is one-directional
-		// ("must not be running for THIS op to start"), so each of the
-		// others carries the reverse entry for catalog.harvest-authors.
+		// The harvest, metadata.candidate-fetch, metafetch.asin-backfill
+		// and identification.advance all spend Audible's token bucket;
+		// DependsOn is one-directional ("must not be running for THIS op to
+		// start"), so each of the others carries the reverse entry for
+		// catalog.harvest-authors.
 		//
 		// catalog.coverage-report is listed too: it reads the author blocks
 		// this op writes and itself depends on this op, so each refuses to
 		// start while the other runs (the write-set gate does not consult
 		// Reads, so DependsOn is the only way to hold the harvest back).
-		DependsOn:    []string{"metadata.candidate-fetch", "metafetch.asin-backfill", catalogCoverageOpID},
+		DependsOn:    []string{"metadata.candidate-fetch", "metafetch.asin-backfill", identificationAdvanceOpID, catalogCoverageOpID},
 		Writes:       []opsregistry.Resource{opsregistry.ResCatalog},
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkAudible},
@@ -224,7 +225,8 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 	}
 
 	tally, runErr := h.Run(ctx, reporter, due, catalog.RunOptions{
-		Checkpoint: func() error { return reporter.Checkpoint(p) },
+		Checkpoint:   func() error { return reporter.Checkpoint(p) },
+		OnAuthorDone: harvestMarksIdentDirty(store),
 	})
 	publishCatalogGauges(cat)
 	var scanner authority.Scanner
@@ -236,6 +238,65 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 	_ = reporter.Log(slog.LevelInfo, summary)
 	catalogHarvestLog.Info("%s", summary)
 	return runErr
+}
+
+// identStateReader is the store capability harvestMarksIdentDirty reads.
+type identStateReader interface {
+	IdentStateFor(bookID string) (database.IdentStateView, bool, error)
+}
+
+// authorBooksLister is the store slice harvestMarksIdentDirty lists an
+// author's books through.
+type authorBooksLister interface {
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
+}
+
+// harvestMarksIdentDirty returns the harvest's per-author hook that marks
+// books for the identification driver (identification.advance): when an
+// author's harvest completes AND changed the author's catalog (new entries,
+// or entries marked stale), each of the author's primary books that is still
+// unanswered (ident unasked or asked_empty) is marked dirty, because the
+// catalog stage may answer it now. Books already holding candidates, applied
+// or held are left alone. Nil (no hook) when the store has no
+// identification index.
+//
+// It runs inside the harvest's RunItems workers; every call it makes is safe
+// for concurrent use, and MarkIdentDirtyBestEffort never fails the harvest.
+func harvestMarksIdentDirty(store authorBooksLister) func(catalog.ScopeAuthor, database.CatalogAuthorState) {
+	reader, ok := database.AsCapability[identStateReader](store)
+	if !ok {
+		return nil
+	}
+	return func(a catalog.ScopeAuthor, st database.CatalogAuthorState) {
+		if st.State != database.CatalogHarvestComplete || (st.Created == 0 && st.MarkedStale == 0) {
+			return
+		}
+		marked := 0
+		for _, authorID := range a.AuthorIDs {
+			books, err := store.GetBooksByAuthorIDCore(authorID)
+			if err != nil {
+				catalogHarvestLog.Warn("author %q: list books of author %d to mark for identification: %v",
+					logger.SanitizeLogValue(a.Name), authorID, err)
+				continue
+			}
+			for i := range books {
+				v, ok, err := reader.IdentStateFor(books[i].ID)
+				if err != nil || !ok || !v.Primary {
+					continue
+				}
+				if v.State != database.IdentUnasked && v.State != database.IdentAskedEmpty {
+					continue
+				}
+				if database.MarkIdentDirtyBestEffort(store, books[i].ID, "catalog harvest") {
+					marked++
+				}
+			}
+		}
+		if marked > 0 {
+			catalogHarvestLog.Info("author %q: catalog changed (created=%d stale=%d); marked %d unanswered books for identification",
+				logger.SanitizeLogValue(a.Name), st.Created, st.MarkedStale, marked)
+		}
+	}
 }
 
 // backfillCatalogAliases files the author alias rows (cat_author:alias:) the

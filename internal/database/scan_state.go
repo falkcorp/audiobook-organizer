@@ -1,7 +1,7 @@
 // file: internal/database/scan_state.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a846cd3-3757-482a-b4df-71e02cb47292
-// last-edited: 2026-08-23
+// last-edited: 2026-10-16
 
 package database
 
@@ -57,6 +57,34 @@ type ScanState struct {
 	// the failure mode this exists to avoid.
 	Attempts int `json:"attempts,omitzero"`
 	// LastError is why the most recent deep-pass attempt failed.
+	LastError string `json:"last_error,omitzero"`
+
+	// The file stages of the identification pipeline
+	// (docs/architecture/identification-pipeline.md, Part II), one
+	// StageStatus each. Nothing writes or reads them yet: they are the shape
+	// the per-stage writers move to in a follow-up, which also retires the
+	// single Attempts/LastError pair above. Added with omitzero like every
+	// other field here, so a row that never ran a stage serializes exactly as
+	// it did before they existed.
+
+	// Tagged: the tag header was read.
+	Tagged StageStatus `json:"tagged,omitzero"`
+	// DurationOK: the file's duration is known (ffprobe header read, no decode).
+	DurationOK StageStatus `json:"duration_ok,omitzero"`
+	// FPWindowed: the windowed fingerprint exists.
+	FPWindowed StageStatus `json:"fp_windowed,omitzero"`
+	// FPFull: the full-file fingerprint exists.
+	FPFull StageStatus `json:"fp_full,omitzero"`
+}
+
+// StageStatus is one file stage's completeness: done, or how many attempts
+// failed and why the last one did. A stage at its attempt ceiling is surfaced
+// to the operator rather than retried forever, as the deep pass is
+// (DeepScanMaxAttempts). omitzero on every field, never omitempty (see the
+// v1/v2 table at the top of this file).
+type StageStatus struct {
+	Done      bool   `json:"done,omitzero"`
+	Attempts  int    `json:"attempts,omitzero"`
 	LastError string `json:"last_error,omitzero"`
 }
 

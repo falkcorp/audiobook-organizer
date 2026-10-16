@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_op.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-16
 //
 // FetchOpParams holds the serializable parameters for the
 // metadata.candidate-fetch v2 OperationDef. Kept here so the
@@ -54,4 +54,13 @@ type FetchOpParams struct {
 	// step is put off without being asked or recorded, so a later quota day
 	// still selects them first. Carried by every checkpoint.
 	GoogleCappedBookIDs []string `json:"google_capped_book_ids,omitempty"`
+	// MarkDirtyOnly, with Unfetched, has Run select its books as usual and
+	// then only MARK each one in the identification dirty set
+	// (ident:dirty:) for the identification.advance driver, logging
+	// safety_net_marked=N, instead of fetching them. The scheduled
+	// candidate_fetch task sends it while identification_advance_enabled is
+	// on: the 6-hour tick is then the safety net behind the writers that mark
+	// books themselves, and N counts the books they missed. omitempty, so a
+	// tick with the flag off sends exactly the params it always did.
+	MarkDirtyOnly bool `json:"mark_dirty_only,omitempty"`
 }

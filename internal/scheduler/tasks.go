@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.33.3
+// version: 1.34.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-15
+// last-edited: 2026-10-16
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -78,6 +78,58 @@ const (
 
 type candidateFetchTaskParams struct {
 	Unfetched bool `json:"unfetched"`
+	// MarkDirtyOnly mirrors metabatch.FetchOpParams.MarkDirtyOnly: set while
+	// identification_advance_enabled is on, so the op marks its selection
+	// for identification.advance instead of fetching it. omitempty, so with
+	// the flag off the params are exactly {"unfetched":true}, as before.
+	MarkDirtyOnly bool `json:"mark_dirty_only,omitempty"`
+}
+
+// candidateFetchParams is what the candidate_fetch tick sends: with the
+// identification driver on, the tick is its safety net and only marks.
+func candidateFetchParams() candidateFetchTaskParams {
+	return candidateFetchTaskParams{Unfetched: true, MarkDirtyOnly: config.AppConfig.IdentificationAdvanceEnabled}
+}
+
+// identification_advance task: enqueues identification.advance (spec 02 PR
+// 14) every identificationAdvanceInterval while the identification dirty set
+// holds a book and no run is queued or running. Live, like catalog_harvest:
+// the op defaults to a dry run.
+const (
+	identificationAdvanceTaskName = "identification_advance"
+	identificationAdvanceOpID     = "identification.advance"
+	identificationAdvanceInterval = 5 * time.Minute
+)
+
+type identificationAdvanceTaskParams struct {
+	DryRun *bool `json:"dry_run"`
+}
+
+// identDirtyPager is the store capability the identification_advance tick
+// reads (database.PebbleStore.IdentDirtyPage).
+type identDirtyPager interface {
+	IdentDirtyPage(after string, limit int) ([]database.IdentDirtyEntry, error)
+}
+
+// identDirtySetNonEmpty reports whether the identification dirty set holds
+// at least one book: one key read. A store that does not expose the set (not
+// Pebble-backed) answers true: the tick cannot tell, so it enqueues and the
+// op itself refuses with the reason, visibly in the op log, rather than the
+// tick skipping in silence forever.
+func (ts *TaskScheduler) identDirtySetNonEmpty() (bool, error) {
+	store := ts.deps.Store()
+	if store == nil {
+		return false, nil
+	}
+	pager, ok := database.AsCapability[identDirtyPager](store)
+	if !ok {
+		return true, nil
+	}
+	page, err := pager.IdentDirtyPage("", 1)
+	if err != nil {
+		return false, err
+	}
+	return len(page) > 0, nil
 }
 
 // candidateFetchInterval is scheduled.candidate_fetch.interval (minutes,
@@ -757,7 +809,12 @@ func (ts *TaskScheduler) registerAllTasks() {
 					}
 				}
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), candidateFetchOpID, candidateFetchTaskParams{Unfetched: true})
+			params := candidateFetchParams()
+			if params.MarkDirtyOnly {
+				schedLog.Info("%s: identification_advance_enabled: this tick marks its selection for %s instead of fetching (the op logs safety_net_marked=N; source=%s)",
+					candidateFetchTaskName, identificationAdvanceOpID, source)
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), candidateFetchOpID, params)
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue %s: %w", candidateFetchOpID, enqErr)
 			}
@@ -774,6 +831,67 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return ok
 		},
 		GetInterval:            candidateFetchInterval,
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return false },
+	})
+
+	// identification_advance: the identification driver's tick. Writers
+	// (a scan that changes a book's title or author, a new primary book, a
+	// merge, a retitle, a catalog harvest that changed an author's catalog)
+	// mark books in the identification dirty set; this task enqueues
+	// identification.advance to drain it, every 5 minutes, only when the set
+	// holds a book and no run is queued or running. Off unless
+	// identification_advance_enabled is set; then candidate_fetch above only
+	// marks (its safety net). Not on startup (memdb warmup) and not in the
+	// maintenance window (it runs on its own short interval).
+	ts.registerTask(TaskDefinition{
+		Name:        identificationAdvanceTaskName,
+		Description: "Advance the identification of books a writer marked dirty (identification.advance, fetch only)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			dirty, err := ts.identDirtySetNonEmpty()
+			if err != nil {
+				return nil, fmt.Errorf("%s: read the identification dirty set: %w", identificationAdvanceTaskName, err)
+			}
+			if !dirty {
+				schedLog.Debug("%s: the identification dirty set is empty, skipping this tick (source=%s)",
+					identificationAdvanceTaskName, source)
+				return nil, nil
+			}
+			if ts.hasActiveV2Op(identificationAdvanceOpID) {
+				schedLog.Debug("%s: a %s run is already queued or running, skipping this tick (source=%s)",
+					identificationAdvanceTaskName, identificationAdvanceOpID, source)
+				return nil, nil
+			}
+			if prev := ts.previousRunID(identificationAdvanceTaskName); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						return nil, nil
+					}
+				}
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), identificationAdvanceOpID,
+				identificationAdvanceTaskParams{DryRun: opmode.Live()})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue %s: %w", identificationAdvanceOpID, enqErr)
+			}
+			ts.setPreviousRunID(identificationAdvanceTaskName, v2ID)
+			return v2ScheduledOp(v2ID, identificationAdvanceTaskName), nil
+		},
+		// Enabled when identification_advance_enabled is set AND the op is
+		// registered in this binary.
+		IsEnabled: func() bool {
+			if ts.deps.OpRegistry == nil || !config.AppConfig.IdentificationAdvanceEnabled {
+				return false
+			}
+			_, ok := ts.deps.OpRegistry.Def(identificationAdvanceOpID)
+			return ok
+		},
+		GetInterval:            func() time.Duration { return identificationAdvanceInterval },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
 	})

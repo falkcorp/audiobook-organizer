@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
-// last-edited: 2026-10-13
+// last-edited: 2026-10-16
 
 package catalog
 
@@ -471,6 +471,7 @@ func (h *Harvester) harvestAuthor(ctx context.Context, a ScopeAuthor, touch func
 			}
 			return st, upErr
 		}
+		st.Created = ur.Created
 		for _, id := range ur.IDs {
 			seen[id] = true
 		}
@@ -866,6 +867,13 @@ type RunOptions struct {
 	// the params intact.
 	Checkpoint      func() error
 	CheckpointEvery time.Duration
+	// OnAuthorDone, if set, is called once per author after its harvest
+	// returned, with the state the run recorded for it (a zero-total author
+	// held for the breaker reads partial). It runs inside the RunItems worker
+	// goroutines, so it must be safe for concurrent use. The server uses it
+	// to mark a changed author's unanswered books for the identification
+	// driver.
+	OnAuthorDone func(a ScopeAuthor, st database.CatalogAuthorState)
 }
 
 // Run harvests authors through a RunItems pool with an explicit
@@ -899,6 +907,9 @@ func (h *Harvester) Run(parent context.Context, reporter registry.Reporter, auth
 		}
 		st, err := h.harvestAuthor(ctx, a, touch, rz)
 		tally.record(st)
+		if opt.OnAuthorDone != nil {
+			opt.OnAuthorDone(a, st)
+		}
 		if h.Cfg.Throttled != nil && h.Cfg.Throttled() && standDown.CompareAndSwap(false, true) {
 			harvestLog.Warn("provider throttled after author %q; standing down the run (%s)",
 				logger.SanitizeLogValue(a.Name), tally.Summary())

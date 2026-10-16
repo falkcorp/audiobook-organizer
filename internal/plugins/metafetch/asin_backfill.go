@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-10-11
+// last-edited: 2026-10-16
 
 package metafetch
 
@@ -230,8 +230,10 @@ func (p *Plugin) asinBackfillDef() sdk.OperationDef {
 		MinCheckpointInterval: asinBackfillCheckpointInterval,
 		DefaultPriority:       sdk.PriorityLow,
 		ConcurrencyKey:        asinBackfillOpID,
-		// Shares Audible's token bucket with the author-catalog harvest.
-		DependsOn:   []string{"catalog.harvest-authors"},
+		// Shares Audible's token bucket with the author-catalog harvest and
+		// the identification driver; DependsOn is one-directional, so each
+		// of them lists this op too.
+		DependsOn:   []string{"catalog.harvest-authors", "identification.advance"},
 		Writes:      []sdk.Resource{sdk.ResBooks},
 		Cancellable: true,
 		Timeout:     24 * time.Hour,
