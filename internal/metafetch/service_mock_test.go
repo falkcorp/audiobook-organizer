@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.18.3
+// version: 1.18.4
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-13
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -831,7 +831,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.9, 0.5}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Mistborn", matched[0].Title)
 	})
@@ -843,7 +843,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.1}
 		words := SignificantWords("Something")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
 		assert.Nil(t, matched, "score below threshold should return nil")
 	})
 
@@ -855,7 +855,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.8, 0.7}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", 0)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", localRuntime{})
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Brandon Sanderson", matched[0].Author, "author match should boost score")
 	})
@@ -868,13 +868,13 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.7, 0.65}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "Michael Kramer", 0)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "Michael Kramer", localRuntime{})
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Michael Kramer", matched[0].Narrator, "narrator match should boost score")
 	})
 
 	t.Run("empty_results", func(t *testing.T) {
-		matched := pickBestMatchFromScored(nil, nil, "f1", map[string]bool{}, "", "", 0)
+		matched := pickBestMatchFromScored(nil, nil, "f1", map[string]bool{}, "", "", localRuntime{})
 		assert.Nil(t, matched)
 	})
 
@@ -885,7 +885,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.0}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", 0)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
 		assert.Nil(t, matched, "zero base score in F1 tier should be skipped even with rich metadata")
 	})
 }
@@ -956,7 +956,7 @@ func TestPickBestMatchFromScored_DurationBreaksTie(t *testing.T) {
 	scores := []float64{0.8, 0.8}
 	words := SignificantWords("Mistborn")
 
-	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", bookDuration)
+	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", knownRuntime(bookDuration))
 	require.NotEmpty(t, matched)
 	assert.Equal(t, 36000, matched[0].DurationSec, "candidate with matching duration should win the tie")
 }
@@ -973,7 +973,7 @@ func TestPickBestMatchFromScored_WrongEditionRejected(t *testing.T) {
 	scores := []float64{0.82, 0.80}
 	words := SignificantWords("Mistborn")
 
-	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", bookDuration)
+	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", knownRuntime(bookDuration))
 	require.NotEmpty(t, matched)
 	assert.Equal(t, 35700, matched[0].DurationSec, "full edition should win despite lower base score")
 }

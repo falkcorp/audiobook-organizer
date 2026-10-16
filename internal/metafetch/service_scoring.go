@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -240,7 +241,10 @@ func ApplyNonBaseAdjustmentsWithBreakdown(
 // Unknown semantics (handled by the callers below, NOT a table row): if
 // either duration is <= 0, the comparison is UNKNOWN, never disqualifying —
 // durationScoreMultiplier returns 1.0 (no adjustment) and
-// computeDurationScore returns 0 (neutral).
+// computeDurationScore returns 0 (neutral). The one exception is a PARTIAL
+// local runtime (some files never probed): localRuntime.multiplier / .score
+// still apply the >100% tier to a candidate longer than the upper bound the
+// files' total size allows, since the files cannot hold that much audio.
 //
 // Tier boundaries are looked up by durationTier, which mirrors the historical
 // computeDurationScore boundary semantics exactly: the first three tiers are
@@ -500,6 +504,27 @@ func computeDurationScore(bookDurationSec, candidateDurationSec int) float64 {
 	return score
 }
 
+// multiplier is durationScoreMultiplier for the local runtime: the tier table
+// against a complete total, the >100% mismatch tier for a candidate longer than
+// a partial runtime's upper bound, and 1.0 (unknown) otherwise.
+func (r localRuntime) multiplier(candSec int) float64 {
+	if r.exceedsUpper(candSec) {
+		m, _ := durationTier(math.Inf(1))
+		return m
+	}
+	return durationScoreMultiplier(r.Sec, candSec)
+}
+
+// score is computeDurationScore for the local runtime, with the same partial
+// handling as multiplier.
+func (r localRuntime) score(candSec int) float64 {
+	if r.exceedsUpper(candSec) {
+		_, sc := durationTier(math.Inf(1))
+		return sc
+	}
+	return computeDurationScore(r.Sec, candSec)
+}
+
 // pickBestMatchFromScored takes pre-computed base scores from any tier and
 // returns the single best-matching result above the tier-appropriate
 // threshold, applying the full stack of author/narrator/audiobook bonus
@@ -514,8 +539,9 @@ func computeDurationScore(bookDurationSec, candidateDurationSec int) float64 {
 // use MetadataEmbeddingBestMatchMin (default 0.70) and disable the length
 // penalty since their base scores have no token-overlap ratio.
 //
-// bookDurationSec is the book's known file duration in seconds (0 = unknown,
-// disables the duration adjustment).
+// bookRuntime is the book's local runtime: its complete total when known (0 =
+// unknown, no duration adjustment), plus the upper bound a partial runtime's
+// file sizes put on it.
 //
 // For the F1 tier we preserve the historical "skip bonuses when base==0"
 // behavior of scoreOneResult: a result whose F1 base is zero contributes a
@@ -633,7 +659,7 @@ func pickBestMatchFromScored(
 	baseTier string,
 	searchWords map[string]bool,
 	bookAuthor, bookNarrator string,
-	bookDurationSec int,
+	bookRuntime localRuntime,
 	hints ...transcriptionHints,
 ) []metadata.BookMetadata {
 	f1MinScore := scoringKnobs().F1MinScore
@@ -709,7 +735,7 @@ func pickBestMatchFromScored(
 		// Duration-based scoring: compare candidate runtime against the book's
 		// known file duration. Strong bonus when they match closely; penalty when
 		// they diverge significantly (wrong edition, abridged vs. unabridged, etc.).
-		score *= durationScoreMultiplier(bookDurationSec, r.DurationSec)
+		score *= bookRuntime.multiplier(r.DurationSec)
 
 		if score > bestScore {
 			bestScore = score
@@ -869,8 +895,7 @@ func (mfs *Service) bestTitleMatchForBook(
 	}
 
 	baseScores, baseTier := mfs.ScoreBaseCandidates(context.Background(), book, results, searchWords)
-	bookDurationSec := mfs.bookRuntimeSec(book)
-	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, bookDurationSec, hintsFromBook(book))
+	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, mfs.bookRuntime(book), hintsFromBook(book))
 }
 
 // hintsFromBook extracts the audio-derived transcription fields from a book for
@@ -1059,7 +1084,7 @@ func BestTitleMatchWithContext(results []metadata.BookMetadata, bookAuthor, book
 		baseScores[i] = computeF1Base(r, searchWords)
 	}
 
-	return pickBestMatchFromScored(results, baseScores, "f1", searchWords, bookAuthor, bookNarrator, 0)
+	return pickBestMatchFromScored(results, baseScores, "f1", searchWords, bookAuthor, bookNarrator, localRuntime{})
 }
 
 var scoreTitleStop = map[string]bool{

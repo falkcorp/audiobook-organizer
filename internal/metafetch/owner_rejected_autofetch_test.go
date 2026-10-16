@@ -1,7 +1,7 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
-// last-edited: 2026-10-11
+// last-edited: 2026-10-15
 
 package metafetch
 
@@ -50,7 +50,7 @@ func rejFetchRecord(asin, desc string) metadata.BookMetadata {
 // search turned r into (its Source is the provider's Name()).
 func rejectFor(t *testing.T, store RejectionStore, bookID, source string, r metadata.BookMetadata) {
 	t.Helper()
-	c := newSearchCandidate(r, source, 0.9, nil, 0, false)
+	c := newSearchCandidate(r, source, 0.9, nil, localRuntime{}, false)
 	require.NoError(t, RecordRejection(store, bookID, &c))
 }
 

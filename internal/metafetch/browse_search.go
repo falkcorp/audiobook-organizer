@@ -1,7 +1,7 @@
 // file: internal/metafetch/browse_search.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5bc1837f-3fbc-42c0-ad1c-7faf383b5983
-// last-edited: 2026-10-10
+// last-edited: 2026-10-15
 //
 // BrowseSearch is the Candidates view's "Search again": a free search by what
 // the reviewer typed, not a search for the book's own identity.
@@ -145,7 +145,7 @@ func (mfs *Service) BrowseSearch(ctx context.Context, bookID string, q BrowseQue
 		}
 	}
 
-	bookSec := mfs.bookRuntimeSec(book)
+	bookRuntime := mfs.bookRuntime(book)
 	bookNarrator := ""
 	if book.Narrator != nil {
 		bookNarrator = SearchAuthorHint(*book.Narrator)
@@ -157,7 +157,7 @@ func (mfs *Service) BrowseSearch(ctx context.Context, bookID string, q BrowseQue
 		if !seen.add(a.r) {
 			continue
 		}
-		c := scoreBrowseAnswer(a.r, a.source, title, words, author, bookNarrator, bookSec)
+		c := scoreBrowseAnswer(a.r, a.source, title, words, author, bookNarrator, bookRuntime)
 		c.FromCatalog = a.fromCatalog
 		out = append(out, c)
 	}
@@ -218,7 +218,7 @@ func (mfs *Service) browseProviders(ctx context.Context, title, author string) (
 // existing scorer steps: the title F1 (ScoreOneResultWithBreakdown) when a
 // title was typed, else a flat base; then author, narrator and runtime
 // agreement. Nothing is dropped for a low score.
-func scoreBrowseAnswer(r metadata.BookMetadata, source, title string, words map[string]bool, author, bookNarrator string, bookSec int) MetadataCandidate {
+func scoreBrowseAnswer(r metadata.BookMetadata, source, title string, words map[string]bool, author, bookNarrator string, bookRuntime localRuntime) MetadataCandidate {
 	var rec *scoreRecorder
 	if title == "" {
 		rec = newScoreRecorder(browseNoTitleBase, "Author search",
@@ -245,6 +245,6 @@ func scoreBrowseAnswer(r metadata.BookMetadata, source, title string, words map[
 			rec.mul("narrator_match", "Narrator match", 1.3, "The result's narrator matches the book's known narrator.")
 		}
 	}
-	rec.mul("duration", "Runtime comparison", durationScoreMultiplier(bookSec, r.DurationSec), durationStepDetail(bookSec, r.DurationSec))
-	return newSearchCandidate(r, source, rec.score, rec.breakdown(), bookSec, false)
+	rec.mul("duration", "Runtime comparison", bookRuntime.multiplier(r.DurationSec), durationStepDetail(bookRuntime, r.DurationSec))
+	return newSearchCandidate(r, source, rec.score, rec.breakdown(), bookRuntime, false)
 }
