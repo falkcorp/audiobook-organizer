@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
-// last-edited: 2026-10-14
+// last-edited: 2026-10-17
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
@@ -2041,4 +2041,23 @@ func attrsToFields(attrs string) map[string]string {
 		out[k] = string(b)
 	}
 	return out
+}
+
+// GetSchedV3 reads opv3:sched:{def_id}; (nil, nil) when none is stored.
+func (p *PebbleStore) GetSchedV3(defID string) (*SchedState, error) {
+	var st SchedState
+	found, err := p.getJSONFound([]byte(opv3SchedPrefix+defID), &st)
+	if err != nil || !found {
+		return nil, err
+	}
+	return &st, nil
+}
+
+// PutSchedV3 replaces opv3:sched:{def_id}. The schedule state is one writer's
+// (the TaskScheduler loop), so it takes no run lock.
+func (p *PebbleStore) PutSchedV3(st SchedState) error {
+	if st.DefID == "" {
+		return errors.New("PutSchedV3: empty def id")
+	}
+	return p.pebbleSetJSON([]byte(opv3SchedPrefix+st.DefID), &st)
 }

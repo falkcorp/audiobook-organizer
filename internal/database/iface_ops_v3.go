@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
-// last-edited: 2026-10-14
+// last-edited: 2026-10-17
 
 package database
 
@@ -419,8 +419,17 @@ type OpsV3AuxStore interface {
 	ListLogV3(id string, limit int, afterKey string) ([]LogLine, error)
 }
 
+// OpsV3SchedStore is the per-def schedule state, opv3:sched:{def_id}, written
+// by the TaskScheduler (05-PR8).
+type OpsV3SchedStore interface {
+	// GetSchedV3 reads a def's schedule state; (nil, nil) when none is stored.
+	GetSchedV3(defID string) (*SchedState, error)
+	// PutSchedV3 replaces a def's schedule state.
+	PutSchedV3(st SchedState) error
+}
+
 // OpsV3Store is the operations v3 storage surface. It is a composition of
-// four pieces because interfacebloat caps a declaration at 8 entries; the
+// five pieces because interfacebloat caps a declaration at 8 entries; the
 // method set is the 05-PR4 brief's OpsV3Store.
 //
 // It is NOT part of Store (TestStoreFlattenedWidth: Store may only narrow). A
@@ -434,4 +443,5 @@ type OpsV3Store interface {
 	OpsV3CheckpointStore
 	OpsV3ChunkStore
 	OpsV3AuxStore
+	OpsV3SchedStore
 }

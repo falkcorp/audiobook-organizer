@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
-// last-edited: 2026-10-14
+// last-edited: 2026-10-17
 
 package database
 
@@ -1219,5 +1219,23 @@ func TestMarksStagedWithLedger(t *testing.T) {
 	}
 	if got, _ := p.ListMarksV3(open); len(got) != 0 {
 		t.Fatalf("marks left after a discard: %v", got)
+	}
+}
+
+func TestSchedStateV3RoundTrip(t *testing.T) {
+	p := newTimelineStore(t)
+	if got, err := p.GetSchedV3("test.sched"); err != nil || got != nil {
+		t.Fatalf("empty GetSchedV3 = %+v, %v; want nil, nil", got, err)
+	}
+	last := time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC)
+	if err := p.PutSchedV3(SchedState{DefID: "test.sched", LastFire: &last, LastRunID: "r1", Missed: 2}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.GetSchedV3("test.sched")
+	if err != nil || got == nil || got.LastRunID != "r1" || got.Missed != 2 || !got.LastFire.Equal(last) {
+		t.Fatalf("GetSchedV3 = %+v, %v", got, err)
+	}
+	if err := p.PutSchedV3(SchedState{}); err == nil {
+		t.Error("PutSchedV3 accepted an empty def id")
 	}
 }
