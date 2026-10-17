@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 package merge
 
@@ -77,7 +77,7 @@ type userPositionStore interface {
 
 // UserProgressMerger adds the fan-out over every user. The Follow* entry points
 // take this because that is the whole of what they forward. Exported for the
-// same reason as BookWriter: FollowMergeWithStore is called from internal/dedup.
+// same reason as BookWriter: internal/dedup, undo and audiobooks name it.
 type UserProgressMerger interface {
 	userPositionStore
 

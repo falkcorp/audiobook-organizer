@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_misc_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f8b6d1c-5e9a-4c3f-8b7d-0a1e2c4f6d8b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package merge
 
@@ -34,7 +34,7 @@ func TestB3_AsExternalIDReassigner_NotImplementing(t *testing.T) {
 }
 
 // TestB3_LockUnlockMergeRMW_RoundTrips exercises the exported
-// LockMergeRMW/UnlockMergeRMW pair used by dedup.MergeBooks to share the
+// LockMergeRMW/UnlockMergeRMW pair used by dedup.MergeSplitBookClusterWithOptions (and repairs) to share the
 // package-level merge serialization lock. A bare lock/unlock round trip
 // must not deadlock or panic, and must leave the lock available for the
 // next acquirer (proven by acquiring it again afterward).
