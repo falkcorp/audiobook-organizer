@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
 // last-edited: 2026-10-17
 
@@ -7,10 +7,14 @@ package opsv3
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,17 +23,26 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // SSE tuning. Heartbeat is the comment line that keeps an idle connection
 // open; the ring is how far back Last-Event-ID can resume; ClientBuffer is how
 // many unsent events one slow client may hold before its oldest are dropped.
+// MaxClients bounds the open streams (each holds a goroutine and a queue);
+// one more is answered 503. MaxWatched bounds the runs the broker re-reads
+// until they settle (see Run).
 const (
 	DefaultHeartbeat    = 15 * time.Second
 	DefaultRingSize     = 512
 	DefaultClientBuffer = 128
+	DefaultMaxClients   = 64
+	DefaultMaxWatched   = 256
 	defaultFlushEvery   = 250 * time.Millisecond
 )
+
+// ErrTooManyClients is subscribe's answer past MaxClients.
+var ErrTooManyClients = errors.New("opsv3: too many event stream clients")
 
 var eventsLog = logger.New("handlers.opsv3.events")
 
@@ -47,9 +60,11 @@ type BrokerOptions struct {
 	// events arrive per item; reading a run per event would put a store read
 	// on the progress path, so changes are coalesced per run instead.
 	FlushEvery time.Duration
+	MaxClients int
+	MaxWatched int
 }
 
-// message is one numbered event.
+// message is one numbered event. Its SSE id is "<nonce>-<id>" (eventID).
 type message struct {
 	id   uint64
 	view RunView
@@ -66,10 +81,24 @@ type Broker struct {
 	zombies ZombieSource
 	opt     BrokerOptions
 
+	// nonce is this broker's boot id. seq restarts at 0 with the process,
+	// so a bare number from before a restart would resume at the wrong
+	// place; an id carrying another nonce is told to resync instead.
+	nonce string
+
 	mu      sync.Mutex
 	seq     uint64
 	ring    []message // oldest first, at most opt.RingSize
 	clients map[*client]struct{}
+
+	// Lazy start (StartOnFirstSubscriber): Run begins with the first client.
+	startCtx  context.Context
+	spawn     func(func())
+	startOnce sync.Once
+
+	// watch is the runs published while not settled, with the JSON last
+	// published for each. Only Run's goroutine touches it.
+	watch map[string][]byte
 }
 
 // NewBroker builds a Broker. runs reads the run behind each event; zombies may
@@ -87,7 +116,55 @@ func NewBroker(runs RunReader, hub Hub, zombies ZombieSource, opt BrokerOptions)
 	if opt.FlushEvery <= 0 {
 		opt.FlushEvery = defaultFlushEvery
 	}
-	return &Broker{runs: runs, hub: hub, zombies: zombies, opt: opt, clients: map[*client]struct{}{}}
+	if opt.MaxClients <= 0 {
+		opt.MaxClients = DefaultMaxClients
+	}
+	if opt.MaxWatched <= 0 {
+		opt.MaxWatched = DefaultMaxWatched
+	}
+	return &Broker{runs: runs, hub: hub, zombies: zombies, opt: opt, nonce: newNonce(),
+		clients: map[*client]struct{}{}, watch: map[string][]byte{}}
+}
+
+func newNonce() string {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// eventID is the SSE id of event n.
+func (b *Broker) eventID(n uint64) string { return b.nonce + "-" + strconv.FormatUint(n, 10) }
+
+// parseEventID reads a Last-Event-ID this broker issued. ok is false for an
+// id from another process (a different nonce) or one that does not parse.
+func (b *Broker) parseEventID(raw string) (n uint64, ok bool) {
+	nonce, seq, found := strings.Cut(raw, "-")
+	if !found || nonce != b.nonce {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(seq, 10, 64)
+	return n, err == nil
+}
+
+// StartOnFirstSubscriber makes the first subscribe start Run(ctx) through
+// spawn (the server's tracked goroutine group), so a server nobody streams
+// from never runs the loop. Nothing starts once ctx is done.
+func (b *Broker) StartOnFirstSubscriber(ctx context.Context, spawn func(func())) {
+	b.mu.Lock()
+	b.startCtx, b.spawn = ctx, spawn
+	b.mu.Unlock()
+}
+
+func (b *Broker) ensureRunning() {
+	b.mu.Lock()
+	ctx, spawn := b.startCtx, b.spawn
+	b.mu.Unlock()
+	if spawn == nil || ctx.Err() != nil {
+		return
+	}
+	b.startOnce.Do(func() { spawn(func() { b.Run(ctx) }) })
 }
 
 // Run drains the feed until ctx ends. The feed's events name a run; each
@@ -98,6 +175,12 @@ func NewBroker(runs RunReader, hub Hub, zombies ZombieSource, opt BrokerOptions)
 // run that changed since the last tick, and a run that is busy changes
 // constantly, so the cost is bounded by the number of active runs (a handful),
 // not by the number of progress events.
+//
+// The feed itself is lossy: the registry's EventHub drops an event for a
+// subscriber whose 64-slot buffer is full. A dropped op.terminal would leave
+// clients showing the run running forever, so every run published while not
+// settled is also re-read each tick until a read finds it settled, and
+// published again when it changed. That set is bounded by MaxWatched.
 func (b *Broker) Run(ctx context.Context) {
 	if b.hub == nil || b.runs == nil {
 		return
@@ -120,6 +203,7 @@ func (b *Broker) Run(ctx context.Context) {
 			}
 		case <-tick.C:
 			b.flush(dirty)
+			b.recheckWatched()
 		}
 	}
 }
@@ -143,6 +227,14 @@ func (b *Broker) flush(dirty map[string]struct{}) {
 	if len(dirty) == 0 {
 		return
 	}
+	zs := b.zombieIDs()
+	for id := range dirty {
+		delete(dirty, id)
+		b.refresh(id, zs, true)
+	}
+}
+
+func (b *Broker) zombieIDs() map[string]bool {
 	var zs map[string]bool
 	if b.zombies != nil {
 		for _, z := range b.zombies.Zombies() {
@@ -152,17 +244,50 @@ func (b *Broker) flush(dirty map[string]struct{}) {
 			zs[z.OpID] = true
 		}
 	}
-	for id := range dirty {
-		delete(dirty, id)
-		rec, err := b.runs.GetRunV3(id)
-		if err != nil {
-			eventsLog.Warn("read run %s for event failed: %v", logger.SanitizeLogValue(id), err)
-			continue
-		}
-		if rec == nil {
-			continue
-		}
-		b.publish(toView(*rec, zs))
+	return zs
+}
+
+// refresh reads run id and publishes it: always when an event named it
+// (always), otherwise only when it differs from what was last published. It
+// keeps the watch set: an unsettled run is watched, a settled or vanished one
+// is not.
+func (b *Broker) refresh(id string, zs map[string]bool, always bool) {
+	rec, err := b.runs.GetRunV3(id)
+	if err != nil {
+		eventsLog.Warn("read run %s for event failed: %v", logger.SanitizeLogValue(id), err)
+		return
+	}
+	if rec == nil {
+		delete(b.watch, id)
+		return
+	}
+	v := toView(*rec, zs)
+	data, _ := json.Marshal(v)
+	last, watched := b.watch[id]
+	if always || !watched || string(last) != string(data) {
+		b.publish(v)
+	}
+	if state.ClassifyV3(rec.State).Settled && !zs[id] {
+		delete(b.watch, id)
+		return
+	}
+	if watched || len(b.watch) < b.opt.MaxWatched {
+		b.watch[id] = data
+	}
+}
+
+// recheckWatched re-reads every watched run (see Run).
+func (b *Broker) recheckWatched() {
+	if len(b.watch) == 0 {
+		return
+	}
+	zs := b.zombieIDs()
+	ids := make([]string, 0, len(b.watch))
+	for id := range b.watch {
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		b.refresh(id, zs, false)
 	}
 }
 
@@ -223,13 +348,30 @@ func (c *client) take() (msgs []message, resync bool) {
 	return msgs, resync
 }
 
-// subscribe registers a client. With lastID set it first queues the ring's
-// events after lastID; when the ring no longer reaches back that far (or the
-// id is from before a restart) the client is marked to resync instead.
-func (b *Broker) subscribe(lastID uint64, hasLast bool) (*client, func()) {
+// resumeMode is what a new client asked for.
+type resumeMode int
+
+const (
+	resumeNone   resumeMode = iota // no Last-Event-ID: live events only
+	resumeAfter                    // replay the ring after lastID
+	resumeResync                   // an id this broker cannot resume from
+)
+
+// subscribe registers a client. resumeAfter first queues the ring's events
+// after lastID; when the ring no longer reaches back that far (or for
+// resumeResync: an id of another process, or one that does not parse) the
+// client is marked to resync instead. Past MaxClients it refuses.
+func (b *Broker) subscribe(lastID uint64, mode resumeMode) (*client, func(), error) {
 	c := newClient(b.opt.ClientBuffer)
 	b.mu.Lock()
-	if hasLast {
+	if len(b.clients) >= b.opt.MaxClients {
+		b.mu.Unlock()
+		return nil, nil, ErrTooManyClients
+	}
+	switch mode {
+	case resumeResync:
+		c.resync = true
+	case resumeAfter:
 		oldest := b.seq + 1
 		if len(b.ring) > 0 {
 			oldest = b.ring[0].id
@@ -247,18 +389,22 @@ func (b *Broker) subscribe(lastID uint64, hasLast bool) (*client, func()) {
 	}
 	b.clients[c] = struct{}{}
 	b.mu.Unlock()
+	b.ensureRunning()
 	return c, func() {
 		b.mu.Lock()
 		delete(b.clients, c)
 		b.mu.Unlock()
-	}
+	}, nil
 }
 
 // Events implements GET /api/v3/ops/events: text/event-stream of
 // `event: run` (a RunView, with progress.chunks and progress.workers), a
 // `: heartbeat` comment every 15 s, and `event: resync` when events were
-// missed (a client too slow for its buffer, or a Last-Event-ID the ring no
-// longer holds): reload /runs, then keep reading.
+// missed (a client too slow for its buffer, a Last-Event-ID the ring no
+// longer holds, or one from before a restart): reload /runs, then keep
+// reading. Event ids are "<boot nonce>-<sequence>". The stream ends when the
+// client leaves or the server starts shutting down (Deps.Closing), and past
+// MaxClients open streams the answer is 503.
 func (h *Handler) Events(c *gin.Context) {
 	b := h.d.Broker
 	if b == nil {
@@ -266,16 +412,18 @@ func (h *Handler) Events(c *gin.Context) {
 		return
 	}
 	var lastID uint64
-	hasLast := false
+	mode := resumeNone
 	if raw := c.GetHeader("Last-Event-ID"); raw != "" {
-		n, err := strconv.ParseUint(raw, 10, 64)
-		if err != nil {
-			httputil.RespondWithValidationError(c, "Last-Event-ID", "not an event id")
-			return
+		mode = resumeResync
+		if n, ok := b.parseEventID(raw); ok {
+			lastID, mode = n, resumeAfter
 		}
-		lastID, hasLast = n, true
 	}
-	cl, unsubscribe := b.subscribe(lastID, hasLast)
+	cl, unsubscribe, err := b.subscribe(lastID, mode)
+	if err != nil {
+		httputil.RespondWithServiceUnavailable(c, "too many open operations event streams; try again shortly")
+		return
+	}
 	defer unsubscribe()
 
 	c.Header("Content-Type", "text/event-stream")
@@ -289,11 +437,14 @@ func (h *Handler) Events(c *gin.Context) {
 	hb := time.NewTicker(b.opt.Heartbeat)
 	defer hb.Stop()
 	done := c.Request.Context().Done()
+	closing := h.d.Closing // nil blocks forever
 	// A subscribe that queued a replay or a resync has something to send now.
 	cl.signal()
 	for {
 		select {
 		case <-done:
+			return
+		case <-closing:
 			return
 		case <-hb.C:
 			fmt.Fprint(c.Writer, ": heartbeat\n\n")
@@ -308,7 +459,7 @@ func (h *Handler) Events(c *gin.Context) {
 				if err != nil {
 					continue
 				}
-				fmt.Fprintf(c.Writer, "id: %d\nevent: run\ndata: %s\n\n", m.id, data)
+				fmt.Fprintf(c.Writer, "id: %s\nevent: run\ndata: %s\n\n", b.eventID(m.id), data)
 			}
 			c.Writer.Flush()
 		}

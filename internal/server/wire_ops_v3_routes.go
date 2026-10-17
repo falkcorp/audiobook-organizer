@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-17
 
@@ -29,7 +29,7 @@ import (
 // database.Store), the catalog and enqueuer are the registry, the schedules are
 // the TaskScheduler's.
 func (s *Server) wireOpsV3Routes(protected *gin.RouterGroup) {
-	d := opsv3.Deps{Authz: s.opsV3Authz()}
+	d := opsv3.Deps{Authz: s.opsV3Authz(), Closing: s.opsV3Closing}
 	if runs, ok := database.AsCapability[opsv3.RunReader](s.storeForWiring()); ok {
 		d.Runs = runs
 	}
@@ -47,9 +47,19 @@ func (s *Server) wireOpsV3Routes(protected *gin.RouterGroup) {
 	// (05-PR9 report), so POST .../approve answers 501 after its checks.
 	if d.Runs != nil && s.opHub != nil {
 		d.Broker = opsv3.NewBroker(d.Runs, s.opHub, d.Zombies, opsv3.BrokerOptions{})
-		s.bgWG.Go("ops-v3-events", func() { d.Broker.Run(s.bgCtx) })
+		// Started by its first subscriber, so a server (or a test server)
+		// nobody streams from runs no loop.
+		d.Broker.StartOnFirstSubscriber(s.bgCtx, func(fn func()) { s.bgWG.Go("ops-v3-events", fn) })
 	}
 	opsv3.New(d).Register(protected, s.perm)
+}
+
+// closeOpsV3Streams ends every open /api/v3/ops/events stream. Idempotent.
+func (s *Server) closeOpsV3Streams() {
+	if s.opsV3Closing == nil {
+		return
+	}
+	s.closeOpsV3Once.Do(func() { close(s.opsV3Closing) })
 }
 
 // opsV3Authz is the server's permission semantics (auth disabled and the

@@ -1,14 +1,17 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-17
 
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -186,4 +189,39 @@ func TestOpsV3Routes_DefsShowTheSchedulerStartAssigns(t *testing.T) {
 	}
 	require.Equal(t, len(want), shown, "every scheduled def is listed with its schedule")
 	require.Equal(t, withNext, shownNext)
+}
+
+// TestOpsV3Routes_EventStreamsEndOnShutdownAndStartLazily: building the
+// server starts no event loop (it starts with the first stream), and
+// closeOpsV3Streams, which Shutdown calls before the graceful HTTP shutdown,
+// ends an open stream at once instead of after the 30s timeout.
+func TestOpsV3Routes_EventStreamsEndOnShutdownAndStartLazily(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	require.NotContains(t, s.bgWG.Running(), "ops-v3-events", "the broker loop must not run before anyone streams")
+
+	srv := httptest.NewServer(s.router)
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v3/ops/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Eventually(t, func() bool { return slices.Contains(s.bgWG.Running(), "ops-v3-events") }, 5*time.Second, 10*time.Millisecond)
+
+	ended := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		close(ended)
+	}()
+	s.closeOpsV3Streams()
+	s.closeOpsV3Streams() // idempotent
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the event stream outlived closeOpsV3Streams")
+	}
 }
