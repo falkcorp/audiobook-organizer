@@ -1,7 +1,7 @@
 // file: internal/merge/sync_identity_survival_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 44a928e0-6f46-412d-826b-198c12f52dc7
-// last-edited: 2026-10-05
+// last-edited: 2026-10-17
 
 // Package merge: cross-mechanism ID-survival acceptance suite.
 //
@@ -9,8 +9,8 @@
 // §4.3: the client-visible libraryItemId (syncID) and the associated user
 // progress must survive every operation this app's core loop performs on a
 // Book/BookFile row -- rename, move (tagged and untagged), retag, the two
-// merge-family paths (merge.Service.MergeBooks/CombineBooks and the separate
-// dedup.MergeBooks hard-delete path), and file replacement -- plus the
+// merge-family paths (merge.Service.MergeBooks/CombineBooks and the
+// hard-delete shell case), and file replacement -- plus the
 // redirect-chain resolution a chain of merges leaves behind.
 //
 // Several of those operations already have thorough, mechanism-specific
@@ -194,14 +194,10 @@ func TestSyncIdentitySurvives_Retag(t *testing.T) {
 //     redirect-chain case this task also asks for), and CombineBooks'
 //     hard-delete shell case. internal/merge/sync_follow_concurrent_test.go
 //     adds a 16-goroutine exactly-once regression on top of that.
-//   - dedup.MergeBooks (the SEPARATE hard-delete path used by
-//     internal/reconcile/itunes_heal.go, the highest-stakes case because
-//     there is no surviving row to repoint after the fact):
-//     internal/dedup/book_dedup_sync_follow_test.go's
-//     TestMergeBooks_SyncIdentityFollowsHardDelete asserts the redirect, the
-//     progress carry-forward, AND that the loser row is actually gone
-//     (proving this really is the hard-delete path, not a stand-in), plus an
-//     idempotent-retry test.
+//   - The legacy dedup.MergeBooks hard-delete path no longer exists: the
+//     reconcile heal (internal/reconcile/itunes_heal.go) now merges through
+//     merge.Service.MergeBooksWithOptions, whose follow coverage is the
+//     sync_follow_test.go set above.
 //
 // Re-driving any of those through this file would assert the exact same
 // production code paths a second time with no new failure mode covered.
@@ -352,12 +348,8 @@ func TestSyncIdentitySurvives_RedirectChain_PathologicalCycle(t *testing.T) {
 // chain silently drops the identity or the progress, this is the one test
 // that would catch it.
 //
-// dedup.MergeBooks cannot join this chain: internal/dedup imports
-// internal/merge (for FollowMergeWithStore), so a test in package merge
-// cannot call into internal/dedup without an import cycle. Its hard-delete
-// case is proven on its own, end-to-end, by
-// internal/dedup/book_dedup_sync_follow_test.go's
-// TestMergeBooks_SyncIdentityFollowsHardDelete instead.
+// The legacy dedup.MergeBooks hard-delete path (deleted) is not part of this
+// chain; every live merge-family path is.
 //
 // Sequence: book X is renamed, moved (tagged), and retagged (three
 // UpdateBook calls, same ID throughout) -- proving the syncID survives all

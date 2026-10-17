@@ -1,5 +1,5 @@
 // file: internal/merge/legacy_guard_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e0c7a41-3b92-4d68-a1f4-8c2d6b9e0f73
 // last-edited: 2026-10-17
 
@@ -34,7 +34,9 @@ func seedPathBook(t *testing.T, store database.Store, title, path string) *datab
 
 // Legacy guardKeeperAudioRoute: a keeper with no audio route (no book_file
 // rows and an empty FilePath) while a loser has audio is refused with the
-// typed FilelessPrimaryError, before any write.
+// typed FilelessPrimaryError, before any write. Overlaps with
+// TestMergeBooks_ExplicitFilelessPrimary_Refused (service_guards_test.go),
+// which covers the same refusal from the generic F1 angle.
 func TestLegacyParity_FilelessKeeperRefused(t *testing.T) {
 	store := setupTestStore(t)
 	keeper := seedGuardBook(t, store, "Parity Ghost Keeper", "m4b", false)

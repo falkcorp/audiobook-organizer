@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.48.1
+// version: 1.48.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-17
 
@@ -57,7 +57,7 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 //
 // MergeBooks and CombineBooks serialize their read-modify-writes on the
 // package-level mergeSerializeMu (see serialize.go), shared with the sibling
-// dedup.MergeBooks path so any two merges are mutually exclusive on a shared
+// split-book merge path (dedup, via LockMergeRMW) so any two merges are mutually exclusive on a shared
 // book row.
 type Service struct {
 	db           Store
@@ -545,7 +545,7 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 
 	// Serialize the entire read-modify-write against every other merge-family
-	// path (MergeBooks / CombineBooks / dedup.MergeBooks) — see the
+	// path (MergeBooks / CombineBooks / split-book merge) — see the
 	// mergeSerializeMu doc comment. Scoped to the merge itself; nothing
 	// slow/blocking runs while it is held.
 	mergeSerializeMu.Lock()
@@ -1698,14 +1698,14 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	}
 
 	// Serialize the entire read-modify-write against every other merge-family
-	// path (MergeBooks / CombineBooks / UndoCombine / dedup.MergeBooks).
+	// path (MergeBooks / CombineBooks / UndoCombine / split-book merge).
 	// CombineBooks is a synchronous HTTP handler with no concurrency key, so two
 	// combines — or a combine racing a MergeBooks on a shared book — can
 	// otherwise interleave GetBookByID -> MoveBookFilesToBook ->
 	// ReassignExternalIDs -> soft-delete -> UpdateBook and corrupt the same way
 	// #1930 fixed for MergeBooks. Scoped to the combine itself; only local DB
 	// work runs while it is held. (CombineBooks never calls MergeBooks or
-	// dedup.MergeBooks, so the non-reentrant mutex is taken exactly once.)
+	// the split-book merge, so the non-reentrant mutex is taken exactly once.)
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
 

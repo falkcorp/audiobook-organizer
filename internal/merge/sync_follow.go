@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-09-26
+// last-edited: 2026-10-17
 
 // Package merge: sync-identity follow hooks.
 //
@@ -11,8 +11,8 @@
 // churns ULIDs. Every code path that retires or replaces a Book ULID must
 // therefore carry the syncID (and the per-user listening position keyed to the
 // old ULID) forward, or a device's place in a book is silently orphaned. On the
-// HARD-delete path (dedup.MergeBooks) there is no surviving row to repoint
-// afterwards, so an un-followed merge there is unrecoverable. CombineBooks
+// HARD-delete path (a loser row removed outright) there is no surviving row to
+// repoint afterwards, so an un-followed merge there is unrecoverable. CombineBooks
 // soft-deletes and journals (since 2026-09-13); UndoCombine reverses its
 // follows with ClearSyncMerge and FollowFileMove in the other direction.
 //
@@ -197,14 +197,6 @@ func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, 
 	return errors.Join(errs...)
 }
 
-// FollowMergeWithStore is FollowMerge for callers that hold only a store and
-// cannot reach a *Service (dedup.MergeBooks). It derives the follower by
-// capability; a store without sync identity still has every user's upos/ubs
-// moved (only the redirect and bookmarks need identity).
-func FollowMergeWithStore(db UserProgressMerger, winnerBookID string, loserBookIDs []string) error {
-	return FollowMerge(db, asFollower(db), winnerBookID, loserBookIDs)
-}
-
 // FollowFileMove carries each moved file's sync_file identity (its durable
 // `ino`) from oldBookID to newBookID after the caller has physically moved
 // the underlying BookFile row(s) onto a different book -- CombineBooks
@@ -219,7 +211,7 @@ func FollowMergeWithStore(db UserProgressMerger, winnerBookID string, loserBookI
 // SyncFileStore is a silent no-op everywhere else sync_file lives, but a
 // skipped follow here strands every moved file's ino on a book that no longer
 // owns the file -- logged at Warn once for the whole call, matching
-// FollowMergeWithStore's severity. Each individual
+// FollowMerge's severity. Each individual
 // repoint failure is logged at ERROR with both book IDs and the file ID,
 // because a silent failure here quietly breaks a user's downloaded file with
 // no trace.
@@ -301,7 +293,7 @@ func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
 	}
 	ids := database.AsSyncIdentityStore(db)
 	if ids == nil {
-		// Debug, not warn (unlike FollowMergeWithStore): both rows survive a
+		// Debug, not warn (unlike FollowMerge): both rows survive a
 		// version-link, so a skipped follow here is recoverable by repointing
 		// later, and this runs on every hash-duplicate import.
 		slog.Debug("sync-identity follow: store does not implement SyncIdentityStore; skipping repoint",
