@@ -1,6 +1,6 @@
 // file: web/src/main.tsx
-// version: 2.0.0
-// last-edited: 2026-08-20
+// version: 2.1.0
+// last-edited: 2026-10-17
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import React from 'react';
@@ -13,13 +13,22 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/toast/ToastProvider';
 import { AuthProvider } from './contexts/AuthContext';
 import { STORAGE_KEYS } from './lib/storageKeys';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient, startQuerySync } from './lib/queryClient';
+
+const QueryDevtools = import.meta.env.DEV
+  ? React.lazy(() =>
+      import('@tanstack/react-query-devtools').then((m) => ({ default: m.ReactQueryDevtools }))
+    )
+  : null;
 
 // eslint-disable-next-line react-refresh/only-export-components
 function AppRoot() {
   const app = (
     <ErrorBoundary>
-      <BrowserRouter>
-        {/* The theme is a module constant now, not derived from app state: with
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          {/* The theme is a module constant now, not derived from app state: with
             CSS variables, changing mode flips one attribute on <html> rather
             than rebuilding the theme and re-rendering every styled component.
 
@@ -27,23 +36,30 @@ function AppRoot() {
             used, so an existing saved preference carries over without a
             migration step. The matching inline script in index.html applies it
             before React mounts, which is what removes the light-mode flash. */}
-        <ThemeProvider
-          theme={appTheme}
-          defaultMode="dark"
-          modeStorageKey={STORAGE_KEYS.APP_THEME_MODE}
-        >
-          <CssBaseline />
-          <AuthProvider>
-            <ToastProvider>
-              <App />
-            </ToastProvider>
-          </AuthProvider>
-        </ThemeProvider>
-      </BrowserRouter>
+          <ThemeProvider
+            theme={appTheme}
+            defaultMode="dark"
+            modeStorageKey={STORAGE_KEYS.APP_THEME_MODE}
+          >
+            <CssBaseline />
+            <AuthProvider>
+              <ToastProvider>
+                <App />
+              </ToastProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </BrowserRouter>
+        {QueryDevtools && (
+          <React.Suspense fallback={null}>
+            <QueryDevtools />
+          </React.Suspense>
+        )}
+      </QueryClientProvider>
     </ErrorBoundary>
   );
 
   return import.meta.env.DEV ? <React.StrictMode>{app}</React.StrictMode> : app;
 }
 
+startQuerySync();
 ReactDOM.createRoot(document.getElementById('root')!).render(<AppRoot />);
