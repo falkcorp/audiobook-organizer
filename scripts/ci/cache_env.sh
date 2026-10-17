@@ -1,22 +1,24 @@
 #!/bin/bash
 # file: scripts/ci/cache_env.sh
-# version: 1.2.0
+# version: 1.3.0
 # guid: 6b0e7d3a-92c4-4f18-a5d7-1e8c3f40b9a2
-# last-edited: 2026-10-12
+# last-edited: 2026-10-17
 # Source this from a Woodpecker step (`. scripts/ci/cache_env.sh`) as the
 # step's first command. It does two things: it unsets the provider keys and
 # live-service URLs that would turn on a live external call (below), and it
 # points Go and npm at the host-wide CI cache of whichever heavy agent runs
 # the step.
 #
-# The workflows that run on any `heavy=true` agent (U1 or llm1) cannot name a
-# cache path in `environment:`: it is a literal, and the two hosts keep the
-# cache in different places. The local backend gives every pipeline a fresh
+# The workflows that run on any `heavy=true` agent (U1 or llm1), or any
+# `taglib=true` agent (U1 or u0-local), cannot name a cache path in
+# `environment:`: it is a literal, and the hosts keep the cache in different
+# places. The local backend gives every pipeline a fresh
 # HOME, so Go's default caches would be re-created per run, which is why the
 # workflows set the caches explicitly.
 #
 #   U1    Linux amd64   /tank/ci/cache          (the agent's own ZFS dataset)
 #   llm1  macOS arm64   /Users/jdfalk/ci/cache  (there is no /tank)
+#   u0-local Linux amd64 /srv/ci/cache          (its own ZFS dataset on prod)
 #
 # The first root that exists wins. It exports CI_CACHE_ROOT, GOMODCACHE,
 # GOCACHE and npm_config_cache. If no root exists it returns 1 instead of
@@ -39,7 +41,7 @@ unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HAR
 
 
 CI_CACHE_ROOT=
-for _ci_cache_candidate in /tank/ci/cache /Users/jdfalk/ci/cache; do
+for _ci_cache_candidate in /tank/ci/cache /Users/jdfalk/ci/cache /srv/ci/cache; do
   if [ -d "$_ci_cache_candidate" ]; then
     CI_CACHE_ROOT=$_ci_cache_candidate
     break
@@ -48,7 +50,7 @@ done
 unset _ci_cache_candidate
 
 if [ -z "$CI_CACHE_ROOT" ]; then
-  echo "cache_env.sh: no CI cache root found (looked for /tank/ci/cache and /Users/jdfalk/ci/cache)" >&2
+  echo "cache_env.sh: no CI cache root found (looked for /tank/ci/cache, /Users/jdfalk/ci/cache and /srv/ci/cache)" >&2
   return 1 2>/dev/null || exit 1
 fi
 
