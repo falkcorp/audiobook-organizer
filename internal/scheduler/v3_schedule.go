@@ -1,5 +1,5 @@
 // file: internal/scheduler/v3_schedule.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b41c7e92-6d05-4a38-9f1e-2c8a5d70e3b6
 // last-edited: 2026-10-17
 
@@ -78,6 +78,11 @@ type v3Entry struct {
 	// process saw it (zero if it never closed). Due times before it were not
 	// "missed": a closed gate is "not active", not "process down".
 	gateOpenedAt time.Time
+	// gateClosedAt is when the gate went from open to closed (or was first
+	// seen closed at boot). It is persisted so a restart while the gate is
+	// closed still knows the gate was closed: the first poll that finds it open
+	// then records an open edge. Nil while the gate is open.
+	gateClosedAt *time.Time
 	lastFire     *time.Time
 	lastRunID    string
 	missed       int64
@@ -230,6 +235,7 @@ func (ts *TaskScheduler) RegisterSchedules(defs []ops.Definition) error {
 		}
 		ts.loadSchedState(e)
 		ts.seedFromLegacyClock(e)
+		ts.noteClosedAtBoot(e)
 		if e.kind == "window" {
 			windowIDs = append(windowIDs, e.defID)
 		}
@@ -284,6 +290,31 @@ func (ts *TaskScheduler) loadSchedState(e *v3Entry) {
 	ts.v3.mu.Lock()
 	defer ts.v3.mu.Unlock()
 	e.lastFire, e.lastRunID, e.missed = rec.LastFire, rec.LastRunID, rec.Missed
+	if rec.GateClosedAt != nil {
+		// The gate was closed when this process last wrote the record. Start
+		// closed so the first poll that finds it open sees an open edge and
+		// stamps gateOpenedAt; otherwise the closed time would count as missed.
+		e.gateClosedAt = rec.GateClosedAt
+		e.gate = false
+	}
+}
+
+// noteClosedAtBoot records that the gate is closed at startup when the saved
+// record does not already say so, so a restart that lands while the gate is
+// closed (and finds it open later or at the next boot) is not mistaken for
+// downtime. It runs after loadSchedState and seedFromLegacyClock.
+func (ts *TaskScheduler) noteClosedAtBoot(e *v3Entry) {
+	ts.v3.mu.Lock()
+	need := !e.sched.Enabled() && e.gateClosedAt == nil
+	if need {
+		now := ts.v3.clock()
+		e.gateClosedAt = &now
+		e.gate = false
+	}
+	ts.v3.mu.Unlock()
+	if need {
+		ts.persistSched(e)
+	}
 }
 
 // seedFromLegacyClock keeps a ported op's cadence across the port. The old
@@ -446,7 +477,7 @@ func (ts *TaskScheduler) persistSched(e *v3Entry) {
 	}
 	next, _ := ts.nextFireOf(e)
 	ts.v3.mu.Lock()
-	rec := database.SchedState{DefID: e.defID, LastFire: e.lastFire, LastRunID: e.lastRunID, Missed: e.missed}
+	rec := database.SchedState{DefID: e.defID, LastFire: e.lastFire, LastRunID: e.lastRunID, Missed: e.missed, GateClosedAt: e.gateClosedAt}
 	if !next.IsZero() {
 		rec.NextFire = &next
 	}
@@ -528,6 +559,11 @@ func (ts *TaskScheduler) pollV3Entry(e *v3Entry, now time.Time) {
 	e.gate = gate
 	if edge && gate {
 		e.gateOpenedAt = now
+		e.gateClosedAt = nil
+	}
+	if edge && !gate {
+		closedAt := now
+		e.gateClosedAt = &closedAt
 	}
 	open := e.gateOpenedAt
 	ts.v3.mu.Unlock()
@@ -710,8 +746,9 @@ func (ts *TaskScheduler) nextFireOf(e *v3Entry) (time.Time, bool) {
 }
 
 // NextFire reports when a registered definition will next fire (for the def
-// list), or false if it is manual, disabled, driven by a legacy task, or its
-// config gate (Schedule.When) is currently off.
+// list), or false if it is manual, disabled, or its config gate
+// (Schedule.When) is currently off. A definition a legacy task still drives
+// reports that task's next due time.
 func (ts *TaskScheduler) NextFire(defID string) (time.Time, bool) {
 	ts.v3.mu.Lock()
 	e, ok := ts.v3.entries[defID]
