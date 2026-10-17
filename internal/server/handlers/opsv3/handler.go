@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
 // last-edited: 2026-10-17
 
@@ -172,6 +172,10 @@ type Deps struct {
 	Authz    Authz
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Closing is closed when the server starts shutting down, so open event
+	// streams end at once instead of holding the HTTP shutdown for its whole
+	// timeout. nil never closes.
+	Closing <-chan struct{}
 }
 
 // Handler serves the routes.
