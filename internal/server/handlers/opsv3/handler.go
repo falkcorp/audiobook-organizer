@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
 // last-edited: 2026-10-17
 
@@ -79,6 +79,16 @@ type DefInfo struct {
 	// ParamsSchema is the JSON Schema params are validated against before a
 	// run is queued; empty means the definition declares none.
 	ParamsSchema []byte
+	// Writer is whether a run can change anything, so its mode matters. For
+	// a native definition it is !ReadOnly; for an adapted v2 op it is what
+	// its capabilities say (undeclared counts as writing).
+	Writer bool
+	// HasPreview is whether the definition honours dry_run, so a "preview"
+	// run really writes nothing. Native writing definitions always do (the
+	// runner resolves the mode with opmode.ParseDryRun). An adapted v2 op does
+	// only when write_op_modes.golden records it as `preview`; the `no-mode`
+	// ops ignore dry_run and always write. Meaningless when !Writer.
+	HasPreview bool
 }
 
 // Defs is the definition catalog.

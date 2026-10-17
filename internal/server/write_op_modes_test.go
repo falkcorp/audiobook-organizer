@@ -1,19 +1,15 @@
 // file: internal/server/write_op_modes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 96a36061-1106-45e7-8f9f-7bc530c6495e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-17
 
 package server
 
 import (
-	"bufio"
+	"bytes"
 	"os"
 	"sort"
-	"strings"
 	"testing"
-
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 const writeOpModesPath = "testdata/write_op_modes.golden"
@@ -63,60 +59,33 @@ func TestWriteOps_EveryWriteOpHasARecordedMode(t *testing.T) {
 	}
 }
 
-// canWrite: declares a write capability, or declares none (undeclared is not
-// evidence of read-only).
-func canWrite(d opsregistry.OperationDef) bool {
-	if len(d.Capabilities) == 0 {
-		return true
-	}
-	for _, c := range d.Capabilities {
-		switch c {
-		case opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite, opsregistry.CapDBMigrate:
-			return true
-		}
-	}
-	return false
-}
-
-func isMaintenanceJobOp(id string) bool {
-	jobID, ok := strings.CutPrefix(id, "maintenance.")
-	if !ok {
-		return false
-	}
-	j, err := maintenance.Get(jobID)
-	return err == nil && j != nil
-}
-
 func readWriteOpModes(t *testing.T) map[string]string {
 	t.Helper()
-	f, err := os.Open(writeOpModesPath)
+	raw, err := os.ReadFile(writeOpModesPath)
 	if err != nil {
 		t.Fatalf("open %s: %v", writeOpModesPath, err)
 	}
-	defer f.Close()
-	out := map[string]string{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		id, class, ok := strings.Cut(line, "\t")
-		if !ok {
-			t.Fatalf("%s: malformed line %q (want <op id><TAB><class>)", writeOpModesPath, line)
-		}
-		switch class {
-		case "preview", "no-mode":
-		default:
-			t.Fatalf("%s: %s has class %q; allowed: preview, no-mode", writeOpModesPath, id, class)
-		}
-		if _, dup := out[id]; dup {
-			t.Fatalf("%s: %s listed twice", writeOpModesPath, id)
-		}
-		out[id] = class
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatalf("read %s: %v", writeOpModesPath, err)
+	out, err := parseWriteOpModes(raw)
+	if err != nil {
+		t.Fatalf("%s: %v", writeOpModesPath, err)
 	}
 	return out
+}
+
+// TestWriteOpModes_EmbeddedLedgerIsTheFile: the copy /api/v3/ops reads at
+// runtime is the file this test checks, and it parses.
+func TestWriteOpModes_EmbeddedLedgerIsTheFile(t *testing.T) {
+	raw, err := os.ReadFile(writeOpModesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, writeOpModesLedger) {
+		t.Fatal("embedded ledger differs from the file")
+	}
+	if _, err := parseWriteOpModes(writeOpModesLedger); err != nil {
+		t.Fatal(err)
+	}
+	if len(recordedWriteOpModes()) == 0 {
+		t.Fatal("embedded ledger parsed to nothing")
+	}
 }

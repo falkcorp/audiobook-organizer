@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/defs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a701dc58-da75-41f2-b165-03a957c6e540
 // last-edited: 2026-10-17
 
@@ -63,6 +63,11 @@ type DefView struct {
 	Ready        ReadyView       `json:"ready"`
 	LastRun      *LastRunView    `json:"last_run"`
 	ParamsSchema json.RawMessage `json:"params_schema,omitempty"`
+	// HasPreview says whether a "preview" run of a writing definition really
+	// writes nothing; false means only mode "live" starts it (POST runs
+	// answers 409 otherwise). null for a read-only definition, where the
+	// mode changes nothing.
+	HasPreview *bool `json:"has_preview"`
 }
 
 // lastRunWindow and lastRunTTL bound the work of finding every definition's
@@ -140,6 +145,10 @@ func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo, window map[
 	}
 	if len(d.ParamsSchema) > 0 {
 		v.ParamsSchema = d.ParamsSchema
+	}
+	if d.Writer {
+		hp := d.HasPreview
+		v.HasPreview = &hp
 	}
 	if s, ok := scheds[d.ID]; ok {
 		v.Schedule = ScheduleView{Kind: s.Kind, Active: s.Active, NextFire: s.NextFire, Live: s.Live}

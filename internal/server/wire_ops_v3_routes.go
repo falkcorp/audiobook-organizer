@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-17
 
@@ -82,7 +82,8 @@ type opsV3Defs struct {
 }
 
 func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.DefInfo {
-	c := ops.Compile(def).Common
+	compiled := ops.Compile(def)
+	c := compiled.Common
 	info := opsv3.DefInfo{
 		ID: def.ID(), Title: c.Title, Help: c.Help, Kind: def.Kind().String(),
 		Permissions: od.Permissions, ReadOnly: c.Effects.IsReadOnly(),
@@ -98,6 +99,14 @@ func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.
 	}
 	if od.ParamsSchema != nil {
 		info.ParamsSchema = json.RawMessage(*od.ParamsSchema)
+	}
+	if compiled.Kind == ops.KindAdapted {
+		// FromV2 declares no effects, so the v2 op's own capabilities and the
+		// write-mode ledger say whether it writes and whether it previews.
+		info.Writer, info.HasPreview = v2PreviewMode(od)
+	} else {
+		info.Writer = c.Effects.IsWriter()
+		info.HasPreview = info.Writer
 	}
 	return info
 }
