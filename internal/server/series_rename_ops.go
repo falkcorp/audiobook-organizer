@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
 // last-edited: 2026-10-17
 
@@ -139,10 +139,15 @@ func (s *Server) invalidateSeriesCaches() {
 	}
 }
 
-// invalidateBookDuplicateCaches drops the cache an undone book merge makes
-// stale: the book duplicate scan's result. The merge-undo route
-// (duplicates.Handler.UndoCombine) drops the same key. (The group-list key
-// "book-duplicates" went with GET /audiobooks/duplicates, 03-PR12.)
+// invalidateBookDuplicateCaches drops the "book-dedup-scan" entry that the
+// dedup.book-scan op writes, as the merge-undo route
+// (duplicates.Handler.UndoCombine) does. That key currently has no reader: its
+// only one, GET /audiobooks/duplicates/scan-results, went with 03-PR12, and the
+// op has no HTTP launcher left. Whether the op and this invalidation stay is
+// the open decision with brief area 04, recorded in
+// todo.d/2026-10-17-remove-audiobooks-duplicates-410-stubs.md.
+// Behaviour is kept until then. (The group-list key "book-duplicates" went with
+// GET /audiobooks/duplicates, 03-PR12.)
 func (s *Server) invalidateBookDuplicateCaches() {
 	if s.dedupCache != nil {
 		s.dedupCache.Invalidate("book-dedup-scan")
