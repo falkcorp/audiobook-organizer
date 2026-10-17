@@ -1,8 +1,8 @@
 #!/bin/bash
 # file: scripts/api_examples.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7e8f9a0b-1c2d-3e4f-5a6b-7c8d9e0f1011
-# last-edited: 2026-02-04
+# last-edited: 2026-10-17
 
 # Convenient API examples for quick testing
 # Source this file or run individual examples
@@ -133,11 +133,13 @@ example_list_soft_deleted() {
 }
 
 # ============================================================================
-# Example 10: List duplicate audiobooks
+# Example 10: List exact-match duplicate candidates
+# (GET /audiobooks/duplicates was retired and answers 410 Gone; the Review
+# page's Duplicates lane reads this route instead.)
 # ============================================================================
 example_list_duplicates() {
-    echo "Example: List duplicate audiobooks"
-    curl -X GET "$API/audiobooks/duplicates" \
+    echo "Example: List exact-match duplicate book candidates"
+    curl -X GET "$API/dedup/candidates?entity_type=book&layer=exact&limit=50&offset=0" \
         -H "Accept: application/json"
     echo ""
 }
@@ -271,7 +273,7 @@ show_help() {
     echo "  example_list_audiobooks_paginated          - List with pagination"
     echo "  example_search_audiobooks [search_term]    - Search audiobooks"
     echo "  example_list_soft_deleted                  - List soft-deleted books"
-    echo "  example_list_duplicates                    - List duplicates"
+    echo "  example_list_duplicates                    - List exact-match duplicate candidates"
     echo "  example_list_authors                       - List authors"
     echo "  example_list_series                        - List series"
     echo "  example_list_works                         - List works"
