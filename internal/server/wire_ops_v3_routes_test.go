@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-17
 
@@ -248,4 +248,73 @@ func TestOpsV3Authz_FirstRunCheckReadOncePerRequest(t *testing.T) {
 			require.False(t, authz.Holds(c, p), "a request with no permissions holds none once users exist")
 		}
 	}
+}
+
+// TestOpsV3Routes_NeedCredentialsWhenAuthIsOn: with auth on and users present,
+// every kind of /api/v3/ops route (a read, a start, an approve and the SSE
+// feed) answers 401 to a request with no credentials, through the real
+// middleware chain.
+// Not parallel: it swaps the process-wide config.
+func TestOpsV3Routes_NeedCredentialsWhenAuthIsOn(t *testing.T) {
+	srv, _, _ := repairsPermServer(t, true, true)
+	for _, r := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v3/ops/defs"},
+		{http.MethodGet, "/api/v3/ops/runs"},
+		{http.MethodPost, "/api/v3/ops/defs/library.scan/runs"},
+		{http.MethodPost, "/api/v3/ops/runs"},
+		{http.MethodPost, "/api/v3/ops/runs/r1/cancel"},
+		{http.MethodPost, "/api/v3/ops/runs/r1/approve"},
+		{http.MethodGet, "/api/v3/ops/events"},
+	} {
+		req := httptest.NewRequest(r.method, r.path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		srv.router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code, "%s %s: %s", r.method, r.path, w.Body.String())
+	}
+}
+
+// TestOpsV3Routes_ForwardedHeaderCannotApprove: the unsigned
+// Cf-Access-Authenticated-User-Email header, naming a real admin, with no
+// verified Access JWT, session or token, is not an identity: approve is
+// refused (401/403) by the real server chain, never reaching the handler's
+// 501.
+// Not parallel: it swaps the process-wide config.
+func TestOpsV3Routes_ForwardedHeaderCannotApprove(t *testing.T) {
+	srv, _, _ := repairsPermServer(t, true, true)
+	req := httptest.NewRequest(http.MethodPost, "/api/v3/ops/runs/r1/approve", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cf-Access-Authenticated-User-Email", "admin@x.test")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	require.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, w.Code, w.Body.String())
+}
+
+// TestOpsV3Routes_ViewerCannotStartARun: the seeded viewer role (no
+// scan.trigger) is refused at both start routes by the real permission
+// middleware; an editor (scan.trigger) passes the floor.
+// Not parallel: it swaps the process-wide config.
+func TestOpsV3Routes_ViewerCannotStartARun(t *testing.T) {
+	srv, editor, _ := repairsPermServer(t, true, true)
+	store := srv.storeForWiring()
+	viewerUser, err := store.CreateUser("viewer", "viewer@x.test", "bcrypt", "hash", []string{auth.SeedRoleViewer}, "active")
+	require.NoError(t, err)
+	vs, err := store.CreateSession(viewerUser.ID, "192.0.2.10", "test", time.Hour)
+	require.NoError(t, err)
+	post := func(token, path, body string) *httptest.ResponseRecorder {
+		return postRepairs(srv, token, path, body)
+	}
+	for _, r := range []struct{ path, body string }{
+		{"/api/v3/ops/defs/library.scan/runs", `{"mode":"preview"}`},
+		{"/api/v3/ops/runs", `{"def":"library.scan","mode":"preview"}`},
+	} {
+		w := post(vs.ID, r.path, r.body)
+		require.Equal(t, http.StatusForbidden, w.Code, "viewer %s: %s", r.path, w.Body.String())
+		require.Contains(t, w.Body.String(), "scan.trigger")
+	}
+	// The editor passes the floor and the permission check and reaches the
+	// mode check: library.scan has no preview, so a preview is a 409 and
+	// nothing is queued.
+	w := post(editor, "/api/v3/ops/defs/library.scan/runs", `{"mode":"preview"}`)
+	require.Equal(t, http.StatusConflict, w.Code, "an editor holds scan.trigger: %s", w.Body.String())
 }
