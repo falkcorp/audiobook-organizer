@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 83b0b0e7-6219-4470-952a-df087898cae5
 // last-edited: 2026-10-17
 
@@ -74,7 +74,7 @@ type caller struct {
 
 var (
 	viewer  = caller{perms: auth.PermLibraryView, user: "u-view", method: string(auth.MethodSession)}
-	admin   = caller{perms: auth.PermLibraryView + "," + auth.PermSettingsManage, user: "u-admin", method: string(auth.MethodSession)}
+	admin   = caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger + "," + auth.PermSettingsManage, user: "u-admin", method: string(auth.MethodSession)}
 	nobody  = caller{}
 	headers = caller{perms: auth.PermLibraryView + "," + auth.PermSettingsManage, user: "u-fwd"} // no verified method
 )

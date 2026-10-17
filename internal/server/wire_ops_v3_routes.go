@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-17
 
@@ -21,9 +21,10 @@ import (
 
 // wireOpsV3Routes registers /api/v3/ops/* on the protected /api/v3 group.
 //
-// Every route is library.view at the route; starting a run, cancelling it and
-// approving it are then checked inside the handler against the definition's own
-// permission (see opsv3). The handlers take narrow interfaces: the run reader
+// Reads, cancel and approve are library.view at the route; the two start
+// routes are scan.trigger (v1's POST /operations/v2 floor). Starting,
+// cancelling and approving are then checked inside the handler against the
+// definition's own permission (see opsv3). The handlers take narrow interfaces: the run reader
 // is resolved from the store with AsCapability (it is not part of
 // database.Store), the catalog and enqueuer are the registry, the schedules are
 // the TaskScheduler's.
