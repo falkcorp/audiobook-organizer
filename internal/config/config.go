@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.158.0
+// version: 1.159.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package config
 
@@ -224,20 +224,12 @@ type MetadataSourceRateLimit struct {
 // DownloadClientConfig represents download client connection settings.
 type DownloadClientConfig struct {
 	Torrent TorrentClientConfig `json:"torrent"`
-	Usenet  UsenetClientConfig  `json:"usenet"`
 }
 
 // TorrentClientConfig holds torrent client configuration.
 type TorrentClientConfig struct {
-	Type        string            `json:"type"`
-	Deluge      DelugeConfig      `json:"deluge"`
-	QBittorrent QBittorrentConfig `json:"qbittorrent"`
-}
-
-// UsenetClientConfig holds Usenet client configuration.
-type UsenetClientConfig struct {
-	Type    string        `json:"type"`
-	SABnzbd SABnzbdConfig `json:"sabnzbd"`
+	Type   string       `json:"type"`
+	Deluge DelugeConfig `json:"deluge"`
 }
 
 // DelugeConfig holds Deluge RPC configuration.
@@ -246,23 +238,6 @@ type DelugeConfig struct {
 	Port     int    `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
-}
-
-// QBittorrentConfig holds qBittorrent Web API configuration.
-type QBittorrentConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	UseHTTPS bool   `json:"use_https"`
-}
-
-// SABnzbdConfig holds SABnzbd API configuration.
-type SABnzbdConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	APIKey   string `json:"api_key"`
-	UseHTTPS bool   `json:"use_https"`
 }
 
 // PluginConfig holds per-plugin configuration.
@@ -2944,16 +2919,6 @@ func InitConfig() {
 	viper.SetDefault("download_client.torrent.deluge.port", 0)
 	viper.SetDefault("download_client.torrent.deluge.username", "")
 	viper.SetDefault("download_client.torrent.deluge.password", "")
-	viper.SetDefault("download_client.torrent.qbittorrent.host", "")
-	viper.SetDefault("download_client.torrent.qbittorrent.port", 0)
-	viper.SetDefault("download_client.torrent.qbittorrent.username", "")
-	viper.SetDefault("download_client.torrent.qbittorrent.password", "")
-	viper.SetDefault("download_client.torrent.qbittorrent.use_https", false)
-	viper.SetDefault("download_client.usenet.type", "")
-	viper.SetDefault("download_client.usenet.sabnzbd.host", "")
-	viper.SetDefault("download_client.usenet.sabnzbd.port", 0)
-	viper.SetDefault("download_client.usenet.sabnzbd.api_key", "")
-	viper.SetDefault("download_client.usenet.sabnzbd.use_https", false)
 	// Path formatting & apply pipeline defaults
 	viper.SetDefault("auto_rename_on_apply", true)
 	viper.SetDefault("auto_write_tags_on_apply", true)
@@ -3401,22 +3366,6 @@ func InitConfig() {
 						Port:     viper.GetInt("download_client.torrent.deluge.port"),
 						Username: viper.GetString("download_client.torrent.deluge.username"),
 						Password: viper.GetString("download_client.torrent.deluge.password"),
-					},
-					QBittorrent: QBittorrentConfig{
-						Host:     viper.GetString("download_client.torrent.qbittorrent.host"),
-						Port:     viper.GetInt("download_client.torrent.qbittorrent.port"),
-						Username: viper.GetString("download_client.torrent.qbittorrent.username"),
-						Password: viper.GetString("download_client.torrent.qbittorrent.password"),
-						UseHTTPS: viper.GetBool("download_client.torrent.qbittorrent.use_https"),
-					},
-				},
-				Usenet: UsenetClientConfig{
-					Type: viper.GetString("download_client.usenet.type"),
-					SABnzbd: SABnzbdConfig{
-						Host:     viper.GetString("download_client.usenet.sabnzbd.host"),
-						Port:     viper.GetInt("download_client.usenet.sabnzbd.port"),
-						APIKey:   viper.GetString("download_client.usenet.sabnzbd.api_key"),
-						UseHTTPS: viper.GetBool("download_client.usenet.sabnzbd.use_https"),
 					},
 				},
 			},
@@ -4326,22 +4275,6 @@ func ResetToDefaults() {
 						Port:     0,
 						Username: "",
 						Password: "",
-					},
-					QBittorrent: QBittorrentConfig{
-						Host:     "",
-						Port:     0,
-						Username: "",
-						Password: "",
-						UseHTTPS: false,
-					},
-				},
-				Usenet: UsenetClientConfig{
-					Type: "",
-					SABnzbd: SABnzbdConfig{
-						Host:     "",
-						Port:     0,
-						APIKey:   "",
-						UseHTTPS: false,
 					},
 				},
 			},

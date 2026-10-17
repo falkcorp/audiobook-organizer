@@ -1,6 +1,6 @@
 // file: internal/plugin/plugin.go
-// version: 1.2.0
-// last-edited: 2026-08-19
+// version: 1.3.0
+// last-edited: 2026-10-17
 
 package plugin
 
@@ -53,9 +53,8 @@ type Deps struct {
 // (Capabilities/Init/Shutdown/HealthCheck), but the real download plugin
 // (internal/plugins/deluge) implements a DIFFERENT base — pkg/plugin/sdk.Plugin
 // — so a compile-assert against this interface can never hold without bridging
-// two plugin frameworks. New torrent-client work extends
-// internal/download.TorrentClient (which has real implementors and a config
-// factory) instead of this interface.
+// two plugin frameworks. New torrent-client work belongs in
+// internal/plugins/deluge, not in this interface.
 type DownloadClient interface {
 	Plugin
 	TestConnection() error

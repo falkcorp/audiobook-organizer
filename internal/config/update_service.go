@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.30.0
+// version: 3.31.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 package config
 
@@ -102,8 +102,8 @@ func (us *UpdateService) MaskSecrets(cfg Config) Config {
 	if masked.BasicAuthPassword != "" {
 		masked.BasicAuthPassword = database.MaskSecret(masked.BasicAuthPassword)
 	}
-	// The OAuth client secrets, the Deluge web password and the three
-	// download-client credentials were returned in full cleartext to every
+	// The OAuth client secrets, the Deluge web password and the
+	// download-client credential were returned in full cleartext to every
 	// caller of GET /api/v1/config until 2026-09-10. They are masked here and
 	// restored on the way back in by restoreRoundTripSecrets — masking without
 	// that restore would turn the disclosure into credential loss.
@@ -125,12 +125,6 @@ func (us *UpdateService) MaskSecrets(cfg Config) Config {
 	// (see maskMetadataSourceCredentials for that footgun).
 	if masked.DownloadClient.Torrent.Deluge.Password != "" {
 		masked.DownloadClient.Torrent.Deluge.Password = database.MaskSecret(masked.DownloadClient.Torrent.Deluge.Password)
-	}
-	if masked.DownloadClient.Torrent.QBittorrent.Password != "" {
-		masked.DownloadClient.Torrent.QBittorrent.Password = database.MaskSecret(masked.DownloadClient.Torrent.QBittorrent.Password)
-	}
-	if masked.DownloadClient.Usenet.SABnzbd.APIKey != "" {
-		masked.DownloadClient.Usenet.SABnzbd.APIKey = database.MaskSecret(masked.DownloadClient.Usenet.SABnzbd.APIKey)
 	}
 	masked.MetadataSources = maskMetadataSourceCredentials(cfg.MetadataSources)
 	masked.AIEndpoints = MaskAIEndpoints(cfg.AIEndpoints)
@@ -278,7 +272,7 @@ func acceptSecretUpdate(incoming, current string) bool {
 	return incoming != database.MaskSecret(current)
 }
 
-// roundTripSecrets holds the six secret fields that MaskSecrets masks but that
+// roundTripSecrets holds the four secret fields that MaskSecrets masks but that
 // are NOT protected by either pre-existing mechanism.
 //
 // The two mechanisms already in this file do not reach these:
@@ -290,7 +284,7 @@ func acceptSecretUpdate(incoming, current string) bool {
 //     same PUT.
 //   - restoreMaskedCredentials covers metadata_sources[].credentials only.
 //
-// So these six ride the JSON round-trip like any other field, and
+// So these four ride the JSON round-trip like any other field, and
 // json.Unmarshal writes whatever the payload carried straight onto the
 // candidate. Snapshotting them before the unmarshal and restoring after is the
 // same shape as restoreMaskedCredentials and needs no second registration
@@ -300,11 +294,9 @@ type roundTripSecrets struct {
 	oauthGoogleClientSecret string
 	delugeWebPassword       string
 	delugePassword          string
-	qbittorrentPassword     string
-	sabnzbdAPIKey           string
 }
 
-// snapshotRoundTripSecrets captures the six values as they stood before the
+// snapshotRoundTripSecrets captures the four values as they stood before the
 // payload was applied. Called inside Mutate, immediately before the unmarshal
 // that would clobber them, so no concurrent writer can slip between snapshot
 // and restore.
@@ -314,12 +306,10 @@ func snapshotRoundTripSecrets(cfg *Config) roundTripSecrets {
 		oauthGoogleClientSecret: cfg.OAuthGoogleClientSecret,
 		delugeWebPassword:       cfg.DelugeWebPassword,
 		delugePassword:          cfg.DownloadClient.Torrent.Deluge.Password,
-		qbittorrentPassword:     cfg.DownloadClient.Torrent.QBittorrent.Password,
-		sabnzbdAPIKey:           cfg.DownloadClient.Usenet.SABnzbd.APIKey,
 	}
 }
 
-// restoreRoundTripSecrets puts back any of the six that the incoming payload
+// restoreRoundTripSecrets puts back any of the four that the incoming payload
 // did not genuinely supply.
 //
 // The two halves use DIFFERENT rules on purpose, and the split is the whole
@@ -331,14 +321,14 @@ func snapshotRoundTripSecrets(cfg *Config) roundTripSecrets {
 //     survives to here can only have been sent explicitly. That is unambiguous
 //     and stays the way to unset one.
 //
-//   - The three NESTED download-client credentials use restoreMaskedCredentials'
+//   - The NESTED download-client credential (Deluge) uses restoreMaskedCredentials'
 //     rule instead — restore on the mask AND on empty. A client that sends the
 //     "deluge" object at all sends the whole object, so a blank password box
 //     serializes as "password": "" and is indistinguishable after unmarshal
 //     from "the operator did not touch this field". Treating that as an
 //     explicit clear would destroy the credential on the ordinary partial PUT,
 //     which is the failure this whole change exists to avoid. The cost is that
-//     clearing one of these three requires removing it from the config file
+//     clearing it requires removing it from the config file
 //     rather than blanking the field; that is the same trade metadata-source
 //     credentials already make.
 //
@@ -354,8 +344,6 @@ func restoreRoundTripSecrets(cfg *Config, prior roundTripSecrets) {
 		cfg.DelugeWebPassword = prior.delugeWebPassword
 	}
 	restoreNestedSecret(&cfg.DownloadClient.Torrent.Deluge.Password, prior.delugePassword)
-	restoreNestedSecret(&cfg.DownloadClient.Torrent.QBittorrent.Password, prior.qbittorrentPassword)
-	restoreNestedSecret(&cfg.DownloadClient.Usenet.SABnzbd.APIKey, prior.sabnzbdAPIKey)
 }
 
 // restoreNestedSecret restores prev over *field when the incoming value is
@@ -601,7 +589,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// clobber them, so no concurrent writer can slip between snapshot and
 		// restore. See restoreMaskedCredentials for why this is needed.
 		priorCreds := snapshotSourceCredentials(candidate.MetadataSources)
-		// Same reason, same window: the six secrets MaskSecrets started masking
+		// Same reason, same window: the four secrets MaskSecrets started masking
 		// on 2026-09-10 ride the round-trip below and would be overwritten by
 		// their own mask. See restoreRoundTripSecrets.
 		priorRoundTrip := snapshotRoundTripSecrets(candidate)

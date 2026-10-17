@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -154,7 +154,6 @@ var layerOf = map[string]int{
 	"internal/deluge":                   3, // computed: max of imports=3, floored at 3
 	"internal/diag/flight":              3, // computed: max of imports=0, floored at 3
 	"internal/diagnostics":              3, // computed: max of imports=3, floored at 3
-	"internal/download":                 3, // computed: max of imports=1, floored at 3
 	"internal/fileops":                  3, // computed: max of imports=2, floored at 3
 	"internal/fingerprint/workerclient": 3, // computed: max of imports=0, floored at 3
 	"internal/foldercover":              3, // computed: max of imports=3, floored at 3

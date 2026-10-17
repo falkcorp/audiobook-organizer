@@ -1,6 +1,6 @@
 // file: internal/config/config_coverage_test.go
-// version: 1.3.0
-// last-edited: 2026-10-08
+// version: 1.4.0
+// last-edited: 2026-10-17
 
 package config
 
@@ -209,34 +209,12 @@ func TestCoverage_DownloadClientConfig(t *testing.T) {
 					Password: "pass",
 				},
 			},
-			Usenet: UsenetClientConfig{
-				Type: "sabnzbd",
-				SABnzbd: SABnzbdConfig{
-					Host:     "localhost",
-					Port:     8085,
-					APIKey:   "key",
-					UseHTTPS: true,
-				},
-			},
 		}
 		if cfg.Torrent.Type != "deluge" {
 			t.Error("Torrent type not set")
 		}
-		if cfg.Usenet.SABnzbd.UseHTTPS != true {
-			t.Error("SABnzbd UseHTTPS not set")
-		}
-	})
-
-	t.Run("QBittorrentConfig", func(t *testing.T) {
-		cfg := QBittorrentConfig{
-			Host:     "qbt.local",
-			Port:     8080,
-			Username: "admin",
-			Password: "pass",
-			UseHTTPS: true,
-		}
-		if cfg.UseHTTPS != true {
-			t.Error("UseHTTPS not set")
+		if cfg.Torrent.Deluge.Port != 8112 {
+			t.Error("Deluge port not set")
 		}
 	})
 }
