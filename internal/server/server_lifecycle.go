@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.48.0
+// version: 4.48.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-17
 
@@ -599,6 +599,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 		// Give clients a moment to receive the event
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	// End the v3 operations event streams, or the graceful HTTP shutdown
+	// below waits on them for its whole timeout.
+	s.closeOpsV3Streams()
 
 	// Stop accepting HTTP requests BEFORE closing any stores.
 	// This prevents panics from requests hitting closed PebbleDB instances.

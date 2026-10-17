@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
 // last-edited: 2026-10-17
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,7 +164,7 @@ func TestSSEHeartbeatAndResumeFromLastEventID(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Ring holds ids 3..6. Resuming after 4 replays 5 and 6, no resync.
-	c := openSSE(t, srv, "4")
+	c := openSSE(t, srv, br.eventID(4))
 	var ids []string
 	for len(ids) < 2 {
 		f := c.next(t)
@@ -174,7 +175,7 @@ func TestSSEHeartbeatAndResumeFromLastEventID(t *testing.T) {
 			ids = append(ids, f.id)
 		}
 	}
-	if ids[0] != "5" || ids[1] != "6" {
+	if ids[0] != br.eventID(5) || ids[1] != br.eventID(6) {
 		t.Fatalf("replayed %v, want [5 6]", ids)
 	}
 	// Idle: heartbeats keep coming.
@@ -182,8 +183,10 @@ func TestSSEHeartbeatAndResumeFromLastEventID(t *testing.T) {
 		t.Fatalf("idle stream frame = %+v, want a heartbeat comment", f)
 	}
 
-	// An id older than the ring, and one from a previous process, resync.
-	for _, last := range []string{"1", "999"} {
+	// An id older than the ring, one past this broker's sequence, one from
+	// a previous process (another nonce, or the bare number a restarted
+	// server used to send), and one that does not parse: all resync.
+	for _, last := range []string{br.eventID(1), br.eventID(999), "0a0a0a0a0a0a-5", "5", "abc"} {
 		c := openSSE(t, srv, last)
 		seen := false
 		for range 3 {
@@ -198,26 +201,193 @@ func TestSSEHeartbeatAndResumeFromLastEventID(t *testing.T) {
 	}
 }
 
-func TestSSEBadLastEventID(t *testing.T) {
-	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{})
-	r := newRouter(New(Deps{Runs: &memRuns{}, Broker: br}))
-	req := httptest.NewRequest(http.MethodGet, "/api/v3/ops/events", nil)
-	req.Header.Set(hPerms, auth.PermLibraryView)
-	req.Header.Set("Last-Event-ID", "abc")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("Last-Event-ID abc = %d, want 400", w.Code)
-	}
+func TestSSENoBrokerIs503(t *testing.T) {
 	nobroker := newRouter(New(Deps{Runs: &memRuns{}}))
 	if w := do(t, nobroker, viewer, http.MethodGet, "/api/v3/ops/events", nil); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no broker = %d, want 503", w.Code)
 	}
 }
 
+// TestSSEIDsCarryTheBootNonce: ids are "<nonce>-<seq>", and a broker built
+// later (a restarted server) has another nonce, so it cannot mistake an
+// earlier process's id for one of its own.
+func TestSSEIDsCarryTheBootNonce(t *testing.T) {
+	a := NewBroker(&memRuns{}, nil, nil, BrokerOptions{})
+	b := NewBroker(&memRuns{}, nil, nil, BrokerOptions{})
+	if a.nonce == "" || a.nonce == b.nonce {
+		t.Fatalf("nonces %q and %q must be set and differ", a.nonce, b.nonce)
+	}
+	if n, ok := a.parseEventID(a.eventID(42)); !ok || n != 42 {
+		t.Fatalf("own id = %d %v", n, ok)
+	}
+	if _, ok := b.parseEventID(a.eventID(42)); ok {
+		t.Fatal("an id from another boot parsed as this broker's")
+	}
+}
+
+// TestSSEClientCap: past MaxClients open streams the answer is 503, and a
+// closed stream frees its place.
+func TestSSEClientCap(t *testing.T) {
+	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 2})
+	_, u1, err := br.subscribe(0, resumeNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, u2, err := br.subscribe(0, resumeNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u2()
+	r := newRouter(New(Deps{Runs: &memRuns{}, Broker: br}))
+	if w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/events", nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("third stream = %d, want 503", w.Code)
+	}
+	u1()
+	if _, u3, err := br.subscribe(0, resumeNone); err != nil {
+		t.Fatalf("after one closed: %v", err)
+	} else {
+		u3()
+	}
+}
+
+// TestSSEStreamsEndOnServerClosing: closing Deps.Closing ends an open stream
+// at once, so the HTTP shutdown is not held for its timeout.
+func TestSSEStreamsEndOnServerClosing(t *testing.T) {
+	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{Heartbeat: time.Hour})
+	closing := make(chan struct{})
+	srv := httptest.NewServer(newRouter(New(Deps{Runs: &memRuns{}, Broker: br, Closing: closing})))
+	t.Cleanup(srv.Close)
+	c := openSSE(t, srv, "")
+	_ = c.next(t) // the opening heartbeat
+	ended := make(chan struct{})
+	go func() {
+		for c.sc.Scan() {
+		}
+		close(ended)
+	}()
+	close(closing)
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream stayed open after the server started closing")
+	}
+}
+
+// TestSSEBrokerStartsOnFirstSubscriber: with StartOnFirstSubscriber the loop
+// does not run until a client subscribes, starts exactly once, and does not
+// start once its context is done.
+func TestSSEBrokerStartsOnFirstSubscriber(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	br := NewBroker(&memRuns{}, newFakeHub(), nil, BrokerOptions{})
+	var mu sync.Mutex
+	spawned := 0
+	br.StartOnFirstSubscriber(ctx, func(fn func()) {
+		mu.Lock()
+		spawned++
+		mu.Unlock()
+		go fn()
+	})
+	mu.Lock()
+	if spawned != 0 {
+		t.Fatal("started before any subscriber")
+	}
+	mu.Unlock()
+	for range 3 {
+		_, u, err := br.subscribe(0, resumeNone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u()
+	}
+	mu.Lock()
+	if spawned != 1 {
+		t.Fatalf("spawned %d times, want 1", spawned)
+	}
+	mu.Unlock()
+
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	late := NewBroker(&memRuns{}, newFakeHub(), nil, BrokerOptions{})
+	late.StartOnFirstSubscriber(done, func(func()) { t.Error("spawned after shutdown") })
+	_, u, _ := late.subscribe(0, resumeNone)
+	u()
+}
+
+// TestSSETerminalSurvivesADroppedEvent: the registry feed drops events for a
+// slow subscriber. A run published while running is re-read each tick until
+// it settles, so its terminal state reaches clients even when op.terminal
+// never arrived; once settled it is no longer re-read.
+func TestSSETerminalSurvivesADroppedEvent(t *testing.T) {
+	mem := &memRuns{runs: map[string]database.RunRecord{"r1": {ID: "r1", DefID: "test.batch", State: state.V3Running}}}
+	hub := newFakeHub()
+	br := NewBroker(mem, hub, nil, BrokerOptions{FlushEvery: 5 * time.Millisecond})
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go br.Run(ctx)
+	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
+	t.Cleanup(srv.Close)
+	c := openSSE(t, srv, "")
+	_ = c.next(t) // heartbeat
+
+	hub.emit("op.updated", "r1")
+	if v := unmarshalView(t, c.next(t).data); v.State != "running" {
+		t.Fatalf("first event = %+v", v)
+	}
+	// The run finishes; its op.terminal is lost (never emitted).
+	mem.set("r1", database.RunRecord{ID: "r1", DefID: "test.batch", State: state.V3Succeeded})
+	f := c.next(t)
+	if f.event != "run" {
+		t.Fatalf("frame = %+v, want the run's terminal event", f)
+	}
+	if v := unmarshalView(t, f.data); v.State != "succeeded" {
+		t.Fatalf("re-read published %+v, want succeeded", v)
+	}
+	// Settled: no longer watched, so nothing more is published for it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		br.mu.Lock()
+		seq := br.seq
+		br.mu.Unlock()
+		if seq == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	br.mu.Lock()
+	seq := br.seq
+	br.mu.Unlock()
+	if seq != 2 {
+		t.Fatalf("published %d events, want 2 (running, succeeded)", seq)
+	}
+}
+
+// TestBrokerWatchSetIsBounded: no more than MaxWatched unsettled runs are
+// re-read per tick.
+func TestBrokerWatchSetIsBounded(t *testing.T) {
+	mem := &memRuns{runs: map[string]database.RunRecord{}}
+	for i := range 10 {
+		id := "r" + string(rune('a'+i))
+		mem.runs[id] = database.RunRecord{ID: id, State: state.V3Running}
+	}
+	br := NewBroker(mem, nil, nil, BrokerOptions{MaxWatched: 3})
+	dirty := map[string]struct{}{}
+	for id := range mem.runs {
+		dirty[id] = struct{}{}
+	}
+	br.flush(dirty)
+	if len(br.watch) != 3 {
+		t.Fatalf("watching %d runs, want the cap of 3", len(br.watch))
+	}
+}
+
 func TestSSESlowClientGetsResyncNotBlocking(t *testing.T) {
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{ClientBuffer: 4, RingSize: 1000})
-	cl, unsub := br.subscribe(0, false)
+	cl, unsub, err := br.subscribe(0, resumeNone)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer unsub()
 
 	// A client that reads nothing while 500 events are published: publishing
