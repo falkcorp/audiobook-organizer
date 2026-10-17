@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.183.0
+// version: 2.183.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -2084,12 +2084,6 @@ export async function resolveProductionAuthor(authorId: number): Promise<Operati
   }
   const body = await response.json();
   return body.data.operation;
-}
-
-// Book dedup — uses existing /audiobooks/duplicates endpoint which returns Book[][] groups
-export interface MergeBooksResult {
-  merged: number;
-  errors: string[];
 }
 
 // linkBooks links a set of books into one version group (no files move; the

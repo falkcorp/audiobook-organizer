@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.21.2
+// version: 2.21.3
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 import { Page } from '@playwright/test';
 
@@ -951,10 +951,6 @@ export async function setupMockApiRoutes(
       return route.fulfill(
         jsonResponse({ candidates: all.slice(offset, offset + limit), total: all.length })
       );
-    }
-
-    if (pathname === '/api/v1/audiobooks/duplicates' && method === 'GET') {
-      return route.fulfill(jsonResponse({ items: [], count: 0 }));
     }
 
     // Author dedup endpoints
