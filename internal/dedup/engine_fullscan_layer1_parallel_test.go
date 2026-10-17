@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_layer1_parallel_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-17
 
 // Regression tests for CONC-4: FullScan's main pass now splits into a
 // parallel Pass 1 (Layer-1 exact checks — checkExactFileHash/ISBN/Title/
@@ -45,7 +45,7 @@ import (
 // checkExactFileHash, checkExactISBN, checkExactTitle, and checkDurationMatch
 // ALL fire for (most) pairs, exercising concurrent upserts of the SAME pair
 // key from multiple Layer-1 signals at once. Duration is set so
-// hasPlausibleAudio/hasKnownShortDuration don't suppress the pair, and
+// hasPlausibleAudio/hasKnownShortDurationMemo don't suppress the pair, and
 // IsPrimaryVersion is left nil (isNonPrimaryVersion treats nil as primary)
 // so upsertExactCandidate's primary gate passes.
 func fullScanLayer1FixtureBooks(n int) []database.Book {

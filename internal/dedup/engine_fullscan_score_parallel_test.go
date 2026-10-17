@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_score_parallel_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7e5b9f24-4a3d-4b8e-9c2a-1d6f8e0b3a57
-// last-edited: 2026-09-27
+// last-edited: 2026-10-17
 
 // Regression test for CONC-2: FullScan's unified-scoring second pass is now
 // sharded across a bounded worker pool (registry.RunItems) instead of running
@@ -28,7 +28,7 @@ import (
 // "exact" candidate for every pair, which the unified-scoring pass then
 // re-scores (ISBN match is high-confidence, so composed.Band is non-empty
 // and the pair is persisted with unified fields). Duration is set above
-// minFingerprintMatchSeconds so hasKnownShortDuration/hasPlausibleAudio don't
+// minFingerprintMatchSeconds so hasKnownShortDurationMemo/hasPlausibleAudio don't
 // suppress the pair, and IsPrimaryVersion is left nil (isNonPrimaryVersion
 // treats nil as primary) so upsertExactCandidate's primary gate passes.
 func fullScanScoreFixtureBooks(n int) []database.Book {

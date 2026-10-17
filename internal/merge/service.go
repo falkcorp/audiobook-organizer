@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.48.2
+// version: 1.48.3
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-17
 
@@ -57,8 +57,8 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 //
 // MergeBooks and CombineBooks serialize their read-modify-writes on the
 // package-level mergeSerializeMu (see serialize.go), shared with the sibling
-// split-book merge path (dedup, via LockMergeRMW) so any two merges are mutually exclusive on a shared
-// book row.
+// split-book merge path (dedup, via LockMergeRMW) so any two merges are
+// mutually exclusive on a shared book row.
 type Service struct {
 	db           Store
 	syncFollower SyncFollower

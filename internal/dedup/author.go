@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.26.1
+// version: 1.26.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-17
 
@@ -37,9 +37,8 @@ type AuthorDedupGroup struct {
 // used by extractBaseAuthor. SplitCompositeAuthorName moved to
 // internal/personname on 2026-10-04 (see authorname_reexport.go).
 var (
-	// extractBaseAuthor's: called twice per author-name comparison
-	// (authorNamesEquivalent, below) and once per author when the prefilter
-	// index is built.
+	// extractBaseAuthor's: called once per author, in newAuthorPrecomputed,
+	// when the prefilter index is built.
 	authorParenSuffixRe = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
 )
 
@@ -68,8 +67,8 @@ func splitAuthorParts(name string) (first, last string) {
 func extractBaseAuthor(name string) string {
 	// Strip " (anything)" parenthetical that looks like a role
 	// authorParenSuffixRe: see the note on authorSpaceRe. extractBaseAuthor is
-	// called twice per author-name comparison (author.go:538-539) and once per
-	// author in the prefilter build (:1068).
+	// called once per author, in newAuthorPrecomputed, when the prefilter
+	// index is built.
 	name = authorParenSuffixRe.ReplaceAllString(name, "")
 
 	// If name contains "/" and isn't just initials, take the first part
@@ -743,8 +742,9 @@ func FindDuplicateAuthors(authors []database.Author, threshold float64, bookCoun
 	return groups
 }
 
-// areAuthorsDuplicatePrecomputed is a author-pair predicate over pre-computed normalized names, which avoids
-// redundant string operations in the O(n^2) scan.
+// areAuthorsDuplicatePrecomputed is an author-pair predicate over pre-computed
+// normalized names, which avoids redundant string operations in the O(n^2)
+// scan.
 func areAuthorsDuplicatePrecomputed(a, b *authorPrecomputed) bool {
 	// Exact normalized match
 	if a.norm == b.norm {

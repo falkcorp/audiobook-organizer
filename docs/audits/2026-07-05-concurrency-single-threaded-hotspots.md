@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.1.1 -->
 <!-- guid: 4f8b2d6e-9c1a-4e3f-b7d5-2a6c8e0f1b3d -->
-<!-- last-edited: 2026-08-24 -->
+<!-- last-edited: 2026-10-17 -->
 
 # Concurrency Audit — Single-Threaded Hotspots
 
@@ -72,6 +72,9 @@
 >   hotspot, and the length prefilter cannot help it:** it gates at 0.80, where
 >   `5t-4 = 0`, so the bound admits every pair and the screen correctly declines
 >   to skip anything. Sharding it would be the available fix.
+>
+>   **Update 2026-10-17:** phase 3.5 / `FindDuplicateAuthorsWithSeries` was
+>   removed in 01-P73.
 
 **Date:** 2026-07-05
 **Branch:** `docs/concurrency-audit`
