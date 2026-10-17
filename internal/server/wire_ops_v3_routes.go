@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-17
 
@@ -67,8 +67,10 @@ func (s *Server) opsV3Authz() opsv3.Authz {
 	return opsv3.Authz{Require: s.permCheck(), Holds: holds}
 }
 
-// warmupSource is the store's warm-up signal, nil when it has none.
-func warmupSource(store database.Store) opsregistry.WarmupStatuser {
+// warmupSource is the store's warm-up signal, nil when it has none. store is
+// taken as any: AsCapability needs nothing more, and naming database.Store
+// here would add a reference to the full interface for no method call.
+func warmupSource(store any) opsregistry.WarmupStatuser {
 	w, _ := database.AsCapability[opsregistry.WarmupStatuser](store)
 	return w
 }
