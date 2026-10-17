@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-09-28
+// last-edited: 2026-10-17
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -561,7 +561,7 @@ func (de *Engine) fetchDrainBook(ctx context.Context, id string) drainBookMeta {
 
 // classifyStaleCandidate re-runs upsertExactCandidate's full guard chain —
 // isNonPrimaryVersion, identifiersConflict, isBoilerplateTitle,
-// hasKnownShortDuration, isPartVsWholeMismatch, in the SAME order the
+// hasKnownShortDurationMemo, isPartVsWholeMismatchMemo, in the SAME order the
 // chokepoint applies them — against a pair's CURRENT data. It returns the
 // first rejecting reason and true if the candidate would no longer be
 // emitted today, or ("", false) if it still passes every gate and must be
@@ -603,8 +603,8 @@ func (de *Engine) classifyStaleCandidate(c database.DedupCandidate, a, b drainBo
 	if isBoilerplateTitle(a.stub.Title) || isBoilerplateTitle(b.stub.Title) {
 		return drainReasonBoilerplateTitle, true
 	}
-	// Same gates as upsertExactCandidate (hasKnownShortDuration,
-	// isPartVsWholeMismatch), on the runtimes cached at lookup.
+	// Same gates as upsertExactCandidate (hasKnownShortDurationMemo,
+	// isPartVsWholeMismatchMemo), on the runtimes cached at lookup.
 	if shortRuntime(a.runtime) || shortRuntime(b.runtime) {
 		return drainReasonShortDuration, true
 	}
