@@ -1,26 +1,19 @@
 // file: internal/scheduler/cron.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2f9a14-5be3-4d68-9a07-e1b4c3d85f26
 // last-edited: 2026-10-17
 
 package scheduler
 
 import (
-	"fmt"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // cronSearchYears bounds Next and Prev: an expression with no fire time in
 // this window (0 0 30 2 *) reports none rather than looping.
 const cronSearchYears = 5
-
-// cronBounds are the inclusive ranges of the five fields. Day-of-week accepts
-// 7 as Sunday, as standard cron does; it is folded onto 0 when parsed.
-var cronBounds = [5][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
-
-var cronFieldNames = [5]string{"minute", "hour", "day-of-month", "month", "day-of-week"}
 
 // CronSpec is a parsed 5-field expression ("m h dom mon dow"). Each field is a
 // bitset of the values it accepts. Like standard cron, when both day-of-month
@@ -31,86 +24,20 @@ type CronSpec struct {
 	domStar, dowStar              bool
 }
 
-// ParseCron parses "m h dom mon dow". It returns an error naming the field for
-// anything it does not accept. Supported: "*", "a", "a-b", "a,b,c", "*/n",
-// "a-b/n". Not supported (error): names (JAN, MON), "?", "L", "W", "#",
+// ParseCron parses "m h dom mon dow" with the one cron grammar in the module
+// (ops.ParseCronFields). It returns an error naming the field for anything it
+// does not accept. Supported: "*", "a", "a-b", "a,b,c", "*/n", "a-b/n". Not
+// supported (error): names (JAN, MON), signs ("+5"), "?", "L", "W", "#",
 // seconds, years, and macros such as @daily.
 func ParseCron(expr string) (CronSpec, error) {
-	fields := strings.Fields(expr)
-	if len(fields) != 5 {
-		return CronSpec{}, fmt.Errorf("cron %q: want 5 fields, got %d", expr, len(fields))
-	}
-	var sets [5]uint64
-	for i, f := range fields {
-		set, err := parseCronField(f, cronBounds[i])
-		if err != nil {
-			return CronSpec{}, fmt.Errorf("cron %q: %s field %q: %w", expr, cronFieldNames[i], f, err)
-		}
-		sets[i] = set
-	}
-	// 7 is Sunday: fold it onto 0.
-	if sets[4]&(1<<7) != 0 {
-		sets[4] = sets[4]&^(1<<7) | 1
+	f, err := ops.ParseCronFields(expr)
+	if err != nil {
+		return CronSpec{}, err
 	}
 	return CronSpec{
-		minute: sets[0], hour: sets[1], dom: sets[2], month: sets[3], dow: sets[4],
-		domStar: strings.HasPrefix(fields[2], "*"), dowStar: strings.HasPrefix(fields[4], "*"),
+		minute: f.Minute, hour: f.Hour, dom: f.DayOfMonth, month: f.Month, dow: f.DayOfWeek,
+		domStar: f.DayOfMonthStar, dowStar: f.DayOfWeekStar,
 	}, nil
-}
-
-func parseCronField(f string, bounds [2]int) (uint64, error) {
-	var set uint64
-	for _, part := range strings.Split(f, ",") {
-		rng, stepStr, hasStep := strings.Cut(part, "/")
-		step := 1
-		if hasStep {
-			n, err := strconv.Atoi(stepStr)
-			if err != nil || n <= 0 {
-				return 0, fmt.Errorf("bad step %q", stepStr)
-			}
-			step = n
-		}
-		lo, hi := bounds[0], bounds[1]
-		switch {
-		case rng == "*":
-		case strings.Contains(rng, "-"):
-			a, b, _ := strings.Cut(rng, "-")
-			var err error
-			if lo, err = cronNum(a, bounds); err != nil {
-				return 0, err
-			}
-			if hi, err = cronNum(b, bounds); err != nil {
-				return 0, err
-			}
-			if lo > hi {
-				return 0, fmt.Errorf("range %q is backwards", rng)
-			}
-		default:
-			n, err := cronNum(rng, bounds)
-			if err != nil {
-				return 0, err
-			}
-			lo, hi = n, n
-			if hasStep {
-				hi = bounds[1] // "a/n" runs from a to the end, as in Vixie cron
-			}
-		}
-		for v := lo; v <= hi; v += step {
-			set |= 1 << uint(v)
-		}
-	}
-	return set, nil
-}
-
-func cronNum(s string, bounds [2]int) (int, error) {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, fmt.Errorf("%q is not a number (names, ?, L, W and # are not supported)", s)
-	}
-	if n < bounds[0] || n > bounds[1] {
-		return 0, fmt.Errorf("value %d out of range %d-%d", n, bounds[0], bounds[1])
-	}
-	return n, nil
 }
 
 func zoneOffset(t time.Time) int { _, off := t.Zone(); return off }
@@ -177,7 +104,16 @@ func (c CronSpec) Next(after time.Time, loc *time.Location) (time.Time, bool) {
 		if !c.dayMatches(dy, dmo, dd, loc) {
 			continue
 		}
-		for h := 0; h < 24; h++ {
+		// On the first day nothing before `after`'s wall-clock hour can be
+		// later than it, so start there (one hour earlier, to stay clear of a
+		// DST gap or repeated hour). Without this every call rescanned the
+		// day from midnight, and the scheduler's catch-up count (up to 1000
+		// calls) cost about half a second.
+		h0 := 0
+		if day.Day() == a.Day() && day.Month() == a.Month() && day.Year() == a.Year() {
+			h0 = max(0, a.Hour()-1)
+		}
+		for h := h0; h < 24; h++ {
 			if !has(c.hour, h) {
 				continue
 			}

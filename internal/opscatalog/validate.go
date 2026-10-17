@@ -1,5 +1,5 @@
 // file: internal/opscatalog/validate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cd6d1761-51b5-4917-971b-5ec67bb94bce
 // last-edited: 2026-10-17
 
@@ -154,7 +154,7 @@ func ValidateCatalog(defs []ops.Definition, u Universe, ledger []string) error {
 			continue
 		}
 		cm := c.Common
-		if cm.Schedule == nil || cm.Effects.IsReadOnly() || len(cm.Effects.WriteSet()) == 0 {
+		if cm.Schedule == nil || !cm.Effects.IsWriter() {
 			continue
 		}
 		if !cm.Schedule.IsLive() && !cm.Schedule.IsPreview() {

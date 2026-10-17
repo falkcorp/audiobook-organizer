@@ -1,5 +1,5 @@
 // file: internal/scheduler/v3_schedule.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b41c7e92-6d05-4a38-9f1e-2c8a5d70e3b6
 // last-edited: 2026-10-17
 
@@ -73,12 +73,16 @@ type v3Entry struct {
 	// disabled: an adapted def whose v2 cron nothing drives (F1, D24).
 	disabled bool
 
-	gate      bool // last observed When gate
-	lastFire  *time.Time
-	lastRunID string
-	missed    int64
-	lastLag   time.Duration
-	coalesced int64
+	gate bool // last observed When gate
+	// gateOpenedAt is when the gate last went from closed to open, as this
+	// process saw it (zero if it never closed). Due times before it were not
+	// "missed": a closed gate is "not active", not "process down".
+	gateOpenedAt time.Time
+	lastFire     *time.Time
+	lastRunID    string
+	missed       int64
+	lastLag      time.Duration
+	coalesced    int64
 }
 
 // v3Scheduler holds the registered schedules. The zero value is usable; the
@@ -200,7 +204,7 @@ func (ts *TaskScheduler) RegisterSchedules(defs []ops.Definition) error {
 			continue
 		}
 		e := &v3Entry{defID: c.ID, sched: s, kind: s.TimerKind(), live: s.IsLive(),
-			writer: !c.Common.Effects.IsReadOnly(), gate: s.Enabled(), external: driven[c.ID]}
+			writer: c.Common.Effects.IsWriter(), gate: s.Enabled(), external: driven[c.ID]}
 		switch e.kind {
 		case "daily_at":
 			h, m, err := parseDailyAt(s.At())
@@ -309,9 +313,15 @@ func (ts *TaskScheduler) seedFromLegacyClock(e *v3Entry) {
 
 // registerWindowTasks adds each window-scheduled def to the maintenance
 // window as a task named by its def ID, so the nightly window op runs it
-// exactly as it runs a TaskDefinition. They are appended to maintenanceOrder
-// in (order, def ID) order, after every task already there.
+// exactly as it runs a TaskDefinition. They are inserted into maintenanceOrder
+// in (order, def ID) order, as one block immediately BEFORE "library_scan":
+// library_scan is last on purpose (scheduler.go), because the window op stops
+// the moment the window closes and a long scan in front of a window def would
+// starve it. Without a library_scan entry the block is appended.
 func (ts *TaskScheduler) registerWindowTasks(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
 	ts.v3.mu.Lock()
 	slices.SortStableFunc(ids, func(a, b string) int {
 		if d := ts.v3.entries[a].sched.Order() - ts.v3.entries[b].sched.Order(); d != 0 {
@@ -334,8 +344,12 @@ func (ts *TaskScheduler) registerWindowTasks(ids []string) {
 			RunOnStart:             func() bool { return e.sched.RunsOnStart() && e.sched.Enabled() },
 			RunInMaintenanceWindow: func() bool { return true },
 		})
-		ts.maintenanceOrder = append(ts.maintenanceOrder, id)
 	}
+	at := slices.Index(ts.maintenanceOrder, "library_scan")
+	if at < 0 {
+		at = len(ts.maintenanceOrder)
+	}
+	ts.maintenanceOrder = slices.Insert(ts.maintenanceOrder, at, ids...)
 }
 
 func cmpString(a, b string) int {
@@ -442,6 +456,32 @@ func (ts *TaskScheduler) persistSched(e *v3Entry) {
 	}
 }
 
+// countDue turns the first due time after the last stamp into the due time to
+// report and the number of due times skipped, counting only due times at or
+// after `open` (zero: all of them). step returns the first due time strictly
+// after its argument. At most one catch-up run is ever enqueued, so the count
+// is capped. The count steps from one due time to the next rather than
+// rescanning from the stamp.
+func countDue(first, now, open time.Time, step func(time.Time) (time.Time, bool)) (dueAt time.Time, missed int64) {
+	dueAt = first
+	if !open.IsZero() && first.Before(open) {
+		nf, ok := step(open.Add(-time.Nanosecond))
+		if !ok || nf.After(now) {
+			return open, 0 // nothing came due since the gate opened: a plain catch-up
+		}
+		first, dueAt = nf, nf
+	}
+	n := int64(1)
+	for t := first; n < 1000; n++ {
+		nt, more := step(t)
+		if !more || nt.After(now) {
+			break
+		}
+		t = nt
+	}
+	return dueAt, n - 1
+}
+
 // claimCronRun is one due check of a Cron schedule. Like the interval and
 // daily clocks, the first observation seeds the stamp and declines, and the
 // stamp is written before the run is enqueued.
@@ -452,20 +492,16 @@ func (ts *TaskScheduler) claimCronRun(e *v3Entry, now time.Time) (due bool, dueA
 		ts.stampIntervalTick(e.defID, now)
 		return false, time.Time{}, 0
 	}
-	dueAt, found := e.cron.Next(last, loc)
-	if !found || now.Before(dueAt) {
+	first, found := e.cron.Next(last, loc)
+	if !found || now.Before(first) {
 		return false, time.Time{}, 0
 	}
-	n := int64(1)
-	for t := dueAt; n < 1000; n++ {
-		nt, more := e.cron.Next(t, loc)
-		if !more || nt.After(now) {
-			break
-		}
-		t = nt
-	}
+	ts.v3.mu.Lock()
+	open := e.gateOpenedAt
+	ts.v3.mu.Unlock()
+	dueAt, missed = countDue(first, now, open, func(t time.Time) (time.Time, bool) { return e.cron.Next(t, loc) })
 	ts.stampIntervalTick(e.defID, now)
-	return true, dueAt, n - 1
+	return true, dueAt, missed
 }
 
 // pollV3 is one due check of every Every, DailyAt and Cron schedule.
@@ -490,12 +526,16 @@ func (ts *TaskScheduler) pollV3Entry(e *v3Entry, now time.Time) {
 	ts.v3.mu.Lock()
 	edge := gate != e.gate
 	e.gate = gate
+	if edge && gate {
+		e.gateOpenedAt = now
+	}
+	open := e.gateOpenedAt
 	ts.v3.mu.Unlock()
 	if edge {
 		ts.persistSched(e)
 	}
 	if !gate {
-		return // not active right now; the clock is not advanced
+		return // not active right now; due times that pass meanwhile are not "missed" (see countDue)
 	}
 	var due bool
 	var dueAt time.Time
@@ -506,18 +546,18 @@ func (ts *TaskScheduler) pollV3Entry(e *v3Entry, now time.Time) {
 		last, ok := ts.loadIntervalLastTick(e.defID)
 		if due = ts.claimIntervalRun(e.defID, interval, now); due && ok {
 			dueAt = last.Add(interval)
-			missed = max(0, int64(now.Sub(last)/interval)-1)
+			from := last
+			if dueAt.Before(open) { // came due while the gate was closed
+				dueAt, from = open, open
+			}
+			missed = max(0, int64(now.Sub(from)/interval)-1)
 		}
 	case "daily_at":
 		loc := ts.v3.zone()
 		last, ok := ts.loadIntervalLastTick(e.defID)
 		if due = ts.claimDailyAtRun(e.defID, e.hour, e.minute, loc, now); due && ok {
-			dueAt = nextDailyAt(last, e.hour, e.minute, loc)
-			n := int64(0)
-			for t := dueAt; !t.After(now) && n < 1000; n++ {
-				t = nextDailyAt(t, e.hour, e.minute, loc)
-			}
-			missed = max(0, n-1)
+			dueAt, missed = countDue(nextDailyAt(last, e.hour, e.minute, loc), now, open,
+				func(t time.Time) (time.Time, bool) { return nextDailyAt(t, e.hour, e.minute, loc), true })
 		}
 	case "cron":
 		due, dueAt, missed = ts.claimCronRun(e, now)
@@ -587,13 +627,66 @@ func (ts *TaskScheduler) runV3OnStart() {
 	}
 }
 
+// legacyNextFire is the next due time of the legacy TaskDefinition(s) that
+// still enqueue defID (taskV2DefIDs), computed from the task's own durable
+// clock the way its ticker does: the daily clock for a DailyAt task, last
+// stamp plus interval otherwise. With several drivers (library_scan and the
+// weekly full sweep share library.scan) the earliest wins. It is false when no
+// enabled driver has a timer.
+func (ts *TaskScheduler) legacyNextFire(defID string) (time.Time, bool) {
+	now := ts.v3.clock()
+	loc := ts.v3.zone()
+	ts.mu.RLock()
+	var drivers []*TaskDefinition
+	for _, name := range ts.order {
+		if taskV2DefIDs[name] == defID {
+			drivers = append(drivers, ts.tasks[name])
+		}
+	}
+	ts.mu.RUnlock()
+	var best time.Time
+	for _, t := range drivers {
+		if t.IsEnabled != nil && !t.IsEnabled() {
+			continue
+		}
+		last, ok := ts.loadIntervalLastTick(t.Name)
+		if !ok {
+			last = now
+		}
+		var next time.Time
+		switch {
+		case t.DailyAt != "":
+			h, m, err := parseDailyAt(t.DailyAt)
+			if err != nil {
+				continue
+			}
+			next = nextDailyAt(last, h, m, loc)
+		case t.GetInterval != nil && t.GetInterval() > 0:
+			next = last.Add(t.GetInterval())
+		default:
+			continue
+		}
+		if best.IsZero() || next.Before(best) {
+			best = next
+		}
+	}
+	return best, !best.IsZero()
+}
+
 // nextFireOf computes the next fire time of an entry, or false if it is
-// manual, disabled, or its gate is off.
+// manual, disabled, or its gate is off. A def a legacy task still drives
+// reports that task's actual next due time, because the task is what fires it.
 func (ts *TaskScheduler) nextFireOf(e *v3Entry) (time.Time, bool) {
 	ts.v3.mu.Lock()
 	external, disabled, kind := e.external, e.disabled, e.kind
 	ts.v3.mu.Unlock()
-	if disabled || kind == "window" || kind == "" || (e.sched != nil && !e.sched.Enabled()) {
+	if disabled {
+		return time.Time{}, false
+	}
+	if external {
+		return ts.legacyNextFire(e.defID)
+	}
+	if kind == "window" || kind == "" || (e.sched != nil && !e.sched.Enabled()) {
 		return time.Time{}, false
 	}
 	now := ts.v3.clock()
@@ -604,15 +697,14 @@ func (ts *TaskScheduler) nextFireOf(e *v3Entry) (time.Time, bool) {
 	loc := ts.v3.zone()
 	switch kind {
 	case "every":
-		return last.Add(e.sched.Interval()), !external
+		return last.Add(e.sched.Interval()), true
 	case "daily_at":
-		return nextDailyAt(last, e.hour, e.minute, loc), !external
+		return nextDailyAt(last, e.hour, e.minute, loc), true
 	case "cron":
 		if e.sched == nil {
 			return time.Time{}, false
 		}
-		t, found := e.cron.Next(last, loc)
-		return t, found && !external
+		return e.cron.Next(last, loc)
 	}
 	return time.Time{}, false
 }
