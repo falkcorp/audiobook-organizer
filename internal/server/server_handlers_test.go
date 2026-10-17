@@ -1,5 +1,5 @@
 // file: internal/server/server_handlers_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-10-17
 
@@ -148,7 +148,7 @@ func TestConfigEndpoints(t *testing.T) {
 
 	// Test PUT config
 	configReq := map[string]any{
-		"language": "en",
+		"log_level": "info",
 	}
 	body, _ := json.Marshal(configReq)
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))

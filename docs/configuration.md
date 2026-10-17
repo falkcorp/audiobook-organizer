@@ -1,7 +1,7 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-17 -->
 
 # Configuration Reference
 
@@ -63,7 +63,6 @@ below):
 | `ENABLE_AI_PARSING` | `enable_ai_parsing` | `true` |
 | `CONCURRENT_SCANS` | `concurrent_scans` | `4` |
 | `API_RATE_LIMIT_PER_MINUTE` | `api_rate_limit_per_minute` | `100` |
-| `AUTH_RATE_LIMIT_PER_MINUTE` | `auth_rate_limit_per_minute` | `10` |
 | `JSON_BODY_LIMIT_MB` | `json_body_limit_mb` | `1` |
 | `UPLOAD_BODY_LIMIT_MB` | `upload_body_limit_mb` | `10` |
 | `ENABLE_AUTH` | `enable_auth` | `true` |
@@ -138,7 +137,6 @@ file_naming_pattern: "{title} - {author} - read by {narrator}"
 
 enable_auth: true
 api_rate_limit_per_minute: 100
-auth_rate_limit_per_minute: 10
 json_body_limit_mb: 1
 upload_body_limit_mb: 10
 

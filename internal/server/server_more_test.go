@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 //go:build !windows
 
@@ -100,7 +100,6 @@ func TestUpdateConfigEndpoint(t *testing.T) {
 		"openai_api_key":    "secret-key",
 		"enable_ai_parsing": true,
 		"concurrent_scans":  2,
-		"language":          "en",
 		"log_level":         "debug",
 	}
 	body, err := json.Marshal(update)

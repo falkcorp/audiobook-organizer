@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
 // last-edited: 2026-10-17
 
@@ -149,17 +149,17 @@ func TestLoadConfigFromFile_RemovedKeyWarnsAndLoads(t *testing.T) {
 	dir := t.TempDir()
 	Mutate(func(c *Config) {
 		c.DatabasePath = filepath.Join(dir, "audiobooks.pebble")
-		c.Language = ""
+		c.RootDir = ""
 	})
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("language: de\nenable_sqlite: true\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("root_dir: /de/books\nenable_sqlite: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := LoadConfigFromFile(); err != nil {
 		t.Fatalf("LoadConfigFromFile: %v", err)
 	}
-	if got := Snapshot().Language; got != "de" {
-		t.Errorf("language = %q, want de — the file did not load", got)
+	if got := Snapshot().RootDir; got != "/de/books" {
+		t.Errorf("root_dir = %q, want /de/books — the file did not load", got)
 	}
 	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "key=enable_sqlite ") {
 		t.Errorf("expected a removed-setting WARN for enable_sqlite, got:\n%s", out)
