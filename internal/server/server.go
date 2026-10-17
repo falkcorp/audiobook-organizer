@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.97.0
+// version: 2.98.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-17
 
@@ -599,7 +599,7 @@ func NewServer(store database.Store) *Server {
 	// Custom logger that skips noisy polling endpoints
 	// (UOS-14: /operations/active removed; SkipPaths entry removed)
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipPaths: []string{"/api/v1/operations/events"},
+		SkipPaths: []string{"/api/v1/operations/events", "/api/v3/ops/events"},
 		// Masks ?token= / ?api_key= and similar values: ABS clients put the
 		// bearer credential (JWT or abk_ API key) in the URL, and gin's default
 		// line prints the path with its query string.

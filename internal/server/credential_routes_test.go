@@ -111,6 +111,7 @@ var exemptPrefixes = map[string]string{
 	"/api/v1/review/":          "review queue",
 	"/api/v1/merge/":           "merge undo journal",
 	"/api/v1/operations":       "operations on library data",
+	"/api/v3/ops/":             "operations on library data (the v3 twin of /api/v1/operations)",
 	"/api/v1/activity/":        "activity log maintenance",
 	"/api/v1/ai/":              "AI calls on library data",
 	"/api/v1/diagnostics/":     "diagnostics",
