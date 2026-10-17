@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-10-17
 
@@ -210,8 +210,7 @@ func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, 
 // others from being attempted. A store that does not implement
 // SyncFileStore is a silent no-op everywhere else sync_file lives, but a
 // skipped follow here strands every moved file's ino on a book that no longer
-// owns the file -- logged at Warn once for the whole call, matching
-// FollowMerge's severity. Each individual
+// owns the file -- logged at Warn once for the whole call. Each individual
 // repoint failure is logged at ERROR with both book IDs and the file ID,
 // because a silent failure here quietly breaks a user's downloaded file with
 // no trace.
@@ -293,9 +292,9 @@ func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
 	}
 	ids := database.AsSyncIdentityStore(db)
 	if ids == nil {
-		// Debug, not warn (unlike FollowMerge): both rows survive a
-		// version-link, so a skipped follow here is recoverable by repointing
-		// later, and this runs on every hash-duplicate import.
+		// Debug, not warn: both rows survive a version-link, so a skipped
+		// follow here is recoverable by repointing later, and this runs on
+		// every hash-duplicate import.
 		slog.Debug("sync-identity follow: store does not implement SyncIdentityStore; skipping repoint",
 			"old_book", oldBookID, "new_book", newBookID)
 		return

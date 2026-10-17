@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_exact_guard_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4a1e6d3f-9c72-4a0b-8e35-1f6b2c7d9e40
-// last-edited: 2026-09-28
+// last-edited: 2026-10-17
 
 // Regression guard for DEDUP-INTRO-1 (residual): upsertExactCandidate is the
 // shared chokepoint for every exact-family emitter. It must reject pairs
@@ -123,8 +123,8 @@ func TestUpsertExactCandidate_ZeroDurationNotSuppressed(t *testing.T) {
 
 // TestUpsertExactCandidateGateParityWithDrain is the INIT-2 T3 acceptance
 // test: for every gate in upsertExactCandidate's chain (non-primary-version
-// skip, identifiersConflict, isBoilerplateTitle, hasKnownShortDuration,
-// isPartVsWholeMismatch), a pair rejected by the chokepoint must be
+// skip, identifiersConflict, isBoilerplateTitle, hasKnownShortDurationMemo,
+// isPartVsWholeMismatchMemo), a pair rejected by the chokepoint must be
 // classified would-purge by DrainStaleCandidates with the MATCHING reason
 // bucket, and a pair that passes every gate must be emitted by the
 // chokepoint AND kept by the drain. This proves DrainStaleCandidates' gate
@@ -350,9 +350,9 @@ func TestUpsertExactCandidate_PairDedupeConfirmed(t *testing.T) {
 
 // TestUpsertExactCandidate_NilDurationConservativeBothGates locks in nil/
 // unknown-duration conservatism across BOTH duration-sensitive gates
-// (hasKnownShortDuration and isPartVsWholeMismatch): a pair with unknown
+// (hasKnownShortDurationMemo and isPartVsWholeMismatchMemo): a pair with unknown
 // Book.Duration on both sides, and a single BookFile each (so neither side
-// has the >=2-file "whole" shape isPartVsWholeMismatch looks for), must
+// has the >=2-file "whole" shape isPartVsWholeMismatchMemo looks for), must
 // still emit through the chokepoint AND be kept by the drain — proving
 // neither gate's nil-conservative default was flipped by this task's
 // changes.

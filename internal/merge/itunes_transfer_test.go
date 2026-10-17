@@ -1,11 +1,12 @@
 // file: internal/merge/itunes_transfer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3f2a90-5c1e-4b86-9a47-e0b8c4d1f259
 // last-edited: 2026-10-17
 
 package merge
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -68,45 +69,52 @@ func TestTransferITunesMetadataFirstWin_EmptyPIDAndNilArgs(t *testing.T) {
 // onto the survivor inside the merge write; without it they stay behind.
 func TestService_MergeBooksWithOptions_CarryITunesFields(t *testing.T) {
 	for _, carry := range []bool{true, false} {
-		store := setupTestStore(t)
-		added := time.Date(2019, 3, 4, 5, 6, 7, 0, time.UTC)
-		played := time.Date(2022, 8, 9, 10, 11, 12, 0, time.UTC)
-		winner := seedGuardBook(t, store, "Carry Winner", "m4b", true)
-		loser := seedGuardBook(t, store, "Carry Loser", "mp3", true)
+		t.Run(fmt.Sprintf("carry=%v", carry), func(t *testing.T) {
+			store := setupTestStore(t)
+			added := time.Date(2019, 3, 4, 5, 6, 7, 0, time.UTC)
+			played := time.Date(2022, 8, 9, 10, 11, 12, 0, time.UTC)
+			winner := seedGuardBook(t, store, "Carry Winner", "m4b", true)
+			w, err := store.GetBookByID(winner.ID)
+			require.NoError(t, err)
+			w.ITunesRating = intPtr(55)
+			_, err = store.UpdateBook(w.ID, w)
+			require.NoError(t, err)
+			loser := seedGuardBook(t, store, "Carry Loser", "mp3", true)
 
-		l, err := store.GetBookByID(loser.ID)
-		require.NoError(t, err)
-		l.ITunesPersistentID = strPtr("PID-LOSER")
-		l.ITunesPlayCount = intPtr(9)
-		l.ITunesRating = intPtr(80)
-		l.ITunesDateAdded = &added
-		l.ITunesLastPlayed = &played
-		l.ITunesBookmark = i64Ptr(1234)
-		_, err = store.UpdateBook(l.ID, l)
-		require.NoError(t, err)
+			l, err := store.GetBookByID(loser.ID)
+			require.NoError(t, err)
+			l.ITunesPersistentID = strPtr("PID-LOSER")
+			l.ITunesPlayCount = intPtr(9)
+			l.ITunesRating = intPtr(80)
+			l.ITunesDateAdded = &added
+			l.ITunesLastPlayed = &played
+			l.ITunesBookmark = i64Ptr(1234)
+			_, err = store.UpdateBook(l.ID, l)
+			require.NoError(t, err)
 
-		_, err = NewService(store).MergeBooksWithOptions(
-			[]string{winner.ID, loser.ID}, winner.ID, MergeOptions{CarryITunesFields: carry})
-		require.NoError(t, err)
+			_, err = NewService(store).MergeBooksWithOptions(
+				[]string{winner.ID, loser.ID}, winner.ID, MergeOptions{CarryITunesFields: carry})
+			require.NoError(t, err)
 
-		got, err := store.GetBookByID(winner.ID)
-		require.NoError(t, err)
-		if !carry {
-			assert.Nil(t, got.ITunesPersistentID, "no carry requested: stats stay on the loser")
-			assert.Nil(t, got.ITunesPlayCount)
-			continue
-		}
-		require.NotNil(t, got.ITunesPersistentID)
-		assert.Equal(t, "PID-LOSER", *got.ITunesPersistentID)
-		require.NotNil(t, got.ITunesPlayCount)
-		assert.Equal(t, 9, *got.ITunesPlayCount)
-		require.NotNil(t, got.ITunesRating)
-		assert.Equal(t, 80, *got.ITunesRating)
-		require.NotNil(t, got.ITunesDateAdded)
-		assert.True(t, added.Equal(*got.ITunesDateAdded))
-		require.NotNil(t, got.ITunesLastPlayed)
-		assert.True(t, played.Equal(*got.ITunesLastPlayed))
-		require.NotNil(t, got.ITunesBookmark)
-		assert.Equal(t, int64(1234), *got.ITunesBookmark)
+			got, err := store.GetBookByID(winner.ID)
+			require.NoError(t, err)
+			if !carry {
+				assert.Nil(t, got.ITunesPersistentID, "no carry requested: stats stay on the loser")
+				assert.Nil(t, got.ITunesPlayCount)
+				return
+			}
+			require.NotNil(t, got.ITunesPersistentID)
+			assert.Equal(t, "PID-LOSER", *got.ITunesPersistentID)
+			require.NotNil(t, got.ITunesPlayCount)
+			assert.Equal(t, 9, *got.ITunesPlayCount)
+			require.NotNil(t, got.ITunesRating)
+			assert.Equal(t, 55, *got.ITunesRating, "winner's pre-existing rating survives (first-win)")
+			require.NotNil(t, got.ITunesDateAdded)
+			assert.True(t, added.Equal(*got.ITunesDateAdded))
+			require.NotNil(t, got.ITunesLastPlayed)
+			assert.True(t, played.Equal(*got.ITunesLastPlayed))
+			require.NotNil(t, got.ITunesBookmark)
+			assert.Equal(t, int64(1234), *got.ITunesBookmark)
+		})
 	}
 }

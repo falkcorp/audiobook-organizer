@@ -1,5 +1,5 @@
 // file: internal/dedup/author_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-17
 
@@ -337,11 +337,18 @@ func TestAreAuthorsDuplicatePrecomputed_Table(t *testing.T) {
 	}
 }
 
-// A slash-composite name still collapses to its base author through the
-// predicate when the composite gate does not skip it (base-author rule).
+// A parenthetical role suffix is stripped by extractBaseAuthor, so the two
+// names share a base author through the live precompute path. Normalization
+// alone leaves them distinct (norm differs); only the base-author rule matches.
 func TestAreAuthorsDuplicatePrecomputed_SharedBase(t *testing.T) {
-	a := authorPrecomputed{norm: "dorian pell", base: "dorian pell", first: "dorian", last: "pell"}
-	b := authorPrecomputed{norm: "dorian pell / wren hollis", base: "dorian pell", first: "dorian", last: "pell"}
+	a := newAuthorPrecomputed(0, database.Author{Name: "Dorian Pell"})
+	b := newAuthorPrecomputed(1, database.Author{Name: "Dorian Pell (Editor)"})
+	if a.skip || b.skip {
+		t.Fatalf("fixtures must not be skipped: a=%v b=%v", a.skip, b.skip)
+	}
+	if a.base != b.base {
+		t.Fatalf("bases differ: %q vs %q", a.base, b.base)
+	}
 	if !areAuthorsDuplicatePrecomputed(&a, &b) {
 		t.Error("authors sharing a base name must match")
 	}
