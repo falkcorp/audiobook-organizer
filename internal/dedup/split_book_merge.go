@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.18.2
+// version: 1.19.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-10-12
+// last-edited: 2026-10-17
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -177,9 +177,8 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 
 	// This is a fourth unguarded read-modify-write over shared book rows
 	// (GetBookByID -> MoveBookFilesToBook -> UpdateBook -> SoftDeleteBook), the
-	// same failure class #1930 fixed for merge.Service.MergeBooks and that
-	// dedup.MergeBooks (book_dedup.go) already guards with this same lock. It
-	// is also the lock merge.Service.UndoCombine takes, so an undo of this
+	// same failure class #1930 fixed for merge.Service.MergeBooks, guarded here
+	// with the same lock. It is also the lock merge.Service.UndoCombine takes, so an undo of this
 	// journal cannot interleave with the merge that writes it.
 	if opts.AcquireLock != nil {
 		if err := opts.AcquireLock(merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {

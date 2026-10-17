@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.95.0
+// version: 1.95.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-14
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -2061,9 +2061,8 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 	// fingerprint (unjudgeable), and BookSignatureSimilarityMasked returns ~0.50 for UNCORRELATED audio (the
 	// noise floor: uncorrelated chromaprints differ in ~half their bits). So there
 	// is no defensible similarity threshold that separates dups from non-dups on
-	// this data. The acoustIDSignaturesConflict helper is kept for a future
-	// veto, which needs measured dup-vs-nondup separation
-	// (and fingerprint coverage) first.
+	// this data. A future veto needs measured dup-vs-nondup separation (and
+	// fingerprint coverage) first; the unused helper was removed in 01-P73.
 	cand := database.DedupCandidate{
 		EntityType: "book",
 		EntityAID:  a.ID,
@@ -2109,21 +2108,14 @@ func normalizeASIN(v string) string {
 	return strings.ToUpper(strings.TrimSpace(v))
 }
 
-// hasKnownShortDuration reports whether book has a known, COMPLETE canonical
-// runtime (knownRuntimeSec) strictly under minFingerprintMatchSeconds.
+// hasKnownShortDurationMemo reports whether book has a known, COMPLETE
+// canonical runtime (knownRuntimeSec) strictly under
+// minFingerprintMatchSeconds, reading file rows through memo (nil: no memo).
 // Unknown runtimes are conservative and never treated as "short" — matches the
 // hasPlausibleAudio convention of not disqualifying on missing data. A PARTIAL
 // runtime is unknown too: it used to read Book.Duration, so a multi-file book
 // with one probed 45-second intro file was "short" and every exact candidate
 // for it was dropped — and drain_stale deleted the ones already stored.
-func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
-	if book == nil {
-		return false
-	}
-	return de.hasKnownShortDurationMemo(nil, book)
-}
-
-// hasKnownShortDurationMemo is hasKnownShortDuration through the given memo.
 func (de *Engine) hasKnownShortDurationMemo(memo *bookRuntimeMemo, book *database.Book) bool {
 	if book == nil {
 		return false
@@ -2132,9 +2124,9 @@ func (de *Engine) hasKnownShortDurationMemo(memo *bookRuntimeMemo, book *databas
 	return shortRuntime(rt)
 }
 
-// isPartVsWholeMismatch reports whether a and b look like a single-file part
-// being compared against a multi-file whole — e.g. one side has exactly one
-// BookFile whose total duration is a small fraction of the other side's
+// isPartVsWholeMismatchMemo reports whether a and b look like a single-file
+// part being compared against a multi-file whole — e.g. one side has exactly
+// one BookFile whose total duration is a small fraction of the other side's
 // total duration. Such pairs must not be emitted as 100%-confidence exact
 // duplicates even if titles/identifiers otherwise match, since a mis-tagged
 // chapter file is common and an incorrect merge is destructive.
@@ -2142,11 +2134,7 @@ func (de *Engine) hasKnownShortDurationMemo(memo *bookRuntimeMemo, book *databas
 // Unknown or zero durations/file counts are conservative and never trigger
 // the guard — this only fires when both sides' file counts and durations are
 // known and clearly mismatched, mirroring hasPlausibleAudio's convention.
-func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
-	return de.isPartVsWholeMismatchMemo(nil, a, b)
-}
-
-// isPartVsWholeMismatchMemo is isPartVsWholeMismatch through the given memo.
+// File rows are read through memo (nil: no memo).
 func (de *Engine) isPartVsWholeMismatchMemo(memo *bookRuntimeMemo, a, b *database.Book) bool {
 	if a == nil || b == nil || de.bookStore == nil {
 		return false
@@ -2160,81 +2148,6 @@ func (de *Engine) isPartVsWholeMismatchMemo(memo *bookRuntimeMemo, a, b *databas
 		return false
 	}
 	return partVsWholeRuntime(rtA, rowsA, rtB, rowsB)
-}
-
-const (
-	// acoustIDVetoMaxSimilarity is the book-level AcoustID signature similarity
-	// BELOW which two books are treated as clearly different audio, so a
-	// title/metadata "exact" candidate between them is a false positive that
-	// gets vetoed. Set well below fingerprint.FuzzyMinSimilarity (0.80, the
-	// positive-match threshold) so only clearly-different audio is vetoed;
-	// borderline pairs (0.50–0.80) are left for manual review, never hidden.
-	acoustIDVetoMaxSimilarity = 0.50
-	// acoustIDVetoMinOverlap is the minimum number of overlapping signature
-	// words required for a reliable masked comparison, mirroring
-	// BookSignatureScan's floor. Below this, the comparison is skipped (no veto).
-	acoustIDVetoMinOverlap = 512
-)
-
-// acoustIDSignaturesConflict reports whether books a and b have book-level
-// AcoustID audio signatures (book_sig_v1, synthesized from per-file chromaprint
-// segments) that CLEARLY disagree — strong evidence they are not the same
-// recording. This is the veto primitive for the exact chokepoint.
-//
-// Deliberately conservative: a false veto silently hides a real duplicate, which
-// is worse than a false positive sitting in the review queue. It therefore
-// returns false (no veto) unless BOTH books have a usable signature, the masked
-// comparison has enough overlap to be reliable, and the similarity is well below
-// the match threshold. Book signatures are book-level (not per-file), so a real
-// duplicate chaptered 1-file-vs-many still compares correctly and is not vetoed.
-//
-// When a passed book lacks its signature (e.g. a stripped summary row), it is
-// re-fetched by ID so the veto still applies. This runs only per emitted
-// candidate (the chokepoint), not per pairwise comparison, so the lookup cost is
-// bounded.
-func (de *Engine) acoustIDSignaturesConflict(a, b *database.Book) bool {
-	if a == nil || b == nil || de.bookStore == nil {
-		return false
-	}
-	sigA, maskA, okA := de.bookSignature(a)
-	sigB, maskB, okB := de.bookSignature(b)
-	if !okA || !okB {
-		return false // conservative: never veto on missing signature data
-	}
-	sim, overlap, err := fingerprint.BookSignatureSimilarityMasked(sigA, sigB, maskA, maskB)
-	if err != nil || overlap < acoustIDVetoMinOverlap {
-		return false
-	}
-	return sim < acoustIDVetoMaxSimilarity
-}
-
-// bookSignature returns a book's book_sig_v1 signature and mask, re-fetching the
-// full record by ID when the passed struct doesn't carry the signature. The
-// bool is false when no usable signature is available.
-func (de *Engine) bookSignature(b *database.Book) (sig, mask string, ok bool) {
-	if b == nil {
-		return "", "", false
-	}
-	if b.BookSigV1 == nil || *b.BookSigV1 == "" {
-		if de.bookStore == nil {
-			return "", "", false
-		}
-		full, err := de.bookStore.GetBookByID(b.ID)
-		if err != nil || full == nil {
-			return "", "", false
-		}
-		b = full
-	}
-	// A legacy-era signature (BookSigVersion unset/old) was synthesized from
-	// misdecoded prints: treat it as NO signature, so the veto never fires on
-	// it. Old-vs-new of the same audio scores ~0.5, below the veto threshold.
-	if !b.HasCurrentBookSig() {
-		return "", "", false
-	}
-	if b.BookSigV1Mask != nil {
-		mask = *b.BookSigV1Mask
-	}
-	return *b.BookSigV1, mask, true
 }
 
 func hasPlausibleAudio(book *database.Book) bool {

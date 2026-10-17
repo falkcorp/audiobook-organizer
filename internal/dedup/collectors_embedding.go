@@ -1,17 +1,17 @@
 // file: internal/dedup/collectors_embedding.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d0e1f2a3-b4c5-4d6e-9f0a-1b2c3d4e5f6a
-// last-edited: 2026-07-03
+// last-edited: 2026-10-17
 
-// Package dedup — embedding collector (fable5 T014).
+// Package dedup — embedding confidence tiers (fable5 T014).
 //
 // # Design
 //
-// CollectEmbedding wraps the findSimilarBooks similarity search into a
-// []unified.Signal emitter.  The business logic is UNCHANGED — only the return
-// shape changes.  Guards (version-group, series-volume, same-dir) have been
-// extracted to PairEligibility in eligibility.go; the collector itself no
-// longer re-evaluates them.  Callers must call PairEligibility first.
+// The standalone CollectEmbedding vector-search emitter was removed in 01-P73
+// once nothing called it; the thresholds, config and confidence curves below
+// are applied by rescore.go and the engine's full-scan scorer. Guards
+// (version-group, series-volume, same-dir) live in PairEligibility
+// (eligibility.go), which callers must run before consuming these signals.
 //
 // Signal tier mapping (SPEC 1 §3):
 //
@@ -26,27 +26,6 @@
 // (noisy-OR) to a higher composite than either alone.
 
 package dedup
-
-import (
-	"context"
-	"fmt"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-)
-
-// EmbeddingStore is the subset of database.EmbeddingStore required by
-// CollectEmbedding.
-type EmbeddingStore interface {
-	Get(entityType, entityID string) (*database.Embedding, error)
-	FindSimilar(entityType string, vector []float32, minSim float32, limit int) ([]database.SimilarityResult, error)
-}
-
-// ChromemStore is the subset of database.ChromemEmbeddingStore required by
-// CollectEmbedding.
-type ChromemStore interface {
-	FindSimilar(ctx context.Context, entityType string, vector []float32, limit int, filter map[string]string) ([]database.ChromemSimilarityResult, error)
-}
 
 // EmbeddingCollectorConfig controls the embedding collector thresholds.
 // Defaults match the Engine's BookHighThreshold and BookLowThreshold fields.
@@ -124,96 +103,4 @@ func embedMediumConfidence(cos float32, low, high float64) float64 {
 	}
 	frac := (float64(cos) - cosMin) / (cosMax - cosMin)
 	return confMin + frac*(confMax-confMin)
-}
-
-// CollectEmbedding performs the vector-similarity search for bookID and returns
-// SigEmbedHigh / SigEmbedMedium signals for each candidate that passes the
-// similarity threshold.
-//
-// The caller is responsible for:
-//  1. Ensuring the embedding for bookID exists (via EmbedBook/EmbedBooks).
-//  2. Running PairEligibility(queryBook, otherBook) before consuming signals —
-//     the eligibility filter is NOT re-run inside this collector.
-//
-// Implementation mirrors findSimilarBooks (engine.go:822-936) with the
-// guards removed (moved to PairEligibility) and UpsertCandidate replaced by
-// signal emission.
-func CollectEmbedding(
-	ctx context.Context,
-	embedStore EmbeddingStore,
-	chromemStore ChromemStore, // may be nil — falls back to embedStore
-	bookID string,
-	cfg EmbeddingCollectorConfig,
-) ([]unified.Signal, error) {
-	emb, err := embedStore.Get("book", bookID)
-	if err != nil || emb == nil {
-		// No embedding available — not an error; caller can log if needed.
-		return nil, nil
-	}
-
-	// Attempt chromem ANN first (fast, in-memory ANN).
-	var results []database.SimilarityResult
-	if chromemStore != nil {
-		filter := map[string]string{"is_primary_version": "true"}
-		chromemResults, cErr := chromemStore.FindSimilar(ctx, "book", emb.Vector, cfg.TopK, filter)
-		if cErr != nil {
-			return nil, fmt.Errorf("CollectEmbedding chromem: %w", cErr)
-		}
-		for _, cr := range chromemResults {
-			if float64(cr.Similarity) >= cfg.LowThreshold {
-				results = append(results, database.SimilarityResult{
-					EntityID:   cr.EntityID,
-					Similarity: cr.Similarity,
-				})
-			}
-		}
-	}
-
-	// SQLite linear-scan fallback when chromem is absent or empty.
-	// See findSimilarBooks rationale: ~50-200ms per query for 42K books;
-	// acceptable for infrequent dedup runs.
-	if len(results) == 0 && embedStore != nil {
-		fallback, fErr := embedStore.FindSimilar("book", emb.Vector, float32(cfg.LowThreshold), cfg.TopK)
-		if fErr != nil {
-			return nil, fmt.Errorf("CollectEmbedding fallback: %w", fErr)
-		}
-		results = fallback
-	}
-
-	var signals []unified.Signal
-	for _, r := range results {
-		if r.EntityID == bookID {
-			continue
-		}
-
-		// Classify into HIGH or MEDIUM tier based on cosine similarity.
-		// Note: eligibility guards (version-group, series-volume, same-dir)
-		// are NOT applied here — they must have been evaluated by the caller
-		// via PairEligibility before processing returned signals.
-		var sig unified.Signal
-		if float64(r.Similarity) >= cfg.HighThreshold {
-			sig = unified.Signal{
-				Kind:       unified.SigEmbedHigh,
-				Raw:        float64(r.Similarity),
-				Confidence: embedHighConfidence(r.Similarity, cfg.HighThreshold),
-				Evidence: fmt.Sprintf(
-					"embedding cosine %.4f (high tier): book %s ↔ %s",
-					r.Similarity, bookID, r.EntityID,
-				),
-			}
-		} else {
-			sig = unified.Signal{
-				Kind:       unified.SigEmbedMedium,
-				Raw:        float64(r.Similarity),
-				Confidence: embedMediumConfidence(r.Similarity, cfg.LowThreshold, cfg.HighThreshold),
-				Evidence: fmt.Sprintf(
-					"embedding cosine %.4f (medium tier): book %s ↔ %s",
-					r.Similarity, bookID, r.EntityID,
-				),
-			}
-		}
-		signals = append(signals, sig)
-	}
-
-	return signals, nil
 }

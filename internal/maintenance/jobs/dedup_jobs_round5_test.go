@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_round5_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8e4a1c73-2f6b-4d90-a5c8-3b7e9f1d2a64
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package jobs
 
@@ -72,7 +72,7 @@ func TestDDMergeDuplicateBook_PrimaryChangedAfterPlanIsReplanned(t *testing.T) {
 		ddSetGroup(t, s, z.ID, vg, &yes)
 	}}
 
-	if err := ddMergeDuplicateBook(store, keeper, dup, false); err != nil {
+	if err := ddMergeDuplicateBookSim(store, nil, keeper, dup, false); err != nil {
 		t.Fatalf("err = %v, want the merge to finish on a fresh plan", err)
 	}
 	if g := ddMustGet(t, s, dup.ID); !g.IsSoftDeleted() {
@@ -115,7 +115,7 @@ func TestDDMergeDuplicateBook_SuccessorRetiredAfterPlanIsReplanned(t *testing.T)
 		}
 	}}
 
-	if err := ddMergeDuplicateBook(store, ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID), false); err != nil {
+	if err := ddMergeDuplicateBookSim(store, nil, ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID), false); err != nil {
 		t.Fatalf("err = %v, want the merge to finish on a fresh plan", err)
 	}
 	if g := ddMustGet(t, s, dup.ID); !g.IsSoftDeleted() {
@@ -160,7 +160,7 @@ func TestDDMergeDuplicateBook_RetireStillRefusedIsAFailureNamingTheDup(t *testin
 	const vg = "vg-keeps-changing"
 	keeper, dup, file := ddPrimaryPair(t, s, vg)
 
-	err := ddMergeDuplicateBook(ddFlipOnRetire{PebbleStore: s, dupID: dup.ID}, keeper, dup, false)
+	err := ddMergeDuplicateBookSim(ddFlipOnRetire{PebbleStore: s, dupID: dup.ID}, nil, keeper, dup, false)
 	if err == nil {
 		t.Fatal("err = nil, want a failure: the dup could not be retired")
 	}

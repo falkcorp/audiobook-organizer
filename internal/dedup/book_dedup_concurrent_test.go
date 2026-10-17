@@ -1,27 +1,23 @@
 // file: internal/dedup/book_dedup_concurrent_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f2c7b41-6d38-4e05-a1b9-3c7e0d2f5a64
-// last-edited: 2026-09-14
+// last-edited: 2026-10-17
 
 package dedup
 
 import (
-	"context"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // dedupSerializeProbe wraps a real database.Store and counts the maximum number
 // of goroutines simultaneously inside the merge read-modify-write. It overrides
-// the two methods BOTH dedup.MergeBooks and merge.Service.MergeBooks drive
-// (GetBookByID / UpdateBook) and delegates the rest. A tiny sleep on entry widens
+// the two methods the merge-family paths drive (GetBookByID / UpdateBook) and
+// delegates the rest. A tiny sleep on entry widens
 // the interleave window so that, if the two paths did NOT share one lock, their
 // bodies would overlap and push maxActive to 2+. Sharing merge's package-level
 // lock keeps at most one goroutine inside at a time -> maxActive == 1.
@@ -80,71 +76,3 @@ func newConcurrentTestStore(t *testing.T) database.Store {
 	return store
 }
 
-// TestDedupMergeBooks_SharesLockWithMergeService is the load-bearing regression
-// test for Path 2 of the #1930 follow-up. dedup.MergeBooks is a package-level
-// function (NOT merge.Service.MergeBooks) with its own read-modify-write, and it
-// can run concurrently with merge.Service.MergeBooks on a shared book row. It
-// must therefore take the SAME process-wide lock those Service methods use.
-//
-// Each goroutine gets its OWN disjoint pair, so maxActive>1 can only mean two
-// read-modify-writes overlapped — i.e. the lock was NOT shared. Even goroutines
-// run dedup.MergeBooks, odd goroutines run merge.Service.MergeBooks, all through
-// one shared probe store. WITH the shared lock (merge.LockMergeRMW) maxActive
-// stays 1. Discriminates: giving dedup.MergeBooks its own separate mutex lets a
-// dedup merge overlap a Service merge and maxActive reaches 2 (verified during
-// development). The even goroutines also exercise dedup-vs-dedup serialization.
-func TestDedupMergeBooks_SharesLockWithMergeService(t *testing.T) {
-	real := newConcurrentTestStore(t)
-	probe := &dedupSerializeProbe{Store: real}
-	ms := merge.NewService(probe)
-
-	const goroutines = 16
-	type pair struct{ keep, drop string }
-	pairs := make([]pair, goroutines)
-	for i := range pairs {
-		keep := ulid.Make().String()
-		drop := ulid.Make().String()
-		if _, err := real.CreateBook(&database.Book{ID: keep, Title: "Keep", Format: "m4b", FilePath: "/tmp/" + keep + ".m4b"}); err != nil {
-			t.Fatalf("CreateBook keep: %v", err)
-		}
-		if _, err := real.CreateBook(&database.Book{ID: drop, Title: "Drop", Format: "mp3", FilePath: "/tmp/" + drop + ".mp3"}); err != nil {
-			t.Fatalf("CreateBook drop: %v", err)
-		}
-		pairs[i] = pair{keep, drop}
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := range goroutines {
-		go func() {
-			defer wg.Done()
-			p := pairs[i]
-			if i%2 == 0 {
-				// dedup.MergeBooks: soft-delete drop, transfer metadata into keep.
-				_, _ = MergeBooks(context.Background(), probe, "", p.keep, []string{p.drop}, nil)
-			} else {
-				// merge.Service.MergeBooks: version-group merge (keep is m4b winner).
-				_, _ = ms.MergeBooks([]string{p.keep, p.drop}, "")
-			}
-		}()
-	}
-	wg.Wait()
-
-	if got := probe.maxActive.Load(); got != 1 {
-		t.Fatalf("dedup.MergeBooks did NOT share the merge lock: maxActive=%d, want 1 "+
-			"(a dedup merge overlapped a merge.Service merge on the shared probe)", got)
-	}
-
-	// Consistency spot-check: pair[0] went through dedup.MergeBooks -> keep alive,
-	// drop soft-deleted (A1#11: never hard-deleted).
-	if k0, err := real.GetBookByID(pairs[0].keep); err != nil || k0 == nil {
-		t.Fatalf("dedup keep book missing: %v", err)
-	}
-	d0, err := real.GetBookByID(pairs[0].drop)
-	if err != nil || d0 == nil {
-		t.Fatalf("dedup drop book must survive as a soft-deleted row: %v", err)
-	}
-	if !d0.IsSoftDeleted() {
-		t.Fatalf("dedup drop book was not soft-deleted")
-	}
-}

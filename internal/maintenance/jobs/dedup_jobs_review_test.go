@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_review_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3c9e7a15-6b2d-4f80-9a41-d5e8f2b6c073
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package jobs
 
@@ -184,7 +184,7 @@ func TestDDMergeDuplicateBook_MoveFailureKeepsOnePrimary(t *testing.T) {
 	s := ddRealStore(t)
 	const vg = "vg-move-fail"
 	keeper, dup, _ := ddPrimaryPair(t, s, vg)
-	if err := ddMergeDuplicateBook(ddMoveFails{s}, keeper, dup, false); err == nil {
+	if err := ddMergeDuplicateBookSim(ddMoveFails{s}, nil, keeper, dup, false); err == nil {
 		t.Fatal("merge succeeded although the move failed")
 	}
 	if got := ddLiveExplicitPrimaries(t, s, vg); len(got) != 1 || got[0] != "Dup" {
@@ -210,7 +210,7 @@ func TestDDMergeDuplicateBook_PostMoveFailureRerunConverges(t *testing.T) {
 	fail := true
 	store := ddReassignFails{PebbleStore: s, fail: &fail}
 
-	if err := ddMergeDuplicateBook(store, keeper, dup, false); err == nil {
+	if err := ddMergeDuplicateBookSim(store, nil, keeper, dup, false); err == nil {
 		t.Fatal("merge succeeded although the external-ID reassign failed")
 	}
 	if g := ddMustGet(t, s, dup.ID); g.IsSoftDeleted() {
@@ -222,7 +222,7 @@ func TestDDMergeDuplicateBook_PostMoveFailureRerunConverges(t *testing.T) {
 
 	fail = false
 	keeper, dup = ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID)
-	if err := ddMergeDuplicateBook(store, keeper, dup, false); err != nil {
+	if err := ddMergeDuplicateBookSim(store, nil, keeper, dup, false); err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
 	if g := ddMustGet(t, s, dup.ID); !g.IsSoftDeleted() || g.FilePath != "" {

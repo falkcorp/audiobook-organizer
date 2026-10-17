@@ -1,7 +1,7 @@
 // file: internal/dedup/itunes_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c9e1f47-2b8a-4d6e-9f15-7a0c4e2b8d61
-// last-edited: 2026-09-13
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -74,17 +74,6 @@ func requireLive(t *testing.T, store database.Store, ids ...string) {
 		require.NotNil(t, b, "book %s must still exist", id)
 		assert.False(t, b.IsSoftDeleted(), "book %s must not be merged away", id)
 	}
-}
-
-func TestDedupMergeBooks_RefusesITunesBookWithoutWriting(t *testing.T) {
-	withGuardMediaRoot(t)
-	store := newConcurrentTestStore(t)
-	itunesID, managedID := seedGuardPair(t, store)
-
-	_, err := MergeBooks(context.Background(), &dedupWriteTrap{Store: store, t: t}, "", managedID, []string{itunesID}, nil)
-	require.ErrorIs(t, err, merge.ErrITunesProtected)
-	assert.True(t, merge.IsRefusal(err))
-	requireLive(t, store, itunesID, managedID)
 }
 
 func TestMergeSplitBookCluster_RefusesITunesBookWithoutWriting(t *testing.T) {

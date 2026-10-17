@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/membership_lock_writers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a3d5f92-1e6c-4b07-9d48-c2f7e0a1b635
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package jobs
 
@@ -59,7 +59,7 @@ func ddKeeperFillCase(t *testing.T, f *vptest.Fixture) (func() error, func() boo
 		if err != nil {
 			return err
 		}
-		return ddMergeDuplicateBook(f.S, keeper, dup, false)
+		return ddMergeDuplicateBookSim(f.S, nil, keeper, dup, false)
 	}
 	unchanged := func() bool {
 		b, err := f.S.GetBookByID(d)

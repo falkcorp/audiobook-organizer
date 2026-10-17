@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-27
+// last-edited: 2026-10-17
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -121,35 +121,6 @@ func allNormalizedTitleFormsForStore(store interface {
 		}
 	}
 	return forms
-}
-
-// CollectDuration scans books by the same author for duration-based similarity
-// signals and emits SigDuration for pairs within the ±2% window (supporting
-// signal — adds a bounded boost to composite score, never drives it alone).
-//
-// Side-effects preserved from checkDurationMatch (engine.go:547-700):
-//
-//   - dedup:duration-match tag applied to BOTH books when duration within ±2%
-//     AND Levenshtein title distance ≤ cfg.LevenshteinMax.
-//   - dedup:duration-abridged tag applied to BOTH books when duration differs
-//     10-20% AND Levenshtein title distance ≤ cfg.LevenshteinMax.
-//
-// These side-effect tags are preserved because the UI and reporting layer
-// depend on them for "show me likely abridged editions" filters.
-//
-// Logic unchanged from checkDurationMatch; emission shape only.
-//
-// tagStore is used for side-effect tag writes via database.EnsureSingletonBookTag.
-// It must be non-nil if tag side-effects are desired (pass nil to disable).
-// In production, both callers pass de.bookStore (a dedup.Store, which embeds
-// database.BookTagSingletonStore).
-func CollectDuration(
-	store DurationCollectorStore,
-	tagStore database.BookTagSingletonStore, // may be nil — side-effect tags silently skipped
-	book *database.Book,
-	cfg DurationCollectorConfig,
-) ([]unified.Signal, error) {
-	return collectDuration(store, tagStore, nil, book, cfg)
 }
 
 // collectDuration is CollectDuration with the engine's run-scoped runtime
