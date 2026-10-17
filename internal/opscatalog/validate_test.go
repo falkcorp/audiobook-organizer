@@ -1,5 +1,5 @@
 // file: internal/opscatalog/validate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 15d7de21-ccf4-4692-992b-95f1056c2b6a
 // last-edited: 2026-10-17
 
@@ -285,6 +285,20 @@ func TestScheduledWriterNeedsLiveOrPreview(t *testing.T) {
 	got := refusals(ValidateCatalog([]ops.Definition{task("synthetic.nightly", c)}, emptyUniverse(), nil))
 	if !slices.Contains(got, "synthetic.nightly:"+string(ops.RefuseSchedule)) {
 		t.Fatalf("Live() with Preview() not refused: %v", got)
+	}
+}
+
+// A def that says Writes() with no resources still gets a Writer, and the
+// scheduler runs it as a Preview unless told otherwise, so validation must
+// demand a mode of it too (one shared predicate, ops.Effects.IsWriter).
+func TestScheduledEmptyWritesNeedsLiveOrPreview(t *testing.T) {
+	c := common("synthetic.empty", ops.Writes())
+	c.Schedule = ops.Cron("0 3 * * *")
+	wantOnly(t, ValidateCatalog([]ops.Definition{task("synthetic.empty", c)}, emptyUniverse(), nil),
+		"synthetic.empty:"+string(RefuseScheduledWriterNotLive))
+	c.Schedule = ops.Cron("0 3 * * *").Preview()
+	if err := ValidateCatalog([]ops.Definition{task("synthetic.empty", c)}, emptyUniverse(), nil); err != nil {
+		t.Fatalf("declared Preview() was refused: %v", err)
 	}
 }
 

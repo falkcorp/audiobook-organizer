@@ -1,5 +1,5 @@
 // file: pkg/ops/schedule.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 569e684d-fb56-46ee-bd07-ce7a4ac835bb
 // last-edited: 2026-10-17
 
@@ -190,53 +190,116 @@ func (s *Schedule) String() string {
 	return b
 }
 
-// cronBounds are the inclusive ranges of the five cron fields.
+// cronBounds are the inclusive ranges of the five cron fields. Day-of-week
+// accepts 7 as Sunday, as standard cron does; it is folded onto 0 when parsed.
 var cronBounds = [5][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
 
-// validateCron checks a five-field expression: each field is "*", or a comma
-// list of n, a-b, with an optional /step. Names (JAN, MON) and macros
-// (@daily) are not accepted.
-func validateCron(expr string) error {
-	fields := strings.Fields(expr)
-	if len(fields) != 5 {
-		return fmt.Errorf("cron %q: want 5 fields, got %d", expr, len(fields))
-	}
-	for i, f := range fields {
-		for _, part := range strings.Split(f, ",") {
-			if err := validateCronPart(part, cronBounds[i]); err != nil {
-				return fmt.Errorf("cron %q field %d: %w", expr, i+1, err)
-			}
-		}
-	}
-	return nil
+var cronFieldNames = [5]string{"minute", "hour", "day-of-month", "month", "day-of-week"}
+
+// CronFields is a parsed five-field cron expression: one bitset per field
+// (bit v set when value v matches), plus whether day-of-month and day-of-week
+// started with "*" (standard cron ORs the two only when neither does). It is
+// the one cron grammar in the module; the scheduler evaluates it.
+type CronFields struct {
+	Minute, Hour, DayOfMonth, Month, DayOfWeek uint64
+	DayOfMonthStar, DayOfWeekStar              bool
 }
 
-func validateCronPart(part string, bounds [2]int) error {
-	rng, step, hasStep := strings.Cut(part, "/")
-	if hasStep {
-		n, err := strconv.Atoi(step)
-		if err != nil || n <= 0 {
-			return fmt.Errorf("bad step %q", step)
+// ParseCronFields parses "m h dom mon dow". Each field is "*", or a comma list
+// of n, a-b, with an optional /step ("*/n", "a-b/n"; "a/n" runs from a to the
+// end of the range). Names (JAN, MON), "?", "L", "W", "#", signs ("+5"),
+// seconds, years and macros such as @daily are errors that name the field.
+func ParseCronFields(expr string) (CronFields, error) {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return CronFields{}, fmt.Errorf("cron %q: want 5 fields, got %d", expr, len(fields))
+	}
+	var sets [5]uint64
+	for i, f := range fields {
+		set, err := parseCronField(f, cronBounds[i])
+		if err != nil {
+			return CronFields{}, fmt.Errorf("cron %q: %s field %q: %w", expr, cronFieldNames[i], f, err)
+		}
+		sets[i] = set
+	}
+	if sets[4]&(1<<7) != 0 { // 7 is Sunday: fold it onto 0
+		sets[4] = sets[4]&^(1<<7) | 1
+	}
+	return CronFields{
+		Minute: sets[0], Hour: sets[1], DayOfMonth: sets[2], Month: sets[3], DayOfWeek: sets[4],
+		DayOfMonthStar: strings.HasPrefix(fields[2], "*"), DayOfWeekStar: strings.HasPrefix(fields[4], "*"),
+	}, nil
+}
+
+func validateCron(expr string) error {
+	_, err := ParseCronFields(expr)
+	return err
+}
+
+func parseCronField(f string, bounds [2]int) (uint64, error) {
+	var set uint64
+	for _, part := range strings.Split(f, ",") {
+		rng, stepStr, hasStep := strings.Cut(part, "/")
+		step := 1
+		if hasStep {
+			n, err := cronNum(stepStr)
+			if err != nil || n <= 0 {
+				return 0, fmt.Errorf("bad step %q", stepStr)
+			}
+			step = n
+		}
+		lo, hi := bounds[0], bounds[1]
+		switch {
+		case rng == "*":
+		case strings.Contains(rng, "-"):
+			a, b, _ := strings.Cut(rng, "-")
+			var err error
+			if lo, err = cronValue(a, bounds); err != nil {
+				return 0, err
+			}
+			if hi, err = cronValue(b, bounds); err != nil {
+				return 0, err
+			}
+			if lo > hi {
+				return 0, fmt.Errorf("range %q is backwards", rng)
+			}
+		default:
+			n, err := cronValue(rng, bounds)
+			if err != nil {
+				return 0, err
+			}
+			lo, hi = n, n
+			if hasStep {
+				hi = bounds[1] // "a/n" runs from a to the end, as in Vixie cron
+			}
+		}
+		for v := lo; v <= hi; v += step {
+			set |= 1 << uint(v)
 		}
 	}
-	if rng == "*" {
-		return nil
+	return set, nil
+}
+
+// cronNum parses an unsigned decimal. strconv.Atoi would also take "+5".
+func cronNum(s string) (int, error) {
+	if s == "" {
+		return 0, errors.New("empty")
 	}
-	lo, hi, isRange := strings.Cut(rng, "-")
-	nums := []string{lo}
-	if isRange {
-		nums = append(nums, hi)
-	}
-	vals := make([]int, 0, 2)
-	for _, s := range nums {
-		n, err := strconv.Atoi(s)
-		if err != nil || n < bounds[0] || n > bounds[1] {
-			return fmt.Errorf("value %q out of range %d-%d", s, bounds[0], bounds[1])
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("%q is not a number", s)
 		}
-		vals = append(vals, n)
 	}
-	if isRange && vals[0] > vals[1] {
-		return fmt.Errorf("range %q is backwards", rng)
+	return strconv.Atoi(s)
+}
+
+func cronValue(s string, bounds [2]int) (int, error) {
+	n, err := cronNum(s)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a number (names, signs, ?, L, W and # are not supported)", s)
 	}
-	return nil
+	if n < bounds[0] || n > bounds[1] {
+		return 0, fmt.Errorf("value %d out of range %d-%d", n, bounds[0], bounds[1])
+	}
+	return n, nil
 }

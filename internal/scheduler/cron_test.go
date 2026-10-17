@@ -1,5 +1,5 @@
 // file: internal/scheduler/cron_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e5d8b73-41a9-4f2c-8d16-a93c7b5e2f40
 // last-edited: 2026-10-17
 
@@ -39,7 +39,7 @@ func TestParseCron_Rejects(t *testing.T) {
 		"", "* * * *", "* * * * * *", "0 0 * JAN *", "0 0 * * MON", "? * * * *",
 		"60 * * * *", "* 24 * * *", "* * 0 * *", "* * 32 * *", "* * * 13 *",
 		"* * * * 8", "*/0 * * * *", "@daily", "0 0 L * *", "0 0 * * 1#2",
-		"5-1 * * * *", "0 0 15W * *", "1/0 * * * *", "-1 * * * *", "a * * * *",
+		"5-1 * * * *", "+5 * * * *", "*/+5 * * * *", "1-+5 * * * *", "0 0 15W * *", "1/0 * * * *", "-1 * * * *", "a * * * *",
 	} {
 		if _, err := ParseCron(e); err == nil {
 			t.Errorf("ParseCron(%q) = nil error, want rejection", e)

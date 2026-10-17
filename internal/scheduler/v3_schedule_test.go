@@ -1,5 +1,5 @@
 // file: internal/scheduler/v3_schedule_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a90d3e7-2c18-4b64-8e0f-71b6c4a9d235
 // last-edited: 2026-10-17
 
@@ -8,7 +8,14 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -187,11 +194,24 @@ func TestWindowOrderHonored(t *testing.T) {
 		readDef("synthetic.a", ops.InMaintenanceWindow(20)),
 		readDef("synthetic.first", ops.InMaintenanceWindow(5)))
 	got := r.ts.maintenanceOrder
-	if !slices.Equal(got[:len(before)], before) {
+	if got[len(got)-1] != "library_scan" {
+		t.Fatalf("library_scan is no longer last: %v", got[len(got)-4:])
+	}
+	// The v3 block sits immediately before library_scan, in (order, id) order,
+	// and every pre-existing task keeps its place relative to the others.
+	end := len(got) - 1
+	if blk := got[end-3 : end]; !slices.Equal(blk, []string{"synthetic.first", "synthetic.a", "synthetic.b"}) {
+		t.Fatalf("v3 window block = %v, want order then def id, just before library_scan", blk)
+	}
+	if rest := slices.Concat(got[:end-3], got[end:]); !slices.Equal(rest, before) {
 		t.Fatal("existing tasks' window order changed")
 	}
-	if tail := got[len(before):]; !slices.Equal(tail, []string{"synthetic.first", "synthetic.a", "synthetic.b"}) {
-		t.Fatalf("v3 window order = %v, want order then def id", tail)
+	// Without a library_scan entry the block is appended.
+	r2 := newV3Rig(t)
+	r2.ts.maintenanceOrder = slices.DeleteFunc(r2.ts.maintenanceOrder, func(n string) bool { return n == "library_scan" })
+	r2.register(t, readDef("synthetic.only", ops.InMaintenanceWindow(1)))
+	if o := r2.ts.maintenanceOrder; o[len(o)-1] != "synthetic.only" {
+		t.Errorf("block not appended when library_scan is absent: %v", o[len(o)-2:])
 	}
 	for _, id := range []string{"synthetic.first", "synthetic.a", "synthetic.b"} {
 		if !r.ts.reachableViaMaintenanceWindow(id) {
@@ -421,5 +441,196 @@ func TestLegacyTaskNamesCoverTaskV2DefIDs(t *testing.T) {
 	}
 	if legacyTaskNameForDef("library.scan") != "library_scan" {
 		t.Error("library.scan must map to library_scan")
+	}
+}
+
+func TestGateClosedTimeIsNotMissed(t *testing.T) {
+	gate := false
+	t0 := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	week := t0.Add(7 * 24 * time.Hour)
+	for name, tc := range map[string]struct {
+		def  func() ops.Definition
+		want int64 // missed after the gate reopens and the catch-up fires
+	}{
+		"every": {func() ops.Definition {
+			return readDef("synthetic.g", ops.Every(time.Hour).When(func() bool { return gate }))
+		}, 0},
+		"daily_at": {func() ops.Definition {
+			return readDef("synthetic.g", ops.DailyAt("03:00").When(func() bool { return gate }))
+		}, 0},
+		"cron": {func() ops.Definition {
+			return readDef("synthetic.g", ops.Cron("0 * * * *").When(func() bool { return gate }))
+		}, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gate = true
+			r := newV3Rig(t)
+			r.register(t, tc.def())
+			r.poll(t0) // seed
+			gate = false
+			for d := time.Duration(0); d <= 7*24*time.Hour; d += 6 * time.Hour {
+				r.poll(t0.Add(d)) // a week with the gate closed
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("fired with the gate closed: %v", r.calls)
+			}
+			gate = true
+			r.poll(week.Add(time.Minute)) // the gate opens; the overdue run catches up once
+			if len(r.calls) != 1 {
+				t.Fatalf("calls = %d, want one catch-up run", len(r.calls))
+			}
+			if m := r.status(t, "synthetic.g").Missed; m != tc.want {
+				t.Errorf("Missed = %d after a week with the gate closed, want %d", m, tc.want)
+			}
+		})
+	}
+}
+
+func TestCountDueClipsToGateOpen(t *testing.T) {
+	// Hourly due times; the gate opened at +3.5h and the poll is at +10h. Due
+	// times before +3.5h are excused, those at +4h..+10h (7) count, one of them
+	// being the catch-up run itself.
+	first := time.Date(2026, 10, 16, 13, 0, 0, 0, time.UTC)
+	step := func(t time.Time) (time.Time, bool) { return t.Truncate(time.Hour).Add(time.Hour), true }
+	open := first.Add(3*time.Hour + 30*time.Minute)
+	dueAt, missed := countDue(first, first.Add(10*time.Hour), open, step)
+	if !dueAt.Equal(first.Add(4*time.Hour)) || missed != 6 {
+		t.Errorf("dueAt=%v missed=%d, want +4h and 6", dueAt, missed)
+	}
+	// Nothing came due since the gate opened: one plain catch-up, nothing missed.
+	dueAt, missed = countDue(first, open.Add(10*time.Minute), open, step)
+	if !dueAt.Equal(open) || missed != 0 {
+		t.Errorf("dueAt=%v missed=%d, want the open time and 0", dueAt, missed)
+	}
+}
+
+func TestCronCatchUpCountIsCheap(t *testing.T) {
+	// 1000 stepped Next calls for an every-minute cron must not rescan the
+	// day from midnight each time.
+	spec, _ := ParseCron("* * * * *")
+	start := time.Now()
+	first := time.Date(2026, 10, 16, 23, 0, 0, 0, time.UTC)
+	now := first.Add(2000 * time.Minute)
+	dueAt, missed := countDue(first, now, time.Time{}, func(t time.Time) (time.Time, bool) { return spec.Next(t, time.UTC) })
+	if !dueAt.Equal(first) || missed != 999 {
+		t.Fatalf("dueAt=%v missed=%d, want first and the 999 cap", dueAt, missed)
+	}
+	if d := time.Since(start); d > 250*time.Millisecond {
+		t.Errorf("counting took %s, want well under 250ms", d)
+	}
+}
+
+func TestNextFireForLegacyDrivenDefs(t *testing.T) {
+	r := newV3Rig(t)
+	// maintenance.file-integrity-check is window-only today (interval 0): no timer.
+	r.register(t,
+		readDef("maintenance.file-integrity-check", ops.Cron("30 2 * * *")),
+		readDef("library.size-refresh", ops.Every(6*time.Hour)))
+	if _, ok := r.ts.NextFire("maintenance.file-integrity-check"); ok {
+		t.Error("a window-only legacy task reports a timer next-fire")
+	}
+	// An interval task: last stamp + its own interval.
+	task := r.ts.tasks["library_size_refresh"]
+	task.IsEnabled = func() bool { return true }
+	task.GetInterval = func() time.Duration { return 6 * time.Hour }
+	last := r.now.Add(-time.Hour)
+	r.ts.stampIntervalTick("library_size_refresh", last)
+	want := last.Add(task.GetInterval())
+	if got, ok := r.ts.NextFire("library.size-refresh"); !ok || !got.Equal(want) {
+		t.Errorf("NextFire = %v,%v want the legacy task's next due %v", got, ok, want)
+	}
+	if st := r.status(t, "library.size-refresh"); st.NextFire == nil || !st.NextFire.Equal(want) {
+		t.Errorf("status NextFire = %v, want %v", st.NextFire, want)
+	}
+	// A DailyAt legacy task uses the daily clock.
+	r.ts.tasks["library_size_refresh"].DailyAt = "04:00"
+	if got, ok := r.ts.NextFire("library.size-refresh"); !ok || !got.Equal(nextDailyAt(last, 4, 0, time.UTC)) {
+		t.Errorf("daily legacy NextFire = %v,%v", got, ok)
+	}
+	// A disabled legacy task has no next fire.
+	r.ts.tasks["library_size_refresh"].IsEnabled = func() bool { return false }
+	if _, ok := r.ts.NextFire("library.size-refresh"); ok {
+		t.Error("a disabled legacy task reports a next fire")
+	}
+}
+
+func TestEveryEnqueueTargetInTasksIsInTaskV2DefIDs(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]*ast.File{}
+	for _, de := range entries {
+		n := de.Name()
+		if de.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(wd, n), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[n] = f
+	}
+	consts := map[string]string{}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				vs := sp.(*ast.ValueSpec)
+				for i, n := range vs.Names {
+					if i < len(vs.Values) {
+						if bl, ok := vs.Values[i].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+							consts[n.Name], _ = strconv.Unquote(bl.Value)
+						}
+					}
+				}
+			}
+		}
+	}
+	ids := map[string]bool{}
+	for _, id := range taskV2DefIDs {
+		ids[id] = true
+	}
+	found := 0
+	f := files["tasks.go"]
+	if f == nil {
+		t.Fatal("tasks.go not found next to the test")
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "EnqueueOp" {
+			return true
+		}
+		var id string
+		switch a := call.Args[1].(type) {
+		case *ast.BasicLit:
+			id, _ = strconv.Unquote(a.Value)
+		case *ast.Ident:
+			id = consts[a.Name]
+		}
+		pos := fset.Position(call.Pos())
+		if id == "" {
+			t.Errorf("%s: cannot resolve the def ID passed to EnqueueOp; use a string literal or a package const", pos)
+			return true
+		}
+		found++
+		if !ids[id] {
+			t.Errorf("%s: a task enqueues %q but taskV2DefIDs has no entry for it, so RegisterSchedules would also fire it from ops.Schedule (double run)", pos, id)
+		}
+		return true
+	})
+	if found < 20 {
+		t.Fatalf("found only %d EnqueueOp calls in tasks.go; the scan is not seeing the file", found)
 	}
 }

@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 package ops
 
@@ -126,6 +126,13 @@ func (e Effects) Ready() Readiness {
 
 // IsReadOnly reports whether the op declared ReadOnly.
 func (e Effects) IsReadOnly() bool { return e.readOnly }
+
+// IsWriter reports whether the op gets a Writer: it did not declare ReadOnly.
+// An empty Writes() counts, because the runner hands that op a Writer too. The
+// scheduler (which picks Live or Preview) and ValidateCatalog (which demands a
+// mode of a scheduled writer) both use this one predicate, so a def cannot
+// pass validation and then run as a Preview by accident.
+func (e Effects) IsWriter() bool { return !e.readOnly }
 
 // Declared reports whether ReadOnly or Writes was called at all.
 func (e Effects) Declared() bool { return e.declared }
