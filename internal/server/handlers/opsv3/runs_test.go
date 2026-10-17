@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
 // last-edited: 2026-10-17
 
@@ -426,13 +426,15 @@ func TestZombieFlagAndStoppingState(t *testing.T) {
 	}}
 	r := newRouter(New(Deps{Runs: mem, Zombies: fakeZombies{{OpID: "z", DefID: "test.slow"}}}))
 	z := decode[RunView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs/z", nil))
-	if z.State != "stopping" || !z.Zombie || z.Outcome != "" {
-		t.Errorf("zombie = state %q zombie %v outcome %q, want stopping/true/empty", z.State, z.Zombie, z.Outcome)
+	// Displays stopping; State stays the stored one, so the row matches the
+	// ?state=running filter and /counts group that listed it.
+	if z.DisplayState != "stopping" || z.State != "running" || !z.Zombie || z.Outcome != "" {
+		t.Errorf("zombie = state %q display %q zombie %v outcome %q, want running/stopping/true/empty", z.State, z.DisplayState, z.Zombie, z.Outcome)
 	}
-	if ok := decode[RunView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs/ok", nil)); ok.State != "running" || ok.Zombie {
+	if ok := decode[RunView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs/ok", nil)); ok.State != "running" || ok.DisplayState != "running" || ok.Zombie {
 		t.Errorf("healthy run = %+v", ok)
 	}
-	if s := decode[RunView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs/s", nil)); s.State != "stopping" || !s.Zombie {
+	if s := decode[RunView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs/s", nil)); s.State != "stopping" || s.DisplayState != "stopping" || !s.Zombie {
 		t.Errorf("record-level zombie = %+v", s)
 	}
 }
@@ -632,5 +634,25 @@ func TestDefsLastRunFallbackIsCached(t *testing.T) {
 	do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs", nil)
 	if p.schedReads != 4 {
 		t.Fatalf("after the cache period: %d reads, want 4", p.schedReads)
+	}
+}
+
+// TestCancelOfARunThatIsNotExecutingIs409: the spec's only stop transition is
+// running -> stopping. An interrupted or awaiting_decision run is not
+// executing; cancelling it is a 409 that points at discard / decide, and the
+// registry is not asked to cancel it.
+func TestCancelOfARunThatIsNotExecutingIs409(t *testing.T) {
+	enq, _, mem, h := startHarness(map[string]DefInfo{"test.fix": {ID: "test.fix", Title: "Fix", Kind: "fixer"}}, nil)
+	mem.runs["ask"] = database.RunRecord{ID: "ask", DefID: "test.fix", State: state.V3AwaitingDecision}
+	mem.runs["int"] = database.RunRecord{ID: "int", DefID: "test.fix", State: state.V3Interrupted}
+	r := newRouter(h)
+	for _, id := range []string{"ask", "int"} {
+		w := do(t, r, admin, http.MethodPost, "/api/v3/ops/runs/"+id+"/cancel", nil)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "discard") {
+			t.Errorf("cancel %s = %d %s, want 409 pointing at discard", id, w.Code, w.Body.String())
+		}
+	}
+	if len(enq.cancelled) != 0 {
+		t.Fatalf("the registry was asked to cancel %v", enq.cancelled)
 	}
 }
