@@ -197,4 +197,3 @@ func TestScanBookDuplicates_TranscriptionMissingLeavesMetadataDecisionUnchanged(
 }
 
 // ── MergeBooks ────────────────────────────────────────────────────────────────
-

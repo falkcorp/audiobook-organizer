@@ -75,4 +75,3 @@ func newConcurrentTestStore(t *testing.T) database.Store {
 	})
 	return store
 }
-
