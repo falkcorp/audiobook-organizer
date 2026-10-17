@@ -1,7 +1,7 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 // The five Deluge connection settings are config/env-authoritative (owner
 // decision 2026-10-11): a value the environment (DELUGE_*) or the server's config
@@ -1002,5 +1002,28 @@ func TestDelugeLock_TablesAreConsistent(t *testing.T) {
 		if _, ok := envLockedSettings[k]; !ok {
 			t.Errorf("configFileLockedSettings key %q has no entry in envLockedSettings", k)
 		}
+	}
+}
+
+// The removed qBittorrent and SABnzbd blocks are scrubbed from config.yaml on
+// save, so a plaintext password or API key does not stay behind; the kept
+// Deluge block survives.
+func TestSaveConfigToFile_ScrubsRemovedDownloadClientBlocks(t *testing.T) {
+	path := saveFileFixture(t, "download_client:\n  torrent:\n    deluge:\n      host: 192.0.2.10\n"+
+		"    qbittorrent:\n      password: qbit-test-pass\n"+
+		"  usenet:\n    sabnzbd:\n      api_key: sab-test-key\n"+
+		"deluge_web_url: "+delugeFileURL+"\n")
+	if err := SaveConfigToFile(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	out := string(data)
+	for _, gone := range []string{"qbittorrent", "qbit-test-pass", "usenet", "sab-test-key"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("removed download-client data %q survived the save:\n%s", gone, out)
+		}
+	}
+	if !strings.Contains(out, "192.0.2.10") {
+		t.Errorf("the kept Deluge settings were lost:\n%s", out)
 	}
 }

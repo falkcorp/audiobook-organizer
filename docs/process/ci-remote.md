@@ -1,7 +1,7 @@
 <!-- file: docs/process/ci-remote.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 64ab6c3c-1ce6-48a4-8e4a-0c95ada9ab46 -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-17 -->
 
 # `make ci-remote`: local CI on a runner pool
 
@@ -77,7 +77,7 @@ measured time of any package in it. `internal/database` has run for
 
 Test shards on a `prod` node run in a separate network namespace with only
 loopback up. Some tests dial fixed localhost ports, for example
-`internal/download`'s Deluge test on `localhost:8112`. On the production host
+`internal/server`'s Deluge integration test on `localhost:8112`. On the production host
 those ports belong to real services, and the test fails or talks to them. The
 node runs `unshare -rn`, raises `lo`, and then runs a second `unshare` that
 maps back to the node user with no capabilities, so file-permission tests
