@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-17
 
@@ -11,8 +11,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
 // TestOpsV3Routes_WiredAndServed checks the oracle the handler tests cannot:
@@ -118,4 +121,69 @@ func TestOpsV3Routes_NoPreviewOpRefusesPreview(t *testing.T) {
 		s.router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusConflict, rec.Code, "%s %s: %s", target, body, rec.Body.String())
 	}
+}
+
+// TestOpsV3Routes_DefsShowTheSchedulerStartAssigns: setupRoutes runs before
+// Start() assigns s.scheduler, so the v3 routes must resolve it per request.
+// The scheduler is assigned after the routes exist, exactly as Start does,
+// and /defs must then show each schedule and its next fire.
+func TestOpsV3Routes_DefsShowTheSchedulerStartAssigns(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	require.Nil(t, s.scheduler, "the test server must not have a scheduler before the routes are built")
+
+	yes := func() bool { return true }
+	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
+		Store:               func() scheduler.SchedulerStore { return nil },
+		OpRegistry:          s.opRegistry,
+		HasDedupPlugin:      yes,
+		HasMetadataFetchSvc: yes,
+		HasActivitySvc:      yes,
+		HasBatchPoller:      yes,
+	})
+	require.NoError(t, ts.RegisterSchedules(s.opRegistry.Catalog()))
+	s.scheduler = ts
+	t.Cleanup(func() { s.scheduler = nil })
+
+	want := map[string]scheduler.ScheduleStatus{}
+	withNext := 0
+	for _, st := range ts.ScheduleStatuses() {
+		want[st.DefID] = st
+		if st.NextFire != nil {
+			withNext++
+		}
+	}
+	require.NotEmpty(t, want, "the catalog registered no schedules")
+	require.Positive(t, withNext, "no schedule has a next fire to show")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v3/ops/defs", nil)
+	rec := httptest.NewRecorder()
+	s.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var list struct {
+		Items []struct {
+			ID       string `json:"id"`
+			Schedule struct {
+				Kind     string     `json:"kind"`
+				NextFire *time.Time `json:"next_fire"`
+			} `json:"schedule"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
+	shown, shownNext := 0, 0
+	for _, d := range list.Items {
+		st, ok := want[d.ID]
+		if !ok {
+			require.Equal(t, "manual", d.Schedule.Kind, d.ID)
+			continue
+		}
+		shown++
+		require.Equal(t, st.Kind, d.Schedule.Kind, "%s schedule kind", d.ID)
+		require.Equal(t, st.NextFire != nil, d.Schedule.NextFire != nil, "%s next_fire", d.ID)
+		if d.Schedule.NextFire != nil {
+			shownNext++
+		}
+	}
+	require.Equal(t, len(want), shown, "every scheduled def is listed with its schedule")
+	require.Equal(t, withNext, shownNext)
 }
