@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/view.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d646f79e-8b01-401b-a907-b56f76273e12
 // last-edited: 2026-10-17
 
@@ -40,8 +40,14 @@ type RunView struct {
 	StartedAt  *time.Time   `json:"started_at"`
 	FinishedAt *time.Time   `json:"finished_at"`
 	Progress   ProgressView `json:"progress"`
+	// DisplayState is the state to show. It is State except for a run the
+	// registry reports as a zombie while its record still reads running (the
+	// record can lag the registry by one write): that run displays
+	// "stopping". State stays the stored state, so a row always matches the
+	// ?state= filter and the /counts group that listed it.
+	DisplayState string `json:"display_state"`
 	// Zombie is true for a run whose goroutine outlived the abandon grace and
-	// has not returned. Its state reads "stopping" (the slot and the exclusive
+	// has not returned. It displays "stopping" (the slot and the exclusive
 	// key are still held), never a terminal state.
 	Zombie    bool   `json:"zombie"`
 	Error     string `json:"error"`
@@ -60,11 +66,11 @@ func outcomeOf(s state.V3) string {
 }
 
 // toView renders a record. zombies is the set of run ids the registry reports
-// as stopping-with-a-live-goroutine; it overrides the record because the
-// record can lag the registry by one write.
+// as stopping-with-a-live-goroutine; it sets Zombie and DisplayState because
+// the record can lag the registry by one write, and leaves State alone.
 func toView(rec database.RunRecord, zombies map[string]bool) RunView {
 	v := RunView{
-		ID: rec.ID, DefID: rec.DefID, State: string(rec.State), Outcome: outcomeOf(rec.State),
+		ID: rec.ID, DefID: rec.DefID, State: string(rec.State), DisplayState: string(rec.State), Outcome: outcomeOf(rec.State),
 		Mode: rec.Mode, StartedAt: rec.StartedAt, FinishedAt: rec.CompletedAt,
 		Zombie: rec.Zombie, Error: rec.Error, StartedBy: rec.Actor.UserID,
 		Progress: ProgressView{
@@ -80,7 +86,7 @@ func toView(rec database.RunRecord, zombies map[string]bool) RunView {
 	}
 	if zombies[rec.ID] {
 		v.Zombie = true
-		v.State = string(state.V3Stopping)
+		v.DisplayState = string(state.V3Stopping)
 		v.Outcome = ""
 	}
 	return v
