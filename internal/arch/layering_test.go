@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-17
 
@@ -243,6 +243,7 @@ var layerOf = map[string]int{
 	"internal/server/handlers/mocks":            5, // family: internal/server/** is transport
 	"internal/server/handlers/operations":       5, // family: internal/server/** is transport
 	"internal/server/handlers/operations/mocks": 5, // family: internal/server/** is transport
+	"internal/server/handlers/opsv3":            5, // family: internal/server/** is transport
 	"internal/server/handlers/repairs":          5, // family: internal/server/** is transport
 	"internal/server/handlers/review":           5, // family: internal/server/** is transport
 	"internal/server/handlers/system":           5, // family: internal/server/** is transport
