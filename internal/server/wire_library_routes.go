@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-17
 
@@ -101,7 +101,10 @@ func (s *Server) wireLibraryRoutes(
 	protected.DELETE("/playlists/:id/books/:bookID", playlistH.RemoveBookFromPlaylist)
 	protected.POST("/playlists/:id/reorder", playlistH.ReorderPlaylist)
 	protected.POST("/playlists/:id/materialize", playlistH.MaterializePlaylist)
-	// Retired (01-P81c): no caller in the repo. Stub kept for one release.
+	// GET /playlists/:id/export.m3u had no caller in the repo or in AudioBooth
+	// (01-P81c). It answers 410 Gone for one release (owner decision D9) and is
+	// then removed. It stays on the protected group, so an unauthenticated
+	// caller still gets 401 and only a signed-in caller learns it is gone.
 	protected.GET("/playlists/:id/export.m3u", gone(""))
 
 	// Collections. This is the ONLY surface that can create a dynamic
