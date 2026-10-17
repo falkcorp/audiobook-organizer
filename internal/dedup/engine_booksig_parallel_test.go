@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_booksig_parallel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c9e7d21-6b48-4f0a-9d2e-8a1f5c04b7e6
-// last-edited: 2026-09-19
+// last-edited: 2026-10-17
 
 // Regression tests for CONC-1: BookSignatureScan's O(n²) pairwise loop is now
 // sharded across a bounded worker pool (registry.RunItems) instead of running
@@ -28,6 +28,9 @@ import (
 // equal to word. Two signatures built from the same word are identical (sim
 // 1.0); signatures from words with a large Hamming distance fall well below
 // FuzzyMinSimilarity. Empty mask => all-real => overlap == 4096 (>= 512).
+// curSigV returns a pointer to the current BookSignatureVersion for fixtures.
+func curSigV() *int { v := fingerprint.BookSignatureVersion; return &v }
+
 func sigWord(word uint32) string {
 	buf := make([]byte, fingerprint.BookSignatureFixedLength*4)
 	for i := range fingerprint.BookSignatureFixedLength {

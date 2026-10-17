@@ -1,7 +1,7 @@
 // file: internal/dedup/author_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-25
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -187,37 +187,6 @@ func TestSplitCompositeAuthorName_NewPatterns(t *testing.T) {
 					t.Errorf("SplitCompositeAuthorName(%q)[%d] = %q, want %q", tt.name, i, got[i], tt.expect[i])
 				}
 			}
-		}
-	}
-}
-
-func TestAreAuthorsDuplicate(t *testing.T) {
-	shouldMatch := []struct{ a, b string }{
-		{"James S. A. Corey", "James S.A. Corey"},
-		{"Brandon Sanderson", "Brandon  Sanderson"},
-		{"David Kushner", "David Kushner/Wil Wheaton"},
-		{"Stephen King", "Steven King"},
-		{"J. K. Rowling", "J.K. Rowling"},
-	}
-	for _, tt := range shouldMatch {
-		if !areAuthorsDuplicate(tt.a, tt.b) {
-			t.Errorf("expected %q and %q to match", tt.a, tt.b)
-		}
-	}
-
-	shouldNotMatch := []struct{ a, b string }{
-		{"Michael Grant", "Michael Angel"},
-		{"Michael Grant", "Michael Troughton"},
-		{"Michael Grant", "Michael Langan"},
-		{"Michael Grant", "Michael Braun"},
-		{"Michael Grant", "Michael Dalton"},
-		{"Alex Karne", "Alex Irvine"},
-		{"Mark Tufo", "Mark Twain"},
-		{"Neal Stephenson", "Neal Stephenson - Snow Crash"},
-	}
-	for _, tt := range shouldNotMatch {
-		if areAuthorsDuplicate(tt.a, tt.b) {
-			t.Errorf("expected %q and %q to NOT match", tt.a, tt.b)
 		}
 	}
 }

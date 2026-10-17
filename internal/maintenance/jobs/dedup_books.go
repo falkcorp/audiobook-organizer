@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package jobs
 
@@ -507,7 +507,7 @@ func ddElectSuccessor(store ddGroupStore, vg string, others []database.Book) (st
 	return d.WinnerID, nil
 }
 
-// ddRetireStore is everything ddRetireBook and ddMergeDuplicateBook need.
+// ddRetireStore is everything ddRetireBook and ddMergeDuplicateBookSim need.
 type ddRetireStore interface {
 	ddGroupStore
 	ddBookModifier
@@ -833,7 +833,7 @@ func ddRetireGuard(store merge.ITunesGuardStore, sim *ddSim, planned *database.B
 	}
 }
 
-// ddMergeStore is ddMergeDuplicateBook's store: the job's whole surface.
+// ddMergeStore is ddMergeDuplicateBookSim's store: the job's whole surface.
 // ddUnlinkFromVersionGroup takes book dupID out of version group vgID (to no
 // group). It leaves vgID for the no-group sentinel, so it holds both locks
 // (one versionprimary.LockGroups call) across this one write, per book and
@@ -918,7 +918,7 @@ func ddRetireMergedDup(store ddMergeStore, sim *ddSim, keeper, dup *database.Boo
 		dup.ID, keeper.ID, lastErr)
 }
 
-// ddMergeDuplicateBook folds dup into keeper and soft-deletes dup.
+// ddMergeDuplicateBookSim folds dup into keeper and soft-deletes dup.
 //
 // Order, and why:
 //  1. Guards (both modes): iTunes, the dup's file list is readable, and the
@@ -945,11 +945,8 @@ func ddRetireMergedDup(store ddMergeStore, sim *ddSim, keeper, dup *database.Boo
 // fresh read of the dup right before the retire (ddRetireMergedDup), because
 // by then steps 2-4 have written and a refusal can no longer leave "nothing
 // happened".
-func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *database.Book, dryRun bool) error {
-	return ddMergeDuplicateBookSim(store, nil, keeper, dup, dryRun)
-}
-
-// ddMergeDuplicateBookSim is ddMergeDuplicateBook with the run's overlay.
+//
+// sim is the run's overlay (nil outside a run).
 func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Book, dup *database.Book, dryRun bool) error {
 	// The caller's copies were loaded before earlier merges in this run: a
 	// keeper that joined a group and was promoted in phase 2 can be phase 3's

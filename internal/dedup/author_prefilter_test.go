@@ -1,7 +1,7 @@
 // file: internal/dedup/author_prefilter_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f9c21ad-7e40-4b62-9c85-1d6a0f3b8e74
-// last-edited: 2026-09-02
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -76,7 +76,7 @@ func TestJaroWinklerBelowThresholdIsSound(t *testing.T) {
 	for i := range corpus {
 		for j := range corpus {
 			a, b := corpus[i], corpus[j]
-			if !jaroWinklerBelowThreshold(a, b, threshold) {
+			if !belowByLength(a, b, threshold) {
 				continue
 			}
 			checked++
@@ -136,7 +136,7 @@ func TestJaroWinklerBelowThresholdIsSoundUnderFuzz(t *testing.T) {
 			b = randName()
 		}
 
-		if !jaroWinklerBelowThreshold(a, b, threshold) {
+		if !belowByLength(a, b, threshold) {
 			continue
 		}
 		skipped++
@@ -161,7 +161,7 @@ func TestJaroWinklerBelowThresholdActuallySkips(t *testing.T) {
 	for i := range corpus {
 		for j := i + 1; j < len(corpus); j++ {
 			total++
-			if jaroWinklerBelowThreshold(corpus[i], corpus[j], 0.95) {
+			if belowByLength(corpus[i], corpus[j], 0.95) {
 				skipped++
 			}
 		}
@@ -270,7 +270,7 @@ func TestJaroWinklerBelowThresholdCountsRunesNotBytes(t *testing.T) {
 		t.Fatal("fixture wrong: needs multi-byte runes to discriminate")
 	}
 
-	if jaroWinklerBelowThreshold(shortASCII, longCJK, 0.95) {
+	if belowByLength(shortASCII, longCJK, 0.95) {
 		t.Fatalf("prefilter skipped %q (%d runes, %d bytes) vs %q (%d runes, %d bytes); "+
 			"rune ratio is %.3f which is >= 0.75, so this pair must be kept. "+
 			"This is the signature of counting bytes instead of runes.",
@@ -289,21 +289,34 @@ func TestJaroWinklerBelowThresholdBoundaryAndWeakThresholds(t *testing.T) {
 	// This case is carried by exact float representation, NOT by the epsilon as
 	// previously claimed here: 3.0 < 0.75*4.0 is 3.0 < 3.0, which is false with
 	// or without the bias. Removing the epsilon leaves this assertion green.
-	if jaroWinklerBelowThreshold("abc", "abcd", 0.95) {
+	if belowByLength("abc", "abcd", 0.95) {
 		t.Error("ratio exactly 0.75 was skipped at threshold 0.95; the bound is off by one rounding step")
 	}
 	// 2 vs 3 runes is 0.667 < 0.75. Must be skipped.
-	if !jaroWinklerBelowThreshold("ab", "abcd", 0.95) {
+	if !belowByLength("ab", "abcd", 0.95) {
 		t.Error("ratio 0.5 was not skipped at threshold 0.95")
 	}
 	// At t <= 0.8 the bound is non-positive: length proves nothing.
 	for _, weak := range []float64{0.8, 0.7, 0.5, 0.0} {
-		if jaroWinklerBelowThreshold("a", "abcdefghijklmnop", weak) {
+		if belowByLength("a", "abcdefghijklmnop", weak) {
 			t.Errorf("threshold %v: length must not justify a skip when 5t-4 <= 0", weak)
 		}
 	}
 	// Empty strings must never be skipped on length.
-	if jaroWinklerBelowThreshold("", "", 0.95) {
+	if belowByLength("", "", 0.95) {
 		t.Error("empty/empty was skipped")
 	}
+}
+
+// belowByLength reports whether the length prefilter would skip the pair at
+// threshold: the rune counts of s1 and s2 against jaroWinklerMinLengthRatio.
+// It is the production scan's skip test (lengthRatioBelowThreshold fed rune
+// counts), kept as a test helper so the soundness tests above can state pairs
+// as strings.
+func belowByLength(s1, s2 string, threshold float64) bool {
+	return lengthRatioBelowThreshold(
+		utf8.RuneCountInString(s1),
+		utf8.RuneCountInString(s2),
+		jaroWinklerMinLengthRatio(threshold),
+	)
 }

@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_concurrent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e3a91f7c-5b2d-4a6e-9c81-0f4d2b7e8a15
-// last-edited: 2026-09-10
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -18,10 +18,8 @@ import (
 // for DA-01: MergeSplitBookCluster does an unguarded GetBookByID -> ... ->
 // UpdateBook -> SoftDeleteBook read-modify-write over shared book rows, the
 // same failure class merge.LockMergeRMW exists to guard (see
-// internal/merge/serialize.go and TestDedupMergeBooks_SharesLockWithMergeService
-// in book_dedup_concurrent_test.go, which pins the same invariant for
-// dedup.MergeBooks). It reuses that file's dedupSerializeProbe/
-// newConcurrentTestStore helpers: half the goroutines run
+// internal/merge/serialize.go). It reuses book_dedup_concurrent_test.go's
+// dedupSerializeProbe/newConcurrentTestStore helpers: half the goroutines run
 // MergeSplitBookCluster, the other half run merge.Service.MergeBooks, all
 // through one shared probe store wrapping GetBookByID/UpdateBook. Each
 // goroutine gets its own disjoint pair of book IDs, so maxActive>1 can only

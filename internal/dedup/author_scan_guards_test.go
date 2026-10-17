@@ -1,7 +1,7 @@
 // file: internal/dedup/author_scan_guards_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c7e2b91-8f36-4a0d-b214-6e9d3a75f0c2
-// last-edited: 2026-08-24
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -14,7 +14,7 @@ import (
 
 // The tests in this file guard phase 3 THROUGH FindDuplicateAuthors, rather
 // than through the prefilter's own unit tests. That distinction is the whole
-// point of the file: jaroWinklerBelowThreshold is covered well in isolation,
+// point of the file: the length prefilter is covered well in isolation,
 // but a unit test cannot observe whether a real duplicate actually survives the
 // production path, and the failures these guard against are all "a genuine
 // duplicate is silently never offered for merging."
@@ -100,7 +100,7 @@ func TestFindDuplicateAuthorsKeepsBoundaryRatioDuplicate(t *testing.T) {
 		t.Fatalf("fixture no longer sits on the gate: JW(smithe, smithers) = %v, want >= %v",
 			got, authorLastNameSimilarity)
 	}
-	if jaroWinklerBelowThreshold("smithe", "smithers", authorLastNameSimilarity) {
+	if belowByLength("smithe", "smithers", authorLastNameSimilarity) {
 		t.Fatal("prefilter skips a pair that scores exactly at the gate; the bound is too tight")
 	}
 
