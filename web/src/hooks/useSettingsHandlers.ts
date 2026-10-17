@@ -1,5 +1,5 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.13.0
+// version: 1.13.1
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-10-17
 
@@ -448,7 +448,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         playlist_dir: `${libraryPath}/playlists`,
         // Trimmed so a field of spaces saves as "use the default" rather than as a
         // whitespace path — ResolveActivityDBPath trims too, so this keeps what is
-        // stored honest about what will be used.
+        // stored consistent with what will be used.
         activity_db_path: settings.activityDbPath.trim(),
         activity_db_move_on_change: settings.activityDbMoveOnChange,
         // Sent even when the server reports it locked, deliberately. The locked

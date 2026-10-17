@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
 // last-edited: 2026-10-17
 
@@ -44,9 +44,15 @@ type removedConfigKey struct {
 	key     string
 	message string
 	// fileOnly marks a key whose bare name is also a common environment
-	// variable (LANGUAGE), so the viper/environment warning would fire for an
-	// unrelated variable. It is still warned about in a config file, scrubbed
-	// on save and refused in an update.
+	// variable (LANGUAGE, the POSIX locale variable), so the viper scan only
+	// warns when the key is in a config file (viper.InConfig) and never for the
+	// environment: an operator's locale would otherwise draw a bogus warning on
+	// every start. It is still scrubbed on save and refused in an update.
+	//
+	// Only language is exempt on purpose. The other environment names
+	// (LOG_FORMAT, CACHE_SIZE, ...) are not set by shells or distros, so a
+	// removed-setting warning for one of them means a stale deploy file, which
+	// is exactly what the warning is for.
 	fileOnly bool
 }
 
@@ -165,7 +171,13 @@ func warnRemovedKey(key, source string) {
 // operator who still sets the removed flag's key in a file gets no signal.
 func warnRemovedViperKeys() {
 	for _, rk := range removedConfigKeys {
-		if !rk.fileOnly && viper.IsSet(rk.key) {
+		if rk.fileOnly {
+			if viper.InConfig(rk.key) {
+				warnRemovedKey(rk.key, "config file")
+			}
+			continue
+		}
+		if viper.IsSet(rk.key) {
 			warnRemovedKey(rk.key, "config file or environment")
 		}
 	}

@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.65.0
+// version: 1.65.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-17
 
@@ -303,8 +303,7 @@ export function Settings() {
     // Performance settings
     concurrentScans: 4,
 
-    // Memory management
-    // 'items', 'percent', 'absolute'
+    // Caching
     cacheInvalidateOnBookUpdate: false,
     metadataFetchCacheTTLDays: 30,
 

@@ -1,7 +1,7 @@
 // file: internal/server/settings_persistence_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-03
+// last-edited: 2026-10-17
 
 package server
 
@@ -325,4 +325,52 @@ func TestOLDumpDirAutoDerive(t *testing.T) {
 
 	dir := metafetch.GetOLDumpDir()
 	assert.Equal(t, "/tmp/test-audiobooks/openlibrary-dumps", dir)
+}
+
+// A config blob stored before 01-P80 still carries the eleven removed settings.
+// The Settings page loads GET /config and saves by PUTting that body back minus
+// the read-only annotations; the removed keys must not survive the load, or the
+// PUT would be refused with 400 and the page could never save again.
+func TestConfigRoundTrip_StoredBlobWithRemovedKeys(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	store := database.GetGlobalStore()
+	blob := `{"metadata_review_default_view":"compact","default_user_quota_gb":100,` +
+		`"memory_limit_type":"items","cache_size":1000,"memory_limit_percent":25,"memory_limit_mb":512,` +
+		`"log_format":"text","enable_json_logging":false,"auth_rate_limit_per_minute":10,"language":"en","api_keys":{}}`
+	require.NoError(t, store.SetSetting("config_blob", blob, "json", false))
+	require.NoError(t, config.LoadConfigFromDatabase(store))
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	getW := httptest.NewRecorder()
+	server.router.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code, getW.Body.String())
+
+	var got struct {
+		Data struct {
+			Config map[string]any `json:"config"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &got), getW.Body.String())
+	require.NotEmpty(t, got.Data.Config, getW.Body.String())
+
+	for _, k := range []string{"metadata_review_default_view", "default_user_quota_gb", "memory_limit_type",
+		"cache_size", "memory_limit_percent", "memory_limit_mb", "log_format", "enable_json_logging",
+		"auth_rate_limit_per_minute", "language", "api_keys"} {
+		assert.NotContains(t, got.Data.Config, k, "GET /config still serves removed key %s", k)
+	}
+
+	// The read-only annotations the handler grafts onto the GET body, plus
+	// database_type, which UpdateConfig refuses in any payload.
+	for _, k := range []string{"env_locked", "setting_locks", "activity_db_resolved_path", "database_type"} {
+		delete(got.Data.Config, k)
+	}
+	body, err := json.Marshal(got.Data.Config)
+	require.NoError(t, err)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
+	putReq.Header.Set("Content-Type", "application/json")
+	putW := httptest.NewRecorder()
+	server.router.ServeHTTP(putW, putReq)
+	assert.Equal(t, http.StatusOK, putW.Code, "PUT of the GET body: %s", putW.Body.String())
 }
