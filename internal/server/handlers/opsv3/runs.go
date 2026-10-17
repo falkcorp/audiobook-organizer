@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
 // last-edited: 2026-10-17
 
@@ -87,9 +87,21 @@ type startBody struct {
 // field paths, nothing queued), it is ready (409 with the reason), then the
 // run is queued (202 {run_id}).
 //
-// mode is "preview" or "live". Left out, the params decide, and a params body
-// that says nothing is a preview (opmode.ResolveDryRun). A mode that
-// contradicts a dry_run in params is a 400.
+// mode is "preview" or "live", and what it means depends on the definition:
+//
+//   - A writing definition with a preview (DefInfo.HasPreview): mode is
+//     written into params as dry_run. Left out, a dry_run already in params
+//     decides, and params that say nothing are a preview: dry_run=true is
+//     written in, so the run cannot fall back on an op default.
+//   - A writing definition without one (an adapted v2 op recorded `no-mode`
+//     in write_op_modes.golden: it ignores dry_run and always writes): only
+//     mode "live" starts it, and params are passed through untouched. "preview"
+//     or no mode is a 409, because answering 202 would queue a live run the
+//     caller asked to be a preview.
+//   - A read-only definition: mode is written into params as for a preview
+//     one; it changes nothing either way.
+//
+// A mode that contradicts a dry_run in params is a 400.
 func (h *Handler) StartRun(c *gin.Context) {
 	if h.d.Defs == nil || h.d.Enqueuer == nil {
 		httputil.RespondWithServiceUnavailable(c, "operations registry not initialized")
@@ -135,9 +147,13 @@ func (h *Handler) StartRun(c *gin.Context) {
 			return
 		}
 	}
-	params, merr := applyMode(defID, params, body.Mode)
-	if merr != "" {
-		httputil.RespondWithValidationError(c, "mode", merr)
+	params, merr := resolveMode(def, params, body.Mode)
+	if merr.msg != "" {
+		if merr.conflict {
+			httputil.RespondWithConflict(c, merr.msg)
+		} else {
+			httputil.RespondWithValidationError(c, "mode", merr.msg)
+		}
 		return
 	}
 	if ok, reason := h.d.Defs.Ready(defID); !ok {
@@ -171,25 +187,56 @@ func normalizeParams(raw json.RawMessage) (json.RawMessage, string) {
 	return json.RawMessage(t), ""
 }
 
-// applyMode writes the request's mode into params as dry_run. With no mode the
-// params are untouched (they either carry dry_run or mean preview). It checks
-// the result with opmode.ParseDryRun so a params body whose dry_run and dryRun
-// disagree, or disagree with mode, is refused here instead of picking a side.
-func applyMode(defID string, params json.RawMessage, mode string) (json.RawMessage, string) {
+// modeErr is why a mode was refused: a 400 (malformed or contradicting
+// params), or a 409 when the definition cannot run in the asked-for mode.
+type modeErr struct {
+	msg      string
+	conflict bool
+}
+
+// resolveMode applies StartRun's mode rules (see there) and returns the params
+// to queue.
+func resolveMode(def DefInfo, params json.RawMessage, mode string) (json.RawMessage, modeErr) {
 	switch mode {
-	case "":
-		if _, err := opmode.ParseDryRun(defID, params); err != nil {
-			return nil, err.Error()
-		}
-		return params, ""
-	case "preview", "live":
+	case "", "preview", "live":
 	default:
-		return nil, `must be "preview" or "live"`
+		return nil, modeErr{msg: `must be "preview" or "live"`}
 	}
-	want := mode == "preview"
+	if def.Writer && !def.HasPreview {
+		if mode != "live" {
+			return nil, modeErr{conflict: true, msg: "definition " + def.ID + " has no preview mode: it ignores dry_run and always writes. " +
+				`Send mode "live" to run it for real`}
+		}
+		// The op never reads dry_run, so nothing is written into params; a
+		// dry_run=true there would be a preview request it cannot honour.
+		if dry, set, err := paramsDryRun(params); err != "" {
+			return nil, modeErr{msg: err}
+		} else if set && dry {
+			return nil, modeErr{msg: "mode live contradicts dry_run in params"}
+		}
+		return params, modeErr{}
+	}
+	if mode == "" {
+		dry, set, err := paramsDryRun(params)
+		if err != "" {
+			return nil, modeErr{msg: err}
+		}
+		if set {
+			mode = map[bool]string{true: "preview", false: "live"}[dry]
+		} else {
+			mode = "preview"
+		}
+	}
+	out, msg := applyMode(def.ID, params, mode)
+	return out, modeErr{msg: msg}
+}
+
+// paramsDryRun reads dry_run / dryRun from params: the value, whether either
+// is present, and a message when they are malformed or disagree.
+func paramsDryRun(params json.RawMessage) (dry, set bool, msg string) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(params, &m); err != nil {
-		return nil, "params must be a JSON object"
+		return false, false, "params must be a JSON object"
 	}
 	for _, key := range []string{"dry_run", "dryRun"} {
 		raw, ok := m[key]
@@ -198,14 +245,38 @@ func applyMode(defID string, params json.RawMessage, mode string) (json.RawMessa
 		}
 		var got bool
 		if err := json.Unmarshal(raw, &got); err != nil {
-			return nil, key + " must be true or false"
+			return false, false, key + " must be true or false"
 		}
-		if got != want {
-			return nil, "mode " + mode + " contradicts " + key + " in params"
+		if set && got != dry {
+			return false, false, "dry_run and dryRun in params disagree"
 		}
+		dry, set = got, true
+	}
+	return dry, set, ""
+}
+
+// applyMode writes mode ("preview" or "live") into params as dry_run. It
+// checks the result with opmode.ParseDryRun so a params body whose dry_run
+// and dryRun disagree, or disagree with mode, is refused here instead of
+// picking a side.
+func applyMode(defID string, params json.RawMessage, mode string) (json.RawMessage, string) {
+	want := mode == "preview"
+	dry, set, msg := paramsDryRun(params)
+	if msg != "" {
+		return nil, msg
+	}
+	if set && dry != want {
+		return nil, "mode " + mode + " contradicts dry_run in params"
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(params, &m); err != nil {
+		return nil, "params must be a JSON object"
 	}
 	b, _ := json.Marshal(want)
 	m["dry_run"] = b
+	if _, camel := m["dryRun"]; camel {
+		m["dryRun"] = b
+	}
 	out, err := json.Marshal(m)
 	if err != nil {
 		return nil, err.Error()
