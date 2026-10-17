@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
 // last-edited: 2026-10-17
 
@@ -301,8 +301,10 @@ func actorOptions(c *gin.Context) []opsregistry.EnqueueOption {
 	return opts
 }
 
-// CancelRun implements POST /api/v3/ops/runs/:id/cancel. The caller must hold
-// the definition's permission or be the user who started the run.
+// CancelRun implements POST /api/v3/ops/runs/:id/cancel. The caller must be
+// the user who started the run, or hold scan.trigger (the start floor) and
+// the definition's permission. v1's DELETE /operations/v2/:id is stricter
+// (settings.manage, no starter exception); the brief's rule is kept here.
 func (h *Handler) CancelRun(c *gin.Context) {
 	rd, ok := h.runs(c)
 	if !ok {
@@ -322,7 +324,7 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		return
 	}
 	if !h.mayCancel(c, rec) {
-		httputil.RespondWithForbidden(c, "cancelling this run needs the definition's permission or being the user who started it")
+		httputil.RespondWithForbidden(c, "cancelling this run needs being the user who started it, or scan.trigger and the definition's permission")
 		return
 	}
 	if p := state.ClassifyV3(rec.State); p.Terminal || p.Settled {
@@ -340,18 +342,18 @@ func (h *Handler) CancelRun(c *gin.Context) {
 	accepted(c, gin.H{"run_id": rec.ID})
 }
 
-// mayCancel: the definition's permissions, or the run's starter.
+// mayCancel: the run's starter, or scan.trigger plus the definition's
+// permissions.
 func (h *Handler) mayCancel(c *gin.Context, rec *database.RunRecord) bool {
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID {
+		return true
+	}
 	var def DefInfo
 	known := false
 	if h.d.Defs != nil {
 		def, known = h.d.Defs.GetDef(rec.DefID)
 	}
-	if h.holdsAll(c, requiredPerms(def, known)) {
-		return true
-	}
-	u, ok := auth.UserFromContext(c.Request.Context())
-	return ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID
+	return h.holdsAll(c, append([]auth.Permission{auth.PermScanTrigger}, requiredPerms(def, known)...))
 }
 
 // approveBody is the body of POST /api/v3/ops/runs/:id/approve.

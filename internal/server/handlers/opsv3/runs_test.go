@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
 // last-edited: 2026-10-17
 
@@ -42,7 +42,7 @@ func TestRunRejectsSchemaInvalidParamsBeforeQueueing(t *testing.T) {
 		"test.apply": {ID: "test.apply", Title: "Apply", Kind: "batch", Permissions: []auth.Permission{auth.PermLibraryEditMetadata}, ParamsSchema: []byte(bookIDsSchema)},
 	}, nil)
 	r := newRouter(h)
-	editor := caller{perms: auth.PermLibraryView + "," + auth.PermLibraryEditMetadata, user: "u-ed", method: string(auth.MethodSession)}
+	editor := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger + "," + auth.PermLibraryEditMetadata, user: "u-ed", method: string(auth.MethodSession)}
 
 	w := do(t, r, editor, http.MethodPost, "/api/v3/ops/defs/test.apply/runs",
 		`{"params":{"book_ids":[],"limit":500,"extra":1}}`)
@@ -509,3 +509,43 @@ type fakeSched map[string]ScheduleInfo
 func (f fakeSched) Schedules() map[string]ScheduleInfo { return f }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestStartAndCancelNeedScanTriggerFloor: a definition that declares only
+// library.view cannot be started by a viewer (v1's POST /operations/v2 floor
+// is scan.trigger), on either start route, and a viewer cannot cancel someone
+// else's run of it. The starter may still cancel their own run.
+func TestStartAndCancelNeedScanTriggerFloor(t *testing.T) {
+	enq, _, mem, h := startHarness(map[string]DefInfo{
+		"test.peek": {ID: "test.peek", Title: "Peek", Kind: "task", Permissions: []auth.Permission{auth.PermLibraryView}},
+	}, nil)
+	mem.runs["theirs"] = database.RunRecord{ID: "theirs", DefID: "test.peek", State: state.V3Running, Actor: database.Actor{UserID: "someone-else"}}
+	mem.runs["mine"] = database.RunRecord{ID: "mine", DefID: "test.peek", State: state.V3Running, Actor: database.Actor{UserID: viewer.user}}
+	r := newRouter(h)
+	for _, req := range []struct{ path, body string }{
+		{"/api/v3/ops/defs/test.peek/runs", `{}`},
+		{"/api/v3/ops/runs", `{"def":"test.peek"}`},
+	} {
+		if w := do(t, r, viewer, http.MethodPost, req.path, req.body); w.Code != http.StatusForbidden {
+			t.Errorf("viewer POST %s = %d, want 403", req.path, w.Code)
+		}
+	}
+	if enq.count() != 0 {
+		t.Fatalf("a viewer queued %d runs", enq.count())
+	}
+	trigger := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u-t", method: string(auth.MethodSession)}
+	if w := do(t, r, trigger, http.MethodPost, "/api/v3/ops/defs/test.peek/runs", `{}`); w.Code != http.StatusAccepted {
+		t.Fatalf("scan.trigger + the def's permission = %d: %s", w.Code, w.Body.String())
+	}
+	if w := do(t, r, viewer, http.MethodPost, "/api/v3/ops/runs/theirs/cancel", nil); w.Code != http.StatusForbidden {
+		t.Errorf("viewer cancelling another user's run = %d, want 403", w.Code)
+	}
+	if w := do(t, r, viewer, http.MethodPost, "/api/v3/ops/runs/mine/cancel", nil); w.Code != http.StatusAccepted {
+		t.Errorf("starter cancelling own run = %d, want 202", w.Code)
+	}
+	if w := do(t, r, trigger, http.MethodPost, "/api/v3/ops/runs/theirs/cancel", nil); w.Code != http.StatusAccepted {
+		t.Errorf("scan.trigger + def permission cancelling = %d, want 202", w.Code)
+	}
+	if got := strings.Join(enq.cancelled, ","); got != "mine,theirs" {
+		t.Errorf("cancelled %q, want mine,theirs", got)
+	}
+}
