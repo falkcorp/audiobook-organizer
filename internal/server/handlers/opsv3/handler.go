@@ -1,16 +1,18 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
 // last-edited: 2026-10-17
 
 // Package opsv3 serves /api/v3/ops/*: the operations v3 run model over HTTP.
 //
 // Reads (defs, runs, counts, timeline, a run's rows, the SSE feed) need
-// library.view. Starting a run needs the definition's own permission (an empty
-// permission means settings.manage, D1), cancelling needs that permission or
-// being the run's starter, and approving needs the definition's approver
-// permission plus a verified auth method (a session, an API token or a
-// verified Cloudflare Access sign-in; never the unsigned forwarded header).
+// library.view. Starting a run needs scan.trigger, the floor v1's
+// POST /operations/v2 has, plus the definition's own permission (an empty
+// permission means settings.manage, D1). Cancelling needs being the run's
+// starter, or scan.trigger plus the definition's permission. Approving needs
+// the definition's approver permission plus a verified auth method (a
+// session, an API token or a verified Cloudflare Access sign-in; never the
+// unsigned forwarded header).
 //
 // Census versus timeline. runs and counts are exact: totals come from the
 // store's indexes, never from the page, and every count carries an href whose
@@ -206,11 +208,15 @@ func (h *Handler) Register(g *gin.RouterGroup, perm func(auth.Permission) gin.Ha
 	g.GET("/ops/counts", view, h.Counts)
 	g.GET("/ops/timeline", view, h.Timeline)
 	g.GET("/ops/events", view, h.Events)
-	// Starting, cancelling and approving are checked against the definition's
-	// own permission inside the handler; library.view is the floor so a
-	// caller who can see nothing is refused before any lookup.
-	g.POST("/ops/defs/:id/runs", view, h.StartRun)
-	g.POST("/ops/runs", view, h.StartRun)
+	// Starting a run has scan.trigger as its floor, as v1's
+	// POST /operations/v2 does: without it a viewer could start any def that
+	// declares only library.view. The definition's own permission is then
+	// checked inside the handler, on top. Cancelling and approving are
+	// checked inside the handler (the run's starter may cancel it, so the
+	// route cannot ask for more than library.view).
+	trigger := perm(auth.PermScanTrigger)
+	g.POST("/ops/defs/:id/runs", trigger, h.StartRun)
+	g.POST("/ops/runs", trigger, h.StartRun)
 	g.POST("/ops/runs/:id/cancel", view, h.CancelRun)
 	g.POST("/ops/runs/:id/approve", view, h.ApproveRun)
 }
