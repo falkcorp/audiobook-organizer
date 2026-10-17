@@ -1,5 +1,5 @@
 // file: internal/config/unread_settings_removed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0f7a3e-2b84-4c19-9e6a-71c3b8d4f052
 // last-edited: 2026-10-17
 
@@ -67,12 +67,24 @@ func TestInitConfig_RemovedUnreadSettingsInOldFileAreIgnored(t *testing.T) {
 
 	out := logs.String()
 	for _, k := range unreadSettingKeys {
-		if k == "language" {
-			continue // fileOnly: the viper/environment scan skips it on purpose
-		}
 		assert.Contains(t, out, "key="+k+" ", "no removed-setting warning for %s", k)
 	}
-	assert.NotContains(t, out, "key=language ", "LANGUAGE is a common environment variable; viper must not warn for it")
+}
+
+// LANGUAGE is the POSIX locale variable, so the environment alone must never
+// draw the removed-setting warning, while the same key in the viper config file
+// (--config or ~/.audiobook-organizer.yaml) must.
+func TestInitConfig_LanguageWarnsFromFileNotEnvironment(t *testing.T) {
+	t.Run("env only", func(t *testing.T) {
+		logs := captureRemovedKeyLogs(t)
+		fileInitConfig(t, "root_dir: /srv/library\n", func() { t.Setenv("LANGUAGE", "en_US:en") })
+		assert.NotContains(t, logs.String(), "key=language ", "env LANGUAGE is a locale, not a stale setting")
+	})
+	t.Run("viper config file", func(t *testing.T) {
+		logs := captureRemovedKeyLogs(t)
+		fileInitConfig(t, "root_dir: /srv/library\nlanguage: en\n", nil)
+		assert.Contains(t, logs.String(), "key=language ")
+	})
 }
 
 // The config.yaml next to the database is loaded by LoadConfigFromFile; it warns
