@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
 // last-edited: 2026-10-17
 
@@ -547,5 +547,90 @@ func TestStartAndCancelNeedScanTriggerFloor(t *testing.T) {
 	}
 	if got := strings.Join(enq.cancelled, ","); got != "mine,theirs" {
 		t.Errorf("cancelled %q, want mine,theirs", got)
+	}
+}
+
+// pagedDone is a RunReader whose finished-run window behaves like the
+// store's: oldest first, cut at limit with complete=false. It counts the
+// scheduler-state reads.
+type pagedDone struct {
+	memRuns
+	all        []database.RunRecord // sorted by CompletedAt
+	pages      int
+	schedReads int
+}
+
+func (p *pagedDone) ListDoneRunsSinceV3(since time.Time, limit int) ([]database.RunRecord, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pages++
+	var out []database.RunRecord
+	for _, r := range p.all {
+		if r.CompletedAt.Before(since) {
+			continue
+		}
+		if len(out) == limit {
+			return out, false, nil
+		}
+		out = append(out, r)
+	}
+	return out, true, nil
+}
+
+func (p *pagedDone) GetSchedV3(id string) (*database.SchedState, error) {
+	p.mu.Lock()
+	p.schedReads++
+	p.mu.Unlock()
+	return p.memRuns.GetSchedV3(id)
+}
+
+// TestDefsLastRunIsTheNewestWhenTheWindowIsTruncated: a day with more
+// finished runs than one scan holds must still show each definition's newest
+// run, not the newest of the oldest page.
+func TestDefsLastRunIsTheNewestWhenTheWindowIsTruncated(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	p := &pagedDone{memRuns: memRuns{runs: map[string]database.RunRecord{}}}
+	n := lastRunScan*2 + 7
+	for i := range n {
+		at := now.Add(-23 * time.Hour).Add(time.Duration(i) * time.Second)
+		id := "old"
+		if i == n-1 {
+			id = "newest"
+		}
+		p.all = append(p.all, database.RunRecord{ID: id, DefID: "test.busy", State: state.V3Succeeded, CompletedAt: ptr(at)})
+	}
+	defs := &fakeDefs{defs: map[string]DefInfo{"test.busy": {ID: "test.busy", Title: "Busy", Kind: "task"}}}
+	r := newRouter(New(Deps{Runs: p, Defs: defs, Now: func() time.Time { return now }}))
+	got := decode[DefView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.busy", nil))
+	if got.LastRun == nil || got.LastRun.ID != "newest" {
+		t.Fatalf("last_run = %+v, want the newest run", got.LastRun)
+	}
+	if p.pages < 2 {
+		t.Errorf("read %d pages, want the window paged to its end", p.pages)
+	}
+}
+
+// TestDefsLastRunFallbackIsCached: the scheduler lookup for a definition that
+// did not run in the window is done once per cache period, not on every
+// request.
+func TestDefsLastRunFallbackIsCached(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	p := &pagedDone{memRuns: memRuns{runs: map[string]database.RunRecord{}, sched: map[string]database.SchedState{}}}
+	defs := &fakeDefs{defs: map[string]DefInfo{
+		"test.a": {ID: "test.a", Title: "A", Kind: "task"},
+		"test.b": {ID: "test.b", Title: "B", Kind: "task"},
+	}}
+	clock := now
+	r := newRouter(New(Deps{Runs: p, Defs: defs, Now: func() time.Time { return clock }}))
+	for range 3 {
+		do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs", nil)
+	}
+	if p.schedReads != 2 {
+		t.Fatalf("scheduler state read %d times for 2 defs over 3 requests, want 2", p.schedReads)
+	}
+	clock = now.Add(lastRunTTL + time.Second)
+	do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs", nil)
+	if p.schedReads != 4 {
+		t.Fatalf("after the cache period: %d reads, want 4", p.schedReads)
 	}
 }
