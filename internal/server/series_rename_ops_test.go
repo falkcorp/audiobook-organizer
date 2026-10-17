@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-10-15
+// last-edited: 2026-10-17
 
 package server
 
@@ -393,7 +393,6 @@ func TestRevertOperation_MergeCombineJournalDropsBookDuplicateCaches(t *testing.
 	srv := newSeriesRenameOpServer(st)
 	prime := func() {
 		srv.dedupCache.Set("book-dedup-scan", gin.H{"stale": true})
-		srv.dedupCache.Set("book-duplicates", gin.H{"stale": true})
 	}
 	cached := func(key string) bool { _, ok := srv.dedupCache.Get(key); return ok }
 
@@ -402,12 +401,10 @@ func TestRevertOperation_MergeCombineJournalDropsBookDuplicateCaches(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeMergeCombineJournal])
 	require.False(t, cached("book-dedup-scan"), "the scan cache survived an undone merge")
-	require.False(t, cached("book-duplicates"), "the group list cache survived an undone merge")
 
 	prime()
 	_, _ = srv.revertOperation("op-other")
 	require.True(t, cached("book-dedup-scan"), "a revert that undid no merge must not drop the cache")
-	require.True(t, cached("book-duplicates"))
 }
 
 // The ops that rename, merge or prune series declare the series write-set,

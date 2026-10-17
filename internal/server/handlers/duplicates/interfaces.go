@@ -1,12 +1,12 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
-// (SQL-backed book/author/series duplicate detection, async link / reject /
-// scan triggers, series prune preview + apply, and dedup-entry metadata
-// validation). Each interface lists only what the handlers actually
+// (SQL-backed author/series duplicate detection, async link / refresh
+// triggers, combine and its undo, series prune preview + apply, and dedup-entry
+// metadata validation). Each interface lists only what the handlers actually
 // call so package duplicates stays decoupled from the concrete store / service /
 // registry implementations and never imports package server (which would create
 // an import cycle).
@@ -22,7 +22,6 @@ package duplicates
 import (
 	"context"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -47,15 +46,17 @@ type DuplicatesStore interface {
 	GetSeriesByID(id int) (*database.Series, error) // SeriesStore
 }
 
-// MergeService is the narrow *merge.Service subset used by
-// mergeBookDuplicatesAsVersions. The concrete *merge.Service satisfies it.
-// MergeBooks returns the concrete *merge.Result; the handler reads .MergedCount,
-// .VersionGroupID and .PrimaryID off it. The service is reached through a
-// provider closure (getMergeService) so the original nil-fallback
-// (merge.NewService(s.Ops()) when s.mergeService is nil) is preserved by the
-// controller without this package importing internal/server.
+// MergeService is the narrow *merge.Service subset used by combineBooks and
+// the combine / sibling-move undo handlers. The concrete *merge.Service
+// satisfies it. The service is reached through a provider closure
+// (getMergeService) so the original nil-fallback (merge.NewService(s.Ops())
+// when s.mergeService is nil) is preserved by the controller without this
+// package importing internal/server.
+//
+// MergeBooks left this interface with the retired synchronous
+// POST /audiobooks/duplicates/link handler (03-PR12): version linking now runs
+// only as the dedup.book-merge op, which package server drives directly.
 type MergeService interface {
-	MergeBooks(bookIDs []string, primaryID string) (*merge.Result, error)
 	// CombineBooks combines several single-file books into ONE multi-file book
 	// on the survivor (primaryID) and soft-deletes the absorbed shells, writing
 	// an undo journal. Distinct from MergeBooks, which links them as alternate
@@ -80,13 +81,6 @@ type MetadataFetchService interface {
 	BuildSourceChain() []metadata.MetadataSource
 }
 
-// AudiobookService is the narrow *audiobookspkg.AudiobookService subset used by
-// listDuplicateAudiobooks. The concrete service satisfies it. GetDuplicateBooks
-// returns the SQL-grouped duplicate result the handler caches + serializes.
-type AudiobookService interface {
-	GetDuplicateBooks(ctx context.Context) (*audiobookspkg.DuplicatesResult, error)
-}
-
 // DedupEngine is the narrow *dedup.Engine subset used to sweep orphaned
 // dedup candidates after a merge/combine hard- or soft-deletes a book.
 // Mirrors the identically-named interface in the dedup handler package
@@ -106,12 +100,11 @@ type OperationsRegistry interface {
 
 // Op-param re-exports. The handlers enqueue with the dedup-engine param structs.
 // In package server these are referenced through type aliases defined in
-// duplicates_ops.go (bookDedupScanOpParams = dedup.BookDedupScanParams, etc.);
+// duplicates_ops.go (bookMergeOpParams = dedup.BookMergeParams, etc.);
 // here the handlers reference the underlying dedup types directly (the aliases
 // live in package server and cannot be imported without a cycle). Kept as local
 // aliases so handler.go reads identically to the original.
 type (
-	bookDedupScanOpParams   = dedup.BookDedupScanParams
 	bookMergeOpParams       = dedup.BookMergeParams
 	authorDedupScanOpParams = dedup.AuthorDedupScanParams
 	seriesDedupScanOpParams = dedup.SeriesDedupScanParams

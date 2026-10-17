@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -1731,18 +1731,6 @@ func TestListAudiobookVersions(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// TestGetDuplicates tests the duplicates endpoint
-func TestGetDuplicates(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/duplicates", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
 // TestGetSoftDeletedBooks tests the soft-deleted books endpoint
 func TestGetSoftDeletedBooks(t *testing.T) {
 	server, cleanup := setupTestServer(t)
@@ -2644,15 +2632,6 @@ func TestListWorks(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/works", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestListDuplicateAudiobooks(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/duplicates", nil)
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)

@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-10-12
+// last-edited: 2026-10-17
 
 package server
 
@@ -71,18 +71,23 @@ func (s *Server) wireDedupRoutes(
 	// sibling routes were intentionally left here by the entities phase and are now
 	// owned by this handler; /dedup/validate is the dedup-entry validator (distinct
 	// from the embedding-based /dedup/* routes above and the split-book /dedup/* routes).
-	protected.GET("/audiobooks/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAudiobooks)
-	protected.GET("/audiobooks/duplicates/scan-results", s.perm(auth.PermLibraryView), duplicatesH.ListBookDuplicateScanResults)
-	protected.POST("/audiobooks/duplicates/scan", s.perm(auth.PermLibraryEditMetadata), duplicatesH.ScanBookDuplicates)
-	// naming-audit classes "merge vs link verbs" and "dismiss vs reject vs
-	// undo" (docs/audits/2026-09-25-interface-naming-consistency.md classes
-	// 2/3): despite the old verb "merge", this links the duplicates as
-	// versions — it never moves a file. The old paths are kept registered as
-	// DEPRECATED aliases pointing at the same handlers.
-	protected.POST("/audiobooks/duplicates/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBookDuplicatesAsVersions)
-	protected.POST("/audiobooks/duplicates/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBookDuplicatesAsVersions) // DEPRECATED alias for /link
-	protected.POST("/audiobooks/duplicates/reject", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RejectBookDuplicateGroup)
-	protected.POST("/audiobooks/duplicates/dismiss", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RejectBookDuplicateGroup) // DEPRECATED alias for /reject
+	//
+	// The five /audiobooks/duplicates routes and their two DEPRECATED aliases
+	// (/merge for /link, /dismiss for /reject) served only the retired Version
+	// Groups and Duplicate Scan tabs of the old /dedup page. They answer 410
+	// Gone for one release (owner decision D9, 03-PR12) and are then removed.
+	// Each keeps its old permission guard so a caller who could not use the
+	// route still gets the same 401/403 and only an allowed caller learns it is
+	// gone. The op dedup.book-scan behind POST /scan stays registered (04 owns
+	// its fate); only its HTTP entry point is retired here.
+	duplicatesGone := gone("GET /api/v1/dedup/candidates (the Review page, Duplicates lane)")
+	protected.GET("/audiobooks/duplicates", s.perm(auth.PermLibraryView), duplicatesGone)
+	protected.GET("/audiobooks/duplicates/scan-results", s.perm(auth.PermLibraryView), duplicatesGone)
+	protected.POST("/audiobooks/duplicates/scan", s.perm(auth.PermLibraryEditMetadata), duplicatesGone)
+	protected.POST("/audiobooks/duplicates/link", s.perm(auth.PermLibraryEditMetadata), duplicatesGone)
+	protected.POST("/audiobooks/duplicates/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesGone)
+	protected.POST("/audiobooks/duplicates/reject", s.perm(auth.PermLibraryEditMetadata), duplicatesGone)
+	protected.POST("/audiobooks/duplicates/dismiss", s.perm(auth.PermLibraryEditMetadata), duplicatesGone)
 	protected.GET("/authors/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAuthors)
 	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
 	protected.POST("/audiobooks/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks)

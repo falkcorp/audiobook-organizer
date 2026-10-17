@@ -1,7 +1,7 @@
 // file: internal/server/leaf_stores.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-09-14
+// last-edited: 2026-10-17
 
 package server
 
@@ -34,14 +34,12 @@ type importPathLister interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
-// The dismissed-dedup-group helpers read and write one preference key each, so
-// they take one method each rather than a shared two-method pair.
+// userPreferenceReader: loadDismissedDedupGroups. Nothing writes the
+// dismissed-group preference since the old /dedup page's reject route was
+// retired (03-PR12); the book-dedup scan and the duplicate-copies fixer still
+// honour the groups already stored there.
 type userPreferenceReader interface {
 	GetUserPreference(key string) (*database.UserPreference, error)
-}
-
-type userPreferenceWriter interface {
-	SetUserPreference(key, value string) error
 }
 
 // entityAssignStore: assignPublisherPreservingRecord. A locked

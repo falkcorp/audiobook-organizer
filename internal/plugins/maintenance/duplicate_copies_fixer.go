@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -457,9 +457,11 @@ func (f *duplicateCopiesFixer) stores() (OpsStore, FragmentRepairReader, error) 
 	return store, hist, nil
 }
 
-// dcDismissedGroupsPref is the preference the review page's "reject group"
-// writes (handlers/duplicates RejectBookDuplicateGroup): a JSON list of group
-// keys, each the group's book ids joined by "+".
+// dcDismissedGroupsPref is the preference the old /dedup page's "reject group"
+// wrote (POST /audiobooks/duplicates/reject, retired to a 410 stub in
+// 03-PR12): a JSON list of group keys, each the group's book ids joined by
+// "+". Nothing writes it any more; the groups already stored there are still
+// owner rejections and are still honoured.
 const dcDismissedGroupsPref = "dedup_dismissed_groups"
 
 // dcPrefReader reads a user preference (OpsStore has it).

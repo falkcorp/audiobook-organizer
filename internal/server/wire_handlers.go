@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.49.0
+// version: 2.50.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-14
+// last-edited: 2026-10-17
 
 package server
 
@@ -398,13 +398,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.markDuplicatesFlaggedDirty,
 	)
 
-	// Duplicates domain handler (SQL-backed book/author/series duplicate listing,
-	// async scan/merge/dismiss/refresh/dedup/prune/normalize triggers, series
-	// prune + normalize preview, and dedup-entry metadata validation; 17 handlers).
+	// Duplicates domain handler (SQL-backed author/series duplicate listing,
+	// async link/refresh/dedup/prune triggers, combine and its undo, series
+	// prune preview, and dedup-entry metadata validation; 15 handlers).
 	// Guard typed-nil boxing for each interface-typed concrete-pointer dep so the
 	// handler's in-method nil guards (mirroring the old `s.opRegistry == nil`,
-	// `s.audiobookService`/`s.metadataFetchService` checks) hold. s.opRegistry,
-	// s.audiobookService and s.metadataFetchService are all wired before
+	// `s.metadataFetchService` checks) hold. s.opRegistry and
+	// s.metadataFetchService are both wired before
 	// setupRoutes and never swapped post-wire, so snapshotting them here is safe.
 	// The store is a LAZY provider closure (not a snapshot): the original handlers
 	// read s.Ops() at request time and a router-integration test swaps
@@ -414,17 +414,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	//
 	// The merge service is reached through getMergeService, which reproduces the
 	// original nil-fallback (s.mergeService when set, else merge.NewService(s.Ops())).
-	// dismissDedupGroup / computeSeriesPrunePreview wrap
-	// helpers that STAY in package server (server_middleware.go, server_title_helpers.go,
-	// duplicates_helpers.go) because they are shared with files that did not move;
-	// the closures let the sub-package call them without importing package server.
+	// computeSeriesPrunePreview wraps a helper that STAYS in package server
+	// (server_title_helpers.go) because it is shared with files that did not
+	// move; the closure lets the sub-package call it without importing package
+	// server.
 	var dupOpReg duplicates.OperationsRegistry
 	if s.opRegistry != nil {
 		dupOpReg = s.opRegistry
-	}
-	var dupAudiobookSvc duplicates.AudiobookService
-	if s.audiobookService != nil {
-		dupAudiobookSvc = s.audiobookService
 	}
 	var dupMetadataSvc duplicates.MetadataFetchService
 	if s.metadataFetchService != nil {
@@ -438,7 +434,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.Ops(),
 		s.dedupCache,
 		dupOpReg,
-		dupAudiobookSvc,
 		dupMetadataSvc,
 		func() duplicates.MergeService {
 			if s.mergeService != nil {
@@ -447,15 +442,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			return merge.NewService(s.storeForWiring())
 		},
 		dupDedupEng,
-		func(groupKey string) {
-			store := s.storeForWiring()
-			if store == nil {
-				return
-			}
-			dismissed := loadDismissedDedupGroups(store)
-			dismissed[groupKey] = true
-			saveDismissedDedupGroups(store, dismissed)
-		},
 		func() (any, error) {
 			store := s.storeForWiring()
 			if store == nil {

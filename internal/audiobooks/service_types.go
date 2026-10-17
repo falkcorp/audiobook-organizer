@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 package audiobooks
 
@@ -24,13 +24,6 @@ type AudiobookDetail struct {
 	*database.Book
 	AuthorName *string `json:"author_name,omitempty"`
 	SeriesName *string `json:"series_name,omitempty"`
-}
-
-// DuplicatesResult represents the result of duplicate detection
-type DuplicatesResult struct {
-	Groups         [][]database.Book `json:"groups"`
-	GroupCount     int               `json:"group_count"`
-	DuplicateCount int               `json:"duplicate_count"`
 }
 
 // SoftDeletedBooksResponse represents the response for listing soft-deleted books

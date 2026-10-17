@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -11,7 +11,7 @@
 //   - service_types.go     — request/response types, filter structs, type helpers
 //   - service_filtering.go — sort/filter helpers, pushdown builders, file aggregation
 //   - service_query.go     — GetAudiobooks, CountAudiobooksFiltered, Enrich*, searchWithBleve
-//   - service_single.go    — GetAudiobook, GetAudiobookTags, GetDuplicateBooks, lifecycle ops
+//   - service_single.go    — GetAudiobook, GetAudiobookTags, lifecycle ops
 //   - service_mutation.go  — UpdateAudiobook, DeleteAudiobook, iTunes helpers, ApplyOverride
 //   - service_tags.go      — ListAllUserTags, GetBookUserTags, SetBookUserTags, batch tag ops
 package audiobooks
@@ -132,7 +132,7 @@ type bookTagStore interface {
 }
 
 // bookFileStore covers everything the service asks about bytes on disk: the
-// file rows for a book, the two duplicate views, the delete path's hash
+// file rows for a book, the delete path's hash
 // blocklist, and the import roots isProtectedPath compares against.
 //
 // GetAllImportPaths is also what satisfies importPathLister when the store is
@@ -143,8 +143,6 @@ type bookFileStore interface {
 	// before it removes a file from disk: EVERY row at the path, not the one
 	// the single-valued GetBookFileByPath index happens to hold.
 	BookFilesAtPath(path string) ([]database.BookFile, error)
-	GetDuplicateBooks() ([][]database.Book, error)
-	GetFolderDuplicatesCore() ([][]database.BookCore, error)
 	AddBlockedHash(hash, reason string) error
 	GetAllImportPaths() ([]database.ImportPath, error)
 	// A delete or restore hands the book's version group primary on through
