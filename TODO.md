@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.25 -->
+<!-- version: 10.76.26 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-16 -->
+<!-- last-edited: 2026-10-17 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,20 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **04-P10 follow-up** Decide how `dedup.check-book` handles books that
+      never get `book_sig_v1`, then flip `dedup.on_import_via_scheduler` to
+      true. Today an unsigned subject is re-bucketed on every batch window
+      forever (`internal/operations/registry/batch.go`, the re-bucket after
+      `AllSatisfied`), so with the flag on, those books lose the Layer 1
+      exact-hash check that import relies on. Options: drop the `Requires`
+      and let `CheckBook` skip only the signature layers when there is no
+      signature, or give the batch engine a max-wait after which an
+      unsatisfied subject runs anyway. After the flip and the 2-week soak
+      (D27) with no dedup regressions, delete the flag and the three goroutine
+      fallbacks in `internal/importer/service.go`,
+      `internal/server/server_search.go` (`fireDedupOnImport`) and
+      `internal/metafetch/service.go`.
 
 - [ ] **AI-SCAN-READS-SIGNAL** Give `listAIScans` and `getAIScanResults` in `web/src/services/api.ts` an `opts?: { signal?: AbortSignal; timeoutMs?: number }` parameter, then delete `web/src/components/review/lanes/aiScanReads.ts` and point `useAIScans.ts` at the wrappers. The AI scans sub-view (03-PR8) copied their wire shapes into `aiScanReads.ts` for the same reason the Authors lane did (see AUTHORS-LANE-READS-SIGNAL): that PR was told not to edit `api.ts`, a hotspot, and every lane read needs a signal and a deadline. Do it in the same PR as AUTHORS-LANE-READS-SIGNAL. While there, give the three write wrappers the sub-view calls (`startAIScan`, `applyAIScanResults`, `cancelAIScan`) a `timeoutMs`: they have none today, so a hung server leaves the Start command's toast, the Apply button's spinner and Cancel waiting forever.
 
