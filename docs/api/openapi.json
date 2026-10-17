@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.220.2",
+    "version": "0.221.0",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -980,7 +980,12 @@
               "canceled",
               "timed_out",
               "dropped"
-            ]
+            ],
+            "description": "the stored state; always matches the ?state= filter and /ops/counts group that listed the run"
+          },
+          "display_state": {
+            "type": "string",
+            "description": "the state to show: state, except stopping for a zombie whose record still reads running"
           },
           "outcome": {
             "type": "string",
@@ -1038,7 +1043,7 @@
           },
           "zombie": {
             "type": "boolean",
-            "description": "goroutine outlived the abandon grace; state reads stopping"
+            "description": "goroutine outlived the abandon grace; display_state reads stopping"
           },
           "error": {
             "type": "string"
@@ -11724,7 +11729,54 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "type": "object"
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "help": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "permission": {
+                            "type": "string"
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "approver": {
+                            "type": "string"
+                          },
+                          "effects": {
+                            "type": "object"
+                          },
+                          "schedule": {
+                            "type": "object"
+                          },
+                          "ready": {
+                            "type": "object"
+                          },
+                          "last_run": {
+                            "type": "object",
+                            "nullable": true
+                          },
+                          "params_schema": {
+                            "type": "object"
+                          },
+                          "has_preview": {
+                            "type": "boolean",
+                            "nullable": true,
+                            "description": "writing definitions: whether a preview run really writes nothing (false: only mode live starts it). null for a read-only definition."
+                          }
+                        }
                       }
                     },
                     "total": {
@@ -11799,7 +11851,7 @@
       "post": {
         "operationId": "opsV3StartRun",
         "summary": "start a run",
-        "description": "Needs the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths.",
+        "description": "Needs scan.trigger (the floor POST /api/v1/operations/v2 has) plus the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths. mode: for a writing definition with a preview (has_preview=true) an omitted mode is a preview; a writing definition without one (has_preview=false: it ignores dry_run and always writes) starts only with mode \"live\", and a preview or omitted mode is a 409. A read-only definition takes either.",
         "tags": [
           "operations"
         ],
@@ -11876,7 +11928,7 @@
             "description": "Unknown definition"
           },
           "409": {
-            "description": "Definition not ready (reason in the message)"
+            "description": "Definition not ready (reason in the message), or a preview / mode-less start of a definition that has no preview mode"
           }
         }
       }
@@ -11988,7 +12040,7 @@
       "post": {
         "operationId": "opsV3StartRunByBody",
         "summary": "start a run (definition in the body)",
-        "description": "Same as POST /ops/defs/{id}/runs with the definition id in the body.",
+        "description": "Same as POST /ops/defs/{id}/runs with the definition id in the body (same permissions and mode rules).",
         "tags": [
           "operations"
         ],
@@ -12055,7 +12107,7 @@
             "description": "Unknown definition"
           },
           "409": {
-            "description": "Definition not ready (reason in the message)"
+            "description": "Definition not ready (reason in the message), or a preview / mode-less start of a definition that has no preview mode"
           }
         }
       }
@@ -12227,7 +12279,7 @@
       "post": {
         "operationId": "opsV3CancelRun",
         "summary": "cancel a run",
-        "description": "Needs the definition's permission, or being the user who started the run.",
+        "description": "Needs being the user who started the run, or scan.trigger plus the definition's permission.",
         "tags": [
           "operations"
         ],
@@ -12266,7 +12318,7 @@
             "description": "Not found"
           },
           "409": {
-            "description": "Run already finished"
+            "description": "Run already finished, or interrupted / awaiting a decision (not executing: discard or decide instead)"
           }
         }
       }
@@ -12528,7 +12580,7 @@
       "get": {
         "operationId": "opsV3Events",
         "summary": "run events (SSE)",
-        "description": "text/event-stream: `event: run` with a run view and an id, `: heartbeat` every 15 s, `event: resync` when events were missed. Last-Event-ID resumes from a bounded ring. Needs library.view.",
+        "description": "text/event-stream: `event: run` with a run view and an id of the form `<boot id>-<sequence>`, `: heartbeat` every 15 s, `event: resync` when events were missed. Last-Event-ID resumes from a bounded ring; an id from another boot, or one that does not parse, gets `event: resync`. The stream ends when the server starts shutting down. Needs library.view.",
         "tags": [
           "operations"
         ],
@@ -12568,6 +12620,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "No event feed, or too many open streams (64)"
           }
         }
       }
