@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.22.3
+// version: 1.23.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package scheduler
 
@@ -194,6 +194,54 @@ var taskV2DefIDs = map[string]string{
 	"orphan_book_files_cleanup":   "maintenance.orphan-book-files-cleanup",
 }
 
+// legacyTaskNames is the reverse of taskV2DefIDs: def ID to the TaskDefinition
+// name whose durable clock (intervalLastTickKey) a ported op inherits. It is a
+// frozen copy on purpose: a port PR deletes its task's taskV2DefIDs entry, and
+// the reverse lookup must keep working after that, so RegisterSchedules can
+// seed the new schedule from the old clock instead of seeing "never ran".
+// library.scan maps to library_scan; library_scan_full shares its def and is
+// not a port source (the scan keys stay as they are).
+var legacyTaskNames = map[string]string{
+	"acoustid.backfill":                        "acoustid_backfill",
+	"acoustid.lookup-online":                   "acoustid_online_lookup",
+	"catalog.harvest-authors":                  "catalog_harvest",
+	"dedup.author-scan":                        "dedup_refresh",
+	"dedup.label-refinement":                   "label_refinement",
+	"dedup.llm-review":                         "dedup_llm_review",
+	"dedup.series-normalize":                   "series_normalize",
+	"dedup.series-prune":                       "series_prune",
+	"identification.advance":                   "identification_advance",
+	"library.organize":                         "library_organize",
+	"library.scan":                             "library_scan",
+	"library.size-refresh":                     "library_size_refresh",
+	"maintenance.ai-dedup-batch":               "ai_dedup_batch",
+	"maintenance.author-split-scan":            "author_split_scan",
+	"maintenance.cleanup-activity-log":         "cleanup_activity_log",
+	"maintenance.cleanup-old-backups":          "cleanup_old_backups",
+	"maintenance.db-optimize":                  "db_optimize",
+	"maintenance.file-integrity-check":         "file_integrity_check",
+	"maintenance.metadata-refresh":             "metadata_refresh",
+	"maintenance.nightly-compact-activity-log": "nightly_activity_compaction",
+	"maintenance.optimize-activity-db":         "optimize_activity_db",
+	"maintenance.orphan-book-files-cleanup":    "orphan_book_files_cleanup",
+	"maintenance.prune-ai-journal":             "ai_journal_prune",
+	"maintenance.purge-deleted":                "purge_deleted",
+	"maintenance.purge-old-logs":               "purge_old_logs",
+	"maintenance.resolve-production-authors":   "resolve_production_authors",
+	"maintenance.temp-file-cleanup":            "temp_file_cleanup",
+	"maintenance.tombstone-cleanup":            "tombstone_cleanup",
+	"maintenance.transcode-temp-cleanup":       "transcode_temp_cleanup",
+	"maintenance.trash-cleanup":                "trash_cleanup",
+	"metadata.candidate-fetch":                 "candidate_fetch",
+	"metafetch.asin-backfill":                  "asin_backfill",
+	"reconcile.scan":                           "reconcile_scan",
+	"scheduler.metadata-upgrade":               "metadata_upgrade",
+}
+
+// legacyTaskNameForDef returns the TaskDefinition name that used to drive
+// defID, or "" when none did.
+func legacyTaskNameForDef(defID string) string { return legacyTaskNames[defID] }
+
 // TaskV2DefIDs returns a copy of the task-name to v2-def-ID map. The
 // schedule-has-driver guard in internal/server uses it to ask whether an op that
 // declares a cron Schedule has a scheduler task that really enqueues it.
@@ -220,7 +268,11 @@ var taskConcurrencySiblings = map[string][]string{
 
 // isTaskRunning is the internal implementation.
 func (ts *TaskScheduler) isTaskRunning(name string) bool {
-	if ts.hasActiveV2Op(taskV2DefIDs[name]) {
+	defID := taskV2DefIDs[name]
+	if defID == "" && ts.v3.has(name) {
+		defID = name // a window-scheduled v3 def is named by its def ID
+	}
+	if ts.hasActiveV2Op(defID) {
 		return true
 	}
 	for _, sib := range taskConcurrencySiblings[name] {

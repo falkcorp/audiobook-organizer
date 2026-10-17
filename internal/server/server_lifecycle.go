@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.46.0
+// version: 4.47.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package server
 
@@ -421,6 +421,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 			return s.batchPoller.Poll(ctx)
 		},
 	})
+	// ops.Schedule declarations (05-PR8): registered before Start so the
+	// scheduler's one v3 loop and the maintenance window see them. A def that
+	// fails here is skipped and reported; the rest still schedule.
+	if err := s.scheduler.RegisterSchedules(s.opRegistry.Catalog()); err != nil {
+		lifecycleLog.Warn("ops.Schedule registration: %v", err)
+	}
 	s.scheduler.Start(shutdown, &backgroundWG)
 
 	ticker := time.NewTicker(5 * time.Second)
