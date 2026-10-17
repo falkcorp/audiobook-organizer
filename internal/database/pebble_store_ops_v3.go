@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-17
 
@@ -1244,7 +1244,7 @@ func (p *PebbleStore) runsFromIndex(prefix []byte, cursor string, limit int, kee
 	}
 	var page RunPage
 	if cursor != "" && !strings.HasPrefix(cursor, string(prefix)) {
-		return page, fmt.Errorf("opv3: cursor %q does not belong to this listing", cursor)
+		return page, fmt.Errorf("%w: %q does not belong to this listing", ErrBadCursorV3, cursor)
 	}
 	type ref struct{ key, id string }
 	var refs []ref
@@ -1826,7 +1826,7 @@ func (p *PebbleStore) ListItemOutcomesV3(id string, q ItemQuery) (page ItemPage,
 	lower := prefix
 	if q.Cursor != "" {
 		if !strings.HasPrefix(q.Cursor, string(prefix)) {
-			return page, fmt.Errorf("opv3: cursor %q does not belong to this listing", q.Cursor)
+			return page, fmt.Errorf("%w: %q does not belong to this listing", ErrBadCursorV3, q.Cursor)
 		}
 		lower = append([]byte(q.Cursor), 0)
 	}
