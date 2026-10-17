@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
-// last-edited: 2026-10-10
+// last-edited: 2026-10-17
 
 package config
 
@@ -353,5 +353,53 @@ func TestHasConfigKey(t *testing.T) {
 		if got := hasConfigKey(m, tc.key); got != tc.want {
 			t.Errorf("hasConfigKey(%q) = %v, want %v", tc.key, got, tc.want)
 		}
+	}
+}
+
+// The qBittorrent and SABnzbd blocks were removed 2026-10-17 (01-P76). A config
+// file still carrying them loads with a removed-setting WARN per block, and a
+// config update carrying them gets the removal message, not the generic
+// unknown-key one.
+func TestRemovedDownloadClientKeys_WarnAndRefuse(t *testing.T) {
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	logs := captureRemovedKeyLogs(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	yamlText := "download_client:\n  torrent:\n    deluge:\n      host: 192.0.2.10\n" +
+		"    qbittorrent:\n      host: 192.0.2.11\n      password: qbit-test-pass\n" +
+		"  usenet:\n    sabnzbd:\n      api_key: sab-test-key\n"
+	if err := os.WriteFile(cfgPath, []byte(yamlText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(cfgPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("ReadInConfig: %v", err)
+	}
+	InitConfig()
+
+	out := logs.String()
+	for _, key := range []string{"download_client.torrent.qbittorrent", "download_client.usenet"} {
+		if !strings.Contains(out, "key="+key+" ") || !strings.Contains(out, "removed setting is ignored") {
+			t.Errorf("no removed-setting WARN for %s in logs:\n%s", key, out)
+		}
+	}
+	if strings.Contains(out, "key=download_client.torrent.deluge") {
+		t.Errorf("the kept Deluge block was reported as removed:\n%s", out)
+	}
+
+	for _, payload := range []map[string]any{
+		{"download_client": map[string]any{"torrent": map[string]any{"qbittorrent": map[string]any{"host": "192.0.2.11"}}}},
+		{"download_client": map[string]any{"usenet": map[string]any{"type": "sabnzbd"}}},
+	} {
+		msg, ok := removedKeyInUpdate(payload)
+		if !ok || !strings.Contains(msg, "download-client settings were removed") {
+			t.Errorf("update %v: ok=%v msg=%q, want the removal message", payload, ok, msg)
+		}
+	}
+	if _, ok := removedKeyInUpdate(map[string]any{"download_client": map[string]any{
+		"torrent": map[string]any{"deluge": map[string]any{"host": "192.0.2.10"}}}}); ok {
+		t.Error("an update touching only the kept Deluge settings was refused")
 	}
 }

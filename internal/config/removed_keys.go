@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
-// last-edited: 2026-10-10
+// last-edited: 2026-10-17
 
 package config
 
@@ -26,6 +26,13 @@ const autoFetchRemovedMessage = "the auto_fetch_metadata setting was removed: no
 const writeBackupBeforeRemovedMessage = "the metadata_scoring.write_backup_before setting (formerly " +
 	"write_backup_before_tag_write) was removed: create_backups is the one switch for keeping a .bak-* " +
 	"copy of a file before a tag write"
+
+// downloadClientRemovedMessage explains the removal of the qBittorrent and
+// SABnzbd client settings. Only the Deluge settings under download_client.torrent
+// are still read.
+const downloadClientRemovedMessage = "the qBittorrent and SABnzbd download-client settings were removed: " +
+	"nothing ever read them. Only the Deluge settings under download_client.torrent are still used; " +
+	"delete this block, including any stored qBittorrent password or SABnzbd API key"
 
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
@@ -58,6 +65,10 @@ var removedConfigKeys = []removedConfigKey{
 	// nested viper/env name.
 	{key: "write_backup_before_tag_write", message: writeBackupBeforeRemovedMessage},
 	{key: "metadata_scoring.write_backup_before", message: writeBackupBeforeRemovedMessage},
+	// Removed 2026-10-17 (01-P76). Whole blocks, so the nested credentials
+	// (qBittorrent password, SABnzbd API key) are scrubbed from config.yaml on save.
+	{key: "download_client.torrent.qbittorrent", message: downloadClientRemovedMessage},
+	{key: "download_client.usenet", message: downloadClientRemovedMessage},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key

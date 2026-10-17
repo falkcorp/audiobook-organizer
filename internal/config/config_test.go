@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-17
 
@@ -725,7 +725,7 @@ func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
 // TestInitConfig_RetiredDownloadClientKeysAreIgnored pins that a config file
 // written while two more download clients were settings still loads: the retired
 // download_client.torrent.qbittorrent and download_client.usenet blocks are
-// dropped silently, and the kept Deluge fallback keys still decode.
+// reported as removed (see removed_keys_test.go), and the kept Deluge fallback keys still decode.
 func TestInitConfig_RetiredDownloadClientKeysAreIgnored(t *testing.T) {
 	fileInitConfig(t, `
 download_client:
