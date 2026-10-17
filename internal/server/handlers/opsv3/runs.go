@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
 // last-edited: 2026-10-17
 
@@ -327,8 +327,15 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		httputil.RespondWithForbidden(c, "cancelling this run needs being the user who started it, or scan.trigger and the definition's permission")
 		return
 	}
-	if p := state.ClassifyV3(rec.State); p.Terminal || p.Settled {
+	// The spec's only stop transition is running -> stopping
+	// (state-and-persistence.md section 1). A terminal run is done. An
+	// interrupted or awaiting_decision run is not executing, so there is
+	// nothing to stop: its way out is "decide drop" (discard), not cancel.
+	if p := state.ClassifyV3(rec.State); p.Terminal {
 		httputil.RespondWithConflict(c, "run is already "+string(rec.State))
+		return
+	} else if p.Settled {
+		httputil.RespondWithConflict(c, "run is "+string(rec.State)+" and not executing, so there is nothing to cancel; discard it or decide on it instead")
 		return
 	}
 	if err := h.d.Enqueuer.Cancel(rec.ID); err != nil {
@@ -374,7 +381,7 @@ func (h *Handler) ApproveRun(c *gin.Context) {
 	}
 	method := servermiddleware.CurrentAuthMethod(c)
 	if !verifiedForApproval(method) {
-		httputil.RespondWithForbidden(c, "approving needs a signed-in session or an API token; a forwarded header is not an identity")
+		httputil.RespondWithForbidden(c, "approving needs a signed-in session, an API token or a verified Cloudflare Access sign-in; a forwarded header is not an identity")
 		return
 	}
 	user, hasUser := auth.UserFromContext(c.Request.Context())
@@ -435,6 +442,13 @@ func (h *Handler) ApproveRun(c *gin.Context) {
 
 // verifiedForApproval: the methods that prove who the caller is. A delegated
 // session (temp-login, invite), an ABS token and no method at all do not.
+//
+// MethodCFAccess is accepted: middleware/cfaccess.go sets it only after it has
+// verified the Cf-Access-Jwt-Assertion signature against the team's keys and
+// resolved the signed email to a user, the same proof the owner gate
+// (auth/owner.go) relies on. The unsigned Cf-Access-Authenticated-User-Email
+// header never sets a method, so a request carrying only that header has
+// none and is refused (TestOpsV3Routes_ForwardedHeaderCannotApprove).
 func verifiedForApproval(m auth.Method) bool {
 	switch m {
 	case auth.MethodSession, auth.MethodAPIKey, auth.MethodCFAccess:
