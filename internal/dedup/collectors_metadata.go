@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.6.0
+// version: 1.7.1
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-27
+// last-edited: 2026-10-17
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -9,7 +9,7 @@
 //
 // Two collector functions handle metadata-derived signals:
 //
-//   - CollectDuration: wraps the duration-gate logic from checkDurationMatch
+//   - collectDuration: wraps the duration-gate logic from checkDurationMatch
 //     (engine.go:547-700) into a SigDuration signal emitter.  The ±2% window,
 //     Levenshtein title check, and the dedup:duration-match / dedup:duration-
 //     abridged side-effect tags are ALL preserved verbatim — only the candidate
@@ -46,10 +46,10 @@ import (
 // ─── store interfaces ──────────────────────────────────────────────────────────
 
 // DurationCollectorStore is the subset of Store required by
-// CollectDuration for the book-query and alt-title path.  Tag side-effects
+// collectDuration for the book-query and alt-title path.  Tag side-effects
 // use database.EnsureSingletonBookTag, which requires only the three methods
 // of database.BookTagSingletonStore (GetBookTagsDetailed, RemoveBookTagsByPrefix,
-// AddBookTagWithSource).  CollectDuration's tagStore parameter has been narrowed
+// AddBookTagWithSource).  collectDuration's tagStore parameter has been narrowed
 // to this type, directly satisfying that interface.
 type DurationCollectorStore interface {
 	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
@@ -67,7 +67,7 @@ type MetaFuzzyStore interface {
 
 // ─── duration collector ────────────────────────────────────────────────────────
 
-// DurationCollectorConfig holds calibration parameters for CollectDuration.
+// DurationCollectorConfig holds calibration parameters for collectDuration.
 type DurationCollectorConfig struct {
 	// MatchTolerance is the maximum fractional difference in duration for a
 	// match signal to be emitted.  Default 0.02 (2%).
@@ -123,37 +123,8 @@ func allNormalizedTitleFormsForStore(store interface {
 	return forms
 }
 
-// CollectDuration scans books by the same author for duration-based similarity
-// signals and emits SigDuration for pairs within the ±2% window (supporting
-// signal — adds a bounded boost to composite score, never drives it alone).
-//
-// Side-effects preserved from checkDurationMatch (engine.go:547-700):
-//
-//   - dedup:duration-match tag applied to BOTH books when duration within ±2%
-//     AND Levenshtein title distance ≤ cfg.LevenshteinMax.
-//   - dedup:duration-abridged tag applied to BOTH books when duration differs
-//     10-20% AND Levenshtein title distance ≤ cfg.LevenshteinMax.
-//
-// These side-effect tags are preserved because the UI and reporting layer
-// depend on them for "show me likely abridged editions" filters.
-//
-// Logic unchanged from checkDurationMatch; emission shape only.
-//
-// tagStore is used for side-effect tag writes via database.EnsureSingletonBookTag.
-// It must be non-nil if tag side-effects are desired (pass nil to disable).
-// In production, both callers pass de.bookStore (a dedup.Store, which embeds
-// database.BookTagSingletonStore).
-func CollectDuration(
-	store DurationCollectorStore,
-	tagStore database.BookTagSingletonStore, // may be nil — side-effect tags silently skipped
-	book *database.Book,
-	cfg DurationCollectorConfig,
-) ([]unified.Signal, error) {
-	return collectDuration(store, tagStore, nil, book, cfg)
-}
-
-// collectDuration is CollectDuration with the engine's run-scoped runtime
-// memo (nil outside a run).
+// collectDuration emits the duration signal for book, reading its canonical
+// runtime through the engine's run-scoped runtime memo (nil outside a run).
 func collectDuration(
 	store DurationCollectorStore,
 	tagStore database.BookTagSingletonStore,
@@ -186,7 +157,7 @@ func collectDuration(
 
 	othersCore, err := store.GetBooksByAuthorIDCore(*book.AuthorID)
 	if err != nil {
-		return nil, fmt.Errorf("CollectDuration get books by author: %w", err)
+		return nil, fmt.Errorf("collectDuration get books by author: %w", err)
 	}
 	others := booksFromCore(othersCore)
 

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_data_loss_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e2b8c47-91d3-4f60-a7c8-2d4e6f1a9b30
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package jobs
 
@@ -81,8 +81,8 @@ func TestDDMergeDuplicateBook_MovesFilesAndClearsDupPath(t *testing.T) {
 	dup := ddMustBook(t, s, &database.Book{Title: "Book", FilePath: shared})
 	f := ddMustFile(t, s, &database.BookFile{BookID: dup.ID, FilePath: shared, ITunesPersistentID: "PID-1"})
 
-	if err := ddMergeDuplicateBook(s, keeper, dup, false); err != nil {
-		t.Fatalf("ddMergeDuplicateBook: %v", err)
+	if err := ddMergeDuplicateBookSim(s, nil, keeper, dup, false); err != nil {
+		t.Fatalf("ddMergeDuplicateBookSim: %v", err)
 	}
 
 	dupFiles, _ := s.GetBookFiles(dup.ID)
@@ -124,7 +124,7 @@ func TestDDMergeDuplicateBook_MoveFailureLeavesDupLive(t *testing.T) {
 		},
 		MoveBookFilesToBookFunc: func([]string, string, string) error { return boom },
 	}
-	err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, &database.Book{ID: "dup"}, false)
+	err := ddMergeDuplicateBookSim(store, nil, &database.Book{ID: "keep"}, &database.Book{ID: "dup"}, false)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the move failure", err)
 	}
@@ -143,7 +143,7 @@ func TestDDMergeDuplicateBook_RefusesITunesLibrary(t *testing.T) {
 	ddMustFile(t, s, &database.BookFile{BookID: dup.ID, FilePath: p})
 
 	for _, dry := range []bool{true, false} {
-		err := ddMergeDuplicateBook(s, keeper, dup, dry)
+		err := ddMergeDuplicateBookSim(s, nil, keeper, dup, dry)
 		if !errors.Is(err, merge.ErrITunesProtected) {
 			t.Fatalf("dryRun=%v: err = %v, want ErrITunesProtected", dry, err)
 		}
@@ -188,8 +188,8 @@ func TestDDMergeDuplicateBook_PrimaryDupHandsOffToKeeper(t *testing.T) {
 	}
 	keeper, dup = ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID)
 
-	if err := ddMergeDuplicateBook(s, keeper, dup, false); err != nil {
-		t.Fatalf("ddMergeDuplicateBook: %v", err)
+	if err := ddMergeDuplicateBookSim(s, nil, keeper, dup, false); err != nil {
+		t.Fatalf("ddMergeDuplicateBookSim: %v", err)
 	}
 	members, err := s.GetBooksByVersionGroup(vg)
 	if err != nil {

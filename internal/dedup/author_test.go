@@ -1,7 +1,7 @@
 // file: internal/dedup/author_test.go
-// version: 1.6.0
+// version: 1.6.3
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-25
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -191,37 +191,6 @@ func TestSplitCompositeAuthorName_NewPatterns(t *testing.T) {
 	}
 }
 
-func TestAreAuthorsDuplicate(t *testing.T) {
-	shouldMatch := []struct{ a, b string }{
-		{"James S. A. Corey", "James S.A. Corey"},
-		{"Brandon Sanderson", "Brandon  Sanderson"},
-		{"David Kushner", "David Kushner/Wil Wheaton"},
-		{"Stephen King", "Steven King"},
-		{"J. K. Rowling", "J.K. Rowling"},
-	}
-	for _, tt := range shouldMatch {
-		if !areAuthorsDuplicate(tt.a, tt.b) {
-			t.Errorf("expected %q and %q to match", tt.a, tt.b)
-		}
-	}
-
-	shouldNotMatch := []struct{ a, b string }{
-		{"Michael Grant", "Michael Angel"},
-		{"Michael Grant", "Michael Troughton"},
-		{"Michael Grant", "Michael Langan"},
-		{"Michael Grant", "Michael Braun"},
-		{"Michael Grant", "Michael Dalton"},
-		{"Alex Karne", "Alex Irvine"},
-		{"Mark Tufo", "Mark Twain"},
-		{"Neal Stephenson", "Neal Stephenson - Snow Crash"},
-	}
-	for _, tt := range shouldNotMatch {
-		if areAuthorsDuplicate(tt.a, tt.b) {
-			t.Errorf("expected %q and %q to NOT match", tt.a, tt.b)
-		}
-	}
-}
-
 func TestIsProductionCompany(t *testing.T) {
 	companies := []string{
 		"Soundbooth Theater",
@@ -321,5 +290,66 @@ func TestPickCanonicalAuthor(t *testing.T) {
 				t.Errorf("expected canonical ID %d, got %d (%s)", tt.expectID, canonical.ID, canonical.Name)
 			}
 		})
+	}
+}
+
+// areNamesDuplicate runs the live scan predicate over two raw names, exactly
+// as the scan does (skipped names never reach the predicate and never match).
+func areNamesDuplicate(a, b string) bool {
+	pa := newAuthorPrecomputed(0, database.Author{ID: 1, Name: a})
+	pb := newAuthorPrecomputed(1, database.Author{ID: 2, Name: b})
+	if pa.skip || pb.skip {
+		return false
+	}
+	return areAuthorsDuplicatePrecomputed(&pa, &pb)
+}
+
+// Ported from the deleted TestAreAuthorsDuplicate: the live predicate keeps
+// fuzzy first-name matching, initial matching and the shared-base rule, and
+// refuses same-first-name / different-surname pairs. Synthetic names only.
+func TestAreAuthorsDuplicatePrecomputed_Table(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		// initials and spacing
+		{"Rowan Q. P. Vale", "Rowan Q.P. Vale", true},
+		{"Tamsin Orrel", "Tamsin  Orrel", true},
+		{"T. R. Quill", "T.R. Quill", true},
+		// fuzzy first name (JW >= 0.85)
+		{"Stefan Marlowe", "Stephan Marlowe", true},
+		// slash-composite names are skipped by the scan, never matched
+		{"Dorian Pell", "Dorian Pell/Wren Hollis", false},
+		// shared first name, different surnames
+		{"Mara Quint", "Mara Angel", false},
+		{"Mara Quint", "Mara Dalton", false},
+		{"Alix Karn", "Alix Irving", false},
+		{"Marek Tuft", "Marek Twill", false},
+		// subtitle suffix is not the same name
+		{"Nolan Stephens", "Nolan Stephens - Glass Harbor", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.a+"|"+tc.b, func(t *testing.T) {
+			if got := areNamesDuplicate(tc.a, tc.b); got != tc.want {
+				t.Errorf("areAuthorsDuplicatePrecomputed(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
+// A parenthetical role suffix is stripped by extractBaseAuthor, so the two
+// names share a base author through the live precompute path. Normalization
+// alone leaves them distinct (norm differs); only the base-author rule matches.
+func TestAreAuthorsDuplicatePrecomputed_SharedBase(t *testing.T) {
+	a := newAuthorPrecomputed(0, database.Author{Name: "Dorian Pell"})
+	b := newAuthorPrecomputed(1, database.Author{Name: "Dorian Pell (Editor)"})
+	if a.skip || b.skip {
+		t.Fatalf("fixtures must not be skipped: a=%v b=%v", a.skip, b.skip)
+	}
+	if a.base != b.base {
+		t.Fatalf("bases differ: %q vs %q", a.base, b.base)
+	}
+	if !areAuthorsDuplicatePrecomputed(&a, &b) {
+		t.Error("authors sharing a base name must match")
 	}
 }

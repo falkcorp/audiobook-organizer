@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_part_vs_whole_test.go
-// version: 1.1.2
+// version: 1.1.4
 // guid: 6d3a9f21-4b7c-4e58-9a01-2f5c8d6e7b34
-// last-edited: 2026-09-27
+// last-edited: 2026-10-17
 
 // Regression guard for CONS-15: upsertExactCandidate must reject a pair where
 // one side is a single-file book whose duration is a small fraction of the
@@ -122,8 +122,8 @@ func TestIsPartVsWholeMismatchAlignedRatio(t *testing.T) {
 				return nil, nil
 			}
 
-			if got := engine.isPartVsWholeMismatch(a, b); got != tc.wantMismatch {
-				t.Errorf("isPartVsWholeMismatch(part=%d, whole=%d) = %v, want %v",
+			if got := engine.isPartVsWholeMismatchMemo(nil, a, b); got != tc.wantMismatch {
+				t.Errorf("isPartVsWholeMismatchMemo(part=%d, whole=%d) = %v, want %v",
 					tc.partDuration, wholeTotal, got, tc.wantMismatch)
 			}
 		})
@@ -153,7 +153,7 @@ func TestIsPartVsWholeMismatchNonPositiveDurations(t *testing.T) {
 		return nil, nil
 	}
 
-	if engine.isPartVsWholeMismatch(a, b) {
-		t.Error("isPartVsWholeMismatch with zero part duration = true, want false (guard must stay)")
+	if engine.isPartVsWholeMismatchMemo(nil, a, b) {
+		t.Error("isPartVsWholeMismatchMemo with zero part duration = true, want false (guard must stay)")
 	}
 }

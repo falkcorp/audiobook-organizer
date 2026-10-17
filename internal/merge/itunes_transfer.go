@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_transfer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 888ac9c0-035e-4ee6-af7e-2584ce3269b9
-// last-edited: 2026-09-14
+// last-edited: 2026-10-17
 
 package merge
 
@@ -18,8 +18,6 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 // It lives in merge (not dedup, which imports merge) so that
 // Service.MergeBooksWithOptions can apply it inside mergeSerializeMu, in the
 // same write that marks the survivor primary (MergeOptions.CarryITunesFields).
-// dedup.TransferITunesMetadataFirstWin forwards here for the legacy
-// dedup.MergeBooks hard-delete path, so the copy semantics live in one place.
 func TransferITunesMetadataFirstWin(keep, from *database.Book) {
 	if keep == nil || from == nil {
 		return

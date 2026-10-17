@@ -1,7 +1,7 @@
 // file: internal/merge/service_guards_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7b2e9d4c-1a5f-4e83-9c6b-2d8f0a3e5b17
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package merge
 
@@ -99,6 +99,8 @@ func TestMergeBooks_Election_WithinTierBookIsBetterDecides(t *testing.T) {
 
 // F1: an explicit primary with no file rows is refused (typed error naming
 // the file-bearing books) rather than silently overridden or honored.
+// See also TestLegacyParity_FilelessKeeperRefused (legacy_guard_parity_test.go),
+// which pins the same refusal as parity case 1 for the retired dedup path.
 func TestMergeBooks_ExplicitFilelessPrimary_Refused(t *testing.T) {
 	store := setupTestStore(t)
 	ghost := seedGuardBook(t, store, "Forced Ghost", "m4b", false)

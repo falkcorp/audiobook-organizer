@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.5
+// version: 1.0.7
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
-// last-edited: 2026-09-28
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -124,8 +124,8 @@ func TestDrainStale_MissingChaptersAreNotAShortBook(t *testing.T) {
 	if n := res.ReasonCounts[drainReasonShortDuration]; n != 0 {
 		t.Fatalf("book with missing chapters drained as short_duration (%v)", res.ReasonCounts)
 	}
-	if engine.hasKnownShortDuration(&database.Book{ID: "BOOK_A"}) {
-		t.Fatal("hasKnownShortDuration: missing chapters read as a 45 s book")
+	if engine.hasKnownShortDurationMemo(nil, &database.Book{ID: "BOOK_A"}) {
+		t.Fatal("hasKnownShortDurationMemo: missing chapters read as a 45 s book")
 	}
 }
 
@@ -251,12 +251,12 @@ func TestRuntimeGates_NoStaleRuntimeAcrossCalls(t *testing.T) {
 	mock.GetBookFilesFunc = func(string) ([]database.BookFile, error) { return files, nil }
 	stamp := time.Unix(1_700_000_000, 0)
 	book := &database.Book{ID: "A", UpdatedAt: &stamp}
-	if !engine.hasKnownShortDuration(book) {
+	if !engine.hasKnownShortDurationMemo(nil, book) {
 		t.Fatal("45 s book not short")
 	}
 	// A second row appears with no duration; UpdatedAt does not move.
 	files = append(files, database.BookFile{ID: "A-2", BookID: "A"})
-	if engine.hasKnownShortDuration(book) {
+	if engine.hasKnownShortDurationMemo(nil, book) {
 		t.Fatal("stale runtime: the book gained a row of unknown length but still reads as a complete 45 s book")
 	}
 }

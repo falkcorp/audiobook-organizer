@@ -1,13 +1,12 @@
 // file: internal/dedup/author.go
-// version: 1.25.0
+// version: 1.26.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-04
+// last-edited: 2026-10-17
 
 package dedup
 
 import (
 	"fmt"
-	"log/slog"
 	"math"
 	"regexp"
 	"runtime"
@@ -38,9 +37,8 @@ type AuthorDedupGroup struct {
 // used by extractBaseAuthor. SplitCompositeAuthorName moved to
 // internal/personname on 2026-10-04 (see authorname_reexport.go).
 var (
-	// extractBaseAuthor's: called twice per author-name comparison
-	// (authorNamesEquivalent, below) and once per author when the prefilter
-	// index is built.
+	// extractBaseAuthor's: called once per author, in newAuthorPrecomputed,
+	// when the prefilter index is built.
 	authorParenSuffixRe = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
 )
 
@@ -69,8 +67,8 @@ func splitAuthorParts(name string) (first, last string) {
 func extractBaseAuthor(name string) string {
 	// Strip " (anything)" parenthetical that looks like a role
 	// authorParenSuffixRe: see the note on authorSpaceRe. extractBaseAuthor is
-	// called twice per author-name comparison (author.go:538-539) and once per
-	// author in the prefilter build (:1068).
+	// called once per author, in newAuthorPrecomputed, when the prefilter
+	// index is built.
 	name = authorParenSuffixRe.ReplaceAllString(name, "")
 
 	// If name contains "/" and isn't just initials, take the first part
@@ -84,59 +82,6 @@ func extractBaseAuthor(name string) string {
 // isCompositeAuthorName returns true if the name contains multiple real authors
 func isCompositeAuthorName(name string) bool {
 	return len(SplitCompositeAuthorName(name)) > 1
-}
-
-// areAuthorsDuplicate determines if two author names refer to the same person.
-// Much stricter than raw Jaro-Winkler — requires last name match.
-func areAuthorsDuplicate(name1, name2 string) bool {
-	// Skip dirty names (book titles, publishers)
-	if IsDirtyAuthorName(name1) || IsDirtyAuthorName(name2) {
-		return false
-	}
-
-	norm1 := strings.ToLower(NormalizeAuthorName(name1))
-	norm2 := strings.ToLower(NormalizeAuthorName(name2))
-
-	// Exact normalized match
-	if norm1 == norm2 {
-		return true
-	}
-
-	// Check if one contains the other (e.g. "David Kushner" vs "David Kushner/Wil Wheaton")
-	base1 := strings.ToLower(extractBaseAuthor(NormalizeAuthorName(name1)))
-	base2 := strings.ToLower(extractBaseAuthor(NormalizeAuthorName(name2)))
-	if base1 == base2 {
-		return true
-	}
-
-	// If after base extraction they still differ, compare parts
-	first1, last1 := splitAuthorParts(base1)
-	first2, last2 := splitAuthorParts(base2)
-
-	// Both must have a last name
-	if last1 == "" || last2 == "" {
-		return false
-	}
-
-	// Last names must be very similar (>= 0.95) or exact match
-	lastSim := jaroWinklerSimilarity(last1, last2)
-	if lastSim < 0.95 {
-		return false
-	}
-
-	// If one has no first name, only match if last names are identical
-	if first1 == "" || first2 == "" {
-		return last1 == last2
-	}
-
-	// First names/initials must also be similar
-	// Handle initial vs full name: "J." matches "James", "J. K." matches "Joanne K."
-	if isInitialMatch(first1, first2) {
-		return true
-	}
-
-	firstSim := jaroWinklerSimilarity(first1, first2)
-	return firstSim >= 0.85
 }
 
 // isInitialMatch checks if one name is an initial form of the other.
@@ -275,13 +220,14 @@ const authorLastNameSimilarity = 0.95
 // Tests that set it must restore it and must not call t.Parallel.
 var scanWorkerCount = runtime.NumCPU()
 
-// jaroWinklerBelowThreshold reports whether jaroWinklerSimilarity(s1, s2) is
-// guaranteed to come out below threshold based on string LENGTH alone, so a
-// caller screening pairs can skip the real comparison. It never returns true
-// for a pair that would have met the threshold, so using it cannot change which
-// pairs a scan accepts -- only how many it has to compute.
+// jaroWinklerMinLengthRatio returns the smallest shorter/longer rune-length
+// ratio a pair can have and still reach threshold. A pair whose ratio is below
+// it is guaranteed to score under threshold on jaroWinklerSimilarity, so a scan
+// can skip the real comparison without changing which pairs it accepts. A
+// result <= 0 means no pair can be excluded on length alone (every ratio clears
+// the bar), which is the case for thresholds at or below 0.8.
 //
-// Why this is sound, against the implementation directly above:
+// Why the bound is sound, against jaroWinklerSimilarity:
 //
 //	Jaro is (m/len1 + m/len2 + (m-t/2)/m) / 3, and (m-t/2)/m <= 1 because
 //	t >= 0. Matches cannot exceed the shorter string, so m <= L where L and M
@@ -298,29 +244,8 @@ var scanWorkerCount = runtime.NumCPU()
 //	At the 0.95 threshold this is L/M >= 0.75: a name can only be a near-match
 //	for another within 4/3 of its length.
 //
-// Two details are load-bearing. Lengths are RUNE counts because the function
-// above counts runes -- measuring bytes would over-skip on any non-ASCII name.
-// And the ratio is biased down by an epsilon, so floating-point error in 5t-4
-// can only ever cost a few wasted comparisons, never wrongly discard a pair
-// sitting on the boundary. See jaroWinklerMinLengthRatio: at the 0.95 gate this
-// package actually uses, 5t-4 IS exactly 0.75, so the epsilon is defensive
-// there rather than load-bearing; it earns its place at other thresholds.
-//
-// For t <= 0.8 the bound is non-positive -- length proves nothing -- and this
-// correctly declines to skip anything.
-func jaroWinklerBelowThreshold(s1, s2 string, threshold float64) bool {
-	return lengthRatioBelowThreshold(
-		utf8.RuneCountInString(s1),
-		utf8.RuneCountInString(s2),
-		jaroWinklerMinLengthRatio(threshold),
-	)
-}
-
-// jaroWinklerMinLengthRatio returns the smallest shorter/longer rune-length
-// ratio a pair can have and still reach threshold, per the derivation on
-// jaroWinklerBelowThreshold. A result <= 0 means no pair can be excluded on
-// length alone (every ratio clears the bar), which is the case for thresholds
-// at or below 0.8.
+// Lengths are RUNE counts because jaroWinklerSimilarity counts runes;
+// measuring bytes would over-skip on any non-ASCII name.
 //
 // The epsilon biases the ratio DOWN, which makes skipping strictly harder. 5t-4
 // is not exactly representable for most t, so without it a pair sitting exactly
@@ -520,99 +445,36 @@ type authorPrecomputed struct {
 	lastLower string // lowercased last name for bucketing
 }
 
-// BuildAuthorSeriesMap pre-loads series names for all authors from the store.
-// Returns a map of authorID → slice of normalized series names (lowercased, trimmed).
-// This is an optional input to FindDuplicateAuthors for series cross-referencing.
-func BuildAuthorSeriesMap(store interface {
-	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
-	GetSeriesByID(id int) (*database.Series, error)
-}, authors []database.Author) map[int][]string {
-	result := make(map[int][]string, len(authors))
-	// H2 (2026-07 error-correction sweep): both store errors below used to be
-	// bare `continue`s. A failure here doesn't fail the map build — it just
-	// silently degrades author-dedup's series cross-referencing for the
-	// affected author (fewer/no series names → sharesSeries() never fires
-	// for them). Count both kinds and emit one summary Warn so a systemic
-	// store problem shows up instead of manifesting only as "series
-	// cross-referencing isn't catching duplicates".
-	booksLoadErrs := 0
-	seriesLoadErrs := 0
-	for _, a := range authors {
-		books, err := store.GetBooksByAuthorIDCore(a.ID)
-		if err != nil {
-			booksLoadErrs++
-			continue
-		}
-		seen := make(map[int]bool)
-		for _, b := range books {
-			if b.SeriesID == nil || seen[*b.SeriesID] {
-				continue
-			}
-			seen[*b.SeriesID] = true
-			series, err := store.GetSeriesByID(*b.SeriesID)
-			if err != nil {
-				seriesLoadErrs++
-				continue
-			}
-			if series == nil {
-				continue
-			}
-			normalized := strings.ToLower(strings.TrimSpace(series.Name))
-			if normalized != "" {
-				result[a.ID] = append(result[a.ID], normalized)
-			}
+// newAuthorPrecomputed builds the comparison form of one author: dirty,
+// multi-author and composite names are marked skip and carry no name parts;
+// every other name gets its normalized, base, first/last parts filled in.
+func newAuthorPrecomputed(index int, a database.Author) authorPrecomputed {
+	pre := authorPrecomputed{
+		index:  index,
+		author: a,
+	}
+	if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) {
+		pre.skip = true
+	} else {
+		pre.norm = strings.ToLower(NormalizeAuthorName(a.Name))
+		pre.base = strings.ToLower(extractBaseAuthor(NormalizeAuthorName(a.Name)))
+		pre.first, pre.last = splitAuthorParts(pre.base)
+		if pre.last != "" {
+			pre.lastLower = strings.ToLower(pre.last)
 		}
 	}
-	if booksLoadErrs > 0 || seriesLoadErrs > 0 {
-		slog.Warn("dedup author-series map: store errors degraded series cross-referencing",
-			"authors", len(authors),
-			"books_load_errors", booksLoadErrs,
-			"series_load_errors", seriesLoadErrs,
-		)
-	}
-	return result
-}
-
-// sharesSeries returns true if the two sets of normalized series names have any overlap.
-func sharesSeries(seriesA, seriesB []string) bool {
-	if len(seriesA) == 0 || len(seriesB) == 0 {
-		return false
-	}
-	setA := make(map[string]bool, len(seriesA))
-	for _, s := range seriesA {
-		setA[s] = true
-	}
-	for _, s := range seriesB {
-		if setA[s] {
-			return true
-		}
-	}
-	return false
+	return pre
 }
 
 // FindDuplicateAuthors groups authors by similarity using structured name comparison.
 // The threshold parameter is kept for API compatibility but the actual matching
-// uses areAuthorsDuplicate which compares first/last names separately.
-//
-// The optional seriesMap parameter (from BuildAuthorSeriesMap) enables series
-// cross-referencing: two authors with different but close names who share a series
-// are treated as duplicates.
+// uses areAuthorsDuplicatePrecomputed, which compares first/last names
+// separately.
 //
 // Performance: Pre-computes normalized names and buckets by last name to reduce
 // comparisons from O(n²) to O(n × avg_bucket_size). For 5,000 authors with
 // ~2,000 unique last names, this reduces comparisons by ~60-80%.
 func FindDuplicateAuthors(authors []database.Author, threshold float64, bookCountFn func(int) int, progressFn ...ProgressCallback) []AuthorDedupGroup {
-	return findDuplicateAuthorsInternal(authors, threshold, bookCountFn, nil, progressFn...)
-}
-
-// FindDuplicateAuthorsWithSeries is like FindDuplicateAuthors but also uses series
-// overlap as a tiebreaker when author names are close but below the strict match threshold.
-// Use BuildAuthorSeriesMap to build the seriesMap from a store.
-func FindDuplicateAuthorsWithSeries(authors []database.Author, threshold float64, bookCountFn func(int) int, seriesMap map[int][]string, progressFn ...ProgressCallback) []AuthorDedupGroup {
-	return findDuplicateAuthorsInternal(authors, threshold, bookCountFn, seriesMap, progressFn...)
-}
-
-func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, bookCountFn func(int) int, seriesMap map[int][]string, progressFn ...ProgressCallback) []AuthorDedupGroup {
 	var reportProgress ProgressCallback
 	if len(progressFn) > 0 && progressFn[0] != nil {
 		reportProgress = progressFn[0]
@@ -622,20 +484,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	precomputed := make([]authorPrecomputed, len(authors))
 	lastNameBuckets := make(map[string][]int) // lastLower → indices into precomputed
 	for i, a := range authors {
-		pre := authorPrecomputed{
-			index:  i,
-			author: a,
-		}
-		if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) {
-			pre.skip = true
-		} else {
-			pre.norm = strings.ToLower(NormalizeAuthorName(a.Name))
-			pre.base = strings.ToLower(extractBaseAuthor(NormalizeAuthorName(a.Name)))
-			pre.first, pre.last = splitAuthorParts(pre.base)
-			if pre.last != "" {
-				pre.lastLower = strings.ToLower(pre.last)
-			}
-		}
+		pre := newAuthorPrecomputed(i, a)
 		precomputed[i] = pre
 
 		// Bucket by last name for faster comparison
@@ -783,7 +632,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 					// Screen on length before paying for the real
 					// comparison. jaroWinklerSimilarity allocates two rune
 					// slices and two match bitmaps per call. The length test
-					// is provably conservative (see jaroWinklerBelowThreshold's
+					// is provably conservative (see jaroWinklerMinLengthRatio's
 					// doc comment), so this changes only the cost, not the
 					// outcome; it discards ~61% of pairs on the real corpus.
 					if lengthRatioBelowThreshold(lastNameRunes[li], lastNameRunes[lj], minRatio) {
@@ -850,86 +699,6 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 		}
 	}
 
-	// Phase 3.5: Series cross-reference — if two authors share a series and their
-	// names are close (JW >= 0.80 on last name), treat them as duplicates.
-	// This catches cases like "James S. A. Corey" vs "J. S. A. Corey" when the
-	// name similarity alone falls below the strict threshold.
-	if len(seriesMap) > 0 {
-		for li := 0; li < len(lastNames); li++ {
-			bucketI := lastNameBuckets[lastNames[li]]
-			for lj := li; lj < len(lastNames); lj++ {
-				lastSim := jaroWinklerSimilarity(lastNames[li], lastNames[lj])
-				if lastSim < 0.80 {
-					continue // last names too different even with series signal
-				}
-				bucketJ := lastNameBuckets[lastNames[lj]]
-				for _, i := range bucketI {
-					pi := &precomputed[i]
-					if used[pi.author.ID] || pi.skip {
-						continue
-					}
-					for _, j := range bucketJ {
-						if li == lj && j <= i {
-							continue // same bucket, skip already-checked pairs
-						}
-						pj := &precomputed[j]
-						if used[pj.author.ID] || pj.skip || pj.author.ID == pi.author.ID {
-							continue
-						}
-						// Only apply series signal when name similarity alone is borderline
-						if areAuthorsDuplicatePrecomputed(pi, pj) {
-							continue // already would have been caught in phases 2/3
-						}
-						if !sharesSeries(seriesMap[pi.author.ID], seriesMap[pj.author.ID]) {
-							continue
-						}
-						// First-name compatibility check — series match alone isn't enough
-						// if first names are clearly different
-						if pi.first != "" && pj.first != "" {
-							firstSim := jaroWinklerSimilarity(pi.first, pj.first)
-							if firstSim < 0.60 && !isInitialMatch(pi.first, pj.first) {
-								continue // first names are clearly different people
-							}
-						}
-						// Merge as duplicates
-						found := false
-						for gi := range groups {
-							if groups[gi].Canonical.ID == pi.author.ID {
-								groups[gi].Variants = append(groups[gi].Variants, pj.author)
-								used[pj.author.ID] = true
-								groups[gi].BookCount += bookCountFn(pj.author.ID)
-								found = true
-								break
-							}
-						}
-						if !found {
-							used[pi.author.ID] = true
-							used[pj.author.ID] = true
-							allInGroup := []database.Author{pi.author, pj.author}
-							canonical := pickCanonicalAuthor(allInGroup, bookCountFn)
-							var variants []database.Author
-							for _, a := range allInGroup {
-								if a.ID != canonical.ID {
-									variants = append(variants, a)
-								}
-							}
-							suggested := buildSuggestedName(allInGroup)
-							g := AuthorDedupGroup{
-								Canonical: canonical,
-								Variants:  variants,
-								BookCount: bookCountFn(pi.author.ID) + bookCountFn(pj.author.ID),
-							}
-							if suggested != "" && suggested != canonical.Name {
-								g.SuggestedName = suggested
-							}
-							groups = append(groups, g)
-						}
-					}
-				}
-			}
-		}
-	}
-
 	if reportProgress != nil {
 		reportProgress(len(authors), len(authors), fmt.Sprintf("Comparison complete: %d groups found", len(groups)))
 	}
@@ -973,8 +742,9 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	return groups
 }
 
-// areAuthorsDuplicatePrecomputed is a faster version of areAuthorsDuplicate
-// that uses pre-computed normalized names to avoid redundant string operations.
+// areAuthorsDuplicatePrecomputed is an author-pair predicate over pre-computed
+// normalized names, which avoids redundant string operations in the O(n^2)
+// scan.
 func areAuthorsDuplicatePrecomputed(a, b *authorPrecomputed) bool {
 	// Exact normalized match
 	if a.norm == b.norm {

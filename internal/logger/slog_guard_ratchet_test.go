@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-17
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 280
-	slogRatchetCallCeiling = 1559
+	slogRatchetFileCeiling = 279
+	slogRatchetCallCeiling = 1558
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -95,7 +95,6 @@ var slogRatchet = map[string]int{
 	"internal/database/sql_activity_relocate.go":                 4,
 	"internal/database/sql_activity_store.go":                    7,
 	"internal/database/transcribe_stats.go":                      1,
-	"internal/dedup/author.go":                                   1,
 	"internal/dedup/auto_resolve.go":                             6,
 	"internal/dedup/book_dedup.go":                               2,
 	"internal/dedup/collectors_acoustid.go":                      10,

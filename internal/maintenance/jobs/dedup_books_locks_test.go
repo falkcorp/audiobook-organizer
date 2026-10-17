@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books_locks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c1d4e9b-3a72-4f58-b0e6-8d2a5c7f1e34
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package jobs
 
@@ -61,8 +61,8 @@ func ddDup() *database.Book {
 func TestDDMergeDuplicateBook_KeeperLockedBlankStaysBlank(t *testing.T) {
 	store, writes := ddLockFixture(t, []string{database.FieldKeyNarrator}, nil)
 
-	if err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, ddDup(), false); err != nil {
-		t.Fatalf("ddMergeDuplicateBook: %v", err)
+	if err := ddMergeDuplicateBookSim(store, nil, &database.Book{ID: "keep"}, ddDup(), false); err != nil {
+		t.Fatalf("ddMergeDuplicateBookSim: %v", err)
 	}
 	keeper := writes["keep"]
 	if keeper == nil {
@@ -84,7 +84,7 @@ func TestDDMergeDuplicateBook_KeeperLockedBlankStaysBlank(t *testing.T) {
 func TestDDMergeDuplicateBook_LockReadErrorLeavesBothRows(t *testing.T) {
 	store, writes := ddLockFixture(t, nil, errors.New("pebble: closed"))
 
-	err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, ddDup(), false)
+	err := ddMergeDuplicateBookSim(store, nil, &database.Book{ID: "keep"}, ddDup(), false)
 	if !errors.Is(err, database.ErrFieldLocksUnavailable) {
 		t.Fatalf("err = %v, want ErrFieldLocksUnavailable", err)
 	}

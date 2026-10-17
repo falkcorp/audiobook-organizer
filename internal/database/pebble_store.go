@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.221.0
+// version: 1.221.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package database
 
@@ -1726,8 +1726,7 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 	}
 	// Full-fidelity read: fold in the book_sig: sidecar. This is THE hydration
 	// point — every signature consumer in the codebase reaches its Book through
-	// here (dedup's bookSignature and its AcoustID-conflict cache,
-	// dataset/builder's StoreAdapter.GetBook, registry deps' ReqFieldSet
+	// here (dataset/builder's StoreAdapter.GetBook, registry deps' ReqFieldSet
 	// predicate, acoustid's synthesize read-modify-write, both of
 	// booksig_recovery_audit's reads, UpdateBook's own oldBook fetch, and
 	// GetAllBooksFullFrom's memdb branch, which point-gets each ID through this

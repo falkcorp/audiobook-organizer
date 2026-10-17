@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_composite_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -14,7 +14,6 @@ package dedup
 // the collector + ComposeScore pipeline in isolation.
 
 import (
-	"context"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -22,28 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// ─── EmbeddingStore mock ──────────────────────────────────────────────────────
-
-// stubEmbedStore implements EmbeddingStore for tests.
-type stubEmbedStore struct {
-	GetFunc  func(entityType, entityID string) (*database.Embedding, error)
-	FindFunc func(entityType string, vector []float32, minSim float32, limit int) ([]database.SimilarityResult, error)
-}
-
-func (s *stubEmbedStore) Get(entityType, entityID string) (*database.Embedding, error) {
-	if s.GetFunc != nil {
-		return s.GetFunc(entityType, entityID)
-	}
-	return nil, nil
-}
-
-func (s *stubEmbedStore) FindSimilar(entityType string, vector []float32, minSim float32, limit int) ([]database.SimilarityResult, error) {
-	if s.FindFunc != nil {
-		return s.FindFunc(entityType, vector, minSim, limit)
-	}
-	return nil, nil
-}
 
 // ─── acceptance criterion test ────────────────────────────────────────────────
 
@@ -218,59 +195,6 @@ func TestCollectMetaSrcHash_EmitsSignalForSharedHash(t *testing.T) {
 	require.Len(t, sigs, 1, "expected one SigMetaSrcHash signal")
 	assert.Equal(t, unified.SigMetaSrcHash, sigs[0].Kind)
 	assert.Equal(t, 0.97, sigs[0].Confidence)
-}
-
-// TestCollectEmbedding_EmitsTwoTiers checks that CollectEmbedding correctly
-// emits SigEmbedHigh for cosine ≥ 0.95 and SigEmbedMedium for 0.85 ≤ cos < 0.95.
-func TestCollectEmbedding_EmitsTwoTiers(t *testing.T) {
-	vec := []float32{0.1, 0.2, 0.3}
-	stubES := &stubEmbedStore{
-		GetFunc: func(entityType, entityID string) (*database.Embedding, error) {
-			if entityType == "book" && entityID == "BOOK_A" {
-				return &database.Embedding{EntityType: "book", EntityID: "BOOK_A", Vector: vec}, nil
-			}
-			return nil, nil
-		},
-		FindFunc: func(entityType string, vector []float32, minSim float32, limit int) ([]database.SimilarityResult, error) {
-			return []database.SimilarityResult{
-				{EntityID: "BOOK_B", Similarity: 0.97}, // HIGH
-				{EntityID: "BOOK_C", Similarity: 0.87}, // MEDIUM
-				{EntityID: "BOOK_A", Similarity: 0.99}, // self — must be skipped
-			}, nil
-		},
-	}
-
-	cfg := DefaultEmbeddingCollectorConfig()
-	sigs, err := CollectEmbedding(context.Background(), stubES, nil, "BOOK_A", cfg)
-	require.NoError(t, err)
-	assert.Len(t, sigs, 2, "expected 2 signals (self skipped)")
-
-	highCount, medCount := 0, 0
-	for _, s := range sigs {
-		switch s.Kind {
-		case unified.SigEmbedHigh:
-			highCount++
-		case unified.SigEmbedMedium:
-			medCount++
-		}
-	}
-	assert.Equal(t, 1, highCount, "expected one SigEmbedHigh")
-	assert.Equal(t, 1, medCount, "expected one SigEmbedMedium")
-}
-
-// TestCollectEmbedding_NoEmbeddingReturnsNil checks that CollectEmbedding
-// returns nil when the book has no embedding.
-func TestCollectEmbedding_NoEmbeddingReturnsNil(t *testing.T) {
-	stubES := &stubEmbedStore{
-		GetFunc: func(entityType, entityID string) (*database.Embedding, error) {
-			return nil, nil // no embedding
-		},
-	}
-
-	cfg := DefaultEmbeddingCollectorConfig()
-	sigs, err := CollectEmbedding(context.Background(), stubES, nil, "BOOK_X", cfg)
-	require.NoError(t, err)
-	assert.Nil(t, sigs)
 }
 
 // TestCollectMetaFuzzy_EmitsSignalForSimilarTitles verifies that

@@ -1,7 +1,7 @@
 // file: internal/dedup/author_bench_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c0d4e918-6b57-42fa-8e13-9a72b5f04c8d
-// last-edited: 2026-08-24
+// last-edited: 2026-10-17
 
 package dedup
 
@@ -126,7 +126,7 @@ func BenchmarkJaroWinklerPrefilterVsFull(b *testing.B) {
 	b.Run("prefilter_then_full", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			p := pairs[i%len(pairs)]
-			if jaroWinklerBelowThreshold(p[0], p[1], 0.95) {
+			if belowByLength(p[0], p[1], 0.95) {
 				continue
 			}
 			_ = jaroWinklerSimilarity(p[0], p[1])
