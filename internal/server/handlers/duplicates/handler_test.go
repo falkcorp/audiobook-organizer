@@ -1,14 +1,15 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
-// audiobook-service / metadata-fetch-service / operations-registry deps are
-// generated mocks; the injected helper funcs (getMergeService,
-// dismissDedupGroup, computeSeriesPrunePreview) are stub
+// metadata-fetch-service / operations-registry deps are generated mocks; the
+// injected helper funcs (getMergeService, computeSeriesPrunePreview) are stub
 // closures that record their invocations or return canned payloads. There is at
-// least one test per public method (17 methods).
+// least one test per public method (15 methods). The five retired
+// /audiobooks/duplicates handlers went with 03-PR12; their 410 stubs are
+// tested in package server (wire_dedup_routes_gone_test.go).
 
 package duplicates_test
 
@@ -26,7 +27,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -43,7 +43,6 @@ func init() { gin.SetMode(gin.TestMode) }
 // recorders captures the side effects of the injected helper closures so tests
 // can assert they fired.
 type recorders struct {
-	dismissedKeys      []string
 	prunePreviewCalls  int
 	prunePreviewResult any
 	prunePreviewErr    error
@@ -53,7 +52,6 @@ type testDeps struct {
 	store    *duplicatesmocks.MockDuplicatesStore
 	reg      *duplicatesmocks.MockOperationsRegistry
 	merge    *duplicatesmocks.MockMergeService
-	audSvc   *duplicatesmocks.MockAudiobookService
 	metaSvc  *duplicatesmocks.MockMetadataFetchService
 	dedupEng *duplicatesmocks.MockDedupEngine
 	cache    *cache.Cache[gin.H]
@@ -61,7 +59,7 @@ type testDeps struct {
 }
 
 type cfg struct {
-	hasReg, hasMerge, hasAud, hasMeta, hasDedupEng bool
+	hasReg, hasMerge, hasMeta, hasDedupEng bool
 }
 
 func noReg(c *cfg) { c.hasReg = false }
@@ -71,7 +69,7 @@ func noReg(c *cfg) { c.hasReg = false }
 // exercise the in-method nil guards.
 func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps) {
 	t.Helper()
-	cf := &cfg{hasReg: true, hasMerge: true, hasAud: true, hasMeta: true, hasDedupEng: true}
+	cf := &cfg{hasReg: true, hasMerge: true, hasMeta: true, hasDedupEng: true}
 	for _, o := range opts {
 		o(cf)
 	}
@@ -79,7 +77,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	store := duplicatesmocks.NewMockDuplicatesStore(t)
 	reg := duplicatesmocks.NewMockOperationsRegistry(t)
 	mergeMock := duplicatesmocks.NewMockMergeService(t)
-	audMock := duplicatesmocks.NewMockAudiobookService(t)
 	metaMock := duplicatesmocks.NewMockMetadataFetchService(t)
 	dedupEngMock := duplicatesmocks.NewMockDedupEngine(t)
 	dc := cache.New[gin.H]("dedup-test", time.Minute)
@@ -88,10 +85,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	var regArg duplicates.OperationsRegistry
 	if cf.hasReg {
 		regArg = reg
-	}
-	var audArg duplicates.AudiobookService
-	if cf.hasAud {
-		audArg = audMock
 	}
 	var metaArg duplicates.MetadataFetchService
 	if cf.hasMeta {
@@ -106,7 +99,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 		store,
 		dc,
 		regArg,
-		audArg,
 		metaArg,
 		func() duplicates.MergeService {
 			if cf.hasMerge {
@@ -115,13 +107,12 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 			return nil
 		},
 		dedupEngArg,
-		func(groupKey string) { rec.dismissedKeys = append(rec.dismissedKeys, groupKey) },
 		func() (any, error) {
 			rec.prunePreviewCalls++
 			return rec.prunePreviewResult, rec.prunePreviewErr
 		},
 	)
-	return h, testDeps{store, reg, mergeMock, audMock, metaMock, dedupEngMock, dc, rec}
+	return h, testDeps{store, reg, mergeMock, metaMock, dedupEngMock, dc, rec}
 }
 
 // doReq drives a single handler with the supplied method/url/body.
@@ -166,138 +157,6 @@ func assertReturnsV2OpID(t *testing.T, w *httptest.ResponseRecorder) {
 	if body.Data.ID != "rid" {
 		t.Fatalf("want the v2 op id %q from EnqueueOp, got %q -- body %s",
 			"rid", body.Data.ID, w.Body.String())
-	}
-}
-
-// --- ListDuplicateAudiobooks ---
-
-func TestListDuplicateAudiobooks_CacheMiss(t *testing.T) {
-	h, d := newHandler(t)
-	d.audSvc.EXPECT().GetDuplicateBooks(mock.Anything).Return(&audiobookspkg.DuplicatesResult{
-		Groups:         [][]database.Book{{{ID: "a"}, {ID: "b"}}},
-		GroupCount:     1,
-		DuplicateCount: 2,
-	}, nil)
-	w := doReq(t, h.ListDuplicateAudiobooks, http.MethodGet, "/audiobooks/duplicates", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	// second call should hit the cache (no further mock calls expected)
-	w2 := doReq(t, h.ListDuplicateAudiobooks, http.MethodGet, "/audiobooks/duplicates", nil)
-	if w2.Code != http.StatusOK {
-		t.Fatalf("cached call want 200, got %d", w2.Code)
-	}
-}
-
-// --- ListBookDuplicateScanResults ---
-
-func TestListBookDuplicateScanResults_EmptyNeedsRefresh(t *testing.T) {
-	h, _ := newHandler(t)
-	w := doReq(t, h.ListBookDuplicateScanResults, http.MethodGet, "/audiobooks/duplicates/scan-results", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
-	}
-	if !bytes.Contains(w.Body.Bytes(), []byte("needs_refresh")) {
-		t.Fatalf("expected needs_refresh in body, got %s", w.Body.String())
-	}
-}
-
-// --- ScanBookDuplicates ---
-
-func TestScanBookDuplicates_Enqueues202(t *testing.T) {
-	h, d := newHandler(t)
-	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-scan", mock.Anything).Return("rid", nil)
-	w := doReq(t, h.ScanBookDuplicates, http.MethodPost, "/audiobooks/duplicates/scan", nil)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
-	}
-	assertReturnsV2OpID(t, w)
-}
-
-func TestScanBookDuplicates_NoRegistry(t *testing.T) {
-	h, _ := newHandler(t, noReg)
-	w := doReq(t, h.ScanBookDuplicates, http.MethodPost, "/audiobooks/duplicates/scan", nil)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500, got %d", w.Code)
-	}
-}
-
-// --- LinkBookDuplicatesAsVersions ---
-
-func TestLinkBookDuplicatesAsVersions_OK(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks([]string{"a", "b"}, "").Return(&merge.Result{
-		PrimaryID: "a", VersionGroupID: "vg1", MergedCount: 2,
-	}, nil)
-	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b"}).Return(1)
-	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
-		map[string]any{"book_ids": []string{"a", "b"}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestLinkBookDuplicatesAsVersions_TooFew(t *testing.T) {
-	h, _ := newHandler(t)
-	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
-		map[string]any{"book_ids": []string{"a"}})
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestLinkBookDuplicatesAsVersions_NotFound(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.BookNotFoundError{BookID: "b"})
-	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
-		map[string]any{"book_ids": []string{"a", "b"}})
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "b") {
-		t.Fatalf("404 must name the missing book, got %s", w.Body.String())
-	}
-}
-
-// A "not found" that is only a substring of some other error's text is NOT a
-// 404: the handler maps the typed error, not the wording. Before 2026-09-02 a
-// store failure mentioning a not-found index would have been reported as a
-// missing book.
-func TestLinkBookDuplicatesAsVersions_UntypedNotFoundTextIs500(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, errString("index shard not found while loading"))
-	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
-		map[string]any{"book_ids": []string{"a", "b"}})
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-// The service refusing the merge because a participant is soft-deleted is the
-// caller's problem to see, not a server fault: 409 with the service's reason.
-func TestLinkBookDuplicatesAsVersions_SoftDeletedInputIs409(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.SoftDeletedInputError{BookID: "b", AsPrimary: true})
-	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
-		map[string]any{"book_ids": []string{"a", "b"}})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "b") {
-		t.Fatalf("409 must carry the service's reason naming the book, got %s", w.Body.String())
-	}
-}
-
-func TestLinkBookDuplicatesAsVersions_ProvisionalIs409(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.ProvisionalScanError{BookID: "b"})
-	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
-		map[string]any{"book_ids": []string{"a", "b"}})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "deep scan") {
-		t.Fatalf("409 must carry the actionable reason, got %s", w.Body.String())
 	}
 }
 
@@ -352,17 +211,47 @@ func TestCombineBooks_FilelessPrimaryIs409WithReason(t *testing.T) {
 	}
 }
 
-// --- RejectBookDuplicateGroup ---
-
-func TestRejectBookDuplicateGroup_OK(t *testing.T) {
+// A "not found" that is only a substring of some other error's text is NOT a
+// 404: respondMergeError maps the typed error, not the wording. Before
+// 2026-09-02 a store failure mentioning a not-found index would have been
+// reported as a missing book. (Ported from the retired link-as-versions
+// handler's tests, 03-PR12: CombineBooks is respondMergeError's remaining
+// caller.)
+func TestCombineBooks_UntypedNotFoundTextIs500(t *testing.T) {
 	h, d := newHandler(t)
-	w := doReq(t, h.RejectBookDuplicateGroup, http.MethodPost, "/audiobooks/duplicates/reject",
-		map[string]any{"group_key": "k1"})
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, errString("index shard not found while loading"))
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
-	if len(d.rec.dismissedKeys) != 1 || d.rec.dismissedKeys[0] != "k1" {
-		t.Fatalf("expected dismiss closure called with k1, got %v", d.rec.dismissedKeys)
+}
+
+// The service refusing because a participant is soft-deleted is the caller's
+// problem to see, not a server fault: 409 with the service's reason.
+func TestCombineBooks_SoftDeletedInputIs409(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.SoftDeletedInputError{BookID: "b", AsPrimary: false})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "b") {
+		t.Fatalf("409 must carry the service's reason naming the book, got %s", w.Body.String())
+	}
+}
+
+func TestCombineBooks_ProvisionalIs409(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.ProvisionalScanError{BookID: "b"})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "deep scan") {
+		t.Fatalf("409 must carry the actionable reason, got %s", w.Body.String())
 	}
 }
 
@@ -422,6 +311,16 @@ func TestRefreshDuplicateAuthors_Enqueues202(t *testing.T) {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
 	assertReturnsV2OpID(t, w)
+}
+
+// launchOp's nil-registry guard answers 500 rather than panicking. (Ported
+// from the retired book-scan trigger's test, 03-PR12.)
+func TestRefreshDuplicateAuthors_NoRegistry(t *testing.T) {
+	h, _ := newHandler(t, noReg)
+	w := doReq(t, h.RefreshDuplicateAuthors, http.MethodPost, "/authors/duplicates/refresh", nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
 }
 
 // --- ListSeriesDuplicates ---

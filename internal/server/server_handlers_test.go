@@ -1,7 +1,7 @@
 // file: internal/server/server_handlers_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-17
 
 package server
 
@@ -234,42 +234,6 @@ func TestSoftDeleteOperations(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/soft-deleted", nil)
 	w = httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
-	assert.True(t, w.Code == 200 || w.Code == 404)
-}
-
-// TestDuplicateDetectionEndpoint tests duplicate detection
-func TestDuplicateDetectionEndpoint(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	tempDir := t.TempDir()
-
-	// Create books with same hash to simulate duplicates
-	sharedHash := "dup_hash_123"
-	file1 := filepath.Join(tempDir, "dup1.m4b")
-	file2 := filepath.Join(tempDir, "dup2.m4b")
-	os.WriteFile(file1, []byte("same"), 0o644)
-	os.WriteFile(file2, []byte("same"), 0o644)
-
-	database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Dup 1",
-		FilePath: file1,
-		FileHash: &sharedHash,
-		Format:   "m4b",
-	})
-
-	database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Dup 2",
-		FilePath: file2,
-		FileHash: &sharedHash,
-		Format:   "m4b",
-	})
-
-	// Get duplicates
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/duplicates", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
 	assert.True(t, w.Code == 200 || w.Code == 404)
 }
 

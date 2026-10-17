@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-08
+// last-edited: 2026-10-17
 
 package server
 
@@ -1038,20 +1038,6 @@ func TestCoverageBookSubresources(t *testing.T) {
 func TestCoverageDuplicateEndpoints(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-
-	t.Run("list duplicate audiobooks", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/duplicates", nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
-
-	t.Run("list duplicate scan results", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/duplicates/scan-results", nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
 
 	t.Run("list duplicate authors", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/authors/duplicates", nil)

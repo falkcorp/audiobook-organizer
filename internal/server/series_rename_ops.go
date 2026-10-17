@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-15
+// last-edited: 2026-10-17
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -139,13 +139,13 @@ func (s *Server) invalidateSeriesCaches() {
 	}
 }
 
-// invalidateBookDuplicateCaches drops the caches an undone book merge makes
-// stale: the book duplicate scan and its group list. The merge-undo route
-// (duplicates.Handler.UndoCombine) drops the same two keys.
+// invalidateBookDuplicateCaches drops the cache an undone book merge makes
+// stale: the book duplicate scan's result. The merge-undo route
+// (duplicates.Handler.UndoCombine) drops the same key. (The group-list key
+// "book-duplicates" went with GET /audiobooks/duplicates, 03-PR12.)
 func (s *Server) invalidateBookDuplicateCaches() {
 	if s.dedupCache != nil {
 		s.dedupCache.Invalidate("book-dedup-scan")
-		s.dedupCache.Invalidate("book-duplicates")
 	}
 }
 

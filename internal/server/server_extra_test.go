@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-17
 
 package server
 
@@ -68,44 +68,20 @@ func TestServerHelpers(t *testing.T) {
 	SetEmbeddedFS(embed.FS{})
 }
 
-func TestDuplicateAndSoftDeleteEndpoints(t *testing.T) {
+// TestSoftDeleteEndpoints drives the soft-delete list, purge and restore
+// routes.
+func TestSoftDeleteEndpoints(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	tempDir := t.TempDir()
-	file1 := filepath.Join(tempDir, "dup1.m4b")
-	file2 := filepath.Join(tempDir, "dup2.m4b")
-	require.NoError(t, os.WriteFile(file1, []byte("audio"), 0o644))
-	require.NoError(t, os.WriteFile(file2, []byte("audio"), 0o644))
-
-	hash := "dup-hash"
-	_, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:             "Dup One",
-		FilePath:          file1,
-		FileHash:          &hash,
-		OrganizedFileHash: &hash,
-	})
-	require.NoError(t, err)
-	_, err = database.GetGlobalStore().CreateBook(&database.Book{
-		Title:             "Dup Two",
-		FilePath:          file2,
-		FileHash:          &hash,
-		OrganizedFileHash: &hash,
-	})
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/duplicates", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
 	// The purge deletes only inside the library root (purgePathInsideRoot,
 	// 2026-10-06), so the file lives under RootDir.
 	softFile := filepath.Join(config.AppConfig.RootDir, "soft.m4b")
 	require.NoError(t, os.WriteFile(softFile, []byte("audio"), 0o644))
 	marked := true
 	deletedAt := time.Now().Add(-24 * time.Hour)
-	_, err = database.GetGlobalStore().CreateBook(&database.Book{
+	_, err := database.GetGlobalStore().CreateBook(&database.Book{
 		Title:               "Soft Delete",
 		FilePath:            softFile,
 		MarkedForDeletion:   &marked,
@@ -113,8 +89,8 @@ func TestDuplicateAndSoftDeleteEndpoints(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/soft-deleted?limit=10", nil)
-	w = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/soft-deleted?limit=10", nil)
+	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 

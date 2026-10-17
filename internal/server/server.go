@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.96.0
+// version: 2.97.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package server
 
@@ -1253,8 +1253,6 @@ type serverOrganizeHooks struct {
 // renamed, or deleted — only hardlinked or copied to the organized library.
 
 // loadDismissedDedupGroups loads the set of dismissed dedup group keys from user preferences.
-
-// saveDismissedDedupGroups saves the set of dismissed dedup group keys to user preferences.
 
 // triggerITunesSync finds the library path from DB and enqueues a sync if the file changed.
 

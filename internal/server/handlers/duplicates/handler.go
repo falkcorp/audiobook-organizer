@@ -1,18 +1,21 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
-// extracted from the server package's duplicates_handlers.go: book / author /
-// series duplicate listing, async scan / link / reject triggers, series
-// prune preview + apply, deduplicate, and dedup-entry metadata validation.
+// extracted from the server package's duplicates_handlers.go: author / series
+// duplicate listing, async link / refresh triggers, combine and its undo,
+// series prune preview + apply, deduplicate, and dedup-entry metadata
+// validation. The book-duplicate listing, scan, link-as-versions and reject
+// handlers were retired with the old /dedup page (03-PR12); their routes answer
+// 410 Gone from package server.
 // (Series normalize has no handler here any more; it runs only as an op.)
 // Distinct from the embedding-based dedup flow in handlers/dedup.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (DuplicatesStore, OperationsRegistry, MergeService,
-// MetadataFetchService, AudiobookService) plus the concrete
+// MetadataFetchService, DedupEngine) plus the concrete
 // *cache.Cache[gin.H] (the dedup cache — a clean generic type held by pointer,
 // the established cache exception) and a set of INJECTED func fields that wrap
 // helpers which STAY in package server because they are shared with files that
@@ -22,7 +25,7 @@
 // package server.
 //
 // The store is a WIRE-TIME SNAPSHOT (assigned once in New, never swapped after
-// that). opRegistry / mergeService / audiobookService / metadataFetchService are
+// that). opRegistry / mergeService / metadataFetchService are
 // also interface snapshots taken at wire time (assigned once before setupRoutes,
 // never swapped), each guarded against typed-nil boxing by the controller.
 
@@ -50,8 +53,8 @@ type Handler struct {
 	store DuplicatesStore
 
 	// dedupCache is the concrete *cache.Cache[gin.H] the original handlers read /
-	// wrote directly (book-duplicates / author-duplicates / series-duplicates /
-	// book-dedup-scan keys). Passed concrete (the cache exception) because it is a
+	// wrote directly (author-duplicates / series-duplicates keys; the
+	// book-dedup-scan key is only invalidated here, after a combine or an undo). Passed concrete (the cache exception) because it is a
 	// clean generic db-adjacent type under heavy multi-method use; the handler
 	// nil-checks it where the original did.
 	dedupCache *cache.Cache[gin.H]
@@ -62,22 +65,19 @@ type Handler struct {
 	// `s.opRegistry == nil` checks) hold.
 	opRegistry OperationsRegistry
 
-	// audiobookService backs listDuplicateAudiobooks (GetDuplicateBooks).
-	// Interface snapshot, typed-nil guarded by the controller.
-	audiobookService AudiobookService
-
 	// metadataFetchService backs validateDedupEntry (BuildSourceChain). Interface
 	// snapshot, typed-nil guarded by the controller.
 	metadataFetchService MetadataFetchService
 
-	// getMergeService resolves the merge service for mergeBookDuplicatesAsVersions.
+	// getMergeService resolves the merge service for combineBooks and the
+	// combine / sibling-move undo handlers.
 	// The original handler used s.mergeService when non-nil, else constructed
 	// merge.NewService(s.Ops()). The controller closes over that exact fallback
 	// so this package needs neither the merge constructor nor a server import.
 	getMergeService func() MergeService
 
 	// dedupEngine backs the post-merge orphan-candidate sweep for
-	// mergeBookDuplicatesAsVersions and combineBooks (mirrors the sweep the
+	// combineBooks (mirrors the sweep the
 	// dedup handler package already runs after its own per-candidate Merge
 	// button). Interface snapshot, typed-nil guarded by the controller; nil is
 	// tolerated (skips the sweep) since CleanupCandidatesAfterMerge itself
@@ -85,11 +85,6 @@ type Handler struct {
 	dedupEngine DedupEngine
 
 	// --- injected funcs wrapping helpers that stay in package server ---
-
-	// dismissDedupGroup wraps the loadDismissedDedupGroups / saveDismissedDedupGroups
-	// pair (defined in server_middleware.go, package server, operating on a full
-	// database.Store). dismissBookDuplicateGroup calls it with the group key.
-	dismissDedupGroup func(groupKey string)
 
 	// computeSeriesPrunePreview wraps the server-resident computeSeriesPrunePreview
 	// (server_title_helpers.go) over the live store, returning the preview payload
@@ -102,67 +97,20 @@ func New(
 	store DuplicatesStore,
 	dedupCache *cache.Cache[gin.H],
 	opRegistry OperationsRegistry,
-	audiobookService AudiobookService,
 	metadataFetchService MetadataFetchService,
 	getMergeService func() MergeService,
 	dedupEngine DedupEngine,
-	dismissDedupGroup func(groupKey string),
 	computeSeriesPrunePreview func() (any, error),
 ) *Handler {
 	return &Handler{
 		store:                     store,
 		dedupCache:                dedupCache,
 		opRegistry:                opRegistry,
-		audiobookService:          audiobookService,
 		metadataFetchService:      metadataFetchService,
 		getMergeService:           getMergeService,
 		dedupEngine:               dedupEngine,
-		dismissDedupGroup:         dismissDedupGroup,
 		computeSeriesPrunePreview: computeSeriesPrunePreview,
 	}
-}
-
-// ListDuplicateAudiobooks handles GET /audiobooks/duplicates.
-func (h *Handler) ListDuplicateAudiobooks(c *gin.Context) {
-	if h.dedupCache != nil {
-		if cached, ok := h.dedupCache.Get("book-duplicates"); ok {
-			httputil.RespondWithOK(c, cached)
-			return
-		}
-	}
-
-	if h.audiobookService == nil {
-		httputil.RespondWithInternalError(c, "audiobook service not initialized")
-		return
-	}
-
-	result, err := h.audiobookService.GetDuplicateBooks(c.Request.Context())
-	if err != nil {
-		httputil.InternalError(c, "failed to list duplicate audiobooks", err)
-		return
-	}
-
-	resp := gin.H{
-		"groups":          result.Groups,
-		"group_count":     result.GroupCount,
-		"duplicate_count": result.DuplicateCount,
-	}
-	if h.dedupCache != nil {
-		h.dedupCache.Set("book-duplicates", resp)
-	}
-	httputil.RespondWithOK(c, resp)
-}
-
-// ListBookDuplicateScanResults returns cached results from the last async
-// book-dedup scan. GET /audiobooks/duplicates/scan-results.
-func (h *Handler) ListBookDuplicateScanResults(c *gin.Context) {
-	if h.dedupCache != nil {
-		if cached, ok := h.dedupCache.Get("book-dedup-scan"); ok {
-			httputil.RespondWithOK(c, cached)
-			return
-		}
-	}
-	httputil.RespondWithOK(c, gin.H{"groups": []any{}, "group_count": 0, "duplicate_count": 0, "needs_refresh": true})
 }
 
 // dupOpResponse is the 202 body every async duplicates trigger returns.
@@ -225,13 +173,6 @@ func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params 
 	})
 }
 
-// ScanBookDuplicates triggers an async scan for book duplicates using metadata
-// matching. POST /audiobooks/duplicates/scan.
-func (h *Handler) ScanBookDuplicates(c *gin.Context) {
-	h.launchOp(c, "dedup.book-scan", "book-dedup-scan", "book-dedup-scan",
-		bookDedupScanOpParams{})
-}
-
 // respondMergeError maps the merge service's typed refusals onto HTTP. A
 // missing book is 404 naming the ID. A refusal of the CALLER'S choice — the
 // picked primary has no audio route while another book does, a participant is
@@ -245,9 +186,9 @@ func respondMergeError(c *gin.Context, err error, fallback string) {
 	case errors.As(err, &notFound):
 		httputil.RespondWithNotFound(c, "book", notFound.BookID)
 	case merge.IsRefusal(err):
-		// RespondWithConflict does not log. A soft-deleted participant on
-		// this endpoint means the duplicates listing served a stale row, so
-		// operators need the line even though the user got the reason.
+		// RespondWithConflict does not log. A soft-deleted participant means
+		// the caller picked from a stale view of the library, so operators
+		// need the line even though the user got the reason.
 		slog.Warn("merge refused", "path", logger.SanitizeLogValue(c.FullPath()), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
 		httputil.RespondWithConflict(c, err.Error())
 	default:
@@ -284,7 +225,6 @@ func (h *Handler) UndoCombine(c *gin.Context) {
 	}
 	if h.dedupCache != nil {
 		h.dedupCache.Invalidate("book-dedup-scan")
-		h.dedupCache.Invalidate("book-duplicates")
 	}
 	httputil.RespondWithOK(c, res)
 }
@@ -343,7 +283,6 @@ func (h *Handler) UndoSiblingMove(c *gin.Context) {
 	}
 	if h.dedupCache != nil {
 		h.dedupCache.Invalidate("book-dedup-scan")
-		h.dedupCache.Invalidate("book-duplicates")
 	}
 	httputil.RespondWithOK(c, res)
 }
@@ -384,68 +323,6 @@ func (h *Handler) ListSiblingMoveJournals(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
 }
 
-// LinkBookDuplicatesAsVersions links a group of duplicate books into a version
-// group (no files move; losers are soft-deleted book rows only).
-// POST /audiobooks/duplicates/link.
-//
-// Renamed from MergeBookDuplicatesAsVersions (naming-audit class "merge vs
-// link verbs", docs/audits/2026-09-25-interface-naming-consistency.md class
-// 2): despite the old verb "merge", this always performed a version-group
-// LINK, never a file-moving merge. The old path/name is registered as a
-// deprecated alias in wireDedupRoutes.
-func (h *Handler) LinkBookDuplicatesAsVersions(c *gin.Context) {
-	var req struct {
-		BookIDs []string `json:"book_ids" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-	if len(req.BookIDs) < 2 {
-		httputil.RespondWithBadRequest(c, "need at least 2 book IDs")
-		return
-	}
-
-	ms := h.getMergeService()
-	if ms == nil {
-		httputil.RespondWithInternalError(c, "merge service not initialized")
-		return
-	}
-
-	result, err := ms.MergeBooks(req.BookIDs, "")
-	if err != nil {
-		respondMergeError(c, err, "failed to merge duplicate books")
-		return
-	}
-
-	if h.dedupCache != nil {
-		h.dedupCache.Invalidate("book-dedup-scan")
-		h.dedupCache.Invalidate("book-duplicates")
-	}
-
-	if h.dedupEngine != nil {
-		h.dedupEngine.CleanupCandidatesAfterMerge(mergedAwayIDs(req.BookIDs, result.PrimaryID))
-	}
-
-	httputil.RespondWithOK(c, gin.H{
-		"message":          fmt.Sprintf("Merged %d books into version group", result.MergedCount),
-		"version_group_id": result.VersionGroupID,
-		"primary_id":       result.PrimaryID,
-		// Set when the merge carried a loser's version siblings along;
-		// POST /merge/sibling-undo/:id puts them back.
-		"sibling_journal_id": result.SiblingJournalID,
-		// Set when an organized version, not primary_id, holds the group's
-		// primary flag.
-		"group_primary_id": result.GroupPrimaryID,
-		// Set, with the reason, when Audiobookshelf will not list the merged
-		// title (merge.Result.HiddenFromABS).
-		"hidden_from_abs": result.HiddenFromABS,
-		// Set when the losers' user state and ABS ids went to a book other
-		// than primary_id (the flag holder).
-		"state_holder_id": result.StateHolderID,
-	})
-}
-
 // mergedAwayIDs returns ids minus the survivor, for handing to
 // DedupEngine.CleanupCandidatesAfterMerge after a successful merge/combine.
 func mergedAwayIDs(ids []string, primaryID string) []string {
@@ -458,41 +335,6 @@ func mergedAwayIDs(ids []string, primaryID string) []string {
 	return out
 }
 
-// RejectBookDuplicateGroup marks a book duplicate group as not-duplicates.
-// POST /audiobooks/duplicates/reject.
-//
-// Renamed from DismissBookDuplicateGroup (naming-audit class "dismiss vs
-// reject vs undo", docs/audits/2026-09-25-interface-naming-consistency.md
-// class 3) to match the review-queue and metadata-candidate vocabulary
-// ("reject"). The persisted "dismissed" group-key value is unchanged — only
-// the route/handler name moves. The old path/name is registered as a
-// deprecated alias in wireDedupRoutes.
-func (h *Handler) RejectBookDuplicateGroup(c *gin.Context) {
-	var req struct {
-		GroupKey string `json:"group_key" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-
-	store := h.store
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	// loadDismissedDedupGroups / saveDismissedDedupGroups stay in package server
-	// (server_middleware.go); the controller injects the load-modify-save pair.
-	h.dismissDedupGroup(req.GroupKey)
-
-	if h.dedupCache != nil {
-		h.dedupCache.Invalidate("book-dedup-scan")
-	}
-
-	httputil.RespondWithOK(c, gin.H{"message": "Group dismissed"})
-}
-
 // LinkBooks enqueues an async book-link operation (books become version-group
 // members; no files move). POST /audiobooks/link.
 //
@@ -500,12 +342,10 @@ func (h *Handler) RejectBookDuplicateGroup(c *gin.Context) {
 // docs/audits/2026-09-25-interface-naming-consistency.md class 2): the
 // underlying "dedup.book-merge" op routes through merge.Service.MergeBooks,
 // which links the losers into the winner's version group and soft-deletes
-// their book rows without touching any files on disk — the same operation
-// LinkBookDuplicatesAsVersions performs synchronously. The internal
+// their book rows without touching any files on disk. The internal
 // merge.Service.MergeBooks method name and the "dedup.book-merge" op ID are
 // unchanged (op IDs are a separate audit class with their own resumability
-// constraints). The old path/name is registered as a deprecated alias in
-// wireDedupRoutes.
+// constraints). The old POST /audiobooks/merge alias was removed (01-P72).
 func (h *Handler) LinkBooks(c *gin.Context) {
 	var req struct {
 		KeepID   string   `json:"keep_id" binding:"required"`
@@ -578,7 +418,6 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 
 	if h.dedupCache != nil {
 		h.dedupCache.Invalidate("book-dedup-scan")
-		h.dedupCache.Invalidate("book-duplicates")
 	}
 
 	if h.dedupEngine != nil {

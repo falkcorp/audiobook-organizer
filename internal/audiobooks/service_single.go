@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package audiobooks
 
@@ -249,90 +249,6 @@ func (svc *AudiobookService) extractBookFileMetadata(book *database.Book, author
 	}
 
 	return m
-}
-
-// coreGroupsToBookGroups widens [][]database.BookCore to [][]database.Book
-// via .ToBook() (heavy fields left at their zero value — never populated by
-// GetFolderDuplicatesCore in the first place, so this is not a lossy
-// conversion). Used at the store boundary so the shared merge logic below
-// (which only reads b.ID and stays []Book to match GetDuplicateBooks)
-// doesn't need its own Core variant.
-func coreGroupsToBookGroups(groups [][]database.BookCore) [][]database.Book {
-	if groups == nil {
-		return nil
-	}
-	out := make([][]database.Book, len(groups))
-	for i, group := range groups {
-		converted := make([]database.Book, len(group))
-		for j, c := range group {
-			converted[j] = c.ToBook()
-		}
-		out[i] = converted
-	}
-	return out
-}
-
-// GetDuplicateBooks retrieves all duplicate book groups
-func (svc *AudiobookService) GetDuplicateBooks(ctx context.Context) (*DuplicatesResult, error) {
-	if svc.store == nil {
-		return nil, fmt.Errorf("database not initialized")
-	}
-
-	// Get hash-based duplicates
-	duplicateGroups, err := svc.store.GetDuplicateBooks()
-	if err != nil {
-		return nil, err
-	}
-	if duplicateGroups == nil {
-		duplicateGroups = [][]database.Book{}
-	}
-
-	// Get folder-based duplicates (same title in same folder, e.g. M4B + MP3).
-	// Converted immediately at the store boundary — everything below only
-	// reads b.ID (Core-safe), so .ToBook() is a lossless widen, not the
-	// hydrate-before-writeback landmine (this path only reports duplicate
-	// groups; it never writes a book back).
-	folderGroupsCore, err := svc.store.GetFolderDuplicatesCore()
-	folderGroups := coreGroupsToBookGroups(folderGroupsCore)
-	if err != nil {
-		slog.Warn("folder duplicate detection failed", "err", err)
-	} else {
-		// Merge folder groups, avoiding duplicate groups already found by hash
-		seenBookIDs := map[string]bool{}
-		for _, group := range duplicateGroups {
-			for _, b := range group {
-				seenBookIDs[b.ID] = true
-			}
-		}
-		for _, group := range folderGroups {
-			// Skip if all books in this group are already in hash-based groups
-			allSeen := true
-			for _, b := range group {
-				if !seenBookIDs[b.ID] {
-					allSeen = false
-					break
-				}
-			}
-			if !allSeen {
-				duplicateGroups = append(duplicateGroups, group)
-				for _, b := range group {
-					seenBookIDs[b.ID] = true
-				}
-			}
-		}
-	}
-
-	// Calculate total duplicates count
-	totalDuplicates := 0
-	for _, group := range duplicateGroups {
-		totalDuplicates += len(group) - 1
-	}
-
-	return &DuplicatesResult{
-		Groups:         duplicateGroups,
-		GroupCount:     len(duplicateGroups),
-		DuplicateCount: totalDuplicates,
-	}, nil
 }
 
 // GetSoftDeletedBooks retrieves soft-deleted audiobooks with optional age filter

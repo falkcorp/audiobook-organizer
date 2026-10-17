@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-17
 
 package audiobooks
 
@@ -473,47 +473,6 @@ func TestAudiobookService_GetSoftDeletedBooks_NormalizesParams(t *testing.T) {
 	books, err := svc.GetSoftDeletedBooks(context.Background(), -1, -1, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, books, "nil from store should become empty slice")
-}
-
-// --- GetDuplicateBooks ---
-
-func TestAudiobookService_GetDuplicateBooks_NilStore(t *testing.T) {
-	svc := &AudiobookService{}
-	result, err := svc.GetDuplicateBooks(context.Background())
-	assert.Error(t, err)
-	assert.Nil(t, result)
-}
-
-func TestAudiobookService_GetDuplicateBooks_NoDuplicates(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
-
-	mockStore.EXPECT().GetDuplicateBooks().Return(nil, nil)
-	mockStore.EXPECT().GetFolderDuplicatesCore().Return(nil, nil)
-
-	result, err := svc.GetDuplicateBooks(context.Background())
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, 0, result.GroupCount)
-	assert.Equal(t, 0, result.DuplicateCount)
-	assert.Empty(t, result.Groups)
-}
-
-func TestAudiobookService_GetDuplicateBooks_CountsCorrectly(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
-
-	groups := [][]database.Book{
-		{{ID: "a"}, {ID: "b"}, {ID: "c"}}, // 2 duplicates
-		{{ID: "d"}, {ID: "e"}},            // 1 duplicate
-	}
-	mockStore.EXPECT().GetDuplicateBooks().Return(groups, nil)
-	mockStore.EXPECT().GetFolderDuplicatesCore().Return(nil, nil)
-
-	result, err := svc.GetDuplicateBooks(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, 2, result.GroupCount)
-	assert.Equal(t, 3, result.DuplicateCount) // (3-1) + (2-1) = 3
 }
 
 // --- User Tags ---
