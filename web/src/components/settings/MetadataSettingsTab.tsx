@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-09-12
+// last-edited: 2026-10-17
 import { Dispatch, SetStateAction } from 'react';
 import {
   Box,
@@ -43,7 +43,6 @@ interface MetadataSettingsTabProps {
     enableAIParsing: boolean;
     openaiApiKey: string;
     metadataSources: UiMetadataSource[];
-    language: string;
   };
   setSettings: Dispatch<SetStateAction<any>>;
   handleChange: (field: string, value: string | boolean | number | string[]) => void;
@@ -397,21 +396,6 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
             </Box>
           ))}
         </Paper>
-      </Grid>
-
-      <Grid
-        size={{
-          xs: 12,
-          sm: 6,
-        }}
-      >
-        <TextField
-          fullWidth
-          label="Default Language"
-          value={settings.language}
-          onChange={(e) => handleChange('language', e.target.value)}
-          helperText="ISO 639-1 language code (e.g., en, es, fr)"
-        />
       </Grid>
 
       {/* Open Library Data Dumps Section */}

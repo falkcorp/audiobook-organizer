@@ -1,7 +1,7 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
-// last-edited: 2026-10-10
+// last-edited: 2026-10-17
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -851,33 +851,6 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           label="Enable per-user storage quotas (multi-user mode)"
         />
       </Grid>
-
-      {props.settings.enableUserQuotas && (
-        <Grid
-          size={{
-            xs: 12,
-            sm: 6,
-          }}
-        >
-          <TextField
-            fullWidth
-            type="number"
-            label="Default User Quota"
-            value={props.settings.defaultUserQuotaGB}
-            onChange={(e) =>
-              props.handleChange('defaultUserQuotaGB', parseInt(e.target.value) || 0)
-            }
-            helperText="Storage limit per user"
-            slotProps={{
-              input: {
-                endAdornment: <InputAdornment position="end">GB</InputAdornment>,
-              },
-
-              htmlInput: { min: 1, max: 10000 },
-            }}
-          />
-        </Grid>
-      )}
     </Grid>
   );
 }

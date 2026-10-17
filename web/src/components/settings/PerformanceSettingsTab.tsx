@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PerformanceSettingsTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
-// last-edited: 2026-10-09
+// last-edited: 2026-10-17
 
 import {
   Grid,
@@ -11,28 +11,17 @@ import {
   Switch,
   FormControlLabel,
   MenuItem,
-  InputAdornment,
-  Radio,
-  RadioGroup,
-  FormControl,
-  FormLabel,
 } from '@mui/material';
 
 interface PerformanceSettingsTabProps {
   settings: {
     concurrentScans: number;
-    memoryLimitType: string;
-    cacheSize: number;
     cacheInvalidateOnBookUpdate: boolean;
     metadataFetchCacheTTLDays: number;
-    memoryLimitPercent: number;
-    memoryLimitMB: number;
     purgeSoftDeletedAfterDays: number;
     backupRetentionDays: number;
     purgeSoftDeletedDeleteFiles: boolean;
     logLevel: string;
-    logFormat: string;
-    enableJsonLogging: boolean;
   };
   handleChange: (field: string, value: string | boolean | number | string[]) => void;
 }
@@ -68,45 +57,9 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
 
       <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom>
-          Memory Management
+          Caching
         </Typography>
       </Grid>
-
-      <Grid size={12}>
-        <FormControl component="fieldset">
-          <FormLabel component="legend">Memory Limit Type</FormLabel>
-          <RadioGroup
-            row
-            value={settings.memoryLimitType}
-            onChange={(e) => handleChange('memoryLimitType', e.target.value)}
-          >
-            <FormControlLabel value="items" control={<Radio />} label="Number of Items" />
-            <FormControlLabel value="percent" control={<Radio />} label="% of System Memory" />
-            <FormControlLabel value="absolute" control={<Radio />} label="Absolute MB" />
-          </RadioGroup>
-        </FormControl>
-      </Grid>
-
-      {settings.memoryLimitType === 'items' && (
-        <Grid
-          size={{
-            xs: 12,
-            sm: 6,
-          }}
-        >
-          <TextField
-            fullWidth
-            type="number"
-            label="Cache Size (items)"
-            value={settings.cacheSize}
-            onChange={(e) => handleChange('cacheSize', parseInt(e.target.value) || 100)}
-            helperText="Number of audiobook records to cache in memory"
-            slotProps={{
-              htmlInput: { min: 100, max: 10000 },
-            }}
-          />
-        </Grid>
-      )}
 
       <Grid
         size={{
@@ -149,56 +102,6 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           immediately.
         </Typography>
       </Grid>
-
-      {settings.memoryLimitType === 'percent' && (
-        <Grid
-          size={{
-            xs: 12,
-            sm: 6,
-          }}
-        >
-          <TextField
-            fullWidth
-            type="number"
-            label="Memory Limit"
-            value={settings.memoryLimitPercent}
-            onChange={(e) => handleChange('memoryLimitPercent', parseInt(e.target.value) || 1)}
-            helperText="Maximum percentage of system memory to use"
-            slotProps={{
-              input: {
-                endAdornment: <InputAdornment position="end">%</InputAdornment>,
-              },
-
-              htmlInput: { min: 1, max: 90 },
-            }}
-          />
-        </Grid>
-      )}
-
-      {settings.memoryLimitType === 'absolute' && (
-        <Grid
-          size={{
-            xs: 12,
-            sm: 6,
-          }}
-        >
-          <TextField
-            fullWidth
-            type="number"
-            label="Memory Limit"
-            value={settings.memoryLimitMB}
-            onChange={(e) => handleChange('memoryLimitMB', parseInt(e.target.value) || 128)}
-            helperText="Absolute memory limit in megabytes"
-            slotProps={{
-              input: {
-                endAdornment: <InputAdornment position="end">MB</InputAdornment>,
-              },
-
-              htmlInput: { min: 128, max: 16384 },
-            }}
-          />
-        </Grid>
-      )}
 
       <Grid size={12}>
         <Divider sx={{ my: 2 }} />
@@ -305,56 +208,6 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           <MenuItem value="warn">Warning</MenuItem>
           <MenuItem value="error">Error</MenuItem>
         </TextField>
-      </Grid>
-
-      <Grid
-        size={{
-          xs: 12,
-          sm: 6,
-        }}
-      >
-        <TextField
-          fullWidth
-          select
-          label="Log Format"
-          value={settings.logFormat}
-          onChange={(e) => handleChange('logFormat', e.target.value)}
-        >
-          <MenuItem value="text">Text (human-readable)</MenuItem>
-          <MenuItem value="json">JSON (structured)</MenuItem>
-        </TextField>
-        <Typography
-          variant="caption"
-          sx={{
-            color: 'text.secondary',
-            mt: 1,
-            display: 'block',
-          }}
-        >
-          JSON logging is recommended for log aggregation and analysis tools
-        </Typography>
-      </Grid>
-
-      <Grid size={12}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={settings.enableJsonLogging}
-              onChange={(e) => handleChange('enableJsonLogging', e.target.checked)}
-            />
-          }
-          label="Enable JSON structured logging to separate file"
-        />
-        <Typography
-          variant="caption"
-          sx={{
-            color: 'text.secondary',
-            display: 'block',
-            ml: 4,
-          }}
-        >
-          Creates a separate .json log file in addition to the main log
-        </Typography>
       </Grid>
     </Grid>
   );

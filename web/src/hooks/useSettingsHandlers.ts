@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-10-09
+// last-edited: 2026-10-17
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -470,7 +470,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         enable_disk_quota: settings.enableDiskQuota,
         disk_quota_percent: settings.diskQuotaPercent,
         enable_user_quotas: settings.enableUserQuotas,
-        default_user_quota_gb: settings.defaultUserQuotaGB,
         enable_ai_parsing: settings.enableAIParsing,
         ...(settings.openaiApiKey ? { openai_api_key: settings.openaiApiKey } : {}),
         metadata_sources: settings.metadataSources.map((source) => ({
@@ -481,20 +480,13 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
           requires_auth: source.requiresAuth,
           credentials: source.credentials as { [key: string]: string },
         })),
-        language: settings.language,
         concurrent_scans: settings.concurrentScans,
-        memory_limit_type: settings.memoryLimitType,
-        cache_size: settings.cacheSize,
         cache_invalidate_on_book_update: settings.cacheInvalidateOnBookUpdate,
         metadata_fetch_cache_ttl_days: settings.metadataFetchCacheTTLDays,
-        memory_limit_percent: settings.memoryLimitPercent,
-        memory_limit_mb: settings.memoryLimitMB,
         purge_soft_deleted_after_days: settings.purgeSoftDeletedAfterDays,
         backup_retention_days: settings.backupRetentionDays,
         purge_soft_deleted_delete_files: settings.purgeSoftDeletedDeleteFiles,
         log_level: settings.logLevel,
-        log_format: settings.logFormat,
-        enable_json_logging: settings.enableJsonLogging,
         auto_update: {
           enabled: settings.autoUpdateEnabled,
           channel: settings.autoUpdateChannel,
