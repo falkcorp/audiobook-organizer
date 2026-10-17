@@ -19,9 +19,13 @@ unchanged; `internal/scheduler/testdata/cadence.golden` pins that.
 The `audiobook_organizer.ops.schedule_lag` and `schedule_missed` OTel instruments
 are now created and recorded.
 
-Time a schedule's `When` gate was closed is not counted as missed fires, including when the process restarts while the gate is closed (the closed state is kept in `opv3:sched:{def_id}`); downtime while the gate was open still counts. Window
-definitions run before `library_scan`, which stays last. A definition a legacy
-task still drives reports that task's real next due time. The cron grammar has
-one parser (`ops.ParseCronFields`) that rejects signed numbers such as `+5`, and a
+Time a schedule's `When` gate was closed is not counted as missed fires,
+including when the process restarts while the gate is closed (the closed state
+is kept in `opv3:sched:{def_id}`); downtime while the gate was open still
+counts. The gate is only known at the moments the process observed it, so a gate
+change made while the process is down is not seen. Window definitions run before
+`library_scan`, which stays last. A definition a legacy task still drives
+reports that task's real next due time. The cron grammar has one parser
+(`ops.ParseCronFields`) that rejects signed numbers such as `+5`, and a
 scheduled writer is recognised by one predicate (`Effects.IsWriter`) in both the
 scheduler and the catalog check.

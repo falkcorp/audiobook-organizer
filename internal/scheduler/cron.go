@@ -1,5 +1,5 @@
 // file: internal/scheduler/cron.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2f9a14-5be3-4d68-9a07-e1b4c3d85f26
 // last-edited: 2026-10-17
 
@@ -96,6 +96,13 @@ func instant(y int, mo time.Month, d, h, m int, loc *time.Location) time.Time {
 // exist (spring forward) fires at the first valid time after the gap; a time
 // that occurs twice (fall back) fires once, on the first occurrence.
 func (c CronSpec) Next(after time.Time, loc *time.Location) (time.Time, bool) {
+	return c.next(after, loc, nil)
+}
+
+// next is Next with an optional probe: when non-nil it is incremented once per
+// candidate instant examined, so a test can assert how much of the first day
+// was scanned without timing anything.
+func (c CronSpec) next(after time.Time, loc *time.Location, probe *int) (time.Time, bool) {
 	a := after.In(loc)
 	limit := a.AddDate(cronSearchYears, 0, 0)
 	y, mo, d := a.Date()
@@ -120,6 +127,9 @@ func (c CronSpec) Next(after time.Time, loc *time.Location) (time.Time, bool) {
 			for m := 0; m < 60; m++ {
 				if !has(c.minute, m) {
 					continue
+				}
+				if probe != nil {
+					*probe++
 				}
 				if t := instant(dy, dmo, dd, h, m, loc); t.After(after) {
 					return t, true

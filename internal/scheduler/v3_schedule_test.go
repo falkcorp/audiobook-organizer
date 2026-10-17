@@ -1,5 +1,5 @@
 // file: internal/scheduler/v3_schedule_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a90d3e7-2c18-4b64-8e0f-71b6c4a9d235
 // last-edited: 2026-10-17
 
@@ -30,6 +30,8 @@ import (
 type fakeSchedStore struct {
 	mu   sync.Mutex
 	recs map[string]database.SchedState
+	// onPut, when set, sees each record just before it is stored.
+	onPut func(database.SchedState)
 }
 
 func (f *fakeSchedStore) GetSchedV3(id string) (*database.SchedState, error) {
@@ -44,6 +46,9 @@ func (f *fakeSchedStore) GetSchedV3(id string) (*database.SchedState, error) {
 func (f *fakeSchedStore) PutSchedV3(st database.SchedState) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onPut != nil {
+		f.onPut(st)
+	}
 	if f.recs == nil {
 		f.recs = map[string]database.SchedState{}
 	}
@@ -526,6 +531,23 @@ func TestCronCatchUpCountIsCheap(t *testing.T) {
 	}
 }
 
+func TestCronNextScansOnlyFromTheAfterHour(t *testing.T) {
+	// Next starts the first day one hour before `after`, not at midnight. A
+	// candidate counter makes that observable without timing: from 23:30 an
+	// every-minute expression examines the 91 minutes from 22:00, where a scan
+	// from midnight would examine 1411.
+	spec, _ := ParseCron("* * * * *")
+	after := time.Date(2026, 10, 16, 23, 30, 0, 0, time.UTC)
+	probes := 0
+	got, ok := spec.next(after, time.UTC, &probes)
+	if !ok || !got.Equal(after.Add(time.Minute)) {
+		t.Fatalf("next = %v,%v want %v", got, ok, after.Add(time.Minute))
+	}
+	if probes > 100 {
+		t.Errorf("next examined %d candidates, want at most 100 (scan must start near the after hour)", probes)
+	}
+}
+
 func TestNextFireForLegacyDrivenDefs(t *testing.T) {
 	r := newV3Rig(t)
 	// maintenance.file-integrity-check is window-only today (interval 0): no timer.
@@ -682,7 +704,7 @@ func TestEveryEnqueueTargetInTasksIsInTaskV2DefIDs(t *testing.T) {
 	}
 }
 
-// restartRig is a second process: a fresh TaskScheduler that shares the sched
+// restart starts a second process: a fresh TaskScheduler that shares the sched
 // store and the durable interval clock of the first.
 func (r *v3Rig) restart(t *testing.T, at time.Time) *v3Rig {
 	t.Helper()
@@ -762,6 +784,42 @@ func TestRestartAcrossClosedGateIsNotMissed(t *testing.T) {
 				t.Errorf("open edge did not clear GateClosedAt: %+v", rec)
 			}
 		})
+	}
+}
+
+// The open edge clears the closed mark only after the claim has stamped the
+// clock, so a crash between the two cannot count the closed period as missed.
+func TestOpenEdgeClearsMarkAfterClockStamp(t *testing.T) {
+	gate := false
+	r := newV3Rig(t)
+	r.register(t, readDef("synthetic.g", ops.Every(time.Hour).When(func() bool { return gate })))
+	stamped, cleared := false, false
+	r.store.onPut = func(st database.SchedState) {
+		if st.GateClosedAt != nil || cleared {
+			return // only the first write that clears the mark matters
+		}
+		cleared = true
+		r.ts.mu.Lock()
+		_, stamped = r.ts.intervalTick["synthetic.g"]
+		r.ts.mu.Unlock()
+	}
+	gate = true
+	r.poll(r.now.Add(time.Minute))
+	if !cleared {
+		t.Fatal("the open edge never cleared the closed mark")
+	}
+	if !stamped {
+		t.Error("the closed mark was cleared before the claim stamped the clock")
+	}
+}
+
+// A window definition is never polled, so a gate closed at boot must not leave
+// a mark that nothing would clear.
+func TestWindowDefClosedAtBootGetsNoClosedMark(t *testing.T) {
+	r := newV3Rig(t)
+	r.register(t, readDef("synthetic.w", ops.InMaintenanceWindow(20).When(func() bool { return false })))
+	if rec, _ := r.store.GetSchedV3("synthetic.w"); rec != nil && rec.GateClosedAt != nil {
+		t.Errorf("window def got GateClosedAt %v", rec.GateClosedAt)
 	}
 }
 

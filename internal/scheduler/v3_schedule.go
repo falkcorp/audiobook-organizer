@@ -1,5 +1,5 @@
 // file: internal/scheduler/v3_schedule.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b41c7e92-6d05-4a38-9f1e-2c8a5d70e3b6
 // last-edited: 2026-10-17
 
@@ -294,6 +294,8 @@ func (ts *TaskScheduler) loadSchedState(e *v3Entry) {
 		// The gate was closed when this process last wrote the record. Start
 		// closed so the first poll that finds it open sees an open edge and
 		// stamps gateOpenedAt; otherwise the closed time would count as missed.
+		// The gate is only known at the moments this process observed it: a
+		// change made while the process is down is not seen.
 		e.gateClosedAt = rec.GateClosedAt
 		e.gate = false
 	}
@@ -304,6 +306,9 @@ func (ts *TaskScheduler) loadSchedState(e *v3Entry) {
 // closed (and finds it open later or at the next boot) is not mistaken for
 // downtime. It runs after loadSchedState and seedFromLegacyClock.
 func (ts *TaskScheduler) noteClosedAtBoot(e *v3Entry) {
+	if e.kind == "window" {
+		return // window entries are never polled, so the mark would never clear
+	}
 	ts.v3.mu.Lock()
 	need := !e.sched.Enabled() && e.gateClosedAt == nil
 	if need {
@@ -567,7 +572,10 @@ func (ts *TaskScheduler) pollV3Entry(e *v3Entry, now time.Time) {
 	}
 	open := e.gateOpenedAt
 	ts.v3.mu.Unlock()
-	if edge {
+	// A close edge is saved at once. An open edge is saved only after the
+	// claim below has stamped the clock: a crash in between would otherwise
+	// leave a cleared mark and an old clock, and count the closed period as missed.
+	if edge && !gate {
 		ts.persistSched(e)
 	}
 	if !gate {
@@ -597,6 +605,9 @@ func (ts *TaskScheduler) pollV3Entry(e *v3Entry, now time.Time) {
 		}
 	case "cron":
 		due, dueAt, missed = ts.claimCronRun(e, now)
+	}
+	if edge {
+		ts.persistSched(e) // open edge: the claim has stamped the clock
 	}
 	if !due {
 		return
