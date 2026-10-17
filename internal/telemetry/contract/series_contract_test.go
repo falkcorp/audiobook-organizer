@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -220,6 +220,8 @@ func buildSeedingTable() []seedRow {
 		{"audiobook_organizer_ops_progress_age_seconds", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_progress_timeout_seconds", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_zombies", "opsmetrics RegisterZombies", opsSeed},
+		{"audiobook_organizer_ops_schedule_lag_seconds", "opsmetrics ScheduleLag", opsSeed},
+		{"audiobook_organizer_ops_schedule_missed_total", "opsmetrics ScheduleMissed", opsSeed},
 
 		{"ai_dispatch_requests_total", "aidispatch.Call with failover", failover},
 		{"ai_dispatch_inflight", "aidispatch.Call with failover", failover},
@@ -388,6 +390,8 @@ func seedOpsMetrics() error {
 		}
 	})
 	r.RegisterZombies(func() int64 { return 1 })
+	r.ScheduleLag("contract", time.Second)
+	r.ScheduleMissed("contract", 1)
 	return nil
 }
 
@@ -882,6 +886,8 @@ var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.ops.progress_age", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.progress_timeout", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.zombies", kind: kindGauge, unit: "{run}"},
+	{name: "audiobook_organizer.ops.schedule_lag", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.DefID}},
+	{name: "audiobook_organizer.ops.schedule_missed", kind: kindCounter, unit: "{run}", keys: []attribute.Key{telemetry.DefID}},
 	{name: "ai_dispatch.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Outcome}},
 	{name: "ai_dispatch.inflight", kind: kindUpDownCounter, unit: "{request}", keys: []attribute.Key{telemetry.Endpoint}},
 	{name: "ai_dispatch.failover", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Class}},

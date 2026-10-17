@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 package opsmetrics
 
@@ -360,7 +360,7 @@ func TestInflightFoldsKeys(t *testing.T) {
 	}
 }
 
-// TestDeclaredButUnwiredAreListed pins the five spec 11 §3.7 instruments that
+// TestDeclaredButUnwiredAreListed pins the three spec 11 §3.7 instruments that
 // are declared but not created here. Creating one needs an ourInstruments
 // declaration, a golden row and a seed in internal/telemetry/contract, which
 // is how the task that wires it (05-PR5) moves it out of Unwired. 05-PR2 moved
@@ -370,8 +370,6 @@ func TestDeclaredButUnwiredAreListed(t *testing.T) {
 		"audiobook_organizer.ops.queue_depth",
 		"audiobook_organizer.ops.fenced_writes",
 		"audiobook_organizer.ops.checkpoint_age",
-		"audiobook_organizer.ops.schedule_lag",
-		"audiobook_organizer.ops.schedule_missed",
 	}
 	var got []string
 	for _, u := range Unwired {
@@ -398,5 +396,22 @@ func TestDeclaredButUnwiredAreListed(t *testing.T) {
 		if slices.Contains(want, name) {
 			t.Errorf("%s is created although it is listed as unwired", name)
 		}
+	}
+}
+
+func TestScheduleInstruments(t *testing.T) {
+	rec, collect := newRig(t)
+	RegisterDefID("t.sched")
+	rec.ScheduleLag("t.sched", 90*time.Second)
+	rec.ScheduleMissed("t.sched", 3)
+	rec.ScheduleMissed("t.sched", 0) // records nothing
+	m := collect()
+	h, ok := m["audiobook_organizer.ops.schedule_lag"].Data.(metricdata.Histogram[float64])
+	if !ok || len(h.DataPoints) != 1 || h.DataPoints[0].Sum != 90 {
+		t.Fatalf("schedule_lag = %+v, want one point summing 90", m["audiobook_organizer.ops.schedule_lag"].Data)
+	}
+	c, ok := m["audiobook_organizer.ops.schedule_missed"].Data.(metricdata.Sum[int64])
+	if !ok || len(c.DataPoints) != 1 || c.DataPoints[0].Value != 3 {
+		t.Fatalf("schedule_missed = %+v, want one point of 3", m["audiobook_organizer.ops.schedule_missed"].Data)
 	}
 }

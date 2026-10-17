@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 // Package opsmetrics holds the OTel instruments for operation runs (spec 11
 // §3.5 and §3.7). One meter, telemetry.Meter("operations"); every instrument
@@ -108,8 +108,6 @@ var Unwired = []UnwiredInstrument{
 	{"audiobook_organizer.ops.queue_depth", "gauge", "{run}", "05-PR5"},
 	{"audiobook_organizer.ops.fenced_writes", "counter", "{write}", "05-PR5"},
 	{"audiobook_organizer.ops.checkpoint_age", "gauge", "s", "05-PR5"},
-	{"audiobook_organizer.ops.schedule_lag", "histogram", "s", "05-PR5"},
-	{"audiobook_organizer.ops.schedule_missed", "counter", "{run}", "05-PR5"},
 }
 
 // OutcomeFor maps a v2 run status and its error message to the run-end
@@ -175,14 +173,16 @@ type InflightStat struct {
 
 // Recorder holds the instruments of one meter provider.
 type Recorder struct {
-	meter    metric.Meter
-	runs     metric.Int64Counter
-	duration metric.Float64Histogram
-	items    metric.Int64Counter
-	inflight metric.Int64ObservableGauge
-	progAge  metric.Float64ObservableGauge
-	progTO   metric.Float64ObservableGauge
-	zombies  metric.Int64ObservableGauge
+	meter     metric.Meter
+	runs      metric.Int64Counter
+	duration  metric.Float64Histogram
+	items     metric.Int64Counter
+	inflight  metric.Int64ObservableGauge
+	progAge   metric.Float64ObservableGauge
+	progTO    metric.Float64ObservableGauge
+	zombies   metric.Int64ObservableGauge
+	schedLag  metric.Float64Histogram
+	schedMiss metric.Int64Counter
 
 	// zombieMu guards zombieSrc, the RegisterZombies sources the one
 	// ops.zombies callback sums. The callback copies them out and releases
@@ -218,6 +218,12 @@ func New(mp metric.MeterProvider) *Recorder {
 	r.zombies, _ = m.Int64ObservableGauge("audiobook_organizer.ops.zombies",
 		metric.WithUnit("{run}"),
 		metric.WithDescription("Operation runs whose goroutine outlived the abandon grace after being stopped and has not returned yet. They hold their concurrency key and write set until it does."))
+	r.schedLag, _ = m.Float64Histogram("audiobook_organizer.ops.schedule_lag",
+		metric.WithUnit("s"),
+		metric.WithDescription("Seconds between a scheduled run's due time and the moment the scheduler enqueued it, by def_id."))
+	r.schedMiss, _ = m.Int64Counter("audiobook_organizer.ops.schedule_missed",
+		metric.WithUnit("{run}"),
+		metric.WithDescription("Scheduled fires that came due while the process was down or busy and were folded into one catch-up run, by def_id."))
 	r.zombieSrc = map[uint64]func() int64{}
 	// One callback for the recorder's lifetime, summing the registered
 	// sources: several registries on one provider (tests create many) then
@@ -285,6 +291,21 @@ func (r *Recorder) Ended(defID, outcome string) bool {
 	r.runs.Add(context.Background(), 1, metric.WithAttributes(
 		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome)))
 	return true
+}
+
+// ScheduleLag records how late a scheduled run was enqueued: the fire time
+// minus the due time.
+func (r *Recorder) ScheduleLag(defID string, lag time.Duration) {
+	r.schedLag.Record(context.Background(), lag.Seconds(), metric.WithAttributes(telemetry.DefID.String(labelFor(defID))))
+}
+
+// ScheduleMissed counts n (> 0) due times a schedule skipped before its one
+// catch-up run.
+func (r *Recorder) ScheduleMissed(defID string, n int64) {
+	if n <= 0 {
+		return
+	}
+	r.schedMiss.Add(context.Background(), n, metric.WithAttributes(telemetry.DefID.String(labelFor(defID))))
 }
 
 // Items adds n (> 0) items with the given outcome.
