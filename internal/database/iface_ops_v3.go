@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
 // last-edited: 2026-10-17
 
@@ -27,6 +27,11 @@ var ErrStaleTransition = errors.New("opv3: stale transition: the run changed sin
 
 // ErrRunNotFoundV3 is returned by the v3 writers for an id with no run record.
 var ErrRunNotFoundV3 = errors.New("opv3: run not found")
+
+// ErrBadCursorV3 is returned by ListRunsV3 and ListItemOutcomesV3 for a cursor
+// that is not the Next of a page of the same listing. The API answers it with
+// a 400 rather than a 500.
+var ErrBadCursorV3 = errors.New("opv3: cursor")
 
 // Actor is who caused a run or a transition.
 type Actor struct {
