@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-10-15
+// last-edited: 2026-10-17
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -147,6 +147,10 @@ type TaskScheduler struct {
 	// means defaultWaitPollInterval. It exists so tests can drive the poll loop
 	// without sleeping through real 5s ticks; nothing in production sets it.
 	waitPollInterval time.Duration
+
+	// v3 holds the schedules declared with ops.Schedule (v3_schedule.go),
+	// registered by RegisterSchedules.
+	v3 v3Scheduler
 }
 
 // defaultWaitPollInterval is WaitForOperation's production poll cadence.
@@ -423,6 +427,9 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 			slog.Debug("Scheduled task disabled", "taskName", name)
 		}
 	}
+
+	// ops.Schedule definitions (RegisterSchedules): one loop for all of them.
+	ts.startV3(shutdown, wg)
 
 	// Maintenance window checker — runs every 60 seconds
 	if config.AppConfig.Maintenance.Enabled {
