@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/schema.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ac48b1e9-48d5-4112-ba4c-7fc672487e52
 // last-edited: 2026-10-17
 
@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -42,6 +43,12 @@ const maxViolations = 50
 // title, description, default, examples, format, $comment, deprecated,
 // readOnly, writeOnly) are accepted and ignored; format is advisory in the
 // specification. $ref and the conditional keywords are not supported.
+//
+// A supported keyword whose argument is malformed (a non-integer minItems, a
+// required that is not a list of strings, a non-positive multipleOf, ...) is
+// a schema error too, never ignored: ignoring it would pass params the schema
+// meant to refuse. A number in params too large for float64 is a violation,
+// not a pass, since no bound can be checked against it.
 func ValidateParams(schema, params []byte) ([]Violation, error) {
 	var root any
 	if err := decodeJSON(schema, &root); err != nil {
@@ -52,6 +59,12 @@ func ValidateParams(schema, params []byte) ([]Violation, error) {
 		return []Violation{{Path: "", Message: "params are not valid JSON: " + err.Error()}}, nil
 	}
 	v := &validator{}
+	// The whole schema is checked first, so a malformed keyword fails every
+	// request, not only the ones whose params happen to reach it.
+	v.wellFormed(root, "")
+	if v.err != nil {
+		return nil, v.err
+	}
 	v.check(root, doc, "")
 	if v.err != nil {
 		return nil, v.err
@@ -123,17 +136,13 @@ func (v *validator) checkObject(s map[string]any, doc any, path string) {
 		case "type":
 			v.checkType(arg, doc, path)
 		case "enum":
-			list, _ := arg.([]any)
-			if !slices.ContainsFunc(list, func(e any) bool { return jsonEqual(e, doc) }) {
+			if !slices.ContainsFunc(asList(arg), func(e any) bool { return jsonEqual(e, doc) }) {
 				v.add(path, "must be one of the allowed values")
 			}
 		case "const":
 			if !jsonEqual(arg, doc) {
 				v.add(path, "must equal the required constant")
 			}
-		case "properties", "required", "additionalProperties":
-			// handled together below, once per object
-		case "items", "minItems", "maxItems", "uniqueItems":
 		case "minLength", "maxLength", "pattern":
 			v.checkString(k, arg, doc, path)
 		case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
@@ -154,11 +163,9 @@ func (v *validator) checkObject(s map[string]any, doc any, path string) {
 			if v.countMatches([]any{arg}, doc, path) > 0 {
 				v.add(path, "must not match the excluded shape")
 			}
-		default:
-			if !annotationKeywords[k] {
-				v.fail(fmt.Errorf("schema keyword %q at %q is not supported", k, path))
-			}
 		}
+		// properties, required, additionalProperties, items, minItems,
+		// maxItems and uniqueItems apply below, once per object or array.
 	}
 	switch d := doc.(type) {
 	case map[string]any:
@@ -166,6 +173,176 @@ func (v *validator) checkObject(s map[string]any, doc any, path string) {
 	case []any:
 		v.checkArray(s, d, path)
 	}
+}
+
+// wellFormed walks every schema node under node and checks each keyword's
+// argument (keywordWellFormed). check() relies on it having passed.
+func (v *validator) wellFormed(node any, path string) {
+	if v.err != nil {
+		return
+	}
+	s, ok := node.(map[string]any)
+	if !ok {
+		if _, isBool := node.(bool); !isBool {
+			v.fail(fmt.Errorf("schema node at %q is neither an object nor a boolean", path))
+		}
+		return
+	}
+	keys := make([]string, 0, len(s))
+	for k := range s {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !v.keywordWellFormed(k, s[k], path) {
+			return
+		}
+		switch k {
+		case "properties":
+			props := s[k].(map[string]any)
+			names := make([]string, 0, len(props))
+			for n := range props {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				v.wellFormed(props[n], path+"/properties/"+escapePointer(n))
+			}
+		case "additionalProperties", "items", "not":
+			v.wellFormed(s[k], path+"/"+k)
+		case "allOf", "anyOf", "oneOf":
+			for i, sub := range asList(s[k]) {
+				v.wellFormed(sub, fmt.Sprintf("%s/%s/%d", path, k, i))
+			}
+		}
+	}
+}
+
+// keywordWellFormed checks one keyword's argument. An unknown validation
+// keyword fails too.
+func (v *validator) keywordWellFormed(k string, arg any, path string) bool {
+	bad := func(want string) bool {
+		v.fail(fmt.Errorf("schema keyword %q at %q needs %s", k, path, want))
+		return false
+	}
+	switch k {
+	case "type":
+		names, ok := typeNames(arg)
+		if !ok {
+			return bad("a type name or a non-empty list of them")
+		}
+		for _, n := range names {
+			if !knownTypes[n] {
+				return bad("a known type name, not " + strconv.Quote(n))
+			}
+		}
+	case "enum":
+		if _, ok := arg.([]any); !ok {
+			return bad("a list")
+		}
+	case "const", "not", "additionalProperties", "items":
+		// any value / a schema node (wellFormed walks into it)
+	case "properties":
+		if _, ok := arg.(map[string]any); !ok {
+			return bad("an object")
+		}
+	case "required":
+		if !isStringList(arg) {
+			return bad("a list of strings")
+		}
+	case "minItems", "maxItems", "minLength", "maxLength":
+		if _, ok := count(arg); !ok {
+			return bad("a non-negative integer")
+		}
+	case "uniqueItems":
+		if _, ok := arg.(bool); !ok {
+			return bad("true or false")
+		}
+	case "pattern":
+		p, ok := arg.(string)
+		if !ok {
+			return bad("a string")
+		}
+		if _, err := regexp.Compile(p); err != nil {
+			v.fail(fmt.Errorf("schema pattern %q at %q does not compile: %w", p, path, err))
+			return false
+		}
+	case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum":
+		if _, ok := num(arg); !ok {
+			return bad("a number")
+		}
+	case "multipleOf":
+		if n, ok := num(arg); !ok || n <= 0 {
+			return bad("a number greater than 0")
+		}
+	case "allOf", "anyOf", "oneOf":
+		if l, ok := arg.([]any); !ok || len(l) == 0 {
+			return bad("a non-empty list")
+		}
+	default:
+		if !annotationKeywords[k] {
+			v.fail(fmt.Errorf("schema keyword %q at %q is not supported", k, path))
+			return false
+		}
+	}
+	return true
+}
+
+var knownTypes = map[string]bool{"object": true, "array": true, "string": true, "boolean": true, "null": true, "number": true, "integer": true}
+
+// typeNames reads a type keyword: one name or a non-empty list of names.
+func typeNames(arg any) ([]string, bool) {
+	switch t := arg.(type) {
+	case string:
+		return []string{t}, true
+	case []any:
+		if len(t) == 0 {
+			return nil, false
+		}
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			s, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+func isStringList(a any) bool {
+	l, ok := a.([]any)
+	if !ok {
+		return false
+	}
+	for _, e := range l {
+		if _, ok := e.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// count reads a non-negative integer keyword argument.
+func count(a any) (int, bool) {
+	n, ok := a.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	i, err := strconv.ParseInt(n.String(), 10, 64)
+	if err != nil {
+		f, ferr := n.Float64()
+		if ferr != nil || f != math.Trunc(f) || f < 0 || f > math.MaxInt32 {
+			return 0, false
+		}
+		return int(f), true
+	}
+	if i < 0 || i > math.MaxInt32 {
+		return 0, false
+	}
+	return int(i), true
 }
 
 func asList(a any) []any { l, _ := a.([]any); return l }
@@ -197,17 +374,7 @@ func (v *validator) countMatches(subs []any, doc any, path string) int {
 }
 
 func (v *validator) checkType(arg, doc any, path string) {
-	var want []string
-	switch t := arg.(type) {
-	case string:
-		want = []string{t}
-	case []any:
-		for _, e := range t {
-			if s, ok := e.(string); ok {
-				want = append(want, s)
-			}
-		}
-	}
+	want, _ := typeNames(arg)
 	for _, w := range want {
 		if typeIs(w, doc) {
 			return
@@ -306,26 +473,86 @@ func (v *validator) checkProperties(s, d map[string]any, path string) {
 }
 
 func (v *validator) checkArray(s map[string]any, d []any, path string) {
-	if n, ok := num(s["minItems"]); ok && float64(len(d)) < n {
-		v.add(path, fmt.Sprintf("needs at least %d items", int(n)))
+	if n, ok := count(s["minItems"]); ok && len(d) < n {
+		v.add(path, fmt.Sprintf("needs at least %d items", n))
 	}
-	if n, ok := num(s["maxItems"]); ok && float64(len(d)) > n {
-		v.add(path, fmt.Sprintf("allows at most %d items", int(n)))
+	if n, ok := count(s["maxItems"]); ok && len(d) > n {
+		v.add(path, fmt.Sprintf("allows at most %d items", n))
 	}
 	if u, _ := s["uniqueItems"].(bool); u {
-		for i := range d {
-			for j := range i {
-				if jsonEqual(d[i], d[j]) {
-					v.add(fmt.Sprintf("%s/%d", path, i), fmt.Sprintf("repeats item %d", j))
-					break
-				}
+		// One canonical encoding per item and a map: linear in the size of
+		// the array, where comparing every pair would be quadratic in
+		// caller-supplied input.
+		first := make(map[string]int, len(d))
+		for i, e := range d {
+			key, comparable := canonicalJSON(e)
+			if !comparable {
+				continue // holds a number jsonEqual never calls equal
 			}
+			if j, seen := first[key]; seen {
+				v.add(fmt.Sprintf("%s/%d", path, i), fmt.Sprintf("repeats item %d", j))
+				continue
+			}
+			first[key] = i
 		}
 	}
 	if items, ok := s["items"]; ok {
 		for i, e := range d {
 			v.check(items, e, fmt.Sprintf("%s/%d", path, i))
 		}
+	}
+}
+
+// canonicalJSON encodes a decoded JSON value so that two values jsonEqual
+// calls equal encode identically: object keys sorted, numbers by their
+// float64 value (the comparison jsonEqual makes). comparable is false when the
+// value holds a number beyond float64, which jsonEqual calls equal to nothing.
+func canonicalJSON(x any) (key string, comparable bool) {
+	var b strings.Builder
+	comparable = true
+	writeCanonical(&b, x, &comparable)
+	return b.String(), comparable
+}
+
+func writeCanonical(b *strings.Builder, x any, comparable *bool) {
+	switch t := x.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(strconv.Quote(k))
+			b.WriteByte(':')
+			writeCanonical(b, t[k], comparable)
+		}
+		b.WriteByte('}')
+	case []any:
+		b.WriteByte('[')
+		for i, e := range t {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			writeCanonical(b, e, comparable)
+		}
+		b.WriteByte(']')
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			b.WriteString("n" + strconv.FormatFloat(f, 'g', -1, 64))
+		} else {
+			*comparable = false
+		}
+	case string:
+		b.WriteString(strconv.Quote(t))
+	case bool:
+		b.WriteString(strconv.FormatBool(t))
+	case nil:
+		b.WriteString("null")
 	}
 }
 
@@ -336,20 +563,16 @@ func (v *validator) checkString(kw string, arg, doc any, path string) {
 	}
 	switch kw {
 	case "minLength":
-		if n, ok := num(arg); ok && float64(len([]rune(str))) < n {
-			v.add(path, fmt.Sprintf("needs at least %d characters", int(n)))
+		if n, _ := count(arg); len([]rune(str)) < n {
+			v.add(path, fmt.Sprintf("needs at least %d characters", n))
 		}
 	case "maxLength":
-		if n, ok := num(arg); ok && float64(len([]rune(str))) > n {
-			v.add(path, fmt.Sprintf("allows at most %d characters", int(n)))
+		if n, _ := count(arg); len([]rune(str)) > n {
+			v.add(path, fmt.Sprintf("allows at most %d characters", n))
 		}
 	case "pattern":
-		p, _ := arg.(string)
-		re, err := regexp.Compile(p)
-		if err != nil {
-			v.fail(fmt.Errorf("schema pattern %q at %q does not compile: %w", p, path, err))
-			return
-		}
+		// wellFormed compiled it already.
+		re := regexp.MustCompile(arg.(string))
 		if !re.MatchString(str) {
 			v.add(path, "does not match the required pattern")
 		}
@@ -363,13 +586,12 @@ func (v *validator) checkNumber(kw string, arg, doc any, path string) {
 	}
 	got, err := n.Float64()
 	if err != nil {
+		// Beyond float64: no bound can be compared, so it fails rather than
+		// passing unchecked.
+		v.add(path, "is too large a number to check against "+kw)
 		return
 	}
-	lim, ok := num(arg)
-	if !ok {
-		v.fail(fmt.Errorf("schema keyword %q at %q needs a number", kw, path))
-		return
-	}
+	lim, _ := num(arg) // wellFormed checked it
 	switch kw {
 	case "minimum":
 		if got < lim {
@@ -388,7 +610,7 @@ func (v *validator) checkNumber(kw string, arg, doc any, path string) {
 			v.add(path, fmt.Sprintf("must be less than %v", lim))
 		}
 	case "multipleOf":
-		if lim > 0 && math.Abs(got/lim-math.Round(got/lim)) > 1e-9 {
+		if math.Abs(got/lim-math.Round(got/lim)) > 1e-9 {
 			v.add(path, fmt.Sprintf("must be a multiple of %v", lim))
 		}
 	}
