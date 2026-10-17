@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.47.0
+// version: 4.48.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-17
 
@@ -599,6 +599,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 		// Give clients a moment to receive the event
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	// End the v3 operations event streams, or the graceful HTTP shutdown
+	// below waits on them for its whole timeout.
+	s.closeOpsV3Streams()
 
 	// Stop accepting HTTP requests BEFORE closing any stores.
 	// This prevents panics from requests hitting closed PebbleDB instances.
@@ -1656,6 +1660,9 @@ func (s *Server) setupRoutes() {
 		// into the app API — the route would look implemented and behave broken.
 		if strings.HasPrefix(path, "/api/") &&
 			!strings.HasPrefix(path, "/api/v1/") &&
+			// /api/v3/ops is the operations v3 API: its own version, not a
+			// v1 path missing its prefix.
+			!strings.HasPrefix(path, "/api/v3/") &&
 			!strings.HasPrefix(path, "/api/health") &&
 			!strings.HasPrefix(path, "/api/events") &&
 			!strings.HasPrefix(path, "/api/metrics") &&
@@ -1960,6 +1967,18 @@ func (s *Server) setupRoutes() {
 			s.setupBenchRoutes(protected)
 		}
 	}
+
+	// Operations v3 API (/api/v3/ops/*): the same middleware chain as /api/v1,
+	// its own version prefix.
+	apiV3 := s.router.Group("/api/v3")
+	if cfMW != nil {
+		apiV3.Use(apiRateLimiter, bodyLimitMiddleware, cfMW)
+	} else {
+		apiV3.Use(apiRateLimiter, bodyLimitMiddleware)
+	}
+	protectedV3 := apiV3.Group("")
+	protectedV3.Use(authMiddleware)
+	s.wireOpsV3Routes(protectedV3)
 
 	// Serve static files (React frontend)
 	// Implementation is in static_embed.go or static_nonembed.go depending on build tags

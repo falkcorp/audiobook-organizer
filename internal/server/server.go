@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.97.0
+// version: 2.98.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-17
 
@@ -379,6 +379,11 @@ type Server struct {
 	shutdownArmed chan struct{}
 	armShutdown   sync.Once
 	bgWG          namedWaitGroup
+	// opsV3Closing is closed when Shutdown begins (closeOpsV3Streams), before
+	// the HTTP server's graceful shutdown: an open /api/v3/ops/events stream
+	// would otherwise hold that shutdown for its whole 30s timeout.
+	opsV3Closing   chan struct{}
+	closeOpsV3Once sync.Once
 	// authorityEvidence holds the authority lists authorcredit reads, offered
 	// to it through authorcredit.SetAuthorityProvider (authority_evidence.go);
 	// Start primes its first load. releaseAuthorityProvider unregisters it.
@@ -599,7 +604,7 @@ func NewServer(store database.Store) *Server {
 	// Custom logger that skips noisy polling endpoints
 	// (UOS-14: /operations/active removed; SkipPaths entry removed)
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipPaths: []string{"/api/v1/operations/events"},
+		SkipPaths: []string{"/api/v1/operations/events", "/api/v3/ops/events"},
 		// Masks ?token= / ?api_key= and similar values: ABS clients put the
 		// bearer credential (JWT or abk_ API key) in the URL, and gin's default
 		// line prints the path with its query string.
@@ -654,6 +659,7 @@ func NewServer(store database.Store) *Server {
 		flight:                 flightRec,
 		traceSnap:              flightRec,
 		shutdownArmed:          make(chan struct{}),
+		opsV3Closing:           make(chan struct{}),
 		router:                 router,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
