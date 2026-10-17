@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
 // last-edited: 2026-10-17
 
@@ -160,7 +160,7 @@ func TestStartUnnestedRouteAndUnknownDef(t *testing.T) {
 }
 
 func TestStartModeIsExplicitAndConsistent(t *testing.T) {
-	enq, _, _, h := startHarness(map[string]DefInfo{"test.w": {ID: "test.w", Title: "W", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}}}, nil)
+	enq, _, _, h := startHarness(map[string]DefInfo{"test.w": {ID: "test.w", Title: "W", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, HasPreview: true}}, nil)
 	r := newRouter(h)
 	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
 	post := func(body string) *int {
@@ -199,10 +199,54 @@ func TestStartModeIsExplicitAndConsistent(t *testing.T) {
 	if m, _ := mode(1); m != "preview" {
 		t.Errorf("mode=preview queued %s", m)
 	}
-	// No mode sent: params are untouched, so the op's own default (preview)
-	// applies.
-	if _, has := mode(2); has {
-		t.Error("a request without a mode must not invent a dry_run")
+	// No mode sent to a definition with a preview: a preview, written into
+	// params so the op's own default cannot decide.
+	if m, _ := mode(2); m != "preview" {
+		t.Errorf("no mode queued %q, want preview", m)
+	}
+}
+
+// TestStartNoPreviewDefNeedsExplicitLive: an adapted v2 op recorded `no-mode`
+// ignores dry_run, so a "preview" (or a request with no mode) would run live.
+// Both are refused with 409 and nothing is queued; only mode "live" starts it,
+// with params passed through as sent.
+func TestStartNoPreviewDefNeedsExplicitLive(t *testing.T) {
+	enq, _, _, h := startHarness(map[string]DefInfo{
+		"dedup.book-merge": {ID: "dedup.book-merge", Title: "Merge", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true},
+		"test.report":      {ID: "test.report", Title: "Report", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}},
+	}, nil)
+	r := newRouter(h)
+	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
+	for _, body := range []string{`{"mode":"preview"}`, `{}`, `{"params":{"dry_run":true}}`, `{"params":{"dry_run":false}}`} {
+		w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/dedup.book-merge/runs", body)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `mode \"live\"`) {
+			t.Errorf("%s on a no-preview def = %d %s, want 409 asking for mode live", body, w.Code, w.Body.String())
+		}
+	}
+	if enq.count() != 0 {
+		t.Fatalf("a refused preview queued %d runs", enq.count())
+	}
+	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/dedup.book-merge/runs", `{"mode":"live","params":{"dry_run":true}}`); w.Code != http.StatusBadRequest {
+		t.Errorf("live with dry_run=true = %d, want 400", w.Code)
+	}
+	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/dedup.book-merge/runs", `{"mode":"live","params":{"keep":"b1"}}`); w.Code != http.StatusAccepted {
+		t.Fatalf("explicit live = %d: %s", w.Code, w.Body.String())
+	}
+	if enq.count() != 1 || string(enq.calls[0].params) != `{"keep":"b1"}` {
+		t.Fatalf("live run params = %s, want them untouched", enq.calls[0].params)
+	}
+	// A read-only def is not gated: the mode changes nothing.
+	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.report/runs", `{}`); w.Code != http.StatusAccepted {
+		t.Errorf("read-only def with no mode = %d", w.Code)
+	}
+	// /defs says which is which: false for no preview, null for read-only.
+	raw := do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/dedup.book-merge", nil).Body.String()
+	if !strings.Contains(raw, `"has_preview":false`) {
+		t.Errorf("no-preview def view lacks has_preview=false: %s", raw)
+	}
+	raw = do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.report", nil).Body.String()
+	if !strings.Contains(raw, `"has_preview":null`) {
+		t.Errorf("read-only def view lacks has_preview=null: %s", raw)
 	}
 }
 
