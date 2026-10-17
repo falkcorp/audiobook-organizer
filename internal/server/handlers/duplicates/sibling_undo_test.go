@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/sibling_undo_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: cefc1ee2-288b-4ccf-a693-5940c218a848
 // last-edited: 2026-10-17
 
@@ -43,15 +43,14 @@ func TestUndoSiblingMove_RestoresAfterLinkMerge(t *testing.T) {
 	// No explicit primary: L has no file, so K wins.
 	res, err := ms.MergeBooks([]string{l, k}, "")
 	require.NoError(t, err)
-	body := struct{ PrimaryID, SiblingJournalID string }{res.PrimaryID, res.SiblingJournalID}
-	require.Equal(t, k, body.PrimaryID)
-	require.NotEmpty(t, body.SiblingJournalID)
+	require.Equal(t, k, res.PrimaryID)
+	require.NotEmpty(t, res.SiblingJournalID)
 	require.Equal(t, "H", f.GroupOf(t, ls))
 
 	uw := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(uw)
-	c.Request = httptest.NewRequest(http.MethodPost, "/merge/sibling-undo/"+body.SiblingJournalID, nil)
-	c.Params = gin.Params{{Key: "journal_id", Value: body.SiblingJournalID}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/merge/sibling-undo/"+res.SiblingJournalID, nil)
+	c.Params = gin.Params{{Key: "journal_id", Value: res.SiblingJournalID}}
 	h.UndoSiblingMove(c)
 	require.Equal(t, http.StatusOK, uw.Code, uw.Body.String())
 
@@ -62,8 +61,8 @@ func TestUndoSiblingMove_RestoresAfterLinkMerge(t *testing.T) {
 	// A repeat is refused with 409, not a 500 and not a second restore.
 	rw := httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(rw)
-	c.Request = httptest.NewRequest(http.MethodPost, "/merge/sibling-undo/"+body.SiblingJournalID, nil)
-	c.Params = gin.Params{{Key: "journal_id", Value: body.SiblingJournalID}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/merge/sibling-undo/"+res.SiblingJournalID, nil)
+	c.Params = gin.Params{{Key: "journal_id", Value: res.SiblingJournalID}}
 	h.UndoSiblingMove(c)
 	require.Equal(t, http.StatusConflict, rw.Code, rw.Body.String())
 	require.Equal(t, "G", f.GroupOf(t, ls))

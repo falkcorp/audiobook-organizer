@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-17
 
@@ -54,7 +54,9 @@ type Handler struct {
 
 	// dedupCache is the concrete *cache.Cache[gin.H] the original handlers read /
 	// wrote directly (author-duplicates / series-duplicates keys; the
-	// book-dedup-scan key is only invalidated here, after a combine or an undo). Passed concrete (the cache exception) because it is a
+	// book-dedup-scan key is only invalidated here, after a combine or an undo,
+	// and currently has no reader: see todo.d/2026-10-17-remove-audiobooks-duplicates-410-stubs.md for the pending decision
+	// with 04 on the dedup.book-scan op that writes it). Passed concrete (the cache exception) because it is a
 	// clean generic db-adjacent type under heavy multi-method use; the handler
 	// nil-checks it where the original did.
 	dedupCache *cache.Cache[gin.H]
@@ -224,6 +226,7 @@ func (h *Handler) UndoCombine(c *gin.Context) {
 		return
 	}
 	if h.dedupCache != nil {
+		// No reader today (see dedupCache above); kept until 04 decides dedup.book-scan.
 		h.dedupCache.Invalidate("book-dedup-scan")
 	}
 	httputil.RespondWithOK(c, res)
@@ -282,6 +285,7 @@ func (h *Handler) UndoSiblingMove(c *gin.Context) {
 		return
 	}
 	if h.dedupCache != nil {
+		// No reader today (see dedupCache above); kept until 04 decides dedup.book-scan.
 		h.dedupCache.Invalidate("book-dedup-scan")
 	}
 	httputil.RespondWithOK(c, res)
@@ -417,6 +421,7 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 	}
 
 	if h.dedupCache != nil {
+		// No reader today (see dedupCache above); kept until 04 decides dedup.book-scan.
 		h.dedupCache.Invalidate("book-dedup-scan")
 	}
 

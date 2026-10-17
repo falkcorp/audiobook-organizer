@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
 // last-edited: 2026-10-17
 
@@ -374,7 +374,9 @@ func TestSeriesRenameOp_UndoRefreshesSeriesList(t *testing.T) {
 
 // Reverting an operation that wrote a merge_combine_journal pointer undoes
 // the merge, and drops the book duplicate caches the way the merge-undo route
-// does; an operation with no such row leaves them alone.
+// does; an operation with no such row leaves them alone. The key has no reader
+// at present (see invalidateBookDuplicateCaches); this pins the invalidation
+// that stays until 04 decides the dedup.book-scan op's fate.
 func TestRevertOperation_MergeCombineJournalDropsBookDuplicateCaches(t *testing.T) {
 	st := newRelinkOpStore(t)
 	keep, err := st.CreateBook(&database.Book{ID: "keep-book", Title: "Keep", FilePath: "/tmp/revert-cache/keep.mp3"})
