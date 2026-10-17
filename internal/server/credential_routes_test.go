@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-17
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
