@@ -1,7 +1,7 @@
 // file: pkg/ops/schedule.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 569e684d-fb56-46ee-bd07-ce7a4ac835bb
-// last-edited: 2026-10-13
+// last-edited: 2026-10-17
 
 package ops
 
@@ -27,6 +27,7 @@ type Schedule struct {
 	when    func() bool
 	params  json.RawMessage
 	live    bool
+	preview bool
 	err     error
 }
 
@@ -92,15 +93,71 @@ func (s *Schedule) Params(p any) *Schedule {
 	return s
 }
 
-// Live makes scheduled runs Live. Scheduled writers must say so explicitly
-// (D8; enforced by 05-PR8).
-func (s *Schedule) Live() *Schedule { s.live = true; return s }
+// Live makes scheduled runs Live. A scheduled writer must say Live or Preview
+// explicitly (D8; enforced by opscatalog.ValidateCatalog). Declaring both is
+// an error.
+func (s *Schedule) Live() *Schedule {
+	s.live = true
+	s.checkMode()
+	return s
+}
+
+// Preview says a scheduled writer is deliberately a Preview run: the nightly
+// job reports what it would change and writes nothing. Exactly one of Live and
+// Preview satisfies D8 for a scheduled writer.
+func (s *Schedule) Preview() *Schedule {
+	s.preview = true
+	s.checkMode()
+	return s
+}
+
+func (s *Schedule) checkMode() {
+	if s.live && s.preview && s.err == nil {
+		s.err = errors.New("schedule declares both Live() and Preview(); say exactly one")
+	}
+}
 
 // Err is the validation error, or nil.
 func (s *Schedule) Err() error { return s.err }
 
 // IsLive reports whether scheduled runs are Live.
 func (s *Schedule) IsLive() bool { return s.live }
+
+// IsPreview reports whether scheduled runs are declared Preview.
+func (s *Schedule) IsPreview() bool { return s.preview }
+
+// The accessors below are how the TaskScheduler reads a declared timer; the
+// value is built by exactly one of Every, DailyAt, Cron and InMaintenanceWindow.
+
+// TimerKind names the timer: "every", "daily_at", "cron" or "window".
+func (s *Schedule) TimerKind() string {
+	switch s.kind {
+	case schedEvery:
+		return "every"
+	case schedDaily:
+		return "daily_at"
+	case schedCron:
+		return "cron"
+	case schedWindow:
+		return "window"
+	}
+	return ""
+}
+
+// Interval is the Every period, or 0.
+func (s *Schedule) Interval() time.Duration { return s.every }
+
+// At is the DailyAt "HH:MM", or "".
+func (s *Schedule) At() string { return s.at }
+
+// Expr is the Cron expression, or "".
+func (s *Schedule) Expr() string { return s.expr }
+
+// Order is the InMaintenanceWindow position.
+func (s *Schedule) Order() int { return s.order }
+
+// RunsOnStart reports whether OnStart was called.
+func (s *Schedule) RunsOnStart() bool { return s.onStart }
 
 // RunParams is the params of scheduled runs, or nil.
 func (s *Schedule) RunParams() json.RawMessage { return s.params }
@@ -126,6 +183,9 @@ func (s *Schedule) String() string {
 	}
 	if s.live {
 		b += ", live"
+	}
+	if s.preview {
+		b += ", preview"
 	}
 	return b
 }

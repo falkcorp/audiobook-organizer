@@ -1,7 +1,7 @@
 // file: pkg/ops/ops_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
-// last-edited: 2026-10-14
+// last-edited: 2026-10-17
 
 package ops
 
@@ -687,3 +687,21 @@ var errAny = errors.New("any error")
 func withHold(r Row, hold string) Row { r.Hold = hold; return r }
 
 func withOwnerOnly(r Row) Row { r.OwnerOnly = true; return r }
+
+func TestScheduleModeAndAccessors(t *testing.T) {
+	if s := Cron("0 3 * * *").Preview(); s.Err() != nil || !s.IsPreview() || s.IsLive() || s.TimerKind() != "cron" || s.Expr() != "0 3 * * *" {
+		t.Fatalf("Preview(): %+v err=%v", s, s.Err())
+	}
+	if Every(time.Hour).Live().Preview().Err() == nil {
+		t.Error("Live() and Preview() together validated")
+	}
+	if s := Every(2 * time.Hour); s.TimerKind() != "every" || s.Interval() != 2*time.Hour {
+		t.Error("Every accessors")
+	}
+	if s := DailyAt("03:30").OnStart(); s.TimerKind() != "daily_at" || s.At() != "03:30" || !s.RunsOnStart() {
+		t.Error("DailyAt accessors")
+	}
+	if s := InMaintenanceWindow(4); s.TimerKind() != "window" || s.Order() != 4 {
+		t.Error("InMaintenanceWindow accessors")
+	}
+}

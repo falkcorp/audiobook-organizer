@@ -1,7 +1,7 @@
 // file: internal/opscatalog/validate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cd6d1761-51b5-4917-971b-5ec67bb94bce
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package opscatalog
 
@@ -20,7 +20,8 @@ import (
 // The refusals this package adds to pkg/ops's (ops.ValidateCatalog).
 const (
 	// RefuseScheduledWriterNotLive is a native def with a Schedule and a
-	// write set whose schedule does not say .Live() (owner decision D8).
+	// write set whose schedule says neither .Live() nor .Preview() (owner
+	// decision D8).
 	RefuseScheduledWriterNotLive ops.Refusal = "scheduled_writer_not_live"
 	// RefuseLedgerIDUnresolved is an op-ID ledger line that resolves to no
 	// def, alias or tombstone.
@@ -130,9 +131,9 @@ func ResolveLedger(u Universe, ledger []string) []string {
 //     Sequential with an empty reason, and a pipeline stage whose def is not
 //     in the catalog;
 //   - a scheduled writer: a native def with a Schedule and a write set whose
-//     schedule does not say .Live() (D8: scheduled writers must declare
-//     .Live(); pkg/ops has no explicit preview-note API, so .Live() is the
-//     only way to pass);
+//     schedule says neither .Live() nor .Preview() (D8: a scheduled
+//     writer must declare exactly one; declaring both is an invalid
+//     schedule);
 //   - a ledger ID that resolves to no def, alias or tombstone in u.
 //
 // Two checks named in sdk-api.md §11 are not made here: an Unordered source
@@ -156,9 +157,9 @@ func ValidateCatalog(defs []ops.Definition, u Universe, ledger []string) error {
 		if cm.Schedule == nil || cm.Effects.IsReadOnly() || len(cm.Effects.WriteSet()) == 0 {
 			continue
 		}
-		if !cm.Schedule.IsLive() {
+		if !cm.Schedule.IsLive() && !cm.Schedule.IsPreview() {
 			errs = append(errs, &ops.CatalogError{DefID: c.ID, Refusal: RefuseScheduledWriterNotLive,
-				Detail: fmt.Sprintf("schedule %q writes %v but does not say .Live() (D8)", cm.Schedule.String(), cm.Effects.WriteSet())})
+				Detail: fmt.Sprintf("schedule %q writes %v but says neither .Live() nor .Preview() (D8)", cm.Schedule.String(), cm.Effects.WriteSet())})
 		}
 	}
 	for _, id := range ResolveLedger(u, ledger) {

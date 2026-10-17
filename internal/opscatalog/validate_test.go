@@ -1,7 +1,7 @@
 // file: internal/opscatalog/validate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 15d7de21-ccf4-4692-992b-95f1056c2b6a
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package opscatalog
 
@@ -264,5 +264,34 @@ func TestBuildRefusesMissingServiceAndUnnamedPlugin(t *testing.T) {
 	if _, err := Build(Deps{Services: map[ops.ServiceKey]bool{"synthetic-service": true}}); err == nil ||
 		strings.Contains(err.Error(), "synthetic-service") {
 		t.Fatalf("a provided service was still refused: %v", err)
+	}
+}
+
+func TestScheduledWriterNeedsLiveOrPreview(t *testing.T) {
+	c := common("synthetic.nightly", ops.Writes(ops.ResBooks))
+	for name, sched := range map[string]*ops.Schedule{
+		"live":    ops.Cron("0 3 * * *").Live(),
+		"preview": ops.Cron("0 3 * * *").Preview(),
+	} {
+		c.Schedule = sched
+		if err := ValidateCatalog([]ops.Definition{task("synthetic.nightly", c)}, emptyUniverse(), nil); err != nil {
+			t.Errorf("%s: a scheduled writer that declares its mode was refused: %v", name, err)
+		}
+	}
+	c.Schedule = ops.Cron("0 3 * * *")
+	wantOnly(t, ValidateCatalog([]ops.Definition{task("synthetic.nightly", c)}, emptyUniverse(), nil),
+		"synthetic.nightly:"+string(RefuseScheduledWriterNotLive))
+	c.Schedule = ops.Cron("0 3 * * *").Live().Preview()
+	got := refusals(ValidateCatalog([]ops.Definition{task("synthetic.nightly", c)}, emptyUniverse(), nil))
+	if !slices.Contains(got, "synthetic.nightly:"+string(ops.RefuseSchedule)) {
+		t.Fatalf("Live() with Preview() not refused: %v", got)
+	}
+}
+
+func TestScheduledReadOnlyNeedsNeither(t *testing.T) {
+	r := common("synthetic.report", ops.ReadOnly(ops.ResBooks))
+	r.Schedule = ops.Cron("0 3 * * *")
+	if err := ValidateCatalog([]ops.Definition{task("synthetic.report", r)}, emptyUniverse(), nil); err != nil {
+		t.Fatalf("a scheduled read-only def was refused: %v", err)
 	}
 }
