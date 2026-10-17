@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-10
+// last-edited: 2026-10-17
 
 package config
 
@@ -720,4 +720,41 @@ func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
 		"ACTIVITY_BACKEND dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
 	assert.Equal(t, "/tmp/activity-test.sqlite", Snapshot().ActivityDBPath,
 		"ACTIVITY_DB_PATH dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
+}
+
+// TestInitConfig_RetiredDownloadClientKeysAreIgnored pins that a config file
+// written while two more download clients were settings still loads: the retired
+// download_client.torrent.qbittorrent and download_client.usenet blocks are
+// dropped silently, and the kept Deluge fallback keys still decode.
+func TestInitConfig_RetiredDownloadClientKeysAreIgnored(t *testing.T) {
+	fileInitConfig(t, `
+download_client:
+  torrent:
+    type: deluge
+    deluge:
+      host: 192.0.2.10
+      port: 58846
+      username: deluge-user
+      password: deluge-test-pass
+    qbittorrent:
+      host: 192.0.2.11
+      port: 8080
+      username: qbit-user
+      password: qbit-test-pass
+      use_https: true
+  usenet:
+    type: sabnzbd
+    sabnzbd:
+      host: 192.0.2.12
+      port: 8085
+      api_key: sab-test-key
+      use_https: true
+`, nil)
+
+	dc := Snapshot().DownloadClient.Torrent
+	assert.Equal(t, "deluge", dc.Type)
+	assert.Equal(t, "192.0.2.10", dc.Deluge.Host)
+	assert.Equal(t, 58846, dc.Deluge.Port)
+	assert.Equal(t, "deluge-user", dc.Deluge.Username)
+	assert.Equal(t, "deluge-test-pass", dc.Deluge.Password)
 }
