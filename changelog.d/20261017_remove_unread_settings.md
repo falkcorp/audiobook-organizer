@@ -1,0 +1,5 @@
+### Removed
+
+#### Eleven Settings fields that never did anything
+
+Removed eleven settings that were loaded, saved and shown on the Settings page but never read by any code: `metadata_review_default_view`, `default_user_quota_gb`, `memory_limit_type`, `cache_size`, `memory_limit_percent`, `memory_limit_mb`, `log_format`, `enable_json_logging`, `auth_rate_limit_per_minute`, the top-level `language` (the catalog provider's `catalog.language` is unchanged) and the empty `api_keys` block. The Settings page loses the memory-limit card, the log-format controls, the default user quota and the Default Language box. Sign-in attempts were never limited by `auth_rate_limit_per_minute`; they are limited by fixed per-IP and per-account throttles. An existing config file, stored settings or older settings export that still carries the keys keeps loading: startup logs a removed-setting warning, saving the config scrubs them from `config.yaml`, the settings import drops them, and a config update that sets one is refused with a removal message.

@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
-// last-edited: 2026-10-09
+// last-edited: 2026-10-17
 
 import { describe, it, expect } from 'vitest';
 import { sanitizeSettingsImport } from './sanitizeSettingsImport';
@@ -90,5 +90,34 @@ describe('sanitizeSettingsImport', () => {
     }) as Record<string, unknown>;
     expect(cleaned).not.toHaveProperty('auto_fetch_metadata');
     expect(cleaned).toEqual({ enable_ai_parsing: true });
+  });
+
+  it('drops the eleven removed unread settings from an older export and keeps the rest', () => {
+    // These keys were stored and shown on the Settings page but nothing ever
+    // read them. The server refuses a PUT that carries them, so an older export
+    // must lose them here while the live settings in the same file still import.
+    const cleaned = load({
+      metadata_review_default_view: 'compact',
+      default_user_quota_gb: 100,
+      memory_limit_type: 'items',
+      cache_size: 1000,
+      memory_limit_percent: 25,
+      memory_limit_mb: 512,
+      log_format: 'text',
+      enable_json_logging: false,
+      auth_rate_limit_per_minute: 10,
+      language: 'en',
+      api_keys: {},
+      root_dir: '/library',
+      log_level: 'debug',
+      concurrent_scans: 4,
+      cache_invalidate_on_book_update: true,
+    }) as Record<string, unknown>;
+    expect(cleaned).toEqual({
+      root_dir: '/library',
+      log_level: 'debug',
+      concurrent_scans: 4,
+      cache_invalidate_on_book_update: true,
+    });
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.64.0
+// version: 1.65.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-12
+// last-edited: 2026-10-17
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -133,21 +133,13 @@ export interface SettingsState {
   enableDiskQuota: boolean;
   diskQuotaPercent: number;
   enableUserQuotas: boolean;
-  defaultUserQuotaGB: number;
   enableAIParsing: boolean;
   openaiApiKey: string;
   metadataSources: UiMetadataSource[];
-  language: string;
   concurrentScans: number;
-  memoryLimitType: string;
-  cacheSize: number;
   cacheInvalidateOnBookUpdate: boolean;
   metadataFetchCacheTTLDays: number;
-  memoryLimitPercent: number;
-  memoryLimitMB: number;
   logLevel: string;
-  logFormat: string;
-  enableJsonLogging: boolean;
   purgeSoftDeletedAfterDays: number;
   backupRetentionDays: number;
   purgeSoftDeletedDeleteFiles: boolean;
@@ -261,7 +253,6 @@ export function Settings() {
     enableDiskQuota: false,
     diskQuotaPercent: 80,
     enableUserQuotas: false,
-    defaultUserQuotaGB: 100,
 
     // Metadata settings
     enableAIParsing: false,
@@ -308,19 +299,14 @@ export function Settings() {
         credentials: { apiKey: '' },
       },
     ],
-    language: 'en',
 
     // Performance settings
     concurrentScans: 4,
 
     // Memory management
     // 'items', 'percent', 'absolute'
-    memoryLimitType: 'items',
-    cacheSize: 1000, // items
     cacheInvalidateOnBookUpdate: false,
     metadataFetchCacheTTLDays: 30,
-    memoryLimitPercent: 25, // % of system memory
-    memoryLimitMB: 512, // MB
 
     // Lifecycle / retention
     purgeSoftDeletedAfterDays: 30,
@@ -329,8 +315,6 @@ export function Settings() {
 
     // Logging
     logLevel: 'info',
-    logFormat: 'text', // 'text' or 'json'
-    enableJsonLogging: false,
 
     // Auto-update
     autoUpdateEnabled: false,
@@ -520,7 +504,6 @@ export function Settings() {
         enableDiskQuota: config.enable_disk_quota ?? false,
         diskQuotaPercent: config.disk_quota_percent || 80,
         enableUserQuotas: config.enable_user_quotas ?? false,
-        defaultUserQuotaGB: config.default_user_quota_gb || 100,
 
         // Metadata settings
         enableAIParsing: config.enable_ai_parsing ?? false,
@@ -584,18 +567,13 @@ export function Settings() {
                   credentials: { apiKey: '' },
                 },
               ],
-        language: config.language || 'en',
 
         // Performance settings
         concurrentScans: config.concurrent_scans || 4,
 
         // Memory management
-        memoryLimitType: config.memory_limit_type || 'items',
-        cacheSize: config.cache_size || 1000,
         cacheInvalidateOnBookUpdate: config.cache_invalidate_on_book_update ?? false,
         metadataFetchCacheTTLDays: config.metadata_fetch_cache_ttl_days ?? 30,
-        memoryLimitPercent: config.memory_limit_percent || 25,
-        memoryLimitMB: config.memory_limit_mb || 512,
 
         // Lifecycle / retention
         purgeSoftDeletedAfterDays: config.purge_soft_deleted_after_days ?? 30,
@@ -604,8 +582,6 @@ export function Settings() {
 
         // Logging
         logLevel: config.log_level || 'info',
-        logFormat: config.log_format || 'text',
-        enableJsonLogging: config.enable_json_logging ?? false,
 
         // Auto-update. The server has only ever emitted the nested object; the
         // flat auto_update_* keys this used to fall back to were never sent.

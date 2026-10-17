@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.183.1
+// version: 2.184.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-17
 
@@ -989,11 +989,9 @@ export interface Config {
   enable_disk_quota: boolean;
   disk_quota_percent: number;
   enable_user_quotas: boolean;
-  default_user_quota_gb: number;
 
   // Metadata
   metadata_sources: MetadataSource[];
-  language: string;
 
   // AI parsing
   enable_ai_parsing: boolean;
@@ -1006,13 +1004,9 @@ export interface Config {
   // Performance
   concurrent_scans: number;
 
-  // Memory management
-  memory_limit_type: string;
-  cache_size: number;
+  // Caching
   cache_invalidate_on_book_update: boolean;
   metadata_fetch_cache_ttl_days: number;
-  memory_limit_percent: number;
-  memory_limit_mb: number;
 
   // Lifecycle / retention
   purge_soft_deleted_after_days?: number;
@@ -1021,8 +1015,6 @@ export interface Config {
 
   // Logging
   log_level: string;
-  log_format: string;
-  enable_json_logging: boolean;
 
   // Smart apply pipeline
   auto_rename_on_apply?: boolean;
@@ -1046,9 +1038,6 @@ export interface Config {
 
   // Deluge integration
   protected_paths?: string[];
-
-  // Legacy fields (Goodreads deprecated Dec 2020, removed)
-  api_keys: Record<string, never>;
 }
 
 export interface AuthStatus {

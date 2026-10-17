@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
-// last-edited: 2026-10-09
+// last-edited: 2026-10-17
 
 import type * as api from '../services/api';
 
@@ -27,12 +27,11 @@ export const sanitizeSettingsImport = (
     'root_dir', 'playlist_dir', 'organization_strategy', 'scan_on_startup', 'auto_organize',
     'folder_naming_pattern', 'file_naming_pattern', 'create_backups', 'supported_extensions',
     'exclude_patterns', 'enable_disk_quota', 'disk_quota_percent', 'enable_user_quotas',
-    'default_user_quota_gb', 'enable_ai_parsing',
-    'openai_api_key', 'metadata_sources', 'language',
-    'concurrent_scans', 'memory_limit_type', 'cache_size', 'cache_invalidate_on_book_update',
-    'metadata_fetch_cache_ttl_days', 'memory_limit_percent', 'memory_limit_mb',
-    'purge_soft_deleted_after_days', 'backup_retention_days', 'purge_soft_deleted_delete_files', 'log_level', 'log_format',
-    'enable_json_logging',
+    'enable_ai_parsing',
+    'openai_api_key', 'metadata_sources',
+    'concurrent_scans', 'cache_invalidate_on_book_update',
+    'metadata_fetch_cache_ttl_days',
+    'purge_soft_deleted_after_days', 'backup_retention_days', 'purge_soft_deleted_delete_files', 'log_level',
     'auto_rename_on_apply', 'auto_write_tags_on_apply', 'verify_after_write', 'protected_paths',
     // nested sub-struct keys (CFG-1)
     'embedding', 'dedup', 'metadata_scoring', 'itunes', 'maintenance', 'scheduled', 'auto_update', 'tools',
@@ -52,10 +51,7 @@ export const sanitizeSettingsImport = (
       case 'organization_strategy':
       case 'folder_naming_pattern':
       case 'file_naming_pattern':
-      case 'language':
-      case 'memory_limit_type':
       case 'log_level':
-      case 'log_format':
       case 'protected_paths':
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (typeof val === 'string') (cleaned as any)[key] = val;
@@ -115,7 +111,6 @@ export const sanitizeSettingsImport = (
       case 'enable_ai_parsing':
         case 'cache_invalidate_on_book_update':
       case 'purge_soft_deleted_delete_files':
-      case 'enable_json_logging':
       case 'auto_rename_on_apply':
       case 'auto_write_tags_on_apply':
       case 'verify_after_write':
@@ -125,12 +120,8 @@ export const sanitizeSettingsImport = (
 
       // numeric fields
       case 'disk_quota_percent':
-      case 'default_user_quota_gb':
       case 'concurrent_scans':
-      case 'cache_size':
       case 'metadata_fetch_cache_ttl_days':
-      case 'memory_limit_percent':
-      case 'memory_limit_mb':
       case 'purge_soft_deleted_after_days':
       case 'backup_retention_days':
         if (typeof val === 'number') {

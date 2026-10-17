@@ -35,22 +35,13 @@ export interface MockConfig {
   enable_disk_quota: boolean;
   disk_quota_percent: number;
   enable_user_quotas: boolean;
-  default_user_quota_gb: number;
   metadata_sources: MockMetadataSource[];
-  language: string;
   enable_ai_parsing: boolean;
   openai_api_key: string;
   concurrent_scans: number;
-  memory_limit_type: string;
-  cache_size: number;
-  memory_limit_percent: number;
-  memory_limit_mb: number;
   purge_soft_deleted_after_days: number;
   purge_soft_deleted_delete_files: boolean;
   log_level: string;
-  log_format: string;
-  enable_json_logging: boolean;
-  api_keys: Record<string, never>;
   supported_extensions: string[];
   exclude_patterns?: string[];
   ai_backend?: {
@@ -1880,22 +1871,13 @@ const DEFAULT_CONFIG: MockConfig = {
   enable_disk_quota: false,
   disk_quota_percent: 80,
   enable_user_quotas: false,
-  default_user_quota_gb: 100,
   metadata_sources: DEFAULT_METADATA_SOURCES,
-  language: 'en',
   enable_ai_parsing: false,
   openai_api_key: '',
   concurrent_scans: 4,
-  memory_limit_type: 'items',
-  cache_size: 1000,
-  memory_limit_percent: 25,
-  memory_limit_mb: 512,
   purge_soft_deleted_after_days: 30,
   purge_soft_deleted_delete_files: false,
   log_level: 'info',
-  log_format: 'text',
-  enable_json_logging: false,
-  api_keys: {},
   supported_extensions: ['.m4b', '.mp3', '.m4a'],
   exclude_patterns: [],
 };
