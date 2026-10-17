@@ -1,5 +1,5 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
 // last-edited: 2026-10-12
 
@@ -111,6 +111,7 @@ var exemptPrefixes = map[string]string{
 	"/api/v1/review/":          "review queue",
 	"/api/v1/merge/":           "merge undo journal",
 	"/api/v1/operations":       "operations on library data",
+	"/api/v3/ops/":             "operations on library data (the v3 twin of /api/v1/operations)",
 	"/api/v1/activity/":        "activity log maintenance",
 	"/api/v1/ai/":              "AI calls on library data",
 	"/api/v1/diagnostics/":     "diagnostics",

@@ -957,6 +957,96 @@
             "type": "integer"
           }
         }
+      },
+      "OpsV3RunView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "def_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "stopping",
+              "interrupted",
+              "awaiting_decision",
+              "succeeded",
+              "failed",
+              "canceled",
+              "timed_out",
+              "dropped"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "description": "succeeded, failed, canceled, timed_out, dropped or interrupted once settled; empty otherwise"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "live"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "progress": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer",
+                "nullable": true
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "chunks": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "done": {
+                    "type": "integer"
+                  },
+                  "total": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "workers": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "zombie": {
+            "type": "boolean",
+            "description": "goroutine outlived the abandon grace; state reads stopping"
+          },
+          "error": {
+            "type": "string"
+          },
+          "started_by": {
+            "type": "string"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -11578,6 +11668,906 @@
           },
           "403": {
             "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/ops/defs": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3ListDefs",
+        "summary": "list v3 operation definitions",
+        "description": "Every definition: effects, schedule and next fire, readiness (D44), last finished run. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "filter by kind (task, batch, fixer, pipeline, adapted)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/defs/{id}": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3GetDef",
+        "summary": "get a v3 operation definition",
+        "description": "Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Success"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/ops/defs/{id}/runs": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "post": {
+        "operationId": "opsV3StartRun",
+        "summary": "start a run",
+        "description": "Needs the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "def": {
+                    "type": "string",
+                    "description": "only on POST /ops/runs"
+                  },
+                  "params": {
+                    "type": "object"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "live"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown definition"
+          },
+          "409": {
+            "description": "Definition not ready (reason in the message)"
+          }
+        }
+      }
+    },
+    "/ops/runs": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3ListRuns",
+        "summary": "list runs (census)",
+        "description": "total is the exact count for the filter, the same number /ops/counts reports. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "run state",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "stopping",
+                "interrupted",
+                "awaiting_decision",
+                "succeeded",
+                "failed",
+                "canceled",
+                "timed_out",
+                "dropped"
+              ]
+            }
+          },
+          {
+            "name": "def_id",
+            "in": "query",
+            "description": "definition id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "page size (default 50, max 500)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "next_cursor of the previous page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Page of runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OpsV3RunView"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "opsV3StartRunByBody",
+        "summary": "start a run (definition in the body)",
+        "description": "Same as POST /ops/defs/{id}/runs with the definition id in the body.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "def": {
+                    "type": "string",
+                    "description": "only on POST /ops/runs"
+                  },
+                  "params": {
+                    "type": "object"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "live"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown definition"
+          },
+          "409": {
+            "description": "Definition not ready (reason in the message)"
+          }
+        }
+      }
+    },
+    "/ops/runs/{id}": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3GetRun",
+        "summary": "get a run",
+        "description": "Carries progress.chunks and progress.workers. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpsV3RunView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/ops/runs/{id}/rows": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3ListRunRows",
+        "summary": "page a run's failed and skipped items",
+        "description": "total is exact; truncated is true when the per-run cap dropped outcomes. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "outcome prefix (failed, skipped, skipped:<reason>)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "page size",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "next_cursor of the previous page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/ops/runs/{id}/cancel": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "post": {
+        "operationId": "opsV3CancelRun",
+        "summary": "cancel a run",
+        "description": "Needs the definition's permission, or being the user who started the run.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "202": {
+            "description": "Cancel requested"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Run already finished"
+          }
+        }
+      }
+    },
+    "/ops/runs/{id}/approve": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "post": {
+        "operationId": "opsV3ApproveRun",
+        "summary": "approve or reject a run",
+        "description": "Needs the definition's approver permission (settings.manage when it names none) and a verified auth method (session, API token or verified Cloudflare Access sign-in); a request authenticated only by a forwarded header is refused with 403. 501 when the build has no approval backend.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "202": {
+            "description": "Recorded"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Run is not waiting for a decision"
+          },
+          "501": {
+            "description": "No approval backend wired"
+          }
+        }
+      }
+    },
+    "/ops/counts": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3Counts",
+        "summary": "exact run counts",
+        "description": "Every group's href lists exactly count rows. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "group_by",
+            "in": "query",
+            "description": "grouping",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "state",
+                "def",
+                "outcome"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "group_by": {
+                      "type": "string"
+                    },
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer"
+                          },
+                          "href": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/timeline": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3Timeline",
+        "summary": "finished runs in a time window",
+        "description": "complete is false when the scan cap cut the window short. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "RFC 3339 start (default 24 h before to)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "RFC 3339 end (default now)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OpsV3RunView"
+                      }
+                    },
+                    "complete": {
+                      "type": "boolean"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "scan_cap": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/events": {
+      "servers": [
+        {
+          "url": "/api/v3",
+          "description": "Operations v3 (own version prefix)"
+        }
+      ],
+      "get": {
+        "operationId": "opsV3Events",
+        "summary": "run events (SSE)",
+        "description": "text/event-stream: `event: run` with a run view and an id, `: heartbeat` every 15 s, `event: resync` when events were missed. Last-Event-ID resumes from a bounded ring. Needs library.view.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
