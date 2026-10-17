@@ -1,6 +1,6 @@
 #!/bin/bash
 # file: scripts/ci/cache_env.sh
-# version: 1.3.0
+# version: 1.3.1
 # guid: 6b0e7d3a-92c4-4f18-a5d7-1e8c3f40b9a2
 # last-edited: 2026-10-17
 # Source this from a Woodpecker step (`. scripts/ci/cache_env.sh`) as the
@@ -36,8 +36,12 @@
 # whatever the host exports. It runs before the cache-root check, so a step
 # that continues past a missing cache root (`|| true`) is scrubbed too. U0's
 # checks-lint steps run in docker containers with a clean environment and run
-# no tests.
-unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HARDCOVER_API_TOKEN WHISPER_LIVE_URL
+# no tests. The local backend also hands each step the agent's own
+# environment, so the agent token is unset too: it keeps it out of anything a
+# step prints. It is no barrier to a hostile step, which runs as the agent's
+# user; the u0-local agent's token is its own and revocable for that reason
+# (docs/ci/woodpecker.md).
+unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HARDCOVER_API_TOKEN WHISPER_LIVE_URL WOODPECKER_AGENT_SECRET
 
 
 CI_CACHE_ROOT=

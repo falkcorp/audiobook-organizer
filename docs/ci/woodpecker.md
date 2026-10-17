@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.14.0 -->
+<!-- version: 1.14.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-10-17 -->
 
@@ -255,10 +255,26 @@ container image, not a shell.
   every pipeline a fresh HOME. Also `cmake`, `zlib1g-dev`, `build-essential`,
   and the host's ffmpeg, ffprobe and fpcalc.
 - **Service:** `/etc/systemd/system/woodpecker-agent-local.service`, talking to
-  the server at `127.0.0.1:18734`, healthcheck on `127.0.0.1:18736`. Its
-  secret is the `WOODPECKER_AGENT_SECRET` line of the stack's
-  `woodpecker.env`, copied to the root-only `/etc/woodpecker-agent-local.env`
-  (mode 600). Logs: `journalctl -u woodpecker-agent-local`.
+  the server at `127.0.0.1:18734`, healthcheck on `127.0.0.1:18736`. Logs:
+  `journalctl -u woodpecker-agent-local`.
+- **Its own agent token, not the shared secret.** The agent was created on the
+  server first (`POST /api/agents`, agent id 7) and authenticates with that
+  agent's token, kept in the root-only `/etc/woodpecker-agent-local.env`
+  (mode 600). A step runs as the agent's user and can read the agent's
+  environment, so a hostile pull request could read the token; this way it
+  can only impersonate u0-local, and deleting agent 7 revokes it without
+  touching the other agents.
+- **Sandbox.** The local backend runs pull-request code directly on the host,
+  so the unit confines it: `ProtectSystem=strict` with only `/srv/ci`
+  writable, `ProtectHome=yes` (the stack's `woodpecker.env` and every other
+  login file), `ProtectProc=invisible`, `PrivateTmp`, `PrivateDevices`,
+  `NoNewPrivileges`, and `InaccessiblePaths=` over `/mnt` (the library and the
+  swarm agent's cache), `/opt`, `/srv/tftp` and the app's and docker's
+  `/var/lib` directories. Loopback is not blocked, because the tests start
+  `httptest` servers on 127.0.0.1, so a step can still reach the prod
+  services' ports; they keep their own authentication. What stops a hostile
+  pull request from getting this far is `require_approval: forks` (see The CI
+  cache); keep it.
 
 **The CI cache.** The docker backend creates `/woodpecker` as a volume for
 each workflow and deletes it when the workflow ends, so caches kept there
