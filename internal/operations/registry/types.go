@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.15.0
+// version: 2.15.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See
@@ -136,7 +136,11 @@ type OperationDef struct {
 	// Per-plugin caps are tracked in Registry.pluginMax via SetPluginMaxConcurrent.
 
 	// Inputs. Optional.
-	ParamsSchema *json.RawMessage // if set, params validated before enqueue
+	// ParamsSchema, if set, is the JSON Schema of the params. Only the v3
+	// start route (POST /api/v3/ops/.../runs, opsv3.StartRun) validates
+	// params against it before enqueue; EnqueueOp and the v1 trigger route
+	// do not check it.
+	ParamsSchema *json.RawMessage
 
 	// Permissions. Optional.
 	Permissions  []auth.Permission // user perms required to trigger via API
