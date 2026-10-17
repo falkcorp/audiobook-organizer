@@ -1,6 +1,5 @@
 // file: web/src/contexts/AuthContext.tsx
-// version: 1.2.0
-// last-edited: 2026-10-17
+// version: 1.1.2
 // guid: 2b3c4d5e-6f70-4819-a2b3-c4d5e6f70819
 
 import {
@@ -15,7 +14,6 @@ import {
 } from 'react';
 import * as api from '../services/api';
 import { ApiError, type AuthUser } from '../services/api';
-import { queryClient } from '../lib/queryClient';
 
 interface AuthContextValue {
   initialized: boolean;
@@ -115,7 +113,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
-      queryClient.clear(); // one user's cached rows never reach the next
       setUser(null);
     }
   }, []);
