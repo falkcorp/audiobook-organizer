@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-17
 
@@ -37,9 +37,11 @@ func (s *Server) wireOpsV3Routes(protected *gin.RouterGroup) {
 		d.Enqueuer = s.opRegistry
 		d.Zombies = s.opRegistry
 	}
-	if s.scheduler != nil {
-		d.Sched = opsV3Sched{ts: s.scheduler}
-	}
+	// Lazy: s.scheduler is assigned in Start(), after setupRoutes has run
+	// this, so a value captured here would always be nil and every def would
+	// read manual (the operations handler's provider in wire_handlers.go has
+	// the same shape).
+	d.Sched = opsV3Sched{ts: func() *scheduler.TaskScheduler { return s.scheduler }}
 	// No Approver: nothing in the runner records an approval against a run yet
 	// (05-PR9 report), so POST .../approve answers 501 after its checks.
 	if d.Runs != nil && s.opHub != nil {
@@ -151,11 +153,18 @@ func (d *opsV3Defs) Ready(id string) (bool, string) {
 	return true, ""
 }
 
-// opsV3Sched is the TaskScheduler's schedules as opsv3.Sched.
-type opsV3Sched struct{ ts *scheduler.TaskScheduler }
+// opsV3Sched is the TaskScheduler's schedules as opsv3.Sched. ts is resolved
+// per request; before the scheduler exists there are no schedules.
+type opsV3Sched struct {
+	ts func() *scheduler.TaskScheduler
+}
 
 func (o opsV3Sched) Schedules() map[string]opsv3.ScheduleInfo {
-	sts := o.ts.ScheduleStatuses()
+	ts := o.ts()
+	if ts == nil {
+		return nil
+	}
+	sts := ts.ScheduleStatuses()
 	out := make(map[string]opsv3.ScheduleInfo, len(sts))
 	for _, st := range sts {
 		out[st.DefID] = opsv3.ScheduleInfo{Kind: st.Kind, Active: st.Active, Live: st.Live, NextFire: st.NextFire}
