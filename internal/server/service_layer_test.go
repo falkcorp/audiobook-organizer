@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-12
+// last-edited: 2026-10-17
 
 package server
 
@@ -1119,7 +1119,6 @@ func TestConfigUpdateService_UpdateConfig_AllFields(t *testing.T) {
 	originalFolderPattern := config.AppConfig.FolderNamingPattern
 	originalFilePattern := config.AppConfig.FileNamingPattern
 	originalBackups := config.AppConfig.CreateBackups
-	originalLanguage := config.AppConfig.Language
 	originalLogLevel := config.AppConfig.LogLevel
 	originalAPIKey := config.AppConfig.OpenAIAPIKey
 	originalEnableAI := config.AppConfig.EnableAIParsing
@@ -1131,7 +1130,6 @@ func TestConfigUpdateService_UpdateConfig_AllFields(t *testing.T) {
 		config.AppConfig.FolderNamingPattern = originalFolderPattern
 		config.AppConfig.FileNamingPattern = originalFilePattern
 		config.AppConfig.CreateBackups = originalBackups
-		config.AppConfig.Language = originalLanguage
 		config.AppConfig.LogLevel = originalLogLevel
 		config.AppConfig.OpenAIAPIKey = originalAPIKey
 		config.AppConfig.EnableAIParsing = originalEnableAI
@@ -1145,7 +1143,6 @@ func TestConfigUpdateService_UpdateConfig_AllFields(t *testing.T) {
 		"folder_naming_pattern": "{author}/{series}",
 		"file_naming_pattern":   "{title}",
 		"create_backups":        true,
-		"language":              "en-US",
 		"log_level":             "debug",
 		"openai_api_key":        "sk-test123",
 		"enable_ai_parsing":     true,
@@ -1174,9 +1171,6 @@ func TestConfigUpdateService_UpdateConfig_AllFields(t *testing.T) {
 	}
 	if !config.AppConfig.CreateBackups {
 		t.Error("expected create_backups true")
-	}
-	if config.AppConfig.Language != "en-US" {
-		t.Errorf("expected language 'en-US', got %q", config.AppConfig.Language)
 	}
 	if config.AppConfig.LogLevel != "debug" {
 		t.Errorf("expected log_level 'debug', got %q", config.AppConfig.LogLevel)

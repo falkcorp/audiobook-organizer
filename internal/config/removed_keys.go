@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
 // last-edited: 2026-10-17
 
@@ -34,10 +34,20 @@ const downloadClientRemovedMessage = "the qBittorrent and SABnzbd download-clien
 	"nothing ever read them. Only the Deluge settings under download_client.torrent are still used; " +
 	"delete this block, including any stored qBittorrent password or SABnzbd API key"
 
+// unreadSettingsRemovedMessage explains the removal of the eleven settings that
+// were loaded, saved and shown on the Settings page but never read by any code.
+const unreadSettingsRemovedMessage = "this setting was removed: it was stored and shown on the Settings page " +
+	"but nothing ever read it, so changing it had no effect"
+
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
 	key     string
 	message string
+	// fileOnly marks a key whose bare name is also a common environment
+	// variable (LANGUAGE), so the viper/environment warning would fire for an
+	// unrelated variable. It is still warned about in a config file, scrubbed
+	// on save and refused in an update.
+	fileOnly bool
 }
 
 // removedConfigKeys lists retired settings. A slice rather than a map so the
@@ -69,6 +79,20 @@ var removedConfigKeys = []removedConfigKey{
 	// (qBittorrent password, SABnzbd API key) are scrubbed from config.yaml on save.
 	{key: "download_client.torrent.qbittorrent", message: downloadClientRemovedMessage},
 	{key: "download_client.usenet", message: downloadClientRemovedMessage},
+	// Removed 2026-10-17 (01-P80): loaded and saved but never read. api_keys was
+	// an empty struct. language is the TOP-LEVEL key only; catalog.language is a
+	// different, live setting and is not matched by a literal top-level lookup.
+	{key: "metadata_review_default_view", message: unreadSettingsRemovedMessage},
+	{key: "default_user_quota_gb", message: unreadSettingsRemovedMessage},
+	{key: "memory_limit_type", message: unreadSettingsRemovedMessage},
+	{key: "cache_size", message: unreadSettingsRemovedMessage},
+	{key: "memory_limit_percent", message: unreadSettingsRemovedMessage},
+	{key: "memory_limit_mb", message: unreadSettingsRemovedMessage},
+	{key: "log_format", message: unreadSettingsRemovedMessage},
+	{key: "enable_json_logging", message: unreadSettingsRemovedMessage},
+	{key: "auth_rate_limit_per_minute", message: unreadSettingsRemovedMessage + "; sign-in attempts are limited by fixed per-IP and per-account throttles, not a setting"},
+	{key: "api_keys", message: unreadSettingsRemovedMessage},
+	{key: "language", message: unreadSettingsRemovedMessage, fileOnly: true},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key
@@ -141,7 +165,7 @@ func warnRemovedKey(key, source string) {
 // operator who still sets the removed flag's key in a file gets no signal.
 func warnRemovedViperKeys() {
 	for _, rk := range removedConfigKeys {
-		if viper.IsSet(rk.key) {
+		if !rk.fileOnly && viper.IsSet(rk.key) {
 			warnRemovedKey(rk.key, "config file or environment")
 		}
 	}

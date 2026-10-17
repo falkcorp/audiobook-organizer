@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.19.0
-// last-edited: 2026-10-11
+// version: 1.20.0
+// last-edited: 2026-10-17
 
 package config
 
@@ -233,12 +233,6 @@ func TestConfigValidate(t *testing.T) {
 		assert.ErrorContains(t, err, "api_rate_limit_per_minute must be >= 0")
 	})
 
-	t.Run("negative auth rate limit", func(t *testing.T) {
-		c := &Config{DatabaseType: "pebble", AuthRateLimitPerMinute: -1}
-		err := c.Validate()
-		assert.ErrorContains(t, err, "auth_rate_limit_per_minute must be >= 0")
-	})
-
 	t.Run("negative JSON body limit", func(t *testing.T) {
 		c := &Config{DatabaseType: "pebble", JSONBodyLimitMB: -1}
 		err := c.Validate()
@@ -381,7 +375,6 @@ func TestInitConfigDefaults(t *testing.T) {
 	t.Run("metadata defaults", func(t *testing.T) {
 		assert.False(t, AppConfig.WriteBackMetadata)
 		assert.True(t, AppConfig.EmbedCoverArt)
-		assert.Equal(t, "en", AppConfig.Language)
 	})
 
 	t.Run("performance defaults", func(t *testing.T) {
@@ -412,24 +405,14 @@ func TestInitConfigDefaults(t *testing.T) {
 
 	t.Run("API and auth defaults", func(t *testing.T) {
 		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)
-		assert.Equal(t, 10, AppConfig.AuthRateLimitPerMinute)
 		assert.Equal(t, 1, AppConfig.JSONBodyLimitMB)
 		assert.Equal(t, 10, AppConfig.UploadBodyLimitMB)
 		assert.True(t, AppConfig.EnableAuth)
 		assert.False(t, AppConfig.BasicAuthEnabled)
 	})
 
-	t.Run("memory management defaults", func(t *testing.T) {
-		assert.Equal(t, "items", AppConfig.MemoryLimitType)
-		assert.Equal(t, 1000, AppConfig.CacheSize)
-		assert.Equal(t, 25, AppConfig.MemoryLimitPercent)
-		assert.Equal(t, 512, AppConfig.MemoryLimitMB)
-	})
-
 	t.Run("logging defaults", func(t *testing.T) {
 		assert.Equal(t, "info", AppConfig.LogLevel)
-		assert.Equal(t, "text", AppConfig.LogFormat)
-		assert.False(t, AppConfig.EnableJsonLogging)
 	})
 
 	t.Run("maintenance window defaults", func(t *testing.T) {
@@ -585,7 +568,6 @@ func TestResetToDefaultsPreservesPaths(t *testing.T) {
 		DatabasePath: "/data/audiobooks.pebble",
 		PlaylistDir:  "/media/playlists",
 		LogLevel:     "debug",
-		CacheSize:    5000,
 	}
 
 	ResetToDefaults()
@@ -598,7 +580,6 @@ func TestResetToDefaultsPreservesPaths(t *testing.T) {
 	// Other fields should be reset
 	assert.Equal(t, "pebble", AppConfig.DatabaseType)
 	assert.Equal(t, "info", AppConfig.LogLevel)
-	assert.Equal(t, 1000, AppConfig.CacheSize)
 	assert.True(t, AppConfig.AutoOrganize)
 	assert.Equal(t, "auto", AppConfig.OrganizationStrategy)
 }
@@ -619,15 +600,11 @@ func TestApplySettingStringKeys(t *testing.T) {
 		{"organization_strategy", "copy", func() string { return AppConfig.OrganizationStrategy }},
 		{"folder_naming_pattern", "{author}/{title}", func() string { return AppConfig.FolderNamingPattern }},
 		{"file_naming_pattern", "{title}", func() string { return AppConfig.FileNamingPattern }},
-		{"language", "fr", func() string { return AppConfig.Language }},
-		{"metadata_review_default_view", "grid", func() string { return AppConfig.MetadataReviewDefaultView }},
 		{"openlibrary_dump_dir", "/dumps", func() string { return AppConfig.OpenLibraryDumpDir }},
 		{"hardcover_api_token", "tok123", func() string { return AppConfig.HardcoverAPIToken }},
 		{"openai_api_key", "sk-abc", func() string { return AppConfig.OpenAIAPIKey }},
 		{"google_books_api_key", "gk-xyz", func() string { return AppConfig.GoogleBooksAPIKey }},
-		{"memory_limit_type", "percent", func() string { return AppConfig.MemoryLimitType }},
 		{"log_level", "debug", func() string { return AppConfig.LogLevel }},
-		{"log_format", "json", func() string { return AppConfig.LogFormat }},
 		{"auto_update_channel", "beta", func() string { return AppConfig.AutoUpdate.Channel }},
 		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunes.LibraryITLPath }},
 		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunes.LibraryITLPath }},
@@ -663,7 +640,6 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"write_back_metadata", func() bool { return AppConfig.WriteBackMetadata }},
 		{"embed_cover_art", func() bool { return AppConfig.EmbedCoverArt }},
 		{"auto_scan_enabled", func() bool { return AppConfig.AutoScanEnabled }},
-		{"enable_json_logging", func() bool { return AppConfig.EnableJsonLogging }},
 		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdate.Enabled }},
 		{"purge_soft_deleted_delete_files", func() bool { return AppConfig.PurgeSoftDeletedDeleteFiles }},
 		{"maintenance_window_enabled", func() bool { return AppConfig.Maintenance.Enabled }},
@@ -722,17 +698,12 @@ func TestApplySettingIntKeys(t *testing.T) {
 		field func() int
 	}{
 		{"disk_quota_percent", "80", func() int { return AppConfig.DiskQuotaPercent }},
-		{"default_user_quota_gb", "50", func() int { return AppConfig.DefaultUserQuotaGB }},
 		{"concurrent_scans", "8", func() int { return AppConfig.ConcurrentScans }},
 		{"operation_timeout_minutes", "60", func() int { return AppConfig.OperationTimeoutMinutes }},
 		{"api_rate_limit_per_minute", "100", func() int { return AppConfig.APIRateLimitPerMinute }},
-		{"auth_rate_limit_per_minute", "20", func() int { return AppConfig.AuthRateLimitPerMinute }},
 		{"json_body_limit_mb", "5", func() int { return AppConfig.JSONBodyLimitMB }},
 		{"upload_body_limit_mb", "50", func() int { return AppConfig.UploadBodyLimitMB }},
 		{"auto_scan_debounce_seconds", "10", func() int { return AppConfig.AutoScanDebounceSeconds }},
-		{"cache_size", "2000", func() int { return AppConfig.CacheSize }},
-		{"memory_limit_percent", "50", func() int { return AppConfig.MemoryLimitPercent }},
-		{"memory_limit_mb", "1024", func() int { return AppConfig.MemoryLimitMB }},
 		{"auto_update_check_minutes", "120", func() int { return AppConfig.AutoUpdate.CheckMinutes }},
 		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdate.WindowStart }},
 		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdate.WindowEnd }},
@@ -898,14 +869,13 @@ func TestLoadConfigFromFileUnit(t *testing.T) {
 	t.Run("loads string fallbacks", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.yaml")
-		content := "openai_api_key: sk-test123\nlanguage: de\n"
+		content := "openai_api_key: sk-test123\n"
 		require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
 
 		AppConfig = Config{DatabasePath: filepath.Join(tmpDir, "test.db")}
 		err := LoadConfigFromFile()
 		assert.NoError(t, err)
 		assert.Equal(t, "sk-test123", AppConfig.OpenAIAPIKey)
-		assert.Equal(t, "de", AppConfig.Language)
 	})
 
 	t.Run("does not overwrite existing values", func(t *testing.T) {

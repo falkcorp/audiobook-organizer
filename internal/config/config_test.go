@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-17
 
@@ -86,11 +86,6 @@ func TestStorageQuotaDefaults(t *testing.T) {
 	if enableUserQuotas := viper.GetBool("enable_user_quotas"); enableUserQuotas {
 		t.Error("Expected enable_user_quotas to be false by default")
 	}
-
-	defaultUserQuota := viper.GetInt("default_user_quota_gb")
-	if defaultUserQuota != 100 {
-		t.Errorf("Expected default_user_quota_gb to be 100, got %d", defaultUserQuota)
-	}
 }
 
 // TestMetadataDefaults tests metadata configuration defaults
@@ -98,11 +93,6 @@ func TestMetadataDefaults(t *testing.T) {
 	// Arrange-Act-Assert: Test metadata defaults
 	viper.Reset()
 	InitConfig()
-
-	language := viper.GetString("language")
-	if language != "en" {
-		t.Errorf("Expected language to be 'en', got '%s'", language)
-	}
 
 	// Verify metadata sources are populated
 	if len(AppConfig.MetadataSources) == 0 {
@@ -149,33 +139,6 @@ func TestPerformanceDefaults(t *testing.T) {
 	}
 }
 
-// TestMemoryManagementDefaults tests memory management defaults
-func TestMemoryManagementDefaults(t *testing.T) {
-	// Arrange-Act-Assert: Test memory defaults
-	viper.Reset()
-	InitConfig()
-
-	memoryLimitType := viper.GetString("memory_limit_type")
-	if memoryLimitType != "items" {
-		t.Errorf("Expected memory_limit_type to be 'items', got '%s'", memoryLimitType)
-	}
-
-	cacheSize := viper.GetInt("cache_size")
-	if cacheSize != 1000 {
-		t.Errorf("Expected cache_size to be 1000, got %d", cacheSize)
-	}
-
-	memoryLimitPercent := viper.GetInt("memory_limit_percent")
-	if memoryLimitPercent != 25 {
-		t.Errorf("Expected memory_limit_percent to be 25, got %d", memoryLimitPercent)
-	}
-
-	memoryLimitMB := viper.GetInt("memory_limit_mb")
-	if memoryLimitMB != 512 {
-		t.Errorf("Expected memory_limit_mb to be 512, got %d", memoryLimitMB)
-	}
-}
-
 // TestLoggingDefaults tests logging configuration defaults
 func TestLoggingDefaults(t *testing.T) {
 	// Arrange-Act-Assert: Test logging defaults
@@ -185,15 +148,6 @@ func TestLoggingDefaults(t *testing.T) {
 	logLevel := viper.GetString("log_level")
 	if logLevel != "info" {
 		t.Errorf("Expected log_level to be 'info', got '%s'", logLevel)
-	}
-
-	logFormat := viper.GetString("log_format")
-	if logFormat != "text" {
-		t.Errorf("Expected log_format to be 'text', got '%s'", logFormat)
-	}
-
-	if enableJSON := viper.GetBool("enable_json_logging"); enableJSON {
-		t.Error("Expected enable_json_logging to be false by default")
 	}
 }
 
@@ -205,7 +159,6 @@ func TestConfigStructure(t *testing.T) {
 		DatabasePath:         "/data/audiobooks.db",
 		DatabaseType:         "pebble",
 		OrganizationStrategy: "auto",
-		Language:             "en",
 	}
 
 	// Act & Assert

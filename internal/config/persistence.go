@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-16
+// last-edited: 2026-10-17
 
 package config
 
@@ -80,7 +80,6 @@ func LoadConfigFromFile() error {
 			{"google_books_api_key", &c.GoogleBooksAPIKey},
 			{"hardcover_api_token", &c.HardcoverAPIToken},
 			{"root_dir", &c.RootDir},
-			{"language", &c.Language},
 		} {
 			if *s.ptr == "" {
 				if val, ok := fileConfig[s.key].(string); ok && val != "" {
@@ -158,7 +157,6 @@ func SaveConfigToFile() error {
 		"auto_organize":         c.AutoOrganize,
 		"folder_naming_pattern": c.FolderNamingPattern,
 		"file_naming_pattern":   c.FileNamingPattern,
-		"language":              c.Language,
 		"enable_ai_parsing":     c.EnableAIParsing,
 		"concurrent_scans":      c.ConcurrentScans,
 		"log_level":             c.LogLevel,
@@ -1416,16 +1414,8 @@ func applySetting(key, value, typ string) error {
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.EnableUserQuotas = b
 			}
-		case "default_user_quota_gb":
-			if i, err := strconv.Atoi(value); err == nil {
-				c.DefaultUserQuotaGB = i
-			}
 
 		// Metadata
-		case "language":
-			c.Language = value
-		case "metadata_review_default_view":
-			c.MetadataReviewDefaultView = value
 		case "metadata_sources":
 			var sources []MetadataSource
 			if err := json.Unmarshal([]byte(value), &sources); err == nil && len(sources) > 0 {
@@ -1471,10 +1461,6 @@ func applySetting(key, value, typ string) error {
 			if i, err := strconv.Atoi(value); err == nil {
 				c.APIRateLimitPerMinute = i
 			}
-		case "auth_rate_limit_per_minute":
-			if i, err := strconv.Atoi(value); err == nil {
-				c.AuthRateLimitPerMinute = i
-			}
 		case "json_body_limit_mb":
 			if i, err := strconv.Atoi(value); err == nil {
 				c.JSONBodyLimitMB = i
@@ -1505,12 +1491,6 @@ func applySetting(key, value, typ string) error {
 			}
 
 		// Memory management
-		case "memory_limit_type":
-			c.MemoryLimitType = value
-		case "cache_size":
-			if i, err := strconv.Atoi(value); err == nil {
-				c.CacheSize = i
-			}
 		case "cache_invalidate_on_book_update":
 			c.CacheInvalidateOnBookUpdate = value == "true"
 		case "metadata_fetch_cache_ttl_days":
@@ -1549,24 +1529,10 @@ func applySetting(key, value, typ string) error {
 			if i, err := strconv.Atoi(value); err == nil {
 				c.MetadataFetch.NegativeTTLDays.Google = i
 			}
-		case "memory_limit_percent":
-			if i, err := strconv.Atoi(value); err == nil {
-				c.MemoryLimitPercent = i
-			}
-		case "memory_limit_mb":
-			if i, err := strconv.Atoi(value); err == nil {
-				c.MemoryLimitMB = i
-			}
 
 		// Logging
 		case "log_level":
 			c.LogLevel = value
-		case "log_format":
-			c.LogFormat = value
-		case "enable_json_logging":
-			if b, err := strconv.ParseBool(value); err == nil {
-				c.EnableJsonLogging = b
-			}
 
 		// Auto-update
 		case "auto_update_enabled":

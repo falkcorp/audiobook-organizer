@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.25.1
+// version: 1.25.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 package config
 
@@ -162,11 +162,6 @@ func TestLoadConfigFromDatabase(t *testing.T) {
 				Type:  "int",
 			},
 			{
-				Key:   "cache_size",
-				Value: "2000",
-				Type:  "int",
-			},
-			{
 				Key:   "disk_quota_percent",
 				Value: "90",
 				Type:  "int",
@@ -182,9 +177,6 @@ func TestLoadConfigFromDatabase(t *testing.T) {
 
 		if AppConfig.ConcurrentScans != 8 {
 			t.Errorf("expected ConcurrentScans=8, got %d", AppConfig.ConcurrentScans)
-		}
-		if AppConfig.CacheSize != 2000 {
-			t.Errorf("expected CacheSize=2000, got %d", AppConfig.CacheSize)
 		}
 		if AppConfig.DiskQuotaPercent != 90 {
 			t.Errorf("expected DiskQuotaPercent=90, got %d", AppConfig.DiskQuotaPercent)
@@ -382,22 +374,6 @@ func TestApplySetting(t *testing.T) {
 			check: func() bool { return AppConfig.EnableUserQuotas },
 		},
 		{
-			name:  "default_user_quota_gb",
-			key:   "default_user_quota_gb",
-			value: "50",
-			typ:   "int",
-			setup: func() { AppConfig.DefaultUserQuotaGB = 0 },
-			check: func() bool { return AppConfig.DefaultUserQuotaGB == 50 },
-		},
-		{
-			name:  "language",
-			key:   "language",
-			value: "de",
-			typ:   "string",
-			setup: func() { AppConfig.Language = "" },
-			check: func() bool { return AppConfig.Language == "de" },
-		},
-		{
 			name:  "enable_ai_parsing",
 			key:   "enable_ai_parsing",
 			value: "true",
@@ -422,60 +398,12 @@ func TestApplySetting(t *testing.T) {
 			check: func() bool { return AppConfig.ConcurrentScans == 16 },
 		},
 		{
-			name:  "memory_limit_type",
-			key:   "memory_limit_type",
-			value: "percent",
-			typ:   "string",
-			setup: func() { AppConfig.MemoryLimitType = "" },
-			check: func() bool { return AppConfig.MemoryLimitType == "percent" },
-		},
-		{
-			name:  "cache_size",
-			key:   "cache_size",
-			value: "5000",
-			typ:   "int",
-			setup: func() { AppConfig.CacheSize = 0 },
-			check: func() bool { return AppConfig.CacheSize == 5000 },
-		},
-		{
-			name:  "memory_limit_percent",
-			key:   "memory_limit_percent",
-			value: "50",
-			typ:   "int",
-			setup: func() { AppConfig.MemoryLimitPercent = 0 },
-			check: func() bool { return AppConfig.MemoryLimitPercent == 50 },
-		},
-		{
-			name:  "memory_limit_mb",
-			key:   "memory_limit_mb",
-			value: "1024",
-			typ:   "int",
-			setup: func() { AppConfig.MemoryLimitMB = 0 },
-			check: func() bool { return AppConfig.MemoryLimitMB == 1024 },
-		},
-		{
 			name:  "log_level",
 			key:   "log_level",
 			value: "debug",
 			typ:   "string",
 			setup: func() { AppConfig.LogLevel = "" },
 			check: func() bool { return AppConfig.LogLevel == "debug" },
-		},
-		{
-			name:  "log_format",
-			key:   "log_format",
-			value: "json",
-			typ:   "string",
-			setup: func() { AppConfig.LogFormat = "" },
-			check: func() bool { return AppConfig.LogFormat == "json" },
-		},
-		{
-			name:  "enable_json_logging",
-			key:   "enable_json_logging",
-			value: "true",
-			typ:   "bool",
-			setup: func() { AppConfig.EnableJsonLogging = false },
-			check: func() bool { return AppConfig.EnableJsonLogging },
 		},
 		{
 			name:    "unknown_key",
@@ -539,18 +467,10 @@ func TestSaveConfigToDatabase(t *testing.T) {
 			EnableDiskQuota:      true,
 			DiskQuotaPercent:     90,
 			EnableUserQuotas:     true,
-			DefaultUserQuotaGB:   50,
-			Language:             "de",
 			EnableAIParsing:      true,
 			OpenAIAPIKey:         "sk-test",
 			ConcurrentScans:      8,
-			MemoryLimitType:      "percent",
-			CacheSize:            2000,
-			MemoryLimitPercent:   50,
-			MemoryLimitMB:        1024,
 			LogLevel:             "debug",
-			LogFormat:            "json",
-			EnableJsonLogging:    true,
 		}
 		err := SaveConfigToDatabase(store)
 		if err != nil {

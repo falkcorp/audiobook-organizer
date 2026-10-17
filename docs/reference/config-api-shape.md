@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-17 -->
 
 # Config API Shape Reference
 
@@ -64,8 +64,8 @@ A request that is not an interactive session (an API key, an ABS token) gets
 `403` (`refused_keys` lists them) when it **changes** a protected setting:
 sign-in settings (`enable_auth`, `basic_auth_*`, `oauth_*`, `cf_access_*`,
 `owner_email`, `abs_api_enabled`, `abs_auth_modes`, `abs_*_ttl`,
-`abs_refresh_grace`, `write_startup_readonly_key`, `enable_rate_limit`,
-`auth_rate_limit_per_minute`), executables (`tools.managed_dir`,
+`abs_refresh_grace`, `write_startup_readonly_key`, `enable_rate_limit`),
+executables (`tools.managed_dir`,
 `tools.*.custom_path`, `tools.*.mode`), database locations (`database_path`,
 `activity_backend`, `activity_db_path`, `activity_db_move_on_change`) and
 server paths (`root_dir`, `path_aliases`, `playlist_dir`, `backup_dir`,
@@ -160,7 +160,6 @@ interface Config {
 
   // ── Metadata sources ─────────────────────────────────────────────────────
   metadata_sources: MetadataSource[];
-  metadata_review_default_view: string;
   metadata_fetch_cache_ttl_days: number;
 
   // ── Misc UI / library settings ───────────────────────────────────────────

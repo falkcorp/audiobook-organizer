@@ -1,7 +1,7 @@
 // file: internal/config/blob_preserves_defaults_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9e14c7b2-58fa-4d63-8071-2ab6f5cd913e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-17
 
 // Regression tests for the stored config blob wiping every default.
 //
@@ -309,7 +309,7 @@ func TestTruncatedAuditLineReportsHowManyKeysItHid(t *testing.T) {
 // meaning anything.
 func TestUntruncatedAuditLineClaimsNothingWasHidden(t *testing.T) {
 	restoreAppConfig(t)
-	Mutate(func(c *Config) { *c = Config{RootDir: "/mnt/books", LogLevel: "info", CacheSize: 1000} })
+	Mutate(func(c *Config) { *c = Config{RootDir: "/mnt/books", LogLevel: "info"} })
 
 	buf := &bytes.Buffer{}
 	prev := slog.Default()

@@ -1,5 +1,5 @@
 // file: internal/config/config_coverage_test.go
-// version: 1.4.0
+// version: 1.5.0
 // last-edited: 2026-10-17
 
 package config
@@ -70,7 +70,6 @@ func TestCoverage_LoadConfigFromFile(t *testing.T) {
 		yamlContent := `openai_api_key: "sk-test-from-file"
 root_dir: "/from/file"
 enable_ai_parsing: true
-language: "fr"
 `
 		if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
 			t.Fatalf("failed to write config file: %v", err)
@@ -86,9 +85,6 @@ language: "fr"
 		}
 		if AppConfig.RootDir != "/from/file" {
 			t.Errorf("expected RootDir from file, got %q", AppConfig.RootDir)
-		}
-		if AppConfig.Language != "fr" {
-			t.Errorf("expected Language 'fr', got %q", AppConfig.Language)
 		}
 	})
 
@@ -151,7 +147,6 @@ func TestCoverage_SaveConfigToFile(t *testing.T) {
 			DatabasePath: filepath.Join(tmpDir, "db.pebble"),
 			RootDir:      "/test/root",
 			OpenAIAPIKey: "sk-test-save",
-			Language:     "en",
 		}
 		err := SaveConfigToFile()
 		if err != nil {

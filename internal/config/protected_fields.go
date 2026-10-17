@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
-// last-edited: 2026-10-12
+// last-edited: 2026-10-17
 
 package config
 
@@ -89,7 +89,6 @@ var configFieldRules = map[string]fieldRule{
 	"abs_refresh_grace":          {FieldSignIn, "how long a used ABS refresh token keeps working"},
 	"write_startup_readonly_key": {FieldSignIn, "mints an API key at every start"},
 	"enable_rate_limit":          {FieldSignIn, "turning it off removes the brute-force limit on sign-in"},
-	"auth_rate_limit_per_minute": {FieldSignIn, "the brute-force limit on sign-in"},
 
 	// ---- executables ----
 	"tools.managed_dir":        {FieldExecutable, "directory the server installs and runs managed tools from"},

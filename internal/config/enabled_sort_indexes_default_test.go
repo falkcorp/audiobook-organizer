@@ -1,7 +1,7 @@
 // file: internal/config/enabled_sort_indexes_default_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c1e8a7d-2b95-4f63-9d0a-6e3b7f58c1a2
-// last-edited: 2026-10-11
+// last-edited: 2026-10-17
 
 // enabled_sort_indexes was reported as null by GET /api/v1/config on prod, so
 // the shipped default never reached cmd/root.go's SetEnabledSortIndexes,
@@ -121,7 +121,7 @@ func TestUpdateConfigRefusesEnabledSortIndexesChange(t *testing.T) {
 
 			status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 				"enabled_sort_indexes": tc.put,
-				"language":             "xx",
+				"log_level":            "warn",
 			})
 			if status != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; resp = %v", status, resp)
@@ -136,8 +136,8 @@ func TestUpdateConfigRefusesEnabledSortIndexesChange(t *testing.T) {
 			if !slices.Equal(snap.EnabledSortIndexes, wantDefaultSortIndexes) {
 				t.Errorf("EnabledSortIndexes = %#v after a refused PUT, want %v", snap.EnabledSortIndexes, wantDefaultSortIndexes)
 			}
-			if snap.Language == "xx" {
-				t.Error("refused PUT still applied language")
+			if snap.LogLevel == "warn" {
+				t.Error("refused PUT still applied log_level")
 			}
 			if len(*blobs) != 0 {
 				t.Error("refused PUT persisted a blob")
@@ -162,14 +162,14 @@ func TestUpdateConfigAcceptsUnchangedEnabledSortIndexes(t *testing.T) {
 
 	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 		"enabled_sort_indexes": []any{"Created_At", "year"},
-		"language":             "xx",
+		"log_level":            "warn",
 	})
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; resp = %v", status, resp)
 	}
 	snap := Snapshot()
-	if snap.Language != "xx" {
-		t.Errorf("language = %q, want xx", snap.Language)
+	if snap.LogLevel != "warn" {
+		t.Errorf("log_level = %q, want warn", snap.LogLevel)
 	}
 	if !slices.Equal(snap.EnabledSortIndexes, wantDefaultSortIndexes) {
 		t.Errorf("EnabledSortIndexes = %#v, want the running value %v unchanged", snap.EnabledSortIndexes, wantDefaultSortIndexes)

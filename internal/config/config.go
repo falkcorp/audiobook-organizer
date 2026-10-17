@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.159.0
+// version: 1.160.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-17
 
@@ -1123,20 +1123,17 @@ type Config struct {
 	BackupCompressionLevel int `json:"backup_compression_level" mapstructure:"backup_compression_level"`
 
 	// Storage quotas
-	EnableDiskQuota    bool `json:"enable_disk_quota"`
-	DiskQuotaPercent   int  `json:"disk_quota_percent"`
-	EnableUserQuotas   bool `json:"enable_user_quotas"`
-	DefaultUserQuotaGB int  `json:"default_user_quota_gb"`
+	EnableDiskQuota  bool `json:"enable_disk_quota"`
+	DiskQuotaPercent int  `json:"disk_quota_percent"`
+	EnableUserQuotas bool `json:"enable_user_quotas"`
 
 	// Metadata
 	WriteBackMetadata bool `json:"write_back_metadata"`
 	// EmbedCoverArt gates metafetch.embedCoverInBookFiles. Default true: the
 	// embed ran unconditionally before the setting was wired, so true keeps
 	// behaviour unchanged on upgrade.
-	EmbedCoverArt             bool             `json:"embed_cover_art"`
-	MetadataSources           []MetadataSource `json:"metadata_sources"`
-	Language                  string           `json:"language"`
-	MetadataReviewDefaultView string           `json:"metadata_review_default_view"`
+	EmbedCoverArt   bool             `json:"embed_cover_art"`
+	MetadataSources []MetadataSource `json:"metadata_sources"`
 
 	// Open Library data dumps
 	OpenLibraryDumpEnabled bool   `json:"openlibrary_dump_enabled"`
@@ -1540,12 +1537,11 @@ type Config struct {
 	AIBackend AIBackendConfig `json:"ai_backend" mapstructure:"ai_backend"`
 
 	// API limits
-	APIRateLimitPerMinute  int  `json:"api_rate_limit_per_minute"`
-	AuthRateLimitPerMinute int  `json:"auth_rate_limit_per_minute"`
-	JSONBodyLimitMB        int  `json:"json_body_limit_mb"`
-	UploadBodyLimitMB      int  `json:"upload_body_limit_mb"`
-	EnableAuth             bool `json:"enable_auth"`
-	EnableRateLimit        bool `json:"enable_rate_limit"`
+	APIRateLimitPerMinute int  `json:"api_rate_limit_per_minute"`
+	JSONBodyLimitMB       int  `json:"json_body_limit_mb"`
+	UploadBodyLimitMB     int  `json:"upload_body_limit_mb"`
+	EnableAuth            bool `json:"enable_auth"`
+	EnableRateLimit       bool `json:"enable_rate_limit"`
 
 	// ReviewApplyEnabled is the GLOBAL "big switch" for the review-queue apply path.
 	// When false (the default), approving a review hold records the decision but NEVER
@@ -1650,8 +1646,6 @@ type Config struct {
 	ABSDefaultLibraryID string `json:"abs_default_library_id"`
 
 	// Memory management
-	MemoryLimitType string `json:"memory_limit_type"` // 'items', 'percent', 'absolute'
-	CacheSize       int    `json:"cache_size"`        // number of items
 	// CacheInvalidateOnBookUpdate controls whether updating a book's metadata
 	// invalidates the list/facets caches. Defaults to false so caches stay
 	// warm across metadata fetches and write-back operations.
@@ -1681,8 +1675,6 @@ type Config struct {
 	// startup warning, and only when BootstrapKeyTTL is unset. `json:"-"` so
 	// the 30 that older config blobs stored is ignored. (SEC-1/PROC-6)
 	BootstrapKeyTTLDays int `json:"-" mapstructure:"bootstrap_key_ttl_days"`
-	MemoryLimitPercent  int `json:"memory_limit_percent"` // % of system memory
-	MemoryLimitMB       int `json:"memory_limit_mb"`      // absolute MB
 
 	// Lifecycle / retention
 	PurgeSoftDeletedAfterDays   int  `json:"purge_soft_deleted_after_days"`
@@ -1692,9 +1684,7 @@ type Config struct {
 	BackupRetentionDays int `json:"backup_retention_days"`
 
 	// Logging
-	LogLevel          string `json:"log_level"`  // 'debug', 'info', 'warn', 'error'
-	LogFormat         string `json:"log_format"` // 'text' or 'json'
-	EnableJsonLogging bool   `json:"enable_json_logging"`
+	LogLevel string `json:"log_level"` // 'debug', 'info', 'warn', 'error'
 
 	// ITunes holds all iTunes import settings.
 	// Previously these were 10 flat fields; Wave 4 nests them here.
@@ -1722,10 +1712,6 @@ type Config struct {
 
 	// Download client integration
 	DownloadClient DownloadClientConfig `json:"download_client"`
-
-	// API Keys (kept for backward compatibility, Goodreads deprecated Dec 2020)
-	APIKeys struct {
-	} `json:"api_keys"`
 
 	// Apply pipeline.
 	//
@@ -2549,13 +2535,10 @@ func InitConfig() {
 	viper.SetDefault("enable_disk_quota", false)
 	viper.SetDefault("disk_quota_percent", 80)
 	viper.SetDefault("enable_user_quotas", false)
-	viper.SetDefault("default_user_quota_gb", 100)
 
 	// Set metadata defaults
 	viper.SetDefault("write_back_metadata", false)
 	viper.SetDefault("embed_cover_art", true)
-	viper.SetDefault("language", "en")
-	viper.SetDefault("metadata_review_default_view", "compact")
 
 	// Managed external-tool lifecycle (tools.*). Until 2026-10-11 InitConfig
 	// assigned these as constants and never consulted viper; the defaults are
@@ -2669,7 +2652,6 @@ func InitConfig() {
 
 	// API security/runtime limits
 	viper.SetDefault("api_rate_limit_per_minute", 100)
-	viper.SetDefault("auth_rate_limit_per_minute", 10)
 	viper.SetDefault("json_body_limit_mb", 1)
 	viper.SetDefault("upload_body_limit_mb", 10)
 	viper.SetDefault("enable_auth", true)
@@ -2718,8 +2700,6 @@ func InitConfig() {
 	viper.BindEnv("whisper_requires", "WHISPER_REQUIRES")   //nolint:errcheck
 
 	// Set memory management defaults
-	viper.SetDefault("memory_limit_type", "items")
-	viper.SetDefault("cache_size", 1000)
 	viper.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
 	viper.SetDefault("metadata_fetch.shared_cache", true)
 	viper.SetDefault("identification_advance_enabled", false)
@@ -2736,8 +2716,6 @@ func InitConfig() {
 	// BOOTSTRAP_KEY_TTL_DAYS reach them even where AutomaticEnv is not on.
 	viper.BindEnv("bootstrap_key_ttl", "BOOTSTRAP_KEY_TTL")           //nolint:errcheck
 	viper.BindEnv("bootstrap_key_ttl_days", "BOOTSTRAP_KEY_TTL_DAYS") //nolint:errcheck
-	viper.SetDefault("memory_limit_percent", 25)
-	viper.SetDefault("memory_limit_mb", 512)
 
 	// Lifecycle / retention defaults
 	viper.SetDefault("purge_soft_deleted_after_days", 30)
@@ -2746,8 +2724,6 @@ func InitConfig() {
 
 	// Set logging defaults
 	viper.SetDefault("log_level", "info")
-	viper.SetDefault("log_format", "text")
-	viper.SetDefault("enable_json_logging", false)
 
 	// Scheduled task defaults (nested under "scheduled.*.*")
 	// library_scan ships ENABLED at a 6-hour interval. Every other member of
@@ -3127,15 +3103,13 @@ func InitConfig() {
 			BackupCompressionLevel:  viper.GetInt("backup_compression_level"),
 
 			// Storage quotas
-			EnableDiskQuota:    viper.GetBool("enable_disk_quota"),
-			DiskQuotaPercent:   viper.GetInt("disk_quota_percent"),
-			EnableUserQuotas:   viper.GetBool("enable_user_quotas"),
-			DefaultUserQuotaGB: viper.GetInt("default_user_quota_gb"),
+			EnableDiskQuota:  viper.GetBool("enable_disk_quota"),
+			DiskQuotaPercent: viper.GetInt("disk_quota_percent"),
+			EnableUserQuotas: viper.GetBool("enable_user_quotas"),
 
 			// Metadata
 			WriteBackMetadata: viper.GetBool("write_back_metadata"),
 			EmbedCoverArt:     viper.GetBool("embed_cover_art"),
-			Language:          viper.GetString("language"),
 
 			// Open Library dumps
 			OpenLibraryDumpEnabled: viper.GetBool("openlibrary_dump_enabled"),
@@ -3194,7 +3168,6 @@ func InitConfig() {
 			LibraryCountsCacheMinIntervalSeconds: viper.GetInt("library_counts_cache_min_interval_seconds"),
 			BleveDescriptionMaxChars:             viper.GetInt("bleve_description_max_chars"),
 			MetadataReviewModel:                  viper.GetString("metadata_review_model"),
-			MetadataReviewDefaultView:            viper.GetString("metadata_review_default_view"),
 			FilenameParseModel:                   viper.GetString("filename_parse_model"),
 			CoverArtModel:                        viper.GetString("cover_art_model"),
 
@@ -3217,7 +3190,6 @@ func InitConfig() {
 			MinBookSizeBytes:                    viper.GetInt64("min_book_size_bytes"),
 			MinRescanAgeHours:                   viper.GetInt("min_rescan_age_hours"),
 			APIRateLimitPerMinute:               viper.GetInt("api_rate_limit_per_minute"),
-			AuthRateLimitPerMinute:              viper.GetInt("auth_rate_limit_per_minute"),
 			JSONBodyLimitMB:                     viper.GetInt("json_body_limit_mb"),
 			UploadBodyLimitMB:                   viper.GetInt("upload_body_limit_mb"),
 			EnableAuth:                          viper.GetBool("enable_auth"),
@@ -3268,14 +3240,10 @@ func InitConfig() {
 			ABSDefaultLibraryID: viper.GetString("abs_default_library_id"),
 
 			// Memory management
-			MemoryLimitType:             viper.GetString("memory_limit_type"),
-			CacheSize:                   viper.GetInt("cache_size"),
 			CacheInvalidateOnBookUpdate: viper.GetBool("cache_invalidate_on_book_update"),
 			MetadataFetchCacheTTLDays:   viper.GetInt("metadata_fetch_cache_ttl_days"),
 			BootstrapKeyTTL:             viper.GetString("bootstrap_key_ttl"),
 			BootstrapKeyTTLDays:         viper.GetInt("bootstrap_key_ttl_days"),
-			MemoryLimitPercent:          viper.GetInt("memory_limit_percent"),
-			MemoryLimitMB:               viper.GetInt("memory_limit_mb"),
 
 			// Shared provider-answer cache (metadata_fetch.*)
 			MetadataFetch: MetadataFetchConfig{
@@ -3296,9 +3264,7 @@ func InitConfig() {
 			BackupRetentionDays:         viper.GetInt("backup_retention_days"),
 
 			// Logging
-			LogLevel:          viper.GetString("log_level"),
-			LogFormat:         viper.GetString("log_format"),
-			EnableJsonLogging: viper.GetBool("enable_json_logging"),
+			LogLevel: viper.GetString("log_level"),
 
 			// Auto-update
 			AutoUpdate: AutoUpdateConfig{
@@ -3899,9 +3865,6 @@ func (c *Config) Validate() error {
 	if c.APIRateLimitPerMinute < 0 {
 		errs = append(errs, "api_rate_limit_per_minute must be >= 0")
 	}
-	if c.AuthRateLimitPerMinute < 0 {
-		errs = append(errs, "auth_rate_limit_per_minute must be >= 0")
-	}
 	if c.JSONBodyLimitMB < 0 {
 		errs = append(errs, "json_body_limit_mb must be >= 0")
 	}
@@ -4011,14 +3974,12 @@ func ResetToDefaults() {
 			CreateBackups:           true,
 
 			// Storage quotas
-			EnableDiskQuota:    false,
-			DiskQuotaPercent:   80,
-			EnableUserQuotas:   false,
-			DefaultUserQuotaGB: 100,
+			EnableDiskQuota:  false,
+			DiskQuotaPercent: 80,
+			EnableUserQuotas: false,
 
 			// Metadata
 			EmbedCoverArt: true,
-			Language:      "en",
 
 			// Open Library dumps
 			OpenLibraryDumpEnabled: false,
@@ -4045,7 +4006,6 @@ func ResetToDefaults() {
 			MinBookSizeBytes:                 5 * 1024 * 1024,
 			MinRescanAgeHours:                144,
 			APIRateLimitPerMinute:            100,
-			AuthRateLimitPerMinute:           10,
 			JSONBodyLimitMB:                  1,
 			UploadBodyLimitMB:                10,
 			EnableAuth:                       true,
@@ -4058,12 +4018,6 @@ func ResetToDefaults() {
 			BasicAuthEnabled:                 false,
 			BasicAuthUsername:                "",
 			BasicAuthPassword:                "",
-
-			// Memory management
-			MemoryLimitType:    "items",
-			CacheSize:          1000,
-			MemoryLimitPercent: 25,
-			MemoryLimitMB:      512,
 
 			// The shared provider-answer cache stays on through a reset:
 			// shared_cache is its rollback switch, and a reset that zeroed it
@@ -4181,9 +4135,7 @@ func ResetToDefaults() {
 			},
 
 			// Logging
-			LogLevel:          "info",
-			LogFormat:         "text",
-			EnableJsonLogging: false,
+			LogLevel: "info",
 
 			// Auto-update
 			AutoUpdate: AutoUpdateConfig{
