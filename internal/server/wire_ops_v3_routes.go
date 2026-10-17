@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-17
 
@@ -62,18 +62,36 @@ func (s *Server) closeOpsV3Streams() {
 	s.closeOpsV3Once.Do(func() { close(s.opsV3Closing) })
 }
 
+// opsV3FirstRunKey caches opsV3Authz's first-run check on the request.
+const opsV3FirstRunKey = "opsv3.first_run"
+
 // opsV3Authz is the server's permission semantics (auth disabled and the
 // first-run bypass hold every permission) as the handlers' two checks.
 func (s *Server) opsV3Authz() opsv3.Authz {
 	store := s.storeForWiring()
+	// firstRun is "no users yet", read once per request: Holds runs for
+	// every permission of a definition (and of the start floor), and
+	// CountUsers is a store read each time.
+	firstRun := func(c *gin.Context) bool {
+		if v, ok := c.Get(opsV3FirstRunKey); ok {
+			b, _ := v.(bool)
+			return b
+		}
+		fr := false
+		if store != nil {
+			if n, err := store.CountUsers(); err == nil && n == 0 {
+				fr = true
+			}
+		}
+		c.Set(opsV3FirstRunKey, fr)
+		return fr
+	}
 	holds := func(c *gin.Context, p auth.Permission) bool {
 		if !config.AppConfig.EnableAuth {
 			return true
 		}
-		if store != nil {
-			if n, err := store.CountUsers(); err == nil && n == 0 {
-				return true
-			}
+		if firstRun(c) {
+			return true
 		}
 		return auth.Can(c.Request.Context(), p)
 	}

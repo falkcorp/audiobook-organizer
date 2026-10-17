@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-17
 
@@ -16,8 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
@@ -223,5 +227,25 @@ func TestOpsV3Routes_EventStreamsEndOnShutdownAndStartLazily(t *testing.T) {
 	case <-ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the event stream outlived closeOpsV3Streams")
+	}
+}
+
+// TestOpsV3Authz_FirstRunCheckReadOncePerRequest: Holds runs once per
+// permission (a definition's set plus the start floor); the first-run check
+// behind it is one CountUsers per request, not one per permission.
+func TestOpsV3Authz_FirstRunCheckReadOncePerRequest(t *testing.T) {
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.EnableAuth = true
+	store := mocks.NewMockStore(t)
+	store.EXPECT().CountUsers().Return(3, nil).Times(2)
+	s := &Server{store: store}
+	authz := s.opsV3Authz()
+	for range 2 { // two requests
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		for _, p := range []auth.Permission{auth.PermScanTrigger, auth.PermLibraryEditMetadata, auth.PermSettingsManage} {
+			require.False(t, authz.Holds(c, p), "a request with no permissions holds none once users exist")
+		}
 	}
 }

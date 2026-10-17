@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/defs.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a701dc58-da75-41f2-b165-03a957c6e540
 // last-edited: 2026-10-17
 
@@ -71,19 +71,29 @@ type DefView struct {
 }
 
 // lastRunWindow and lastRunTTL bound the work of finding every definition's
-// latest finished run: one pass over the last day's finished runs, kept for a
+// latest finished run: a pass over the last day's finished runs, kept for a
 // few seconds, plus a lookup of the scheduler's recorded last run for a
-// definition that did not run in the window.
+// definition that did not run in the window (cached for as long).
+//
+// The window is read in pages of lastRunScan, oldest first, each page
+// starting where the last one ended, until the store says the window is
+// complete. Stopping after one page would keep the oldest runs and drop the
+// newest, so a busy day would show stale last runs. lastRunMaxPages bounds a
+// pathological day; past it the result is still the newest seen so far.
 const (
-	lastRunWindow = 24 * time.Hour
-	lastRunTTL    = 5 * time.Second
-	lastRunScan   = 2000
+	lastRunWindow   = 24 * time.Hour
+	lastRunTTL      = 5 * time.Second
+	lastRunScan     = 2000
+	lastRunMaxPages = 50
 )
 
 type lastRunCache struct {
 	mu   sync.Mutex
 	at   time.Time
 	byID map[string]LastRunView
+	// fallback is lastRunOf's scheduler lookups for this cache period; a
+	// nil value records "none".
+	fallback map[string]*LastRunView
 }
 
 // lastRuns returns the latest finished run per definition within the window.
@@ -96,21 +106,43 @@ func (h *Handler) lastRuns() map[string]LastRunView {
 	}
 	out := map[string]LastRunView{}
 	if h.d.Runs != nil {
-		recs, _, err := h.d.Runs.ListDoneRunsSinceV3(now.Add(-lastRunWindow), lastRunScan)
-		if err == nil {
+		since := now.Add(-lastRunWindow)
+		for range lastRunMaxPages {
+			recs, complete, err := h.d.Runs.ListDoneRunsSinceV3(since, lastRunScan)
+			if err != nil {
+				break
+			}
 			// Oldest first, so a later run of the same definition replaces an
 			// earlier one.
 			for _, r := range recs {
 				out[r.DefID] = LastRunView{ID: r.ID, State: string(r.State), Outcome: outcomeOf(r.State), FinishedAt: r.CompletedAt}
 			}
+			if complete || len(recs) == 0 {
+				break
+			}
+			next := since
+			if last := recs[len(recs)-1].CompletedAt; last != nil {
+				next = *last
+			}
+			// The next page starts at the last completion seen (inclusive,
+			// so a run sharing that instant is not skipped; re-reading one is
+			// harmless). A page entirely at one instant cannot move the start,
+			// so step past it rather than read the same page again.
+			if !next.After(since) {
+				next = since.Add(time.Nanosecond)
+			}
+			since = next
 		}
 	}
 	h.lastCache.byID, h.lastCache.at = out, now
+	h.lastCache.fallback = map[string]*LastRunView{}
 	return out
 }
 
 // lastRunOf is the definition's last finished run: the window's, else the one
-// its schedule state recorded.
+// its schedule state recorded. The schedule lookup (two store reads) is
+// cached with the window, so listing every definition does not repeat it for
+// each one on every request.
 func (h *Handler) lastRunOf(defID string, window map[string]LastRunView) *LastRunView {
 	if lr, ok := window[defID]; ok {
 		return &lr
@@ -118,6 +150,22 @@ func (h *Handler) lastRunOf(defID string, window map[string]LastRunView) *LastRu
 	if h.d.Runs == nil {
 		return nil
 	}
+	h.lastCache.mu.Lock()
+	if lr, ok := h.lastCache.fallback[defID]; ok {
+		h.lastCache.mu.Unlock()
+		return lr
+	}
+	h.lastCache.mu.Unlock()
+	lr := h.schedLastRun(defID)
+	h.lastCache.mu.Lock()
+	if h.lastCache.fallback != nil {
+		h.lastCache.fallback[defID] = lr
+	}
+	h.lastCache.mu.Unlock()
+	return lr
+}
+
+func (h *Handler) schedLastRun(defID string) *LastRunView {
 	st, err := h.d.Runs.GetSchedV3(defID)
 	if err != nil || st == nil || st.LastRunID == "" {
 		return nil
