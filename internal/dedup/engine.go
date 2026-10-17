@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.95.1
+// version: 1.95.2
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-10-17
 
@@ -1656,7 +1656,7 @@ func (de *Engine) checkExactMetadataSourceHash(book *database.Book) error {
 // exactly matching what GetBooksByAuthorID already returned before
 // STOREFID P3-W2, since memdb never carried them in the first place.
 //
-// This exists ONLY so checkExactTitle/checkDurationMatch/CollectDuration can
+// This exists ONLY so checkExactTitle/checkDurationMatch/collectDuration can
 // keep passing author-sibling books through the shared, Book-typed helpers
 // (hasPlausibleAudio, seriesNumberOf, sameMultiFileBook,
 // allNormalizedTitleForms(ForStore), upsertExactCandidate/identifiersConflict

@@ -1,5 +1,5 @@
 // file: internal/dedup/book_dedup_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
 // last-edited: 2026-10-17
 
@@ -195,5 +195,3 @@ func TestScanBookDuplicates_TranscriptionMissingLeavesMetadataDecisionUnchanged(
 	assert.Equal(t, "Similar title and author", result.Groups[0].Reason)
 	assert.Equal(t, 1, result.TotalDuplicates)
 }
-
-// ── MergeBooks ────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
 // last-edited: 2026-10-17
 
@@ -125,7 +125,7 @@ func TestDrainStale_MissingChaptersAreNotAShortBook(t *testing.T) {
 		t.Fatalf("book with missing chapters drained as short_duration (%v)", res.ReasonCounts)
 	}
 	if engine.hasKnownShortDurationMemo(nil, &database.Book{ID: "BOOK_A"}) {
-		t.Fatal("hasKnownShortDuration: missing chapters read as a 45 s book")
+		t.Fatal("hasKnownShortDurationMemo: missing chapters read as a 45 s book")
 	}
 }
 

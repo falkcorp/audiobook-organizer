@@ -1,5 +1,5 @@
 // file: internal/dedup/author_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-17
 
@@ -290,5 +290,59 @@ func TestPickCanonicalAuthor(t *testing.T) {
 				t.Errorf("expected canonical ID %d, got %d (%s)", tt.expectID, canonical.ID, canonical.Name)
 			}
 		})
+	}
+}
+
+// areNamesDuplicate runs the live scan predicate over two raw names, exactly
+// as the scan does (skipped names never reach the predicate and never match).
+func areNamesDuplicate(a, b string) bool {
+	pa := newAuthorPrecomputed(0, database.Author{ID: 1, Name: a})
+	pb := newAuthorPrecomputed(1, database.Author{ID: 2, Name: b})
+	if pa.skip || pb.skip {
+		return false
+	}
+	return areAuthorsDuplicatePrecomputed(&pa, &pb)
+}
+
+// Ported from the deleted TestAreAuthorsDuplicate: the live predicate keeps
+// fuzzy first-name matching, initial matching and the shared-base rule, and
+// refuses same-first-name / different-surname pairs. Synthetic names only.
+func TestAreAuthorsDuplicatePrecomputed_Table(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		// initials and spacing
+		{"Rowan Q. P. Vale", "Rowan Q.P. Vale", true},
+		{"Tamsin Orrel", "Tamsin  Orrel", true},
+		{"T. R. Quill", "T.R. Quill", true},
+		// fuzzy first name (JW >= 0.85)
+		{"Stefan Marlowe", "Stephan Marlowe", true},
+		// slash-composite names are skipped by the scan, never matched
+		{"Dorian Pell", "Dorian Pell/Wren Hollis", false},
+		// shared first name, different surnames
+		{"Mara Quint", "Mara Angel", false},
+		{"Mara Quint", "Mara Dalton", false},
+		{"Alix Karn", "Alix Irving", false},
+		{"Marek Tuft", "Marek Twill", false},
+		// subtitle suffix is not the same name
+		{"Nolan Stephens", "Nolan Stephens - Glass Harbor", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.a+"|"+tc.b, func(t *testing.T) {
+			if got := areNamesDuplicate(tc.a, tc.b); got != tc.want {
+				t.Errorf("areAuthorsDuplicatePrecomputed(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
+// A slash-composite name still collapses to its base author through the
+// predicate when the composite gate does not skip it (base-author rule).
+func TestAreAuthorsDuplicatePrecomputed_SharedBase(t *testing.T) {
+	a := authorPrecomputed{norm: "dorian pell", base: "dorian pell", first: "dorian", last: "pell"}
+	b := authorPrecomputed{norm: "dorian pell / wren hollis", base: "dorian pell", first: "dorian", last: "pell"}
+	if !areAuthorsDuplicatePrecomputed(&a, &b) {
+		t.Error("authors sharing a base name must match")
 	}
 }
