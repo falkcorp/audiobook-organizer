@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.14.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-15 -->
+<!-- last-edited: 2026-10-17 -->
 
 # Woodpecker CI: install runbook
 
@@ -30,8 +30,8 @@ one-at-a-time cap: each agent runs as many workflows as its own capacity
 setting allows. The repo's `allow_pr` setting on the Woodpecker server must
 be on for `pull_request` events to start anything. A push to a branch with no
 PR starts nothing; use `make ci-woodpecker` for that. `test-native-taglib`
-is pinned to `host=u1`, so outside U1's CI window (10:00-19:00) or while U1
-is scaled down its run waits in the queue. `make ci-woodpecker` follows the
+runs on any `taglib=true` agent, U1 or u0-local (2026-10-17), so it no longer
+waits in the queue outside U1's CI window or while U1 is scaled down. `make ci-woodpecker` follows the
 pull_request pipeline the push starts instead of queueing a second, manual
 one for the same commit.
 
@@ -41,7 +41,7 @@ one for the same commit.
 | `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
 | `test-fixtures` | `heavy=true` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
-| `test-native-taglib` | `heavy=true`, `host=u1` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
+| `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, pprof-check, web tests | split out of `checks` on 2026-09-29 |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
@@ -193,7 +193,8 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 1 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
-| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true` | 1 | systemd `woodpecker-agent.service`, `User=woodpecker` |
+| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true,taglib=true` | 1 | systemd `woodpecker-agent.service`, `User=woodpecker` |
+| u0-local | 192.0.2.10 (prod, Ubuntu amd64) | local | `host=u0-local,taglib=true` | 1 | systemd `woodpecker-agent-local.service`, `User=woodpecker` |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
@@ -222,7 +223,58 @@ WOODPECKER_BACKEND_DOCKER_VOLUMES=/mnt/cache/woodpecker-cache:/ci-cache
 That bounds CI at about 16 CPUs and 32 GiB of the host's 48 cores.
 `checks-lint`, the only workflow file in `.woodpecker/` labelled `host=u0`,
 runs in the `golang` image, which has no ffmpeg, so the host's no-decode rule
-holds.
+holds for this agent. The one exception on this host is `test-native-taglib`
+on the separate u0-local agent below.
+
+### u0-local: local backend on prod (`test-native-taglib` only)
+
+`test-native-taglib` links on Linux only, and until 2026-10-17 U1 was the only
+Linux local-backend agent, so the workflow waited whenever U1 was outside its
+CI window or scaled down for fan noise. The owner ruled that tests must never
+wait on U1, so the prod host runs a second agent next to the swarm one. The
+swarm agent cannot run the workflow: on the docker backend `image: bash` is a
+container image, not a shell.
+
+- **Labels:** `host=u0-local,taglib=true` and nothing else. Never `heavy=true`
+  (it would pull every heavy workflow onto prod) and never `host=u0` (it would
+  pull `checks-lint`, whose `image: golang...` the local backend would try to
+  exec as a shell). The workflow's metafetch tests decode audio; that is an
+  owner-approved exception to the prod no-decode rule for this one workflow.
+- **Bounds:** `WOODPECKER_MAX_WORKFLOWS=1`, `Nice=10`, `CPUQuota=800%`,
+  `MemoryMax=16G`: the same caps the swarm agent puts on each step container.
+- **Runs as:** system user `woodpecker`, HOME `/srv/ci`, which is its own ZFS
+  dataset (`nvmecache/woodpecker-local`, `quota=60G`), separate from the swarm
+  agent's `nvmecache/woodpecker-cache`. `cache_env.sh` finds `/srv/ci/cache`.
+- **Install layout:** `/srv/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`,
+  copied from U1 (same version, sha256 checked); work dir
+  `/srv/ci/woodpecker/work`; agent config `/srv/ci/woodpecker/agent.conf`.
+  `scripts/ci/update_woodpecker_agents.py` does not cover this agent yet; copy
+  U1's binary again after upgrading U1.
+- **Toolchain:** apt `golang-go` as the bootstrap, as on U1. Snap's `go` (the
+  login user's) refuses a HOME outside `/home`, and the local backend gives
+  every pipeline a fresh HOME. Also `cmake`, `zlib1g-dev`, `build-essential`,
+  and the host's ffmpeg, ffprobe and fpcalc.
+- **Service:** `/etc/systemd/system/woodpecker-agent-local.service`, talking to
+  the server at `127.0.0.1:18734`, healthcheck on `127.0.0.1:18736`. Logs:
+  `journalctl -u woodpecker-agent-local`.
+- **Its own agent token, not the shared secret.** The agent was created on the
+  server first (`POST /api/agents`, agent id 7) and authenticates with that
+  agent's token, kept in the root-only `/etc/woodpecker-agent-local.env`
+  (mode 600). A step runs as the agent's user and can read the agent's
+  environment, so a hostile pull request could read the token; this way it
+  can only impersonate u0-local, and deleting agent 7 revokes it without
+  touching the other agents.
+- **Sandbox.** The local backend runs pull-request code directly on the host,
+  so the unit confines it: `ProtectSystem=strict` with only `/srv/ci`
+  writable, `ProtectHome=yes` (the stack's `woodpecker.env` and every other
+  login file), `ProtectProc=invisible`, `PrivateTmp`, `PrivateDevices`,
+  `NoNewPrivileges`, and `InaccessiblePaths=` over `/mnt` (the library and the
+  swarm agent's cache), `/opt`, `/srv/tftp` and the app's and docker's
+  `/var/lib` directories. Loopback is not blocked, because the tests start
+  `httptest` servers on 127.0.0.1, so a step can still reach the prod
+  services' ports; they keep their own authentication. What stops a hostile
+  pull request from getting this far is `require_approval: forks` (see The CI
+  cache); keep it.
 
 **The CI cache.** The docker backend creates `/woodpecker` as a volume for
 each workflow and deletes it when the workflow ends, so caches kept there
@@ -296,18 +348,20 @@ pipelines would run as root.
 ### U1: local backend on Linux
 
 U1 runs the `heavy=true` workflows (`test-rest`, `test-database`,
-`test-server-scanner`, `test-fixtures`, `checks-build` and, as the only host
-that can link it, `test-native-taglib`) with the local
+`test-server-scanner`, `test-fixtures`, `checks-build` and, shared with
+u0-local, `test-native-taglib`) with the local
 backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
 fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies
 the C compiler `-race` needs, and `golang-go` is only a bootstrap:
 `GOTOOLCHAIN=go1.27.2` fetches the pinned version. `test-native-taglib` also
 needs `cmake` and `zlib1g-dev` (the static `libz.a`) installed (`apt install
 cmake zlib1g-dev`) and, for the first build only, network access to github.com;
-it stores the static TagLib it builds under `/tank/ci/cache/taglib/`. It is
-labelled `host=u1` as well as `heavy=true` because the `#cgo LDFLAGS` in
-`internal/metadata/taglib_cgo.go` (`-lgcc_eh`) link on Linux only: llm1 (macOS)
-would fail at link time.
+it stores the static TagLib it builds under `/tank/ci/cache/taglib/`. That
+workflow is labelled `taglib=true`, which only the Linux agents (U1 and
+u0-local) carry, because the `#cgo LDFLAGS` in
+`internal/metadata/taglib_cgo.go` (`-lgcc_eh`) link on Linux only: llm1 and mac
+(macOS) would fail at link time. U1 gets the label from the drop-in
+`/etc/systemd/system/woodpecker-agent.service.d/labels.conf`.
 
 - **Runs as:** the unprivileged system user `woodpecker` (no sudo). Pipelines
   execute pull-request code, so the agent never runs as a login user.

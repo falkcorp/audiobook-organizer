@@ -1,7 +1,7 @@
 # file: .woodpecker/test-native-taglib.yaml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 8e2d6a41-5c93-4b7f-a0d8-1f4b9c3e7a52
-# last-edited: 2026-10-15
+# last-edited: 2026-10-17
 #
 # The tag writers under `-tags native_taglib`: the cgo build the production
 # binary is made with (Dockerfile, Dockerfile.build-cgo). Every other workflow
@@ -16,20 +16,24 @@
 # The distro's libtag1-dev is TagLib 1.x, a different tag_c API, and is not
 # used.
 #
-# Runs on U1 only (`host=u1`, which carries `heavy=true`): the #cgo LDFLAGS in
-# taglib_cgo.go name -lgcc_eh, which exists on Linux only, so llm1 (macOS) could
-# not link it. U1 needs cmake and zlib1g-dev besides the packages the other
-# heavy workflows use (see docs/ci/woodpecker.md); the script says so and fails
-# if either is missing. Never on the prod host. No CI-COVERAGE line: these
-# packages are already counted by the test workflows' -short runs, and this
-# run's coverage would be the cgo files only.
+# Runs on any agent labelled `taglib=true`: U1 and u0-local, the second,
+# local-backend agent on the prod host (owner 2026-10-17: tests must never wait
+# because U1 is outside its CI window or scaled down for fan noise). Both are
+# Linux; the #cgo LDFLAGS in taglib_cgo.go name -lgcc_eh, which exists on Linux
+# only, so llm1 and mac (macOS) must never carry the label. u0-local carries
+# neither `heavy` nor `host=u0`, so no other workflow lands on prod through it;
+# it runs this workflow as an owner-approved exception to prod's no-decode rule
+# (the metafetch tests decode audio). Both hosts need cmake and zlib1g-dev
+# besides the packages the other heavy workflows use (see
+# docs/ci/woodpecker.md); the script says so and fails if either is missing.
+# No CI-COVERAGE line: these packages are already counted by the test
+# workflows' -short runs, and this run's coverage would be the cgo files only.
 #
 # Clone, environment, trigger and cleanup are copied from test-fixtures.yaml;
 # see that file for why each setting is there.
 
 labels:
-  heavy: "true"
-  host: u1
+  taglib: "true"
 
 when:
   # Automatic on pull requests (owner 2026-10-15; reverses the 2026-10-02
