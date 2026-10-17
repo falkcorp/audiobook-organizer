@@ -1,5 +1,5 @@
 // file: internal/scheduler/v3_schedule_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a90d3e7-2c18-4b64-8e0f-71b6c4a9d235
 // last-edited: 2026-10-17
 
@@ -11,6 +11,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -505,18 +506,23 @@ func TestCountDueClipsToGateOpen(t *testing.T) {
 }
 
 func TestCronCatchUpCountIsCheap(t *testing.T) {
-	// 1000 stepped Next calls for an every-minute cron must not rescan the
-	// day from midnight each time.
+	// The catch-up count steps from one due time to the next: one Next call per
+	// counted due time (plus the one that ends the walk), not a rescan from the
+	// stamp each time. Counting calls is deterministic where a wall-clock bound
+	// is not.
 	spec, _ := ParseCron("* * * * *")
-	start := time.Now()
 	first := time.Date(2026, 10, 16, 23, 0, 0, 0, time.UTC)
 	now := first.Add(2000 * time.Minute)
-	dueAt, missed := countDue(first, now, time.Time{}, func(t time.Time) (time.Time, bool) { return spec.Next(t, time.UTC) })
+	calls := 0
+	dueAt, missed := countDue(first, now, time.Time{}, func(t time.Time) (time.Time, bool) {
+		calls++
+		return spec.Next(t, time.UTC)
+	})
 	if !dueAt.Equal(first) || missed != 999 {
 		t.Fatalf("dueAt=%v missed=%d, want first and the 999 cap", dueAt, missed)
 	}
-	if d := time.Since(start); d > 250*time.Millisecond {
-		t.Errorf("counting took %s, want well under 250ms", d)
+	if calls != 999 {
+		t.Errorf("countDue made %d Next calls, want exactly 999 (one per counted step)", calls)
 	}
 }
 
@@ -599,12 +605,44 @@ func TestEveryEnqueueTargetInTasksIsInTaskV2DefIDs(t *testing.T) {
 	for _, id := range taskV2DefIDs {
 		ids[id] = true
 	}
-	found := 0
+	found, named := 0, 0
 	f := files["tasks.go"]
 	if f == nil {
 		t.Fatal("tasks.go not found next to the test")
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
+	// stack holds the composite literals around the node being visited, so an
+	// EnqueueOp call can be tied to the TaskDefinition{Name: ...} it sits in.
+	var stack []*ast.CompositeLit
+	enclosingName := func() string {
+		for i := len(stack) - 1; i >= 0; i-- {
+			for _, el := range stack[i].Elts {
+				kv, ok := el.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Name" {
+					if bl, ok := kv.Value.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+						name, _ := strconv.Unquote(bl.Value)
+						return name
+					}
+				}
+			}
+		}
+		return ""
+	}
+	var visit func(n ast.Node) bool
+	visit = func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		if cl, ok := n.(*ast.CompositeLit); ok {
+			stack = append(stack, cl)
+			for _, el := range cl.Elts {
+				ast.Inspect(el, visit)
+			}
+			stack = stack[:len(stack)-1]
+			return false
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok || len(call.Args) < 2 {
 			return true
@@ -625,12 +663,119 @@ func TestEveryEnqueueTargetInTasksIsInTaskV2DefIDs(t *testing.T) {
 			return true
 		}
 		found++
-		if !ids[id] {
+		if name := enclosingName(); name != "" {
+			named++
+			if taskV2DefIDs[name] != id {
+				t.Errorf("%s: task %q enqueues %q but taskV2DefIDs[%q] = %q, so RegisterSchedules would also fire it from ops.Schedule (double run)", pos, name, id, name, taskV2DefIDs[name])
+			}
+		} else if !ids[id] {
 			t.Errorf("%s: a task enqueues %q but taskV2DefIDs has no entry for it, so RegisterSchedules would also fire it from ops.Schedule (double run)", pos, id)
 		}
 		return true
-	})
+	}
+	ast.Inspect(f, visit)
 	if found < 20 {
 		t.Fatalf("found only %d EnqueueOp calls in tasks.go; the scan is not seeing the file", found)
+	}
+	if named < 10 {
+		t.Fatalf("only %d of %d EnqueueOp calls resolved to an enclosing TaskDefinition name; the scan is not seeing the Name fields", named, found)
+	}
+}
+
+// restartRig is a second process: a fresh TaskScheduler that shares the sched
+// store and the durable interval clock of the first.
+func (r *v3Rig) restart(t *testing.T, at time.Time) *v3Rig {
+	t.Helper()
+	r2 := newV3Rig(t)
+	r2.store = r.store
+	r2.ts.intervalTick = maps.Clone(r.ts.intervalTick)
+	r2.now = at
+	return r2
+}
+
+func TestRestartAcrossClosedGateIsNotMissed(t *testing.T) {
+	t0 := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name   string
+		sched  func(gate func() bool) *ops.Schedule
+		closed time.Duration
+	}{
+		{"every", func(g func() bool) *ops.Schedule { return ops.Every(time.Hour).When(g) }, 3 * 24 * time.Hour},
+		{"daily_at", func(g func() bool) *ops.Schedule { return ops.DailyAt("03:00").When(g) }, 7 * 24 * time.Hour},
+		{"cron", func(g func() bool) *ops.Schedule { return ops.Cron("0 * * * *").When(g) }, 7 * 24 * time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/open at boot", func(t *testing.T) {
+			gate := true
+			mk := func() ops.Definition { return readDef("synthetic.g", tc.sched(func() bool { return gate })) }
+			r := newV3Rig(t)
+			r.now = t0
+			r.register(t, mk())
+			r.poll(t0)
+			gate = false
+			for d := time.Hour; d <= tc.closed; d += 6 * time.Hour {
+				r.poll(t0.Add(d))
+			}
+			// Restart with the gate open at boot.
+			gate = true
+			r2 := r.restart(t, t0.Add(tc.closed+time.Minute))
+			r2.register(t, mk())
+			r2.poll(r2.now)
+			if m := r2.status(t, "synthetic.g").Missed; m != 0 {
+				t.Errorf("Missed = %d after a restart across a closed gate, want 0", m)
+			}
+			if len(r2.calls) != 1 {
+				t.Errorf("calls = %d, want one catch-up run", len(r2.calls))
+			}
+		})
+		t.Run(tc.name+"/closed at boot then open", func(t *testing.T) {
+			gate := true
+			mk := func() ops.Definition { return readDef("synthetic.g", tc.sched(func() bool { return gate })) }
+			r := newV3Rig(t)
+			r.register(t, mk())
+			r.poll(t0)
+			gate = false
+			r.poll(t0.Add(time.Hour))
+			r2 := r.restart(t, t0.Add(tc.closed))
+			r2.register(t, mk()) // closed at boot
+			r2.poll(r2.now)
+			gate = true
+			r2.poll(r2.now.Add(time.Minute))
+			if m := r2.status(t, "synthetic.g").Missed; m != 0 {
+				t.Errorf("Missed = %d, want 0", m)
+			}
+		})
+		t.Run(tc.name+"/closed at first boot is recorded", func(t *testing.T) {
+			gate := false
+			mk := func() ops.Definition { return readDef("synthetic.g", tc.sched(func() bool { return gate })) }
+			r := newV3Rig(t)
+			r.register(t, mk())
+			rec, _ := r.store.GetSchedV3("synthetic.g")
+			if rec == nil || rec.GateClosedAt == nil {
+				t.Fatalf("a gate closed at boot was not persisted: %+v", rec)
+			}
+			// Reopen: the open edge clears the record.
+			gate = true
+			r.poll(t0)
+			rec, _ = r.store.GetSchedV3("synthetic.g")
+			if rec == nil || rec.GateClosedAt != nil {
+				t.Errorf("open edge did not clear GateClosedAt: %+v", rec)
+			}
+		})
+	}
+}
+
+// A restart while the gate stayed OPEN is real downtime and still counts.
+func TestRestartWithOpenGateStillCountsDowntime(t *testing.T) {
+	t0 := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	mk := func() ops.Definition { return readDef("synthetic.g", ops.Every(time.Hour)) }
+	r := newV3Rig(t)
+	r.register(t, mk())
+	r.poll(t0)
+	r2 := r.restart(t, t0.Add(10*time.Hour+time.Minute))
+	r2.register(t, mk())
+	r2.poll(r2.now)
+	if m := r2.status(t, "synthetic.g").Missed; m != 9 {
+		t.Errorf("Missed = %d, want 9 for real downtime", m)
 	}
 }

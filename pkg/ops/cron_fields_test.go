@@ -1,5 +1,5 @@
 // file: pkg/ops/cron_fields_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8c1b57-94a2-4d06-b7f3-5a1d92c60e84
 // last-edited: 2026-10-17
 
@@ -24,7 +24,7 @@ func TestParseCronFields_GrammarIsOneSource(t *testing.T) {
 	if f.DayOfWeek != 1 { // 7 folds onto Sunday (bit 0)
 		t.Errorf("day-of-week = %b, want Sunday only", f.DayOfWeek)
 	}
-	if !f.DayOfMonthStar && f.DayOfWeekStar {
+	if f.DayOfMonthStar || f.DayOfWeekStar {
 		t.Error("star flags wrong")
 	}
 }

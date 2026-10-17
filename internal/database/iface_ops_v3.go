@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
 // last-edited: 2026-10-17
 
@@ -273,6 +273,9 @@ type SchedState struct {
 	NextFire  *time.Time `json:"next_fire,omitempty"`
 	LastRunID string     `json:"last_run_id,omitempty"`
 	Missed    int64      `json:"missed"`
+	// GateClosedAt is set while the schedule's When gate is closed, so a restart
+	// across the closed period does not count it as missed.
+	GateClosedAt *time.Time `json:"gate_closed_at,omitempty"`
 }
 
 // DefSnapshot is opv3:def:{def_id}, kept for runs whose def was later removed.
