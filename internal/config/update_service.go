@@ -553,7 +553,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// the rollback target when the save fails, and includes the secret
 		// updates applied above so a rollback does not un-apply those.
 		//
-		// Honest note on the depth: with the update applied to `candidate` and
+		// A note on the depth: with the update applied to `candidate` and
 		// swapped in wholesale (`*c = *candidate` below), the live config's
 		// maps are REPLACED rather than mutated, so a shallow `prior = *c`
 		// would in fact restore correctly today — a mutation swapping the
