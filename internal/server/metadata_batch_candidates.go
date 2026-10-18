@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.28.1
+// version: 4.28.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -806,9 +806,9 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "book_ids must not be empty")
 		return
 	}
-	// Dry run unless the caller says dry_run:false: the preview reports, for
+	// Dry run unless the caller says dry_run:false: the preview works out, for
 	// each selected book, the gate verdict, field changes and rename, and
-	// applies nothing. It is read-only, so it takes neither the apply cap nor
+	// applies nothing; the caller reads its summary from the op's message. It is read-only, so it takes neither the apply cap nor
 	// the scan stand-down hold below.
 	if req.DryRun == nil || *req.DryRun {
 		s.enqueueBulkApplyPreview(c, bulkApplyPreviewParams{

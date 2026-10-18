@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.40.1
+// version: 1.40.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-18
 
@@ -1204,9 +1204,9 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// single-book path's body.WriteBack.
 		WriteBack *bool `json:"write_back"`
 		// DryRun defaults to TRUE when absent: a caller that does not say
-		// dry_run:false gets the metadata.bulk-apply-preview report (candidate,
-		// certainty-gate verdict, field changes, rename) and nothing is
-		// applied. The web UI's Apply button sends dry_run:false.
+		// dry_run:false gets a metadata.bulk-apply-preview run (it works out the
+		// candidate, certainty-gate verdict, field changes and rename per book)
+		// and nothing is applied; the caller reads the op's summary message. The web UI's Apply button sends dry_run:false.
 		DryRun *bool `json:"dry_run"`
 		// Pins maps book id -> the candidate the reviewer was looking at when
 		// they clicked Apply. Every apply button on the review page sends

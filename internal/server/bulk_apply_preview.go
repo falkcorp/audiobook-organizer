@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-10-18
 //
@@ -12,10 +12,10 @@
 //
 // READ-ONLY. It writes no book, author, series, tag, file, field state,
 // change history or metadata cache. The single thing it writes is its own
-// report: one OperationResult row per book under the preview op's id, which is
-// what makes the result pageable and downloadable. Those rows are op
-// bookkeeping, not library state, and the dry-run test's fail-on-write store
-// exempts nothing else.
+// report: one OperationResult row per book under the preview op's id. Those
+// rows are op bookkeeping, not library state, and the dry-run test's
+// fail-on-write store exempts nothing else. Since 01-P81i no route serves the
+// rows; the finished operation's message carries the summary.
 //
 // The decision it reports comes from planCachedApply / planOpResultApply, the
 // same functions the real applies call, so the preview cannot disagree with
@@ -46,6 +46,12 @@ import (
 )
 
 const bulkApplyPreviewOpID = "metadata.bulk-apply-preview"
+
+// What the retired POST and GET /metadata/bulk-apply-preview stubs name.
+const (
+	bulkApplyPreviewGone       = `POST /api/v1/operations/v2 {"def_id":"metadata.bulk-apply-preview","params":{...}} (or POST /api/v1/metadata/batch-apply-candidates / POST /api/v1/audiobooks/metadata/batch-apply-cached, which are dry runs unless the body sends dry_run:false)`
+	bulkApplyPreviewReportGone = "GET /api/v1/operations/v2/:id (the finished operation's message carries the summary; the per-book report is no longer served)"
+)
 
 // Preview verdicts.
 const (
@@ -257,7 +263,7 @@ func (s *Server) RegisterBulkApplyPreviewOp(reg *opsregistry.Registry) error {
 		Liveness:        opsregistry.LivenessRunItems,
 		Plugin:          "metadata",
 		DisplayName:     "Preview Bulk Metadata Apply (dry run)",
-		Description:     "Report, for each book, the candidate a bulk metadata apply would take, the certainty gate's verdict, the field changes and any rename, without applying anything.",
+		Description:     "Dry run of a bulk metadata apply: works out, for each book, the candidate it would take, the certainty gate's verdict, the field changes and any rename, without applying anything. The finished operation's message gives the counts.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Timeout:         4 * time.Hour,
