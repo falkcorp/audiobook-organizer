@@ -8,11 +8,11 @@ Produces a per-file report the operator uses to write the narrowed interface.
 Does NOT edit files — we do the edits by hand per file after reviewing output,
 because transitive deps may force composite changes (see PR #380 / #388).
 """
+
 from __future__ import annotations
 
 import pathlib
 import re
-import sys
 
 FILES = [
     "internal/server/ai_scan_pipeline.go",
@@ -346,7 +346,7 @@ def analyze(path: pathlib.Path) -> None:
     text = path.read_text()
     fields = list(dict.fromkeys(FIELD_RE.findall(text)))
     if not fields:
-        print(f"  (no database.Store field found)")
+        print("  (no database.Store field found)")
         return
     print(f"  field(s): {', '.join(fields)}")
     for name in fields:
