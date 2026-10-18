@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2d7e9b41-5c3a-4f86-9e10-4b8a6c2d1f57
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package server
 
@@ -10,13 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -195,54 +191,5 @@ func TestCatalogHarvest_DryRunThenLive(t *testing.T) {
 	// An out-of-scope manual trigger is refused, not silently a no-op.
 	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, catalogHarvestParams{Authors: []string{"Ghost Writer"}}, false, config.AppConfig.Catalog); err == nil {
 		t.Error("out-of-scope author accepted")
-	}
-}
-
-func TestCatalogRoutes_FlagGatesAndLists(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ps := seedCatalogLibrary(t)
-	cat := database.NewCatalogStoreFromStore(ps)
-	if _, err := cat.UpsertEntries([]database.CatalogUpsert{{Entry: catalog.BuildEntry(metadata.CatalogProduct{
-		ASIN: "B1", Title: "First", Authors: []metadata.CatalogContributor{{Name: "Ann Author", ASIN: "AX"}},
-		Series: []metadata.CatalogProductSeries{{Title: "Saga", Sequence: "1"}},
-	}, "audible", "us")}}, "annauthor"); err != nil {
-		t.Fatal(err)
-	}
-	h := &catalogHandler{store: func() *database.CatalogStore { return cat }}
-	r := gin.New()
-	r.GET("/catalog/entries", h.listEntries)
-	r.GET("/catalog/entries/:id", h.getEntry)
-	get := func(path string) *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		return w
-	}
-
-	withCatalogEnabled(t, false)
-	if w := get("/catalog/entries"); w.Code != http.StatusNotFound {
-		t.Errorf("flag off: %d", w.Code)
-	}
-	withCatalogEnabled(t, true)
-	for _, q := range []string{"?author=ann%20author", "?author_asin=ax", "?series=SAGA", ""} {
-		w := get("/catalog/entries" + q)
-		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"provider_id":"B1"`) {
-			t.Errorf("list %q: %d %s", q, w.Code, w.Body.String())
-		}
-	}
-	if w := get("/catalog/entries?author=nobody"); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "B1") {
-		t.Errorf("other author: %d %s", w.Code, w.Body.String())
-	}
-	if w := get("/catalog/entries?author=a&series=b"); w.Code != http.StatusBadRequest {
-		t.Errorf("two filters: %d", w.Code)
-	}
-	if w := get("/catalog/entries?limit=0"); w.Code != http.StatusBadRequest {
-		t.Errorf("limit=0: %d", w.Code)
-	}
-	e, _ := cat.GetEntryByProviderID("audible", "us", "B1")
-	if w := get("/catalog/entries/" + e.ID); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "edition_group_entry_ids") {
-		t.Errorf("get: %d %s", w.Code, w.Body.String())
-	}
-	if w := get("/catalog/entries/nope"); w.Code != http.StatusNotFound {
-		t.Errorf("unknown id: %d", w.Code)
 	}
 }

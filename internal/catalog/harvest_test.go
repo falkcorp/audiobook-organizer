@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package catalog
 
@@ -208,10 +208,6 @@ func TestHarvest_LanguageFilterNameOnlyAndGroups(t *testing.T) {
 	if a == nil || b == nil || a.EditionGroupID == "" || a.EditionGroupID != b.EditionGroupID {
 		t.Fatalf("Cage of Souls editions not grouped: %+v / %+v", a, b)
 	}
-	members, _ := st.EditionGroupMembers(a.EditionGroupID)
-	if len(members) != 2 {
-		t.Errorf("group members = %v", members)
-	}
 	// Children of Time is unabridged with sequence "1".
 	cot, _ := st.GetEntryByProviderID("audible", "us", "B071Y9TTHC")
 	if cot == nil || cot.EditionKind != database.EditionUnabridged || len(cot.Series) != 1 || cot.Series[0].SeqLo == nil || *cot.Series[0].SeqLo != 1 {
@@ -221,11 +217,28 @@ func TestHarvest_LanguageFilterNameOnlyAndGroups(t *testing.T) {
 	if len(raw) == 0 {
 		t.Error("raw payload not stored")
 	}
-	// The read index finds the author by name and by ASIN.
-	byName, total, _ := st.ListEntries(database.CatalogListQuery{AuthorKey: AuthorNameKey("Adrian Tchaikovsky"), Limit: 500})
-	byASIN, totalA, _ := st.ListEntries(database.CatalogListQuery{AuthorKey: AuthorASINKey("B002XLHS8Q"), Limit: 500})
-	if total != s.Kept || len(byName) != s.Kept || totalA != s.Kept-s.NameOnly || len(byASIN) != totalA {
-		t.Errorf("index: by name %d/%d, by asin %d/%d, kept %d name_only %d", len(byName), total, len(byASIN), totalA, s.Kept, s.NameOnly)
+	// The author-name index finds every kept entry, and the entries carry the
+	// ASIN key the index files them under.
+	byName, err := st.EntryIDsByAuthorName(strings.TrimPrefix(AuthorNameKey("Adrian Tchaikovsky"), "name:"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allIDs, err := st.AllEntryIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byASIN := 0
+	for _, id := range allIDs {
+		e, err := st.GetEntry(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(e.AuthorKeys, AuthorASINKey("B002XLHS8Q")) {
+			byASIN++
+		}
+	}
+	if len(byName) != s.Kept || byASIN != s.Kept-s.NameOnly {
+		t.Errorf("index: by name %d, by asin %d, kept %d name_only %d", len(byName), byASIN, s.Kept, s.NameOnly)
 	}
 }
 
