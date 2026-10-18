@@ -1,5 +1,5 @@
 // file: web/src/pages/libraryCombineToast.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 153032e4-1d3e-45a8-9827-f498afe24850
 // last-edited: 2026-10-18
 
@@ -97,8 +97,13 @@ export function describeUndoResult(
       typeof result.restored === 'number' && typeof result.total === 'number'
         ? ` (${result.restored} of ${result.total} changes reverted)`
         : '';
+    // The server's message names what was not undone and, for a combine
+    // undone with things left as they are, each of those notes. Without it
+    // the toast only said that something was left.
+    const serverMessage = result.message?.trim();
+    const details = serverMessage ? ` ${serverMessage.replace(/[.;:,]?$/, '.')}` : '';
     return {
-      message: `Some of the combine could not be undone${counts}. Retry runs the undo again for what is left${operationRef(operationId)}.`,
+      message: `Some of the combine could not be undone${counts}.${details} Retry runs the undo again for what is left${operationRef(operationId)}.`,
       severity: 'warning',
       undoOperationId: operationId,
       actionLabel: 'Retry',
