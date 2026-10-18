@@ -140,9 +140,8 @@ func (s *Server) invalidateSeriesCaches() {
 }
 
 // invalidateBookDuplicateCaches drops the "book-dedup-scan" entry that the
-// dedup.book-scan op writes, as the merge-undo route
-// (duplicates.Handler.UndoCombine, retired in 01-P81h; the revert reaches
-// this through revertOperation) did. That key currently has no reader: its
+// dedup.book-scan op writes; the retired merge-undo route did the same, and
+// revertOperation now does it for a reverted combine. That key currently has no reader: its
 // only one, GET /audiobooks/duplicates/scan-results, went with 03-PR12, and the
 // op has no HTTP launcher left. Whether the op and this invalidation stay is
 // the open decision with brief area 04, recorded in
