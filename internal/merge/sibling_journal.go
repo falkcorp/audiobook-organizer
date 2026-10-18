@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
 // last-edited: 2026-10-18
 
@@ -369,12 +369,27 @@ func followHasDestination(db interface {
 		return false, "", fmt.Errorf("read loser %s: %w", f.LoserID, err)
 	}
 	if b == nil {
-		return false, fmt.Sprintf("loser %s has been purged since the merge; its listening state stays on %s", f.LoserID, f.HolderID), nil
+		where := "stays on " + f.HolderID
+		if j.LastError != "" {
+			// An earlier attempt failed. It may have put the state back on
+			// the loser before its refollow failed, and a loser holding
+			// state is purged only after the purge carried that state to a
+			// listed copy.
+			where = fmt.Sprintf("stays where it is now: on %s, or, if an earlier failed attempt of this undo had already put it back on the loser, on the copy the purge carried it to", f.HolderID)
+		}
+		return false, fmt.Sprintf("loser %s has been purged since the merge; its listening state %s", f.LoserID, where), nil
 	}
 	if refollow && b.IsSoftDeleted() {
 		_, err := ResolveSurvivor(db, j.SurvivorID)
 		if errors.Is(err, ErrNoLiveSurvivor) {
-			return false, fmt.Sprintf("loser %s is in the trash and survivor %s leads to no live book; its listening state stays on %s", f.LoserID, j.SurvivorID, f.HolderID), nil
+			where := "stays on " + f.HolderID
+			if j.LastError != "" {
+				// An earlier attempt failed, possibly after putting the
+				// state back on the (trashed) loser and before its refollow
+				// landed.
+				where = fmt.Sprintf("stays where it is now: on %s, or on loser %s itself if an earlier failed attempt of this undo had already put it back there", f.HolderID, f.LoserID)
+			}
+			return false, fmt.Sprintf("loser %s is in the trash and survivor %s leads to no live book; its listening state %s", f.LoserID, j.SurvivorID, where), nil
 		}
 		if err != nil {
 			return false, "", fmt.Errorf("resolve survivor %s: %w", j.SurvivorID, err)
