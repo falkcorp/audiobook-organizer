@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_gone_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a4124a6-9e47-439e-bf24-3e5da4f68289
 // last-edited: 2026-10-18
 
@@ -19,13 +19,17 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// retiredLibraryRoutes are the activity-maintenance routes retired by
+// retiredLibraryRoutes are the cache and activity-maintenance routes retired by
 // 01-P81g, with the exact gone() body each one answers.
 var retiredLibraryRoutes = []struct {
 	method, path, body string
 }{
 	{http.MethodPost, "/api/v1/admin/recompact-digests",
 		`{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/v2 with {\"def_id\":\"maintenance.recompact-activity-digests\"} instead"}`},
+	{http.MethodPost, "/api/v1/cache/invalidate",
+		`{"error":"gone","message":"this endpoint has been removed and has no replacement"}`},
+	{http.MethodPost, "/api/v1/activity/clamp-summaries",
+		`{"error":"gone","message":"this endpoint has been removed and has no replacement"}`},
 }
 
 // TestRetiredLibraryRoutes_Answer410 drives each retired path through the real
@@ -42,7 +46,7 @@ func TestRetiredLibraryRoutes_Answer410(t *testing.T) {
 }
 
 // TestRetiredLibraryRoutes_AuthRunsFirst: the stubs sit on the protected
-// group, so a caller with no credentials gets 401 and never learns the route
+// group (clamp-summaries) or its admin-only subgroup (the other two), so a caller with no credentials gets 401 and never learns the route
 // is gone.
 func TestRetiredLibraryRoutes_AuthRunsFirst(t *testing.T) {
 	f := setupCredGuardServer(t)
@@ -57,10 +61,13 @@ func TestRetiredLibraryRoutes_AuthRunsFirst(t *testing.T) {
 	}
 }
 
-// TestRetiredLibraryRoutes_AdminGuardRunsFirst: the stubs keep the admin-only
-// group's guard. A viewer and a fingerprint-worker session are both refused
-// with 403 and never learn the route is gone.
-func TestRetiredLibraryRoutes_AdminGuardRunsFirst(t *testing.T) {
+// TestRetiredLibraryRoutes_GuardRunsFirst: the stubs keep their old guards:
+// RequireAdmin for recompact-digests and cache/invalidate, settings.manage for
+// clamp-summaries. A viewer and a fingerprint-worker session hold neither, so
+// both are refused with 403 and never learn the route is gone. The admin
+// session reaching 410 in TestRetiredLibraryRoutes_Answer410 is the positive
+// control that the guards let an allowed caller through to the stub.
+func TestRetiredLibraryRoutes_GuardRunsFirst(t *testing.T) {
 	f := setupCredGuardServer(t)
 	for _, role := range []string{auth.SeedRoleViewer, auth.SeedRoleFPWorker} {
 		u, err := f.store.CreateUser("synthetic-"+role, role+"@example.test", "bcrypt", "x", []string{role}, "active")
@@ -77,10 +84,12 @@ func TestRetiredLibraryRoutes_AdminGuardRunsFirst(t *testing.T) {
 	}
 }
 
-// TestRetiredLibraryRoutes_ReplacementWorks: the replacement the 410 names is
-// a live route that really enqueues the digest recompaction op, and the kept
-// neighbour POST /cache/invalidate still reaches its own handler.
-func TestRetiredLibraryRoutes_ReplacementWorks(t *testing.T) {
+// TestRetiredLibraryRoutes_ReplacementAndKeptNeighbours: the replacement the
+// recompact-digests 410 names is a live route that really enqueues the op, and
+// the routes the owner kept (D73) next to the retired ones still answer from
+// their own handlers, not the stub. The introspection route is driven with a
+// real registered cache name so it exercises the handler, not a 400 path.
+func TestRetiredLibraryRoutes_ReplacementAndKeptNeighbours(t *testing.T) {
 	f := setupCredGuardServer(t)
 
 	w := f.do(t, f.sessionToken, http.MethodPost, "/api/v1/operations/v2",
@@ -92,7 +101,15 @@ func TestRetiredLibraryRoutes_ReplacementWorks(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.NotEmpty(t, body.OpID)
 
-	w = f.do(t, f.sessionToken, http.MethodPost, "/api/v1/cache/invalidate", nil)
+	name := f.srv.listCache.Name()
+	require.NotEmpty(t, name)
+	w = f.do(t, f.sessionToken, http.MethodGet, "/api/v1/cache/stats/keys?cache="+name, nil)
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.NotContains(t, w.Body.String(), `"error":"gone"`)
+	assert.Contains(t, w.Body.String(), `"cache":"`+name+`"`)
+
+	w = f.do(t, f.sessionToken, http.MethodPost, "/api/v1/activity/compact",
+		map[string]any{"older_than_days": 3650})
+	assert.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 	assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 }

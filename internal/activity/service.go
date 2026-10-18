@@ -1,13 +1,12 @@
 // file: internal/activity/service.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-04
+// last-edited: 2026-10-18
 
 package activity
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -280,59 +279,6 @@ func (s *Service) RecompactDigests(ctx context.Context) (database.RecompactResul
 // Store returns the underlying ActivityStorer (e.g. for close or direct access).
 func (s *Service) Store() database.ActivityStorer {
 	return s.store
-}
-
-// ErrSummaryClampUnsupported is returned when the active activity backend has no
-// SQLite side to clamp (ActivityBackend=pebble). It is a distinct error rather
-// than a zero result so a caller can tell "nothing needed clamping" from "this
-// backend cannot be clamped at all" — the two look identical in the counters and
-// mean opposite things about whether the work still has to happen.
-var ErrSummaryClampUnsupported = errors.New("activity: summary clamp requires the SQLite backend")
-
-// ErrClampVacuumFailed marks a ClampSummaries error where the clamp itself
-// COMMITTED and only the follow-up vacuum (or its WAL reset) failed. The
-// returned result is then real and complete; the space it freed is simply still
-// held by the file or its -wal. Callers report that as a successful clamp with
-// the space still held, not as a failed request.
-var ErrClampVacuumFailed = errors.New("activity: clamp committed but vacuum failed")
-
-// ClampSummaries retroactively applies the write-path summary cap to rows
-// written before that cap existed, optionally VACUUMing afterwards to hand the
-// freed pages back to the filesystem.
-//
-// vacuum is a separate switch because clamping alone shrinks values without
-// shrinking the file: a run that skips it truthfully reports gigabytes reclaimed
-// while df does not move. It is skipped only for a dry run, which has nothing to
-// compact.
-//
-// It is deliberately NOT conditioned on this pass having clamped anything. That
-// guard existed until 2026-09-08 and made the operation unable to fix the exact
-// situation it was written for: after the first production clamp reclaimed
-// 10.66 GB, the WAL held 11,514,065,152 bytes that VACUUM would have released —
-// but every subsequent call found zero rows left to clamp and therefore skipped
-// the vacuum, so no request could reach the reclaim path. Restarting does not
-// help either: SQLite only deletes the -wal on a clean last-connection close.
-// `vacuum` already defaults to false, so passing it is an explicit request and
-// honouring it unconditionally is what the caller asked for.
-func (s *Service) ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error) {
-	var zero database.ClampSummariesResult
-	clamper, ok := database.FindSummaryClamper(s.store)
-	if !ok {
-		return zero, ErrSummaryClampUnsupported
-	}
-
-	res, err := clamper.ClampOversizedSummaries(ctx, database.ClampSummariesOptions{Max: max, DryRun: dryRun})
-	if err != nil {
-		return res, err
-	}
-	if vacuum && !dryRun {
-		if _, verr := clamper.VacuumActivity(ctx); verr != nil {
-			// The clamp already committed. Surface the vacuum failure without
-			// discarding a successful pass that may have taken hours.
-			return res, fmt.Errorf("%w: %w", ErrClampVacuumFailed, verr)
-		}
-	}
-	return res, nil
 }
 
 // ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite

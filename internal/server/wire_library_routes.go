@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.10.4
+// version: 1.10.5
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-18
 
@@ -39,7 +39,13 @@ func (s *Server) wireLibraryRoutes(
 	protected.GET("/activity", s.perm(auth.PermLibraryView), activityH.ListActivity)
 	protected.GET("/activity/sources", s.perm(auth.PermLibraryView), activityH.ListActivitySources)
 	protected.POST("/activity/compact", s.perm(auth.PermSettingsManage), activityCompactH.CompactActivity)
-	protected.POST("/activity/clamp-summaries", s.perm(auth.PermSettingsManage), activityH.ClampActivitySummaries)
+	// POST /activity/clamp-summaries (the retroactive summary clamp plus
+	// vacuum) had no caller in the repo and no replacement (01-P81g). It
+	// answers 410 Gone for one release (owner decision D9) and is then
+	// removed. The settings.manage guard still runs first, so an
+	// unauthenticated caller gets 401, a caller without the permission 403,
+	// and only an allowed caller learns it is gone.
+	protected.POST("/activity/clamp-summaries", s.perm(auth.PermSettingsManage), gone(""))
 	protected.GET("/operations/:id/activity", s.perm(auth.PermLibraryView), activityH.ListOperationActivity)
 	// A read, despite the verb: the body carries a group's member ids, which can
 	// be several hundred ULIDs. Gated like the GET above.
@@ -158,10 +164,13 @@ func (s *Server) wireLibraryRoutes(
 	adminOnly.Use(servermiddleware.RequireAdmin())
 	{
 		adminOnly.GET("/cache/stats/keys", cacheH.HandleCacheKeysIntrospection)
-		// Operator escape hatch for cache staleness. Until this existed the
-		// only way to clear a stale cache was a process restart, which costs
-		// roughly ten minutes of unusable library while memdb warms back up.
-		adminOnly.POST("/cache/invalidate", cacheH.HandleCacheInvalidate)
+		// POST /cache/invalidate (flush one or all in-memory caches) had no
+		// caller in the repo and no replacement (01-P81g). It answers 410 Gone
+		// for one release (owner decision D9) and is then removed. It stays on
+		// the admin-only group, so an unauthenticated caller still gets 401, a
+		// non-admin 403, and only an admin learns it is gone. Until a
+		// registered op replaces it, flushing a stale cache takes a restart.
+		adminOnly.POST("/cache/invalidate", gone(""))
 		// POST /admin/recompact-digests only enqueued the
 		// maintenance.recompact-activity-digests op, which POST /operations/v2
 		// starts just as well, and it had no caller in the repo (01-P81g). It
