@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_preview_behaviour_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 646f265d-ef3c-42a4-b9c8-1764018f6b26
 // last-edited: 2026-10-18
 
@@ -8,9 +8,11 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -28,9 +30,15 @@ func (c *countingReviewStore) UpsertReviewItem(it database.ReviewItem) (database
 	return c.Store.UpsertReviewItem(it)
 }
 
-func (c *countingReviewStore) DeleteReviewItem(id string) error {
+// DeleteReviewItemIfPending makes the wrapper satisfy the reconcile's
+// conditional-delete capability; the embedded Store does not carry it.
+func (c *countingReviewStore) DeleteReviewItemIfPending(id string) (bool, error) {
 	c.deletes.Add(1)
-	return c.Store.DeleteReviewItem(id)
+	d, ok := database.AsCapability[database.ReviewItemPendingDeleter](c.Store)
+	if !ok {
+		return false, fmt.Errorf("store %T cannot delete review holds conditionally", c.Store)
+	}
+	return d.DeleteReviewItemIfPending(id)
 }
 
 // TestPreviewBehaviour_RegroupShatteredAI runs the registered op with the
@@ -111,7 +119,7 @@ func TestRegroupPreview_SkipsHumanDecidedHolds(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("want one hold after the live run, got %d (%v)", len(items), err)
 	}
-	if _, err := s.SetReviewItemStatus(items[0].ID, database.ReviewStatusApproved); err != nil {
+	if _, err := s.DecideReviewItem(items[0].ID, database.ReviewStatusApproved, "", time.Time{}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 
