@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -40,7 +40,8 @@
 // "separate" must not be given "combine" because they mistyped.
 //
 // 🔴 AND THE CHOICE IS PERSISTED. ReviewItem.ChosenAction records what the human
-// picked, written atomically with the status by SetReviewItemDecision. That matters
+// picked, written atomically with the status (database.ReviewItemApplyClaimer: DecideReviewItem
+// for a decision, FinishReviewItemApply for an apply). That matters
 // because with review_apply_enabled OFF — production's setting — approving executes
 // nothing, and approving the same item again once the switch is on does the work
 // later (POST /review/replay-approved did that in one call until 01-P81j retired it).
@@ -61,11 +62,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/gin-gonic/gin"
 )
@@ -100,10 +103,21 @@ type Handler struct {
 	// store is the wire-time snapshot of the review-queue store.
 	store database.ReviewStore
 
-	// claimer is the apply-claim compare-and-set resolved from store with
-	// database.AsCapability (nil when the store lacks it: no claim is taken and two
-	// concurrent approves can then both apply, as before the claim existed).
+	// claimer owns every review write that can race an apply — the claim, its finish
+	// and release, and every decision (database.ReviewItemApplyClaimer, resolved from
+	// store with database.AsCapability). Nil when the store lacks the capability; then
+	// approve, reject and bulk refuse with 500 REVIEW_CLAIM_UNAVAILABLE rather than
+	// write unguarded, because an unguarded decision can land over a running apply.
 	claimer database.ReviewItemApplyClaimer
+
+	// unrecorded maps an item id to the claim token of an apply that SUCCEEDED in this
+	// process but whose "applied" write failed (appliedUnrecordedError). The item stays
+	// applying under that live claim, so nothing else can claim or decide it; the next
+	// approve of the item finds the token here and retries the finish WITHOUT running
+	// the apply again. Lost on restart, which is correct: the claim is then dead and an
+	// approve takes it over and re-runs the apply (see appliedUnrecordedError).
+	unrecordedMu sync.Mutex
+	unrecorded   map[string]string
 
 	// applyEnabled is the GLOBAL "big switch" gate, read at approve time. When it
 	// returns false (the default), approving a hold records the decision but NEVER
@@ -134,14 +148,50 @@ type Handler struct {
 // never executed). applyCap supplies the bulk apply ceiling; nil means
 // applycap.Default.
 func New(store database.ReviewStore, applyEnabled func() bool, applyCap func() int) *Handler {
-	claimer, _ := database.AsCapability[database.ReviewItemApplyClaimer](store)
+	claimer, ok := database.AsCapability[database.ReviewItemApplyClaimer](store)
+	if !ok && store != nil {
+		reviewLog.Error("review store %T does not implement database.ReviewItemApplyClaimer: "+
+			"approve, reject and bulk review actions will refuse with REVIEW_CLAIM_UNAVAILABLE", store)
+	}
 	return &Handler{
 		store:         store,
 		claimer:       claimer,
+		unrecorded:    make(map[string]string),
 		applyEnabled:  applyEnabled,
 		applyCap:      applyCap,
 		applyHandlers: make(map[string]ApplyFunc),
 	}
+}
+
+var reviewLog = logger.New("review")
+
+// refuseWithoutClaimer answers 500 REVIEW_CLAIM_UNAVAILABLE and returns true when the
+// store has no apply-claim capability. Every review write goes through the claimer, so
+// without one there is no write this handler can make safely.
+func (h *Handler) refuseWithoutClaimer(c *gin.Context) bool {
+	if h.claimer != nil {
+		return false
+	}
+	httputil.RespondWithError(c, http.StatusInternalServerError,
+		"the review store cannot claim items for apply, so review decisions are disabled", "REVIEW_CLAIM_UNAVAILABLE")
+	return true
+}
+
+func (h *Handler) unrecordedToken(id string) (string, bool) {
+	h.unrecordedMu.Lock()
+	defer h.unrecordedMu.Unlock()
+	tok, ok := h.unrecorded[id]
+	return tok, ok
+}
+
+func (h *Handler) setUnrecorded(id, token string) {
+	h.unrecordedMu.Lock()
+	defer h.unrecordedMu.Unlock()
+	if token == "" {
+		delete(h.unrecorded, id)
+		return
+	}
+	h.unrecorded[id] = token
 }
 
 // configuredApplyCap returns the raw configured ceiling (0 when no gate was
@@ -223,7 +273,8 @@ func recommendedActionFor(item database.ReviewItem) string {
 // the same way, first time or re-approve: what does this hold currently mean?
 //
 // 🔴 THE PERSISTED HUMAN CHOICE WINS OVER THE MACHINE'S SUGGESTION. ReviewItem.ChosenAction
-// is written when a reviewer approves (SetReviewItemDecision); the payload's
+// is written when a reviewer approves (DecideReviewItem, or FinishReviewItemApply when
+// the approve applied); the payload's
 // `recommendedAction` is what the classifier proposed. When they disagree, the human
 // is right by definition — that disagreement IS owner item 2. A hold recommending
 // `combine` that a human approved as `separate` must never be re-approved as a merge,
@@ -264,22 +315,39 @@ func rejectf(status int, code, msg string) *actionRejection {
 }
 
 // appliedUnrecordedError means the apply handler SUCCEEDED but the "applied" status
-// could not be written (twice). The work is done; the item is left in the "applying"
-// claim, which blocks a second apply until the claim goes stale. It is its own type
-// so a caller is never told to resend: a resend inside the stale window is refused,
-// and one after it would re-run an apply that already ran.
+// could not be written, even after retries. The work is done. The item stays
+// "applying" under this process's live claim, so no other approve, reject or bulk
+// action can claim or decide it, and the claim's token is kept in Handler.unrecorded.
+//
+// What happens next, exactly:
+//   - Approving the item again while this server keeps running retries ONLY the
+//     status write (FinishReviewItemApply with the kept token). The apply does not
+//     run again.
+//   - After a restart the token is gone and the claim is dead. Approving the item
+//     again (as the same action) takes the claim over and RE-RUNS the apply. The
+//     registered handlers tolerate that: ApplyMultidisc and ApplyDuplicateOf skip
+//     members that are already merged away (presentMembers) and no-op when too few
+//     remain, and ApplyVersionGroup reuses the group the members already share. The
+//     one thing a re-run does not redo is multidisc disc/track numbering that was
+//     left incomplete (see ApplyMultidisc).
+//   - Reject is refused (REVIEW_ALREADY_APPLIED): the work happened.
 type appliedUnrecordedError struct{ err error }
 
 func (e *appliedUnrecordedError) Error() string {
-	return "applied but status write failed — do not resend: " + e.err.Error()
+	return "applied, but the result could not be recorded (" + e.err.Error() + "); approve it again to record it — " +
+		"the apply is not repeated while this server keeps running"
 }
 func (e *appliedUnrecordedError) Unwrap() error { return e.err }
 
 // GetReviewCount handles GET /api/v1/review/count.
 //
-// Response: { "count": N, "by_kind": { "<kind>": n, ... } } where count and the
-// by_kind breakdown both cover PENDING items only (decision #1: the badge counts
-// intentional holds awaiting a decision, never decided items).
+// Response: { "count": N, "by_kind": { "<kind>": n, ... }, "applying": M }. count and
+// the by_kind breakdown cover PENDING items only (decision #1: the badge counts
+// intentional holds awaiting a decision, never decided items). applying counts items
+// held by an apply claim: running now, applied but not yet recorded, or interrupted
+// by a restart. It is separate so the badge keeps its meaning, and it exists so an
+// item stuck mid-apply is visible somewhere — it is in no pending list. List them
+// with GET /review/items?status=applying.
 func (h *Handler) GetReviewCount(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
@@ -301,7 +369,12 @@ func (h *Handler) GetReviewCount(c *gin.Context) {
 			byKind[s.Kind] = s.Count
 		}
 	}
-	httputil.RespondWithOK(c, gin.H{"count": count, "by_kind": byKind})
+	applying, err := h.store.CountReviewItems(database.ReviewStatusApplying)
+	if err != nil {
+		httputil.InternalError(c, "failed to count applying review items", err)
+		return
+	}
+	httputil.RespondWithOK(c, gin.H{"count": count, "by_kind": byKind, "applying": applying})
 }
 
 // ListReviewItems handles GET /api/v1/review/items.
@@ -376,6 +449,9 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 	// is not an error — but a MALFORMED body is. Binding errors are surfaced rather
 	// than ignored: silently discarding an unparseable `{"action": ...}` would run
 	// the recommendation while the caller believes it overrode it.
+	if h.refuseWithoutClaimer(c) {
+		return
+	}
 	var req approveRequest
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
@@ -418,10 +494,17 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 // genuine fault. applyOn is the apply switch as read ONCE by the caller, so a bulk
 // batch and its per-item results can never disagree about it.
 //
-// An item that is already applied (or mid-apply under another claim) is refused with
-// 409, never approved again: a second apply of a merge that already ran must not
-// happen, from a single approve or a resent bulk alike.
+// Every write goes through h.claimer, and the STORE decides what an item's state
+// allows (database.ReviewItemApplyClaimer): an applied item, or one under an apply
+// claim held by this process, is refused with 409; a claim a previous process left is
+// taken over by an approve of its own action and the apply re-runs. This function
+// does not pre-judge the status it read, because that read is already stale by the
+// time a write lands — pre-refusing "applying" here is what once made a crashed
+// claim impossible to recover.
 func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn bool) (*database.ReviewItem, string, string, error) {
+	if h.claimer == nil {
+		return nil, "", "", errNoClaimer
+	}
 	item, err := h.store.GetReviewItem(id)
 	if err != nil {
 		return nil, "", "", err
@@ -429,8 +512,13 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	if item == nil {
 		return nil, "", "", nil
 	}
-	if rej := alreadyDone(item); rej != nil {
-		return nil, effectiveActionFor(*item), "", rej
+	// An apply that ran in THIS process but could not be recorded: record it now and
+	// never run it again. The work happened as the claim's action, whatever this
+	// request asks for.
+	if item.Status == database.ReviewStatusApplying {
+		if token, ok := h.unrecordedToken(id); ok {
+			return h.finishUnrecorded(id, token, item.ApplyClaimAction)
+		}
 	}
 
 	// The default is the hold's EFFECTIVE action, not the raw payload recommendation:
@@ -439,9 +527,13 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	// supported flow — it is how a hold approved while apply was off gets executed now
 	// that POST /review/replay-approved is retired (01-P81j).
 	// Pending holds carry no ChosenAction, so for them this is the recommendation.
+	//
+	// An item under an apply claim means the claim's action: re-approving an item whose
+	// apply was interrupted by a restart must re-run what was running, not whatever
+	// the payload recommends.
 	chosen := requested
 	if chosen == "" {
-		chosen = effectiveActionFor(*item)
+		chosen = currentActionFor(*item)
 	}
 
 	// (1) Closed vocabulary. An unrecognised action is a 400, NEVER a fall back to
@@ -498,7 +590,10 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	// whole mechanism: a re-scan skips a non-pending hold. Recording the action still
 	// matters: it is what stops a later re-approve from falling back to a `combine` payload.
 	if chosen == itunesservice.ActionSeparate {
-		updated, serr := h.store.SetReviewItemDecision(id, database.ReviewStatusApproved, chosen)
+		updated, serr := h.claimer.DecideReviewItem(id, database.ReviewStatusApproved, chosen)
+		if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](serr); ok {
+			return nil, chosen, "", conflictRejection(conflict)
+		}
 		if serr != nil {
 			return nil, "", "", serr
 		}
@@ -508,55 +603,21 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 
 	fn, hasHandler := h.applyHandlerFor(chosen)
 	if hasHandler && applyOn {
-		// Claim the item (pending/approved/rejected -> applying) under the store's
-		// lock so two concurrent approves cannot both run the handler. A store
-		// without the capability applies unclaimed.
-		if h.claimer != nil {
-			claimed, cerr := h.claimer.ClaimReviewItemForApply(id, database.ReviewApplyClaimStale)
-			if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](cerr); ok {
-				return nil, chosen, "", claimConflict(conflict)
-			}
-			if cerr != nil {
-				return nil, "", "", cerr
-			}
-			if claimed == nil {
-				return nil, "", "", nil
-			}
-		}
-		release := func() {
-			if h.claimer != nil {
-				_ = h.claimer.ReleaseReviewItemClaim(id)
-			}
-		}
-		if err := fn(ctx, *item); err != nil {
-			// Nothing was applied: hand the claim back so the item is retryable.
-			release()
-			// A refusal because a member has a file under the active iTunes
-			// library is 409, not a 500: the item keeps its status and bulk
-			// approve skips it instead of aborting.
-			if errors.Is(err, merge.ErrITunesProtected) {
-				return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", err.Error())
-			}
-			return nil, "", "", err
-		}
-		// The handler ran. Recording that is retried once; if it still fails the
-		// claim stays (blocking a double apply) and the caller is told not to resend.
-		updated, err := h.store.SetReviewItemDecision(id, database.ReviewStatusApplied, chosen)
-		if err != nil {
-			updated, err = h.store.SetReviewItemDecision(id, database.ReviewStatusApplied, chosen)
-		}
-		if err != nil {
-			return nil, chosen, "", &appliedUnrecordedError{err: err}
-		}
-		return updated, chosen, "", nil
+		return h.applyUnderClaim(ctx, item, chosen, fn)
 	}
 	// Either no apply handler for this action, OR the global apply switch is OFF
 	// (review-only mode). Record the decision as "approved" but do NOT execute — the
 	// item stays visible/reviewable and nothing is merged. The action is recorded even
 	// though nothing ran, which is precisely the case a later re-approve reads back.
-	updated, err := h.store.SetReviewItemDecision(id, database.ReviewStatusApproved, chosen)
+	updated, err := h.claimer.DecideReviewItem(id, database.ReviewStatusApproved, chosen)
+	if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+		return nil, chosen, "", conflictRejection(conflict)
+	}
 	if err != nil {
 		return nil, "", "", err
+	}
+	if updated == nil {
+		return nil, "", "", nil
 	}
 	note := "no apply handler registered for action " + chosen + "; marked approved"
 	if hasHandler {
@@ -566,43 +627,189 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	return updated, chosen, note, nil
 }
 
-// alreadyDone refuses an approve or reject of an item whose apply already ran or is
-// running: rewriting an applied item's status would falsify history.
-func alreadyDone(item *database.ReviewItem) *actionRejection {
-	switch item.Status {
-	case database.ReviewStatusApplied:
-		return rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED", "already applied")
-	case database.ReviewStatusApplying:
-		return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
+// errNoClaimer is approveOne's and rejectOne's answer when the store has no
+// apply-claim capability. The HTTP handlers refuse with REVIEW_CLAIM_UNAVAILABLE
+// before calling either, so this is a backstop.
+var errNoClaimer = errors.New("review store has no apply-claim capability; refusing to write")
+
+// finishAttempts is how many times a successful apply's "applied" write is tried
+// before the item is reported applied-but-unrecorded, and finishBackoff the pause
+// before each retry.
+const finishAttempts = 3
+
+var finishBackoff = []time.Duration{0, 50 * time.Millisecond, 250 * time.Millisecond}
+
+// applyUnderClaim claims item for chosen, runs fn on the claimed record, and records
+// the outcome. The claim is a compare-and-set on the record approveOne read
+// (item.UpdatedAt), so the action resolved from that read is still what the item
+// means when fn runs: a re-scan refreshing the payload, or a decision landing in
+// between, refuses the claim with 409 REVIEW_ITEM_CHANGED instead of applying a stale
+// reading.
+//
+// Every exit leaves the claim finished or released, except appliedUnrecordedError,
+// which keeps it on purpose. A panicking fn releases it too: a claim from this process
+// is never taken over, so a leaked one would hold the item until a restart.
+func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem, chosen string, fn ApplyFunc) (
+	*database.ReviewItem, string, string, error) {
+	id := item.ID
+	claim, err := h.claimer.ClaimReviewItemForApply(id, chosen, item.UpdatedAt)
+	if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+		return nil, chosen, "", conflictRejection(conflict)
+	}
+	if err != nil {
+		return nil, "", "", err
+	}
+	if claim == nil {
+		return nil, "", "", nil
+	}
+
+	settled := false
+	defer func() {
+		if settled {
+			return
+		}
+		r := recover()
+		if relErr := h.releaseClaim(id, claim.Token); relErr != nil {
+			reviewLog.Error("review apply of %s panicked and its claim could not be released: %v", id, relErr)
+		}
+		if r != nil {
+			panic(r)
+		}
+	}()
+	applyErr := fn(ctx, *claim.Item)
+	if applyErr != nil {
+		settled = true
+		reason := applyErr
+		// Nothing was applied: hand the claim back so the item is retryable.
+		if relErr := h.releaseClaim(id, claim.Token); relErr != nil {
+			reason = fmt.Errorf("%w; and its apply claim could not be released, so the item stays "+
+				"\"applying\" until the server restarts: %v", applyErr, relErr)
+		}
+		// A refusal because a member has a file under the active iTunes library is
+		// 409, not a 500: the item keeps its status and bulk approve skips it
+		// instead of aborting.
+		if errors.Is(applyErr, merge.ErrITunesProtected) {
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
+		}
+		return nil, "", "", reason
+	}
+	settled = true
+
+	// The handler ran. Recording that is retried; if it still fails the claim stays
+	// (blocking a second apply) and its token is kept so a re-approve can finish it.
+	var updated *database.ReviewItem
+	for attempt := range finishAttempts {
+		if d := finishBackoff[attempt]; d > 0 {
+			time.Sleep(d)
+		}
+		updated, err = h.claimer.FinishReviewItemApply(id, claim.Token)
+		if err == nil {
+			break
+		}
+		if _, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+			break // the claim is not ours any more; retrying cannot help
+		}
+	}
+	if err != nil || updated == nil {
+		if err == nil {
+			err = errors.New("the item disappeared before its result was recorded")
+		}
+		h.setUnrecorded(id, claim.Token)
+		reviewLog.Error("review apply of %s (%s) succeeded but could not be recorded: %v", id, chosen, err)
+		return nil, chosen, "", &appliedUnrecordedError{err: err}
+	}
+	note := ""
+	if claim.TookOver {
+		note = "this finished an apply that a server restart had interrupted; the apply was run again " +
+			"and skipped any work already done"
+	}
+	return updated, chosen, note, nil
+}
+
+// releaseClaim hands a claim back after its apply failed, logging a failure. A false
+// release (the token no longer holds the claim) is logged too: nothing else should be
+// able to take a live claim, so it means something is wrong.
+func (h *Handler) releaseClaim(id, token string) error {
+	released, err := h.claimer.ReleaseReviewItemClaim(id, token)
+	if err != nil {
+		reviewLog.Error("review item %s: release apply claim: %v", id, err)
+		return err
+	}
+	if !released {
+		reviewLog.Warn("review item %s: release apply claim: the claim was no longer held by this apply", id)
 	}
 	return nil
 }
 
-// claimConflict turns a refused apply claim into the same 409s alreadyDone gives.
-func claimConflict(c *database.ReviewClaimConflictError) *actionRejection {
-	if c.Status == database.ReviewStatusApplied {
+// finishUnrecorded records an apply that already succeeded in this process but whose
+// "applied" write failed earlier (see appliedUnrecordedError). It never runs the apply.
+func (h *Handler) finishUnrecorded(id, token, action string) (*database.ReviewItem, string, string, error) {
+	updated, err := h.claimer.FinishReviewItemApply(id, token)
+	if err != nil || updated == nil {
+		if err == nil {
+			err = errors.New("the item disappeared before its result was recorded")
+		}
+		if _, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+			h.setUnrecorded(id, "") // the claim is gone; the token can never finish it
+		}
+		return nil, action, "", &appliedUnrecordedError{err: err}
+	}
+	h.setUnrecorded(id, "")
+	return updated, action, "the apply had already run; its result is recorded now (it was not run again)", nil
+}
+
+// currentActionFor is the action an approve with no explicit choice resolves to: the
+// claim's action for an item under an apply claim (only that action may finish an
+// interrupted apply), else the hold's effective action.
+func currentActionFor(item database.ReviewItem) string {
+	if item.Status == database.ReviewStatusApplying && item.ApplyClaimAction != "" {
+		return item.ApplyClaimAction
+	}
+	return effectiveActionFor(item)
+}
+
+// conflictRejection turns a store refusal into the 409 a caller acts on.
+func conflictRejection(c *database.ReviewClaimConflictError) *actionRejection {
+	switch c.Reason {
+	case database.ReviewClaimApplied:
 		return rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED", "already applied")
+	case database.ReviewClaimInterrupted:
+		return rejectf(http.StatusConflict, "REVIEW_APPLY_INTERRUPTED",
+			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted by a server restart; approve it again as "+
+				strconv.Quote(c.ClaimAction)+" to finish it (the apply runs again and skips work already done). "+
+				"No other decision can be recorded until then, because the interrupted apply may already have changed the library")
+	case database.ReviewClaimChanged:
+		return rejectf(http.StatusConflict, "REVIEW_ITEM_CHANGED",
+			"the item changed while it was being approved; reload it and approve again")
 	}
 	return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
 }
 
-// rejectOne rejects one item, refusing one that is applied or applying. Returns
-// (nil, nil) when the item does not exist.
+// rejectOne rejects one item through the store's claim-aware decision write, which
+// refuses an applied item or one under an apply claim. Returns (nil, nil) when the
+// item does not exist.
 func (h *Handler) rejectOne(id string) (*database.ReviewItem, error) {
-	item, err := h.store.GetReviewItem(id)
-	if err != nil || item == nil {
-		return nil, err
+	if h.claimer == nil {
+		return nil, errNoClaimer
 	}
-	if rej := alreadyDone(item); rej != nil {
-		return nil, rej
+	if _, ok := h.unrecordedToken(id); ok {
+		return nil, rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED",
+			"already applied (its result is not recorded yet; approve it again to record it)")
 	}
-	return h.store.SetReviewItemStatus(id, database.ReviewStatusRejected)
+	updated, err := h.claimer.DecideReviewItem(id, database.ReviewStatusRejected, "")
+	if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+		return nil, conflictRejection(conflict)
+	}
+	return updated, err
 }
 
 // RejectReviewItem handles POST /api/v1/review/items/:id/reject.
 func (h *Handler) RejectReviewItem(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
+		return
+	}
+	if h.refuseWithoutClaimer(c) {
 		return
 	}
 	id := c.Param("id")
@@ -644,6 +851,12 @@ type bulkSkip struct {
 	ID     string `json:"id"`
 	Action string `json:"action"` // the action that was refused (usually insufficient-evidence)
 	Reason string `json:"reason"`
+	// Code is the refusal's stable code, the one a single approve or reject would
+	// return (REVIEW_ACTION_NOT_DECIDABLE, REVIEW_ALREADY_APPLIED,
+	// REVIEW_APPLY_IN_PROGRESS, REVIEW_APPLY_INTERRUPTED, ...). The UI groups skips by
+	// it: a hold skipped for having no decidable action is still pending, one skipped
+	// because it is applied or mid-apply is not.
+	Code string `json:"code,omitempty"`
 }
 
 // bulkResult reports the outcome of a bulk action.
@@ -659,9 +872,10 @@ type bulkResult struct {
 	// approved and a retry is another bulk approve naming its id.
 	Failed []bulkFail `json:"failed,omitempty"`
 	// AppliedUnrecorded lists items whose apply SUCCEEDED but whose "applied" status
-	// write failed. The work is done: do NOT resend them (the item is held in
-	// "applying" so a resend is refused until the claim goes stale, and a resend
-	// after that would apply twice). Check the item and fix its status by hand.
+	// write failed. The work is done and the item is held "applying" under this
+	// server's claim. Approving it again records the result without re-running the
+	// apply while this server keeps running; after a restart, approving it again
+	// re-runs the apply, which the apply handlers tolerate (appliedUnrecordedError).
 	AppliedUnrecorded []bulkFail `json:"applied_unrecorded,omitempty"`
 	// ApplyDisabled is true on an approve while the global apply switch is off:
 	// approvals were recorded but nothing was applied, so an empty `applied` is not
@@ -689,6 +903,9 @@ type bulkFail struct {
 func (h *Handler) BulkReviewAction(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
+		return
+	}
+	if h.refuseWithoutClaimer(c) {
 		return
 	}
 	var req bulkRequest
@@ -750,7 +967,7 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 			// insufficient-evidence hold would make bulk approve useless on a queue
 			// where 70 of 356 holds are exactly that.
 			if rej, ok := errors.AsType[*actionRejection](err); ok {
-				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: chosen, Reason: rej.msg})
+				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: chosen, Reason: rej.msg, Code: rej.code})
 				continue
 			}
 			if unrec, ok := errors.AsType[*appliedUnrecordedError](err); ok {
@@ -774,7 +991,7 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		case "reject":
 			updated, err := h.rejectOne(id)
 			if rej, ok := errors.AsType[*actionRejection](err); ok {
-				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Reason: rej.msg})
+				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Reason: rej.msg, Code: rej.code})
 				continue
 			}
 			if err != nil {

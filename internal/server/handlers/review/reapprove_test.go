@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/reapprove_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d2e4e573-9060-4296-b021-6de20390337a
 // last-edited: 2026-10-18
 
@@ -309,35 +309,40 @@ func TestBulkApprove_ApplyOffSaysSo(t *testing.T) {
 }
 
 // flakyStore wraps the real store (embedding keeps the apply-claim capability
-// visible to database.AsCapability) and fails chosen writes.
+// visible to database.AsCapability, and lets it override the claimer's methods) and
+// fails chosen writes.
 type flakyStore struct {
 	*database.PebbleStore
-	failApplied  atomic.Bool
+	failFinish   atomic.Bool
+	finishCalls  atomic.Int32
 	rejectFailID string
 }
 
-func (f *flakyStore) SetReviewItemDecision(id, status, chosen string) (*database.ReviewItem, error) {
-	if f.failApplied.Load() && status == database.ReviewStatusApplied {
+func (f *flakyStore) FinishReviewItemApply(id, token string) (*database.ReviewItem, error) {
+	f.finishCalls.Add(1)
+	if f.failFinish.Load() {
 		return nil, errors.New("synthetic pebble write error")
 	}
-	return f.PebbleStore.SetReviewItemDecision(id, status, chosen)
+	return f.PebbleStore.FinishReviewItemApply(id, token)
 }
 
-func (f *flakyStore) SetReviewItemStatus(id, status string) (*database.ReviewItem, error) {
+func (f *flakyStore) DecideReviewItem(id, status, chosen string) (*database.ReviewItem, error) {
 	if status == database.ReviewStatusRejected && id == f.rejectFailID {
 		return nil, errors.New("synthetic reject write error")
 	}
-	return f.PebbleStore.SetReviewItemStatus(id, status)
+	return f.PebbleStore.DecideReviewItem(id, status, chosen)
 }
 
-// 🔴 AN APPLY THAT SUCCEEDED BUT COULD NOT BE RECORDED MUST NEVER BE RESENT. The handler
-// ran, the "applied" write failed twice: the item lands in applied_unrecorded (not
-// failed), stays claimed ("applying") so a resend is refused, and the apply ran once.
-func TestBulkApprove_StatusWriteFailAfterApply_IsUnrecordedAndNotResendable(t *testing.T) {
+// 🔴 AN APPLY THAT SUCCEEDED BUT COULD NOT BE RECORDED IS NEVER RUN AGAIN BY THIS
+// PROCESS. The handler ran and every "applied" write failed: the item lands in
+// applied_unrecorded (not failed) and stays claimed ("applying"), so a reject is
+// refused. Approving it again once the store recovers records it WITHOUT re-running
+// the apply.
+func TestBulkApprove_StatusWriteFailAfterApply_IsUnrecordedThenRecordedWithoutReapply(t *testing.T) {
 	s := newTestStore(t)
 	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	fs := &flakyStore{PebbleStore: s}
-	fs.failApplied.Store(true)
+	fs.failFinish.Store(true)
 	h := reviewhandler.New(fs, func() bool { return true }, nil)
 	var calls atomic.Int32
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
@@ -355,25 +360,38 @@ func TestBulkApprove_StatusWriteFailAfterApply_IsUnrecordedAndNotResendable(t *t
 	if len(unrec) != 1 || unrec[0].(map[string]any)["id"] != a.ID {
 		t.Fatalf("applied_unrecorded = %v, want the item", data["applied_unrecorded"])
 	}
-	if reason, _ := unrec[0].(map[string]any)["reason"].(string); !strings.Contains(reason, "do not resend") {
-		t.Fatalf("reason = %q, want it to say do not resend", reason)
+	if reason, _ := unrec[0].(map[string]any)["reason"].(string); !strings.Contains(reason, "approve it again to record it") {
+		t.Fatalf("reason = %q, want it to say how to record it", reason)
 	}
 	if data["failed"] != nil {
 		t.Fatalf("failed = %v; an applied item must not be reported as failed", data["failed"])
 	}
+	if n := fs.finishCalls.Load(); n < 2 {
+		t.Fatalf("finish tried %d times, want it retried", n)
+	}
 	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplying {
-		t.Fatalf("status = %q, want applying (held so a resend is refused)", got.Status)
+		t.Fatalf("status = %q, want applying (held so nothing else claims it)", got.Status)
 	}
 
-	fs.failApplied.Store(false)
+	// A reject cannot land: the work happened.
+	w = doReq(t, h.RejectReviewItem, http.MethodPost, "/r", nil, gin.Params{{Key: "id", Value: a.ID}})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "REVIEW_ALREADY_APPLIED") {
+		t.Fatalf("reject of unrecorded: code %d body %s", w.Code, w.Body.String())
+	}
+
+	fs.failFinish.Store(false)
 	w = doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
 		map[string]any{"action": "approve", "ids": []string{a.ID}}, nil)
 	data = decodeBody(t, w)["data"].(map[string]any)
-	if skipped, _ := data["skipped"].([]any); len(skipped) != 1 {
-		t.Fatalf("resend skipped = %v, want the held item", data["skipped"])
+	if applied, _ := data["applied"].([]any); len(applied) != 1 {
+		t.Fatalf("re-approve = %v, want the item recorded as applied", data)
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("apply ran %d times, want 1", calls.Load())
+	}
+	got, _ := s.GetReviewItem(a.ID)
+	if got.Status != database.ReviewStatusApplied || got.ChosenAction != itunesservice.ActionCombine || got.ApplyClaimToken != "" {
+		t.Fatalf("after re-approve = %+v", got)
 	}
 }
 
