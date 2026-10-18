@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-18
 
@@ -196,6 +196,26 @@ func respondMergeError(c *gin.Context, err error, fallback string) {
 	default:
 		httputil.InternalError(c, fallback, err)
 	}
+}
+
+// respondCombineIncomplete answers a combine that failed after its undo
+// pointer was journaled: it may have moved files or retired books before it
+// stopped, so the body carries the ids that undo it (journal_id, operation_id)
+// and says so. The underlying error is logged, not sent: it names internal
+// rows and store errors. 409 when the failure is a refusal (nothing the
+// caller can retry as is), 500 otherwise.
+func respondCombineIncomplete(c *gin.Context, e *merge.CombineIncompleteError) {
+	logger.New("duplicates").Error("combine stopped part-way journal=%s operation=%s err=%s",
+		logger.SanitizeLogValue(e.JournalID), logger.SanitizeLogValue(e.OperationID), logger.SanitizeLogValue(fmt.Sprint(e.Err)))
+	status := http.StatusInternalServerError
+	if merge.IsRefusal(e) {
+		status = http.StatusConflict
+	}
+	msg := fmt.Sprintf("The combine stopped part-way and may already have moved some files or put some books in the trash. Revert operation %s to undo what it did.", e.OperationID)
+	httputil.RespondWithErrorFields(c, status, msg, "COMBINE_INCOMPLETE", map[string]any{
+		"journal_id":   e.JournalID,
+		"operation_id": e.OperationID,
+	})
 }
 
 // UndoCombine reverses one journaled combine (manual /audiobooks/combine or a
@@ -415,6 +435,11 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 
 	// Pass ALL ids (the absorbed books plus the survivor) and the survivor id.
 	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID, req.Override)
+	var incomplete *merge.CombineIncompleteError
+	if errors.As(err, &incomplete) {
+		respondCombineIncomplete(c, incomplete)
+		return
+	}
 	if err != nil {
 		respondMergeError(c, err, "failed to combine books")
 		return

@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -1598,6 +1598,22 @@ type PartialMergeError struct {
 func (e *PartialMergeError) Error() string { return e.Err.Error() }
 func (e *PartialMergeError) Unwrap() error { return e.Err }
 
+// CombineIncompleteError is a combine that failed after its undo pointer was
+// journaled. It may have changed the library before it stopped (moved files,
+// retired absorbed books); its journal is left Pending and names every step
+// that ran, so reverting OperationID (POST /operations/:id/revert) undoes
+// exactly those. A caller that shows the failure should show the id too.
+type CombineIncompleteError struct {
+	// JournalID is the combine journal (GET /merge/combine-journal lists it).
+	JournalID string
+	// OperationID is the operation the journal's undo pointer is under.
+	OperationID string
+	Err         error
+}
+
+func (e *CombineIncompleteError) Error() string { return e.Err.Error() }
+func (e *CombineIncompleteError) Unwrap() error { return e.Err }
+
 // resolveVersionGroup picks the version group a merge's books end up in, and
 // whether it is an existing group (reused) rather than a new one.
 //
@@ -1761,7 +1777,20 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 // Pending journal is written, and before the first mutation, it journals the
 // pointer POST /operations/:id/revert follows to that journal
 // (undo_pointer.go); a pointer that cannot be written refuses the combine.
-func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, override *CombineOverride, opts CombineOptions) (*CombineResult, error) {
+//
+// Once the pointer is written, every error is a *CombineIncompleteError
+// carrying the journal and operation ids: the combine may have changed the
+// library before it stopped, and reverting that operation undoes what it did.
+func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, override *CombineOverride, opts CombineOptions) (_ *CombineResult, retErr error) {
+	// Set once the undo pointer is journaled; from then on a failure hands the
+	// caller the ids it needs to undo whatever ran.
+	var incomplete *CombineIncompleteError
+	defer func() {
+		if retErr != nil && incomplete != nil {
+			incomplete.Err = retErr
+			retErr = incomplete
+		}
+	}()
 	if len(bookIDs) < 2 {
 		return nil, fmt.Errorf("need at least 2 books to combine")
 	}
@@ -1928,6 +1957,7 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		return nil, fmt.Errorf("combine refused: undo pointer could not be journaled: %w", err)
 	}
 	res.OperationID = opID
+	incomplete = &CombineIncompleteError{JournalID: journal.ID, OperationID: opID}
 
 	// persist re-writes the journal. Every call precedes a mutation (or
 	// records one that just ran before the next can start), so a failure
@@ -2120,7 +2150,7 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	// combine stops: a renumbering the journal does not allow for would
 	// survive the undo.
 	journal.SurvivorNumbering = SurvivorNumberingMayChange
-	if err := persist("completing the combine body"); err != nil {
+	if err := persist("the end of the combine body (every file is moved and every absorbed book retired; the aggregate recompute, version-group hand-off and override did not run)"); err != nil {
 		return nil, err
 	}
 
