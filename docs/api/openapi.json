@@ -2746,7 +2746,7 @@
             }
           }
         },
-        "description": "Retired: this endpoint now always answers 410 Gone. Use GET/PUT /api/v1/audiobooks/:id (narrator field) instead. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "description": "Retired: this endpoint now always answers 410 Gone. Use PUT /api/v1/audiobooks/{id} (narrator credit; GET returns narrators[]) instead. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
         "deprecated": true
       },
       "put": {
@@ -2789,7 +2789,7 @@
             }
           }
         },
-        "description": "Retired: this endpoint now always answers 410 Gone. Use GET/PUT /api/v1/audiobooks/:id (narrator field) instead. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "description": "Retired: this endpoint now always answers 410 Gone. Use PUT /api/v1/audiobooks/{id} (narrator credit; GET returns narrators[]) instead. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
         "deprecated": true
       }
     },

@@ -1,5 +1,5 @@
 // file: internal/server/wire_entities_gone_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d2a9c41-7b58-4e03-91f6-a4c8e2b05d37
 // last-edited: 2026-10-18
 
@@ -19,7 +19,7 @@ import (
 
 const (
 	entitiesGoneBody  = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
-	narratorsGoneBody = `{"error":"gone","message":"this endpoint has been removed; use GET/PUT /api/v1/audiobooks/:id (narrator field) instead"}`
+	narratorsGoneBody = `{"error":"gone","message":"this endpoint has been removed; use PUT /api/v1/audiobooks/:id (narrator credit; GET returns narrators[]) instead"}`
 )
 
 // retiredEntityRoutes are the narrator-link and author/series tag routes
@@ -83,6 +83,24 @@ func TestRetiredEntityRoutes_PermissionRunsBeforeGone(t *testing.T) {
 		}
 		t.Run("viewer gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
 			w := f.do(t, viewerSess.ID, r.method, r.path, nil)
+			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
+		})
+	}
+
+	// An fp-worker session holds only PermFingerprintWorker, so s.perm must
+	// refuse it on every GET stub too; without this, dropping s.perm from a
+	// GET stub would fail no test.
+	fpWorker, err := f.store.CreateUser("synthetic-fp-worker", "fpworker@example.test", "bcrypt", "x", []string{auth.SeedRoleFPWorker}, "active")
+	require.NoError(t, err)
+	fpSess, err := f.store.CreateSessionWithOrigin(fpWorker.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	require.NoError(t, err)
+	for _, r := range retiredEntityRoutes {
+		if r.method != http.MethodGet {
+			continue
+		}
+		t.Run("fp-worker gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
+			w := f.do(t, fpSess.ID, r.method, r.path, nil)
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 		})

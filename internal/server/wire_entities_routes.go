@@ -1,5 +1,5 @@
 // file: internal/server/wire_entities_routes.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: e5f6a7b8-c9d0-1234-efab-567890123456
 // last-edited: 2026-10-18
 
@@ -12,7 +12,9 @@ import (
 )
 
 // narratorsGone names where the retired per-book narrator routes point callers.
-const narratorsGone = "GET/PUT /api/v1/audiobooks/:id (narrator field)"
+// Narrators are an ordered credit list (owner decision 2026-10-04), so edits go
+// through the book record's narrator credit.
+const narratorsGone = "PUT /api/v1/audiobooks/:id (narrator credit; GET returns narrators[])"
 
 // wireEntitiesRoutes registers the entities domain routes (authors, narrators,
 // series, works) on the protected group. Handler instantiation stays in wireHandlers.

@@ -1,1 +1,3 @@
 Retired the per-book narrator list and update routes (GET and PUT `/api/v1/audiobooks/:id/narrators`) and the author and series tag routes (GET and POST `/api/v1/authors/:id/tags` and `/api/v1/series/:id/tags`). Nothing in the app called them. They now answer 410 Gone for one release, and the handlers and their tests are deleted. The narrator count and work statistics diagnostics are kept.
+
+The narrator stubs point callers at PUT `/api/v1/audiobooks/:id` (narrator credit; GET returns narrators[]). `AddAuthorTag` and `AddSeriesTag` were also deleted from the store, since the retired tag routes were their only callers.
