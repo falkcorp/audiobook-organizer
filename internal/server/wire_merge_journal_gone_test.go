@@ -1,5 +1,5 @@
 // file: internal/server/wire_merge_journal_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f7287a40-9996-4784-8c46-4f09afcab92e
 // last-edited: 2026-10-18
 
@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	combineUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert (for a combine a Repairs fixer made; a manual combine has no HTTP undo now) instead"}`
+	combineUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert (only for a combine made by the dedup.split-books Repairs fixer; other combines have no HTTP undo now) instead"}`
 	siblingUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
 )
 
@@ -79,8 +79,8 @@ func TestRetiredMergeUndoRoutes_GuardsRunFirst(t *testing.T) {
 // TestRetiredMergeUndoRoutes_KeptJournalListsNotGone: the two owner-kept (D73)
 // read-only journal lists beside the retired stubs still run their handlers.
 // Each is seeded with one synthetic journal so the control proves the handler
-// read it back, not just that the path is not 410. A fp-worker session (only
-// PermFingerprintWorker) is refused 403 on both, so the view guard is real.
+// read it back, not just that the path is not 410. A session whose role holds only
+// playlists.create is refused 403 on both, so the view guard is real.
 func TestRetiredMergeUndoRoutes_KeptJournalListsNotGone(t *testing.T) {
 	f := setupCredGuardServer(t)
 
@@ -96,9 +96,14 @@ func TestRetiredMergeUndoRoutes_KeptJournalListsNotGone(t *testing.T) {
 		registered[r.Method+" "+r.Path] = true
 	}
 
-	fpWorker, err := f.store.CreateUser("synthetic-fp-worker", "fpworker@example.test", "bcrypt", "x", []string{auth.SeedRoleFPWorker}, "active")
+	// A session whose custom role holds exactly one permission, neither
+	// library.view nor the fingerprint-worker one. The worker-only middleware
+	// is not involved, so the 403 below can only come from s.perm on the GET.
+	_, err = f.store.CreateRole(&database.Role{ID: "synthetic-playlists-only", Name: "synthetic-playlists-only", Permissions: []string{auth.PermPlaylistsCreate}})
 	require.NoError(t, err)
-	fpSess, err := f.store.CreateSessionWithOrigin(fpWorker.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	noView, err := f.store.CreateUser("synthetic-no-view", "noview@example.test", "bcrypt", "x", []string{"synthetic-playlists-only"}, "active")
+	require.NoError(t, err)
+	noViewSess, err := f.store.CreateSessionWithOrigin(noView.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
 	require.NoError(t, err)
 
 	kept := []struct{ pattern, path, seeded string }{
@@ -113,8 +118,8 @@ func TestRetiredMergeUndoRoutes_KeptJournalListsNotGone(t *testing.T) {
 			assert.Contains(t, w.Body.String(), k.seeded)
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 		})
-		t.Run("fp-worker GET "+k.pattern, func(t *testing.T) {
-			w := f.do(t, fpSess.ID, http.MethodGet, k.path, nil)
+		t.Run("no-view-permission GET "+k.pattern, func(t *testing.T) {
+			w := f.do(t, noViewSess.ID, http.MethodGet, k.path, nil)
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 		})
 	}

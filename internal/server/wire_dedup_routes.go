@@ -1,5 +1,5 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
 // last-edited: 2026-10-18
 
@@ -14,7 +14,7 @@ import (
 
 // combineUndoGone is the replacement named by the retired POST
 // /merge/undo/:journal_id stub. It reads inside gone()'s "use ... instead".
-const combineUndoGone = "POST /api/v1/operations/:id/revert (for a combine a Repairs fixer made; a manual combine has no HTTP undo now)"
+const combineUndoGone = "POST /api/v1/operations/:id/revert (only for a combine made by the dedup.split-books Repairs fixer; other combines have no HTTP undo now)"
 
 // wireDedupRoutes registers the embedding-based dedup domain routes and the
 // SQL-backed duplicates domain routes on the protected group.
