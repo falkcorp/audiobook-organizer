@@ -1,0 +1,1 @@
+- Test: the query-grammar "refuse quickly" test bounds compile-time refusal at 500 ms instead of 50 ms, so a race build on a busy CI runner no longer fails it with nothing wrong; it still catches any regression toward the seconds of matching it guards against.
