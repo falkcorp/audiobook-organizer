@@ -1,7 +1,7 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 package querygrammar
 
@@ -281,8 +281,15 @@ func TestUnitParsers(t *testing.T) {
 
 // TestLimits_RefuseQuickly: the patterns measured at 1.3 s, 23.5 s and
 // 2 m 10 s over 40,000 titles before the limits are refused at compile time,
-// in well under a millisecond each, with an error that says why.
+// with an error that says why. Locally each refusal takes well under a
+// millisecond; the bound below is set against the failure it guards (seconds
+// of matching), not against that figure, because a -race build on a busy CI
+// runner took 52 ms on `(.*){1000}` (PR #4060, shard 4/4) and failed a 50 ms
+// bound with nothing wrong.
 func TestLimits_RefuseQuickly(t *testing.T) {
+	// Well below the 1.3 s fastest regression above, well above scheduler and
+	// race-detector noise.
+	const refuseBound = 500 * time.Millisecond
 	cases := map[string]struct {
 		raw  string
 		want string
@@ -301,7 +308,7 @@ func TestLimits_RefuseQuickly(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%s: err = %v, want it to contain %q", name, err, tc.want)
 		}
-		if took > 50*time.Millisecond {
+		if took > refuseBound {
 			t.Fatalf("%s: refusing took %s", name, took)
 		}
 		t.Logf("%s: refused in %s: %v", name, took, err)
