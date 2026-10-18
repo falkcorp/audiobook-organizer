@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-10-18
 
@@ -24,8 +24,13 @@ import (
 // structured result the job persisted.
 func chRun(t *testing.T, job maintenance.MaintenanceJob, store maintenance.JobStore, params string, dryRun bool) chapterGroupsResult {
 	t.Helper()
+	return chRunIn(t, maintenance.WithOperationID(context.Background(), "op-chapter-test"), job, store, params, dryRun)
+}
+
+// chRunIn is chRun on a caller-built context (one with no operation id, say).
+func chRunIn(t *testing.T, ctx context.Context, job maintenance.MaintenanceJob, store maintenance.JobStore, params string, dryRun bool) chapterGroupsResult {
+	t.Helper()
 	var got any
-	ctx := maintenance.WithOperationID(context.Background(), "op-chapter-test")
 	ctx = maintenance.WithRawParams(ctx, json.RawMessage(params))
 	ctx = maintenance.WithResultSetter(ctx, func(v any) error { got = v; return nil })
 	if err := job.Run(ctx, store, ddJobReporter{}, dryRun); err != nil {
@@ -264,6 +269,11 @@ func TestMergeChapterGroups_RealMergeIsCorrectAuditedAndUndoable(t *testing.T) {
 	res := chPreviewThenApply(t, s)
 	if res.DryRun || res.GroupsFound != 2 || res.BooksMerged != 3 || res.BooksSkipped != 0 || res.GroupsFailed != 0 {
 		t.Fatalf("merge summary wrong: %+v", res)
+	}
+	for _, g := range res.Groups {
+		if g.UndoOperationID != "op-chapter-test" {
+			t.Fatalf("group %s names undo operation %q, want the run's id", g.PrimaryBookID, g.UndoOperationID)
+		}
 	}
 
 	// (a) primary is chapter 01 and now owns every file.
@@ -752,5 +762,37 @@ func TestMergeChapterGroups_ZombieScanRowDoesNotBlock(t *testing.T) {
 	res := chApply(t, s, sel)
 	if res.BooksMerged != 1 {
 		t.Fatalf("a zombie scan row blocked the merge: %+v", res.Groups)
+	}
+}
+
+// A run with no operation id (one started outside the registry) is not
+// refused: each merge mints its own undo operation and the group outcome names
+// it, so reverting that id undoes the merge.
+func TestChapterGroups_ApplyWithNoOperationID_RecordsTheMintedUndoID(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 3, 300)
+	preview, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	res := chRunIn(t, context.Background(), &mergeChapterGroupsJob{}, s, chReviewedParams(t, preview), false)
+	if len(res.Groups) != 1 || res.Groups[0].Status != "merged" {
+		t.Fatalf("want one merged group, got %+v", res.Groups)
+	}
+	undoID := res.Groups[0].UndoOperationID
+	if undoID == "" {
+		t.Fatalf("the outcome does not name the merge's undo operation: %+v", res.Groups[0])
+	}
+	rv, err := audiobooks.NewRevertService(s).RevertOperation(undoID)
+	if err != nil {
+		t.Fatalf("RevertOperation(%s): %v", undoID, err)
+	}
+	if rv.RestoredTypes[undo.ChangeTypeMergeCombineJournal] != 1 {
+		t.Fatalf("revert restored %v, want the one combine", rv.RestoredTypes)
+	}
+	for _, src := range books[1:] {
+		if ddMustGet(t, s, src.ID).IsSoftDeleted() {
+			t.Fatalf("source %s still soft-deleted after reverting %s", src.ID, undoID)
+		}
 	}
 }
