@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
 // last-edited: 2026-10-18
 
@@ -835,14 +835,14 @@ func (s *CatalogStore) GetRaw(id string) ([]byte, error) {
 // Only index prefixes (empty values) may be passed: never catEntryPrefix,
 // whose values are the ~1 KB entry JSON.
 func (s *CatalogStore) idsUnder(prefix string) ([]string, error) {
-	ids, _, err := s.pageUnder(prefix, 0, -1)
+	ids, _, err := s.keysUnder(prefix, true)
 	return ids, err
 }
 
-// pageUnder walks the keys under an index prefix (empty values) and returns
-// the trailing ids of keys [offset, offset+limit) plus the total key count.
-// limit < 0 means no limit. Ids past the window are counted, never copied.
-func (s *CatalogStore) pageUnder(prefix string, offset, limit int) ([]string, int, error) {
+// keysUnder walks the keys under an index prefix (empty values) and returns
+// the total key count. When collect is true it also returns every trailing id;
+// when false (the count callers) ids are counted, never copied.
+func (s *CatalogStore) keysUnder(prefix string, collect bool) ([]string, int, error) {
 	if s.scanHook != nil {
 		s.scanHook(prefix)
 	}
@@ -855,7 +855,7 @@ func (s *CatalogStore) pageUnder(prefix string, offset, limit int) ([]string, in
 	var ids []string
 	n := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		if n >= offset && (limit < 0 || len(ids) < limit) {
+		if collect {
 			ids = append(ids, string(bytes.TrimPrefix(iter.Key(), p)))
 		}
 		n++
@@ -865,7 +865,7 @@ func (s *CatalogStore) pageUnder(prefix string, offset, limit int) ([]string, in
 
 // CountEntries counts every catalog entry by its keys-only cat_id index.
 func (s *CatalogStore) CountEntries() (int, error) {
-	_, n, err := s.pageUnder(catIDPrefix, 0, 0)
+	_, n, err := s.keysUnder(catIDPrefix, false)
 	return n, err
 }
 
@@ -875,13 +875,13 @@ func (s *CatalogStore) CountHarvestedBy(harvestKey string) (int, error) {
 	if harvestKey == "" {
 		return 0, nil
 	}
-	_, n, err := s.pageUnder(catHarvestPrefix+harvestKey+":", 0, 0)
+	_, n, err := s.keysUnder(catHarvestPrefix+harvestKey+":", false)
 	return n, err
 }
 
 // CountStale counts entries with stale_since set.
 func (s *CatalogStore) CountStale() (int, error) {
-	_, n, err := s.pageUnder(catStalePrefix, 0, 0)
+	_, n, err := s.keysUnder(catStalePrefix, false)
 	return n, err
 }
 
