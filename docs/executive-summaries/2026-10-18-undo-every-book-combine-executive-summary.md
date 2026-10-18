@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -181,3 +181,41 @@ then reverting. A stop in the middle of moving a reader's progress can
 leave a copy of it on the surviving book as well; the progress on the
 original book always comes back. The track-number and listening-progress
 fixes each have a test of the exact case that went wrong.
+
+## Fixes from the third review
+
+**What it was.** A third review of #4064 found that an undo cut short by a
+crash could never be finished: the record still said "combined", so every
+retry saw the books it had already put back and refused. It also found:
+
+- A manual combine that stopped part-way told the user only "failed",
+  with no way to find the undo.
+- The Combine message did not offer the undo it described.
+- The nightly trash purge could race an undo and delete a book the undo
+  had just put a reader's progress back on.
+- A few smaller gaps: a co-author added after a combine was dropped by
+  the undo, an author row could be created for an override that was then
+  skipped, and some messages named the wrong place for kept progress.
+
+**Why it mattered.** Each one either left a combine that could not be
+fully undone, or put a reader's progress or a user's later edit at risk.
+
+**The fix.**
+
+- An undo now notes "started" before it changes anything, so running it
+  again finishes the job. Crashing the undo at each of its 44 writes,
+  then running it again, puts everything back.
+- A combine that stops part-way now returns its undo number and says so.
+- The Combine message has an Undo button, and a Retry button when an undo
+  only partly works.
+- The purge now checks for progress and deletes the book in one step that
+  an undo cannot interrupt.
+- The undo keeps a co-author added since the combine and says so.
+- An override creates a new author only after its plan is recorded.
+- The kept-progress messages now name the right place.
+- A split-book merge now handles a trash write that reports an error the
+  same safe way a combine does.
+- The code this pull request added no longer depends on the full
+  database interface. That had turned a code-size check red.
+
+Each of these has a test.
