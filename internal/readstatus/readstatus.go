@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 //
 // RecomputeUserBookState derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -78,7 +78,27 @@ var ErrBookFilesUnreadable = errors.New("readstatus: book files are unreadable")
 // updates user_book_state with fresh auto-computed fields. Returns
 // the new state (or a no-op unchanged state if there's nothing to
 // record — e.g. a user who's never touched this book).
+//
+// It takes database.LockUserBookState for (userID, bookID) around the read
+// and the write. A caller that writes a position first and then recomputes
+// (the web heartbeat, the iTunes bookmark seed) must hold the stripe across
+// both and call RecomputeUserBookStateLocked instead: the stripe is not
+// reentrant.
 func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserBookState, error) {
+	if store == nil || userID == "" || bookID == "" {
+		return nil, nil
+	}
+	defer database.LockUserBookState(userID, bookID)()
+	return RecomputeUserBookStateLocked(store, userID, bookID)
+}
+
+// RecomputeUserBookStateLocked is RecomputeUserBookState for a caller that
+// already holds database.LockUserBookState for (userID, bookID). Without the
+// stripe its read of the positions and the state and its write of the derived
+// state are not one step: a locked read-decide-write (an ABS sync, the merge
+// undo's put-back) could land between them and be overwritten by a state
+// derived from what it replaced.
+func RecomputeUserBookStateLocked(store Store, userID, bookID string) (*database.UserBookState, error) {
 	if store == nil || userID == "" || bookID == "" {
 		return nil, nil
 	}
@@ -268,11 +288,18 @@ type RebuildReport struct {
 // carried (a manual status, hide-from-continue-listening, the progress-reset
 // tombstone) cannot be recovered and are listed in Lost. Positions and files
 // must be readable: this never guesses.
+//
+// The read of the row and the write over it are one step under
+// database.LockUserBookState, so a write that makes the row readable again
+// (or a newer one) cannot land between the "undecodable" read and the
+// rebuild's overwrite. Its only caller (the web status repair) holds no
+// stripe.
 func RebuildUserBookState(store Store, userID, bookID string, apply bool) (RebuildReport, error) {
 	rep := RebuildReport{UserID: userID, BookID: bookID}
 	if store == nil || userID == "" || bookID == "" {
 		return rep, fmt.Errorf("readstatus: rebuild needs a store, user and book")
 	}
+	defer database.LockUserBookState(userID, bookID)()
 	_, err := store.GetUserBookState(userID, bookID)
 	if err == nil {
 		rep.StateReadable = true

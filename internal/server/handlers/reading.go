@@ -1,12 +1,13 @@
 // file: internal/server/handlers/reading.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 package handlers
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -77,6 +78,15 @@ func CallingUserID(c *gin.Context) string {
 
 // SetPosition records one position heartbeat and recomputes derived UserBookState.
 // POST /api/v1/audiobooks/:id/position (deprecated alias: /api/v1/books/:id/position)
+//
+// The position write and the recompute are one step under the per-(user,
+// book) user-state stripe (database.LockUserBookState), the lock every other
+// listening-state writer holds. Without it the heartbeat could land between
+// another writer's read and write -- the merge undo's put-back replaces the
+// book's whole position set from what it read -- and be erased, or its
+// recompute could write a state derived from positions another writer was
+// about to replace. Lock order: this stripe only; the store calls under it
+// take nothing that leads back to it.
 func (h *ReadingHandler) SetPosition(c *gin.Context) {
 	bookID := c.Param("id")
 	if bookID == "" {
@@ -89,16 +99,30 @@ func (h *ReadingHandler) SetPosition(c *gin.Context) {
 		return
 	}
 	userID := CallingUserID(c)
-	if err := h.store.SetUserPosition(userID, bookID, req.SegmentID, req.PositionSeconds); err != nil {
+	state, err := h.recordPosition(userID, bookID, req.SegmentID, req.PositionSeconds)
+	if errors.Is(err, errPositionWrite) {
 		httputil.InternalError(c, "failed to record position", err)
 		return
 	}
-	state, err := readstatus.RecomputeUserBookState(h.store, userID, bookID)
 	if err != nil {
 		respondReadStatusError(c, "failed to recompute book state", err)
 		return
 	}
 	httputil.RespondWithOK(c, state)
+}
+
+// errPositionWrite marks a failure of the heartbeat's position write itself,
+// as opposed to the recompute after it.
+var errPositionWrite = errors.New("record position")
+
+// recordPosition writes one heartbeat position and recomputes the derived
+// state, holding the (userID, bookID) user-state stripe across both.
+func (h *ReadingHandler) recordPosition(userID, bookID, segmentID string, positionSeconds float64) (*database.UserBookState, error) {
+	defer database.LockUserBookState(userID, bookID)()
+	if err := h.store.SetUserPosition(userID, bookID, segmentID, positionSeconds); err != nil {
+		return nil, fmt.Errorf("%w: %w", errPositionWrite, err)
+	}
+	return readstatus.RecomputeUserBookStateLocked(h.store, userID, bookID)
 }
 
 // GetPosition returns the latest position for the calling user.
