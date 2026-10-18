@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_preview_behaviour_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f479366b-0525-4f2f-a944-65aa99b39977
 // last-edited: 2026-10-18
 
@@ -195,7 +195,7 @@ func TestIntroTranscribe_PreviewSkipsServerDecodeCheck(t *testing.T) {
 	}
 }
 
-// The checkpoint a run writes must not carry dry_run: ResumeRestart merges the
+// The checkpoint a run writes must not carry dry_run or dryRun: ResumeRestart merges the
 // checkpoint OVER the run's original params, so a dry_run key in it would
 // override the live run's dry_run=false on resume. Left out (nil, omitempty),
 // the original dry_run=false survives and a resumed live run stays live.
@@ -209,7 +209,55 @@ func TestIntroTranscribe_CheckpointLeavesDryRunAlone(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	if _, has := m["dry_run"]; has {
-		t.Fatalf("checkpoint carries dry_run and would override the resumed run's mode: %s", raw)
+	for _, k := range []string{"dry_run", "dryRun"} {
+		if _, has := m[k]; has {
+			t.Fatalf("checkpoint carries %s and would override the resumed run's mode: %s", k, raw)
+		}
+	}
+}
+
+// TestIntroTranscribe_ResolvesBothSpellings: the op reads dryRun as well as
+// dry_run, as the rest of the op family does, so {"dryRun":false} runs for
+// real instead of being ignored into a preview, and a body that sends both
+// with different values is refused. The declared Preview carries both keys,
+// so /api/v3/ops writes both when it resolves a mode.
+func TestIntroTranscribe_ResolvesBothSpellings(t *testing.T) {
+	origCache := config.AppConfig.WhisperClipCacheDir
+	config.AppConfig.WhisperClipCacheDir = ""
+	t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = origCache })
+
+	keys := (&Plugin{}).introTranscribeDef().Preview.ModeKeys()
+	if strings.Join(keys, ",") != "dry_run,dryRun" {
+		t.Fatalf("Preview mode keys = %v, want [dry_run dryRun]", keys)
+	}
+	for _, tc := range []struct {
+		body      string
+		wantWrite bool
+		wantErr   bool
+	}{
+		{`{"dryRun":false}`, true, false},
+		{`{"dryRun":true}`, false, false},
+		{`{"dry_run":false,"dryRun":false}`, true, false},
+		{`{"dry_run":false,"dryRun":true}`, false, true},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			root := t.TempDir()
+			store := newTranscribeWriteStore(map[string]*database.Book{
+				"book-1": {ID: "book-1", Title: "Example Book", FilePath: filepath.Join(root, "missing", "example.mp3")},
+			})
+			p := New(fakeDeps{store: store, root: root})
+			t.Setenv(serverdecode.EnvVar, "1")
+			err := p.runIntroTranscribe(context.Background(), json.RawMessage(tc.body), &lastProgressReporter{})
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "disagree") {
+					t.Fatalf("%s: want a disagreement error, got %v", tc.body, err)
+				}
+			} else if err != nil {
+				t.Fatalf("%s: %v", tc.body, err)
+			}
+			if got := store.bookWrites.Load() > 0; got != tc.wantWrite {
+				t.Fatalf("%s: wrote book rows = %v, want %v", tc.body, got, tc.wantWrite)
+			}
+		})
 	}
 }

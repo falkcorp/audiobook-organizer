@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.33.0
+// version: 3.34.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-18
 
@@ -122,6 +122,12 @@ type introTranscribeParams struct {
 	// live run's dry_run=false stays in the resumed params and a resumed live run
 	// stays live. Writing dry_run into the checkpoint would let it override that.
 	DryRun *bool `json:"dry_run,omitempty"`
+	// DryRunCamel is the camelCase spelling (dryRun) that the rest of the op
+	// family accepts (opmode.DryRunParams). Both are resolved together by
+	// opmode.ResolveDryRun: one sent wins, both must agree. Without it a
+	// {"dryRun":false} body was ignored and the run previewed. Like DryRun, the
+	// checkpoint leaves it nil so a resumed run keeps its original mode.
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
@@ -131,7 +137,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false to transcribe, extract or reparse for real.",
+		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -171,7 +177,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
 	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
 	// One mode for every path below; omitted = preview.
-	dryRun, err := opmode.ResolveDryRun("maintenance.transcribe-book-intros", params.DryRun, nil)
+	dryRun, err := opmode.ResolveDryRun("maintenance.transcribe-book-intros", params.DryRun, params.DryRunCamel)
 	if err != nil {
 		return err
 	}
