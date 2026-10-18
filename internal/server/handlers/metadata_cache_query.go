@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package handlers
 
@@ -385,6 +385,7 @@ func init() {
 		"ident",
 		"has_cover", "has_written", "needs_writeback", "has_organized", "itunes_sync_status",
 		"read_status", "progress_pct", "last_played",
+		"date_added", "added", "date_modified", "modified",
 	} {
 		reviewSearchFields[f] = struct{}{}
 	}

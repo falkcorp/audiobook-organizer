@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package handlers
 
@@ -819,6 +819,8 @@ func TestReviewQuery_BadFieldIs400(t *testing.T) {
 		"q=author:smith":         "author: only title: filters apply here",
 		"q=ident:missing":        "ident: only title: filters apply here",
 		"q=-asin:*":              "asin: only title: filters apply here",
+		"q=date_added:>-30d":     "date_added: only title: filters apply here",
+		"q=modified:2026-01-01":  "modified: only title: filters apply here",
 		"q=title:a+extra":        `"extra": mix of title: tokens and bare text — write every part as title:…`,
 		"q=title:/a(b/":          "title:/a(b/ — invalid regex",
 		"q=/(?=x)/":              "no lookahead",

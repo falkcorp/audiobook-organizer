@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
 // last-edited: 2026-10-18
 
@@ -192,7 +192,7 @@ func TestIsPlainLiteral(t *testing.T) {
 	}
 }
 
-func TestParseNumericExpr(t *testing.T) {
+func TestParseNumericExprUnits_PlainNumbers(t *testing.T) {
 	cases := []struct {
 		raw  string
 		vals []float64
@@ -222,9 +222,9 @@ func TestParseNumericExpr(t *testing.T) {
 		{"!=5", nil, false},
 	}
 	for _, tc := range cases {
-		c, err := ParseNumericExpr(tc.raw)
+		c, err := ParseNumericExprUnits(tc.raw, nil)
 		if err != nil {
-			t.Fatalf("ParseNumericExpr(%q): %v", tc.raw, err)
+			t.Fatalf("ParseNumericExprUnits(%q, nil): %v", tc.raw, err)
 		}
 		if got := c.MatchAny(tc.vals); got != tc.want {
 			t.Errorf("%q over %v = %v, want %v", tc.raw, tc.vals, got, tc.want)
@@ -232,10 +232,10 @@ func TestParseNumericExpr(t *testing.T) {
 	}
 }
 
-func TestParseNumericExpr_Errors(t *testing.T) {
+func TestParseNumericExprUnits_PlainNumberErrors(t *testing.T) {
 	for _, raw := range []string{">abc", "[2015 2020]", "[2015 TO", "[a TO b]", "[2020 TO 2015]", ">", "abc"} {
-		if _, err := ParseNumericExpr(raw); err == nil {
-			t.Errorf("ParseNumericExpr(%q) = nil error, want error", raw)
+		if _, err := ParseNumericExprUnits(raw, nil); err == nil {
+			t.Errorf("ParseNumericExprUnits(%q, nil) = nil error, want error", raw)
 		}
 	}
 }
