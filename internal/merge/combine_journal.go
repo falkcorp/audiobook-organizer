@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1783,7 +1783,9 @@ func timePtrEqual(a, b *time.Time) bool {
 // (database.LockUserBookState; lock order: merge lock, then this stripe), so
 // a device sync cannot land between the read the combine is built from and
 // the write that would rewind it. The caller must not hold a user-state
-// stripe (none does: RestoreFollowedProgress takes none).
+// stripe, and none does: RestoreFollowedProgress holds none when it calls
+// this, and takes the survivor's (restoreSurvivorSide) only after this has
+// returned and released the absorbed book's.
 func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt *database.UserBookState, snapPos []database.UserPosition) (string, error) {
 	defer database.LockUserBookState(userID, absorbedID)()
 	cur, err := db.GetUserBookState(userID, absorbedID)
