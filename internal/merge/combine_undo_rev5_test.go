@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
 // last-edited: 2026-10-18
 
@@ -415,8 +415,11 @@ func TestRev5_FillEmptyUndoPicksAnAuthorLinkForAuthorID(t *testing.T) {
 }
 
 func TestRev5_PrimaryAuthorOfSkipsNonAuthorRoles(t *testing.T) {
-	require.Nil(t, primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 2, Role: "co-author", Position: 1}}))
-	got := primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 3, Role: "Author ", Position: 2}, {AuthorID: 2, Role: "", Position: 1}})
+	require.Nil(t, primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 2, Role: "editor", Position: 1}}))
+	got := primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 4, Role: "co-author"}, {AuthorID: 3, Role: "Author ", Position: 2}, {AuthorID: 2, Role: "", Position: 1}})
 	require.NotNil(t, got)
-	require.Equal(t, 2, *got, "the lowest position among author-role links")
+	require.Equal(t, 2, *got, "the lowest position among author-role links, over an earlier co-author")
+	got = primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 5, Role: "co-author", Position: 1}})
+	require.NotNil(t, got)
+	require.Equal(t, 5, *got, "a co-author when no author link is left")
 }
