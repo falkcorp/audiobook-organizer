@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1091,7 +1091,7 @@ func intPtrEqual(a, b *int) bool {
 // and the sweep would otherwise drain it onto the survivor again), every
 // user's absorbed-book state and positions are written back, and the
 // survivor's are put back to their before-state. A survivor a user has
-// listened to since is reconciled instead (reconcileTouchedSurvivor): what
+// listened to since is reconciled instead (reconcileTouchedSurvivorOnce): what
 // the follow brought is taken back off it and what the user did there since
 // stays, so the carried state ends up on exactly one book -- the absorbed
 // one -- and its listened time is not counted on both. That is returned as a
@@ -1136,90 +1136,149 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 		if w != "" {
 			warnings = append(warnings, w)
 		}
-		curSurv, err := db.GetUserBookState(p.UserID, survivorID)
+		w, err = restoreSurvivorSide(db, p, survivorID, absorbedID)
+		if w != "" {
+			warnings = append(warnings, w)
+		}
 		if err != nil {
-			return warnings, fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
-		}
-		curSurvPos, err := db.ListUserPositionsForBook(p.UserID, survivorID)
-		if err != nil {
-			return warnings, fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
-		}
-		if sameProgress(curSurv, p.SurvivorStateBefore, curSurvPos, p.SurvivorPosBefore) {
-			// Already restored (an earlier attempt of this undo got here).
-			continue
-		}
-		hasAfter := p.SurvivorStateAfter != nil || len(p.SurvivorPosAfter) > 0
-		var key string
-		if hasAfter {
-			key = survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
-			marker, err := readSurvivorReconcileMarker(db, key)
-			if err != nil {
-				return warnings, err
-			}
-			if marker != nil && curSurv != nil && !curSurv.UpdatedAt.Equal(marker.PreUpdatedAt) {
-				// An earlier attempt of this put-back already wrote this
-				// user's survivor state (the put-back below, or the
-				// reconcile), and the state has been written since: what is
-				// there now is the user's own listening after the put-back.
-				// Doing it again would take the carried seconds off a
-				// second time (round-4 S2: an undo whose final journal write
-				// failed stays undo_failed, and its re-run comes here).
-				// Nothing is written and nothing is reported.
-				continue
-			}
-		}
-		if !sameProgress(curSurv, p.SurvivorStateAfter, curSurvPos, p.SurvivorPosAfter) {
-			if !hasAfter {
-				// No after-snapshot (the follow failed, or its re-read did):
-				// what the follow wrote cannot be told from the user's own
-				// listening, so nothing is taken off the survivor.
-				warnings = append(warnings, fmt.Sprintf(
-					"user %s progress on survivor %s changed after the merge and no after-merge record exists to separate it; left as is", p.UserID, survivorID))
-				continue
-			}
-			// The user has listened to the survivor since. Take back only
-			// what the follow brought, keep what they did there since.
-			if err := reconcileTouchedSurvivor(db, p, survivorID, absorbedID, curSurv, curSurvPos); err != nil {
-				return warnings, err
-			}
-			warnings = append(warnings, fmt.Sprintf(
-				"user %s progress on survivor %s changed after the merge; the carried state was taken back off it and their listening there since was kept", p.UserID, survivorID))
-			continue
-		}
-		// The survivor is exactly as the follow left it: put it back whole.
-		// The same marker the reconcile writes goes first, holding the
-		// state's UpdatedAt as it is now, so a re-run that finds the state
-		// written since knows this put-back landed (above). A write that
-		// fails drops the marker again (best effort), as the reconcile does.
-		wroteMarker := false
-		if hasAfter {
-			var pre time.Time
-			if curSurv != nil {
-				pre = curSurv.UpdatedAt
-			}
-			data, err := json.Marshal(survivorReconcileMarker{PreUpdatedAt: pre})
-			if err != nil {
-				return warnings, fmt.Errorf("encode survivor put-back marker: %w", err)
-			}
-			if err := db.SetRaw(key, data); err != nil {
-				return warnings, fmt.Errorf("journal survivor put-back marker user=%s book=%s: %w", p.UserID, survivorID, err)
-			}
-			wroteMarker = true
-		}
-		if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, curSurv); err != nil {
-			if wroteMarker {
-				if derr := db.DeleteRaw(key); derr != nil {
-					mlog.Warn("merge: survivor put-back marker %s not dropped after a failed write: %s",
-						logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()))
-				}
-			}
 			return warnings, err
 		}
 	}
 	return warnings, nil
 }
 
-// survivorReconcilePrefix keys the per-user marker reconcileTouchedSurvivor
+// restoreSurvivorSide puts one user's survivor progress back after the
+// follow (RestoreFollowedProgress), returning a warning when it left
+// something as it is. Each attempt (restoreSurvivorSideOnce) decides from a
+// fresh read of the survivor's state and positions; one whose write finds
+// the survivor changed under it (errSurvivorMovedOn) writes nothing, and the
+// decision is made again from new reads, because a client write can turn a
+// plain put-back into a reconcile.
+func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string) (string, error) {
+	for range survivorReconcileAttempts {
+		cur, err := db.GetUserBookState(p.UserID, survivorID)
+		if err != nil {
+			return "", fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
+		}
+		curPos, err := db.ListUserPositionsForBook(p.UserID, survivorID)
+		if err != nil {
+			return "", fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
+		}
+		w, err := restoreSurvivorSideOnce(db, p, survivorID, absorbedID, cur, curPos)
+		if !errors.Is(err, errSurvivorMovedOn) {
+			return w, err
+		}
+	}
+	return "", fmt.Errorf("restore progress user=%s book=%s: %w (%d attempts)", p.UserID, survivorID, errSurvivorMovedOn, survivorReconcileAttempts)
+}
+
+// restoreSurvivorSideOnce is one attempt of restoreSurvivorSide, decided from
+// cur and curPos as read just before it.
+func restoreSurvivorSideOnce(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string, cur *database.UserBookState, curPos []database.UserPosition) (string, error) {
+	if sameProgress(cur, p.SurvivorStateBefore, curPos, p.SurvivorPosBefore) {
+		// Already restored (an earlier attempt of this undo got here).
+		return "", nil
+	}
+	hasAfter := p.SurvivorStateAfter != nil || len(p.SurvivorPosAfter) > 0
+	var key string
+	if hasAfter {
+		key = survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
+		marker, err := readSurvivorReconcileMarker(db, key)
+		if err != nil {
+			return "", err
+		}
+		if marker != nil && cur != nil && !cur.UpdatedAt.Equal(marker.PreUpdatedAt) {
+			// An earlier attempt of this put-back already wrote this
+			// user's survivor state (the put-back below, or the
+			// reconcile), and the state has been written since: what is
+			// there now is the user's own listening after the put-back.
+			// Doing it again would take the carried seconds off a
+			// second time (round-4 S2: an undo whose final journal write
+			// failed stays undo_failed, and its re-run comes here).
+			// Nothing is written and nothing is reported.
+			return "", nil
+		}
+	}
+	if !sameProgress(cur, p.SurvivorStateAfter, curPos, p.SurvivorPosAfter) {
+		if !hasAfter {
+			// No after-snapshot (the follow failed, or its re-read did):
+			// what the follow wrote cannot be told from the user's own
+			// listening, so nothing is taken off the survivor.
+			return fmt.Sprintf(
+				"user %s progress on survivor %s changed after the merge and no after-merge record exists to separate it; left as is", p.UserID, survivorID), nil
+		}
+		// The user has listened to the survivor since. Take back only
+		// what the follow brought, keep what they did there since.
+		if err := reconcileTouchedSurvivorOnce(db, p, survivorID, absorbedID, cur, curPos); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(
+			"user %s progress on survivor %s changed after the merge; the carried state was taken back off it and their listening there since was kept", p.UserID, survivorID), nil
+	}
+	return "", putBackSurvivor(db, p, survivorID, key, cur, curPos)
+}
+
+// putBackSurvivor writes one user's survivor progress back to its
+// before-follow snapshot whole: the survivor was exactly as the follow left
+// it (cur, curPos) when restoreSurvivorSideOnce decided so.
+//
+// Under the per-(user, book) stripe the ABS progress, play and session
+// handlers and readstatus hold (database.LockUserBookState; lock order:
+// merge lock, then this stripe, and no other user-state stripe is held: the
+// absorbed side's was released by restoreAbsorbedSide). The state and the
+// positions are read again under it and compared with cur and curPos; a
+// write that landed since (a device sync) sends the caller round again
+// (errSurvivorMovedOn), so it is reconciled instead of written over. Until
+// round 5 of the #4064 review the marker, positions and state were written
+// with no stripe, and a sync landing between the read and the state write
+// was lost.
+//
+// The same marker the reconcile writes goes first (key empty: no
+// after-snapshot, so no marker), holding the state's UpdatedAt as it is
+// under the stripe, so a re-run that finds the state written since knows
+// this put-back landed (restoreSurvivorSideOnce). A write that fails drops
+// the marker again, as the reconcile does.
+func putBackSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, key string, cur *database.UserBookState, curPos []database.UserPosition) error {
+	unlock := database.LockUserBookState(p.UserID, survivorID)
+	defer unlock()
+	fresh, err := db.GetUserBookState(p.UserID, survivorID)
+	if err != nil {
+		return fmt.Errorf("re-read state user=%s book=%s: %w", p.UserID, survivorID, err)
+	}
+	freshPos, err := db.ListUserPositionsForBook(p.UserID, survivorID)
+	if err != nil {
+		return fmt.Errorf("re-read positions user=%s book=%s: %w", p.UserID, survivorID, err)
+	}
+	if (fresh == nil) != (cur == nil) || (cur != nil && !fresh.UpdatedAt.Equal(cur.UpdatedAt)) ||
+		!sameProgress(nil, nil, curPos, freshPos) {
+		return errSurvivorMovedOn
+	}
+	if key != "" {
+		var pre time.Time
+		if fresh != nil {
+			pre = fresh.UpdatedAt
+		}
+		data, err := json.Marshal(survivorReconcileMarker{PreUpdatedAt: pre})
+		if err != nil {
+			return fmt.Errorf("encode survivor put-back marker: %w", err)
+		}
+		if err := db.SetRaw(key, data); err != nil {
+			return fmt.Errorf("journal survivor put-back marker user=%s book=%s: %w", p.UserID, survivorID, err)
+		}
+	}
+	if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, fresh); err != nil {
+		if key != "" {
+			if derr := db.DeleteRaw(key); derr != nil {
+				mlog.Warn("merge: survivor put-back marker %s not dropped after a failed write: %s",
+					logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()))
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// survivorReconcilePrefix keys the per-user marker reconcileTouchedSurvivorOnce
 // writes before its state write: merge:survivor-reconcile:<survivor>:
 // <absorbed>:<user>:<follow stamp>. The follow stamp (followStamp) is unique
 // to one follow's after-snapshot, so a later follow between the same books
@@ -1227,7 +1286,7 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 const survivorReconcilePrefix = "merge:survivor-reconcile:"
 
 // survivorReconcileMarker records the survivor state's UpdatedAt as it was
-// right before a put-back's state write: reconcileTouchedSurvivor's, or the
+// right before a put-back's state write: reconcileTouchedSurvivorOnce's, or the
 // plain put-back in RestoreFollowedProgress (zero when the survivor had no
 // state row). SetUserBookState stamps UpdatedAt on every write, so on a
 // re-run a different UpdatedAt means that write (or a later one) landed.
@@ -1304,7 +1363,16 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 	return nil, nil
 }
 
-// reconcileTouchedSurvivor puts one user's survivor progress back to its
+// survivorReconcileAttempts bounds restoreSurvivorSide's re-reads when the
+// survivor's state keeps changing under its put-back or reconcile.
+const survivorReconcileAttempts = 3
+
+// errSurvivorMovedOn: the survivor's state changed between a put-back's read
+// and its write (putBackSurvivor, reconcileTouchedSurvivorOnce), so what it
+// built is stale.
+var errSurvivorMovedOn = errors.New("the survivor's listening state changed while it was being reconciled")
+
+// reconcileTouchedSurvivorOnce puts one user's survivor progress back to its
 // before-follow state when the user has listened there since the follow,
 // keeping that listening. It is a three-way merge per field with the
 // after-follow snapshot as the base: a field still equal to what the follow
@@ -1343,7 +1411,7 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 // book) stripe (database.LockUserBookState), after a re-read of the state AND
 // the positions taken under it; if either differs from what the reconcile was
 // computed from, nothing is written and the whole reconcile is redone from
-// fresh reads (up to survivorReconcileAttempts). The marker's UpdatedAt comes
+// fresh reads (restoreSurvivorSide, up to survivorReconcileAttempts). The marker's UpdatedAt comes
 // from that re-read. Until 2026-10-06 the positions were written BEFORE the
 // stripe and the check, so a client position that landed after the read
 // was rewound to the before-snapshot's row (the review of #3777). A
@@ -1355,30 +1423,6 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 // seconds once -- never fewer seconds than the user listened. UndoCombine
 // (re-run when a later absorbed book fails) and the user_state_follow
 // revert (retried after a failure) both come through here.
-func reconcileTouchedSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string, cur *database.UserBookState, curPos []database.UserPosition) error {
-	for range survivorReconcileAttempts {
-		err := reconcileTouchedSurvivorOnce(db, p, survivorID, absorbedID, cur, curPos)
-		if !errors.Is(err, errSurvivorMovedOn) {
-			return err
-		}
-		if cur, err = db.GetUserBookState(p.UserID, survivorID); err != nil {
-			return fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
-		}
-		if curPos, err = db.ListUserPositionsForBook(p.UserID, survivorID); err != nil {
-			return fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
-		}
-	}
-	return fmt.Errorf("reconcile state user=%s book=%s: %w (%d attempts)", p.UserID, survivorID, errSurvivorMovedOn, survivorReconcileAttempts)
-}
-
-// survivorReconcileAttempts bounds reconcileTouchedSurvivor's re-reads when
-// the survivor's state keeps changing under it.
-const survivorReconcileAttempts = 3
-
-// errSurvivorMovedOn: the survivor's state changed between
-// reconcileTouchedSurvivor's read and its write, so what it built is stale.
-var errSurvivorMovedOn = errors.New("the survivor's listening state changed while it was being reconciled")
-
 func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string, cur *database.UserBookState, curPos []database.UserPosition) error {
 	afterBy := map[string]database.UserPosition{}
 	for _, a := range p.SurvivorPosAfter {
