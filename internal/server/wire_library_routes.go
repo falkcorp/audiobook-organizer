@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.10.3
+// version: 1.10.4
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -162,6 +162,14 @@ func (s *Server) wireLibraryRoutes(
 		// only way to clear a stale cache was a process restart, which costs
 		// roughly ten minutes of unusable library while memdb warms back up.
 		adminOnly.POST("/cache/invalidate", cacheH.HandleCacheInvalidate)
-		adminOnly.POST("/admin/recompact-digests", activityCompactH.RecompactDigests)
+		// POST /admin/recompact-digests only enqueued the
+		// maintenance.recompact-activity-digests op, which POST /operations/v2
+		// starts just as well, and it had no caller in the repo (01-P81g). It
+		// answers 410 Gone for one release (owner decision D9) and is then
+		// removed. It stays on the admin-only group, so an unauthenticated
+		// caller still gets 401, a non-admin 403, and only an admin learns it
+		// is gone.
+		adminOnly.POST("/admin/recompact-digests",
+			gone(`POST /api/v1/operations/v2 with {"def_id":"maintenance.recompact-activity-digests"}`))
 	}
 }

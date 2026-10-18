@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b4f2e61-3d7a-4c95-a0e8-5f1c9d6b2a73
-// last-edited: 2026-09-10
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -18,8 +18,10 @@ import (
 )
 
 // RecompactActivityDigestsDefID is the def id of the admin-triggered digest
-// re-derivation. POST /api/v1/admin/recompact-digests enqueues it; the handler
-// refers to it by this constant.
+// re-derivation. Start it with POST /api/v1/operations/v2 and
+// {"def_id":"maintenance.recompact-activity-digests"}. (POST
+// /api/v1/admin/recompact-digests, which used to enqueue it, answers 410 Gone
+// since 01-P81g.)
 const RecompactActivityDigestsDefID = "maintenance.recompact-activity-digests"
 
 // RecompactActivityDigestsResult is the op's persisted result: how many
@@ -32,7 +34,7 @@ type RecompactActivityDigestsResult struct {
 // recompactActivityDigestsDef is the admin "recompact digests" action.
 //
 // WHY AN OP AND NOT A HANDLER. Until 2026-09-10 POST /admin/recompact-digests
-// re-derived every digest inside the HTTP request — the same shape the
+// (now retired) re-derived every digest inside the HTTP request — the same shape the
 // Activity page's Compact button had until PR #3214, and the same failure:
 // on a store with years of digests across two backends the request outlives
 // any browser timeout and the caller cannot tell whether the work is still
