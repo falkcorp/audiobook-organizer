@@ -4,7 +4,8 @@
 
 New read endpoints for the v3 run model, beside the unchanged `/api/v1/operations*`
 routes: `GET /api/v3/ops/defs` (effects, schedule and next fire, readiness, last
-finished run however long ago it finished, params schema), `GET /api/v3/ops/runs` and `/runs/{id}`
+finished run however long ago it finished (null if 256 or more newer runs
+are still unfinished), params schema), `GET /api/v3/ops/runs` and `/runs/{id}`
 (`progress.chunks` and `progress.workers` included; `state` is always the stored
 state, so a row matches the filter that listed it, and a run whose goroutine
 outlived the abandon grace has `zombie=true` and `display_state=stopping`), `GET /api/v3/ops/runs/{id}/rows`
@@ -19,7 +20,9 @@ Event ids are `<boot id>-<sequence>`, so an id from before a restart resyncs
 instead of resuming at the wrong place; a run whose terminal event the registry
 feed dropped is still published once it settles; streams end as soon as the
 server starts shutting down; at most 64 streams are open at once (then 503)
-and at most 4 per signed-in user (then 429).
+and at most 4 per signed-in user and credential (then 429 with `Retry-After`;
+a browser session and each API key of one user are counted apart); a stream
+ends when a write to the client fails.
 
 `POST /api/v3/ops/defs/{id}/runs` (also `POST /api/v3/ops/runs` with the
 definition in the body) needs scan.trigger, as `POST /api/v1/operations/v2`
@@ -28,18 +31,35 @@ none), validates params against its JSON Schema before anything
 is queued (400 with field paths), answers 409 with the reason while the
 definition is not ready, and returns 202 `{run_id}` (or `{"batched": true}`
 when a batchable definition added the request to a pending batch). The mode is
-written into params under the key the operation's own code gates its writes on,
-declared on the operation (`OperationDef.Preview`) and shown as `preview_param`
-in `/defs`: `dry_run` (preview = true) or `apply` / `live` (preview = false).
-An omitted mode is a preview unless params already state that key. A mode that
-contradicts the key in params, or a mode key the operation does not read (a
-`dry_run` sent to an `apply` operation), is a 400. A writing definition that
-declares no preview key (`has_preview=false`: it ignores every mode key, or, like
-`metadata.batch-apply-cached`, previews only through a different operation) is
-never queued as a "preview": a preview or a request with no mode is a 409, and
-only an explicit `mode: "live"` starts it, with params passed through untouched.
-A read-only definition's params are never touched, so a strictly decoded
-operation is not handed a `dry_run` it does not declare. `POST
+written into params under every mode key the operation's own params type
+decodes, declared on the operation (`OperationDef.Preview` names that type) and
+shown as `preview_keys` in `/defs`: a preview writes `dry_run`/`dryRun` true and
+`apply`/`live` false, a live run the opposite, so an operation that writes only
+when `apply && !dry_run` is never silently a preview on a live run. An omitted
+mode is a preview unless params already state the mode. A mode that
+contradicts a mode key in params, two mode keys that disagree, a mode key the
+operation does not read (a `dry_run` sent to an `apply` operation), or a key that
+differs from a mode key only in case (`APPLY`, which encoding/json would decode
+into `apply`) is a 400. `itunes.clone-into-library` lists its three write kinds
+in `live_one_of`: a preview sets all three false and a live run must name
+exactly one. `maintenance.series-phantom-repair` refuses a live run in report
+mode and `maintenance.opchange-book-index-rebuild` refuses `ensure=true` at
+start instead of queueing a run that writes nothing or fails. A writing
+definition that declares no preview (`has_preview=false`: it ignores every mode
+key, or, like `metadata.batch-apply-cached`, previews only through a different
+operation) is never queued as a "preview": a preview or a request with no mode
+is a 409, and only an explicit `mode: "live"` starts it, with params passed
+through untouched. A read-only definition's params are never touched, so a
+strictly decoded operation is not handed a `dry_run` it does not declare, but a
+mode key in them that contradicts the asked mode is a 400. An operation counts
+as writing when it declares a write capability or the rows it writes
+(`OperationDef.Writes`); six operations that wrote while declaring only read
+capabilities now declare their writes: `itunes.playlist-import`,
+`maintenance.cover-text-read` and `maintenance.file-provenance-export` already
+previewed by default; `deluge.path-update`, `maintenance.regroup-shattered-ai`
+and the full-transcribe path of `maintenance.transcribe-book-intros` now take
+`dry_run` and preview when it is omitted (pass `dry_run: false` to run them for
+real). `POST
 .../runs/{id}/cancel` needs being the run's starter, or scan.trigger plus the
 definition's permission; an interrupted or awaiting-decision run is not
 executing, so cancelling it is a 409. `POST
