@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-18
 
@@ -63,6 +63,20 @@ import (
 // still edits every other part of the collection, and any query without one. A
 // collection with no usable owner evaluates as the first active admin, so only
 // that admin may set one there. See requirePerUserQueryEvaluator.
+//
+// A STAND-IN ADMIN NEVER EVALUATES A PER-USER QUERY. The first-admin fallback
+// exists so a collection whose owner was deleted keeps working, but for a query
+// that uses a per-user field it would publish the admin's listening state (the
+// members are served to every reader) for a query the admin did not write, and a
+// per-user query on an ownerless collection may have been written by someone else
+// before the evaluator gate existed. So evaluate refuses it with
+// ErrCollectionOwnerMissingPerUserQuery and the stored members stay as they were:
+// materialize answers 409 COLLECTION_OWNER_MISSING_PER_USER_QUERY, and a native
+// read answers 200 with the stored collection and an evaluation_blocked flag (a
+// read has always served the last known members rather than failing, see
+// GetCollection). A query without a per-user field still falls back to the admin.
+// The first active admin takes the collection over by saving its query again
+// (UpdateCollection stores that admin as the owner).
 
 // CollectionCreateReq is the payload for POST /api/v1/collections.
 //
@@ -114,6 +128,24 @@ type CollectionOwnerStore interface {
 // exists and the install has no active admin to fall back to, so there is no
 // user whose per-user state the query could be evaluated against.
 var ErrNoCollectionEvaluator = errors.New("no admin user to evaluate this collection as")
+
+// ErrCollectionOwnerMissingPerUserQuery means a dynamic collection's owner no
+// longer exists and its query uses a per-user field, so it must not be evaluated
+// as the first-admin stand-in (see the file header). The stored members are kept.
+var ErrCollectionOwnerMissingPerUserQuery = errors.New(
+	"the collection's owner no longer exists and its query uses per-user fields; it is not evaluated as the first admin")
+
+// ErrCodeCollectionOwnerMissingPerUserQuery is the error code and the
+// evaluation_blocked flag value for ErrCollectionOwnerMissingPerUserQuery.
+const ErrCodeCollectionOwnerMissingPerUserQuery = "COLLECTION_OWNER_MISSING_PER_USER_QUERY"
+
+// collectionBlockedResponse is a collection read whose evaluation was refused:
+// the stored collection, flattened, plus why it was not re-evaluated.
+type collectionBlockedResponse struct {
+	*database.Collection
+	EvaluationBlocked        string `json:"evaluation_blocked"`
+	EvaluationBlockedMessage string `json:"evaluation_blocked_message"`
+}
 
 // maxCollectionBooksPerRequest bounds one add-books request.
 const maxCollectionBooksPerRequest = 500
@@ -306,6 +338,18 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 	}
 
 	ids, err := h.evaluate(col)
+	if errors.Is(err, ErrCollectionOwnerMissingPerUserQuery) {
+		// Not a transient condition, so say so: the stored members are served
+		// unchanged (nothing is re-materialized from the stand-in admin's state)
+		// with a flag a client can show. A 409 would black out the collection for
+		// every reader, which is what the paragraph below exists to avoid.
+		httputil.RespondWithOK(c, collectionBlockedResponse{
+			Collection:               col,
+			EvaluationBlocked:        ErrCodeCollectionOwnerMissingPerUserQuery,
+			EvaluationBlockedMessage: ownerMissingMessage(),
+		})
+		return
+	}
 	if err != nil {
 		// Serve the last known membership rather than an error. A search index
 		// that is closed or rebuilding is a transient condition, and failing the
@@ -402,6 +446,17 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		if *req.Query != origQuery && !h.requirePerUserQueryEvaluator(c, col, *req.Query) {
 			return
 		}
+		// The first active admin saving a per-user query on an ownerless collection
+		// takes it over: the stand-in never evaluates such a query (see the file
+		// header), so without this the one user the gate lets write it could not
+		// make it work. Re-sending the unchanged query is enough. Only the
+		// stand-in qualifies (the gate above refuses anyone else a changed query,
+		// and an unchanged one by someone else fails the id check here).
+		if search.QueryUsesPerUserField(*req.Query) {
+			if id, fallback, rerr := h.resolveEvaluator(col); rerr == nil && fallback && id == CallingUserID(c) {
+				col.CreatedByUserID = id
+			}
+		}
 		col.Query = *req.Query
 	}
 	if req.SortJSON != nil {
@@ -462,6 +517,14 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 	}
 	ids, err := h.evaluate(col)
 	if err != nil {
+		if errors.Is(err, ErrCollectionOwnerMissingPerUserQuery) {
+			// An explicit request to re-evaluate cannot be honoured, and the
+			// caller should be told why rather than handed the old members as if
+			// they were fresh.
+			httputil.RespondWithError(c, http.StatusConflict, ownerMissingMessage(),
+				ErrCodeCollectionOwnerMissingPerUserQuery)
+			return
+		}
 		if errors.Is(err, playlist.ErrSearchIndexUnavailable) || errors.Is(err, ErrNoCollectionEvaluator) {
 			httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "SERVICE_UNAVAILABLE")
 			return
@@ -503,9 +566,15 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 // header. That is what makes a materialize, a native read and the ABS surface
 // (which serves the stored set) agree whoever is signed in.
 func (h *CollectionHandler) evaluate(col *database.Collection) ([]string, error) {
-	userID, err := h.evaluatorFor(col)
+	userID, fallback, err := h.resolveEvaluator(col)
 	if err != nil {
 		return nil, err
+	}
+	if fallback {
+		if search.QueryUsesPerUserField(col.Query) {
+			return nil, ErrCollectionOwnerMissingPerUserQuery
+		}
+		logOwnerFallback(col, userID)
 	}
 	return playlist.EvaluateSmartPlaylist(
 		h.evalStore, h.indexFn(),
@@ -553,29 +622,53 @@ func (h *CollectionHandler) requirePerUserQueryEvaluator(c *gin.Context, col *da
 // because its owner was deactivated would silently change its members. The
 // fallback admin, by contrast, must be active (auth.FirstActiveAdmin).
 func (h *CollectionHandler) evaluatorFor(col *database.Collection) (string, error) {
+	userID, fallback, err := h.resolveEvaluator(col)
+	if err == nil && fallback {
+		logOwnerFallback(col, userID)
+	}
+	return userID, err
+}
+
+// resolveEvaluator is evaluatorFor that also says whether the answer is the
+// first-admin stand-in (the stored owner is empty, "_local" or not a user row)
+// rather than the owner. It does not log; callers that evaluate do.
+func (h *CollectionHandler) resolveEvaluator(col *database.Collection) (userID string, fallback bool, err error) {
 	if h.owners == nil {
-		return "", ErrNoCollectionEvaluator
+		return "", false, ErrNoCollectionEvaluator
 	}
 	if col.CreatedByUserID != "" {
 		u, err := h.owners.GetUserByID(col.CreatedByUserID)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		if u != nil {
-			return u.ID, nil
+			return u.ID, false, nil
 		}
 	}
 	users, err := h.owners.ListUsers()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	admin := auth.FirstActiveAdmin(users)
 	if admin == nil {
-		return "", ErrNoCollectionEvaluator
+		return "", false, ErrNoCollectionEvaluator
 	}
+	return admin.ID, true, nil
+}
+
+// logOwnerFallback records that a collection is being evaluated as someone other
+// than its stored owner.
+func logOwnerFallback(col *database.Collection, adminID string) {
 	collectionLog.Warn("collections: collection %s has owner %q which is not a user; evaluating as first admin %s",
-		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.CreatedByUserID), logger.SanitizeLogValue(admin.ID))
-	return admin.ID, nil
+		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.CreatedByUserID), logger.SanitizeLogValue(adminID))
+}
+
+// ownerMissingMessage is the text of the 409 and of the evaluation_blocked flag.
+func ownerMissingMessage() string {
+	return "this collection's owner no longer exists and its query uses per-user fields (" +
+		strings.Join(search.PerUserFieldNames(), ", ") +
+		"), so it is not evaluated as the first admin and keeps its stored members; " +
+		"the first active admin can save its query again to take ownership, or the per-user fields can be removed"
 }
 
 // load resolves :id, writing the error response itself.

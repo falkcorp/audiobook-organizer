@@ -180,6 +180,22 @@ falls back to the first admin can have per-user fields set only by that admin. T
 Audiobookshelf-compatible routes cannot set a query (their create is static only
 and their PATCH touches name, description and books), so they have no path to it.
 
+A stand-in admin never evaluates a per-user query. When the owner row is gone (or
+the stored owner is empty or `_local`) the collection falls back to the first
+active admin only if its query has no per-user field. With one, the collection is
+not evaluated at all and keeps its stored members: `POST /collections/:id/materialize`
+answers `409` with code `COLLECTION_OWNER_MISSING_PER_USER_QUERY`, and `GET
+/collections/:id` answers `200` with the stored collection plus
+`evaluation_blocked` (the same code) and `evaluation_blocked_message` (a read has
+always served the last known members rather than failing). The first active admin
+takes such a collection over by saving its query again (`PUT /collections/:id`
+with the same `query`), which records that admin as `created_by_user_id`. The
+startup owner backfill leaves these collections ownerless and lists their ids and
+names in one warning, written to the system activity log under the source
+`collection-owner-backfill`, on every start until they are resolved. Queries
+written before the 403 gate existed by someone other than the owner cannot be
+detected (there is no authorship history); the gate prevents new ones.
+
 ### Authentication
 
 | Method | Path | Description |

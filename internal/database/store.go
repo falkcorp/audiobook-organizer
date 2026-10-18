@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.114.0
+// version: 2.115.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-18
 
@@ -583,7 +583,9 @@ type Collection struct {
 	// evaluating user: the query's per-user fields (read_status, progress_pct,
 	// last_played) are answered from this user's state, whoever is reading the
 	// collection (D75). If that user no longer exists the first active admin is
-	// used instead. It does NOT scope visibility -- collections are shared by
+	// used instead, except that a query using a per-user field is then not
+	// evaluated at all (the stand-in's state would be published); the owner
+	// backfill leaves such a collection ownerless. It does NOT scope visibility -- collections are shared by
 	// definition, and a static collection never evaluates anything.
 	CreatedByUserID string `json:"created_by_user_id,omitempty"`
 	Version         int    `json:"version"`

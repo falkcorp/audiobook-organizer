@@ -47,3 +47,17 @@ now write those fields into a query, when creating a dynamic collection, editing
 its query or converting a static collection; anyone else gets a 403 with code
 `COLLECTION_PER_USER_QUERY_OWNER_ONLY` and nothing is changed. Queries without
 those fields, renames and re-sending the unchanged query are unaffected.
+
+A stand-in admin no longer evaluates a per-user query. A dynamic collection whose
+owner is gone and whose query uses `read_status`, `progress_pct` or `last_played`
+is not evaluated as the first active admin (that would publish the admin's
+listening state to every reader): materialize answers 409
+`COLLECTION_OWNER_MISSING_PER_USER_QUERY`, a native read answers 200 with the
+stored members and an `evaluation_blocked` flag, and the stored members are left
+as they were. Queries without those fields still fall back to the admin. The first
+active admin takes the collection over by saving its query again. The startup
+owner backfill leaves such collections ownerless instead of assigning the admin,
+and logs one warning listing their ids and names (also in the system activity
+log) on every start until they are resolved. Per-user queries that someone other
+than the owner wrote before the 403 gate cannot be detected, because collections
+keep no authorship history.
