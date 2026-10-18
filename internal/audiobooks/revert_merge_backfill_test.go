@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b41849c-b912-4800-9ead-9c3ea4beb456
 // last-edited: 2026-10-18
 
@@ -115,17 +115,23 @@ func TestBackfillMergeUndoPointers_CombineJournals(t *testing.T) {
 	}
 	require.NotEmpty(t, refusedID)
 
-	// Preview: names the historical journal only, writes no pointer.
+	// Preview: every journal gets a result. Only the historical one would
+	// get a pointer; the current one names its existing pointer's id; the
+	// refused one says why it has none. No pointer is written.
 	preview := runPointerBackfill(t, store, "op-backfill-preview", true)
-	require.Len(t, preview, 1, "%+v", preview)
+	require.Len(t, preview, 3, "%+v", preview)
 	require.Equal(t, merge.PointerBackfillWouldWrite, preview[histRes.JournalID].Verdict)
 	require.Empty(t, preview[histRes.JournalID].OperationID)
+	require.Equal(t, merge.PointerBackfillHasPointer, preview[curRes.JournalID].Verdict)
+	require.Equal(t, curRes.OperationID, preview[curRes.JournalID].OperationID)
+	require.Equal(t, merge.PointerBackfillNotUndoable, preview[refusedID].Verdict)
+	require.NotEmpty(t, preview[refusedID].Reason)
 	require.Empty(t, livePointersOn(t, store, hist.keep), "a preview writes no pointer")
 	require.Empty(t, livePointersOn(t, store, ref.keep))
 
 	// Apply: one pointer, under a fresh id that is not the backfill's own.
 	applied := runPointerBackfill(t, store, "op-backfill-apply", false)
-	require.Len(t, applied, 1, "%+v", applied)
+	require.Len(t, applied, 3, "%+v", applied)
 	got := applied[histRes.JournalID]
 	require.Equal(t, merge.PointerBackfillWritten, got.Verdict)
 	require.NotEmpty(t, got.OperationID)
@@ -140,8 +146,13 @@ func TestBackfillMergeUndoPointers_CombineJournals(t *testing.T) {
 	require.Len(t, livePointersOn(t, store, cur.keep), 1, "the live chokepoint pointer is not duplicated")
 	require.Empty(t, livePointersOn(t, store, ref.keep), "the refused combine's empty journal gets no pointer")
 
-	// A re-run writes nothing more.
-	require.Empty(t, runPointerBackfill(t, store, "op-backfill-rerun", false))
+	// A re-run writes nothing more, and names the backfilled id.
+	rerun := runPointerBackfill(t, store, "op-backfill-rerun", false)
+	require.Equal(t, merge.PointerBackfillHasPointer, rerun[histRes.JournalID].Verdict)
+	require.Equal(t, got.OperationID, rerun[histRes.JournalID].OperationID)
+	for id, item := range rerun {
+		require.NotEqual(t, merge.PointerBackfillWritten, item.Verdict, "journal %s", id)
+	}
 	require.Len(t, livePointersOn(t, store, hist.keep), 1)
 
 	// The backfilled id reverts the historical combine; the current one is
@@ -152,7 +163,9 @@ func TestBackfillMergeUndoPointers_CombineJournals(t *testing.T) {
 	require.NoError(t, err)
 
 	// Undone journals are not undoable, so a later run leaves them alone.
-	require.Empty(t, runPointerBackfill(t, store, "op-backfill-after-undo", true))
+	for id, item := range runPointerBackfill(t, store, "op-backfill-after-undo", true) {
+		require.Equal(t, merge.PointerBackfillNotUndoable, item.Verdict, "journal %s", id)
+	}
 }
 
 func TestBackfillMergeUndoPointers_SiblingJournal(t *testing.T) {
