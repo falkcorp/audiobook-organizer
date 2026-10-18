@@ -1,5 +1,5 @@
 // file: internal/operations/registry/preview.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 1d72f677-0951-40e4-9b15-cb9211c3e50a
 // last-edited: 2026-10-18
 
@@ -70,19 +70,28 @@ const (
 // value makes fail at run time). It sees the params Resolve is about to
 // return; an error refuses the start.
 //
+// AnyFamilyWrites declares how an op with two mode-key families (dry_run and
+// apply, say) combines them at run time. False, the default, is "writes only
+// when every family says write" (repoint-version-primary: apply && !dry_run);
+// true is "writes when any family says write" (version-group-primary-repair:
+// apply || dry_run==false). Resolve writes every key either way, so it only
+// changes how SameMode reads a body the caller wrote. Check refuses it on an
+// op with fewer than two families.
+//
 // The zero value means the op has no preview a caller can ask for by params:
 // it ignores every mode key, or previews only through a different op or
 // handler. /api/v3/ops then requires an explicit mode "live" to start it and
 // passes params through untouched.
 type PreviewSpec struct {
-	Params     any
-	LiveOneOf  []string
-	StartCheck func(params map[string]json.RawMessage, live bool) error
+	Params          any
+	LiveOneOf       []string
+	StartCheck      func(params map[string]json.RawMessage, live bool) error
+	AnyFamilyWrites bool
 }
 
 // IsZero reports whether no preview is declared.
 func (p PreviewSpec) IsZero() bool {
-	return p.Params == nil && len(p.LiveOneOf) == 0 && p.StartCheck == nil
+	return p.Params == nil && len(p.LiveOneOf) == 0 && p.StartCheck == nil && !p.AnyFamilyWrites
 }
 
 // Check returns why the declaration is unusable, nil when it is usable or
@@ -130,6 +139,10 @@ func (p PreviewSpec) Check() error {
 	if len(keys) == 0 && len(p.LiveOneOf) == 0 {
 		return fmt.Errorf("preview params %s decodes none of %v and declares no LiveOneOf", paramsTypeName(p.Params), modeKeyOrder)
 	}
+	if p.AnyFamilyWrites && len(p.ModeFamilies()) < 2 {
+		return fmt.Errorf("preview AnyFamilyWrites set on %s, which decodes mode keys of fewer than two families %v",
+			paramsTypeName(p.Params), keys)
+	}
 	return nil
 }
 
@@ -153,8 +166,8 @@ func (p PreviewSpec) ModeKeys() []string {
 }
 
 // ModeFamilies returns the distinct families of ModeKeys: an op whose type
-// decodes both dry_run and apply has two, and a run writes only when both say
-// so.
+// decodes both dry_run and apply has two. How a run combines them is
+// AnyFamilyWrites.
 func (p PreviewSpec) ModeFamilies() []string {
 	var out []string
 	for _, k := range p.ModeKeys() {
@@ -189,6 +202,142 @@ func modeErrorf(format string, args ...any) error {
 	return &ModeError{Msg: fmt.Sprintf(format, args...)}
 }
 
+// SameMode reports whether two params bodies of the op run in the same mode,
+// judged by what each body does at run time, not by Resolve's normalization:
+// Resolve refuses bodies (an undecoded key, keys that disagree, a case
+// variant) that a run still decodes and runs in some mode. A body whose mode
+// cannot be read (malformed JSON, a non-bool mode value, two case variants of
+// one key) is in no mode and never the same as another. EnqueueOp's dedupe
+// uses it, after a byte-equality check, so a live request is never answered
+// with a queued preview's run id, or the reverse.
+func (p PreviewSpec) SameMode(a, b json.RawMessage) bool {
+	sa, err := p.modeSignature(a)
+	if err != nil {
+		return false
+	}
+	sb, err := p.modeSignature(b)
+	if err != nil {
+		return false
+	}
+	return sa == sb
+}
+
+// modeSignature is a body's run-time mode ("live" or "preview") followed by
+// the value of every LiveOneOf switch. It reads each mode key the declared
+// type decodes the way encoding/json decodes it (exact name, else a
+// case-insensitive match), and:
+//
+//   - an absent or null key takes the op's preview default (dry_run and
+//     dryRun true, apply and live false);
+//   - dry_run and dryRun that disagree are a preview, as opmode.ResolveDryRun
+//     fails toward preview;
+//   - each family says write or not, and the run is live when every family
+//     does, or when any does for an op that declares AnyFamilyWrites;
+//   - an op with no mode-key family is live when a LiveOneOf switch is true.
+//
+// Keys the type does not decode are ignored, as the run ignores them. An
+// empty or null body is no params.
+func (p PreviewSpec) modeSignature(params json.RawMessage) (string, error) {
+	m := map[string]json.RawMessage{}
+	if t := bytes.TrimSpace(params); len(t) > 0 && !bytes.Equal(t, []byte("null")) {
+		if err := json.Unmarshal(t, &m); err != nil || m == nil {
+			return "", modeErrorf("params must be a JSON object")
+		}
+	}
+	switches := map[string]bool{} // every key at its run-time value
+	stated := map[string]bool{}   // keys the body sets (not absent, not null)
+	for _, k := range append(p.ModeKeys(), p.LiveOneOf...) {
+		v, set, err := runtimeBool(m, k)
+		if err != nil {
+			return "", err
+		}
+		if !set {
+			v = ModeKeyFamily(k) == ModeKeyDryRun // the preview default
+		}
+		switches[k], stated[k] = v, set
+	}
+
+	families := p.ModeFamilies()
+	writes := 0
+	for _, f := range families {
+		var w bool
+		switch f {
+		case ModeKeyDryRun:
+			// One switch, two spellings: it writes when a spelling is stated
+			// false and none is stated true (a disagreement previews, and
+			// neither stated is the preview default).
+			for _, k := range []string{ModeKeyDryRun, ModeKeyDryRunCamel} {
+				if !stated[k] {
+					continue
+				}
+				if switches[k] {
+					w = false
+					break
+				}
+				w = true
+			}
+		default:
+			w = switches[f]
+		}
+		if w {
+			writes++
+		}
+	}
+	var live bool
+	switch {
+	case len(families) == 0:
+		for _, k := range p.LiveOneOf {
+			live = live || switches[k]
+		}
+	case p.AnyFamilyWrites:
+		live = writes > 0
+	default:
+		live = writes == len(families)
+	}
+
+	var b strings.Builder
+	if live {
+		b.WriteString(ModeLive)
+	} else {
+		b.WriteString(ModePreview)
+	}
+	for _, k := range p.LiveOneOf {
+		fmt.Fprintf(&b, ";%s=%t", k, switches[k])
+	}
+	return b.String(), nil
+}
+
+// runtimeBool reads mode key k from a params object the way encoding/json
+// fills a struct field tagged k: the exact name, else a case-insensitive
+// match. set is false when the key is absent or null. Two keys that match k
+// with different values are refused, because which one a run decodes is not
+// something to guess at.
+func runtimeBool(m map[string]json.RawMessage, k string) (v, set bool, err error) {
+	var found []json.RawMessage
+	if raw, ok := m[k]; ok {
+		found = append(found, raw)
+	}
+	for name, raw := range m {
+		if name != k && strings.EqualFold(name, k) {
+			found = append(found, raw)
+		}
+	}
+	for i, raw := range found {
+		var cur bool
+		curSet := !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+		if curSet {
+			if json.Unmarshal(raw, &cur) != nil {
+				return false, false, modeErrorf("%s must be true or false", k)
+			}
+		}
+		if i > 0 && (curSet != set || cur != v) {
+			return false, false, modeErrorf("params carry %s more than once, in different cases, with different values", k)
+		}
+		v, set = cur, curSet
+	}
+	return v, set, nil
+}
+
 // Resolve applies mode ("", "preview" or "live") to params, a JSON object,
 // and returns the params to queue.
 //
@@ -208,60 +357,6 @@ func modeErrorf(format string, args ...any) error {
 //
 // Every error is a *ModeError.
 func (p PreviewSpec) Resolve(params json.RawMessage, mode string) (json.RawMessage, error) {
-	return p.resolve(params, mode, true)
-}
-
-// SameMode reports whether two params bodies of the op run in the same mode:
-// both are normalized as Resolve with an empty mode would (StartCheck aside:
-// it judges whether a start may be queued, not which mode a body is), and
-// the values of every mode key and LiveOneOf switch are compared. A body that
-// does not normalize (malformed, or keys that disagree) is in no mode, so it
-// is never the same as another. EnqueueOp's dedupe uses it so a live request
-// is never answered with a queued preview's run id, or the reverse.
-func (p PreviewSpec) SameMode(a, b json.RawMessage) bool {
-	sa, err := p.modeSignature(a)
-	if err != nil {
-		return false
-	}
-	sb, err := p.modeSignature(b)
-	if err != nil {
-		return false
-	}
-	return sa == sb
-}
-
-// modeSignature is the normalized value of every mode key and LiveOneOf
-// switch, in declaration order; an absent switch is false.
-func (p PreviewSpec) modeSignature(params json.RawMessage) (string, error) {
-	// A JSON null body is "no params", as empty is: EnqueueOp marshals a nil
-	// json.RawMessage to null, and scheduler ticks enqueue with no params. Left
-	// as an error it would make every tick "a different mode" and queue a new
-	// row each time, which is the pile-up this dedupe exists to stop.
-	if bytes.Equal(bytes.TrimSpace(params), []byte("null")) {
-		params = nil
-	}
-	out, err := p.resolve(params, "", false)
-	if err != nil {
-		return "", err
-	}
-	m, err := paramsObject(out)
-	if err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	for _, k := range append(p.ModeKeys(), p.LiveOneOf...) {
-		v := false
-		if raw, ok := m[k]; ok {
-			if v, err = paramsBool(raw, k); err != nil {
-				return "", err
-			}
-		}
-		fmt.Fprintf(&b, "%s=%t;", k, v)
-	}
-	return b.String(), nil
-}
-
-func (p PreviewSpec) resolve(params json.RawMessage, mode string, startCheck bool) (json.RawMessage, error) {
 	if p.IsZero() {
 		return nil, modeErrorf("no preview declared")
 	}
@@ -356,7 +451,7 @@ func (p PreviewSpec) resolve(params json.RawMessage, mode string, startCheck boo
 			}
 		}
 	}
-	if startCheck && p.StartCheck != nil {
+	if p.StartCheck != nil {
 		if err := p.StartCheck(m, live); err != nil {
 			return nil, &ModeError{Msg: err.Error()}
 		}

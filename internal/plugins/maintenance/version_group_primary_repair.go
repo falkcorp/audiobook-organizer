@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
 // last-edited: 2026-10-18
 
@@ -272,8 +272,10 @@ func (r *vgRepairReport) summary() string {
 
 func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.version-group-primary-repair",
-		Preview:     sdk.PreviewSpec{Params: vgPrimaryRepairParams{}},
+		ID: "maintenance.version-group-primary-repair",
+		// AnyFamilyWrites: Run writes when apply OR dry_run==false says so
+		// (vgPrimaryRepairParams.resolveWrite), not only when both do.
+		Preview:     sdk.PreviewSpec{Params: vgPrimaryRepairParams{}, AnyFamilyWrites: true},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Version-group primary repair",

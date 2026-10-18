@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-18
 
@@ -89,18 +89,22 @@ var previewOnlyElsewhere = map[string]string{
 // than one mode-key family (dry_run/dryRun, apply, live). v3 writes every
 // one, so a preview is a preview and a live run is live whichever the op
 // reads, but two switches for one decision is a shape to justify, not to
-// copy: each entry says how the op combines them. A new op with two families
-// fails until it is listed here, and an entry whose op no longer has two
-// fails too.
-var multiModeKeyFamilies = map[string]string{
+// copy: each entry says how the op combines them, and anyWrites must match
+// the op's PreviewSpec.AnyFamilyWrites (EnqueueOp's mode-aware dedupe reads a
+// caller's body by it). A new op with two families fails until it is listed
+// here, and an entry whose op no longer has two fails too.
+var multiModeKeyFamilies = map[string]struct {
+	anyWrites bool
+	how       string
+}{
 	// vgPrimaryRepairParams: apply is the older spelling of dry_run=false.
 	// Run writes when either says write (apply || dry_run==false) and refuses
 	// dry_run=true beside apply=true (version_group_primary_repair.go).
-	"maintenance.version-group-primary-repair": "apply || !dry_run; dry_run=true with apply=true is refused",
+	"maintenance.version-group-primary-repair": {anyWrites: true, how: "apply || !dry_run; dry_run=true with apply=true is refused"},
 	// repointVersionPrimaryParams via ExecutionPolicy.Params: Run writes only
 	// when apply && !dry_run, two fail-closed switches
 	// (repoint_version_primary.go).
-	"maintenance.repoint-version-primary": "apply && !dry_run",
+	"maintenance.repoint-version-primary": {anyWrites: false, how: "apply && !dry_run"},
 }
 
 // TestOpsV3_PreviewDeclarationsMatchTheOpsParams checks every registered op's
@@ -149,8 +153,9 @@ func TestOpsV3_PreviewDeclarationsMatchTheOpsParams(t *testing.T) {
 				oneOf++
 			}
 			if len(p.ModeFamilies()) > 1 {
-				_, listed := multiModeKeyFamilies[od.ID]
+				entry, listed := multiModeKeyFamilies[od.ID]
 				require.True(t, listed, "%s decodes mode keys %v from more than one family; list it in multiModeKeyFamilies with how its Run combines them", od.ID, p.ModeKeys())
+				require.Equal(t, entry.anyWrites, p.AnyFamilyWrites, "%s: multiModeKeyFamilies says %q; PreviewSpec.AnyFamilyWrites must agree", od.ID, entry.how)
 				usedMulti[od.ID] = true
 			}
 		} else if d.Writer {

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/enqueue_dedupe_mode_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bf374303-0b13-466b-b0d6-f5efc8453cff
 // last-edited: 2026-10-18
 
@@ -139,19 +139,140 @@ func TestEnqueueDedupe_LiveOneOfSwitchesAreDifferentWork(t *testing.T) {
 	}
 }
 
+// TestPreviewSpec_SameMode reads bodies by what they do at run time: an
+// absent or null key is the preview default, a case variant decodes into the
+// same field, a key the type does not decode is ignored, and dry_run/dryRun
+// that disagree are a preview. Bodies whose mode cannot be read are in no mode.
 func TestPreviewSpec_SameMode(t *testing.T) {
 	spec := registry.PreviewSpec{Params: opmode.DryRunParams{}}
-	same := [][2]string{{`{}`, `{"dry_run":true}`}, {`{"dryRun":false}`, `{"dry_run":false,"dryRun":false}`}, {`{"x":1}`, `{}`}}
+	same := [][2]string{
+		{`{}`, `{"dry_run":true}`},
+		{`{"dryRun":false}`, `{"dry_run":false,"dryRun":false}`},
+		{`{"x":1}`, `{}`},
+		{`{"apply":true}`, `{}`},
+		{`{"dry_run":null}`, `{}`},
+		{`{"DRY_RUN":false}`, `{"dry_run":false}`},
+		{`{"dry_run":true,"dryRun":false}`, `{}`},
+		{` null` + "\n", `{}`},
+		{``, `{}`},
+	}
 	for _, c := range same {
 		if !spec.SameMode(json.RawMessage(c[0]), json.RawMessage(c[1])) {
 			t.Errorf("SameMode(%s, %s) = false, want true", c[0], c[1])
 		}
 	}
-	diff := [][2]string{{`{}`, `{"dry_run":false}`}, {`{"dry_run":true,"dryRun":false}`, `{"dry_run":true,"dryRun":false}`}, {`[1]`, `[1]`}}
+	diff := [][2]string{
+		{`{}`, `{"dry_run":false}`},
+		{`[1]`, `[1]`},
+		{`{"dry_run":"false"}`, `{"dry_run":"false"}`},
+		{`{"DRY_RUN":true,"dry_run":false}`, `{"DRY_RUN":true,"dry_run":false}`},
+	}
 	for _, c := range diff {
 		if spec.SameMode(json.RawMessage(c[0]), json.RawMessage(c[1])) {
 			t.Errorf("SameMode(%s, %s) = true, want false", c[0], c[1])
 		}
+	}
+
+	oneOf := registry.PreviewSpec{Params: dedupeOneOfParams{}, LiveOneOf: []string{"apply", "rollback"}}
+	if !oneOf.SameMode(json.RawMessage(`{}`), json.RawMessage(`{"apply":false,"rollback":false}`)) {
+		t.Error("LiveOneOf: {} and every switch false are both a preview")
+	}
+	if oneOf.SameMode(json.RawMessage(`{"apply":true}`), json.RawMessage(`{"rollback":true}`)) {
+		t.Error("LiveOneOf: apply and rollback are different work")
+	}
+}
+
+type twoFamilyParams struct {
+	DryRun *bool `json:"dry_run"`
+	Apply  bool  `json:"apply"`
+}
+
+// TestPreviewSpec_SameMode_TwoFamilies: with dry_run and apply both decoded,
+// a body is live only when every family says write (the default, apply &&
+// !dry_run), or when any does for AnyFamilyWrites (apply || !dry_run).
+// Resolve's normalization classed {"dry_run":false} as live on the first
+// shape, which previews at run time because apply is false.
+func TestPreviewSpec_SameMode_TwoFamilies(t *testing.T) {
+	all := registry.PreviewSpec{Params: twoFamilyParams{}}
+	anyW := registry.PreviewSpec{Params: twoFamilyParams{}, AnyFamilyWrites: true}
+	if err := anyW.Check(); err != nil {
+		t.Fatalf("AnyFamilyWrites on two families must check: %v", err)
+	}
+	for _, c := range []struct {
+		spec registry.PreviewSpec
+		a, b string
+		same bool
+	}{
+		{all, `{"dry_run":false}`, `{}`, true},
+		{all, `{"apply":true}`, `{}`, true},
+		{all, `{"dry_run":false}`, `{"dry_run":false,"apply":true}`, false},
+		{anyW, `{"apply":true}`, `{"dry_run":false}`, true},
+		{anyW, `{"apply":true}`, `{}`, false},
+		{anyW, `{"dry_run":false}`, `{"dry_run":false,"apply":true}`, true},
+	} {
+		if got := c.spec.SameMode(json.RawMessage(c.a), json.RawMessage(c.b)); got != c.same {
+			t.Errorf("AnyFamilyWrites=%v SameMode(%s, %s) = %v, want %v", c.spec.AnyFamilyWrites, c.a, c.b, got, c.same)
+		}
+	}
+	if err := (registry.PreviewSpec{Params: opmode.DryRunParams{}, AnyFamilyWrites: true}).Check(); err == nil {
+		t.Error("AnyFamilyWrites on a single family must not check")
+	}
+}
+
+// TestEnqueueDedupe_IdenticalBodiesAlwaysFold: byte-identical params are one
+// request whatever SameMode can read from them. Before the byte check, a
+// body SameMode could not read never folded, so five cron ticks left five
+// rows.
+func TestEnqueueDedupe_IdenticalBodiesAlwaysFold(t *testing.T) {
+	for i, body := range []string{
+		`{"apply":true}`, `{"dry_run":true,"dryRun":false}`, `{"dry_run":null}`, `{"DRY_RUN":true}`,
+		`{"dry_run":"false"}`, `{"DRY_RUN":true,"dry_run":false}`,
+	} {
+		r, store := newTestRegistry(t)
+		def := registerCronPreviewDef(t, r, "test.identical-"+string(rune('a'+i)))
+		for n := 0; n < 5; n++ {
+			if _, err := r.EnqueueOp(context.Background(), def.ID, json.RawMessage(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := len(activeRowsForDef(t, store, def.ID)); got != 1 {
+			t.Errorf("%s enqueued 5 times on a scheduled def left %d active rows, want 1", body, got)
+		}
+	}
+}
+
+// TestEnqueueDedupe_TwoFamilyDefFoldsByRunTimeMode: on an apply && !dry_run
+// def, {"dry_run":false} previews at run time (apply is false), so it folds
+// into the queued preview tick; only a body that sets both is live.
+func TestEnqueueDedupe_TwoFamilyDefFoldsByRunTimeMode(t *testing.T) {
+	r, store := newTestRegistry(t)
+	sched := "0 2 * * 1"
+	def := makeDedupeDef(t, "test.two-family-cron", "k.two-family-cron")
+	def.Schedule = &sched
+	def.Preview = registry.PreviewSpec{Params: twoFamilyParams{}}
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	tick, err := r.EnqueueOp(context.Background(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	half, err := r.EnqueueOp(context.Background(), def.ID, json.RawMessage(`{"dry_run":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if half != tick {
+		t.Fatalf(`{"dry_run":false} previews at run time but queued %s beside the preview tick %s`, half, tick)
+	}
+	live, err := r.EnqueueOp(context.Background(), def.ID, json.RawMessage(`{"dry_run":false,"apply":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live == tick {
+		t.Fatal("a live body was answered with the queued preview tick")
+	}
+	if n := len(activeRowsForDef(t, store, def.ID)); n != 2 {
+		t.Fatalf("active rows = %d, want the preview tick and the live run", n)
 	}
 }
 
