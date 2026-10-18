@@ -1,7 +1,7 @@
 // file: internal/database/review_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 
 package database
 
@@ -76,8 +76,9 @@ type ReviewItem struct {
 	// 🔴 THIS FIELD IS WHY AN OVERRIDE SURVIVES. The classifier's suggestion lives in
 	// Payload.recommendedAction; this records what the reviewer actually picked, which
 	// may DISAGREE with it. Without it, approving a `combine` hold as `separate` wrote
-	// nothing but status="approved", and ReplayApprovedItems — which re-resolves the
-	// action later, after review_apply_enabled is flipped — would read the payload back
+	// nothing but status="approved", and the later apply — which re-resolves the action
+	// when the hold is approved again after review_apply_enabled is flipped — would
+	// read the payload back
 	// and merge exactly the books the human said to keep apart. The combine apply path
 	// hard-deletes the absorbed Book rows, so that is unrecoverable.
 	//
@@ -566,7 +567,7 @@ func (p *PebbleStore) ReviewStatsByKind() ([]ReviewKindStat, error) {
 // stable), so a rejected item stays remembered across future producer re-scans.
 //
 // It records NO chosen action — see SetReviewItemDecision. That is what makes the
-// approved→applied transition in ReplayApprovedItems safe: it must not disturb the
+// approved→applied transition after a re-approve safe: it must not disturb the
 // human decision it is in the middle of carrying out.
 func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error) {
 	return p.SetReviewItemDecision(id, status, "")

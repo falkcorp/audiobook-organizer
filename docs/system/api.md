@@ -104,8 +104,8 @@ The producer-agnostic review queue behind the `/review` workspace's **Review que
 | `GET` | `/api/v1/review/items` | List review items |
 | `POST` | `/api/v1/review/items/:id/approve` | Approve; dispatches the chosen action to its apply handler only while `review_apply_enabled` is on, otherwise records `approved` |
 | `POST` | `/api/v1/review/items/:id/reject` | Reject |
-| `POST` | `/api/v1/review/bulk` | Bulk approve/reject |
-| `POST` | `/api/v1/review/replay-approved` | Re-run apply for items already approved |
+| `POST` | `/api/v1/review/bulk` | Bulk approve/reject. Approving by `ids` also executes items that were approved while apply was off, once `review_apply_enabled` is on (list them with `GET /api/v1/review/items?status=approved`) |
+| `POST` | `/api/v1/review/replay-approved` | Retired (01-P81j): answers `410 Gone` for one release; use `POST /api/v1/review/bulk` with `ids` as above |
 
 ### Repairs Lane
 

@@ -1,7 +1,7 @@
 // file: internal/server/wire_review_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c8e1a37-9b24-4f60-83d1-7e2a9c4b6f18
-// last-edited: 2026-07-13
+// last-edited: 2026-10-18
 
 package server
 
@@ -23,8 +23,13 @@ func (s *Server) wireReviewRoutes(protected *gin.RouterGroup, reviewH *reviewhan
 	protected.POST("/review/items/:id/approve", s.perm(auth.PermLibraryEditMetadata), reviewH.ApproveReviewItem)
 	protected.POST("/review/items/:id/reject", s.perm(auth.PermLibraryEditMetadata), reviewH.RejectReviewItem)
 	protected.POST("/review/bulk", s.perm(auth.PermLibraryEditMetadata), reviewH.BulkReviewAction)
-	// Re-runs apply for items already marked approved. Exists because approving
-	// while the global switch is off records the decision but never executes it, and
-	// nothing else ever reads that state back.
-	protected.POST("/review/replay-approved", s.perm(auth.PermLibraryEditMetadata), reviewH.ReplayApprovedItems)
+	// Retired (01-P81j, owner decision D9): POST /review/replay-approved re-ran
+	// apply for every item already marked approved. Nothing in the web app,
+	// scripts, cmd or the agent tooling called it. It answers 410 Gone via gone()
+	// for one release and is then removed; the library.edit_metadata guard stays
+	// first, so auth and the permission check run before the stub and only an
+	// allowed caller learns it is gone. The replacement is approving the items
+	// again (their recorded action is honoured), one call per list of ids.
+	protected.POST("/review/replay-approved", s.perm(auth.PermLibraryEditMetadata),
+		gone("POST /api/v1/review/bulk with {\"action\":\"approve\",\"ids\":[...]} (list the approved items with GET /api/v1/review/items?status=approved) once review_apply_enabled is on"))
 }
