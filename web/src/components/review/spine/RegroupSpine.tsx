@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.10.1
+// version: 1.11.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -654,14 +654,17 @@ function ReportIdText({ id }: { id: string }) {
   return <code data-testid={`regroup-report-id-${id}`}>{id}</code>;
 }
 
-/** Skip codes that mean the item is no longer pending: it is applied or held by an
- *  apply claim, so it is not in the list and must not be reported as "still
- *  pending". */
+/** Skip codes that mean the item is no longer pending: it is applied, held by an
+ *  apply claim, or waiting in needs_attention, so it is not in the list and must not
+ *  be reported as "still pending". REVIEW_ITUNES_PROTECTED is deliberately absent: it
+ *  answers a FIRST run that was handed back, which is still pending (a re-run the
+ *  iTunes guard refuses answers REVIEW_RERUN_FAILED, because it stays held). */
 const NOT_PENDING_SKIP_CODES = new Set([
   'REVIEW_ALREADY_APPLIED',
   'REVIEW_APPLY_IN_PROGRESS',
   'REVIEW_APPLY_INTERRUPTED',
   'REVIEW_RERUN_FAILED',
+  'REVIEW_APPLY_DISABLED',
 ]);
 
 /** The kind's report from the last bulk action: skips, failures and applied-but-
@@ -716,7 +719,8 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
         <Box data-testid={`regroup-skipped-done-${kind}`} sx={{ mb: 1 }}>
           <AlertTitle>
             {skippedDone.length} hold
-            {skippedDone.length === 1 ? ' was' : 's were'} skipped — already applied or mid-apply
+            {skippedDone.length === 1 ? ' was' : 's were'} skipped — no longer pending (applied,
+            mid-apply or needs attention)
           </AlertTitle>
           <Typography variant="body2" sx={{ mb: 1 }}>
             These are no longer pending, so they are not in the list below. Nothing was done to
