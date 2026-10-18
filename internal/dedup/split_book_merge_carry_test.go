@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_carry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e52db43b-d7f1-4be6-947a-639edb4e616c
-// last-edited: 2026-09-19
+// last-edited: 2026-10-18
 
 package dedup
 
@@ -171,12 +171,20 @@ type faultStore struct {
 	*database.PebbleStore
 	failID string
 	crash  bool
+	// landed: the soft-delete commits, then the call reports an error (a
+	// read-back or durability failure after the write).
+	landed bool
 }
 
 func (f *faultStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	if id == f.failID {
 		if f.crash {
 			panic("injected crash")
+		}
+		if f.landed {
+			if _, err := f.PebbleStore.ModifyBook(id, fn); err != nil {
+				return nil, err
+			}
 		}
 		return nil, errors.New("injected failure")
 	}
@@ -217,6 +225,26 @@ func TestMergeSplitBookCluster_SourceFailureStaysUndoable(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, res.Errors)
 	require.NotEmpty(t, res.JournalID)
+	_, err = merge.NewService(s).UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	requireSourcesRestored(t, s, srcs, files)
+}
+
+// NIT 2 (#4064 round 3): a soft-delete that committed and then reported an
+// error. The journaled stamp is kept (as the combine keeps it), so the undo
+// finds the retired source carrying it and restores it. With the stamp
+// cleared, the undo read that source as "re-deleted since the merge" and
+// refused as a whole.
+func TestMergeSplitBookCluster_SoftDeleteLandedThenFailedStaysUndoable(t *testing.T) {
+	s := carryStore(t)
+	keep, srcs, files := carryThree(t, s)
+	fs := &faultStore{PebbleStore: s, failID: srcs[1], landed: true}
+	res, err := MergeSplitBookClusterWithOptions(fs, keep, srcs, "", SplitMergeOptions{})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Errors)
+	b, err := s.GetBookByID(srcs[1])
+	require.NoError(t, err)
+	require.True(t, b.IsSoftDeleted(), "fixture: the soft-delete landed")
 	_, err = merge.NewService(s).UndoCombine(res.JournalID)
 	require.NoError(t, err)
 	requireSourcesRestored(t, s, srcs, files)
