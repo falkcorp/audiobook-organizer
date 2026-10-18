@@ -1,5 +1,5 @@
 // file: internal/server/wire_review_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c8e1a37-9b24-4f60-83d1-7e2a9c4b6f18
 // last-edited: 2026-10-18
 
@@ -22,6 +22,9 @@ func (s *Server) wireReviewRoutes(protected *gin.RouterGroup, reviewH *reviewhan
 	protected.GET("/review/items", s.perm(auth.PermLibraryView), reviewH.ListReviewItems)
 	protected.POST("/review/items/:id/approve", s.perm(auth.PermLibraryEditMetadata), reviewH.ApproveReviewItem)
 	protected.POST("/review/items/:id/reject", s.perm(auth.PermLibraryEditMetadata), reviewH.RejectReviewItem)
+	// Moves an item held by an interrupted apply to needs_attention (01-P81j). Same
+	// permission as approve: it is a review decision, and it changes nothing on disk.
+	protected.POST("/review/items/:id/abandon-apply", s.perm(auth.PermLibraryEditMetadata), reviewH.AbandonApply)
 	protected.POST("/review/bulk", s.perm(auth.PermLibraryEditMetadata), reviewH.BulkReviewAction)
 	// Retired (01-P81j, owner decision D9): POST /review/replay-approved re-ran
 	// apply for every item already marked approved. Nothing in the web app,

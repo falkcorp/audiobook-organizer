@@ -1,5 +1,5 @@
 // file: internal/database/review_claim.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 793a733c-f28c-4b2d-ba41-4170b8a43a07
 // last-edited: 2026-10-18
 
@@ -21,12 +21,14 @@ import (
 // 🔴 THE INVARIANT. An item in ReviewStatusApplying is held by exactly one claim, and
 // only that claim leaves the state: FinishReviewItemApply (applying → applied) or
 // ReleaseReviewItemClaim (applying → the status it was claimed from), each checked
-// against the claim's token. No decision write may replace it — DecideReviewItem
-// refuses, and so does the generic SetReviewItemDecision — because a reject or a
-// "separate" landing over a live claim un-claims the item while its apply is still
-// running, and the next approve then claims it again and applies a second time.
-// Every method here runs under reviewMu, the mutex every other review writer takes,
-// and moves the status-index row in the same synced batch as the record.
+// against the claim's token — or, for a claim no running process holds, an
+// operator's AbandonReviewItemClaim (applying → needs_attention). No decision write
+// may replace it — DecideReviewItem refuses, and the store has no other status
+// writer — because a reject or a "separate" landing over a live claim un-claims the
+// item while its apply is still running, and the next approve then claims it again
+// and applies a second time. Every method here runs under reviewMu, the mutex every
+// other review writer takes, and moves the status-index row in the same synced batch
+// as the record.
 //
 // 🔴 LIVENESS IS THE CLAIMING PROCESS, NOT A CLOCK. A claim records the instance id
 // of the store handle that took it (reviewClaimInstance: random, made on first use,
@@ -51,8 +53,9 @@ type ReviewItemApplyClaimer interface {
 	//   - the record's UpdatedAt differs from ifUpdatedAt (when non-zero): the item
 	//     changed after the caller read it, so the action the caller resolved from
 	//     that read may no longer be what the item means.
-	// Pending, approved and rejected items are claimable; so is an applying item
-	// whose claim a previous process left, for the same action (Claim.TookOver).
+	// Pending, approved, rejected and needs_attention items are claimable; so is an
+	// applying item whose claim no running process holds, for the same action
+	// (Claim.TookOver). A takeover's claim is marked ApplyClaimRerun.
 	ClaimReviewItemForApply(id, action string, ifUpdatedAt time.Time) (*ReviewApplyClaim, error)
 
 	// FinishReviewItemApply moves the claimed item to applied and records the
@@ -61,10 +64,24 @@ type ReviewItemApplyClaimer interface {
 	// (nil, nil) when the item does not exist.
 	FinishReviewItemApply(id, token string) (*ReviewItem, error)
 
-	// ReleaseReviewItemClaim puts a claimed item back to the status it was claimed
-	// from. It reports false, and changes nothing, when token does not hold the
-	// claim. Used when the apply handler failed.
-	ReleaseReviewItemClaim(id, token string) (bool, error)
+	// ReleaseReviewItemClaim ends a claim whose apply failed. A first-run claim
+	// puts the item back to the status it was claimed from. A RE-RUN claim (one that
+	// took over an interrupted apply) does not: the first run may already have
+	// changed the library, so the item stays applying with the claim marked as held
+	// by no process — it keeps answering "interrupted" until an approve finishes it
+	// or an operator abandons it. Returns the item as left, or (nil, nil) when the
+	// item is missing or token does not hold the claim (nothing is changed).
+	ReleaseReviewItemClaim(id, token string) (*ReviewItem, error)
+
+	// AbandonReviewItemClaim is the operator's way out of an interrupted apply that
+	// cannot or should not be re-run (its re-run keeps failing, or its action has no
+	// apply handler any more). It moves an applying item whose claim no running
+	// process holds to needs_attention, recording the abandoned action in
+	// ApplyAbandonedAction, and clears the claim. It refuses with a
+	// *ReviewClaimConflictError a live claim (ReviewClaimInProgress), an applied item
+	// (ReviewClaimApplied) and any item not under a claim (ReviewClaimNotClaimed).
+	// Returns (nil, nil) when the item does not exist.
+	AbandonReviewItemClaim(id string) (*ReviewItem, error)
 
 	// DecideReviewItem records a human decision (status plus, when non-empty, the
 	// chosen action) on an item no apply has claimed or finished. It refuses with a
@@ -72,8 +89,15 @@ type ReviewItemApplyClaimer interface {
 	// claim or a dead one, because a dead claim's apply may already have changed the
 	// library, and only re-running it (an approve, which takes the claim over) leaves
 	// a record that matches what happened. status may not be applying or applied;
-	// those belong to the claim. Returns (nil, nil) when the item does not exist.
-	DecideReviewItem(id, status, chosenAction string) (*ReviewItem, error)
+	// those belong to the claim. A non-zero ifUpdatedAt makes it a compare-and-set
+	// like the claim's (ReviewClaimChanged). Returns (nil, nil) when the item does not
+	// exist.
+	//
+	// The write is narrow: the record is re-read under the lock and only Status,
+	// UpdatedAt and (when non-empty) ChosenAction change, so a caller holding a stale
+	// copy cannot roll Payload or Summary back, and an empty chosenAction never
+	// clears a recorded decision.
+	DecideReviewItem(id, status, chosenAction string, ifUpdatedAt time.Time) (*ReviewItem, error)
 }
 
 var _ ReviewItemApplyClaimer = (*PebbleStore)(nil)
@@ -106,6 +130,8 @@ const (
 	ReviewClaimChanged ReviewClaimConflictReason = "changed"
 	// ReviewClaimNotHeld: a finish named a token that does not hold the claim.
 	ReviewClaimNotHeld ReviewClaimConflictReason = "not_held"
+	// ReviewClaimNotClaimed: an abandon named an item that is under no claim.
+	ReviewClaimNotClaimed ReviewClaimConflictReason = "not_claimed"
 )
 
 // ReviewClaimConflictError says why a claim, finish or decision was refused.
@@ -128,6 +154,8 @@ func (e *ReviewClaimConflictError) Error() string {
 		return fmt.Sprintf("review item %s changed after it was read", e.ID)
 	case ReviewClaimNotHeld:
 		return fmt.Sprintf("review item %s is %s and the claim is not held by this token", e.ID, e.Status)
+	case ReviewClaimNotClaimed:
+		return fmt.Sprintf("review item %s is %s, not under an apply claim", e.ID, e.Status)
 	}
 	return fmt.Sprintf("review item %s is %s", e.ID, e.Status)
 }
@@ -159,8 +187,10 @@ func (p *PebbleStore) claimConflictLocked(item *ReviewItem) (*ReviewClaimConflic
 		if err != nil {
 			return nil, err
 		}
+		// A blank instance is a claim a failed re-run left (ReleaseReviewItemClaim):
+		// held by no process. self is never blank.
 		reason := ReviewClaimInterrupted
-		if item.ApplyClaimInstance == self {
+		if item.ApplyClaimInstance != "" && item.ApplyClaimInstance == self {
 			reason = ReviewClaimInProgress
 		}
 		return &ReviewClaimConflictError{ID: item.ID, Status: item.Status, Reason: reason, ClaimAction: item.ApplyClaimAction}, nil
@@ -186,9 +216,10 @@ func (p *PebbleStore) ClaimReviewItemForApply(id, action string, ifUpdatedAt tim
 	from := item.Status
 	tookOver := false
 	switch from {
-	case ReviewStatusPending, ReviewStatusApproved, ReviewStatusRejected:
+	case ReviewStatusPending, ReviewStatusApproved, ReviewStatusRejected, ReviewStatusNeedsAttention:
 	// Rejected stays claimable: approving a rejected item has always been allowed
-	// (a reviewer changing their mind), and the claim must not change that.
+	// (a reviewer changing their mind), and the claim must not change that. So does
+	// needs_attention: an operator who has inspected the library may apply it.
 	case ReviewStatusApplying:
 		conflict, cerr := p.claimConflictLocked(item)
 		if cerr != nil {
@@ -232,6 +263,7 @@ func (p *PebbleStore) ClaimReviewItemForApply(id, action string, ifUpdatedAt tim
 	item.ApplyClaimAction = action
 	item.ApplyClaimToken = token
 	item.ApplyClaimInstance = self
+	item.ApplyClaimRerun = tookOver
 	if err := p.commitReviewItemLocked(item, oldStatus); err != nil {
 		return nil, err
 	}
@@ -253,6 +285,7 @@ func (p *PebbleStore) FinishReviewItemApply(id, token string) (*ReviewItem, erro
 		item.ChosenAction = item.ApplyClaimAction
 	}
 	item.Status = ReviewStatusApplied
+	item.ApplyAbandonedAction = ""
 	clearReviewClaim(item)
 	if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
 		return nil, err
@@ -260,16 +293,26 @@ func (p *PebbleStore) FinishReviewItemApply(id, token string) (*ReviewItem, erro
 	return item, nil
 }
 
-func (p *PebbleStore) ReleaseReviewItemClaim(id, token string) (bool, error) {
+func (p *PebbleStore) ReleaseReviewItemClaim(id, token string) (*ReviewItem, error) {
 	p.reviewMu.Lock()
 	defer p.reviewMu.Unlock()
 
 	item, err := p.getReviewItem(id)
 	if err != nil || item == nil {
-		return false, err
+		return nil, err
 	}
 	if item.Status != ReviewStatusApplying || token == "" || item.ApplyClaimToken != token {
-		return false, nil
+		return nil, nil
+	}
+	if item.ApplyClaimRerun {
+		// The re-run failed over a library the interrupted first run may have
+		// changed. Keep the claim, held by no process: still "interrupted".
+		item.ApplyClaimToken = ""
+		item.ApplyClaimInstance = ""
+		if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
+			return nil, err
+		}
+		return item, nil
 	}
 	back := item.ApplyClaimedFrom
 	if back == "" {
@@ -278,12 +321,39 @@ func (p *PebbleStore) ReleaseReviewItemClaim(id, token string) (bool, error) {
 	item.Status = back
 	clearReviewClaim(item)
 	if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	return item, nil
 }
 
-func (p *PebbleStore) DecideReviewItem(id, status, chosenAction string) (*ReviewItem, error) {
+func (p *PebbleStore) AbandonReviewItemClaim(id string) (*ReviewItem, error) {
+	p.reviewMu.Lock()
+	defer p.reviewMu.Unlock()
+
+	item, err := p.getReviewItem(id)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	conflict, err := p.claimConflictLocked(item)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case conflict == nil:
+		return nil, &ReviewClaimConflictError{ID: id, Status: item.Status, Reason: ReviewClaimNotClaimed}
+	case conflict.Reason != ReviewClaimInterrupted:
+		return nil, conflict
+	}
+	item.ApplyAbandonedAction = item.ApplyClaimAction
+	item.Status = ReviewStatusNeedsAttention
+	clearReviewClaim(item)
+	if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (p *PebbleStore) DecideReviewItem(id, status, chosenAction string, ifUpdatedAt time.Time) (*ReviewItem, error) {
 	switch status {
 	case "":
 		return nil, fmt.Errorf("review item: status is required")
@@ -304,8 +374,14 @@ func (p *PebbleStore) DecideReviewItem(id, status, chosenAction string) (*Review
 	if conflict != nil {
 		return nil, conflict
 	}
+	if !ifUpdatedAt.IsZero() && !item.UpdatedAt.Equal(ifUpdatedAt) {
+		return nil, &ReviewClaimConflictError{ID: id, Status: item.Status, Reason: ReviewClaimChanged}
+	}
 	oldStatus := item.Status
 	item.Status = status
+	// A decision on a needs_attention item is the operator's answer to the
+	// abandoned apply; the note has done its job.
+	item.ApplyAbandonedAction = ""
 	if chosenAction != "" {
 		item.ChosenAction = chosenAction
 	}
@@ -322,6 +398,7 @@ func clearReviewClaim(item *ReviewItem) {
 	item.ApplyClaimAction = ""
 	item.ApplyClaimToken = ""
 	item.ApplyClaimInstance = ""
+	item.ApplyClaimRerun = false
 }
 
 // commitReviewItemLocked writes item (stamping UpdatedAt) and moves its status-index

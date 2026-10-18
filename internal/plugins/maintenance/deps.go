@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.93.2
+// version: 1.94.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-18
 
@@ -318,7 +318,6 @@ type opsRecordsAndQueue interface {
 	database.MetadataFieldStateReader
 
 	CreateOperationChange(change *database.OperationChange) error
-	DeleteReviewItem(id string) error
 	ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
 	ListUserPlaylists(playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error)
 	Optimize(ctx context.Context) error

@@ -1,7 +1,7 @@
 // file: internal/database/review_store_index_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5c1e9a27-7d43-4b8f-a6e2-3f9d0b7c8e15
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 
 package database
 
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -76,12 +77,12 @@ func assertStatusIndexConsistent(t *testing.T, s *PebbleStore) {
 // 🔴 CONCURRENT DECISIONS MUST LEAVE THE STATUS INDEX EXACT.
 //
 // N goroutines each decide EVERY item, each with its own status, in the same
-// order at the same time. Without reviewMu in SetReviewItemDecision two of them
+// order at the same time. Without reviewMu in DecideReviewItem two of them
 // read the item as pending, both delete the pending row, and each writes its own
 // status row — the record ends up with the last writer's status while the index
 // lists the item under two. Verified by removing the lock: this test then fails
 // with "indexed under 2 statuses".
-func TestSetReviewItemDecision_ConcurrentDecisionsKeepStatusIndexExact(t *testing.T) {
+func TestDecideReviewItem_ConcurrentDecisionsKeepStatusIndexExact(t *testing.T) {
 	s := newReviewTestStore(t)
 
 	const items = 24
@@ -97,7 +98,7 @@ func TestSetReviewItemDecision_ConcurrentDecisionsKeepStatusIndexExact(t *testin
 	// Distinct statuses per goroutine so a double-index is visible as two
 	// DIFFERENT rows; the same status from both writers would collide on one key
 	// and hide the race.
-	statuses := []string{ReviewStatusApproved, ReviewStatusRejected, ReviewStatusApplied, "on-hold", "escalated"}
+	statuses := []string{ReviewStatusApproved, ReviewStatusRejected, ReviewStatusNeedsAttention, "on-hold", "escalated"}
 	const rounds = 5
 	for round := range rounds {
 		var start, done sync.WaitGroup
@@ -108,14 +109,14 @@ func TestSetReviewItemDecision_ConcurrentDecisionsKeepStatusIndexExact(t *testin
 				defer done.Done()
 				start.Wait()
 				for _, id := range ids {
-					if _, err := s.SetReviewItemDecision(id, status, ""); err != nil {
+					if _, err := s.DecideReviewItem(id, status, "", time.Time{}); err != nil {
 						t.Errorf("round %d worker %d: decide %s: %v", round, w, id, err)
 					}
 				}
 			}(w, status)
 		}
 		start.Done()
-		waitGroupOrFatal(t, &done, "concurrent SetReviewItemDecision workers")
+		waitGroupOrFatal(t, &done, "concurrent DecideReviewItem workers")
 		assertStatusIndexConsistent(t, s)
 		if t.Failed() {
 			t.FailNow()
@@ -123,7 +124,7 @@ func TestSetReviewItemDecision_ConcurrentDecisionsKeepStatusIndexExact(t *testin
 		// Reset to pending through the same writer so the next round races
 		// from the same starting state.
 		for _, id := range ids {
-			if _, err := s.SetReviewItemDecision(id, ReviewStatusPending, ""); err != nil {
+			if _, err := s.DecideReviewItem(id, ReviewStatusPending, "", time.Time{}); err != nil {
 				t.Fatalf("reset %s: %v", id, err)
 			}
 		}

@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.151.0
+// version: 1.152.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-18
 
@@ -355,9 +355,6 @@ type MockStore struct {
 	ListReviewItemsFunc               func(filter ReviewFilter) ([]ReviewItem, int, error)
 	CountReviewItemsFunc              func(status string) (int, error)
 	ReviewStatsByKindFunc             func() ([]ReviewKindStat, error)
-	SetReviewItemStatusFunc           func(id, status string) (*ReviewItem, error)
-	SetReviewItemDecisionFunc         func(id, status, chosenAction string) (*ReviewItem, error)
-	DeleteReviewItemFunc              func(id string) error
 
 	// User Preferences
 	GetUserPreferenceFunc     func(key string) (*UserPreference, error)
@@ -4102,22 +4099,4 @@ func (m *MockStore) ReviewStatsByKind() ([]ReviewKindStat, error) {
 		return m.ReviewStatsByKindFunc()
 	}
 	return nil, nil
-}
-func (m *MockStore) SetReviewItemStatus(id, status string) (*ReviewItem, error) {
-	if m.SetReviewItemStatusFunc != nil {
-		return m.SetReviewItemStatusFunc(id, status)
-	}
-	return nil, nil
-}
-func (m *MockStore) SetReviewItemDecision(id, status, chosenAction string) (*ReviewItem, error) {
-	if m.SetReviewItemDecisionFunc != nil {
-		return m.SetReviewItemDecisionFunc(id, status, chosenAction)
-	}
-	return nil, nil
-}
-func (m *MockStore) DeleteReviewItem(id string) error {
-	if m.DeleteReviewItemFunc != nil {
-		return m.DeleteReviewItemFunc(id)
-	}
-	return nil
 }

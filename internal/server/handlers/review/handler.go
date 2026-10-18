@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -341,13 +341,16 @@ func (e *appliedUnrecordedError) Unwrap() error { return e.err }
 
 // GetReviewCount handles GET /api/v1/review/count.
 //
-// Response: { "count": N, "by_kind": { "<kind>": n, ... }, "applying": M }. count and
+// Response: { "count": N, "by_kind": { "<kind>": n, ... }, "applying": M,
+// "needs_attention": K }. count and
 // the by_kind breakdown cover PENDING items only (decision #1: the badge counts
 // intentional holds awaiting a decision, never decided items). applying counts items
 // held by an apply claim: running now, applied but not yet recorded, or interrupted
 // by a restart. It is separate so the badge keeps its meaning, and it exists so an
 // item stuck mid-apply is visible somewhere — it is in no pending list. List them
-// with GET /review/items?status=applying.
+// with GET /review/items?status=applying. needs_attention counts items whose
+// interrupted apply an operator abandoned (AbandonApply); they too are in no pending
+// list (GET /review/items?status=needs_attention).
 func (h *Handler) GetReviewCount(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
@@ -374,7 +377,12 @@ func (h *Handler) GetReviewCount(c *gin.Context) {
 		httputil.InternalError(c, "failed to count applying review items", err)
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"count": count, "by_kind": byKind, "applying": applying})
+	needsAttention, err := h.store.CountReviewItems(database.ReviewStatusNeedsAttention)
+	if err != nil {
+		httputil.InternalError(c, "failed to count needs-attention review items", err)
+		return
+	}
+	httputil.RespondWithOK(c, gin.H{"count": count, "by_kind": byKind, "applying": applying, "needs_attention": needsAttention})
 }
 
 // ListReviewItems handles GET /api/v1/review/items.
@@ -417,10 +425,11 @@ func (h *Handler) ListReviewItems(c *gin.Context) {
 		httputil.InternalError(c, "failed to list review items", err)
 		return
 	}
-	if items == nil {
-		items = []database.ReviewItem{}
+	out := make([]database.ReviewItem, len(items))
+	for i := range items {
+		out[i] = *publicItem(&items[i])
 	}
-	httputil.RespondWithList(c, items, total, filter.Limit, filter.Offset)
+	httputil.RespondWithList(c, out, total, filter.Limit, filter.Offset)
 }
 
 // approveRequest is the OPTIONAL POST /api/v1/review/items/:id/approve body.
@@ -428,8 +437,43 @@ func (h *Handler) ListReviewItems(c *gin.Context) {
 // Absent or empty Action means "do what the hold recommends". A present Action
 // OVERRIDES the recommendation — that is the entire point of owner item 2: the
 // machine proposes, the human disposes, and the human's choice is what runs.
+//
+// IfUpdatedAt is the item's updated_at as the caller last read it. When present the
+// approve is refused with 409 REVIEW_ITEM_CHANGED unless the item is still exactly
+// that record, so a re-scan or another reviewer's decision that landed after the page
+// was rendered cannot be approved blind (see ifUpdatedAtOf).
 type approveRequest struct {
-	Action string `json:"action,omitempty"`
+	Action      string     `json:"action,omitempty"`
+	IfUpdatedAt *time.Time `json:"if_updated_at,omitempty"`
+}
+
+// rejectRequest is the OPTIONAL POST /api/v1/review/items/:id/reject body; see
+// approveRequest.IfUpdatedAt.
+type rejectRequest struct {
+	IfUpdatedAt *time.Time `json:"if_updated_at,omitempty"`
+}
+
+// ifUpdatedAtOf turns an optional if_updated_at into the store's compare-and-set
+// argument, where the zero time means "no check".
+func ifUpdatedAtOf(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
+// publicItem is item as the API returns it: without the claim token and instance id.
+// The token is the one secret that can finish or release a claim and the instance id
+// is the process's identity; neither is any client's business, and nothing accepts
+// them. Returns a copy; nil stays nil.
+func publicItem(item *database.ReviewItem) *database.ReviewItem {
+	if item == nil {
+		return nil
+	}
+	out := *item
+	out.ApplyClaimToken = ""
+	out.ApplyClaimInstance = ""
+	return &out
 }
 
 // ApproveReviewItem handles POST /api/v1/review/items/:id/approve.
@@ -459,7 +503,8 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 	}
 
 	id := c.Param("id")
-	updated, chosen, note, err := h.approveOne(c.Request.Context(), id, strings.TrimSpace(req.Action), h.applyGloballyEnabled())
+	updated, chosen, note, err := h.approveOne(c.Request.Context(), id, strings.TrimSpace(req.Action),
+		ifUpdatedAtOf(req.IfUpdatedAt), h.applyGloballyEnabled())
 	if rej, ok := errors.AsType[*actionRejection](err); ok {
 		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
 		return
@@ -478,7 +523,7 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 	}
 	// chosen_action is echoed so the caller can see WHICH action ran — with an empty
 	// body that is the recommendation, which the caller may not have read.
-	resp := gin.H{"item": updated, "chosen_action": chosen}
+	resp := gin.H{"item": publicItem(updated), "chosen_action": chosen}
 	if note != "" {
 		resp["note"] = note
 	}
@@ -492,7 +537,9 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 // The returned action is the one actually dispatched. A returned *actionRejection
 // means the caller asked for something that must not happen; any other error is a
 // genuine fault. applyOn is the apply switch as read ONCE by the caller, so a bulk
-// batch and its per-item results can never disagree about it.
+// batch and its per-item results can never disagree about it. ifUpdatedAt is the
+// caller's if_updated_at (zero = none): a read that differs from it is refused with
+// REVIEW_ITEM_CHANGED before anything is resolved from it.
 //
 // Every write goes through h.claimer, and the STORE decides what an item's state
 // allows (database.ReviewItemApplyClaimer): an applied item, or one under an apply
@@ -501,7 +548,8 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 // does not pre-judge the status it read, because that read is already stale by the
 // time a write lands — pre-refusing "applying" here is what once made a crashed
 // claim impossible to recover.
-func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn bool) (*database.ReviewItem, string, string, error) {
+func (h *Handler) approveOne(ctx context.Context, id, requested string, ifUpdatedAt time.Time, applyOn bool) (
+	*database.ReviewItem, string, string, error) {
 	if h.claimer == nil {
 		return nil, "", "", errNoClaimer
 	}
@@ -518,6 +566,9 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	// to insufficient-evidence, and must answer "already applied", not "choose an
 	// action" (which bulk would list as still pending).
 	if item.Status == database.ReviewStatusApplied {
+		// A token still kept for it is stale (another request recorded the result);
+		// drop it so a reject stops answering "not recorded yet".
+		h.setUnrecorded(id, "")
 		return nil, effectiveActionFor(*item), "", conflictRejection(
 			&database.ReviewClaimConflictError{ID: id, Status: item.Status, Reason: database.ReviewClaimApplied})
 	}
@@ -528,6 +579,15 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 		if token, ok := h.unrecordedToken(id); ok {
 			return h.finishUnrecorded(id, token, item.ApplyClaimAction)
 		}
+	}
+	// The caller's view of the item, checked against this read. Everything below
+	// resolves the action from this read and every write is a compare-and-set on it
+	// (item.UpdatedAt), so passing this check extends that guarantee back to what the
+	// reviewer saw. Checked after the two cases above because neither depends on the
+	// caller's view: an applied item is applied, and an unrecorded apply already ran.
+	if !ifUpdatedAt.IsZero() && !item.UpdatedAt.Equal(ifUpdatedAt) {
+		return nil, currentActionFor(*item), "", conflictRejection(
+			&database.ReviewClaimConflictError{ID: id, Status: item.Status, Reason: database.ReviewClaimChanged})
 	}
 
 	// The default is the hold's EFFECTIVE action, not the raw payload recommendation:
@@ -581,7 +641,7 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	//
 	// This is what makes an override durable, and it is the reason the 409
 	// REVIEW_OVERRIDE_NOT_PERSISTABLE refusal that used to sit here is gone. Before
-	// SetReviewItemDecision existed the chosen action was stored NOWHERE, so with
+	// the decision write recorded it (now DecideReviewItem) the chosen action was stored NOWHERE, so with
 	// review_apply_enabled off — production's setting — a reviewer could not record a
 	// disagreement at all: approving a `combine` hold as `separate` wrote plain
 	// "approved", and the later apply re-resolved the action from the payload and
@@ -599,7 +659,7 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	// whole mechanism: a re-scan skips a non-pending hold. Recording the action still
 	// matters: it is what stops a later re-approve from falling back to a `combine` payload.
 	if chosen == itunesservice.ActionSeparate {
-		updated, serr := h.claimer.DecideReviewItem(id, database.ReviewStatusApproved, chosen)
+		updated, serr := h.claimer.DecideReviewItem(id, database.ReviewStatusApproved, chosen, item.UpdatedAt)
 		if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](serr); ok {
 			return nil, chosen, "", conflictRejection(conflict)
 		}
@@ -618,7 +678,7 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	// (review-only mode). Record the decision as "approved" but do NOT execute — the
 	// item stays visible/reviewable and nothing is merged. The action is recorded even
 	// though nothing ran, which is precisely the case a later re-approve reads back.
-	updated, err := h.claimer.DecideReviewItem(id, database.ReviewStatusApproved, chosen)
+	updated, err := h.claimer.DecideReviewItem(id, database.ReviewStatusApproved, chosen, item.UpdatedAt)
 	if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
 		return nil, chosen, "", conflictRejection(conflict)
 	}
@@ -650,14 +710,23 @@ var finishBackoff = []time.Duration{0, 50 * time.Millisecond, 250 * time.Millise
 
 // applyUnderClaim claims item for chosen, runs fn on the claimed record, and records
 // the outcome. The claim is a compare-and-set on the record approveOne read
-// (item.UpdatedAt), so the action resolved from that read is still what the item
-// means when fn runs: a re-scan refreshing the payload, or a decision landing in
-// between, refuses the claim with 409 REVIEW_ITEM_CHANGED instead of applying a stale
-// reading.
+// (item.UpdatedAt): a re-scan refreshing the payload, or a decision, landing between
+// that read and the claim refuses it with 409 REVIEW_ITEM_CHANGED instead of applying
+// an action resolved from a stale read. That read is the HANDLER's, made when the
+// request arrived. It is the record the reviewer saw only when the request carried
+// if_updated_at, which approveOne has already checked against it; a request without
+// one is protected from changes after it arrived, not from changes after the page it
+// came from was rendered.
 //
 // Every exit leaves the claim finished or released, except appliedUnrecordedError,
 // which keeps it on purpose. A panicking fn releases it too: a claim from this process
 // is never taken over, so a leaked one would hold the item until a restart.
+//
+// A release of a RE-RUN (claim.TookOver) does not hand the item back: the store keeps
+// it applying, held by no process (ReleaseReviewItemClaim), because the interrupted
+// first run may already have changed the library. It keeps answering
+// REVIEW_APPLY_INTERRUPTED until a later approve finishes it or an operator abandons
+// it (AbandonApply).
 func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem, chosen string, fn ApplyFunc) (
 	*database.ReviewItem, string, string, error) {
 	id := item.ID
@@ -689,16 +758,30 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 	if applyErr != nil {
 		settled = true
 		reason := applyErr
-		// Nothing was applied: hand the claim back so the item is retryable.
-		if relErr := h.releaseClaim(id, claim.Token); relErr != nil {
+		// A first run failed before changing anything it could not retry: hand the
+		// claim back so the item is decidable again. A re-run's release keeps the item
+		// held as interrupted (see the doc above), and the reason says so.
+		relErr := h.releaseClaim(id, claim.Token)
+		if relErr != nil {
 			reason = fmt.Errorf("%w; and its apply claim could not be released, so the item stays "+
 				"\"applying\" until the server restarts: %v", applyErr, relErr)
+		} else if claim.TookOver {
+			reason = fmt.Errorf("re-running the interrupted %q apply failed: %w; the item stays held as "+
+				"interrupted because the first run may already have changed the library. Approve it again to "+
+				"retry, or abandon the apply (POST /api/v1/review/items/%s/abandon-apply) to move it to "+
+				"needs_attention for someone to check the library", chosen, applyErr, id)
 		}
 		// A refusal because a member has a file under the active iTunes library is
 		// 409, not a 500: the item keeps its status and bulk approve skips it
 		// instead of aborting.
 		if errors.Is(applyErr, merge.ErrITunesProtected) {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
+		}
+		// A failed re-run is a 409 with its own code, not a 500: the item is still held
+		// as interrupted, which the caller has to act on (retry or abandon), and a 500's
+		// body would hide the reason.
+		if relErr == nil && claim.TookOver {
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_RERUN_FAILED", reason.Error())
 		}
 		return nil, "", "", reason
 	}
@@ -735,16 +818,17 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 	return updated, chosen, note, nil
 }
 
-// releaseClaim hands a claim back after its apply failed, logging a failure. A false
-// release (the token no longer holds the claim) is logged too: nothing else should be
-// able to take a live claim, so it means something is wrong.
+// releaseClaim ends a claim whose apply failed (the store decides whether the item
+// goes back or, for a re-run, stays held as interrupted), logging a failure. A
+// release that found the claim no longer held by token is logged too: nothing else
+// should be able to take a live claim, so it means something is wrong.
 func (h *Handler) releaseClaim(id, token string) error {
-	released, err := h.claimer.ReleaseReviewItemClaim(id, token)
+	left, err := h.claimer.ReleaseReviewItemClaim(id, token)
 	if err != nil {
 		reviewLog.Error("review item %s: release apply claim: %v", id, err)
 		return err
 	}
-	if !released {
+	if left == nil {
 		reviewLog.Warn("review item %s: release apply claim: the claim was no longer held by this apply", id)
 	}
 	return nil
@@ -752,14 +836,24 @@ func (h *Handler) releaseClaim(id, token string) error {
 
 // finishUnrecorded records an apply that already succeeded in this process but whose
 // "applied" write failed earlier (see appliedUnrecordedError). It never runs the apply.
+//
+// Two requests can both find the token and race to finish. The loser's finish is
+// refused because the winner's already moved the item to applied; that is success
+// recorded by someone else, so the loser answers REVIEW_ALREADY_APPLIED (and drops the
+// token) rather than "applied but not recorded", which would send the reviewer to
+// approve again for nothing.
 func (h *Handler) finishUnrecorded(id, token, action string) (*database.ReviewItem, string, string, error) {
 	updated, err := h.claimer.FinishReviewItemApply(id, token)
 	if err != nil || updated == nil {
 		if err == nil {
 			err = errors.New("the item disappeared before its result was recorded")
 		}
-		if _, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+		if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
 			h.setUnrecorded(id, "") // the claim is gone; the token can never finish it
+			if conflict.Status == database.ReviewStatusApplied {
+				return nil, action, "", conflictRejection(
+					&database.ReviewClaimConflictError{ID: id, Status: conflict.Status, Reason: database.ReviewClaimApplied})
+			}
 		}
 		return nil, action, "", &appliedUnrecordedError{err: err}
 	}
@@ -777,27 +871,39 @@ func currentActionFor(item database.ReviewItem) string {
 	return effectiveActionFor(item)
 }
 
-// conflictRejection turns a store refusal into the 409 a caller acts on.
+// conflictRejection turns a store refusal into the 409 a caller acts on. Every reason
+// the store defines has its own code; anything else (a reason added to the store and
+// not here, or none) is REVIEW_CONFLICT rather than a guess, because telling a caller
+// "an apply is in progress" about an item that has none sends them to wait for
+// nothing.
 func conflictRejection(c *database.ReviewClaimConflictError) *actionRejection {
 	switch c.Reason {
 	case database.ReviewClaimApplied:
 		return rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED", "already applied")
+	case database.ReviewClaimInProgress:
+		return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
 	case database.ReviewClaimInterrupted:
 		return rejectf(http.StatusConflict, "REVIEW_APPLY_INTERRUPTED",
-			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted by a server restart; with apply enabled, approve it again as "+
-				strconv.Quote(c.ClaimAction)+" to finish it (the apply runs again and skips work already done). "+
-				"No other decision can be recorded until then, because the interrupted apply may already have changed the library")
+			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted (by a server restart, or its re-run failed) and "+
+				"may already have changed part of the library, so no other decision can be recorded over it. "+
+				"With apply enabled, approve it again as "+strconv.Quote(c.ClaimAction)+" to re-run it; the re-run skips work "+
+				"already done but does not redo an incomplete multidisc renumbering, and a duplicate-of re-run can fail after "+
+				"a partial merge. If it cannot be finished (or its action has no apply handler), abandon it with "+
+				"POST /api/v1/review/items/"+c.ID+"/abandon-apply: the item moves to needs_attention for someone to check the library")
 	case database.ReviewClaimChanged:
 		return rejectf(http.StatusConflict, "REVIEW_ITEM_CHANGED",
-			"the item changed while it was being approved; reload it and approve again")
+			"the item changed since it was read; reload it and decide again")
+	case database.ReviewClaimNotClaimed:
+		return rejectf(http.StatusConflict, "REVIEW_APPLY_NOT_INTERRUPTED",
+			"the item is "+c.Status+", not held by an interrupted apply; there is nothing to abandon")
 	}
-	return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
+	return rejectf(http.StatusConflict, "REVIEW_CONFLICT", "review item "+c.ID+" is "+c.Status+"; the store refused the write")
 }
 
 // rejectOne rejects one item through the store's claim-aware decision write, which
 // refuses an applied item or one under an apply claim. Returns (nil, nil) when the
 // item does not exist.
-func (h *Handler) rejectOne(id string) (*database.ReviewItem, error) {
+func (h *Handler) rejectOne(id string, ifUpdatedAt time.Time) (*database.ReviewItem, error) {
 	if h.claimer == nil {
 		return nil, errNoClaimer
 	}
@@ -805,7 +911,7 @@ func (h *Handler) rejectOne(id string) (*database.ReviewItem, error) {
 		return nil, rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED",
 			"already applied (its result is not recorded yet; approve it again to record it)")
 	}
-	updated, err := h.claimer.DecideReviewItem(id, database.ReviewStatusRejected, "")
+	updated, err := h.claimer.DecideReviewItem(id, database.ReviewStatusRejected, "", ifUpdatedAt)
 	if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
 		return nil, conflictRejection(conflict)
 	}
@@ -821,8 +927,13 @@ func (h *Handler) RejectReviewItem(c *gin.Context) {
 	if h.refuseWithoutClaimer(c) {
 		return
 	}
+	var req rejectRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 	id := c.Param("id")
-	updated, err := h.rejectOne(id)
+	updated, err := h.rejectOne(id, ifUpdatedAtOf(req.IfUpdatedAt))
 	if rej, ok := errors.AsType[*actionRejection](err); ok {
 		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
 		return
@@ -835,7 +946,56 @@ func (h *Handler) RejectReviewItem(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "review item", id)
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"item": updated})
+	httputil.RespondWithOK(c, gin.H{"item": publicItem(updated)})
+}
+
+// AbandonApply handles POST /api/v1/review/items/:id/abandon-apply.
+//
+// It is the way out of an interrupted apply that cannot or should not be re-run: its
+// re-run keeps failing, or its action has no apply handler any more. The item moves
+// from applying to needs_attention (database.AbandonReviewItemClaim) with the
+// abandoned action recorded in apply_abandoned_action; nothing in the library is
+// touched or undone, so someone has to check what the first run changed and then
+// decide the item (approve or reject work on needs_attention items). Refused with 409
+// for a claim a running apply holds (REVIEW_APPLY_IN_PROGRESS), an applied item
+// (REVIEW_ALREADY_APPLIED, including one whose result is waiting to be recorded) and
+// an item under no claim (REVIEW_APPLY_NOT_INTERRUPTED).
+func (h *Handler) AbandonApply(c *gin.Context) {
+	if h.store == nil {
+		httputil.RespondWithServiceUnavailable(c, "review store not available")
+		return
+	}
+	if h.refuseWithoutClaimer(c) {
+		return
+	}
+	id := c.Param("id")
+	// An apply that succeeded in this process and is waiting to be recorded holds a
+	// live claim, which the store refuses as in progress; say what it really is.
+	if _, ok := h.unrecordedToken(id); ok {
+		httputil.RespondWithError(c, http.StatusConflict,
+			"already applied (its result is not recorded yet; approve it again to record it)", "REVIEW_ALREADY_APPLIED")
+		return
+	}
+	updated, err := h.claimer.AbandonReviewItemClaim(id)
+	if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](err); ok {
+		rej := conflictRejection(conflict)
+		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
+		return
+	}
+	if err != nil {
+		httputil.InternalError(c, "failed to abandon the interrupted apply", err)
+		return
+	}
+	if updated == nil {
+		httputil.RespondWithNotFound(c, "review item", id)
+		return
+	}
+	reviewLog.Warn("review item %s: interrupted %q apply abandoned; moved to needs_attention", id, updated.ApplyAbandonedAction)
+	httputil.RespondWithOK(c, gin.H{
+		"item": publicItem(updated),
+		"note": "the interrupted " + strconv.Quote(updated.ApplyAbandonedAction) + " apply was abandoned, not undone: " +
+			"check what it changed in the library, then approve or reject the item",
+	})
 }
 
 // bulkRequest is the POST /api/v1/review/bulk body (decision #4: grouped bulk
@@ -848,10 +1008,17 @@ func (h *Handler) RejectReviewItem(c *gin.Context) {
 // over `regroup.multidisc` would merge the 3 series near-misses that motivated it.
 // Bulk approve instead uses EACH item's own recommendation, so it processes the 121
 // all-fragment holds and skips those 3 — the payoff, not a limitation.
+//
+// IfUpdatedAt maps an id in IDs to the updated_at the caller last read for it; each
+// listed item is refused (skipped with REVIEW_ITEM_CHANGED) unless it is still that
+// record, exactly as a single approve or reject with if_updated_at. Ids it does not
+// list are unchecked. It is refused with a kind-scoped request, whose targets the
+// caller never saw.
 type bulkRequest struct {
-	Action string   `json:"action"` // "approve" | "reject"
-	Kind   string   `json:"kind,omitempty"`
-	IDs    []string `json:"ids,omitempty"`
+	Action      string               `json:"action"` // "approve" | "reject"
+	Kind        string               `json:"kind,omitempty"`
+	IDs         []string             `json:"ids,omitempty"`
+	IfUpdatedAt map[string]time.Time `json:"if_updated_at,omitempty"`
 }
 
 // bulkSkip is one item a bulk approve refused to act on, with the reason a reviewer
@@ -930,6 +1097,10 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "bulk action requires 'kind' or 'ids' — refusing to act on the entire queue")
 		return
 	}
+	if len(req.IfUpdatedAt) > 0 && len(req.IDs) == 0 {
+		httputil.RespondWithBadRequest(c, "'if_updated_at' applies to 'ids'; a kind-scoped bulk action has no ids to check")
+		return
+	}
 
 	ids := req.IDs
 	if len(ids) == 0 {
@@ -970,7 +1141,7 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		case "approve":
 			// "" = use this item's OWN recommendation. See bulkRequest's comment for
 			// why there is no batch-wide action.
-			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "", applyOn)
+			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "", req.IfUpdatedAt[id], applyOn)
 			// A per-item refusal (no decidable action, unimplemented action) SKIPS that
 			// item and the batch continues. Aborting the whole batch on one
 			// insufficient-evidence hold would make bulk approve useless on a queue
@@ -998,7 +1169,7 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 			}
 			result.Processed++
 		case "reject":
-			updated, err := h.rejectOne(id)
+			updated, err := h.rejectOne(id, req.IfUpdatedAt[id])
 			if rej, ok := errors.AsType[*actionRejection](err); ok {
 				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Reason: rej.msg, Code: rej.code})
 				continue

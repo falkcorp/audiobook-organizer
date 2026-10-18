@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.223.0
+// version: 1.224.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-18
 
@@ -200,7 +200,7 @@ type PebbleStore struct {
 	memPending               memPendingBuffer
 	counterMu                sync.Mutex           // protects nextID read-modify-write
 	opsMu                    sync.Mutex           // serializes v2 op status writes, incl. the UpdateOperationV2StatusIf compare-and-set
-	reviewMu                 sync.Mutex           // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
+	reviewMu                 sync.Mutex           // serializes every review-item write (upsert, claim, decide, delete, index rebuild, Reset) — review_store.go, review_claim.go
 	reviewClaim              reviewClaimInstance  // this handle's apply-claim instance id: a claim carrying another id was left by a previous process (review_claim.go)
 	nameIdx                  nameIndexLocks       // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
 	apiKeyMu                 sync.Mutex           // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
@@ -5989,7 +5989,13 @@ func (p *PebbleStore) Reset() error {
 	// Commit with sync for durability. identMu (for write) spans the commit
 	// so no identification write can interleave with the zeroing of the
 	// counters; the generation bump makes a rebuild already running end
-	// without overwriting them (errIdentRebuildSuperseded).
+	// without overwriting them (errIdentRebuildSuperseded). reviewMu spans it
+	// too: every review write is a read-modify-write under that lock, and one
+	// that read before the wipe and committed after it would resurrect a
+	// review record (or an apply claim) into the reset store. Lock order is
+	// reviewMu then identMu; no review write takes identMu.
+	p.reviewMu.Lock()
+	defer p.reviewMu.Unlock()
 	p.ident.mu.Lock()
 	if err := batch.Commit(pebble.Sync); err != nil {
 		p.ident.mu.Unlock()

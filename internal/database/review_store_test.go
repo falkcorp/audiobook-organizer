@@ -1,12 +1,13 @@
 // file: internal/database/review_store_test.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 
 import (
 	"testing"
+	"time"
 )
 
 func newReviewTestStore(t *testing.T) *PebbleStore {
@@ -30,15 +31,15 @@ func mkReviewItem(kind, dedupKey, folder, summary, payload string) ReviewItem {
 	}
 }
 
-func TestDeleteReviewItem_RemovesRecordAndAllIndexes(t *testing.T) {
+func TestDeleteReviewItemIfPending_RemovesRecordAndAllIndexes(t *testing.T) {
 	s := newReviewTestStore(t)
 	it, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-del", "/books/a", "sum", `{}`))
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	if err := s.DeleteReviewItem(it.ID); err != nil {
-		t.Fatalf("delete: %v", err)
+	if deleted, err := s.DeleteReviewItemIfPending(it.ID); err != nil || !deleted {
+		t.Fatalf("delete: deleted=%v err=%v", deleted, err)
 	}
 
 	// Record gone.
@@ -64,10 +65,10 @@ func TestDeleteReviewItem_RemovesRecordAndAllIndexes(t *testing.T) {
 	}
 }
 
-func TestDeleteReviewItem_MissingIsNoOp(t *testing.T) {
+func TestDeleteReviewItemIfPending_MissingIsNoOp(t *testing.T) {
 	s := newReviewTestStore(t)
-	if err := s.DeleteReviewItem("does-not-exist"); err != nil {
-		t.Fatalf("deleting a missing id must be a no-op, got %v", err)
+	if deleted, err := s.DeleteReviewItemIfPending("does-not-exist"); err != nil || deleted {
+		t.Fatalf("deleting a missing id must be a no-op, got deleted=%v err=%v", deleted, err)
 	}
 }
 
@@ -133,7 +134,7 @@ func TestUpsertReviewItem_PreservesRejectedStatus(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 	// Human rejects it.
-	if _, err := s.SetReviewItemStatus(first.ID, ReviewStatusRejected); err != nil {
+	if _, err := s.DecideReviewItem(first.ID, ReviewStatusRejected, "", time.Time{}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 
@@ -174,7 +175,7 @@ func TestCountReviewItems_ByStatusIndex(t *testing.T) {
 		}
 		ids = append(ids, it.ID)
 	}
-	if _, err := s.SetReviewItemStatus(ids[0], ReviewStatusRejected); err != nil {
+	if _, err := s.DecideReviewItem(ids[0], ReviewStatusRejected, "", time.Time{}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 
@@ -246,7 +247,7 @@ func TestListReviewItems_Pagination(t *testing.T) {
 	}
 }
 
-func TestSetReviewItemStatus_MovesIndexRow(t *testing.T) {
+func TestDecideReviewItem_MovesIndexRow(t *testing.T) {
 	s := newReviewTestStore(t)
 	it, err := s.UpsertReviewItem(mkReviewItem("regroup.version-group", "vg1", "/f/vg1", "s", ""))
 	if err != nil {
@@ -254,7 +255,7 @@ func TestSetReviewItemStatus_MovesIndexRow(t *testing.T) {
 	}
 
 	// Move pending → approved.
-	updated, err := s.SetReviewItemStatus(it.ID, ReviewStatusApproved)
+	updated, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "", time.Time{})
 	if err != nil {
 		t.Fatalf("set status: %v", err)
 	}
@@ -280,9 +281,9 @@ func TestSetReviewItemStatus_MovesIndexRow(t *testing.T) {
 	}
 }
 
-func TestSetReviewItemStatus_NotFound(t *testing.T) {
+func TestDecideReviewItem_NotFoundWithoutAction(t *testing.T) {
 	s := newReviewTestStore(t)
-	got, err := s.SetReviewItemStatus("nonexistent", ReviewStatusApproved)
+	got, err := s.DecideReviewItem("nonexistent", ReviewStatusApproved, "", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -296,10 +297,10 @@ func TestSetReviewItemStatus_NotFound(t *testing.T) {
 // write clears it, the replay path silently falls back to the payload's
 // recommendation and merges books the reviewer said to keep apart.
 //
-// This walks the real sequence: decide → status-only transition (replay's
-// approved→applied) → producer re-scan, asserting the action survives all three, and
+// This walks the real sequence: decide → the apply claim's approved → applying →
+// applied (which carries no action of its own) → producer re-scan, asserting the action survives all three, and
 // that no unrelated field was collateral damage of the decision write.
-func TestSetReviewItemDecision_PersistsAndIsNeverClearedByLaterWrites(t *testing.T) {
+func TestDecideReviewItem_PersistsAndIsNeverClearedByLaterWrites(t *testing.T) {
 	s := newReviewTestStore(t)
 	it, err := s.UpsertReviewItem(mkReviewItem(
 		"regroup.multidisc", "dk-dec", "/books/a", "sum", `{"recommendedAction":"combine"}`))
@@ -308,9 +309,9 @@ func TestSetReviewItemDecision_PersistsAndIsNeverClearedByLaterWrites(t *testing
 	}
 
 	// A reviewer overrides the recommendation.
-	got, err := s.SetReviewItemDecision(it.ID, ReviewStatusApproved, "separate")
+	got, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "separate", time.Time{})
 	if err != nil {
-		t.Fatalf("SetReviewItemDecision: %v", err)
+		t.Fatalf("DecideReviewItem: %v", err)
 	}
 	if got.ChosenAction != "separate" || got.Status != ReviewStatusApproved {
 		t.Fatalf("got status=%q action=%q, want approved/separate", got.Status, got.ChosenAction)
@@ -321,10 +322,21 @@ func TestSetReviewItemDecision_PersistsAndIsNeverClearedByLaterWrites(t *testing
 		t.Fatalf("decision write disturbed an unrelated field: %+v vs %+v", got, it)
 	}
 
-	// A status-only transition (what replay does after a successful apply) must leave
-	// the decision alone — a blank chosenAction means "don't touch", never "clear".
-	if _, err := s.SetReviewItemStatus(it.ID, ReviewStatusApplied); err != nil {
-		t.Fatalf("SetReviewItemStatus: %v", err)
+	// A blank-action decision must leave the recorded one alone: blank means
+	// "don't touch", never "clear".
+	if _, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "", time.Time{}); err != nil {
+		t.Fatalf("DecideReviewItem (blank action): %v", err)
+	}
+	if reread, _ := s.GetReviewItem(it.ID); reread.ChosenAction != "separate" {
+		t.Fatalf("chosen_action = %q after a blank-action decision, want separate", reread.ChosenAction)
+	}
+	// Applying it (claim → finish) must leave the decision alone too.
+	claim, err := s.ClaimReviewItemForApply(it.ID, "separate", time.Time{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := s.FinishReviewItemApply(it.ID, claim.Token); err != nil {
+		t.Fatalf("finish: %v", err)
 	}
 	reread, _ := s.GetReviewItem(it.ID)
 	if reread.ChosenAction != "separate" {
@@ -349,9 +361,9 @@ func TestSetReviewItemDecision_PersistsAndIsNeverClearedByLaterWrites(t *testing
 
 // Persisting a decision on a missing row behaves like every other store getter:
 // (nil, nil), so the handler can answer 404 rather than inventing a row.
-func TestSetReviewItemDecision_NotFound(t *testing.T) {
+func TestDecideReviewItem_NotFound(t *testing.T) {
 	s := newReviewTestStore(t)
-	got, err := s.SetReviewItemDecision("nonexistent", ReviewStatusApproved, "combine")
+	got, err := s.DecideReviewItem("nonexistent", ReviewStatusApproved, "combine", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -377,7 +389,7 @@ func TestReviewStatsByKind(t *testing.T) {
 			anthologyID = it.ID
 		}
 	}
-	if _, err := s.SetReviewItemStatus(anthologyID, ReviewStatusRejected); err != nil {
+	if _, err := s.DecideReviewItem(anthologyID, ReviewStatusRejected, "", time.Time{}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 
@@ -665,7 +677,7 @@ func TestListReviewItems_Search(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed decided: %v", err)
 		}
-		if _, err := s3.SetReviewItemStatus(gone.ID, ReviewStatusApproved); err != nil {
+		if _, err := s3.DecideReviewItem(gone.ID, ReviewStatusApproved, "", time.Time{}); err != nil {
 			t.Fatalf("set status: %v", err)
 		}
 		items, total, err := s3.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr"})

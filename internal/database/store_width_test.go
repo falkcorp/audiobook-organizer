@@ -1,5 +1,5 @@
 // file: internal/database/store_width_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d1b6c2e-4a93-4f58-9e0d-3c8a52b7f1e4
 // last-edited: 2026-10-18
 
@@ -22,9 +22,9 @@ import (
 // lower it next. Any PR that removes Store methods lowers this one.
 //
 // Why a test and not interfacebloat: that linter counts declared entries
-// (Store declares 6 embedded interfaces), so it cannot see the 448 methods
+// (Store declares 6 embedded interfaces), so it cannot see the 445 methods
 // the embeds flatten to.
-const storeMethodBaseline = 448
+const storeMethodBaseline = 445
 
 // flattenedMethodCount parses the non-test Go files in dir and returns the
 // number of distinct methods of the interface named iface, following

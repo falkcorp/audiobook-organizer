@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-10-18
 
@@ -52,6 +52,13 @@ const (
 	// ReviewStatusApplying is a transient claim held while an apply handler runs
 	// (review_claim.go). It is never a decision a human makes.
 	ReviewStatusApplying = "applying"
+	// ReviewStatusNeedsAttention is where an operator puts an item whose
+	// interrupted apply they gave up on (AbandonReviewItemClaim): the apply may have
+	// changed part of the library, so the item is out of the pending queue, out of
+	// every automatic path (a re-scan and the reconcile leave non-pending items
+	// alone), and waits for a human who has looked at the library to record what is
+	// true. ApplyAbandonedAction says which apply was abandoned.
+	ReviewStatusNeedsAttention = "needs_attention"
 )
 
 // ReviewItem is one thing the system has flagged for a human decision.
@@ -66,7 +73,7 @@ type ReviewItem struct {
 	Kind      string    `json:"kind"`       // e.g. "regroup.multidisc", "regroup.anthology"
 	DedupKey  string    `json:"dedup_key"`  // STABLE: hash(Kind + FolderRef) — upsert target
 	FolderRef string    `json:"folder_ref"` // grandparent folder path this hold is about
-	Status    string    `json:"status"`     // pending | approved | rejected | applied | applying (transient claim)
+	Status    string    `json:"status"`     // pending | approved | rejected | applied | applying (transient claim) | needs_attention
 	Summary   string    `json:"summary"`    // one-line human label
 	Payload   string    `json:"payload"`    // JSON blob: folder, listing, proposed action, member IDs, ...
 	CreatedAt time.Time `json:"created_at"`
@@ -89,26 +96,37 @@ type ReviewItem struct {
 	// and readers fall back to the payload recommendation, which for a pre-2026-08-06
 	// hold resolves to insufficient-evidence — the fail-closed direction.
 	//
-	// Written by SetReviewItemDecision, DecideReviewItem and FinishReviewItemApply
-	// (which records the claimed action), never cleared: SetReviewItemStatus and a
-	// release leave it alone, so no later transition can erase the decision it is
-	// carrying out.
+	// Written by DecideReviewItem and FinishReviewItemApply (which records the
+	// claimed action), never cleared: a status-only decision and a release leave it
+	// alone, so no later transition can erase the decision it is carrying out.
 	ChosenAction string `json:"chosen_action,omitempty"`
 
-	// The apply claim (review_claim.go). All four are set together when a claim moves
-	// the item to "applying" and cleared together when FinishReviewItemApply or
-	// ReleaseReviewItemClaim moves it out; nothing else writes them.
+	// The apply claim (review_claim.go). They are set together when a claim moves
+	// the item to "applying" and cleared together when FinishReviewItemApply,
+	// ReleaseReviewItemClaim or AbandonReviewItemClaim moves it out; nothing else
+	// writes them. The one partial write: a failed re-run's release blanks the token
+	// and instance and keeps the rest, leaving a claim no process holds.
 	//
 	// ApplyClaimedFrom is the status before the claim, which a release goes back to.
 	// ApplyClaimAction is the action being applied: the finish records it as
 	// ChosenAction, and a takeover after a restart must re-run that same action.
 	// ApplyClaimToken names the one claim allowed to finish or release the item.
 	// ApplyClaimInstance is the claiming store handle's instance id; a claim whose id
-	// is not the running process's was left by a process that has exited.
+	// is blank or not the running process's is held by no running process.
 	ApplyClaimedFrom   string `json:"apply_claimed_from,omitempty"`
 	ApplyClaimAction   string `json:"apply_claim_action,omitempty"`
 	ApplyClaimToken    string `json:"apply_claim_token,omitempty"`
 	ApplyClaimInstance string `json:"apply_claim_instance,omitempty"`
+	// ApplyClaimRerun is true on a claim that took over an interrupted one: its
+	// apply is a re-run over a library the first run may have changed. Releasing
+	// such a claim does not hand the item back (see ReleaseReviewItemClaim).
+	ApplyClaimRerun bool `json:"apply_claim_rerun,omitempty"`
+
+	// ApplyAbandonedAction is the action of an interrupted apply an operator
+	// abandoned (AbandonReviewItemClaim, status needs_attention). Kept so whoever
+	// inspects the library knows which change may be half done; cleared when the item
+	// is next decided or applied.
+	ApplyAbandonedAction string `json:"apply_abandoned_action,omitempty"`
 }
 
 // ReviewFilter controls ListReviewItems / list-by-status queries.
@@ -581,123 +599,6 @@ func (p *PebbleStore) ReviewStatsByKind() ([]ReviewKindStat, error) {
 	return stats, nil
 }
 
-// SetReviewItemStatus transitions a review item to a new status and moves its
-// status-index row accordingly. Returns (nil, nil) when the item does not exist
-// so callers can respond 404. The dedupkey index is never touched (DedupKey is
-// stable), so a rejected item stays remembered across future producer re-scans.
-//
-// It records NO chosen action — see SetReviewItemDecision. That is what makes the
-// approved→applied transition after a re-approve safe: it must not disturb the
-// human decision it is in the middle of carrying out.
-func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error) {
-	return p.SetReviewItemDecision(id, status, "")
-}
-
-// SetReviewItemDecision transitions a review item to a new status AND records the
-// action a human chose, in one atomic batch.
-//
-// 🔴 WHY BOTH IN ONE CALL, AND WHY THIS WRITE IS SAFE.
-//
-// The two facts — "this hold is approved" and "the human picked separate, not the
-// recommended combine" — must land together or not at all. Split across two writes,
-// a crash between them leaves status="approved" with no recorded action, and a later
-// replay falls back to the payload's recommendation: the precise merge-nobody-asked-for
-// this field exists to prevent. One Pebble batch, committed with Sync, removes that window.
-//
-// The write is NARROW BY CONSTRUCTION, which matters in a codebase whose dominant
-// incident class is a field wiped on write-back:
-//
-//   - The record is RE-READ here, inside the store, immediately before mutation. The
-//     caller's copy of the ReviewItem is never marshalled back — so a handler holding a
-//     stale item (fetched before some other writer touched Payload or Summary) cannot
-//     roll those fields back.
-//   - Exactly three fields are assigned: Status, UpdatedAt, and ChosenAction. Everything
-//     else — ID, Kind, DedupKey, FolderRef, Summary, Payload, CreatedAt — round-trips
-//     from the freshly-read record untouched.
-//   - An EMPTY chosenAction means "leave the stored value alone", never "clear it".
-//     That is what lets SetReviewItemStatus delegate here: reject, and replay's
-//     approved→applied transition, change status without erasing the recorded decision.
-//     Clearing requires no code path at all, so no caller can do it by accident.
-//
-// Returns (nil, nil) when the item does not exist.
-//
-// 🔴 IT NEVER TOUCHES AN APPLY CLAIM. Moving an item into "applying" is
-// ClaimReviewItemForApply's job and moving it out is FinishReviewItemApply's or
-// ReleaseReviewItemClaim's (review_claim.go); this writer refuses both, returning a
-// *ReviewClaimConflictError for an item that is applying. A decision landing over a
-// live claim is how one apply became two (01-P81j): the claim vanished while its
-// apply ran and the next approve claimed again. The review handler records decisions
-// through DecideReviewItem, which also refuses applied items.
-//
-// 🔴 reviewMu IS HELD ACROSS THE READ-MODIFY-WRITE. The status index is moved by
-// deleting the OLD status row, and "old" is whatever this call read a moment ago.
-// Without the lock two concurrent decisions on one item both read status=pending,
-// both delete the pending row, and each writes its own new row — the record ends
-// up with one status while the index lists it under two, so a status-filtered list
-// or count returns an item that no longer has that status. Upsert and Delete take
-// the same mutex for the same class of reason; this writer was the one sibling
-// that did not, and maintenance.review-status-index-repair exists to rebuild the
-// index for rows the unlocked version already damaged.
-func (p *PebbleStore) SetReviewItemDecision(id, status, chosenAction string) (*ReviewItem, error) {
-	switch status {
-	case "":
-		return nil, fmt.Errorf("review item: status is required")
-	case ReviewStatusApplying:
-		return nil, fmt.Errorf("review item %s: status %q is written only by ClaimReviewItemForApply", id, status)
-	}
-	p.reviewMu.Lock()
-	defer p.reviewMu.Unlock()
-
-	item, err := p.getReviewItem(id)
-	if err != nil {
-		return nil, err
-	}
-	if item == nil {
-		return nil, nil
-	}
-	if item.Status == ReviewStatusApplying {
-		conflict, cerr := p.claimConflictLocked(item)
-		if cerr != nil {
-			return nil, cerr
-		}
-		return nil, conflict
-	}
-	oldStatus := item.Status
-	item.Status = status
-	if chosenAction != "" {
-		item.ChosenAction = chosenAction
-	}
-	if err := p.commitReviewItemLocked(item, oldStatus); err != nil {
-		return nil, err
-	}
-	return item, nil
-}
-
-// DeleteReviewItem removes a review item and ALL its index rows (record, status
-// index, dedup index). Idempotent: deleting a missing id is a no-op returning nil.
-//
-// Deleting the dedup index means a future producer re-scan of that folder can create
-// a FRESH hold — exactly what the regroup reconcile wants for a hold whose folder is
-// no longer a candidate. Because this forgets a remembered decision, callers that
-// must PRESERVE one (rejected-is-remembered) must only delete PENDING items; the
-// regroup reconcile enforces that.
-func (p *PebbleStore) DeleteReviewItem(id string) error {
-	// Serialize against UpsertReviewItem, which reads the dedup index to decide
-	// create-vs-update: deleting that index concurrently could let a duplicate slip
-	// in. Same mutex, same reason as Upsert.
-	p.reviewMu.Lock()
-	defer p.reviewMu.Unlock()
-
-	item, err := p.getReviewItem(id)
-	if err != nil {
-		return err
-	}
-	if item == nil {
-		return nil // idempotent no-op
-	}
-	return p.deleteReviewItemLocked(item)
-}
-
 // deleteReviewItemLocked removes item's record and all its index rows in one synced
 // batch. Caller holds reviewMu and has just read item.
 func (p *PebbleStore) deleteReviewItemLocked(item *ReviewItem) error {
@@ -753,7 +654,8 @@ type ReviewStatusIndexRepair struct {
 // mutex, so holding it here is what makes the result exact rather than a
 // snapshot that was true at some point during the scan.
 //
-// Why this exists: SetReviewItemDecision wrote the record and moved the index
+// Why this exists: the decision writer (SetReviewItemDecision, since replaced by
+// DecideReviewItem) wrote the record and moved the index
 // row WITHOUT the mutex until 2026-09-02, so two concurrent decisions on one item
 // could leave it indexed under two statuses. Fixing the writer stops new damage;
 // this is the route back for rows the old writer already left inconsistent.
@@ -765,7 +667,7 @@ func (p *PebbleStore) RebuildReviewStatusIndex(apply bool) (ReviewStatusIndexRep
 
 	// Source of truth: every record, keyed by ID, with the status it is stored
 	// under. Items are never stored with an empty status (UpsertReviewItem
-	// defaults it, SetReviewItemDecision refuses it), so an empty status here is
+	// defaults it, DecideReviewItem refuses it), so an empty status here is
 	// a record with nothing to index and no row it can be expected under.
 	items, err := p.listAllReviewItems()
 	if err != nil {

@@ -1,5 +1,5 @@
 // file: internal/server/wire_review_claim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c06d748-d485-44de-9d5a-2ad16e6fedd7
 // last-edited: 2026-10-18
 
@@ -8,6 +8,7 @@ package server
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,38 @@ func TestReviewRoutes_ClaimCapabilityResolvesThroughServerWiring(t *testing.T) {
 	w = f.do(t, f.sessionToken, http.MethodGet, "/api/v1/review/count", nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), `"applying":0`)
+}
+
+// TestReviewRoutes_AbandonApplyIsWiredAndReachesTheStore: the abandon route exists,
+// takes the session's permission, and its refusals are the store's (coded 409s, not a
+// 404 for a missing route or a 500 for a missing capability). The item claimed here is
+// held by this process, so it is in progress, not interrupted; the handler tests cover
+// a real abandon.
+func TestReviewRoutes_AbandonApplyIsWiredAndReachesTheStore(t *testing.T) {
+	f := setupCredGuardServerWith(t, func(c *config.Config) { c.ReviewApplyEnabled = true })
+	seed := func(key string) database.ReviewItem {
+		it, err := f.store.UpsertReviewItem(database.ReviewItem{Kind: "regroup.multidisc", DedupKey: key,
+			FolderRef: "/synthetic/" + key, Summary: "s", Payload: `{"recommendedAction":"combine"}`})
+		require.NoError(t, err)
+		return it
+	}
+	open, held := seed("open"), seed("held")
+	claimer, ok := database.AsCapability[database.ReviewItemApplyClaimer](f.store)
+	require.True(t, ok)
+	_, err := claimer.ClaimReviewItemForApply(held.ID, "combine", time.Time{})
+	require.NoError(t, err)
+
+	w := f.do(t, f.sessionToken, http.MethodPost, "/api/v1/review/items/"+open.ID+"/abandon-apply", nil)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "REVIEW_APPLY_NOT_INTERRUPTED")
+	w = f.do(t, f.sessionToken, http.MethodPost, "/api/v1/review/items/"+held.ID+"/abandon-apply", nil)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "REVIEW_APPLY_IN_PROGRESS")
+
+	w = f.do(t, f.sessionToken, http.MethodGet, "/api/v1/review/count", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"needs_attention":0`)
+	assert.Contains(t, w.Body.String(), `"applying":1`)
 }
 
 // TestOpsStore_ResolvesReviewPendingDeleter: the regroup reconcile resolves its

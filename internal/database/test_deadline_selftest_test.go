@@ -1,7 +1,7 @@
 // file: internal/database/test_deadline_selftest_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a3232db7-10d7-425f-865c-cb905b10b5c3
-// last-edited: 2026-10-04
+// last-edited: 2026-10-18
 
 package database
 
@@ -125,7 +125,7 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 		statuses := []string{ReviewStatusApproved, ReviewStatusRejected}
 		start := time.Now()
 		for i := 0; runFor == 0 || time.Since(start) < runFor; i++ {
-			if _, err := s.SetReviewItemDecision(it.ID, statuses[i%2], ""); err != nil {
+			if _, err := s.DecideReviewItem(it.ID, statuses[i%2], "", time.Time{}); err != nil {
 				fmt.Fprintf(os.Stderr, "%s: %v\n", deadlineChildWorkerErr, err)
 				return
 			}

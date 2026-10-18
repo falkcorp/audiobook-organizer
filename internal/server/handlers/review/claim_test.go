@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/claim_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4ac78f22-e4e5-46e6-963d-64243d9d758f
 // last-edited: 2026-10-18
 
@@ -55,11 +55,11 @@ type gateDecide struct {
 	chosen string
 }
 
-func (g *gateDecide) DecideReviewItem(id, status, chosen string) (*database.ReviewItem, error) {
+func (g *gateDecide) DecideReviewItem(id, status, chosen string, ifUpdatedAt time.Time) (*database.ReviewItem, error) {
 	if status == g.status && chosen == g.chosen {
 		<-g.gate
 	}
-	return g.PebbleStore.DecideReviewItem(id, status, chosen)
+	return g.PebbleStore.DecideReviewItem(id, status, chosen, ifUpdatedAt)
 }
 
 func approveReq(t *testing.T, h *reviewhandler.Handler, id string, body any) (int, string) {
@@ -479,13 +479,22 @@ func TestApproveRejectStorm_AppliesAtMostOnce(t *testing.T) {
 // An applied hold whose action resolves to insufficient-evidence (no recorded choice,
 // old payload) answers "already applied", not "choose an action": bulk must not list
 // it as still pending.
+//
+// The store can no longer write an applied item without a recorded action (the finish
+// records the claim's), but production holds applied rows from before it did, so the
+// handler's read is made to return one: the hold is applied through the claim, and
+// oldShapeRead blanks the action the finish recorded.
 func TestApprove_AppliedOldShapeHold_Is409AlreadyApplied(t *testing.T) {
 	s := newTestStore(t)
 	a := seed(t, s, "regroup.multidisc", "m1") // payload "{}": insufficient-evidence
-	if _, err := s.SetReviewItemDecision(a.ID, database.ReviewStatusApplied, ""); err != nil {
+	c, err := s.ClaimReviewItemForApply(a.ID, itunesservice.ActionCombine, time.Time{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	h := reviewhandler.New(s, func() bool { return true }, nil)
+	if _, err := s.FinishReviewItemApply(a.ID, c.Token); err != nil {
+		t.Fatal(err)
+	}
+	h := reviewhandler.New(&oldShapeRead{PebbleStore: s}, func() bool { return true }, nil)
 	code, body := approveReq(t, h, a.ID, nil)
 	want409(t, "approve of an applied old-shape hold", code, body, "REVIEW_ALREADY_APPLIED")
 	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
@@ -495,4 +504,16 @@ func TestApprove_AppliedOldShapeHold_Is409AlreadyApplied(t *testing.T) {
 	if len(skipped) != 1 || skipped[0].(map[string]any)["code"] != "REVIEW_ALREADY_APPLIED" {
 		t.Fatalf("bulk = %v, want one skip coded REVIEW_ALREADY_APPLIED", data)
 	}
+}
+
+// oldShapeRead returns every review item without its recorded action, as an item
+// decided before ChosenAction existed reads.
+type oldShapeRead struct{ *database.PebbleStore }
+
+func (o *oldShapeRead) GetReviewItem(id string) (*database.ReviewItem, error) {
+	it, err := o.PebbleStore.GetReviewItem(id)
+	if it != nil {
+		it.ChosenAction = ""
+	}
+	return it, err
 }
