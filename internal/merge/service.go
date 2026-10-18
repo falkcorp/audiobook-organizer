@@ -1721,7 +1721,10 @@ type CombineResult struct {
 	// key keeps its old name for API compatibility; the books are recoverable
 	// via UndoCombine(JournalID) until the purge job removes them.
 	BooksDeleted int `json:"books_deleted"`
-	// JournalID is the combine's undo journal.
+	// JournalID is the combine's undo journal (GET /api/v1/merge/combine-journal
+	// lists it). Revert OperationID to undo the combine; POST
+	// /api/v1/merge/undo/:journal_id, which used to take this id, answers 410
+	// Gone (01-P81h).
 	JournalID string `json:"journal_id,omitempty"`
 	// JournalPending is set when the combine applied but its journal could
 	// not be marked applied: it stays Pending, naming every step that ran

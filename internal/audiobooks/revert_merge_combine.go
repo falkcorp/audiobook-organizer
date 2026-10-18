@@ -42,7 +42,8 @@ func (rs *RevertService) combineUndoerFor() combineUndoer {
 // its combine journal (merge.Service.UndoCombine), which takes the merge lock
 // itself (this must not hold it: the mutex is not re-entrant) and refuses as
 // a whole when the library changed since. A journal already undone, through
-// the merge undo route or an earlier revert, is already restored.
+// an earlier revert (or a direct merge.Service.UndoCombine; the HTTP merge
+// undo route is retired), is already restored.
 func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) error {
 	if _, err := rs.loadBook(c.BookID); err != nil {
 		return err
@@ -74,7 +75,7 @@ func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) 
 		var refused *merge.CombineUndoRefusedError
 		if errors.As(err, &refused) {
 			// The pre-read above and the undo are not atomic: another undo
-			// (the merge undo route, a second revert) may have finished in
+			// (a second revert, a direct UndoCombine) may have finished in
 			// between, and then UndoCombine refuses a journal that is done.
 			// Re-read before calling it a change since.
 			if j2, rerr := u.GetCombineJournal(c.NewValue); rerr == nil && j2.Status == merge.CombineJournalUndone {

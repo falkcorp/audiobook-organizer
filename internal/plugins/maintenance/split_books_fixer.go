@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/split_books_fixer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b55e5de5-a785-4658-9cb0-ab1d3f20a781
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -122,7 +122,7 @@ const (
 // resumed as such: the re-plan sees the sources it already retired, the
 // fingerprint differs, and the row settles changed_since_plan. The combine
 // journal names every step already made (it is written before each one), so
-// reverting the apply operation (or POST /merge/undo/:journal_id) reverses
+// reverting the apply operation (POST /operations/:id/revert) reverses
 // the partial merge; a fresh plan offers what is left.
 //
 // CANDIDATE ROWS. A complete merge deletes the dedup.SplitBookStore row with

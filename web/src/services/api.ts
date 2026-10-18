@@ -2102,7 +2102,9 @@ export interface CombineBooksResult {
   primary_id: string;
   files_moved: number;
   books_deleted: number;
-  // Combine journal id (GET /merge/combine-journal lists it).
+  // Combine journal id (GET /merge/combine-journal lists it). POST
+  // /merge/undo/:journal_id, which used to take it, answers 410 Gone
+  // (01-P81h); revert operation_id instead.
   journal_id?: string;
   // Undo key: POST /operations/:id/revert with it reverses this combine. The
   // combine journals its undo pointer under this id (a correlation id of its
