@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -106,8 +106,8 @@ the wrong group, with the wrong book marked as the main edition.
 
 **The fix.** The Revert action now understands this second kind of record
 and puts each edition back in its old group with its old main-edition flag.
-An edition that has since been moved to some other group is left where it is
-and reported. If a later merge moved an edition into the same group again,
+An edition that has since been moved to some other group is left where it
+is. If a later merge moved an edition into the same group again,
 the undo refuses as a whole and says why, rather than undoing that later
 merge. The undo works even if the merge's surviving book has been purged
 since.
@@ -145,6 +145,8 @@ undo. The owner's rule is never to delete file records.
 
 **The fix.** The undo now checks that each book was sent to the trash by
 this exact combine before restoring it, and leaves every other book alone.
-Created file records are moved to the book whose file they are. A combine
+Created file records are moved to the book whose file they are; one with no
+such book left stays on the surviving book, and the revert's result names it.
+A combine
 now records each step before taking it, so a stopped combine undoes exactly
 what it did. Each of these has a test that failed before the fix.
