@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -18,7 +18,7 @@
  * surfaces render these same components, so they cannot drift apart in the gap.
  */
 
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -661,6 +661,7 @@ const NOT_PENDING_SKIP_CODES = new Set([
   'REVIEW_ALREADY_APPLIED',
   'REVIEW_APPLY_IN_PROGRESS',
   'REVIEW_APPLY_INTERRUPTED',
+  'REVIEW_RERUN_FAILED',
 ]);
 
 /** The kind's report from the last bulk action: skips, failures and applied-but-
@@ -754,6 +755,80 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
   );
 }
 
+/** How many held holds an alert lists at once. */
+const HELD_LIST_LIMIT = 100;
+
+/**
+ * The on-demand list behind a held-holds alert (applying / needs_attention). Nothing
+ * loads until "Show them"; once shown, the list reloads whenever the polled count
+ * changes, so a hold that finished or was abandoned elsewhere does not linger and a
+ * newly held one appears.
+ */
+function useHeldList(status: string, count: number) {
+  const [items, setItems] = useState<ReviewItem[] | null>(null);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  // Leaves `message` alone on success: after a refused action the list reloads, and
+  // the refusal is what the operator needs to read.
+  const load = useCallback(async () => {
+    try {
+      const page = await api.getReviewItems({ status, limit: HELD_LIST_LIMIT });
+      setItems(page.items);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'failed to load');
+    }
+  }, [status]);
+  const show = () => {
+    setMessage('');
+    void load();
+  };
+  const shown = items !== null;
+  useEffect(() => {
+    if (!shown || count <= 0) return;
+    // A count that moves again before this answers supersedes it.
+    let current = true;
+    api
+      .getReviewItems({ status, limit: HELD_LIST_LIMIT })
+      .then((page) => {
+        if (current) setItems(page.items);
+      })
+      .catch(() => {
+        // The list on screen stays; the next count change or action reloads it.
+      });
+    return () => {
+      current = false;
+    };
+    // `shown` is read, not a trigger: showing the list loads it already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [count, status]);
+  /** Runs one item action, reporting its error and reloading the list after it
+   *  (either way: a refusal such as REVIEW_ITEM_CHANGED means the row is stale). */
+  const run = async (id: string, fn: () => Promise<unknown>, onChanged: () => void) => {
+    setBusy(id);
+    try {
+      await fn();
+      setMessage('');
+      onChanged();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'failed');
+    } finally {
+      setBusy(null);
+      await load();
+    }
+  };
+  return { items, message, busy, show, run };
+}
+
+/** "Showing the first 100 of N" when the list is capped below the count. */
+function HeldListCap({ shown, count }: { shown: number; count: number }) {
+  if (count <= shown) return null;
+  return (
+    <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+      Showing the first {shown} of {count}.
+    </Typography>
+  );
+}
+
 /**
  * Holds held by an apply claim. They are in no pending list, so without this a
  * hold whose apply was interrupted by a restart, or ran but could not be recorded,
@@ -762,51 +837,33 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
  * The list loads on demand. "Finish" approves with NO action, which the server
  * resolves to the claim's own action: a running apply answers "in progress", an
  * unrecorded one is recorded without re-running, and an interrupted one runs again
- * (skipping work already done).
+ * (skipping work already done, but not redoing an incomplete multidisc renumbering;
+ * a duplicate-of re-run can fail after a partial merge). A failed re-run leaves the
+ * hold here. "Abandon" moves an interrupted hold to needs attention when it cannot
+ * be finished; it undoes nothing.
  */
 export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: () => void }) {
-  const [items, setItems] = useState<ReviewItem[] | null>(null);
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
+  const { items, message, busy, show, run } = useHeldList('applying', count);
   if (count <= 0) return null;
-  const load = async () => {
-    try {
-      const page = await api.getReviewItems({ status: 'applying', limit: 100 });
-      setItems(page.items);
-      setMessage('');
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'failed to load');
-    }
-  };
-  const finish = async (id: string) => {
-    setBusy(id);
-    try {
-      await api.approveReviewItem(id);
-      setMessage('');
-      onChanged();
-      await load();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'failed to finish');
-    } finally {
-      setBusy(null);
-    }
-  };
   return (
     <Alert severity="warning" data-testid="regroup-applying" sx={{ mb: 1 }}>
       <AlertTitle>
         {count} hold{count === 1 ? ' is' : 's are'} held mid-apply
       </AlertTitle>
       <Typography variant="body2" sx={{ mb: 1 }}>
-        An apply is running, ran but could not be recorded, or was interrupted by a server restart.
-        These holds are not in the list below and accept no other decision until the apply is
-        finished.
+        An apply is running, ran but could not be recorded, or was interrupted (by a server restart,
+        or its re-run failed). These holds are not in the list below and accept no other decision
+        until the apply is finished. Finish runs an interrupted apply again; if it cannot be
+        finished, Abandon moves the hold to needs attention. Abandoning undoes nothing, so check
+        what the apply changed in the library.
       </Typography>
       {items === null ? (
-        <Button size="small" data-testid="regroup-applying-show" onClick={() => void load()}>
+        <Button size="small" data-testid="regroup-applying-show" onClick={show}>
           Show them
         </Button>
       ) : (
         <Stack spacing={0.5}>
+          <HeldListCap shown={items.length} count={count} />
           {items.map((it) => (
             <Typography key={it.id} variant="caption" sx={{ display: 'block' }}>
               <ReportIdText id={it.id} /> ·{' '}
@@ -815,12 +872,104 @@ export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: 
                 size="small"
                 disabled={busy !== null}
                 data-testid={`regroup-applying-finish-${it.id}`}
-                onClick={() => void finish(it.id)}
+                onClick={() =>
+                  void run(
+                    it.id,
+                    () => api.approveReviewItem(it.id, undefined, it.updated_at),
+                    onChanged
+                  )
+                }
               >
                 Finish
               </Button>
+              <Button
+                size="small"
+                color="warning"
+                disabled={busy !== null}
+                data-testid={`regroup-applying-abandon-${it.id}`}
+                onClick={() => void run(it.id, () => api.abandonReviewApply(it.id), onChanged)}
+              >
+                Abandon
+              </Button>
             </Typography>
           ))}
+        </Stack>
+      )}
+      {message && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+          {message}
+        </Typography>
+      )}
+    </Alert>
+  );
+}
+
+/**
+ * Holds whose interrupted apply was abandoned (status needs_attention). The apply may
+ * have changed part of the library, so these wait for someone to check it. Approve
+ * runs the abandoned action again from the start; Reject records that nothing more
+ * should happen. Both send the updated_at the row was rendered with.
+ */
+export function NeedsAttentionAlert({
+  count,
+  onChanged,
+}: {
+  count: number;
+  onChanged: () => void;
+}) {
+  const { items, message, busy, show, run } = useHeldList('needs_attention', count);
+  if (count <= 0) return null;
+  return (
+    <Alert severity="error" data-testid="regroup-needs-attention" sx={{ mb: 1 }}>
+      <AlertTitle>
+        {count} hold{count === 1 ? ' needs' : 's need'} attention
+      </AlertTitle>
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        Their interrupted apply was abandoned and may have changed part of the library. Check the
+        library, then approve (runs the action again) or reject each one.
+      </Typography>
+      {items === null ? (
+        <Button size="small" data-testid="regroup-needs-attention-show" onClick={show}>
+          Show them
+        </Button>
+      ) : (
+        <Stack spacing={0.5}>
+          <HeldListCap shown={items.length} count={count} />
+          {items.map((it) => {
+            const action = it.apply_abandoned_action ?? '';
+            return (
+              <Typography key={it.id} variant="caption" sx={{ display: 'block' }}>
+                <ReportIdText id={it.id} /> · abandoned{' '}
+                {labelForAction(action) || action || 'apply'} — {it.summary}{' '}
+                {action && (
+                  <Button
+                    size="small"
+                    disabled={busy !== null}
+                    data-testid={`regroup-needs-attention-approve-${it.id}`}
+                    onClick={() =>
+                      void run(
+                        it.id,
+                        () => api.approveReviewItem(it.id, action, it.updated_at),
+                        onChanged
+                      )
+                    }
+                  >
+                    Approve
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  disabled={busy !== null}
+                  data-testid={`regroup-needs-attention-reject-${it.id}`}
+                  onClick={() =>
+                    void run(it.id, () => api.rejectReviewItem(it.id, it.updated_at), onChanged)
+                  }
+                >
+                  Reject
+                </Button>
+              </Typography>
+            );
+          })}
         </Stack>
       )}
       {message && (
@@ -978,6 +1127,7 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
     return (
       <Paper sx={{ p: 6, textAlign: 'center' }} data-testid="regroup-spine">
         <ApplyingAlert count={lane.applyingTotal} onChanged={lane.refresh} />
+        <NeedsAttentionAlert count={lane.needsAttentionTotal} onChanged={lane.refresh} />
         <Typography variant="h6" gutterBottom data-testid="regroup-empty">
           Nothing to review 🎉
         </Typography>
@@ -991,6 +1141,7 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
   return (
     <Stack spacing={2} data-testid="regroup-spine" sx={{ p: 1 }}>
       <ApplyingAlert count={lane.applyingTotal} onChanged={lane.refresh} />
+      <NeedsAttentionAlert count={lane.needsAttentionTotal} onChanged={lane.refresh} />
       {lane.buckets.map((bucket) => (
         <Paper key={bucket.kind} sx={{ p: 2 }}>
           <BucketHeader bucket={bucket} lane={lane} />

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.payloadIndex.test.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2e7a4c19-5d80-4b36-91af-6c3e08d5b724
 // last-edited: 2026-10-18
 //
@@ -61,7 +61,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   toast.mockReset();
   useReviewStore.setState({ byKind: {}, count: 0 });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   // 🔴 ONE ROW'S PAYLOAD DOES NOT PARSE, on purpose. Every fixture here used to
   // be valid JSON, which made two deliberately-commented decisions in the lane
   // unobservable: `payloadIndex.has(id)` rather than `?? parsePayload(...)`, and

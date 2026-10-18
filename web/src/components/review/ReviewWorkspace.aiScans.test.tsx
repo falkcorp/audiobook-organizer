@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
 // last-edited: 2026-10-18
 
@@ -79,7 +79,12 @@ beforeEach(() => {
     stale: 0,
   } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
   vi.mocked(api.getReviewItems).mockResolvedValue({ items: [], count: 0, limit: 500, offset: 0, total: 0 });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
   vi.mocked(api.listRepairFixers).mockResolvedValue([]);
 });

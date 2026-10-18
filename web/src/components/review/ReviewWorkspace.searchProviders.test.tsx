@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.searchProviders.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f8c2a1d-9e5f-4a2b-8c1e-6d7f9a2b5c3e
 // last-edited: 2026-10-18
 //
@@ -63,7 +63,12 @@ function seed(results: api.CandidateResult[]) {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   vi.mocked(api.batchFetchCandidates).mockResolvedValue({ operation_id: 'op-1' });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
 }

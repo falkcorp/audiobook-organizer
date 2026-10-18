@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
 // last-edited: 2026-10-18
 
@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
-import { ApplyingAlert, MemberRow, SkipsAlert } from './RegroupSpine';
+import { ApplyingAlert, MemberRow, NeedsAttentionAlert, SkipsAlert } from './RegroupSpine';
 import type { RegroupLane } from '../lanes/useRegroupLane';
 import { appTheme } from '../../../theme';
 import * as api from '../../../services/api';
@@ -181,26 +181,7 @@ describe('ApplyingAlert', () => {
   });
 
   it('lists the held holds on demand and finishes one with no explicit action', async () => {
-    vi.mocked(api.getReviewItems).mockResolvedValue({
-      items: [
-        {
-          id: 'h1',
-          kind: 'regroup.multidisc',
-          dedup_key: 'k',
-          folder_ref: '/f',
-          status: 'applying',
-          summary: 'Chapters: 3 tracks',
-          payload: '{}',
-          created_at: '',
-          updated_at: '',
-          apply_claim_action: 'combine',
-        },
-      ],
-      count: 1,
-      total: 1,
-      limit: 100,
-      offset: 0,
-    } as api.ReviewItemsPage);
+    vi.mocked(api.getReviewItems).mockResolvedValue(heldPage([heldItem('h1', 'applying')]));
     vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
     const onChanged = vi.fn();
     render(<ApplyingAlert count={1} onChanged={onChanged} />);
@@ -209,8 +190,109 @@ describe('ApplyingAlert', () => {
     await userEvent.click(screen.getByTestId('regroup-applying-show'));
     expect(api.getReviewItems).toHaveBeenCalledWith({ status: 'applying', limit: 100 });
     await userEvent.click(await screen.findByTestId('regroup-applying-finish-h1'));
-    // No action: the server resolves it to the claim's own action.
-    expect(api.approveReviewItem).toHaveBeenCalledWith('h1');
+    // No action: the server resolves it to the claim's own action. The rendered
+    // updated_at goes with it.
+    expect(api.approveReviewItem).toHaveBeenCalledWith('h1', undefined, HELD_STAMP);
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });
+
+  it('abandons an interrupted hold and reloads the list', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue(heldPage([heldItem('h1', 'applying')]));
+    vi.mocked(api.abandonReviewApply).mockResolvedValue({} as never);
+    const onChanged = vi.fn();
+    render(<ApplyingAlert count={1} onChanged={onChanged} />);
+
+    await userEvent.click(screen.getByTestId('regroup-applying-show'));
+    await userEvent.click(await screen.findByTestId('regroup-applying-abandon-h1'));
+    expect(api.abandonReviewApply).toHaveBeenCalledWith('h1');
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows a refusal and reloads the list, since the row is stale', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue(heldPage([heldItem('h1', 'applying')]));
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      new Error('the item changed since it was read')
+    );
+    const onChanged = vi.fn();
+    render(<ApplyingAlert count={1} onChanged={onChanged} />);
+
+    await userEvent.click(screen.getByTestId('regroup-applying-show'));
+    await userEvent.click(await screen.findByTestId('regroup-applying-finish-h1'));
+    expect(await screen.findByText('the item changed since it was read')).toBeInTheDocument();
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(2));
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('reloads the shown list when the polled count changes, and says when it is capped', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue(heldPage([heldItem('h1', 'applying')]));
+    const { rerender } = render(<ApplyingAlert count={1} onChanged={vi.fn()} />);
+    // Not loaded until asked for.
+    rerender(<ApplyingAlert count={2} onChanged={vi.fn()} />);
+    expect(api.getReviewItems).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId('regroup-applying-show'));
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Showing the first 1 of 2.')).toBeInTheDocument();
+    rerender(<ApplyingAlert count={3} onChanged={vi.fn()} />);
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(2));
+  });
 });
+
+describe('NeedsAttentionAlert', () => {
+  it('renders nothing when no hold needs attention', () => {
+    render(<NeedsAttentionAlert count={0} onChanged={vi.fn()} />);
+    expect(screen.queryByTestId('regroup-needs-attention')).toBeNull();
+  });
+
+  it('lists the abandoned holds and approves one as its abandoned action', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue(
+      heldPage([{ ...heldItem('n1', 'needs_attention'), apply_abandoned_action: 'combine' }])
+    );
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    const onChanged = vi.fn();
+    render(<NeedsAttentionAlert count={1} onChanged={onChanged} />);
+
+    expect(screen.getByTestId('regroup-needs-attention')).toHaveTextContent(
+      '1 hold needs attention'
+    );
+    await userEvent.click(screen.getByTestId('regroup-needs-attention-show'));
+    expect(api.getReviewItems).toHaveBeenCalledWith({ status: 'needs_attention', limit: 100 });
+    await userEvent.click(await screen.findByTestId('regroup-needs-attention-approve-n1'));
+    expect(api.approveReviewItem).toHaveBeenCalledWith('n1', 'combine', HELD_STAMP);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it('rejects one with the rendered updated_at', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue(
+      heldPage([{ ...heldItem('n1', 'needs_attention'), apply_abandoned_action: 'combine' }])
+    );
+    vi.mocked(api.rejectReviewItem).mockResolvedValue({} as never);
+    render(<NeedsAttentionAlert count={1} onChanged={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId('regroup-needs-attention-show'));
+    await userEvent.click(await screen.findByTestId('regroup-needs-attention-reject-n1'));
+    expect(api.rejectReviewItem).toHaveBeenCalledWith('n1', HELD_STAMP);
+  });
+});
+
+const HELD_STAMP = '2026-10-18T07:00:00.123456789Z';
+
+function heldItem(id: string, status: string): api.ReviewItem {
+  return {
+    id,
+    kind: 'regroup.multidisc',
+    dedup_key: 'k-' + id,
+    folder_ref: '/f',
+    status,
+    summary: 'Chapters: 3 tracks',
+    payload: '{}',
+    created_at: '',
+    updated_at: HELD_STAMP,
+    apply_claim_action: status === 'applying' ? 'combine' : undefined,
+  };
+}
+
+function heldPage(items: api.ReviewItem[]): api.ReviewItemsPage {
+  return { items, count: items.length, total: items.length, limit: 100, offset: 0 };
+}

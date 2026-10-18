@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.13.0
+// version: 1.13.1
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-18
 //
@@ -102,7 +102,12 @@ function seed() {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
   vi.mocked(api.batchFetchCandidates).mockResolvedValue({
     operation_id: 'op-search',

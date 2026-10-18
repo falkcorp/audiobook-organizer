@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
 // last-edited: 2026-10-18
 //
@@ -59,7 +59,12 @@ function seed(results: api.CandidateResult[]) {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
   vi.mocked(api.batchApplyFromCache).mockResolvedValue({
     op_id: 'op-1',
