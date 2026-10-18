@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_merge_undo_pointers.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 844f88c2-fda0-43f4-bf8d-e4e35ca38b0c
 // last-edited: 2026-10-18
 
@@ -45,13 +45,22 @@ var bmupLog = logger.New("backfill-merge-undo-pointers")
 // id), or not_undoable (with the reason: undone, aborted, a CombineBooks
 // journal left pending, a refused combine's emptied journal). A preview
 // writes no pointer.
+//
+// Every combine journal old enough to need a pointer predates the
+// survivor-numbering marker (CombineJournal.SurvivorNumbering is ""), which
+// the undo reads as "may change", the old rule. Reverting one of these
+// combines therefore also puts the survivor's own tracks back to their
+// pre-combine disc/track numbers, so a renumbering made after the combine is
+// reverted with it. The job description says so.
 type backfillMergeUndoPointersJob struct{}
 
 func (j *backfillMergeUndoPointersJob) ID() string       { return "backfill-merge-undo-pointers" }
 func (j *backfillMergeUndoPointersJob) Name() string     { return "Backfill Merge Undo Pointers" }
 func (j *backfillMergeUndoPointersJob) Category() string { return "library" }
 func (j *backfillMergeUndoPointersJob) Description() string {
-	return "Gives every older combine and sibling-move journal an undo pointer so Operations > Revert can undo it (preview first)"
+	return "Gives every older combine and sibling-move journal an undo pointer so Operations > Revert can undo it (preview first). " +
+		"Reverting an older combine also puts the kept book's own tracks back to their pre-combine disc/track numbers, " +
+		"undoing any renumbering made since"
 }
 
 // DefaultParams advertises dry_run:true, which the dispatcher and the op

@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -88,6 +88,16 @@ const (
 
 // survivorMayBeRenumbered reports whether undo restores the numbers of the
 // survivor's own rows.
+//
+// Anything but SurvivorNumberingUntouched reads as "may change", including ""
+// on a journal written before the field existed: the old rule, which always
+// restored them. So the undo of such an older combine (every journal the
+// backfill-merge-undo-pointers job gives a pointer to is one) also puts the
+// survivor's own rows back to their pre-combine disc/track numbers, and a
+// renumbering of them made after the combine is reverted with it. Reading ""
+// as untouched instead would leave a play-order stamp the combine's own
+// caller made (regroup's multidisc apply) in place after the undo, with no
+// record to tell the two apart.
 func (j *CombineJournal) survivorMayBeRenumbered() bool {
 	return j.SurvivorNumbering != SurvivorNumberingUntouched
 }
