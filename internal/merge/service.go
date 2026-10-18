@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2459,6 +2459,8 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 			}
 			if err := database.RecordUserOverrides(ms.db, fresh.ID, userSet); err != nil {
 				slog.Warn("combine override lock rows", "id", fresh.ID, "err", err)
+			} else {
+				ms.noteOverrideLocksAfter(fresh.ID, plan, database.FieldKeyTitle, database.FieldKeyNarrator)
 			}
 		}
 	}
@@ -2542,8 +2544,39 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		database.FieldKeyAuthorName: plan.Applied.Author,
 	}); err != nil {
 		slog.Warn("combine override author lock row", "id", b.ID, "err", err)
+	} else {
+		ms.noteOverrideLocksAfter(b.ID, plan, database.FieldKeyAuthorName)
 	}
 	return warnings
+}
+
+// noteOverrideLocksAfter records in plan.FieldStatesAfter the lock rows the
+// override's lock write just left for fields (those the override set), read
+// back from the store; the caller re-journals the plan. The undo restores a
+// lock row only while it still holds this (restoreOverrideLocks). A failed
+// read records nothing: the undo then compares with what the lock write
+// writes, which is the same lock.
+func (ms *Service) noteOverrideLocksAfter(bookID string, plan *CombineOverrideUndo, fields ...string) {
+	states, err := ms.db.GetMetadataFieldStates(bookID)
+	if err != nil {
+		mlog.Warn("combine override: lock rows of %s not read back after the lock write; the undo compares with the value written: %s",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	for _, field := range fields {
+		if _, set := plan.FieldStates[field]; !set {
+			continue
+		}
+		for i := range states {
+			if states[i].Field == field {
+				st := states[i]
+				if plan.FieldStatesAfter == nil {
+					plan.FieldStatesAfter = map[string]*database.MetadataFieldState{}
+				}
+				plan.FieldStatesAfter[field] = &st
+			}
+		}
+	}
 }
 
 // virtualFilePlan is what attaching a virtual single-file book's FilePath to
