@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.47.0
+# version: 2.47.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-18
 
@@ -334,6 +334,8 @@ test-short-shard:
 ## scripts/ci/fixture_test_packages.py, so a new short-skipped test is covered
 ## without editing this target.
 ##
+## FIXTURE_TIMEOUT is go test's per-package -timeout (default 25m; Woodpecker's
+## scripts/ci/run_fixture_shards.sh lowers it to fit its step budget).
 ## FIXTURE_SHARD=i/n runs shard i of n (ci.yml's fixture-tests matrix). The
 ## script fails on an empty list or an empty shard: `go test` with no package
 ## arguments would test only the module root and pass.
@@ -341,11 +343,12 @@ test-short-shard:
 ## No `vet` prerequisite: the CI jobs that run vet already gate it, and each
 ## matrix shard would pay for it again.
 FIXTURE_SHARD ?=
+FIXTURE_TIMEOUT ?= 25m
 test-fixtures:
 	@PKGS="$$(python3 scripts/ci/fixture_test_packages.py $(if $(FIXTURE_SHARD),--shard $(FIXTURE_SHARD)))" || exit 1; \
 	echo "🧪 Running short-skipped fixture tests without -short$(if $(FIXTURE_SHARD), (shard $(FIXTURE_SHARD))):"; \
 	echo "$$PKGS" | sed 's/^/   /'; \
-	go test $$PKGS -race -count=1 -timeout 25m
+	go test $$PKGS -race -count=1 -timeout $(FIXTURE_TIMEOUT)
 	@echo "✅ Fixture tests passed"
 
 ## vet: Run go vet across every package. Catches hand-written mock

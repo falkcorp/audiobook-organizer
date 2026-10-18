@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -40,7 +40,7 @@ one for the same commit.
 | `test-database` | `heavy=true` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
 | `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
-| `test-fixtures` | `heavy=true` | `make test-fixtures` as three sequential shards (`FIXTURE_SHARD=1/3`, `2/3`, `3/3`, one step, first failure stops it): every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line. Sequential, not one run of every package, because on llm1 and the mac agent the packages starved each other (pipeline 1129: `internal/plugins/maintenance` hit the 25m per-package timeout with nothing hung). One workflow keeps the one status context and one agent; each shard runs a third of the packages at a time. The repo pipeline timeout (60 min) is a Woodpecker server setting: 22-34 min on llm1/mac before the split, about 11 min on U1; raise it if the summed shard times approach it | 22-34 min on llm1/mac (single run), about 11 min on U1 |
+| `test-fixtures` | `heavy=true` | `make test-fixtures` as three sequential shards (`scripts/ci/run_fixture_shards.sh`): every package whose tests skip under `-short`, run without `-short`; no coverage line. All shards always run; the step fails if any failed. Split because one run of every package was contended on llm1/mac (temp-file I/O and CPU). Each shard's `-timeout` is `min(25m, 55 min budget - elapsed)`, under the 60 min repo timeout | sharded: not yet measured. Single run: 22-34 min on llm1/mac, about 11 min on U1 |
 | `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, pprof-check, web tests | split out of `checks` on 2026-09-29 |
@@ -187,7 +187,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
    "Service Auth" policy that allows that token. The webhook does not use it.
    The `coverage` workflow uses the same three values (see Secrets).
 
-## 4. Agents (as deployed 2026-09-26; developer-Mac agent removed and U1 added 2026-09-29)
+## 4. Agents (as deployed 2026-09-26; U1 added 2026-09-29; mac agent added 2026-10-12)
 
 | agent | host | backend | labels | parallel workflows | runs as |
 |---|---|---|---|---|---|
@@ -195,6 +195,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
 | U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true,taglib=true` | 1 | systemd `woodpecker-agent.service`, `User=woodpecker` |
 | u0-local | 192.0.2.10 (prod, Ubuntu amd64) | local | `host=u0-local,taglib=true` | 1 | systemd `woodpecker-agent-local.service`, `User=woodpecker` |
+| mac | the owner's Mac (macOS arm64) | local | `host=mac,heavy=true` | 2 | `run-agent.sh` under `env -i`, started by hand (not a launchd job); gRPC goes through an ssh tunnel to U0 because macOS Local Network blocks the agent binary |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.

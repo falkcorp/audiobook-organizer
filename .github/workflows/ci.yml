@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.30.0
+# version: 3.30.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-12
+# last-edited: 2026-10-18
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -827,7 +827,7 @@ jobs:
       matrix:
         shard: ['1/3', '2/3', '3/3']
     # INVARIANT (same as go-test-short-shards): the job cap must stay strictly greater
-    # than the 25m `-timeout` that `make test-fixtures` passes to go test, plus
+    # than the 25m `-timeout` (FIXTURE_TIMEOUT's default) that `make test-fixtures` passes to go test, plus
     # setup, or the runner kills the job before Go prints the goroutine dump.
     timeout-minutes: 35
     steps:
