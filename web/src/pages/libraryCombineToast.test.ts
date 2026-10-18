@@ -1,5 +1,5 @@
 // file: web/src/pages/libraryCombineToast.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: c0c7ee3f-0536-48da-951a-b0bfa6e93857
 // last-edited: 2026-10-18
 
@@ -79,6 +79,19 @@ describe('libraryCombineToast', () => {
     expect(p.actionLabel).toBe('Retry');
     expect(p.message).not.toContain('Activity');
     expect(p.message).toContain('operation op-2');
+  });
+
+  it('a partial undo shows the server message, combine notes included, and keeps Retry', () => {
+    const message =
+      'operation partially reverted: 1 of 3 changes restored; 1 combine(s) undone with some things left as they are: user u1 progress on survivor s1 changed after the merge; 1 failed to restore';
+    const p = describeUndoResult({ message, partial: true, restored: 1, total: 3 }, 'op-5');
+    expect(p.severity).toBe('warning');
+    expect(p.message).toContain('(1 of 3 changes reverted)');
+    expect(p.message).toContain(
+      'user u1 progress on survivor s1 changed after the merge; 1 failed to restore.'
+    );
+    expect(p.undoOperationId).toBe('op-5');
+    expect(p.actionLabel).toBe('Retry');
   });
 
   it('an undo that left things as they are is a warning that shows them, with no retry', () => {

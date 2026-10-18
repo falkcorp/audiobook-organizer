@@ -1,11 +1,12 @@
 // file: internal/audiobooks/revert_merge_combine_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a6c29e41-8f07-4b3d-9e15-d2b84f7c0a63
 // last-edited: 2026-10-18
 
 package audiobooks
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,4 +157,21 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 		assert.Equal(t, 1, res.Failed)
 		assert.Empty(t, s.marked)
 	})
+}
+
+// Summary spells out the first combineNotesShown things combine undos left as
+// they are and counts the rest; Kept still carries every one. Summary used
+// to join them all, with no limit, into the toast and the Activity log.
+func TestRevertResultSummary_CapsCombineNotes(t *testing.T) {
+	r := &RevertResult{Total: 1, Restored: 1, CombinesUndoneInPart: 1}
+	for i := range combineNotesShown + 3 {
+		r.combineKept = append(r.combineKept, fmt.Sprintf("note %d", i))
+	}
+	sum := r.Summary()
+	assert.Contains(t, sum, "note 0; note 1; note 2; note 3; note 4; and 3 more")
+	assert.NotContains(t, sum, "note 5")
+
+	r.combineKept = r.combineKept[:2]
+	assert.Contains(t, r.Summary(), "left as they are: note 0; note 1")
+	assert.NotContains(t, r.Summary(), "more")
 }

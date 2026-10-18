@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.79.0
+// version: 1.79.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-18
 
@@ -367,7 +367,7 @@ func (r *RevertResult) Summary() string {
 		fmt.Fprintf(&b, "; %d restored in part (tags changed since the operation were left as they are)", r.PartiallyRestored)
 	}
 	if r.CombinesUndoneInPart > 0 {
-		fmt.Fprintf(&b, "; %d combine(s) undone with some things left as they are: %s", r.CombinesUndoneInPart, strings.Join(r.combineKept, "; "))
+		fmt.Fprintf(&b, "; %d combine(s) undone with some things left as they are: %s", r.CombinesUndoneInPart, joinSampled(r.combineKept, combineNotesShown))
 	}
 	if r.Superseded > 0 {
 		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
@@ -675,10 +675,21 @@ const revertErrorsShown = 5
 // the rest, so an operator sees every kind of refusal a revert met, not only
 // the first.
 func joinRevertErrors(msgs []string) string {
-	if len(msgs) <= revertErrorsShown {
+	return joinSampled(msgs, revertErrorsShown)
+}
+
+// combineNotesShown is how many of the things combine undos left as they are
+// Summary spells out. An operation that undid many combines can leave
+// hundreds, and Summary is the message the Library toast and the Activity
+// log show; Kept carries the full list.
+const combineNotesShown = 5
+
+// joinSampled joins the first shown of msgs with "; " and counts the rest.
+func joinSampled(msgs []string, shown int) string {
+	if len(msgs) <= shown {
 		return strings.Join(msgs, "; ")
 	}
-	return strings.Join(msgs[:revertErrorsShown], "; ") + fmt.Sprintf("; and %d more", len(msgs)-revertErrorsShown)
+	return strings.Join(msgs[:shown], "; ") + fmt.Sprintf("; and %d more", len(msgs)-shown)
 }
 
 // formatTypeCounts renders {"author_delete": 3} as "3 author_delete rows",
