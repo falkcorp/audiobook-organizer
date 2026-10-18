@@ -2143,8 +2143,8 @@
         }
       ],
       "get": {
-        "operationId": "handleListCoverHistory",
-        "summary": "List Cover History",
+        "operationId": "listCoverHistory",
+        "summary": "List Cover History (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -2154,19 +2154,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed and has no replacement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. It has no replacement. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/cover-history/restore": {
@@ -2182,8 +2199,8 @@
         }
       ],
       "post": {
-        "operationId": "handleRestoreCover",
-        "summary": "Restore Cover",
+        "operationId": "restoreCoverFromHistory",
+        "summary": "Restore Cover From History (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -2193,19 +2210,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed and has no replacement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. It has no replacement. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/cow-versions": {
@@ -3261,8 +3295,8 @@
         }
       ],
       "get": {
-        "operationId": "handleSimilarBooks",
-        "summary": "Similar Books",
+        "operationId": "listSimilarBooks",
+        "summary": "Similar Books (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -3272,19 +3306,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed; use the replacement named in the message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. Use GET /api/v1/audiobooks?search=author:... (the library search takes the same author: and series: terms) instead. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/split-to-books": {
@@ -6697,8 +6748,8 @@
     },
     "/import/collision-preview": {
       "post": {
-        "operationId": "handleImportCollisionPreview",
-        "summary": "Import Collision Preview",
+        "operationId": "previewImportCollision",
+        "summary": "Import Collision Preview (retired)",
         "tags": [
           "import"
         ],
@@ -6708,19 +6759,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed and has no replacement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. It has no replacement. A caller without the required library permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/import/file": {
