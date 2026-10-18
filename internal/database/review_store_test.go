@@ -1,5 +1,5 @@
 // file: internal/database/review_store_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
 // last-edited: 2026-10-18
 
@@ -8,6 +8,8 @@ package database
 import (
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 func newReviewTestStore(t *testing.T) *PebbleStore {
@@ -418,6 +420,101 @@ func TestUpsertReviewItem_RequiresDedupKeyAndKind(t *testing.T) {
 	}
 	if _, err := s.UpsertReviewItem(ReviewItem{DedupKey: "dk"}); err == nil {
 		t.Fatal("expected error for empty Kind")
+	}
+}
+
+// A producer upsert writes only pending items: statuses belong to DecideReviewItem
+// and the apply claim, so an insert carrying approved/applied/anything else is
+// refused on every path (new row, existing row, dangling dedup index) and writes
+// nothing. An empty status and an explicit pending are both fine.
+func TestUpsertReviewItem_RefusesANonPendingStatus(t *testing.T) {
+	s := newReviewTestStore(t)
+	for _, status := range []string{ReviewStatusApproved, ReviewStatusApplied, ReviewStatusApplying, ReviewStatusNeedsAttention, "on-hold"} {
+		in := mkReviewItem("regroup.multidisc", "dk-new", "/books/a", "sum", "{}")
+		in.Status = status
+		if _, err := s.UpsertReviewItem(in); err == nil {
+			t.Fatalf("new row: upsert accepted status %q", status)
+		}
+	}
+	if n, _ := s.CountReviewItems(""); n != 0 {
+		t.Fatalf("a refused upsert wrote %d rows", n)
+	}
+
+	pending := mkReviewItem("regroup.multidisc", "dk-new", "/books/a", "sum", "{}")
+	pending.Status = ReviewStatusPending
+	first, err := s.UpsertReviewItem(pending)
+	if err != nil || first.Status != ReviewStatusPending {
+		t.Fatalf("explicit pending = %+v, %v", first, err)
+	}
+
+	// Existing row: refused too, not silently ignored.
+	in := mkReviewItem("regroup.multidisc", "dk-new", "/books/a", "sum2", "{}")
+	in.Status = ReviewStatusApplied
+	if _, err := s.UpsertReviewItem(in); err == nil {
+		t.Fatal("existing row: upsert accepted status applied")
+	}
+	if got, _ := s.GetReviewItem(first.ID); got.Summary != "sum" || got.Status != ReviewStatusPending {
+		t.Fatalf("a refused upsert changed the row: %+v", got)
+	}
+
+	// Dangling dedup index: the record is gone, the index remains.
+	if err := s.db.Delete(reviewItemRecKey(first.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	in.Status = ReviewStatusApproved
+	if _, err := s.UpsertReviewItem(in); err == nil {
+		t.Fatal("dangling index: upsert accepted status approved")
+	}
+	in.Status = ""
+	re, err := s.UpsertReviewItem(in)
+	if err != nil || re.Status != ReviewStatusPending || re.ID != first.ID {
+		t.Fatalf("dangling index, empty status = %+v, %v; want a pending row under the old id", re, err)
+	}
+	if n := countStatus(t, s, ReviewStatusApproved) + countStatus(t, s, ReviewStatusApplied); n != 0 {
+		t.Fatalf("%d rows landed in a decision status", n)
+	}
+}
+
+// A pending hold re-emitted unchanged is a full no-op, UpdatedAt included: that stamp
+// is the if_updated_at a reviewer's open row carries, and stamping it on every
+// regroup run would make every approve of an unchanged hold answer 409. A real change
+// to Summary or Payload still refreshes the row and moves the stamp.
+func TestUpsertReviewItem_IdenticalRefreshKeepsUpdatedAt(t *testing.T) {
+	s := newReviewTestStore(t)
+	in := mkReviewItem("regroup.multidisc", "dk1", "/books/a", "sum", `{"v":1}`)
+	first, err := s.UpsertReviewItem(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	again, err := s.UpsertReviewItem(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := s.GetReviewItem(first.ID)
+	if !again.UpdatedAt.Equal(first.UpdatedAt) || !stored.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("identical refresh moved UpdatedAt: first %v, returned %v, stored %v",
+			first.UpdatedAt, again.UpdatedAt, stored.UpdatedAt)
+	}
+	// The stamp a reviewer read still claims.
+	if _, err := s.ClaimReviewItemForApply(first.ID, "combine", first.UpdatedAt); err != nil {
+		t.Fatalf("claim with the stamp read before an identical refresh: %v", err)
+	}
+
+	s2 := newReviewTestStore(t)
+	f2, _ := s2.UpsertReviewItem(in)
+	for name, change := range map[string]func(*ReviewItem){
+		"summary": func(i *ReviewItem) { i.Summary = "sum2" },
+		"payload": func(i *ReviewItem) { i.Payload = `{"v":2}` },
+	} {
+		changed := in
+		change(&changed)
+		time.Sleep(5 * time.Millisecond)
+		got, err := s2.UpsertReviewItem(changed)
+		if err != nil || !got.UpdatedAt.After(f2.UpdatedAt) {
+			t.Fatalf("%s change: UpdatedAt %v not after %v (err %v)", name, got.UpdatedAt, f2.UpdatedAt, err)
+		}
+		f2 = got
 	}
 }
 
