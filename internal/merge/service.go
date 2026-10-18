@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2172,9 +2172,11 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 	handOffLeftGroups(ms.db, leftGroups)
 
-	// The override is planned (every before-value read, the author
-	// resolved), journaled, and only then written; an override the journal
-	// could not record is not written at all. Written unjournaled, a
+	// The override is planned (every before-value read, the author looked
+	// up), journaled, and only then written, a new author row included
+	// (writeCombineOverride creates it and journals its id before linking
+	// it); an override the journal could not record is not written at all,
+	// and leaves no author row behind. Written unjournaled, a
 	// failure of the final journal write would leave it with no undo.
 	if override != nil && (override.Title != "" || override.Author != "" || override.Narrator != "") {
 		if plan := ms.planCombineOverride(primaryID, override); plan != nil {
@@ -2186,7 +2188,7 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 				journal.Warnings = append(journal.Warnings, msg)
 				res.Warnings = append(res.Warnings, msg)
 			} else {
-				ms.writeCombineOverride(primaryID, plan)
+				ms.writeCombineOverride(primaryID, plan, func() error { return ms.putCombineJournal(journal) })
 				// Records the before-values the writes actually replaced and
 				// drops any sub-write that failed. A failure here is carried by
 				// the final write below.
@@ -2301,9 +2303,11 @@ func buildProgressJournal(before, after progressSnap) []CombineUserProgress {
 // planCombineOverride reads everything an undo of the override needs before
 // anything is written, under the merge lock: the survivor's title, narrator,
 // author id and author links, and the lock rows the override will write. It
-// resolves the author by name (creating it when new), so AuthorIDAfter is
-// known up front. A field that cannot be planned is dropped from the plan, and
-// a plan with nothing left is nil.
+// looks the author up by name: an existing author's id is AuthorIDAfter up
+// front; a new author is created by writeCombineOverride once this plan is
+// journaled, and AuthorIDAfter journaled before any link is written. A field
+// that cannot be planned is dropped from the plan, and a plan with nothing
+// left is nil.
 //
 // Creation gate. The override is often PREFILLED from one of the books being
 // combined rather than typed, so a book already carrying an author row like
@@ -2333,13 +2337,15 @@ func (ms *Service) planCombineOverride(primaryID string, override *CombineOverri
 			// Applied.Author names the author actually linked: the lock
 			// row records this cleaned name, not the raw override.
 			plan.Applied.Author = cleaned
+			// Looked up only: a new author row is created by
+			// writeCombineOverride, after this plan is journaled. Created
+			// here, every override the combine then skipped (the plan's
+			// journal write failed, the lock rows were unreadable) left an
+			// author row nothing links to and no undo removes.
 			author, aerr := ms.db.GetAuthorByName(cleaned)
-			if aerr == nil && author == nil {
-				author, aerr = ms.db.CreateAuthor(cleaned)
-			}
 			prior, perr := ms.db.GetBookAuthors(primaryID)
 			switch {
-			case aerr != nil || author == nil:
+			case aerr != nil:
 				slog.Warn("combine override author", "name", logger.SanitizeLogValue(override.Author), "err", logger.SanitizeLogValue(fmt.Sprint(aerr)))
 				plan.Applied.Author = ""
 			case perr != nil:
@@ -2348,8 +2354,10 @@ func (ms *Service) planCombineOverride(primaryID string, override *CombineOverri
 				mlog.Warn("combine override: prior authors of %s unreadable; author not overridden: %s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(perr)))
 				plan.Applied.Author = ""
 			default:
-				id := author.ID
-				plan.AuthorIDAfter = &id
+				if author != nil {
+					id := author.ID
+					plan.AuthorIDAfter = &id
+				}
 				plan.AuthorsBefore = prior
 			}
 		}
@@ -2396,7 +2404,7 @@ func (ms *Service) planCombineOverride(primaryID string, override *CombineOverri
 // Applied field and lock-row entry cleared, AuthorIDAfter nil) so the undo
 // neither checks nor rolls back a change that never happened. The caller
 // re-journals the plan afterwards.
-func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo) {
+func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo, persist func() error) {
 	if plan.Applied.Title != "" || plan.Applied.Narrator != "" {
 		// ModifyBook: only Title and Narrator are written, on the row as it
 		// is under the write lock, so a column another writer committed in
@@ -2436,15 +2444,41 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 			}
 		}
 	}
-	if plan.AuthorIDAfter == nil {
+	if plan.Applied.Author == "" {
 		return
 	}
-	authorID := *plan.AuthorIDAfter
 	dropAuthor := func() {
 		plan.Applied.Author = ""
 		plan.AuthorIDAfter = nil
 		delete(plan.FieldStates, database.FieldKeyAuthorName)
 	}
+	if plan.AuthorIDAfter == nil {
+		// A new author: created only now that the plan is journaled, and its
+		// id journaled before any link names it, so the undo always knows
+		// which links to put back. A journal on disk that names the author
+		// but no id (a crash in between) has no link to undo. The one row
+		// this can still leave unlinked is the author created here when
+		// that journal write then fails: the override is dropped, and the
+		// row is logged.
+		author, err := ms.db.GetAuthorByName(plan.Applied.Author)
+		if err == nil && author == nil {
+			author, err = ms.db.CreateAuthor(plan.Applied.Author)
+		}
+		if err != nil || author == nil {
+			slog.Warn("combine override author", "name", logger.SanitizeLogValue(plan.Applied.Author), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
+			dropAuthor()
+			return
+		}
+		id := author.ID
+		plan.AuthorIDAfter = &id
+		if err := persist(); err != nil {
+			mlog.Error("combine override: author %d (%s) exists but its id could not be journaled; author not overridden and the row is left unlinked: %s",
+				id, logger.SanitizeLogValue(plan.Applied.Author), logger.SanitizeLogValue(fmt.Sprint(err)))
+			dropAuthor()
+			return
+		}
+	}
+	authorID := *plan.AuthorIDAfter
 	if err := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
 		{BookID: primaryID, AuthorID: authorID, Role: "author", Position: 0},
 	}); err != nil {
