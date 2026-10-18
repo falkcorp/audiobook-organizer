@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package metadata
 
@@ -97,8 +97,8 @@ var rateLimitMarkers = []string{
 // misconfigured CDN answering `Retry-After: Sun, 01 Jan 2040 ...` would otherwise
 // write a 14-year hold, persist it with pebble.Sync, and have AttachStore
 // faithfully restore it on every boot -- a permanent, silent removal of that
-// provider whose only escape is an operator who happens to know the reset
-// endpoint exists.
+// provider whose cap is this constant: a provider stays held for at most 24h, released
+// by expiry or by a successful single-book lookup.
 const maxThrottleHold = 24 * time.Hour
 
 // bodyNames reports whether a provider's message contains any of these markers.

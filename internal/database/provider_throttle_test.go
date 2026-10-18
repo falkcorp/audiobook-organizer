@@ -1,7 +1,7 @@
 // file: internal/database/provider_throttle_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b66678de-73cb-4f2b-8d84-94bea576add7
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 
@@ -64,8 +64,8 @@ func TestProviderThrottle_RoundTrip(t *testing.T) {
 	}
 }
 
-// Expiry and the manual reset both delete, and neither knows whether a row is
-// there. Erroring on an absent key would turn a normal path into a logged
+// The expiry sweep, release-on-success and AttachStore's drop of unreadable or
+// expired rows all delete, and none of them knows whether a row is there. Erroring on an absent key would turn a normal path into a logged
 // failure.
 func TestProviderThrottle_DeleteAbsentIsNotAnError(t *testing.T) {
 	s := newThrottleTestStore(t)

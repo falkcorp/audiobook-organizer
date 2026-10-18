@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops_throttle_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 11f72a9a-9bd0-4e67-925a-1e1b498f9baf
 // last-edited: 2026-10-18
 
@@ -77,6 +77,10 @@ func TestPrepareFetchChain_AllThrottledRefusesToStart(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error message does not mention %q: %v", want, err)
 		}
+	}
+	// The DELETE reset routes are retired (01-P81f); never point operators at them.
+	if strings.Contains(err.Error(), "DELETE") {
+		t.Errorf("error message names a retired DELETE route: %v", err)
 	}
 }
 
@@ -193,10 +197,13 @@ func TestChainOutcome_AllThrottledIsReportedMidRun(t *testing.T) {
 	throttleProvider(t, "hardcover", 401, "bad token")
 
 	err := metafetch.AllThrottledMidRunError(chain)
-	for _, want := range []string{"mid-run", "retryable", "google-books", "hardcover"} {
+	for _, want := range []string{"mid-run", "retryable", "google-books", "hardcover", "throttles"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("mid-run error does not mention %q: %v", want, err)
 		}
+	}
+	if strings.Contains(err.Error(), "DELETE") {
+		t.Errorf("mid-run error names a retired DELETE route: %v", err)
 	}
 }
 

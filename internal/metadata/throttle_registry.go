@@ -1,5 +1,5 @@
 // file: internal/metadata/throttle_registry.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0317e94d-7c76-4a4b-97a3-3cdfbf327945
 // last-edited: 2026-10-18
 
@@ -45,9 +45,9 @@ type ThrottleRegistry struct {
 	// mu alone was not enough. Persistence happened AFTER mu was released, so
 	// two callers could interleave into a state where memory and disk disagree:
 	// a RecordFailure that had mutated the map but not yet written, overtaken by
-	// a user's manual Clear, ends with no hold in memory and a hold on disk --
-	// and AttachStore faithfully restores it on the next boot, silently undoing
-	// a reset the user performed while the run was live. The same interleaving
+	// a RecordSuccess release or the expiry sweep, ends with no hold in memory
+	// and a hold on disk -- and AttachStore faithfully restores it on the next
+	// boot, silently undoing a release that had already happened. The same interleaving
 	// let a 4h daily-quota hold persist as a 15m rate-limit row.
 	//
 	// It is a separate lock from mu so the read paths (Get/Throttled/List, hit

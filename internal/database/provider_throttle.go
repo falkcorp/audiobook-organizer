@@ -1,7 +1,7 @@
 // file: internal/database/provider_throttle.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 954d6574-128c-4af7-b839-dcd891c661bd
-// last-edited: 2026-09-03
+// last-edited: 2026-10-18
 
 package database
 
@@ -66,8 +66,9 @@ func (p *PebbleStore) SaveProviderThrottle(providerID string, payload []byte) er
 }
 
 // DeleteProviderThrottle removes one provider's hold. Deleting an absent key is
-// not an error -- both expiry and the manual reset take this path and neither
-// should care whether a row happened to be there.
+// not an error -- the expiry sweep, release-on-success (clearLocked) and
+// AttachStore dropping unreadable or expired rows all take this path and none
+// of them should care whether a row happened to be there.
 func (p *PebbleStore) DeleteProviderThrottle(providerID string) error {
 	return p.db.Delete(providerThrottleKey(providerID), pebble.Sync)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/exported.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 34fcf0d9-304d-4ce1-8020-bb03430c90a7
 // last-edited: 2026-10-18
 
@@ -7,7 +7,7 @@
 // the unexported *Impl method that holds the original handler body verbatim, so
 // the bodies read identically to the server-package originals while the router
 // in wire_handlers.go binds to stable exported names. One exported method per
-// route (19 total), matching the 19 routes relocated out of server_lifecycle.go.
+// route (20 methods in this file).
 
 package metadatahandler
 
