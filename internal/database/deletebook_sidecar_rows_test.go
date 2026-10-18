@@ -1,5 +1,5 @@
 // file: internal/database/deletebook_sidecar_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c125e490-ad49-4fbd-8185-e0ae632b4de3
 // last-edited: 2026-10-18
 
@@ -70,7 +70,8 @@ func sidecarFamilies(t *testing.T, db *GatedDB) []sidecarFamily {
 
 // seedSidecars writes one row into every family for bookID through the same
 // public writers production uses, so the keys under test are exactly the keys
-// the writers create.
+// the writers create. The one exception is alt_titles:book:<id>, whose writer
+// was deleted (01-P81d): seedAltTitles writes that legacy row raw.
 func seedSidecars(t *testing.T, s *PebbleStore, bookID string, authorID, narratorID int) {
 	t.Helper()
 	require.NoError(t, s.SetBookAuthors(bookID, []BookAuthor{{BookID: bookID, AuthorID: authorID, Role: "author"}}))

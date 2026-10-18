@@ -1,9 +1,9 @@
 // file: internal/server/handlers/audiobooks/handler_tags.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ff2e3609-5ce3-4414-a18b-976d21b929fb
 // last-edited: 2026-10-18
 
-// Tag read/write, and batch tag-update endpoints for
+// Tag read/write and batch tag-update endpoints for
 // the audiobooks domain. Split out of handler.go for readability; one Handler,
 // one New().
 
