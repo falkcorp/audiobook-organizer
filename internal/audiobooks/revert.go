@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.76.0
+// version: 1.77.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -190,6 +190,10 @@ type RevertService struct {
 	// undo.ChangeTypeMergeCombineJournal row. nil means merge.NewService
 	// over db (combineUndoerFor).
 	combineUndo combineUndoer
+	// siblingUndo undoes a merge's sibling-move journal: the revert of an
+	// undo.ChangeTypeMergeSiblingJournal row. nil means merge.NewService
+	// over db (siblingUndoerFor).
+	siblingUndo siblingUndoer
 }
 
 // NewRevertService creates a new RevertService.
@@ -756,6 +760,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertMetadataCacheCopy(c)
 	case undo.ChangeTypeMergeCombineJournal:
 		return rs.revertMergeCombineJournal(c)
+	case undo.ChangeTypeMergeSiblingJournal:
+		return rs.revertMergeSiblingJournal(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
 		undo.ChangeTypeRepairPlanRecord, undo.ChangeTypeRepairOwnerApply, undo.ChangeTypeAIScanResultApplied:
 		// No filesystem or DB mutation recorded; nothing to reverse.

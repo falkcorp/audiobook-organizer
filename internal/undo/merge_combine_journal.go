@@ -1,7 +1,7 @@
 // file: internal/undo/merge_combine_journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e3a9c17-2d84-4f60-b9a1-7c06e4d2f8b3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package undo
 
@@ -11,11 +11,15 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// ChangeTypeMergeCombineJournal: a Repairs fixer merged books through a merge
-// core that keeps its own undo record (merge.CombineJournal), and this row
-// names that record. It is journaled on the merge's keep book (BookID) right
-// after the merge wrote its journal Pending and before the merge's first
-// mutation, by maintenance's dedup.split-books fixer. FieldName is
+// ChangeTypeMergeCombineJournal: books were combined through a merge core
+// that keeps its own undo record (merge.CombineJournal), and this row names
+// that record. It is journaled on the merge's keep book (BookID) right after
+// the merge wrote its journal Pending and before the merge's first mutation:
+// by maintenance's dedup.split-books fixer (through its repairs Writer), and by
+// every other combine at the chokepoints themselves (merge.Service
+// CombineBooksWithOptions and dedup.MergeSplitBookClusterWithOptions, through
+// RecordMergeJournalPointer), under the caller's operation id or, for a
+// combine no operation runs, a correlation id of its own. FieldName is
 // MergeCombineJournalField, NewValue the combine journal id, OldValue "".
 //
 // Restorable: the revert undoes that combine journal
