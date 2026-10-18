@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -1000,9 +1000,8 @@ func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
 // Renamed from RescanAudiobook on 2026-08-24. The old name promised a rescan it
 // never performed: it stats files and corrects sizes, but nothing is re-read,
 // no tags are parsed and no hash is recomputed. For an actual forced re-read of
-// a book see ForceRescanAudiobook. POST /audiobooks/:id/rescan is retained as a
-// deprecated alias for THIS handler, so no existing caller silently changes
-// meaning.
+// a book see ForceRescanAudiobook. The old POST /audiobooks/:id/rescan alias was
+// retired behind a 410 stub (01-P81d); this handler serves reconcile-files only.
 func (h *Handler) ReconcileAudiobookFiles(c *gin.Context) {
 	id := c.Param("id")
 	store := h.store

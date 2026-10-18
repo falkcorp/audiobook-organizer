@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -979,20 +979,6 @@ func TestCoverageBookSubresources(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		resp = resp["data"].(map[string]any)
 		assert.NotNil(t, resp["entries"])
-	})
-
-	t.Run("get path history", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/audiobooks/%s/path-history", book.ID), nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp map[string]any
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		resp = resp["data"].(map[string]any)
-		// history key exists in response (may be null for no history)
-		_, hasHistory := resp["history"]
-		assert.True(t, hasHistory, "response should contain 'history' key")
 	})
 
 	t.Run("get external IDs", func(t *testing.T) {

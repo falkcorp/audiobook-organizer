@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -249,17 +249,6 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 		"author_credits_left":     res.AuthorCreditsLeft,
 		"batch_id":                res.BatchID,
 	})
-}
-
-// GetBookPathHistory handles GET /audiobooks/:id/path-history.
-func (h *Handler) GetBookPathHistory(c *gin.Context) {
-	id := c.Param("id")
-	history, err := h.store.GetBookPathHistory(id)
-	if err != nil {
-		httputil.RespondWithOK(c, gin.H{"history": []any{}})
-		return
-	}
-	httputil.RespondWithOK(c, gin.H{"history": history})
 }
 
 // GetAudiobookExternalIDs handles GET /audiobooks/:id/external-ids. The

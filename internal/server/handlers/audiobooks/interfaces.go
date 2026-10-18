@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -73,20 +73,12 @@ type AudiobookFileStore interface {
 	PatchBookFileFields(bookID, fileID string, patch database.BookFileFieldPatch) (before, after *database.BookFile, err error)
 }
 
-// AudiobookHistoryStore covers change and path history.
+// AudiobookHistoryStore covers change history.
 type AudiobookHistoryStore interface {
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
 	GetMetadataChangeHistory(bookID, field string, limit int) ([]database.MetadataChangeRecord, error)
-	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
 	GetBookChanges(bookID string) ([]*database.OperationChange, error)
-}
-
-// AudiobookTitleStore covers alternative titles.
-type AudiobookTitleStore interface {
-	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
-	AddBookAlternativeTitle(bookID, title, source, language string) error
-	RemoveBookAlternativeTitle(bookID, title string) error
 }
 
 // AudiobookTagStore reads detailed tags.
@@ -135,7 +127,6 @@ type AudiobooksStore interface {
 	AudiobookBookStore
 	AudiobookFileStore
 	AudiobookHistoryStore
-	AudiobookTitleStore
 	AudiobookTagStore
 	AudiobookFacetStore
 	AudiobookCreditStore
