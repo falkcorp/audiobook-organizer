@@ -1,7 +1,7 @@
 <!-- file: docs/system/components.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: f6a7b8c9-d0e1-2345-f012-345678901234 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-18 -->
 
 # Component Inventory
 
@@ -167,7 +167,7 @@ The React/TypeScript UI (`web/src/`) provides these main views:
 | Book detail | Metadata, files (format-grouped trays), iTunes linked panel, version group chip |
 | Tag comparison | Transposed table: tags as columns, sources as rows; resizable; snapshot dismiss |
 | Changelog | Timeline with revert buttons; clicking metadata_apply or tag_write shows snapshot diff |
-| Review (`/review`) | One workspace, four lanes (`web/src/components/review/lanes/`): Review queue (producer-agnostic holds, approve/reject/replay), Duplicates (dedup candidates with evidence and scoring breakdown), Metadata (candidate apply), Repairs (per fixer: run trial → page rows → pick rows → apply) |
+| Review (`/review`) | One workspace, four lanes (`web/src/components/review/lanes/`): Review queue (producer-agnostic holds, approve/reject/re-approve), Duplicates (dedup candidates with evidence and scoring breakdown), Metadata (candidate apply), Repairs (per fixer: run trial → page rows → pick rows → apply) |
 | Diagnostics | ZIP export, AI batch analysis, results review |
 | Activity log | Namespace-colored tag chips, click-to-filter, per-item timestamps, digest expansion |
 | Settings | Import paths, metadata sources, backup, config sub-structs (7 groups) |
