@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/reapprove_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2e4e573-9060-4296-b021-6de20390337a
 // last-edited: 2026-10-18
 
@@ -7,6 +7,7 @@ package reviewhandler_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -194,5 +195,111 @@ func TestBulkApproveByIDs_AppliesItemsApprovedWhileApplyWasOff(t *testing.T) {
 	}
 	if got, _ := s.GetReviewItem(keepApart.ID); got.Status != database.ReviewStatusApproved || got.ChosenAction != itunesservice.ActionSeparate {
 		t.Fatalf("separate-decided item = %q/%q, want approved/separate", got.Status, got.ChosenAction)
+	}
+}
+
+// 🔴 A FAILING ITEM MUST NOT STOP THE BATCH OR HIDE ITS CAUSE (ported from the retired
+// TestReplayApproved_LeavesFailedItemsRetryable). The middle item's apply errors: the
+// first item is applied, the third still runs, the failed one stays approved (so a
+// resend retries it) and the response names it with the reason instead of a bare 500.
+func TestBulkApprove_FailingItemIsReportedAndRetryable(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	b := seedAction(t, s, "regroup.multidisc", "m2", itunesservice.ActionCombine)
+	c := seedAction(t, s, "regroup.multidisc", "m3", itunesservice.ActionCombine)
+
+	applyOn := false
+	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
+	failB := true
+	calls := map[string]int{}
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, it database.ReviewItem) error {
+		calls[it.ID]++
+		if it.ID == b.ID && failB {
+			return errors.New("synthetic refusal")
+		}
+		return nil
+	})
+	ids := []string{a.ID, b.ID, c.ID}
+	for _, id := range ids {
+		reApprove(t, h, id) // apply off: records approved
+	}
+
+	applyOn = true
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": ids}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("bulk: code %d body %s", w.Code, w.Body.String())
+	}
+	data := decodeBody(t, w)["data"].(map[string]any)
+	if applied, _ := data["applied"].([]any); len(applied) != 2 {
+		t.Fatalf("applied = %v, want the first and third items", data["applied"])
+	}
+	failed, _ := data["failed"].([]any)
+	if len(failed) != 1 {
+		t.Fatalf("failed = %v, want exactly the middle item", data["failed"])
+	}
+	f0 := failed[0].(map[string]any)
+	if f0["id"] != b.ID || f0["reason"] == "" || f0["reason"] == nil {
+		t.Fatalf("failed[0] = %v, want id %s with the apply error as reason", f0, b.ID)
+	}
+	if data["apply_disabled"] != nil {
+		t.Fatalf("apply_disabled = %v with apply on, want it absent", data["apply_disabled"])
+	}
+	if got, _ := s.GetReviewItem(b.ID); got.Status != database.ReviewStatusApproved {
+		t.Fatalf("failed item status = %q, want approved (retryable)", got.Status)
+	}
+	for _, id := range []string{a.ID, c.ID} {
+		if got, _ := s.GetReviewItem(id); got.Status != database.ReviewStatusApplied {
+			t.Fatalf("item %s status = %q, want applied", id, got.Status)
+		}
+	}
+
+	// Retry the same ids: the applied two are skipped (never applied twice) and the
+	// previously failing one now succeeds.
+	failB = false
+	w = doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": ids}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("retry: code %d body %s", w.Code, w.Body.String())
+	}
+	data = decodeBody(t, w)["data"].(map[string]any)
+	if applied, _ := data["applied"].([]any); len(applied) != 1 || applied[0] != b.ID {
+		t.Fatalf("retry applied = %v, want [%s]", data["applied"], b.ID)
+	}
+	if skipped, _ := data["skipped"].([]any); len(skipped) != 2 {
+		t.Fatalf("retry skipped = %v, want the two already-applied items", data["skipped"])
+	}
+	if calls[a.ID] != 1 || calls[c.ID] != 1 || calls[b.ID] != 2 {
+		t.Fatalf("apply calls = %v, want a=1 c=1 b=2", calls)
+	}
+}
+
+// With apply OFF a bulk approve of already-approved ids records approval and applies
+// nothing; the response must say so rather than return an unexplained empty `applied`.
+func TestBulkApprove_ApplyOffSaysSo(t *testing.T) {
+	s := newTestStore(t)
+	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	h := reviewhandler.New(s, func() bool { return false }, nil)
+	combined := 0
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
+		combined++
+		return nil
+	})
+	reApprove(t, h, it.ID)
+
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": []string{it.ID}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code %d body %s", w.Code, w.Body.String())
+	}
+	data := decodeBody(t, w)["data"].(map[string]any)
+	if data["apply_disabled"] != true {
+		t.Fatalf("apply_disabled = %v, want true", data["apply_disabled"])
+	}
+	if combined != 0 || data["applied"] != nil {
+		t.Fatalf("applied %d times / %v with apply off", combined, data["applied"])
+	}
+	if got, _ := s.GetReviewItem(it.ID); got.Status != database.ReviewStatusApproved {
+		t.Fatalf("status = %q, want approved", got.Status)
 	}
 }

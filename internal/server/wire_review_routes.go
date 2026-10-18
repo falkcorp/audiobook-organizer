@@ -31,5 +31,5 @@ func (s *Server) wireReviewRoutes(protected *gin.RouterGroup, reviewH *reviewhan
 	// allowed caller learns it is gone. The replacement is approving the items
 	// again (their recorded action is honoured), one call per list of ids.
 	protected.POST("/review/replay-approved", s.perm(auth.PermLibraryEditMetadata),
-		gone("POST /api/v1/review/bulk with {\"action\":\"approve\",\"ids\":[...]} (list the approved items with GET /api/v1/review/items?status=approved) once review_apply_enabled is on"))
+		gone("POST /api/v1/review/bulk with {\"action\":\"approve\",\"ids\":[...]} (list the approved items with GET /api/v1/review/items?status=approved; items run their recorded action only while review_apply_enabled is on, and the response lists failed ones)"))
 }

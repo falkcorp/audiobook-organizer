@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
-// last-edited: 2026-09-01
+// last-edited: 2026-10-18
 
 /**
  * The regroup lane's data layer.
@@ -818,16 +818,26 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         try {
           const result = await api.bulkReviewAction({ action, kind });
           const skipped = result.skipped ?? [];
+          const failed = result.failed ?? [];
           // Report the skips in the same breath as the successes. Bulk approve
           // runs each hold's OWN recommendation and refuses the undecidable
           // ones; a message quoting only `processed` would let a reviewer
           // believe a bucket was cleared when a third of it is still sitting
-          // there.
+          // there. Failed items (an apply that errored) are named too: they keep
+          // their status and stay in the list, and the first cause is quoted.
+          // `apply_disabled` says an approve only recorded the decision.
+          const notes = [
+            skipped.length ? `${skipped.length} skipped, listed below` : '',
+            failed.length ? `${failed.length} failed (still in the list; ${failed[0].reason})` : '',
+            action === 'approve' && result.apply_disabled
+              ? 'apply is off, so nothing was applied'
+              : '',
+          ].filter(Boolean);
           toast(
             `${action === 'approve' ? 'Approved' : 'Rejected'} ${result.processed} item${
               result.processed === 1 ? '' : 's'
-            }${skipped.length ? ` · ${skipped.length} skipped, listed below` : ''}`,
-            skipped.length ? 'warning' : 'success'
+            }${notes.length ? ` · ${notes.join(' · ')}` : ''}`,
+            failed.length ? 'error' : notes.length ? 'warning' : 'success'
           );
           setSkipsByKind((prev) => {
             const next = { ...prev };

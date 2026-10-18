@@ -1,5 +1,5 @@
 // file: internal/server/wire_catalog_review_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f249ef1-e42a-4424-9b7a-b8d1c8e263c2
 // last-edited: 2026-10-18
 
@@ -20,7 +20,7 @@ import (
 
 const (
 	catalogGoneBody = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
-	replayGoneBody  = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/review/bulk with {\"action\":\"approve\",\"ids\":[...]} (list the approved items with GET /api/v1/review/items?status=approved) once review_apply_enabled is on instead"}`
+	replayGoneBody  = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/review/bulk with {\"action\":\"approve\",\"ids\":[...]} (list the approved items with GET /api/v1/review/items?status=approved; items run their recorded action only while review_apply_enabled is on, and the response lists failed ones) instead"}`
 )
 
 // retiredCatalogReviewRoutes are the routes retired by 01-P81j with the exact

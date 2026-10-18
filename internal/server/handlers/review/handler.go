@@ -550,13 +550,28 @@ type bulkSkip struct {
 
 // bulkResult reports the outcome of a bulk action.
 type bulkResult struct {
-	Action    string     `json:"action"`
-	Approved  []string   `json:"approved,omitempty"`
-	Applied   []string   `json:"applied,omitempty"`
-	Rejected  []string   `json:"rejected,omitempty"`
-	NotFound  []string   `json:"not_found,omitempty"`
-	Skipped   []bulkSkip `json:"skipped,omitempty"`
-	Processed int        `json:"processed"`
+	Action   string     `json:"action"`
+	Approved []string   `json:"approved,omitempty"`
+	Applied  []string   `json:"applied,omitempty"`
+	Rejected []string   `json:"rejected,omitempty"`
+	NotFound []string   `json:"not_found,omitempty"`
+	Skipped  []bulkSkip `json:"skipped,omitempty"`
+	// Failed lists items whose apply (or status write) errored. The item keeps the
+	// status it had, so an approved item stays approved and a retry is another
+	// bulk approve naming its id; the batch carries on past it.
+	Failed []bulkFail `json:"failed,omitempty"`
+	// ApplyDisabled is true on an approve while the global apply switch is off:
+	// approvals were recorded but nothing was applied, so an empty `applied` is not
+	// a result. Enable review_apply_enabled and approve the ids again.
+	ApplyDisabled bool `json:"apply_disabled,omitempty"`
+	Processed     int  `json:"processed"`
+}
+
+// bulkFail is one item a bulk action could not complete, with the cause a
+// reviewer needs (the same text the retired replay-approved route reported).
+type bulkFail struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 // BulkReviewAction handles POST /api/v1/review/bulk.
@@ -564,6 +579,10 @@ type bulkResult struct {
 // Targets are the explicit IDs when provided, otherwise every PENDING item of
 // the given Kind. Volume is bounded (v1 producer holds only), so this runs
 // sequentially; a worker pool would be premature until real apply handlers land.
+//
+// Approving an id that is already approved executes it (once the apply switch is
+// on) with the action a human recorded; this is how holds approved while apply was
+// off get carried out now that POST /review/replay-approved is retired.
 func (h *Handler) BulkReviewAction(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
@@ -610,12 +629,25 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		return
 	}
 
+	// Per-item faults (an apply handler error, a status write error) go in
+	// result.Failed and the batch continues: stopping at the first one left earlier
+	// items applied but unreported and later ones untouched. A 500 is kept only for
+	// request-level failures (the store listing above).
 	result := bulkResult{Action: req.Action}
+	result.ApplyDisabled = req.Action == "approve" && !h.applyGloballyEnabled()
 	for _, id := range ids {
 		switch req.Action {
 		case "approve":
 			// "" = use this item's OWN recommendation. See bulkRequest's comment for
 			// why there is no batch-wide action.
+			//
+			// An item that is already applied is skipped, not approved again: the
+			// retry path after a partial failure is to resend the same ids, and a
+			// second apply of a merge that already ran must never happen.
+			if cur, gerr := h.store.GetReviewItem(id); gerr == nil && cur != nil && cur.Status == database.ReviewStatusApplied {
+				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: effectiveActionFor(*cur), Reason: "already applied"})
+				continue
+			}
 			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "")
 			// A per-item refusal (no decidable action, unimplemented action) SKIPS that
 			// item and the batch continues. Aborting the whole batch on one
@@ -626,8 +658,8 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 				continue
 			}
 			if err != nil {
-				httputil.InternalError(c, "failed to approve review item "+id, err)
-				return
+				result.Failed = append(result.Failed, bulkFail{ID: id, Reason: err.Error()})
+				continue
 			}
 			if updated == nil {
 				result.NotFound = append(result.NotFound, id)
@@ -642,8 +674,8 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		case "reject":
 			updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusRejected)
 			if err != nil {
-				httputil.InternalError(c, "failed to reject review item "+id, err)
-				return
+				result.Failed = append(result.Failed, bulkFail{ID: id, Reason: err.Error()})
+				continue
 			}
 			if updated == nil {
 				result.NotFound = append(result.NotFound, id)
@@ -678,9 +710,8 @@ const (
 // 50". A client that sends limit=0 meaning "everything" therefore gets 50 rows,
 // a total that says otherwise, and no error — the replay-approved handler that
 // lived in this package until 01-P81j made exactly that mistake and reported a
-// 300-hold queue as 50. A
-// non-numeric limit used to fall to the default the same silent way. Refusing
-// at the edge turns the misunderstanding into a message the caller sees on the
+// 300-hold queue as 50. A non-numeric limit used to fall to the default the
+// same silent way. Refusing at the edge turns the misunderstanding into a message the caller sees on the
 // first request instead of a page that looks complete and is not.
 func parseReviewListLimit(c *gin.Context) (int, bool) {
 	raw := c.Query("limit")

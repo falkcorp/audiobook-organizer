@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 /**
  * Tests for the regroup lane's data layer.
@@ -212,6 +212,25 @@ describe('bulk skips are kept per kind', () => {
 
     expect(result.current.skipsByKind['regroup.ambiguous']).toBeUndefined();
     expect(result.current.skipsByKind['regroup.multidisc']).toHaveLength(1);
+  });
+
+  it('names failed items and an apply-off approve in the toast instead of quoting only processed', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.bulkReviewAction).mockResolvedValueOnce({
+      action: 'approve',
+      processed: 2,
+      applied: ['a1'],
+      failed: [{ id: 'a2', reason: 'synthetic refusal' }],
+      apply_disabled: true,
+    } as api.ReviewBulkResult);
+    await act(async () => result.current.bulkAction('regroup.multidisc', 'approve'));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/1 failed \(still in the list; synthetic refusal\).*apply is off/),
+        'error'
+      )
+    );
   });
 
   it('a clean bulk run clears that kind rather than leaving a stale report', async () => {
