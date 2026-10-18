@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.188.0
+// version: 2.189.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -5477,10 +5477,7 @@ export async function getAIScanResults(id: number, agreement?: string): Promise<
  * marked applied only once its merge succeeded. Refusals are 409 (superseded or
  * unfinished scan, result already applied) and 400 (not a merge, no keep author).
  */
-export async function applyAIScanResults(
-  scanID: number,
-  resultIDs: number[]
-): Promise<AIScanApplyStarted> {
+export async function applyAIScanResults(scanID: number, resultIDs: number[]): Promise<AIScanApplyStarted> {
   const response = await apiFetch(`${API_BASE}/ai/scans/${scanID}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -7474,16 +7471,23 @@ export interface ReviewItem {
   /** Set only while status is "applying": the action the apply claim is applying.
    *  Approving the item with no explicit action finishes that claim. */
   apply_claim_action?: string;
+  /** True while status is "applying" when the claim is a re-run of an interrupted
+   *  apply. A failed re-run leaves the item held (it does not go back to the queue). */
+  apply_claim_rerun?: boolean;
+  /** Set while status is "needs_attention": the action of the interrupted apply an
+   *  operator abandoned (POST /review/items/:id/abandon-apply). It may be half done. */
+  apply_abandoned_action?: string;
 }
 
-/** GET /review/count → data.{count, by_kind, applying}. count and by_kind cover
- *  PENDING items only; applying counts items held by an apply claim (running now,
- *  applied but not yet recorded, or interrupted by a server restart), which appear
- *  in no pending list. */
+/** GET /review/count → data.{count, by_kind, applying, needs_attention}. count and
+ *  by_kind cover PENDING items only; applying counts items held by an apply claim
+ *  (running now, applied but not yet recorded, or interrupted), and needs_attention
+ *  items whose interrupted apply was abandoned. Neither appears in any pending list. */
 export interface ReviewCount {
   count: number;
   by_kind: Record<string, number>;
   applying: number;
+  needs_attention: number;
 }
 
 /** GET /review/items → flat {items, count, limit, offset, total} (RespondWithList,
@@ -7578,6 +7582,9 @@ export interface ReviewBulkRequest {
    *  bulk over the entire queue. */
   kind?: string;
   ids?: string[];
+  /** Per id in `ids`: the updated_at the caller last read. A listed item that has
+   *  changed since is skipped with REVIEW_ITEM_CHANGED. Refused with `kind`. */
+  if_updated_at?: Record<string, string>;
 }
 
 export async function getReviewCount(): Promise<ReviewCount> {
@@ -7589,7 +7596,12 @@ export async function getReviewCount(): Promise<ReviewCount> {
   }
   const body = await response.json();
   const data = body.data ?? {};
-  return { count: data.count ?? 0, by_kind: data.by_kind ?? {}, applying: data.applying ?? 0 };
+  return {
+    count: data.count ?? 0,
+    by_kind: data.by_kind ?? {},
+    applying: data.applying ?? 0,
+    needs_attention: data.needs_attention ?? 0,
+  };
 }
 
 export async function getReviewItems(
@@ -7638,13 +7650,25 @@ export async function getReviewItems(
  *  2026-08-06, so the UI must send an explicit choice for those. The chosen action is
  *  persisted on the item, so an override survives to the later re-approve.
  *
- *  Errors carry the backend's own message (buildApiError reads `error`), which is how
- *  the 501 for `duplicate-of` reaches the reviewer intact instead of as "failed". */
-export async function approveReviewItem(id: string, action?: string): Promise<ReviewItem> {
+ *  `ifUpdatedAt` is the item's `updated_at` as the UI rendered it. The server refuses
+ *  with 409 REVIEW_ITEM_CHANGED when the item has changed since (a re-scan, another
+ *  reviewer), so a decision is never made on a hold the reviewer did not see.
+ *
+ *  Errors carry the backend's own message and code (buildApiError reads `error` and
+ *  `code`), so a refusal's reason reaches the reviewer intact instead of as "failed". */
+export async function approveReviewItem(
+  id: string,
+  action?: string,
+  ifUpdatedAt?: string
+): Promise<ReviewItem> {
+  const request = {
+    ...(action ? { action } : {}),
+    ...(ifUpdatedAt ? { if_updated_at: ifUpdatedAt } : {}),
+  };
   const response = await apiFetch(`${API_BASE}/review/items/${encodeURIComponent(id)}/approve`, {
     method: 'POST',
-    ...(action
-      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }
+    ...(Object.keys(request).length
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }
       : {}),
   });
   if (!response.ok) {
@@ -7654,12 +7678,35 @@ export async function approveReviewItem(id: string, action?: string): Promise<Re
   return body.data?.item;
 }
 
-export async function rejectReviewItem(id: string): Promise<ReviewItem> {
+/** rejectReviewItem rejects a hold. `ifUpdatedAt` works as in approveReviewItem. */
+export async function rejectReviewItem(id: string, ifUpdatedAt?: string): Promise<ReviewItem> {
   const response = await apiFetch(`${API_BASE}/review/items/${encodeURIComponent(id)}/reject`, {
     method: 'POST',
+    ...(ifUpdatedAt
+      ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ if_updated_at: ifUpdatedAt }),
+        }
+      : {}),
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to reject review item');
+  }
+  const body = await response.json();
+  return body.data?.item;
+}
+
+/** abandonReviewApply moves a hold whose interrupted apply cannot be finished to
+ *  needs_attention. Nothing in the library is undone: someone has to check what the
+ *  apply changed, then approve or reject the hold. Refused with 409 for a running
+ *  apply, an applied hold, or one under no interrupted apply. */
+export async function abandonReviewApply(id: string): Promise<ReviewItem> {
+  const response = await apiFetch(
+    `${API_BASE}/review/items/${encodeURIComponent(id)}/abandon-apply`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to abandon the interrupted apply');
   }
   const body = await response.json();
   return body.data?.item;
@@ -7769,7 +7816,11 @@ export interface RepairRowMember {
  * one, or the skipped rows of one kind (`skipped:<kind>`, a key of
  * `skipped_by_kind`) so each per-kind count opens the rows behind it.
  */
-export type RepairRowsFilter = 'applicable' | 'skipped' | 'owner_applicable' | `skipped:${string}`;
+export type RepairRowsFilter =
+  | 'applicable'
+  | 'skipped'
+  | 'owner_applicable'
+  | `skipped:${string}`;
 
 export interface RepairRowsPage {
   plan_op_id: string;

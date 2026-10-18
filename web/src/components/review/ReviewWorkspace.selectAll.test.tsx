@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
 // last-edited: 2026-10-18
 //
@@ -70,7 +70,12 @@ function seed(reviewable: api.CandidateResult[] = [matched('m1')]) {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
   let op = 0;
   vi.mocked(api.batchFetchCandidates).mockImplementation(async (req) => ({

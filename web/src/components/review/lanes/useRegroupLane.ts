@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-10-18
 
@@ -226,6 +226,11 @@ export interface RegroupLane {
    * interrupted. They are in no pending list, so the lane surfaces the number.
    */
   applyingTotal: number;
+  /**
+   * Holds whose interrupted apply an operator abandoned (status needs_attention),
+   * per the polled /review/count. Also in no pending list.
+   */
+  needsAttentionTotal: number;
   /** Holds actually loaded, across every loaded kind. */
   loaded: number;
   /** Loaded holds still visible after the search box. */
@@ -391,6 +396,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   const byKind = useReviewStore((s) => s.byKind);
   const storeCount = useReviewStore((s) => s.count);
   const applyingTotal = useReviewStore((s) => s.applying);
+  const needsAttentionTotal = useReviewStore((s) => s.needsAttention);
   const loadCount = useReviewStore((s) => s.loadCount);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -792,9 +798,12 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           // Always send the resolved action explicitly. The backend would accept
           // an empty body and use the recommendation, but sending what the UI
           // actually displayed removes any chance of the two disagreeing.
-          await api.approveReviewItem(item.id, actionForRef.current(item));
+          // updated_at is the version of the hold the row rendered: if a re-scan or
+          // another reviewer changed it since, the server refuses (409
+          // REVIEW_ITEM_CHANGED) instead of deciding a hold nobody here has seen.
+          await api.approveReviewItem(item.id, actionForRef.current(item), item.updated_at);
         } else {
-          await api.rejectReviewItem(item.id);
+          await api.rejectReviewItem(item.id, item.updated_at);
         }
         await reload();
       } catch (err) {
@@ -818,9 +827,17 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         toast(
           code === 'REVIEW_APPLIED_UNRECORDED'
             ? `Applied, but the result was not recorded: ${message}`
-            : `Failed to ${action} item: ${message}`,
+            : code === 'REVIEW_ITEM_CHANGED'
+              ? `This hold changed since it was shown, so nothing was done. It has been reloaded: check it and decide again.`
+              : `Failed to ${action} item: ${message}`,
           'error'
         );
+        // Both of these mean the row on screen is no longer the hold: an
+        // unrecorded apply has left the pending list (it is held mid-apply), and a
+        // changed hold must be re-read before anyone decides it.
+        if (code === 'REVIEW_APPLIED_UNRECORDED' || code === 'REVIEW_ITEM_CHANGED') {
+          await reload();
+        }
       } finally {
         setBusyItems((prev) => {
           const next = new Set(prev);
@@ -940,6 +957,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     // condition names both filters rather than the one that existed first.
     queueTotal: kindFilter || searchFilter ? (storeCount > 0 ? storeCount : null) : total,
     applyingTotal,
+    needsAttentionTotal,
     loaded: items.length,
     visible,
     oldestSortIsPartial: filters.sortBy === 'oldest' && items.length < total,

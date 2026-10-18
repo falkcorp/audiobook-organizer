@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
 // last-edited: 2026-10-18
 //
@@ -72,7 +72,12 @@ function seed(results: api.CandidateResult[], stale: number) {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   // The STARTED shape, as `batchFetchCandidates` hands it back after unwrapping
   // the server's `{data:...}` envelope. This is flat on purpose: the mock stands
   // in for the api function at its own boundary, and that function's contract is

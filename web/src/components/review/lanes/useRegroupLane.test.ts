@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.12.0
+// version: 1.12.1
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-10-18
 
@@ -110,14 +110,24 @@ function mockItems(items: api.ReviewItem[], total?: number) {
 function setByKind(byKind: Record<string, number>) {
   const count = Object.values(byKind).reduce((a, b) => a + b, 0);
   useReviewStore.setState({ byKind, count });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count, by_kind: byKind });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count,
+    by_kind: byKind,
+  });
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
   toast.mockReset();
   setByKind({});
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('m1', 'regroup.multidisc')]);
 });
 
@@ -316,8 +326,61 @@ describe('actionFor', () => {
     });
 
     // Not an empty body relying on the server to re-derive it: what ran and what
-    // was displayed cannot then disagree.
-    expect(api.approveReviewItem).toHaveBeenCalledWith('a1', 'combine');
+    // was displayed cannot then disagree. The rendered updated_at goes with it so
+    // the server can refuse a hold that changed since.
+    expect(api.approveReviewItem).toHaveBeenCalledWith('a1', 'combine', '2026-01-01T00:00:00Z');
+  });
+
+  it('sends the rendered updated_at on reject', async () => {
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    vi.mocked(api.rejectReviewItem).mockResolvedValue({} as never);
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.rejectItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(api.rejectReviewItem).toHaveBeenCalledWith('a1', '2026-01-01T00:00:00Z');
+  });
+
+  it.each([
+    ['REVIEW_ITEM_CHANGED', /^This hold changed since it was shown/],
+    ['REVIEW_APPLIED_UNRECORDED', /^Applied, but the result was not recorded/],
+  ])('reloads the rows after a %s refusal', async (code, toastText) => {
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      Object.assign(new Error('refused'), { status: 409, data: { code } })
+    );
+    const { result } = await renderLane();
+    const before = vi.mocked(api.getReviewItems).mock.calls.length;
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(toastText), 'error');
+    await waitFor(() =>
+      expect(vi.mocked(api.getReviewItems).mock.calls.length).toBeGreaterThan(before)
+    );
+  });
+
+  it('does not reload the rows after an ordinary refusal', async () => {
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      Object.assign(new Error('nope'), { status: 409, data: { code: 'REVIEW_ITUNES_PROTECTED' } })
+    );
+    const { result } = await renderLane();
+    const before = vi.mocked(api.getReviewItems).mock.calls.length;
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^Failed to approve item: nope/),
+      'error'
+    );
+    expect(vi.mocked(api.getReviewItems).mock.calls.length).toBe(before);
   });
 
   it("surfaces the backend's own message when an action is refused", async () => {
@@ -358,11 +421,30 @@ describe('actionFor', () => {
 
   it('reports the applying count from the polled review count', async () => {
     const { result } = await renderLane();
-    vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 2, count: 0, by_kind: {} });
+    vi.mocked(api.getReviewCount).mockResolvedValue({
+      applying: 2,
+      needs_attention: 0,
+      count: 0,
+      by_kind: {},
+    });
     await act(async () => {
       await useReviewStore.getState().loadCount();
     });
     expect(result.current.applyingTotal).toBe(2);
+  });
+
+  it('reports the needs-attention count from the polled review count', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.getReviewCount).mockResolvedValue({
+      applying: 0,
+      needs_attention: 3,
+      count: 0,
+      by_kind: {},
+    });
+    await act(async () => {
+      await useReviewStore.getState().loadCount();
+    });
+    expect(result.current.needsAttentionTotal).toBe(3);
   });
 });
 

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.ownerRejected.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e2b2514-41c9-47c3-b42b-cec3205fd369
 // last-edited: 2026-10-18
 //
@@ -50,7 +50,12 @@ function seed(results: api.CandidateResult[]) {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({
+    applying: 0,
+    needs_attention: 0,
+    count: 0,
+    by_kind: {},
+  });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
 }
 
