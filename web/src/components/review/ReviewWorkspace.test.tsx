@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.24.1
+// version: 1.24.2
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-18
 
@@ -11,6 +11,7 @@ import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import { resetDedupPipelineForTests } from './useDedupPipeline';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 // A test can freeze the search debounce open (hold.on) so "typed but not applied
@@ -53,7 +54,8 @@ function renderWorkspace(initialEntries: string[] = ['/review']) {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
 }
 
@@ -1204,7 +1206,8 @@ describe('the dupes lane sub-views (Queue | Labels | Suspicious)', () => {
           <ReviewWorkspace />
           <LocationProbe />
         </ToastProvider>
-      </MemoryRouter>
+      </MemoryRouter>,
+      { wrapper: QueryWrapper }
     );
   }
 

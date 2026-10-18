@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
 // last-edited: 2026-10-18
 //
@@ -22,6 +22,7 @@ import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -86,7 +87,8 @@ async function renderWorkspace() {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
   await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
   return view;

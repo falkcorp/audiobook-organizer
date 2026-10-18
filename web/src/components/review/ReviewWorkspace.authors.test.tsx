@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.authors.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0b6d94c3-f7a2-4e18-9d05-62c8e1a7b350
 // last-edited: 2026-10-18
 
@@ -20,6 +20,7 @@ import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import * as reads from './lanes/authorsReads';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 vi.mock('./lanes/authorsReads');
@@ -36,7 +37,8 @@ function renderWorkspace(entry: string) {
         <ReviewWorkspace />
         <LocationProbe />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
 }
 

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.ownerRejected.test.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4e2b2514-41c9-47c3-b42b-cec3205fd369
 // last-edited: 2026-10-18
 //
@@ -13,6 +13,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -72,7 +73,8 @@ describe('owner-rejected candidates on /review', () => {
         <ToastProvider>
           <ReviewWorkspace />
         </ToastProvider>
-      </MemoryRouter>
+      </MemoryRouter>,
+      { wrapper: QueryWrapper }
     );
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
     expect(await screen.findByTestId('owner-rejected-a')).toHaveTextContent('Rejected');

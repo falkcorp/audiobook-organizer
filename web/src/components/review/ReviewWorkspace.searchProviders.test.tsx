@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.searchProviders.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f8c2a1d-9e5f-4a2b-8c1e-6d7f9a2b5c3e
 // last-edited: 2026-10-18
 //
@@ -15,6 +15,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -40,7 +41,8 @@ function renderWorkspace() {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
 }
 

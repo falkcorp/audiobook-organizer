@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.manualSearch.test.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8c04b7e2-5d13-49af-b026-3f7159ea840c
 // last-edited: 2026-10-18
 //
@@ -23,6 +23,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -85,7 +86,8 @@ async function openWorkspace() {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
   await waitFor(() => expect(screen.getByText(/Hide no-match/i)).toBeInTheDocument());
 }

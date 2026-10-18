@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
 // last-edited: 2026-10-18
 
@@ -22,6 +22,7 @@ import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import * as authorsReads from './lanes/authorsReads';
 import * as reads from './lanes/aiScanReads';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 vi.mock('./lanes/authorsReads');
@@ -39,7 +40,8 @@ function renderWorkspace(entry: string) {
         <ReviewWorkspace />
         <LocationProbe />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
 }
 

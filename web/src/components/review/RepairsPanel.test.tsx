@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.15.0
+// version: 1.15.1
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -15,6 +15,7 @@ import type { Book, OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from
 import { RepairsPanel, SKIP_KIND_LABEL } from './RepairsPanel';
 import { useRepairsLane } from './lanes/useRepairsLane';
 import type { SpineViewMode } from './spine/viewMode';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -70,7 +71,8 @@ function renderPanel(viewMode?: SpineViewMode) {
   return render(
     <MemoryRouter>
       <Harness viewMode={viewMode} />
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
 }
 

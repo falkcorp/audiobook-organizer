@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
 // last-edited: 2026-10-18
 //
@@ -24,6 +24,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -49,7 +50,8 @@ function renderWorkspace() {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
 }
 

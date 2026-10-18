@@ -1,14 +1,14 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.10.1
+// version: 1.11.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
  * applies.
  *
- * Shaped like the other lanes (own fetches, own AbortControllers, `active`
- * gating: an inactive lane makes no requests and polls nothing).
+ * Reads, writes and polls go through TanStack Query (keys in lib/queryClient),
+ * gated on `active`: an inactive lane makes no requests and polls nothing.
  *
  * ---------------------------------------------------------------------------
  * WHICH PLAN THE TABLE SHOWS
@@ -32,7 +32,16 @@
  * startRepairApply -- because the server treats an omitted flag as a preview.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from '@tanstack/react-query';
+import { queryKeys } from '../../../lib/queryClient';
 import * as api from '../../../services/api';
 import type {
   OperationV2,
@@ -85,13 +94,13 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
-function isAbort(err: unknown): boolean {
-  return err instanceof DOMException && err.name === 'AbortError';
-}
-
 /** Statuses of a plan that has not finished. */
 function isInFlight(status: string | undefined): boolean {
   return status === 'queued' || status === 'running' || status === 'pending';
+}
+
+function trialFailure(op: OperationV2): string {
+  return op.error_message || `The trial ended with status "${op.status}".`;
 }
 
 /**
@@ -284,44 +293,112 @@ export interface RepairsLane {
   dispatch: (action: RepairsAction) => void;
 }
 
+/** The fixer list, and the newest completed plan seen per fixer across fetches. */
+interface FixerList {
+  list: RepairFixer[];
+  plans: Record<string, KnownPlan>;
+}
+
+const NO_FIXERS: FixerList = { list: [], plans: {} };
+
+/** Reads the fixer list, keeping each plan the cache already holds unless the list has a newer one. */
+async function loadFixers(qc: QueryClient, signal: AbortSignal): Promise<FixerList> {
+  const list = await api.listRepairFixers({ signal });
+  let plans = qc.getQueryData<FixerList>(queryKeys.repairs.fixers())?.plans ?? {};
+  for (const f of list) {
+    const lp = f.last_plan;
+    if (lp?.status === 'completed') {
+      plans = withNewerPlan(plans, f.id, {
+        opId: lp.operation_id,
+        completedAt: lp.completed_at ?? lp.queued_at,
+      });
+    } else if (lp && isInFlight(lp.status)) {
+      // Still running after its poll lost track: follow it again.
+      const key = queryKeys.ops.v2(lp.operation_id);
+      if (qc.getQueryState(key)?.status === 'error') void qc.resetQueries({ queryKey: key });
+    }
+  }
+  return { list, plans };
+}
+
+/**
+ * Follows an operation to its end, calling `onEnd` once when it gets there. An
+ * ended op never changes, so a refetch (an event-stream invalidation) returns
+ * the cached end. A poll that loses track calls `onLost`; one cut off because
+ * the lane went inactive or unmounted (no observer left) calls neither.
+ */
+function followOp(
+  qc: QueryClient,
+  opId: string,
+  onEnd: (op: OperationV2) => void,
+  onLost: (err: unknown) => void
+) {
+  const queryKey = queryKeys.ops.v2(opId);
+  return {
+    queryKey,
+    retry: false,
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
+      const ended = qc.getQueryData<OperationV2>(queryKey);
+      if (ended) return ended;
+      const op = await api
+        .pollOperationV2(opId, undefined, REPAIRS_POLL_INTERVAL_MS, {
+          signal,
+          requestTimeoutMs: api.REPAIRS_FETCH_TIMEOUT_MS,
+        })
+        .catch((err: unknown) => {
+          if (!signal.aborted) onLost(err);
+          throw err;
+        });
+      onEnd(op);
+      return op;
+    },
+  };
+}
+
+/** What a followed trial's poll says about it: running, failed, or (null) done. */
+function trialState(opId: string, q: UseQueryResult<OperationV2>): RepairTrialState | null {
+  if (q.data?.status === 'completed') return null;
+  if (q.data) return { opId, phase: 'failed', message: trialFailure(q.data) };
+  if (q.error) {
+    const message = `Lost track of the trial: ${errorMessage(q.error, 'unknown error')}`;
+    return { opId, phase: 'failed', message };
+  }
+  return { opId, phase: 'running' };
+}
+
+interface ApplyRequest {
+  fixerId: string;
+  plan: string;
+  resolveIds: () => Promise<string[]>;
+  start?: (fixerId: string, plan: string, rowIds: string[]) => Promise<RepairOpStarted>;
+}
+
 /**
  * `seedFixerId` is the URL's `?fixer=<id>`: a seed, read once on the first
  * render and never mirrored back to the URL or into the per-viewer storage key
- * (only a reviewer's own click does that). It is held in a ref, not put into
- * the selection, and applied once when the fixer list first loads, and only if
- * the server lists that id; an unknown id is ignored, leaving the viewer's
- * remembered fixer (or the first one listed).
+ * (only a reviewer's own click does that). It is preferred over the remembered
+ * fixer, and only if the server lists that id; an unknown id is ignored,
+ * leaving the viewer's remembered fixer (or the first one listed).
  */
 export function useRepairsLane(
   toast: Toast,
   active = true,
   seedFixerId: string | null = null
 ): RepairsLane {
-  const [fixers, setFixers] = useState<RepairFixer[]>([]);
-  const [fixersLoading, setFixersLoading] = useState(false);
-  const [fixersError, setFixersError] = useState<string | null>(null);
-  const [fixersNonce, setFixersNonce] = useState(0);
-  const [ownerStatus, setOwnerStatus] = useState<api.RepairOwnerStatus | null>(null);
-
-  const [selectedFixerId, setSelectedFixerId] = useState<string | null>(() =>
-    readStored(REPAIRS_FIXER_STORAGE_KEY)
-  );
-  // The URL's `?fixer=`, consumed by the first successful fixer-list load.
-  const fixerSeedRef = useRef<string | null>(seedFixerId);
-  const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
-  const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
+  const qc = useQueryClient();
+  const [initialFixer] = useState(() => [seedFixerId, readStored(REPAIRS_FIXER_STORAGE_KEY)]);
+  const [pickedFixerId, setPickedFixerId] = useState<string | null>(null);
+  // Trials started from this lane, by fixer: followed until the server lists them.
+  const [startedTrials, setStartedTrials] = useState<Record<string, string>>({});
 
   const [filter, setFilterState] = useState<RepairRowsFilter>('applicable');
   const [rowClass, setRowClassState] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [pageSize, setPageSizeState] = useState<number>(initialPageSize);
-  const [page, setPage] = useState<RepairRowsPage | null>(null);
-  const [rowsLoading, setRowsLoading] = useState(false);
-  const [rowsError, setRowsError] = useState<string | null>(null);
-  const [rowsNonce, setRowsNonce] = useState(0);
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
-  const [applyingFor, setApplyingFor] = useState<string | null>(null);
+  // The apply being followed, by fixer (its op id).
+  const [applyOps, setApplyOps] = useState<Record<string, string>>({});
   const [applyErrors, setApplyErrors] = useState<Record<string, RepairApplyProblem>>({});
   const [applyResults, setApplyResults] = useState<Record<string, RepairApplyResult>>({});
   // Every row outcome reported for a plan, merged across applies, so a second
@@ -330,6 +407,30 @@ export function useRepairsLane(
     Record<string, Record<string, RepairRowResult>>
   >({});
 
+  // ---- fixer list and owner status ----------------------------------------
+  const fixersQuery = useQuery({
+    queryKey: queryKeys.repairs.fixers(),
+    queryFn: ({ signal }) => loadFixers(qc, signal),
+    enabled: active,
+  });
+  const { list: fixers, plans: knownPlans } = fixersQuery.data ?? NO_FIXERS;
+  // Read with the fixer list. A failure leaves it unknown: the button stays,
+  // and the server's 403 names the reason if it refuses.
+  const ownerQuery = useQuery({
+    queryKey: queryKeys.repairs.ownerStatus(),
+    queryFn: async ({ signal }) => (await api.getRepairOwnerStatus?.({ signal })) ?? null,
+    enabled: active,
+  });
+  // Reloads the owner status too: its key is under the list's.
+  const reloadFixers = useCallback(
+    () => void qc.invalidateQueries({ queryKey: queryKeys.repairs.fixers() }),
+    [qc]
+  );
+
+  const selectedFixerId =
+    [pickedFixerId, ...initialFixer].find((id) => fixers.some((f) => f.id === id)) ??
+    fixers[0]?.id ??
+    null;
   const selectedFixer = useMemo(
     () => fixers.find((f) => f.id === selectedFixerId) ?? null,
     [fixers, selectedFixerId]
@@ -347,173 +448,42 @@ export function useRepairsLane(
     setSelectedRowIds(new Set());
   }
 
-  // ---- fixer list ---------------------------------------------------------
-  useEffect(() => {
-    if (!active) return;
-    const ctrl = new AbortController();
-    setFixersLoading(true);
-    setFixersError(null);
-    api
-      .listRepairFixers({ signal: ctrl.signal })
-      .then((list) => {
-        if (ctrl.signal.aborted) return;
-        setFixers(list);
-        setKnownPlans((prev) => {
-          let next = prev;
-          for (const f of list) {
-            const lp = f.last_plan;
-            if (lp?.status !== 'completed') continue;
-            next = withNewerPlan(next, f.id, {
-              opId: lp.operation_id,
-              completedAt: lp.completed_at ?? lp.queued_at,
-            });
-          }
-          return next;
-        });
-        // A trial the lane was following that the server now reports as done
-        // (followed poll aborted when the lane went inactive, say).
-        setTrials((prev) => {
-          let changed = false;
-          const next = { ...prev };
-          for (const f of list) {
-            const t = next[f.id];
-            if (t && f.last_plan?.operation_id === t.opId && f.last_plan.status === 'completed') {
-              delete next[f.id];
-              changed = true;
-            }
-          }
-          return changed ? next : prev;
-        });
-        const seed = fixerSeedRef.current;
-        fixerSeedRef.current = null;
-        const seeded = seed && list.some((f) => f.id === seed) ? seed : null;
-        setSelectedFixerId((cur) =>
-          seeded ?? (cur && list.some((f) => f.id === cur) ? cur : (list[0]?.id ?? null))
-        );
-      })
-      .catch((err: unknown) => {
-        if (ctrl.signal.aborted) return;
-        const status = (err as { status?: number } | null)?.status;
-        setFixersError(
-          status === 404
-            ? 'This server has no repairs endpoints yet. It needs a build that includes the repairs framework.'
-            : errorMessage(err, 'Failed to load the repair fixers.')
-        );
-      })
-      .finally(() => {
-        if (!ctrl.signal.aborted) setFixersLoading(false);
-      });
-    return () => ctrl.abort();
-  }, [active, fixersNonce]);
-
-  // ---- owner status ------------------------------------------------------
-  // Read with the fixer list. A failure leaves it unknown: the button stays,
-  // and the server's 403 names the reason if it refuses.
-  useEffect(() => {
-    if (!active) return;
-    const ctrl = new AbortController();
-    Promise.resolve(api.getRepairOwnerStatus?.({ signal: ctrl.signal }))
-      .then((st) => {
-        if (!ctrl.signal.aborted) setOwnerStatus(st ?? null);
-      })
-      .catch(() => {
-        if (!ctrl.signal.aborted) setOwnerStatus(null);
-      });
-    return () => ctrl.abort();
-  }, [active, fixersNonce]);
-
-  const reloadFixers = useCallback(() => setFixersNonce((n) => n + 1), []);
-
   // ---- following trials ---------------------------------------------------
-  const trialPolls = useRef(new Map<string, AbortController>());
-
-  const followTrial = useCallback(
-    (fixerId: string, opId: string) => {
-      if (trialPolls.current.has(opId)) return;
-      const ctrl = new AbortController();
-      trialPolls.current.set(opId, ctrl);
-      setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'running' } }));
-      api
-        .pollOperationV2(opId, undefined, REPAIRS_POLL_INTERVAL_MS, {
-          signal: ctrl.signal,
-          requestTimeoutMs: api.REPAIRS_FETCH_TIMEOUT_MS,
-        })
-        .then((op) => {
-          if (ctrl.signal.aborted) return;
-          if (op.status === 'completed') {
-            setKnownPlans((prev) =>
-              withNewerPlan(prev, fixerId, {
-                opId,
-                completedAt: op.completed_at ?? new Date().toISOString(),
-              })
-            );
-            setTrials((prev) => {
-              if (prev[fixerId]?.opId !== opId) return prev;
-              const next = { ...prev };
-              delete next[fixerId];
-              return next;
-            });
-            toast('Trial finished. Its rows are ready to review.', 'success');
-            setFixersNonce((n) => n + 1);
-          } else {
-            const message = op.error_message || `The trial ended with status "${op.status}".`;
-            setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message } }));
-            toast(`Trial failed: ${message}`, 'error');
-          }
-        })
-        .catch((err: unknown) => {
-          if (ctrl.signal.aborted || isAbort(err)) {
-            // The lane went inactive or unmounted. Forget the running state;
-            // the next fixer load re-follows the trial if it is still going.
-            setTrials((prev) => {
-              if (prev[fixerId]?.opId !== opId) return prev;
-              const next = { ...prev };
-              delete next[fixerId];
-              return next;
-            });
-            return;
-          }
-          const message = `Lost track of the trial: ${errorMessage(err, 'unknown error')}`;
-          setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message } }));
-          // If it is still running, the reload's auto-follow picks it back up.
-          setFixersNonce((n) => n + 1);
-        })
-        .finally(() => {
-          if (trialPolls.current.get(opId) === ctrl) trialPolls.current.delete(opId);
-        });
+  // Each fixer's trial the server reports as still running (one started from
+  // another tab, or before a reload), else the one started here. Polled only
+  // while the lane is active: an unobserved poll is aborted, and resumes when
+  // the lane is active again.
+  const followedTrials = active
+    ? fixers.flatMap((f) => {
+        const lp = f.last_plan;
+        const opId = lp && isInFlight(lp.status) ? lp.operation_id : startedTrials[f.id];
+        const listedDone = lp?.operation_id === opId && lp?.status === 'completed';
+        return opId && !listedDone ? [{ fixerId: f.id, opId }] : [];
+      })
+    : [];
+  const endTrial = (fixerId: string, opId: string, op: OperationV2) => {
+    if (op.status !== 'completed') return toast(`Trial failed: ${trialFailure(op)}`, 'error');
+    qc.setQueryData<FixerList>(queryKeys.repairs.fixers(), (d) => {
+      const plan = { opId, completedAt: op.completed_at ?? new Date().toISOString() };
+      return d && { ...d, plans: withNewerPlan(d.plans, fixerId, plan) };
+    });
+    toast('Trial finished. Its rows are ready to review.', 'success');
+    reloadFixers();
+  };
+  const trials = useQueries({
+    queries: followedTrials.map(({ fixerId, opId }) =>
+      // If a lost trial is still running, the reload follows it again.
+      followOp(qc, opId, (op) => endTrial(fixerId, opId, op), reloadFixers)
+    ),
+    combine: (results) => {
+      const out: Record<string, RepairTrialState> = {};
+      results.forEach((q, i) => {
+        const t = trialState(followedTrials[i].opId, q);
+        if (t) out[followedTrials[i].fixerId] = t;
+      });
+      return out;
     },
-    [toast]
-  );
-
-  // Follow any trial the server reports as still running -- one started from
-  // another tab, or before a reload -- so it does not look idle.
-  useEffect(() => {
-    if (!active) return;
-    for (const f of fixers) {
-      const lp = f.last_plan;
-      if (lp && isInFlight(lp.status)) followTrial(f.id, lp.operation_id);
-    }
-  }, [active, fixers, followTrial]);
-
-  // An inactive lane polls nothing.
-  useEffect(() => {
-    if (active) return;
-    const polls = trialPolls.current;
-    for (const ctrl of polls.values()) ctrl.abort();
-    polls.clear();
-  }, [active]);
-
-  const applyPolls = useRef(new Set<AbortController>());
-  useEffect(() => {
-    const trialsMap = trialPolls.current;
-    const applies = applyPolls.current;
-    return () => {
-      for (const ctrl of trialsMap.values()) ctrl.abort();
-      trialsMap.clear();
-      for (const ctrl of applies) ctrl.abort();
-      applies.clear();
-    };
-  }, []);
+  });
 
   // The class of every row this session has read, keyed "<plan>|<row id>":
   // settled outcomes carry no class, and under a selected class the "apply
@@ -535,46 +505,29 @@ export function useRepairsLane(
   }, []);
 
   // ---- rows ---------------------------------------------------------------
-  useEffect(() => {
-    if (!active || !selectedFixerId || !planOpId) return;
-    const ctrl = new AbortController();
-    setRowsLoading(true);
-    setRowsError(null);
-    api
-      .getRepairPlanRows(
-        selectedFixerId,
-        planOpId,
-        { filter, offset, limit: pageSize, rowClass: rowClass ?? undefined },
-        { signal: ctrl.signal }
-      )
-      .then((p) => {
-        if (ctrl.signal.aborted) return;
-        noteRowClasses(p.plan_op_id, p.rows);
-        setPage(p);
-      })
-      .catch((err: unknown) => {
-        if (ctrl.signal.aborted) return;
-        setPage(null);
-        setRowsError(errorMessage(err, 'Failed to load the trial rows.'));
-      })
-      .finally(() => {
-        if (!ctrl.signal.aborted) setRowsLoading(false);
+  const rowsParams = { filter, offset, limit: pageSize, rowClass: rowClass ?? undefined };
+  const isOnScreen = (p: RepairRowsPage | undefined) =>
+    p?.fixer_id === selectedFixerId &&
+    p?.plan_op_id === planOpId &&
+    (p?.filter ?? '') === filter &&
+    (p?.class ?? '') === (rowClass ?? '');
+  const rowsQuery = useQuery({
+    queryKey: queryKeys.repairs.rows(selectedFixerId ?? '', planOpId ?? '', rowsParams),
+    queryFn: async ({ signal }) => {
+      const p = await api.getRepairPlanRows(selectedFixerId ?? '', planOpId ?? '', rowsParams, {
+        signal,
       });
-    return () => ctrl.abort();
-  }, [active, selectedFixerId, planOpId, filter, rowClass, offset, pageSize, rowsNonce, noteRowClasses]);
-
-  const reloadRows = useCallback(() => setRowsNonce((n) => n + 1), []);
-
-  // The loaded page counts only when it is the page on screen: a response for
-  // the previous fixer, plan or filter must not render under the new one.
-  const currentPage =
-    page &&
-    page.fixer_id === selectedFixerId &&
-    page.plan_op_id === planOpId &&
-    (page.filter ?? '') === filter &&
-    (page.class ?? '') === (rowClass ?? '')
-      ? page
-      : null;
+      noteRowClasses(p.plan_op_id, p.rows);
+      return p;
+    },
+    enabled: active && selectedFixerId !== null && planOpId !== null,
+    // The page stays up while the next page of the same view loads. A page of
+    // the previous fixer, plan, filter or class never renders under the new one.
+    placeholderData: (prev) => (isOnScreen(prev) ? prev : undefined),
+  });
+  const { refetch: refetchRows } = rowsQuery;
+  const reloadRows = useCallback(() => void refetchRows(), [refetchRows]);
+  const currentPage = (!rowsQuery.isError && rowsQuery.data) || null;
   const rows = useMemo(() => currentPage?.rows ?? [], [currentPage]);
 
   // ---- selection ----------------------------------------------------------
@@ -641,38 +594,40 @@ export function useRepairsLane(
   }, []);
 
   const selectFixer = useCallback((id: string) => {
-    setSelectedFixerId(id);
+    setPickedFixerId(id);
     setFilterState('applicable');
     setRowClassState(null);
     writeStored(REPAIRS_FIXER_STORAGE_KEY, id);
   }, []);
 
   // ---- actions ------------------------------------------------------------
-  const runTrial = useCallback(
-    async (fixerId: string) => {
-      try {
-        const started = await api.startRepairPlan(fixerId);
-        if (started.deduped) {
-          toast('A trial with the same settings is already running; following it.', 'info');
-        } else {
-          toast('Trial started. Nothing is written until you apply rows from it.', 'info');
-        }
-        followTrial(fixerId, started.operation_id);
-      } catch (err) {
-        toast(`Could not start the trial: ${errorMessage(err, 'unknown error')}`, 'error');
+  const { mutate: startTrial } = useMutation({
+    mutationFn: (fixerId: string) => api.startRepairPlan(fixerId),
+    onSuccess: (started, fixerId) => {
+      if (started.deduped) {
+        toast('A trial with the same settings is already running; following it.', 'info');
+      } else {
+        toast('Trial started. Nothing is written until you apply rows from it.', 'info');
       }
+      setStartedTrials((prev) => ({ ...prev, [fixerId]: started.operation_id }));
     },
-    [followTrial, toast]
-  );
+    onError: (err) =>
+      toast(`Could not start the trial: ${errorMessage(err, 'unknown error')}`, 'error'),
+  });
 
   /**
    * Every applicable row id of the stored plan (of rowClass only, when set),
    * less the rows already settled.
    */
   const collectApplicableIds = useCallback(
-    async (fixerId: string, plan: string, settled: ReadonlySet<string>, rowClass?: string): Promise<string[]> => {
+    async (
+      fixerId: string,
+      plan: string,
+      settled: ReadonlySet<string>,
+      rowClass?: string
+    ): Promise<string[]> => {
       const ids: string[] = [];
-      for (let off = 0; ; ) {
+      for (let off = 0; ;) {
         const p = await api.getRepairPlanRows(fixerId, plan, {
           filter: 'applicable',
           offset: off,
@@ -688,107 +643,101 @@ export function useRepairsLane(
     [noteRowClasses]
   );
 
-  const runApply = useCallback(
-    async (
-      fixerId: string,
-      plan: string,
-      resolveIds: () => Promise<string[]>,
-      start: (fixerId: string, plan: string, rowIds: string[]) => Promise<RepairOpStarted> = api.startRepairApply
-    ) => {
-      const ctrl = new AbortController();
-      applyPolls.current.add(ctrl);
-      setApplyingFor(fixerId);
+  const report = (fixerId: string, problem: RepairApplyProblem) => {
+    setApplyErrors((prev) => ({ ...prev, [fixerId]: problem }));
+    toast(problem.message, problem.severity);
+  };
+
+  // 1. Start. A failure here means nothing was enqueued.
+  const startApply = useMutation({
+    mutationFn: async ({ fixerId, plan, resolveIds, start }: ApplyRequest) => {
+      const rowIds = await resolveIds();
+      return rowIds.length === 0 ? null : (start ?? api.startRepairApply)(fixerId, plan, rowIds);
+    },
+    onMutate: ({ fixerId }) =>
       setApplyErrors((prev) => {
         const next = { ...prev };
         delete next[fixerId];
         return next;
-      });
-      const report = (problem: RepairApplyProblem) => {
-        setApplyErrors((prev) => ({ ...prev, [fixerId]: problem }));
-        toast(problem.message, problem.severity);
-      };
-      try {
-        // 1. Start. A failure here means nothing was enqueued.
-        let started: RepairOpStarted;
-        try {
-          const rowIds = await resolveIds();
-          if (rowIds.length === 0) {
-            toast('No rows left to apply from this trial.', 'info');
-            return;
-          }
-          started = await start(fixerId, plan, rowIds);
-        } catch (err) {
-          report({
-            severity: 'error',
-            message: `Apply not started: ${errorMessage(err, 'unknown error')}`,
-          });
-          return;
-        }
+      }),
+    onSuccess: (started, { fixerId }) => {
+      if (!started) return toast('No rows left to apply from this trial.', 'info');
+      // A new op has no end yet, whatever the cache holds under its id.
+      qc.removeQueries({ queryKey: queryKeys.ops.v2(started.operation_id) });
+      setApplyOps((prev) => ({ ...prev, [fixerId]: started.operation_id }));
+    },
+    onError: (err, { fixerId }) =>
+      report(fixerId, {
+        severity: 'error',
+        message: `Apply not started: ${errorMessage(err, 'unknown error')}`,
+      }),
+  });
 
-        // 2. Follow. From here the op exists on the server and may be
-        // writing, so losing sight of it is NOT a failed apply: saying so
-        // would invite a second apply of the same rows.
-        let op: OperationV2;
-        try {
-          op = await api.pollOperationV2(started.operation_id, undefined, REPAIRS_POLL_INTERVAL_MS, {
-            signal: ctrl.signal,
-            requestTimeoutMs: api.REPAIRS_FETCH_TIMEOUT_MS,
-          });
-        } catch (err) {
-          if (ctrl.signal.aborted || isAbort(err)) return;
-          report({
+  const endApply = (fixerId: string, problem?: RepairApplyProblem) => {
+    if (problem) report(fixerId, problem);
+    setApplyOps((prev) => {
+      const next = { ...prev };
+      delete next[fixerId];
+      return next;
+    });
+    reloadFixers();
+    void qc.invalidateQueries({ queryKey: queryKeys.books.all() });
+  };
+
+  // 3. Read the result. A failed op may have stored none; its own error then
+  // says why. A completed op whose result cannot be read DID run: report
+  // that, not a failure.
+  const readApplyResult = async (fixerId: string, opId: string, op: OperationV2) => {
+    let r: RepairApplyResult | null = null;
+    try {
+      r = await api.getRepairApplyResult(opId);
+    } catch (err) {
+      if (op.status === 'completed') {
+        return endApply(fixerId, {
+          severity: 'warning',
+          message:
+            `Apply ${opId} finished, but its result could not be read ` +
+            `(${errorMessage(err, 'unknown error')}). Re-run the trial to see what changed.`,
+        });
+      }
+    }
+    if (!r) {
+      const why = op.error_message || `the operation ended with status "${op.status}".`;
+      return endApply(fixerId, { severity: 'error', message: `Apply failed: ${why}` });
+    }
+    const result = r;
+    setApplyResults((prev) => ({ ...prev, [fixerId]: result }));
+    setOutcomesByPlan((prev) => {
+      const merged = { ...(prev[result.plan_op_id] ?? {}) };
+      for (const row of result.rows) merged[row.row_id] = row;
+      return { ...prev, [result.plan_op_id]: merged };
+    });
+    setSelectedRowIds(new Set());
+    toast(summarizeApply(result), applySeverity(result));
+    endApply(fixerId);
+  };
+
+  const { mutate: applyMutate } = startApply;
+
+  // 2. Follow, while the lane is active. From here the op exists on the server
+  // and may be writing, so losing sight of it is NOT a failed apply: saying so
+  // would invite a second apply of the same rows.
+  useQueries({
+    queries: Object.entries(active ? applyOps : {}).map(([fixerId, opId]) =>
+      followOp(
+        qc,
+        opId,
+        (op) => void readApplyResult(fixerId, opId, op),
+        (err) =>
+          endApply(fixerId, {
             severity: 'warning',
             message:
-              `Lost track of apply ${started.operation_id} (${errorMessage(err, 'unknown error')}); ` +
+              `Lost track of apply ${opId} (${errorMessage(err, 'unknown error')}); ` +
               'it may still be writing. Check the operations list before applying again.',
-          });
-          setFixersNonce((n) => n + 1);
-          return;
-        }
-
-        // 3. Read the result. A failed op may have stored none; its own error
-        // then says why. A completed op whose result cannot be read DID run:
-        // report that, not a failure.
-        let result: RepairApplyResult | null = null;
-        try {
-          result = await api.getRepairApplyResult(started.operation_id);
-        } catch (err) {
-          if (op.status === 'completed') {
-            report({
-              severity: 'warning',
-              message:
-                `Apply ${started.operation_id} finished, but its result could not be read ` +
-                `(${errorMessage(err, 'unknown error')}). Re-run the trial to see what changed.`,
-            });
-            setFixersNonce((n) => n + 1);
-            return;
-          }
-        }
-        if (!result) {
-          report({
-            severity: 'error',
-            message: `Apply failed: ${op.error_message || `the operation ended with status "${op.status}".`}`,
-          });
-          setFixersNonce((n) => n + 1);
-          return;
-        }
-        const r = result;
-        setApplyResults((prev) => ({ ...prev, [fixerId]: r }));
-        setOutcomesByPlan((prev) => {
-          const merged = { ...(prev[r.plan_op_id] ?? {}) };
-          for (const row of r.rows) merged[row.row_id] = row;
-          return { ...prev, [r.plan_op_id]: merged };
-        });
-        setSelectedRowIds(new Set());
-        toast(summarizeApply(r), applySeverity(r));
-        setFixersNonce((n) => n + 1);
-      } finally {
-        applyPolls.current.delete(ctrl);
-        if (!ctrl.signal.aborted) setApplyingFor((cur) => (cur === fixerId ? null : cur));
-      }
-    },
-    [toast]
-  );
+          })
+      )
+    ),
+  });
 
   const fixerTitle = useCallback(
     (id: string) => fixers.find((f) => f.id === id)?.title ?? id,
@@ -804,7 +753,8 @@ export function useRepairsLane(
     if (currentPage === null) return null;
     if (!rowClass) return Math.max(0, currentPage.applicable - settledRowIds.size);
     let settledInClass = 0;
-    for (const id of settledRowIds) if (rowClasses[`${planOpId}|${id}`] === rowClass) settledInClass++;
+    for (const id of settledRowIds)
+      if (rowClasses[`${planOpId}|${id}`] === rowClass) settledInClass++;
     return Math.max(0, (currentPage.applicable_in_class ?? 0) - settledInClass);
   }, [currentPage, rowClass, settledRowIds, planOpId, rowClasses]);
 
@@ -812,7 +762,7 @@ export function useRepairsLane(
     (action: RepairsAction) => {
       switch (action.type) {
         case 'runTrial':
-          void runTrial(action.fixerId);
+          startTrial(action.fixerId);
           return;
         case 'applyRows': {
           const ids = action.rowIds.filter((id) => !settledRowIds.has(id));
@@ -820,7 +770,11 @@ export function useRepairsLane(
           if (!window.confirm(repairApplyConfirmMessage(ids.length, fixerTitle(action.fixerId)))) {
             return;
           }
-          void runApply(action.fixerId, action.planOpId, async () => ids);
+          applyMutate({
+            fixerId: action.fixerId,
+            plan: action.planOpId,
+            resolveIds: async () => ids,
+          });
           return;
         }
         case 'applyAllApplicable': {
@@ -832,9 +786,12 @@ export function useRepairsLane(
           if (n === 0) return;
           if (!window.confirm(repairApplyConfirmMessage(n, fixerTitle(action.fixerId)))) return;
           const settled = new Set(settledRowIds);
-          void runApply(action.fixerId, action.planOpId, () =>
-            collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass)
-          );
+          applyMutate({
+            fixerId: action.fixerId,
+            plan: action.planOpId,
+            resolveIds: () =>
+              collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass),
+          });
           return;
         }
         case 'ownerApplyRow': {
@@ -849,17 +806,17 @@ export function useRepairsLane(
           if (!window.confirm(msg)) {
             return;
           }
-          void runApply(
-            action.fixerId,
-            action.planOpId,
-            async () => [action.rowId],
-            (fixerId, plan, rowIds) => api.startRepairOwnerApply(fixerId, plan, rowIds[0])
-          );
+          applyMutate({
+            fixerId: action.fixerId,
+            plan: action.planOpId,
+            resolveIds: async () => [action.rowId],
+            start: (fixerId, plan, rowIds) => api.startRepairOwnerApply(fixerId, plan, rowIds[0]),
+          });
           return;
         }
       }
     },
-    [collectApplicableIds, fixerTitle, remainingApplicable, runApply, runTrial, settledRowIds]
+    [collectApplicableIds, fixerTitle, remainingApplicable, applyMutate, startTrial, settledRowIds]
   );
 
   const applyResult =
@@ -870,15 +827,21 @@ export function useRepairsLane(
   const rowOutcomes = useMemo(() => new Map(Object.entries(planOutcomes)), [planOutcomes]);
 
   const trial = selectedFixerId ? (trials[selectedFixerId] ?? null) : null;
+  const fixersFailure = fixersQuery.error as (Error & { status?: number }) | null;
+  const fixersError = !fixersFailure
+    ? null
+    : fixersFailure.status === 404
+      ? 'This server has no repairs endpoints yet. It needs a build that includes the repairs framework.'
+      : errorMessage(fixersFailure, 'Failed to load the repair fixers.');
 
   return {
     active,
     fixers,
-    fixersLoading,
+    fixersLoading: fixersQuery.isFetching,
     fixersError,
     reloadFixers,
-    ownerStatus,
-    selectedFixerId: selectedFixer ? selectedFixerId : null,
+    ownerStatus: ownerQuery.isError ? null : (ownerQuery.data ?? null),
+    selectedFixerId,
     selectedFixer,
     selectFixer,
     planOpId,
@@ -894,17 +857,20 @@ export function useRepairsLane(
     setPageSize,
     page: currentPage,
     rows,
-    // Only meaningful while there is a plan to load: a fetch cut off by a
-    // switch to a fixer with no plan would otherwise leave the flag stuck.
-    rowsLoading: rowsLoading && planOpId !== null,
-    rowsError: planOpId !== null ? rowsError : null,
+    rowsLoading: rowsQuery.isFetching,
+    rowsError: rowsQuery.error
+      ? errorMessage(rowsQuery.error, 'Failed to load the trial rows.')
+      : null,
     reloadRows,
     selectedRowIds,
     toggleRow,
     selectPage,
     selectRows,
     clearSelection,
-    applying: applyingFor !== null && applyingFor === selectedFixerId,
+    applying:
+      selectedFixerId !== null &&
+      (selectedFixerId in applyOps ||
+        (startApply.isPending && startApply.variables.fixerId === selectedFixerId)),
     applyError: selectedFixerId ? (applyErrors[selectedFixerId] ?? null) : null,
     settledRowIds,
     remainingApplicable,

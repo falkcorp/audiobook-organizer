@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
 // last-edited: 2026-10-18
 //
@@ -22,6 +22,7 @@ import {
   useMetadataLane,
 } from './lanes/useMetadataLane';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -101,7 +102,8 @@ async function openNoCandidates() {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
   await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
   await user.click(screen.getByTestId('chip-no_candidates'));

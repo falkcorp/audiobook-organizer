@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.13.1
+// version: 1.13.2
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-18
 //
@@ -20,6 +20,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
+import { QueryWrapper } from '../../test/queryWrapper';
 
 vi.mock('../../services/api');
 
@@ -128,7 +129,8 @@ async function openWorkspace() {
       <ToastProvider>
         <ReviewWorkspace />
       </ToastProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
+    { wrapper: QueryWrapper }
   );
   await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
 }
