@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.28 -->
+<!-- version: 10.76.29 -->
 <!-- version: 10.76.27 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-18 -->
@@ -14,6 +14,199 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **05-PR9 follow-up** `POST /api/v3/ops/runs/{id}/approve` answers 501
+      after all its checks: nothing records a decision against a run yet.
+      Wire it once `ops.Approval` is attached to `ops.Common` / `ops.Compiled`
+      and the runner writes a `database.ApprovalRecord` (then pass an
+      `opsv3.Approver` in `internal/server/wire_ops_v3_routes.go`).
+- [ ] **05-PR9 follow-up** The v3 params schema check
+      (`internal/server/handlers/opsv3/schema.go`) is an in-tree subset of
+      JSON Schema, because the repo imports no JSON Schema library and a new
+      dependency is the owner's call. Owner decision: keep the subset, or
+      adopt a maintained library (and drop the checker).
+- [ ] **05-PR9 follow-up** Writers declared read-only (the reverse of the
+      item below): `/api/v3/ops` decides whether an op writes from its
+      capabilities and `Writes`. A sweep on 2026-10-18 found five that declare
+      neither yet write something on every run with no mode key:
+      `acoustid.scan` (dedup candidate rows), `ai.author-scan` (AI scan state
+      and suggestions, paid OpenAI calls), `dedup.split-book-scan` (split-book
+      candidates), `library.bulk-metadata-fetch` (metadata fetch caches, never
+      book rows) and `diagnostics.ai-analyze` (a paid OpenAI batch, no DB
+      writes). Until the owner decides, v3 fails closed on them:
+      `writesWithoutPreview` (`internal/server/wire_ops_v3_routes.go`) makes
+      each a writer with no preview, so a v3 start is a 409 unless it says
+      `mode: "live"`, with params untouched. That list is v3-only: no
+      `write_op_modes.golden` line, no dispatcher write-set gate, and v1/v2
+      starts and internal enqueues are unchanged. Owner decision, recommended
+      (b) for the three that write derived rows or caches and (a) for the two
+      paid AI ones: (a) give each a dry_run preview mode and its write
+      capability, then delete its list entry; (b) rule that derived,
+      recomputable result rows and caches are not writes for the preview
+      rule, delete the entry and list the op in `readOnlyByDeclaration`;
+      (c) keep the v3 list as the permanent answer.
+- [ ] **05-PR9 follow-up** `PreviewSpec.Params` names the type an op's Run
+      decodes, but nothing ties the two by construction: an edit to Run's
+      decode target is caught only by that op's `TestPreviewBehaviour_*`
+      test, which seven ops have (acoustid fingerprint-duration-repair,
+      version-group-primary-repair, repoint-version-primary, deluge
+      path-update, regroup-shattered-ai, transcribe-book-intros,
+      vacuum-activity-db). Owner
+      decision: (a) keep behavioural tests and add one per new writing op;
+      (b) declare the params type once and use it for both, e.g. a generic
+      `registry.Decode[T]` that Run calls and that sets Preview, touching
+      every declaring op's Run (about 85 decode sites plus the maintenance
+      job bridge).
+- [ ] **05-PR9 follow-up** `maintenance.book-shape-report`'s `reportPath`
+      param is used as the report destination with no containment check
+      (`resolveReportPath`, `internal/plugins/maintenance/report_path.go`), so a
+      caller with the op's permission can make it overwrite any file the
+      server can write. Confine report paths to `{root_dir}/.reports/`.
+- [ ] **05-PR9 follow-up** Five read-only maintenance jobs (relink-report,
+      scan-duplicate-files, scan-duration-mismatch, scan-metadata-hash-dups,
+      scan-chapter-groups) declare `DefaultPolicy()` capabilities, which
+      include library.write, so `/api/v3/ops` treats them as writers without
+      a preview and requires `mode: "live"`. Give them read-only capabilities.
+
+- [ ] **03-PR12-STUBS** Remove the 410 stubs for /audiobooks/duplicates* one
+      release after 03 PR 12 — the seven `duplicatesGone` registrations in
+      `internal/server/wire_dedup_routes.go` and their test
+      `internal/server/wire_dedup_routes_gone_test.go` (01 P81-style stub
+      cleanup). Also decide, with 04, whether the `dedup.book-scan` op stays:
+      its groups go only to the `book-dedup-scan` cache entry (plus one
+      activity line with the counts), and no route reads that entry now.
+
+- [ ] **CI-TAGLIB-CONTAINER** Run `test-native-taglib` in a container instead
+      of on the u0-local agent's host (owner 2026-10-17: "at some point it might
+      be better running it in a container on u0/u1"). Today u0-local runs PR
+      code directly on the prod host, behind only a systemd sandbox; the
+      remaining exposure is loopback access to prod ports and a persistent
+      `/srv/ci` cache. Build a CI image from `Dockerfile.build-cgo`'s
+      `go-builder` stage, which already builds TagLib 2.0.2 statically, plus
+      ffmpeg and fpcalc for the metafetch tests. Run it on u0's existing
+      docker-backend swarm agent, under its per-step CPU and memory caps and
+      with only the dedicated cache volume. Then retire u0-local
+      (`woodpecker-agent-local.service`, server agent 7, the ZFS dataset
+      `nvmecache/woodpecker-local`) and its section in `docs/ci/woodpecker.md`.
+      u1 has no docker today, so it would need docker or podman to share the
+      lane.
+
+- [ ] **ACTIVITY-RECORD-NONBLOCKING** A live `maintenance.vacuum-activity-db` holds
+      the SQLite activity store's single writer connection for its whole run, so
+      synchronous `SQLActivityStore.Record` callers block until it ends: the
+      library scan (once per book, `server_search.go`), metadata apply and
+      write-back, and the admin debug paths. The log-tee `activity.Writer`
+      channel holds 10k entries and drops lines once it fills. The op documents
+      this and refuses to start during a scan or metadata op, but that guard is
+      point-in-time. Give `Record` a context (so a caller can time out or be
+      canceled) or a deferral (queue the row for the writer to drain after the
+      VACUUM), then drop the stall warning from the op description and preview
+      message. Needs a test that a Record issued during a VACUUM returns
+      promptly and lands afterwards.
+
+- [ ] **CACHE-INVALIDATE-OP** There is no way to flush the in-memory caches
+      without a process restart. `POST /api/v1/cache/invalidate` was retired in
+      01-P81g (it answers 410 Gone for one release) and nothing replaces it. A
+      restart costs about ten minutes of unusable library while the in-memory
+      store warms back up. Generation keying on the library-list caches does not
+      cover batch writes, direct memory-store writes or index-only edits, so
+      stale entries are still possible. If the owner wants the lever back, add a
+      registered `maintenance.*` op that empties one named cache or all of them
+      and reports what was dropped per cache. Needs a preview mode and an
+      admin-only permission.
+
+- [ ] **01-P81I-PREVIEWREPORT** Bring back a way to read the bulk-apply dry-run
+      report. 01-P81i retired `GET /api/v1/metadata/bulk-apply-preview/:id`, the
+      only reader of the per-book rows the `metadata.bulk-apply-preview` op writes
+      (candidate, gate verdict, field changes, rename, plus a summary by verdict
+      and reason, paging, filters and a download). The dry run is still the
+      default of `POST /api/v1/metadata/batch-apply-candidates` and
+      `POST /api/v1/audiobooks/metadata/batch-apply-cached`, and the op still
+      writes the rows and an `_sibling_index` row, but nothing can read them over
+      HTTP any more. What is left is the one-line summary in the finished
+      operation's message (`GET /api/v1/operations/v2/:id`). Decide whether to add
+      a reader (option a: a typed results view on the operations API, which
+      needs `GET /operations/:id/results` to accept this op, today it only
+      resolves candidate-fetch operations), restore the old route (b), or drop
+      the per-book rows and the `_sibling_index` row (c). Whichever is chosen,
+      note that those rows (`op_result:` keys) have no deleter and grow forever.
+- [ ] **01-P81I-COVERRESTORE** Decide how to restore an archived cover. 01-P81i
+      retired `GET /api/v1/audiobooks/:id/cover-history` and
+      `POST /api/v1/audiobooks/:id/cover-history/restore`. The web UI never had a
+      restore button, but cover embedding still archives the previous cover under
+      `covers/history/{bookID}/` and nothing can list or restore those files over
+      HTTP now. Either add a restore action to the book detail page (and a route
+      that records an undoable metadata change) or stop archiving. Until then
+      the archived cover files and the metadata-change rows written for each
+      archive grow without bound.
+- [ ] **01-P81I-COLLISION** Decide whether import needs a pre-import collision
+      check. 01-P81i retired `POST /api/v1/import/collision-preview`, which told a
+      caller whether a file would collide with an existing book by torrent
+      fingerprint, quick file hash or matching title before importing it. Nothing
+      in the repo called it and it has no replacement; the importer's own
+      duplicate handling at ingest is unchanged.
+
+- [ ] **01-P81K-API-KEY-ROTATE-GAP** Capability gap from 01-P81k: replacing an API
+      key is now two calls instead of one. `POST /api/v1/auth/api-keys/:id/rotate`
+      answers 410 and names `POST /api/v1/auth/api-keys` (create) followed by
+      `DELETE /api/v1/auth/api-keys/:id` (revoke) as the replacement. Create,
+      list, get, status change and revoke are unchanged. What the pair does not
+      give: (1) the one-hour grace window the old key kept after a rotate, so
+      the owner must create the new key and move the client over BEFORE revoking
+      the old one; (2) the old key's scopes and lifetime carried over, so the
+      owner passes `scopes` and `expires_in_days` again (default 30 days). If
+      either matters, add `replaces_key_id` to the create request instead of
+      reviving rotate (the grace expiry via `SetAPIKeyExpiry`, and the clamp to
+      the calling key's expiry, are both already in the create path).
+
+- [ ] **01-P81K-DELUGE-IMPORT-RECONFIRM** Owner reconfirmation needed:
+      `POST /api/v1/deluge/discover/import` was marked "retire" by D73
+      (2026-10-09), but 10-PR1 (merged 2026-10-10) made it the only trusted
+      setter of `ImportFileRequest.TorrentHash`, which drives the
+      `idx:bv:torrent` index and the duplicate-torrent 409. 01-P81k therefore
+      kept the route live. If the owner still wants it retired, a trusted,
+      Deluge-verified caller must keep setting `TorrentHash` (for example
+      `POST /discovery/import`), or duplicate-torrent protection is lost.
+
+- [ ] **01-P81K-PID-REPAIR-APPLY** Capability gap from 01-P81k: there is no longer
+      any way to APPLY the duplicate iTunes PID repair. `POST /api/v1/itunes/pid-repair`
+      (clear the PID from every duplicate owner except one keeper, database
+      fields only) now answers 410, and `itunes.ApplyPIDRepairPlan` was deleted
+      with it because nothing else called it. The read-only census
+      (`GET /api/v1/itunes/pid-integrity`) and the plan preview
+      (`pid-census --repair`) are kept. The 2026-08-14 census had already
+      dropped to 2 ambiguous groups with `files_to_clear=0`, so the apply was a
+      no-op; the open "apply the backfill repair" entry in the TODO is moot
+      unless the census shows duplicates again. If it does, rebuild the apply
+      as an operation with a preview mode (`opmode.ParseDryRun`), the clear
+      step from git history (`internal/itunes/pid_repair.go` before 01-P81k).
+
+- [ ] **01-P81K-REMOVE-410-STUBS** One release after 01-P81k ships (owner decision
+      D9), delete the five `gone(...)` stubs it registered and their
+      `wire_*_gone_test.go` tests, openapi entries and exempt-route lines:
+      `DELETE /books/:id/versions/:vid`, `POST /books/:id/versions/:vid/restore`,
+      `POST /books/:id/versions/:vid/purge-now`, `POST /itunes/pid-repair`,
+      `POST /auth/api-keys/:id/rotate`. The rotate stub is the only one that
+      also removes a `credRouteWhen` entry, so drop `apiKeyOwnedByAnotherUser`
+      and its row in `guardedRoutes()` with it.
+
+- [ ] **THROTTLE-RESET-OP** Add an op to release metadata provider holds by
+      hand. 01-P81f retired `DELETE /api/v1/metadata/providers/throttles` and
+      `DELETE /api/v1/metadata/providers/throttles/:id` (no caller), and with
+      them `ThrottleRegistry.Clear`/`ClearAll`. A quota or auth hold now ends
+      on expiry or when a successful call releases it, and it survives restarts. Today the working manual exit is a single-book metadata lookup (it bypasses holds and releases any kind on success). Add a
+      registered op (with a preview mode, per the owner's rule), not a route,
+      and give the planned Throttle panel a "reset now" button on top of it.
+
+- [ ] **01-P81E-TAGSTORE** After 01-T1 merges, remove the whole author and series
+      tag store surface: 16 methods (8 reader, 8 writer) across `AuthorTagReader`,
+      `AuthorTagWriter`, `SeriesTagReader` and `SeriesTagWriter` in
+      `internal/database/iface_tags.go`, plus their PebbleStore implementations
+      and mocks. 01-P81e retired the HTTP routes. Ten of the methods have no
+      non-test caller today: `GetAuthorTags`, `ListAllAuthorTags`,
+      `GetAuthorsByTag`, `RemoveAuthorTag`, `SetAuthorTags` and the five series
+      equivalents. The other six are only called from the `EnsureSingleton*Tag`
+      helpers in `tag_helpers.go`, which 01-T1 deletes.
 
 - [ ] **04-P10 follow-up** Decide how `dedup.check-book` handles books that
       never get `book_sig_v1`, then flip `dedup.on_import_via_scheduler` to
