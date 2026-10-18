@@ -1,5 +1,5 @@
 // file: internal/merge/state_follow_followups_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1056ccb5-89ca-4487-9ff7-533be24d6942
 // last-edited: 2026-10-18
 
@@ -37,6 +37,11 @@ type sfFaultStore struct {
 	failGetBookOnce map[string]bool
 	// failModifyBookOnce fails the next ModifyBook of each id, once.
 	failModifyBookOnce map[string]bool
+	// vanishAfterStateOn: once a SetUserBookState for this book lands,
+	// GetBookByID answers (nil, nil) for it, as if a delete outside the merge
+	// lock removed the row right after a revert put state back on it.
+	vanishAfterStateOn string
+	vanished           map[string]bool
 }
 
 func (s *sfFaultStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
@@ -70,16 +75,31 @@ func (s *sfFaultStore) SetUserBookState(st *database.UserBookState) error {
 	if fail {
 		return fmt.Errorf("injected SetUserBookState failure for %s", st.BookID)
 	}
-	return s.PebbleStore.SetUserBookState(st)
+	if err := s.PebbleStore.SetUserBookState(st); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.vanishAfterStateOn != "" && st.BookID == s.vanishAfterStateOn {
+		if s.vanished == nil {
+			s.vanished = map[string]bool{}
+		}
+		s.vanished[st.BookID] = true
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *sfFaultStore) GetBookByID(id string) (*database.Book, error) {
 	s.mu.Lock()
 	fail := s.failGetBookOnce[id]
 	delete(s.failGetBookOnce, id)
+	gone := s.vanished[id]
 	s.mu.Unlock()
 	if fail {
 		return nil, fmt.Errorf("injected GetBookByID failure for %s", id)
+	}
+	if gone {
+		return nil, nil
 	}
 	return s.PebbleStore.GetBookByID(id)
 }
@@ -249,6 +269,22 @@ func TestUndoSiblingMove_RefollowFailureIsRetried(t *testing.T) {
 	j = journalByID(t, m.svc, res.SiblingJournalID)
 	require.True(t, j.StateFollows[0].Undone)
 	require.Len(t, j.StateFollows, 2, "one refollow entry, not one per attempt")
+}
+
+// SF4: a loser whose row is gone right after the undo put its state back on
+// it (a delete outside the merge lock) is an error, not a finished reversal:
+// the follow stays open (not Undone) and the journal records the failure.
+func TestUndoSiblingMove_LoserGoneAfterRestoreIsAnError(t *testing.T) {
+	m := newFlagHolderMerge(t)
+	res := m.merge(t)
+
+	m.fs.vanishAfterStateOn = m.l
+	_, err := m.svc.UndoSiblingMove(res.SiblingJournalID)
+	require.ErrorContains(t, err, "is gone after its listening state was put back on it")
+	j := journalByID(t, m.svc, res.SiblingJournalID)
+	require.False(t, j.StateFollows[0].Undone, "a follow whose state went with a deleted row is not Undone")
+	require.NotEqual(t, SiblingJournalUndone, j.Status)
+	require.NotEmpty(t, j.LastError)
 }
 
 // NIT 2: a survivor merged away since the merge. The refollow goes to the

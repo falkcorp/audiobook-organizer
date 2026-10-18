@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
 // last-edited: 2026-10-18
 
@@ -315,12 +315,22 @@ func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateF
 // end of j.SurvivorID's chain, journaled (see undoStateFollows). A live loser
 // is left alone. undoing is the index of the entry being reversed, which the
 // refollow must not reuse (followLoserJournaled).
+//
+// A loser that is GONE is an error, not "nothing to do": the caller checked
+// under the merge lock that it existed (followHasDestination) and has just put
+// its state back on it, so its row vanishing now means a delete outside the
+// lock took that state with it. Reporting it keeps the follow open (not
+// Undone) and the failure visible, instead of recording a reversal whose
+// state no longer exists anywhere.
 func (ms *Service) refollowOntoSurvivor(j *SiblingMoveJournal, loser string, undoing int) ([]string, error) {
 	b, err := ms.db.GetBookByID(loser)
 	if err != nil {
 		return nil, fmt.Errorf("read loser %s: %w", loser, err)
 	}
-	if b == nil || !b.IsSoftDeleted() {
+	if b == nil {
+		return nil, fmt.Errorf("loser %s is gone after its listening state was put back on it (deleted outside the merge lock); the follow stays open", loser)
+	}
+	if !b.IsSoftDeleted() {
 		return nil, nil
 	}
 	target, err := ResolveSurvivor(ms.db, j.SurvivorID)

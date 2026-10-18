@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -332,8 +332,11 @@ func (svc *AudiobookService) CountSoftDeletedBooks(ctx context.Context, olderTha
 //
 // The books are processed by a bounded worker pool, one version group per
 // worker at a time (purgePartitions), so two workers never carry state into
-// or delete from the same group concurrently. The carries themselves still
-// run one at a time: each holds the global merge lock.
+// or delete from the same group concurrently. The carries, and each book's
+// state check plus row delete, still run one at a time: each holds the
+// global merge lock, which is what keeps a merge revert from putting state
+// back on a book between its check and its delete. The file-row check and
+// the on-disk file removal run outside it, in parallel.
 func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*PurgeResult, error) {
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -436,15 +439,21 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// a pending repair still holds it, or the user trashed a book they were
 	// listening to), and a plain hard delete would drop it. Fail closed: an
 	// unreadable answer is not proof there is none.
-	hasState, stateErr := stateProbe.Has(book.ID)
+	//
+	// The check and the delete run in ONE hold of the merge lock
+	// (purgeIfStateless): a merge revert (UndoSiblingMove putting a loser's
+	// state back on it, UndoCombine restoring progress) writes listening
+	// state onto a trashed book under that lock, so a check made outside it
+	// could read "none", lose the race to the revert, and delete the book the
+	// revert had just put a user's progress on.
+	hasState, stateErr, err := svc.purgeIfStateless(book, stateProbe)
 	if stateErr != nil {
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(stateErr), stateErr)}}
 	}
 	if hasState {
 		return svc.purgeCarryingState(book, deleteFiles)
 	}
-
-	if err := svc.purgeDeleteRow(book); err != nil {
+	if err != nil {
 		if errors.Is(err, database.ErrBookOwnsFiles) {
 			// A file row landed between the pre-check and the delete.
 			return purgeOutcome{kind: purgeOwnsFiles}
@@ -453,6 +462,23 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	}
 	n, errs := svc.purgeFinish(book, deleteFiles)
 	return purgeOutcome{kind: purgePurged, filesDeleted: n, errs: errs}
+}
+
+// purgeIfStateless checks book for listening state and, when it has none,
+// deletes its row, both under the merge lock (see purgeOne step 0b). It
+// returns whether the book has state (nothing is deleted then), the check's
+// error, and the delete's error. The lock is released before it returns, so
+// purgeCarryingState, which takes it itself, can follow. Lock order: the
+// merge lock is the outermost lock; nothing here takes it again, and the
+// store calls underneath take only per-book locks.
+func (svc *AudiobookService) purgeIfStateless(book *database.Book, probe *merge.UserStateProbe) (hasState bool, stateErr, deleteErr error) {
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	hasState, stateErr = probe.Has(book.ID)
+	if stateErr != nil || hasState {
+		return hasState, stateErr, nil
+	}
+	return false, nil, svc.purgeDeleteRow(book)
 }
 
 // stateCheckFailureReason names why the listening-state check of a book
