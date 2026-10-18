@@ -1,5 +1,5 @@
 // file: internal/database/review_claim.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 793a733c-f28c-4b2d-ba41-4170b8a43a07
 // last-edited: 2026-10-18
 
@@ -20,7 +20,8 @@ import (
 //
 // 🔴 THE INVARIANT. An item in ReviewStatusApplying is held by exactly one claim, and
 // only that claim leaves the state: FinishReviewItemApply (applying → applied) or
-// ReleaseReviewItemClaim (applying → the status it was claimed from), each checked
+// ReleaseReviewItemClaim (applying → the status it was claimed from) or
+// HoldReviewItemClaim (applying, claim held by no process), each checked
 // against the claim's token — or, for a claim no running process holds, an
 // operator's AbandonReviewItemClaim (applying → needs_attention). No decision write
 // may replace it — DecideReviewItem refuses, and the store has no other status
@@ -64,14 +65,24 @@ type ReviewItemApplyClaimer interface {
 	// (nil, nil) when the item does not exist.
 	FinishReviewItemApply(id, token string) (*ReviewItem, error)
 
-	// ReleaseReviewItemClaim ends a claim whose apply failed. A first-run claim
-	// puts the item back to the status it was claimed from. A RE-RUN claim (one that
-	// took over an interrupted apply) does not: the first run may already have
-	// changed the library, so the item stays applying with the claim marked as held
-	// by no process — it keeps answering "interrupted" until an approve finishes it
-	// or an operator abandons it. Returns the item as left, or (nil, nil) when the
+	// ReleaseReviewItemClaim ends a claim whose apply failed having written nothing
+	// (NothingWrittenError). A first-run claim puts the item back to the status it was
+	// claimed from. A RE-RUN claim (one that took over an interrupted apply) does not:
+	// the first run may already have changed the library, so the item is held exactly as
+	// HoldReviewItemClaim holds it. Returns the item as left, or (nil, nil) when the
 	// item is missing or token does not hold the claim (nothing is changed).
 	ReleaseReviewItemClaim(id, token string) (*ReviewItem, error)
+
+	// HoldReviewItemClaim ends a claim whose apply failed and may have written
+	// something: a first run that failed after its first write, or one that could not
+	// say (a plain error, a panic). The item stays applying, the claim marked as held
+	// by no process, with its claimed-from status and action kept: it keeps answering
+	// "interrupted" until an approve of the same action takes it over and re-runs the
+	// apply (Claim.TookOver) or an operator abandons it. This is the state a failed
+	// re-run leaves; ReleaseReviewItemClaim of a re-run claim is this call. Returns the
+	// item as left, or (nil, nil) when the item is missing or token does not hold the
+	// claim (nothing is changed).
+	HoldReviewItemClaim(id, token string) (*ReviewItem, error)
 
 	// AbandonReviewItemClaim is the operator's way out of an interrupted apply that
 	// cannot or should not be re-run (its re-run keeps failing, or its action has no
@@ -192,8 +203,8 @@ func (p *PebbleStore) claimConflictLocked(item *ReviewItem) (*ReviewClaimConflic
 		if err != nil {
 			return nil, err
 		}
-		// A blank instance is a claim a failed re-run left (ReleaseReviewItemClaim):
-		// held by no process. self is never blank.
+		// A blank instance is a claim a failed re-run, or a first run that failed after
+		// writing, left (HoldReviewItemClaim): held by no process. self is never blank.
 		reason := ReviewClaimInterrupted
 		if item.ApplyClaimInstance != "" && item.ApplyClaimInstance == self {
 			reason = ReviewClaimInProgress
@@ -263,10 +274,10 @@ func (p *PebbleStore) ClaimReviewItemForApply(id, action string, ifUpdatedAt tim
 		return nil, fmt.Errorf("review claim token: %w", err)
 	}
 	oldStatus := item.Status
-	// ChosenAction is deliberately NOT written here: a failed first run is released
-	// back to the status it was claimed from, and an override recorded by a claim
-	// would outlive an apply that never finished, becoming what a later approve with
-	// no action runs. The action rides on the claim (ApplyClaimAction) until the
+	// ChosenAction is deliberately NOT written here: a first run that failed having
+	// written nothing is released back to the status it was claimed from, and an
+	// override recorded by a claim would outlive an apply that never finished,
+	// becoming what a later approve with no action runs. The action rides on the claim (ApplyClaimAction) until the
 	// apply is finished (ChosenAction) or abandoned (ChosenAction, as the action
 	// that may be half done).
 	item.Status = ReviewStatusApplying
@@ -317,13 +328,8 @@ func (p *PebbleStore) ReleaseReviewItemClaim(id, token string) (*ReviewItem, err
 	}
 	if item.ApplyClaimRerun {
 		// The re-run failed over a library the interrupted first run may have
-		// changed. Keep the claim, held by no process: still "interrupted".
-		item.ApplyClaimToken = ""
-		item.ApplyClaimInstance = ""
-		if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
-			return nil, err
-		}
-		return item, nil
+		// changed: held, whatever the failure was.
+		return p.holdReviewItemClaimLocked(item)
 	}
 	back := item.ApplyClaimedFrom
 	if back == "" {
@@ -331,6 +337,35 @@ func (p *PebbleStore) ReleaseReviewItemClaim(id, token string) (*ReviewItem, err
 	}
 	item.Status = back
 	clearReviewClaim(item)
+	if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (p *PebbleStore) HoldReviewItemClaim(id, token string) (*ReviewItem, error) {
+	p.reviewMu.Lock()
+	defer p.reviewMu.Unlock()
+
+	item, err := p.getReviewItem(id)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	if item.Status != ReviewStatusApplying || token == "" || item.ApplyClaimToken != token {
+		return nil, nil
+	}
+	return p.holdReviewItemClaimLocked(item)
+}
+
+// holdReviewItemClaimLocked leaves item applying with its claim held by no process:
+// the token and instance are blanked, everything else (claimed-from status, action)
+// stays, so the item reads as interrupted (claimConflictLocked) and an approve of the
+// same action takes it over. The one place a held claim is made, shared by a failed
+// re-run's release and a failed first run's hold. Caller holds reviewMu and has
+// checked the claim.
+func (p *PebbleStore) holdReviewItemClaimLocked(item *ReviewItem) (*ReviewItem, error) {
+	item.ApplyClaimToken = ""
+	item.ApplyClaimInstance = ""
 	if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
 		return nil, err
 	}

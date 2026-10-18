@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -660,12 +660,15 @@ function ReportIdText({ id }: { id: string }) {
  *  answers a FIRST run that was handed back, and the item is then back at the status
  *  it was claimed from (pending, approved, rejected or needs_attention), which is not
  *  always pending (a re-run the iTunes guard refuses answers REVIEW_RERUN_FAILED,
- *  because it stays held). */
+ *  because it stays held). REVIEW_APPLY_PARTIAL IS here: a first run that failed after
+ *  it may have changed the library is held applying, like a failed re-run, not handed
+ *  back. */
 const NOT_PENDING_SKIP_CODES = new Set([
   'REVIEW_ALREADY_APPLIED',
   'REVIEW_APPLY_IN_PROGRESS',
   'REVIEW_APPLY_INTERRUPTED',
   'REVIEW_RERUN_FAILED',
+  'REVIEW_APPLY_PARTIAL',
   'REVIEW_APPLY_DISABLED',
   'REVIEW_NO_APPLY_HANDLER',
   'REVIEW_SEPARATE_NEEDS_ATTENTION',
@@ -839,15 +842,15 @@ function HeldListCap({ shown, count }: { shown: number; count: number }) {
 
 /**
  * Holds held by an apply claim. They are in no pending list, so without this a
- * hold whose apply was interrupted by a restart, or ran but could not be recorded,
- * would vanish from the queue with no way to finish it from the UI.
+ * hold whose apply was interrupted by a restart, failed after it may have changed the
+ * library (REVIEW_APPLY_PARTIAL), or ran but could not be recorded, would vanish from the queue with no way to finish it from the UI.
  *
  * The list loads on demand. "Finish" approves with NO action, which the server
  * resolves to the claim's own action: a running apply answers "in progress", an
  * unrecorded one is recorded without re-running, and an interrupted one runs again
  * (skipping work already done, but not redoing an incomplete multidisc renumbering;
- * a duplicate-of re-run can fail after a partial merge). A failed re-run leaves the
- * hold here. "Abandon" moves an interrupted hold to needs attention when it cannot
+ * a duplicate-of re-run can fail after a partial merge). A failed first run that may
+ * have written, and a failed re-run, leave the hold here. "Abandon" moves an interrupted hold to needs attention when it cannot
  * be finished; it undoes nothing.
  */
 export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: () => void }) {
@@ -860,7 +863,7 @@ export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: 
       </AlertTitle>
       <Typography variant="body2" sx={{ mb: 1 }}>
         An apply is running, ran but could not be recorded, or was interrupted (by a server restart,
-        or its re-run failed). These holds are not in the list below and accept no other decision
+        a failure after it may have changed the library, or a failed re-run). These holds are not in the list below and accept no other decision
         until the apply is finished. Finish runs an interrupted apply again: it skips work already
         done, but it does not redo an incomplete multidisc renumbering, and a duplicate-of re-run
         can fail after a partial merge. If it cannot be finished, Abandon moves the hold to needs

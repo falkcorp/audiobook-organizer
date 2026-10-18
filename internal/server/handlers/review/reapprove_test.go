@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/reapprove_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d2e4e573-9060-4296-b021-6de20390337a
 // last-edited: 2026-10-18
 
@@ -219,7 +219,7 @@ func TestBulkApprove_FailingItemIsReportedAndRetryable(t *testing.T) {
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, it database.ReviewItem) error {
 		calls[it.ID]++
 		if it.ID == b.ID && failB {
-			return errors.New("synthetic refusal")
+			return database.NothingWritten(errors.New("synthetic refusal"))
 		}
 		return nil
 	})
@@ -448,14 +448,15 @@ func TestApprove_ConcurrentApprovesApplyExactlyOnce(t *testing.T) {
 	}
 }
 
-// A failing apply releases its claim, so the item is retryable and not stuck applying.
+// A failing apply that wrote nothing releases its claim, so the item is retryable and not
+// stuck applying. (One that may have written is held instead: partial_apply_test.go.)
 func TestApprove_FailedApplyReleasesTheClaim(t *testing.T) {
 	s := newTestStore(t)
 	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	applyOn := false
 	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
-		return errors.New("synthetic refusal")
+		return database.NothingWritten(errors.New("synthetic refusal"))
 	})
 	reApprove(t, h, a.ID)
 	applyOn = true

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -97,6 +97,15 @@ var approvableActions = map[string]bool{
 // ApplyFunc executes the real-world action an approved review item represents
 // (e.g. the regroup op collapsing shattered books). Registered per ACTION — see
 // RegisterApplyHandler and the package doc; it was per Kind before 2026-08-06.
+//
+// 🔴 A FAILURE IS HELD UNLESS IT SAYS NOTHING WAS WRITTEN. An ApplyFunc that returns an
+// error wrapped by database.NothingWritten asserts that no persistent write landed
+// before it failed: the item is then handed back to the status it was claimed from.
+// Any other error (a plain one, an opaque call that may have written, a panic) is
+// treated as "may have written": the item stays applying, held by no process, exactly
+// like a failed re-run (REVIEW_APPLY_PARTIAL; see applyUnderClaim). A handler asserts
+// cleanliness only where it can show it, and the default for a forgotten path is the
+// safe one.
 type ApplyFunc func(ctx context.Context, item database.ReviewItem) error
 
 // Handler hosts the review-queue HTTP endpoints.
@@ -751,15 +760,18 @@ var finishBackoff = []time.Duration{0, 50 * time.Millisecond, 250 * time.Millise
 // one is protected from changes after it arrived, not from changes after the page it
 // came from was rendered.
 //
-// Every exit leaves the claim finished or released, except appliedUnrecordedError,
-// which keeps it on purpose. A panicking fn releases it too: a claim from this process
-// is never taken over, so a leaked one would hold the item until a restart.
-//
-// A release of a RE-RUN (claim.TookOver) does not hand the item back: the store keeps
-// it applying, held by no process (ReleaseReviewItemClaim), because the interrupted
-// first run may already have changed the library. It keeps answering
-// REVIEW_APPLY_INTERRUPTED until a later approve finishes it or an operator abandons
-// it (AbandonApply).
+// Every exit leaves the claim finished, released or held, except
+// appliedUnrecordedError, which keeps it on purpose. A failed apply is HELD, not
+// released, unless its error says nothing was written (database.NothingWritten):
+// the store then keeps the item applying, held by no process
+// (HoldReviewItemClaim), because the library may already have changed. That covers
+// a failed RE-RUN (the interrupted first run may have changed it), a first run that
+// failed after its first write (ApplyVersionGroup makes two writes; a duplicate-of
+// merge can stop after a partial merge), and a first run that cannot say, including
+// a panicking fn. A held item keeps answering REVIEW_APPLY_INTERRUPTED until a later
+// approve finishes it or an operator abandons it (AbandonApply). Only a first run
+// whose failure wrote nothing (a refused precondition, the iTunes guard) is released
+// back to the status it was claimed from, still decidable.
 func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem, chosen string, fn ApplyFunc) (
 	*database.ReviewItem, string, string, error) {
 	id := item.ID
@@ -780,8 +792,10 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 			return
 		}
 		r := recover()
-		if relErr := h.releaseClaim(id, claim.Token); relErr != nil {
-			reviewLog.Error("review apply of %s panicked and its claim could not be released: %v", id, relErr)
+		// A panic cannot say whether anything was written, so it is held like any
+		// other unclassified failure.
+		if relErr := h.holdClaim(id, claim.Token); relErr != nil {
+			reviewLog.Error("review apply of %s panicked and its claim could not be held: %v", id, relErr)
 		}
 		if r != nil {
 			panic(r)
@@ -791,38 +805,51 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 	if applyErr != nil {
 		settled = true
 		reason := applyErr
-		// A first run that fails is handed back: the claim is released and the item is
-		// decidable again, EVEN IF the apply wrote part of what it set out to. The
-		// handlers are not all-or-nothing (ApplyVersionGroup makes two writes, and a
-		// duplicate-of merge can stop after a partial merge), so "failed" does not
-		// mean "changed nothing". Only a RE-RUN's release keeps the item held as
-		// interrupted (see the doc above), and the reason says so. Holding a failed
-		// first run the same way is an open owner decision (todo.d fragment
-		// 2026-10-18-hold-failed-first-run-apply.md).
-		relErr := h.releaseClaim(id, claim.Token)
-		if relErr != nil {
+		// held: the failure may have changed the library, so the claim is kept, held by
+		// no process, and the item is NOT decidable again. A re-run is always held (the
+		// interrupted first run may have changed it); a first run is held unless its
+		// error says nothing was written. See the doc above.
+		held := claim.TookOver || !database.IsNothingWritten(applyErr)
+		var relErr error
+		if held {
+			relErr = h.holdClaim(id, claim.Token)
+		} else {
+			relErr = h.releaseClaim(id, claim.Token)
+		}
+		switch {
+		case relErr != nil:
 			reason = fmt.Errorf("%w; and its apply claim could not be released, so the item stays "+
 				"\"applying\" until the server restarts: %v", applyErr, relErr)
-		} else if claim.TookOver {
+		case claim.TookOver:
 			reason = fmt.Errorf("re-running the interrupted %q apply failed: %w; the item stays held as "+
 				"interrupted because the first run may already have changed the library. Approve it again to "+
 				"retry, or abandon the apply (POST /api/v1/review/items/%s/abandon-apply) to move it to "+
 				"needs_attention for someone to check the library", chosen, applyErr, id)
+		case held:
+			reason = fmt.Errorf("the %q apply failed and may already have changed part of the library: %w; the "+
+				"item stays held as interrupted, not back in the queue. Approve it again to retry (the re-run "+
+				"skips work already done), or abandon the apply (POST /api/v1/review/items/%s/abandon-apply) to "+
+				"move it to needs_attention for someone to check the library", chosen, applyErr, id)
 		}
-		// A failed re-run is a 409 with its own code, not a 500: the item is still held
+		// A held failure is a 409 with its own code, not a 500: the item is still held
 		// as interrupted, which the caller has to act on (retry or abandon), and a 500's
 		// body would hide the reason. It is checked BEFORE the iTunes refusal below
 		// because the code is what tells a client whether the item is still in a
-		// pending list: a re-run refused by the iTunes guard leaves the item applying,
-		// so it answers REVIEW_RERUN_FAILED like any other failed re-run (the reason
-		// carries the iTunes detail), whereas REVIEW_ITUNES_PROTECTED means a first run
-		// that was handed back and the item is back at the status it was claimed from.
+		// pending list. A re-run answers REVIEW_RERUN_FAILED for any reason, including
+		// the iTunes guard (the reason carries the iTunes detail); a first run that
+		// failed after writing answers REVIEW_APPLY_PARTIAL. REVIEW_ITUNES_PROTECTED
+		// means a first run that was handed back, so the item is back at the status it
+		// was claimed from.
 		if relErr == nil && claim.TookOver {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_RERUN_FAILED", reason.Error())
 		}
+		if relErr == nil && held {
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_APPLY_PARTIAL", reason.Error())
+		}
 		// A refusal because a member has a file under the active iTunes library is
 		// 409, not a 500: the item keeps its status and bulk approve skips it
-		// instead of aborting.
+		// instead of aborting. It is a first run that wrote nothing: the guards run
+		// before any write, and a handler marks only such a refusal NothingWritten.
 		if errors.Is(applyErr, merge.ErrITunesProtected) {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
 		}
@@ -861,10 +888,27 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 	return updated, chosen, note, nil
 }
 
-// releaseClaim ends a claim whose apply failed (the store decides whether the item
-// goes back or, for a re-run, stays held as interrupted), logging a failure. A
-// release that found the claim no longer held by token is logged too: nothing else
-// should be able to take a live claim, so it means something is wrong.
+// holdClaim ends a claim whose apply failed and may have written something: the item
+// stays applying, held by no process (database.ReviewItemApplyClaimer
+// HoldReviewItemClaim), logging a failure. A hold that found the claim no longer held
+// by token is logged too, for the same reason as in releaseClaim.
+func (h *Handler) holdClaim(id, token string) error {
+	left, err := h.claimer.HoldReviewItemClaim(id, token)
+	if err != nil {
+		reviewLog.Error("review item %s: hold apply claim: %v", id, err)
+		return err
+	}
+	if left == nil {
+		reviewLog.Warn("review item %s: hold apply claim: the claim was no longer held by this apply", id)
+	}
+	return nil
+}
+
+// releaseClaim ends a claim whose apply failed having written nothing (the store
+// decides whether the item goes back or, for a re-run, stays held as interrupted),
+// logging a failure. A release that found the claim no longer held by token is
+// logged too: nothing else should be able to take a live claim, so it means
+// something is wrong.
 func (h *Handler) releaseClaim(id, token string) error {
 	left, err := h.claimer.ReleaseReviewItemClaim(id, token)
 	if err != nil {
@@ -927,7 +971,7 @@ func conflictRejection(c *database.ReviewClaimConflictError) *actionRejection {
 		return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
 	case database.ReviewClaimInterrupted:
 		return rejectf(http.StatusConflict, "REVIEW_APPLY_INTERRUPTED",
-			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted (by a server restart, or its re-run failed) and "+
+			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted (by a server restart, a failure after it had written, or a failed re-run) and "+
 				"may already have changed part of the library, so no other decision can be recorded over it. "+
 				"With apply enabled, approve it again as "+strconv.Quote(c.ClaimAction)+" to re-run it; the re-run skips work "+
 				"already done but does not redo an incomplete multidisc renumbering, and a duplicate-of re-run can fail after "+

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/claim_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4ac78f22-e4e5-46e6-963d-64243d9d758f
 // last-edited: 2026-10-18
 
@@ -324,9 +324,11 @@ func TestUnrecordedApply_AfterRestart_IsReRunAndRecorded(t *testing.T) {
 	}
 }
 
-// A panicking apply hands its claim back: a claim from this process is never taken
-// over, so a leaked one would hold the item until a restart.
-func TestApplyPanic_ReleasesTheClaim(t *testing.T) {
+// A panicking apply cannot say whether it wrote anything, so its claim is HELD, not
+// handed back: the item stays applying with the claim blanked (a claim from this
+// process is never taken over, so a leaked live one would hold the item until a
+// restart). An approve of the same action then takes it over and re-runs the apply.
+func TestApplyPanic_HoldsTheClaim(t *testing.T) {
 	s := newTestStore(t)
 	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true }, nil)
@@ -341,8 +343,21 @@ func TestApplyPanic_ReleasesTheClaim(t *testing.T) {
 		approveReq(t, h, a.ID, nil)
 	}()
 	got, _ := s.GetReviewItem(a.ID)
-	if got.Status != database.ReviewStatusPending || got.ApplyClaimToken != "" {
-		t.Fatalf("after panic = status %q token %q, want pending with no claim", got.Status, got.ApplyClaimToken)
+	if got.Status != database.ReviewStatusApplying || got.ApplyClaimToken != "" || got.ApplyClaimInstance != "" ||
+		got.ApplyClaimAction != itunesservice.ActionCombine {
+		t.Fatalf("after panic = status %q token %q instance %q action %q, want applying, claim blanked, action kept",
+			got.Status, got.ApplyClaimToken, got.ApplyClaimInstance, got.ApplyClaimAction)
+	}
+
+	// Retryable: the next approve takes the held claim over and finishes the apply.
+	var calls atomic.Int32
+	h2 := reviewhandler.New(s, func() bool { return true }, nil)
+	h2.RegisterApplyHandler(itunesservice.ActionCombine, func(context.Context, database.ReviewItem) error { calls.Add(1); return nil })
+	if code, body := approveReq(t, h2, a.ID, nil); code != http.StatusOK {
+		t.Fatalf("retry after panic: code %d body %s", code, body)
+	}
+	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplied || calls.Load() != 1 {
+		t.Fatalf("after retry = %q with %d apply calls, want applied after 1", got.Status, calls.Load())
 	}
 }
 
