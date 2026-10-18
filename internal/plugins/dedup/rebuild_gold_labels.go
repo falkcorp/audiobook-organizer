@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rebuild_gold_labels.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 74b6de83-de1b-4231-8edc-6920a2f7b91c
 // last-edited: 2026-10-18
 
@@ -95,7 +95,7 @@ func (r rebuildReport) summary() string {
 func (p *Plugin) rebuildGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.rebuild-gold-labels",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: rebuildGoldLabelsParams{}},
+		Preview:     sdk.PreviewSpec{Params: rebuildGoldLabelsParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Rebuild mechanically-derived gold labels",

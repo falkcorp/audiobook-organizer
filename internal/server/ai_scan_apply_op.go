@@ -1,5 +1,5 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
 // last-edited: 2026-10-18
 
@@ -269,7 +269,7 @@ func applyScanResult(
 func (s *Server) RegisterAIScanApplyOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              handlers.AIScanApplyDefID,
-		Preview:         opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: handlers.AIScanApplyOpParams{}},
+		Preview:         opsregistry.PreviewSpec{Params: handlers.AIScanApplyOpParams{}},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Scan Apply",

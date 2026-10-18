@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
 // last-edited: 2026-10-18
 
@@ -237,7 +237,7 @@ func runAllPlan() (plan, skipped []string) {
 func (p *Plugin) runAllDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:           RunAllDefID,
-		Preview:      sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: runAllState{}},
+		Preview:      sdk.PreviewSpec{Params: runAllState{}},
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "Find all duplicates",

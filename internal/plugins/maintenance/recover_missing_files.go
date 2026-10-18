@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-10-18
 
@@ -223,7 +223,7 @@ func (p recoverPlan) summary() string {
 func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.recover-missing-files",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: recoverMissingParams{}},
+		Preview:     sdk.PreviewSpec{Params: recoverMissingParams{}},
 		DisplayName: "Recover missing book files by size match",
 		Description: "For book_file rows whose bytes are gone and whose path cannot be derived by " +
 			"missing-file-repoint, matches the row's recorded file size to a real file on disk. Repoints " +

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
 // last-edited: 2026-10-18
 
@@ -87,7 +87,7 @@ type authorDuplicateMergeParams struct {
 func (p *Plugin) authorDuplicateMergeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-duplicate-merge",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: authorDuplicateMergeParams{}},
+		Preview:     sdk.PreviewSpec{Params: authorDuplicateMergeParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Merge an operator-confirmed list of duplicate authors",

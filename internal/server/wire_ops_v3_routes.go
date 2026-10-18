@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-18
 
@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opsv3"
@@ -137,17 +138,18 @@ func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.
 		info.ParamsSchema = json.RawMessage(*od.ParamsSchema)
 	}
 	if compiled.Kind == ops.KindAdapted {
-		// FromV2 declares no effects, so the v2 op's own capabilities say
+		// FromV2 declares no effects, so the v2 op's own declarations say
 		// whether it writes, and its own Preview declaration how it previews.
 		info.Writer = canWrite(od)
 		if info.Writer {
-			info.PreviewParam, info.UnreadModeKeys = adaptedPreview(od.Preview)
+			info.Preview = adaptedPreview(od.Preview)
 		}
 	} else {
-		// A native definition's mode is resolved by the runner from dry_run.
+		// A native definition's mode is resolved by the runner from dry_run
+		// (opmode.ParseDryRun, both spellings).
 		info.Writer = c.Effects.IsWriter()
 		if info.Writer {
-			info.PreviewParam = string(opsregistry.PreviewDryRun)
+			info.Preview = opsregistry.PreviewSpec{Params: opmode.DryRunParams{}}
 		}
 	}
 	return info
@@ -168,27 +170,16 @@ func canWrite(d opsregistry.OperationDef) bool {
 	return false
 }
 
-// modeKeys are every params key a caller can state a mode with.
-var modeKeys = []string{"dry_run", "dryRun", string(opsregistry.PreviewApply), string(opsregistry.PreviewLive)}
-
-// adaptedPreview turns a v2 op's Preview declaration into the params key
-// /api/v3/ops writes the mode into, plus the mode keys its params type does
-// not decode (refused in a start request). Nothing declared, or a declaration
-// that does not check (its key is not a bool field of the params type it
-// names), is no preview: fail closed, so the op starts only in mode live with
-// params untouched. TestOpsV3_PreviewDeclarationsMatchTheOpsParams fails on
-// such a declaration.
-func adaptedPreview(p opsregistry.PreviewSpec) (string, []string) {
+// adaptedPreview is a v2 op's Preview declaration as v3 uses it. Nothing
+// declared, or a declaration that does not check, is no preview: fail closed,
+// so the op starts only in mode live with params untouched. ValidateOpDef
+// refuses to register a declaration that does not check, so the second case
+// is a guard, not a path.
+func adaptedPreview(p opsregistry.PreviewSpec) opsregistry.PreviewSpec {
 	if p.IsZero() || p.Check() != nil {
-		return "", nil
+		return opsregistry.PreviewSpec{}
 	}
-	var unread []string
-	for _, k := range modeKeys {
-		if !p.HasJSONField(k) {
-			unread = append(unread, k)
-		}
-	}
-	return string(p.Key), unread
+	return p
 }
 
 func (d *opsV3Defs) ListDefs() []opsv3.DefInfo {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-10-18
 
@@ -103,7 +103,7 @@ const (
 func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-conjunction-repair",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: authorConjunctionRepairParams{}},
+		Preview:     sdk.PreviewSpec{Params: authorConjunctionRepairParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair author names with a stranded ampersand",

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
 // last-edited: 2026-10-18
 
@@ -70,7 +70,7 @@ type relinkParams struct {
 func (p *Plugin) relinkUnlinkedBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.relink-unlinked-books",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: relinkParams{}},
+		Preview:     sdk.PreviewSpec{Params: relinkParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Relink unlinked books (detect · repair)",

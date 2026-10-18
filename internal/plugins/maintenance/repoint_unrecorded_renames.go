@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
 // last-edited: 2026-10-18
 
@@ -96,7 +96,7 @@ type repointUnrecordedRenamesResult struct {
 func (p *Plugin) repointUnrecordedRenamesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.repoint-unrecorded-renames",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: repointUnrecordedRenamesParams{}},
+		Preview:         sdk.PreviewSpec{Params: repointUnrecordedRenamesParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		ProgressTimeout: 10 * time.Minute,
 		Plugin:          "maintenance",

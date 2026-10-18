@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-10-18
 
@@ -91,7 +91,7 @@ const introMigratePageSize = 500
 func (p *Plugin) introMigrateSingleFileDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.intro-migrate-single-file",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: introMigrateParams{}},
+		Preview:         sdk.PreviewSpec{Params: introMigrateParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Migrate intro transcripts to single-file books",

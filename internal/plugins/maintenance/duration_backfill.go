@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.3
+// version: 2.10.4
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-10-18
 
@@ -269,7 +269,7 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 		// rule. It is this op's UPSTREAM: the field it fills is the first source
 		// of truth the segment loop below consults.
 		ID:          "maintenance.duration-backfill",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: durationReextractParams{}},
+		Preview:     sdk.PreviewSpec{Params: durationReextractParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill book durations",

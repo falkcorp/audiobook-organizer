@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/mine_gold_labels.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8f4c2a16-5d70-4e93-bc28-1a6e9d3b7c52
 // last-edited: 2026-10-18
 
@@ -43,7 +43,7 @@ type mineGoldLabelsParams struct {
 func (p *Plugin) mineGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.mine-gold-labels",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: mineGoldLabelsParams{}},
+		Preview:     sdk.PreviewSpec{Params: mineGoldLabelsParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Mine high-confidence dedup labels",

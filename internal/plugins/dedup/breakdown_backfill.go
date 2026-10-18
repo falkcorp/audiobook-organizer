@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
 // last-edited: 2026-10-18
 
@@ -242,7 +242,7 @@ type breakdownBackfillReport struct {
 func (p *Plugin) breakdownBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.breakdown-backfill",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: breakdownBackfillParams{}},
+		Preview:     sdk.PreviewSpec{Params: breakdownBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Backfill ScoreBreakdowns onto pre-T015 pending candidates",

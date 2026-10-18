@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.54.0
+// version: 3.55.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 package registry
 
@@ -776,7 +776,31 @@ func ValidateOpDef(def OperationDef) error {
 		return fmt.Errorf("registry: OperationDef.Liveness is LivenessNone but ProgressTimeout is unset (id=%s): "+
 			"an op that never reports must state how long it may run in silence", def.ID)
 	}
+	if err := validatePreview(def); err != nil {
+		return err
+	}
 	return validateFormerIDs(def)
+}
+
+// validatePreview refuses a Preview declaration that does not check, and one
+// on a def whose enqueue path does not keep its params as resolved: a
+// Batchable def drops them (the batch flush runs with the bucket's subject,
+// not the request's params) and MergeQueuedParams merges them into an already
+// queued run, so the mode a start request resolved is not the mode that runs.
+func validatePreview(def OperationDef) error {
+	if def.Preview.IsZero() {
+		return nil
+	}
+	if err := def.Preview.Check(); err != nil {
+		return fmt.Errorf("registry: OperationDef.Preview (id=%s): %w", def.ID, err)
+	}
+	if def.Batchable {
+		return fmt.Errorf("registry: OperationDef.Preview (id=%s) is declared on a Batchable def, whose enqueue drops the resolved params", def.ID)
+	}
+	if def.MergeQueuedParams != nil {
+		return fmt.Errorf("registry: OperationDef.Preview (id=%s) is declared on a def with MergeQueuedParams, which can merge a preview into a queued live run", def.ID)
+	}
+	return nil
 }
 
 // RegisterOp validates and registers an OperationDef.

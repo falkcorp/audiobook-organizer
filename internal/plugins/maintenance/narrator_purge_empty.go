@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
 // last-edited: 2026-10-18
 
@@ -146,7 +146,7 @@ func (r emptyNarratorReport) summary() string {
 func (p *Plugin) purgeEmptyNarratorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.purge-empty-narrators",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: purgeEmptyNarratorsParams{}},
+		Preview:     sdk.PreviewSpec{Params: purgeEmptyNarratorsParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Purge empty narrators",

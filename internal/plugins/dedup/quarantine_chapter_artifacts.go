@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
 // last-edited: 2026-10-18
 
@@ -69,7 +69,7 @@ type quarantineChapterParams struct {
 func (p *Plugin) quarantineChapterArtifactsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.quarantine-chapter-artifacts",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: quarantineChapterParams{}},
+		Preview:     sdk.PreviewSpec{Params: quarantineChapterParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Quarantine chapter-file artifacts",

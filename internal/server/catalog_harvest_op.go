@@ -1,5 +1,5 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
 // last-edited: 2026-10-18
 //
@@ -80,7 +80,7 @@ func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 		config.AppConfig.Catalog.Enabled, map[bool]string{true: "live", false: "refusing"}[config.AppConfig.Catalog.Enabled])
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:          catalogHarvestOpID,
-		Preview:     opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: catalogHarvestParams{}},
+		Preview:     opsregistry.PreviewSpec{Params: catalogHarvestParams{}},
 		Liveness:    opsregistry.LivenessRunItems,
 		Plugin:      "catalog",
 		DisplayName: "Harvest Author Catalogs",

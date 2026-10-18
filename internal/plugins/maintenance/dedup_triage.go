@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
 // last-edited: 2026-10-18
 
@@ -326,7 +326,7 @@ type dedupExactTriageParams struct {
 func (p *Plugin) dedupExactTriageDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedup-exact-triage",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: dedupExactTriageParams{}},
+		Preview:         sdk.PreviewSpec{Params: dedupExactTriageParams{}},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Dedup exact-pending triage (dry-run / apply)",

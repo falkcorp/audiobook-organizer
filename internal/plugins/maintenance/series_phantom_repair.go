@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
 // last-edited: 2026-10-18
 
@@ -160,7 +160,7 @@ type seriesPhantomRepairResult struct {
 func (p *Plugin) seriesPhantomRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              seriesPhantomRepairOpID,
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: seriesPhantomRepairParams{}},
+		Preview:         sdk.PreviewSpec{Params: seriesPhantomRepairParams{}, StartCheck: seriesPhantomStartCheck},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Report / repair phantom series IDs",
@@ -191,6 +191,29 @@ func (p *Plugin) runSeriesPhantomRepair(ctx context.Context, raw json.RawMessage
 		}
 	}
 	return err
+}
+
+// seriesPhantomStartCheck refuses a live start whose mode cannot write: mode
+// "report" (the default when mode is left out) ignores dry_run, so a live run
+// of it would answer 202 and write nothing. A preview of any mode is fine.
+func seriesPhantomStartCheck(params map[string]json.RawMessage, live bool) error {
+	if !live {
+		return nil
+	}
+	mode := seriesPhantomModeReport
+	if raw, ok := params["mode"]; ok {
+		if err := json.Unmarshal(raw, &mode); err != nil {
+			return fmt.Errorf("mode must be a string")
+		}
+		if mode == "" {
+			mode = seriesPhantomModeReport
+		}
+	}
+	if mode == seriesPhantomModeReport {
+		return fmt.Errorf("a live run of %s needs mode %q or %q in params; mode %q only reports",
+			seriesPhantomRepairOpID, seriesPhantomModeNull, seriesPhantomModeRecreate, seriesPhantomModeReport)
+	}
+	return nil
 }
 
 // seriesPhantomRepair is the op body, split from the Run wrapper so tests can

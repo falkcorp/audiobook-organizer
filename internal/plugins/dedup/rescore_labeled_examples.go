@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rescore_labeled_examples.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3e9c1a70-5d84-4b62-8f01-6a2d7c0e9b53
 // last-edited: 2026-10-18
 
@@ -84,7 +84,7 @@ type labeledExampleStore interface {
 func (p *Plugin) rescoreLabeledExamplesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.rescore-labeled-examples",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: rescoreLabeledExamplesParams{}},
+		Preview:     sdk.PreviewSpec{Params: rescoreLabeledExamplesParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Rescore labeled examples (populate ScoreBreakdowns for calibration)",

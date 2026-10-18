@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.29.1
+// version: 2.29.2
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-18
 
@@ -505,7 +505,7 @@ const SeriesDedupFailedIDsPrefix = "series dedup left series ids ["
 func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:          "dedup.series-dedup",
-		Preview:     opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: dedup.SeriesDedupParams{}},
+		Preview:     opsregistry.PreviewSpec{Params: dedup.SeriesDedupParams{}},
 		Liveness:    opsregistry.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Series Deduplication",

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
 // last-edited: 2026-10-18
 
@@ -107,7 +107,7 @@ var (
 func (p *Plugin) probeDirectoryBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.probe-directory-books",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: probeDirParams{}},
+		Preview:     sdk.PreviewSpec{Params: probeDirParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Probe directory-shaped books (tier 2 · re-classify)",

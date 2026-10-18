@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
 // last-edited: 2026-10-18
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
@@ -161,7 +162,7 @@ func TestStartUnnestedRouteAndUnknownDef(t *testing.T) {
 }
 
 func TestStartModeIsExplicitAndConsistent(t *testing.T) {
-	enq, _, _, h := startHarness(map[string]DefInfo{"test.w": {ID: "test.w", Title: "W", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, PreviewParam: "dry_run"}}, nil)
+	enq, _, _, h := startHarness(map[string]DefInfo{"test.w": {ID: "test.w", Title: "W", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, Preview: opsregistry.PreviewSpec{Params: opmode.DryRunParams{}}}}, nil)
 	r := newRouter(h)
 	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
 	post := func(body string) *int {
@@ -228,8 +229,10 @@ func TestStartNoPreviewDefNeedsExplicitLive(t *testing.T) {
 	if enq.count() != 0 {
 		t.Fatalf("a refused preview queued %d runs", enq.count())
 	}
-	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/dedup.book-merge/runs", `{"mode":"live","params":{"dry_run":true}}`); w.Code != http.StatusBadRequest {
-		t.Errorf("live with dry_run=true = %d, want 400", w.Code)
+	for _, bad := range []string{`{"mode":"live","params":{"dry_run":true}}`, `{"mode":"live","params":{"apply":false}}`, `{"mode":"live","params":{"Dry_Run":true}}`} {
+		if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/dedup.book-merge/runs", bad); w.Code != http.StatusBadRequest {
+			t.Errorf("%s on a no-preview def = %d, want 400", bad, w.Code)
+		}
 	}
 	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/dedup.book-merge/runs", `{"mode":"live","params":{"keep":"b1"}}`); w.Code != http.StatusAccepted {
 		t.Fatalf("explicit live = %d: %s", w.Code, w.Body.String())
@@ -252,17 +255,50 @@ func TestStartNoPreviewDefNeedsExplicitLive(t *testing.T) {
 	}
 }
 
-// TestStartApplyAndLiveDefsGetTheirOwnKey: an op that previews with apply
-// (or live) gets that key, never dry_run: preview is false, live is true, an
-// omitted mode takes the key from params or else previews, a contradiction is
-// a 400, and a dry_run sent to it is a 400 because it would never be read.
-// This is the review probe: mode "" with apply:true used to queue
-// {"apply":true,"dry_run":true}, a "preview" that wrote.
-func TestStartApplyAndLiveDefsGetTheirOwnKey(t *testing.T) {
-	unread := []string{"dry_run", "dryRun"}
+type applyOnlyParams struct {
+	Apply bool `json:"apply"`
+	K     int  `json:"k"`
+}
+
+type liveOnlyParams struct {
+	Live bool `json:"live"`
+}
+
+// twoKeyParams is an op that writes only when apply && !dry_run
+// (maintenance.version-group-primary-repair, repoint-version-primary).
+type twoKeyParams struct {
+	Apply  bool `json:"apply"`
+	DryRun bool `json:"dry_run"`
+}
+
+type oneOfParams struct {
+	Apply    bool `json:"apply"`
+	Rollback bool `json:"rollback"`
+	Repair   bool `json:"repair"`
+}
+
+// TestStartWritesEveryModeKeyTheOpDecodes: every mode key the declared params
+// type decodes is part of the mode. An op that previews with apply (or live)
+// gets that key, never dry_run; an op that decodes both apply and dry_run
+// gets both, so a live run is not silently a preview; a LiveOneOf op's
+// switches are all false for a preview, and a live run must name one. An
+// omitted mode follows the keys in params or else previews, a contradiction
+// is a 400, a mode key the type does not decode is a 400, and so is a key
+// that differs from a mode key only in case.
+// This covers the review probes: mode "" with apply:true used to queue
+// {"apply":true,"dry_run":true}, a "preview" that wrote; and a declaration
+// naming only apply on a type that also gates on dry_run silently previewed
+// every live run.
+func TestStartWritesEveryModeKeyTheOpDecodes(t *testing.T) {
+	writer := func(id string, params any, oneOf ...string) DefInfo {
+		return DefInfo{ID: id, Title: id, Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true,
+			Preview: opsregistry.PreviewSpec{Params: params, LiveOneOf: oneOf}}
+	}
 	enq, _, _, h := startHarness(map[string]DefInfo{
-		"test.apply": {ID: "test.apply", Title: "A", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, PreviewParam: "apply", UnreadModeKeys: unread},
-		"test.live":  {ID: "test.live", Title: "L", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, PreviewParam: "live", UnreadModeKeys: append(unread, "apply")},
+		"test.apply": writer("test.apply", applyOnlyParams{}),
+		"test.live":  writer("test.live", liveOnlyParams{}),
+		"test.two":   writer("test.two", twoKeyParams{}),
+		"test.oneof": writer("test.oneof", oneOfParams{}, "apply", "rollback", "repair"),
 	}, nil)
 	r := newRouter(h)
 	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
@@ -276,6 +312,11 @@ func TestStartApplyAndLiveDefsGetTheirOwnKey(t *testing.T) {
 		{"test.apply", `{"params":{"apply":false}}`, `{"apply":false}`},
 		{"test.live", `{}`, `{"live":false}`},
 		{"test.live", `{"mode":"live"}`, `{"live":true}`},
+		{"test.two", `{"mode":"preview"}`, `{"apply":false,"dry_run":true}`},
+		{"test.two", `{"mode":"live"}`, `{"apply":true,"dry_run":false}`},
+		{"test.two", `{"params":{"apply":true}}`, `{"apply":true,"dry_run":false}`},
+		{"test.oneof", `{}`, `{"apply":false,"repair":false,"rollback":false}`},
+		{"test.oneof", `{"mode":"live","params":{"rollback":true}}`, `{"rollback":true}`},
 	}
 	for i, tc := range cases {
 		w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/"+tc.def+"/runs", tc.body)
@@ -292,7 +333,14 @@ func TestStartApplyAndLiveDefsGetTheirOwnKey(t *testing.T) {
 		{"test.apply", `{"params":{"apply":"yes"}}`},
 		{"test.apply", `{"params":{"apply":true,"dry_run":true}}`},
 		{"test.apply", `{"mode":"live","params":{"dryRun":false}}`},
+		{"test.apply", `{"mode":"preview","params":{"APPLY":true}}`},
+		{"test.apply", `{"mode":"preview","params":{"Apply":true}}`},
 		{"test.live", `{"mode":"live","params":{"apply":true}}`},
+		{"test.two", `{"params":{"apply":true,"dry_run":true}}`},
+		{"test.two", `{"mode":"live","params":{"DRY_RUN":true}}`},
+		{"test.oneof", `{"mode":"live"}`},
+		{"test.oneof", `{"mode":"live","params":{"apply":true,"rollback":true}}`},
+		{"test.oneof", `{"mode":"preview","params":{"repair":true}}`},
 	} {
 		if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/"+bad.def+"/runs", bad.body); w.Code != http.StatusBadRequest {
 			t.Errorf("%s %s = %d, want 400", bad.def, bad.body, w.Code)
@@ -301,9 +349,13 @@ func TestStartApplyAndLiveDefsGetTheirOwnKey(t *testing.T) {
 	if enq.count() != len(cases) {
 		t.Fatalf("enqueued %d, want %d", enq.count(), len(cases))
 	}
-	raw := do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.apply", nil).Body.String()
-	if !strings.Contains(raw, `"has_preview":true`) || !strings.Contains(raw, `"preview_param":"apply"`) {
-		t.Errorf("apply def view = %s, want has_preview=true and preview_param=apply", raw)
+	raw := do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.two", nil).Body.String()
+	if !strings.Contains(raw, `"has_preview":true`) || !strings.Contains(raw, `"preview_keys":["dry_run","apply"]`) {
+		t.Errorf("two-key def view = %s, want has_preview=true and preview_keys=[dry_run apply]", raw)
+	}
+	raw = do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.oneof", nil).Body.String()
+	if !strings.Contains(raw, `"preview_keys":[]`) || !strings.Contains(raw, `"live_one_of":["apply","rollback","repair"]`) {
+		t.Errorf("one-of def view = %s, want preview_keys=[] and live_one_of", raw)
 	}
 }
 
@@ -328,6 +380,31 @@ func TestStartReadOnlyDefParamsAreUntouched(t *testing.T) {
 	}
 	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.audit/runs", `{"mode":"sometimes"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("bad mode on a read-only def = %d, want 400", w.Code)
+	}
+	// The backstop: nothing is written into a read-only def's params, but a
+	// mode key that contradicts the asked mode, or two that disagree, or one
+	// spelled in another case, is refused. If the def is misclassified and
+	// really writes, the caller's own words still stop a "preview" that
+	// would write.
+	n := enq.count()
+	for _, bad := range []string{
+		`{"mode":"preview","params":{"apply":true}}`,
+		`{"mode":"preview","params":{"dry_run":false}}`,
+		`{"mode":"live","params":{"dry_run":true}}`,
+		`{"mode":"live","params":{"live":false}}`,
+		`{"params":{"apply":true,"dryRun":true}}`,
+		`{"mode":"preview","params":{"APPLY":true}}`,
+	} {
+		if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.audit/runs", bad); w.Code != http.StatusBadRequest {
+			t.Errorf("%s on a read-only def = %d, want 400", bad, w.Code)
+		}
+	}
+	if enq.count() != n {
+		t.Fatalf("a refused read-only start queued a run")
+	}
+	w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.audit/runs", `{"mode":"preview","params":{"dry_run":true}}`)
+	if w.Code != http.StatusAccepted || string(enq.calls[n].params) != `{"dry_run":true}` {
+		t.Errorf("agreeing key on a read-only def = %d %s, want 202 with params untouched", w.Code, enq.calls[n].params)
 	}
 }
 

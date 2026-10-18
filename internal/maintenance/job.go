@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-10-18
 
@@ -132,14 +132,14 @@ type ExecutionPolicy struct {
 	// Capabilities are the system capabilities the job needs.
 	Capabilities []opsregistry.Capability
 
-	// ExtraWriteKey names a params key the job also requires before it
-	// writes, on top of dry_run=false (repoint-version-primary: apply=true).
-	// Empty for every job whose dry_run alone decides. A job that sets it has
-	// no preview /api/v3/ops can drive through dry_run, because a "live"
-	// run with dry_run=false and no apply would silently preview; its
-	// OperationDef declares no Preview, so v3 starts it only with mode
-	// "live" and passes params through for the caller to state both keys.
-	ExtraWriteKey string
+	// Params, when set, is a zero value of the struct the job decodes from
+	// maintenance.RawParamsFromCtx, for a job that reads a mode key besides
+	// the bridge's dry_run (repoint-version-primary: apply). Registration
+	// declares it as the op's Preview params, so /api/v3/ops writes every mode
+	// key it decodes: a preview sends dry_run=true and apply=false, a live run
+	// dry_run=false and apply=true. Nil for every job whose dry_run alone
+	// decides; those declare opmode.DryRunParams.
+	Params any
 }
 
 // DefaultPolicy returns exactly what the maintenance.job bridge hardcodes for all

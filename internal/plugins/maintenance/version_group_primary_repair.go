@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.2
+// version: 1.5.4
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
 // last-edited: 2026-10-18
 
@@ -273,7 +273,7 @@ func (r *vgRepairReport) summary() string {
 func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.version-group-primary-repair",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: vgPrimaryRepairParams{}},
+		Preview:     sdk.PreviewSpec{Params: vgPrimaryRepairParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Version-group primary repair",
@@ -297,12 +297,22 @@ func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runVersionGroupPrimaryRepair(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+// parseVGPrimaryRepairParams is Run's decode, named so the preview
+// behaviour test decodes /api/v3/ops's params exactly as a run does.
+func parseVGPrimaryRepairParams(rawParams json.RawMessage) (vgPrimaryRepairParams, error) {
 	var params vgPrimaryRepairParams
 	if len(rawParams) > 0 {
 		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("parse params: %w", err)
+			return params, fmt.Errorf("parse params: %w", err)
 		}
+	}
+	return params, nil
+}
+
+func (p *Plugin) runVersionGroupPrimaryRepair(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	params, err := parseVGPrimaryRepairParams(rawParams)
+	if err != nil {
+		return err
 	}
 	prober, perr := versionprimary.FFprobeChapterCounter()
 	if perr != nil {

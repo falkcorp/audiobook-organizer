@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-18
 
@@ -39,7 +39,7 @@ type pendingUpdate struct {
 func (p *Plugin) titleBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-backfill",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: titleBackfillParams{}},
+		Preview:         sdk.PreviewSpec{Params: titleBackfillParams{}},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Strip chapter prefixes from book titles",
