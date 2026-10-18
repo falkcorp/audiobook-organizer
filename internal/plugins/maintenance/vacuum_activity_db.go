@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/vacuum_activity_db.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fa1a4efa-5368-45f0-bccb-6fda6360e461
 // last-edited: 2026-10-18
 
@@ -52,9 +52,30 @@ type VacuumActivityDBResult struct {
 // (freelist_count * page_size) and writes nothing. dry_run=false runs VACUUM and
 // then the post-vacuum WAL truncate, and reports the bytes actually returned.
 //
-// TEMP SPACE. VACUUM rewrites the whole database, so it needs roughly the file's
-// size again in free space on the volume holding the activity database while it
-// runs. The preview is the place to check that before going live.
+// DISK SPACE AND TEMP DIRECTORY. VACUUM rewrites the whole database. It builds
+// the compacted copy in a temp file and then copies it back through the WAL, so
+// the peak EXTRA space is about TWICE the compacted size (FileBytes minus the
+// free pages), not the file's size: the rebuilt database passes through the -wal
+// on the database's volume until the post-vacuum TRUNCATE returns it. Before it
+// starts, VacuumActivity pins SQLite's temp directory to the database's own
+// directory (otherwise the temp copy lands in TMPDIR, the root pool on prod: the
+// 2026-09-09 outage) and REFUSES, fail closed, if that pin fails or if free space
+// there is below required_bytes = 2 x compacted + max(1 GiB, 10%). The preview
+// reports free_bytes, required_bytes and would_refuse so the answer is known
+// before going live.
+//
+// STALLS WHILE IT RUNS. A live VACUUM holds the activity store's single writer
+// connection for its whole run. Synchronous callers of SQLActivityStore.Record
+// (the library scan, once per book; metadata applies and write-back; admin debug)
+// block until it finishes, and the log-tee's activity writer, whose channel holds
+// 10k entries, drops entries once that fills. So scans and metadata applies
+// stall and some activity log lines may be dropped while it runs. Owner decision
+// 2026-10-18: accept that and say so; the follow-up that gives Record a context
+// or a deferral is todo.d/2026-10-18-activity-record-nonblocking.md. As cheap
+// protection a live run refuses to start while a library scan or a metadata
+// fetch/apply/write-back op is queued or running. That check is POINT-IN-TIME,
+// not a lock (an op enqueued a moment later is not caught), the same shape as
+// dedupe-book-file-rows' scan guard; a preview is read-only and always allowed.
 //
 // LIVENESS: NONE, WITH A BUDGET. The VACUUM is one blocking statement with no
 // progress callback, so the only true declaration is LivenessNone with an
@@ -77,7 +98,10 @@ func (p *Plugin) vacuumActivityDBDef() sdk.OperationDef {
 		Plugin:          "maintenance",
 		DisplayName:     "Vacuum activity database",
 		Description: "Rewrites the SQLite activity database to give freed pages back to the filesystem, then truncates its WAL. " +
-			"Preview unless dry_run=false: a preview reports file size, page and free-page counts and the reclaimable estimate.",
+			"Preview unless dry_run=false: a preview reports file size, page and free-page counts, the reclaimable estimate and a free-space check. " +
+			"A live run needs about twice the compacted size free on the database's volume and refuses without it. " +
+			"While it runs scans and metadata applies stall and some activity log lines may be dropped; " +
+			"it refuses to start during a library scan or metadata fetch/apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -110,28 +134,53 @@ func (p *Plugin) runVacuumActivityDB(ctx context.Context, raw json.RawMessage, r
 	_ = reporter.Log(slog.LevelInfo, startMsg)
 	_ = reporter.UpdateProgress(0, 1, startMsg)
 
+	if !dryRun {
+		if err := p.refuseWhileActivityWritersActive(); err != nil {
+			logging.Error(ctx, err.Error())
+			_ = reporter.Log(slog.LevelError, err.Error())
+			return err
+		}
+	}
+
 	rep, runErr := p.deps.VacuumActivityDB(ctx, dryRun)
 
 	var msg string
+	level := slog.LevelInfo
 	switch {
+	case runErr != nil:
+		level = slog.LevelError
+		if dryRun {
+			msg = fmt.Sprintf("PREVIEW FAILED: %v", runErr)
+		} else {
+			msg = fmt.Sprintf("FAILED after %s: %v (on disk %d -> %d bytes)",
+				rep.Duration.Round(time.Millisecond), runErr, rep.Before.DiskBytes(), rep.After.DiskBytes())
+		}
 	case !rep.Supported:
 		msg = "Activity backend has no SQLite database; nothing to vacuum"
 	case dryRun:
+		verdict := "a live run would proceed"
+		if rep.Before.WouldRefuse {
+			verdict = "a live run would REFUSE"
+			if rep.Before.PreflightNote != "" {
+				verdict += " (" + rep.Before.PreflightNote + ")"
+			}
+		}
 		msg = fmt.Sprintf(
-			"PREVIEW: activity database is %d bytes (+%d bytes WAL); %d of %d pages are free, about %d bytes reclaimable. Rerun with dry_run=false to vacuum.",
-			rep.Before.FileBytes, rep.Before.WALBytes, rep.Before.FreelistCount, rep.Before.PageCount, rep.Before.ReclaimableBytes)
-	case runErr != nil:
-		msg = fmt.Sprintf("FAILED after %s: %v (on disk %d -> %d bytes)",
-			rep.Duration.Round(time.Millisecond), runErr, rep.Before.DiskBytes(), rep.After.DiskBytes())
+			"PREVIEW: activity database is %d bytes (+%d bytes WAL); %d of %d pages are free, about %d bytes reclaimable. "+
+				"Disk check: free_bytes=%d required_bytes=%d would_refuse=%t, %s. "+
+				"On a live run, scans and metadata applies stall and some activity log lines may be dropped while it runs. "+
+				"Rerun with dry_run=false to vacuum.",
+			rep.Before.FileBytes, rep.Before.WALBytes, rep.Before.FreelistCount, rep.Before.PageCount, rep.Before.ReclaimableBytes,
+			rep.Before.FreeBytes, rep.Before.RequiredBytes, rep.Before.WouldRefuse, verdict)
 	default:
 		msg = fmt.Sprintf("Vacuumed the activity database in %s: on disk %d -> %d bytes, %d bytes reclaimed",
 			rep.Duration.Round(time.Millisecond), rep.Before.DiskBytes(), rep.After.DiskBytes(), rep.BytesReclaimed)
 	}
-	level := slog.LevelInfo
 	if runErr != nil {
-		level = slog.LevelError
+		logging.Error(ctx, msg)
+	} else {
+		logging.Info(ctx, msg)
 	}
-	logging.Info(ctx, msg)
 	_ = reporter.Log(level, msg)
 	_ = reporter.UpdateProgress(1, 1, msg)
 
@@ -143,6 +192,44 @@ func (p *Plugin) runVacuumActivityDB(ctx context.Context, raw json.RawMessage, r
 	}
 	if runErr != nil {
 		return fmt.Errorf("vacuum-activity-db: %w", runErr)
+	}
+	return nil
+}
+
+// vacuumBlockingDefIDs are the ops whose synchronous activity Record calls (or
+// whole-library write pressure) a live VACUUM would stall: the library scan and
+// the metadata fetch, apply and write-back ops.
+var vacuumBlockingDefIDs = map[string]bool{
+	"library.scan":                true,
+	"library.folder-auto-scan":    true,
+	"library.bulk-metadata-fetch": true,
+	"library.bulk-write-back":     true,
+	"metadata.batch-apply-cached": true,
+	"metadata.batch-save":         true,
+}
+
+// refuseWhileActivityWritersActive fails closed: an unreadable queue is not
+// proof of an idle queue. Point-in-time, not a lock (see vacuumActivityDBDef). A
+// zombie 'running' row with no live handle also refuses, which is the safe
+// direction; clear it rather than bypassing this check.
+func (p *Plugin) refuseWhileActivityWritersActive() error {
+	return refuseWhileOpsActive(p.deps.OperationQueueStore(), VacuumActivityDBDefID, vacuumBlockingDefIDs)
+}
+
+func refuseWhileOpsActive(queue OpQueueReader, opName string, blocking map[string]bool) error {
+	if queue == nil {
+		return fmt.Errorf("%s: cannot verify no scan or metadata op is active; refusing to vacuum", opName)
+	}
+	active, err := queue.ListActiveOperationsV2()
+	if err != nil {
+		return fmt.Errorf("%s: cannot list active operations; refusing to vacuum: %w", opName, err)
+	}
+	for _, op := range active {
+		if blocking[op.DefID] && (op.Status == "running" || op.Status == "queued") {
+			return fmt.Errorf("%s: %s is %s (op %s); refusing to vacuum: a live VACUUM holds the activity "+
+				"writer and would stall it. Retry when it finishes; a preview (dry_run=true) is always allowed",
+				opName, op.DefID, op.Status, op.ID)
+		}
 	}
 	return nil
 }
