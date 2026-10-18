@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.9.6 -->
+<!-- version: 1.9.7 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -100,11 +100,11 @@ The producer-agnostic review queue behind the `/review` workspace's **Review que
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/review/count` | Pending item count |
+| `GET` | `/api/v1/review/count` | Pending item count (`count`, `by_kind`), plus `applying`: items held by an apply claim (running, applied but unrecorded, or interrupted by a restart), which are in no pending list. List them with `GET /api/v1/review/items?status=applying` |
 | `GET` | `/api/v1/review/items` | List review items |
-| `POST` | `/api/v1/review/items/:id/approve` | Approve; dispatches the chosen action to its apply handler only while `review_apply_enabled` is on, otherwise records `approved` |
-| `POST` | `/api/v1/review/items/:id/reject` | Reject |
-| `POST` | `/api/v1/review/bulk` | Bulk approve/reject. Approving by `ids` also executes items that were approved while apply was off, once `review_apply_enabled` is on (list them with `GET /api/v1/review/items?status=approved`). Per-item apply errors do not stop the batch: they come back in `failed` (`{id, reason}`) and failed items keep their status, so resending their id retries them. `applied_unrecorded` (`{id, reason}`) is the opposite case: the apply ran but the `applied` status write failed twice, so the item is held `applying` and must **not** be resent (a resend answers 409 until the claim goes stale after 15 minutes). Items already applied, or being applied by another request, are `skipped`; approve and reject both refuse them (single-item routes answer 409 `REVIEW_ALREADY_APPLIED` / `REVIEW_APPLY_IN_PROGRESS`). `apply_disabled: true` means apply is off and nothing was applied |
+| `POST` | `/api/v1/review/items/:id/approve` | Approve; dispatches the chosen action to its apply handler only while `review_apply_enabled` is on, otherwise records `approved`. The apply runs under a claim (status `applying`). 409s: `REVIEW_ALREADY_APPLIED`; `REVIEW_APPLY_IN_PROGRESS` (an apply in this server process holds the claim; it is never taken over); `REVIEW_APPLY_INTERRUPTED` (a previous server process left the claim: approve again with no action, or the same action, to take it over and re-run the apply, which skips work already done; no other decision is accepted until then); `REVIEW_ITEM_CHANGED` (the item changed while being approved; reload and approve again). With no `action` an item under a claim resolves to the claim's own action. 500 `REVIEW_APPLIED_UNRECORDED`: the apply ran but its status write failed; approving again records it without re-running the apply while the server keeps running, and re-runs it after a restart. 500 `REVIEW_CLAIM_UNAVAILABLE`: the store cannot claim, so no review write is made |
+| `POST` | `/api/v1/review/items/:id/reject` | Reject. 409 for an applied item or one under an apply claim, with the same codes as approve |
+| `POST` | `/api/v1/review/bulk` | Bulk approve/reject. Approving by `ids` also executes items that were approved while apply was off, once `review_apply_enabled` is on (list them with `GET /api/v1/review/items?status=approved`). Per-item apply errors do not stop the batch: they come back in `failed` (`{id, reason}`) and failed items keep their status, so resending their id retries them. `applied_unrecorded` (`{id, reason}`) is the opposite case: the apply ran but the `applied` status write failed after retries, so the item is held `applying`. Approving it again records the result without re-running the apply while the server keeps running; after a restart, approving it again re-runs the apply, which skips work already done. Items that are applied or held by an apply claim are `skipped`, each with the `code` a single-item route would answer (`REVIEW_ALREADY_APPLIED`, `REVIEW_APPLY_IN_PROGRESS`, `REVIEW_APPLY_INTERRUPTED`, ...). `apply_disabled: true` means apply is off and nothing was applied |
 | `POST` | `/api/v1/review/replay-approved` | Retired (01-P81j): answers `410 Gone` for one release; use `POST /api/v1/review/bulk` with `ids` as above |
 
 ### Repairs Lane
