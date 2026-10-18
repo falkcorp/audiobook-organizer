@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_combine_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a6c29e41-8f07-4b3d-9e15-d2b84f7c0a63
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -25,6 +25,8 @@ var _ merge.Store = database.Store(nil)
 type fakeCombineUndoer struct {
 	journals map[string]*merge.CombineJournal
 	refuse   bool
+	// warnings are returned on a successful undo's result.
+	warnings []string
 	// undoneByRival: the journal is undone by someone else after the revert
 	// read it, so this undo is refused against a journal that is done.
 	undoneByRival bool
@@ -49,7 +51,7 @@ func (f *fakeCombineUndoer) UndoCombine(id string) (*merge.CombineUndoResult, er
 	}
 	f.undone = append(f.undone, id)
 	f.journals[id].Status = merge.CombineJournalUndone
-	return &merge.CombineUndoResult{JournalID: id}, nil
+	return &merge.CombineUndoResult{JournalID: id, Warnings: f.warnings}, nil
 }
 
 // The split-book fixer's apply journals a ledger decision and a pointer to
@@ -78,6 +80,20 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{"J1"}, u.undone)
 		assert.Equal(t, 1, res.Restored)
+		assert.ElementsMatch(t, []string{"ptr", "dec"}, s.marked)
+	})
+	t.Run("what the undo left as is is reported on the revert", func(t *testing.T) {
+		s := &ledgerStub{book: keep, changes: rows()}
+		u := newFake(merge.CombineJournalApplied)
+		u.warnings = []string{"file row f9 (created by the combine for book gone) has no book to go back to; left on survivor keep"}
+		rs := NewRevertService(s)
+		rs.combineUndo = u
+		res, err := rs.RevertOperation("op")
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Restored, "the combine is undone")
+		assert.Equal(t, 1, res.PartiallyRestored)
+		require.Len(t, res.Kept, 1)
+		assert.Contains(t, res.Kept[0], "file row f9")
 		assert.ElementsMatch(t, []string{"ptr", "dec"}, s.marked)
 	})
 	t.Run("a journal already undone is already restored", func(t *testing.T) {

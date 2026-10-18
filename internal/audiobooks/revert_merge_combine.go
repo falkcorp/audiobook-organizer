@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_combine.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7b0d52-c1e4-4a98-8d26-9e5a7c13b0f4
 // last-edited: 2026-10-18
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -68,7 +69,8 @@ func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) 
 		return &undo.ReferentError{Reason: undo.ReasonFieldUnreadable,
 			Detail: fmt.Sprintf("book %s: combine %s never completed and recorded no steps; no undo recorded", c.BookID, c.NewValue)}
 	}
-	if _, err := u.UndoCombine(c.NewValue); err != nil {
+	res, err := u.UndoCombine(c.NewValue)
+	if err != nil {
 		var refused *merge.CombineUndoRefusedError
 		if errors.As(err, &refused) {
 			// The pre-read above and the undo are not atomic: another undo
@@ -81,6 +83,14 @@ func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) 
 			return &undo.ReferentError{Reason: undo.ReasonChangedSince, Detail: fmt.Sprintf("book %s: %v", c.BookID, refused)}
 		}
 		return fmt.Errorf("book %s: combine journal %s not undone: %w", c.BookID, c.NewValue, err)
+	}
+	if res != nil && len(res.Warnings) > 0 {
+		// The combine is undone, but the undo left something as it is: a
+		// created file row with no book to go back to, a survivor field
+		// changed since, progress it could not put back. Report each one on
+		// the revert (RevertResult.Kept) rather than only in the log.
+		return &partialTagRestore{detail: fmt.Sprintf("book %s: combine %s undone; left as is: %s",
+			c.BookID, c.NewValue, strings.Join(res.Warnings, "; "))}
 	}
 	return nil
 }
