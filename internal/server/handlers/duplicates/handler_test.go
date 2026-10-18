@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
 // last-edited: 2026-10-18
 
@@ -176,6 +176,28 @@ func TestCombineBooks_OK(t *testing.T) {
 	// The id POST /operations/:id/revert undoes the combine with.
 	if !strings.Contains(w.Body.String(), `"operation_id":"op-combine"`) {
 		t.Fatalf("response does not carry the combine's operation id: %s", w.Body.String())
+	}
+}
+
+// A combine whose journal was never finalized offers no operation to revert
+// and says it cannot be undone.
+func TestCombineBooks_UndoUnavailable_OffersNoOperation(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks([]string{"b", "a"}, "a", (*merge.CombineOverride)(nil)).Return(&merge.CombineResult{
+		PrimaryID: "a", FilesMoved: 1, BooksDeleted: 1, OperationID: "op-combine", UndoUnavailable: "disk full",
+	}, nil)
+	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b"}).Return(1)
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "operation_id") || strings.Contains(body, "journal_id") {
+		t.Fatalf("an undo id is offered for a combine with no undo: %s", body)
+	}
+	if !strings.Contains(body, `"undo_unavailable":"disk full"`) || !strings.Contains(body, "cannot be undone") {
+		t.Fatalf("response does not say the combine cannot be undone: %s", body)
 	}
 }
 
