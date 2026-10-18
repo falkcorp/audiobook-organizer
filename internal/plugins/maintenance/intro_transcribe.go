@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.34.1
+// version: 3.35.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-18
 
@@ -253,7 +253,10 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// The selection reads every listed book before the first page runs, so it
 	// reports progress once up front: the watchdog otherwise sees an op that
 	// has never reported and cancels it as unwired rather than stuck.
-	_ = reporter.UpdateProgress(0, 1, fmt.Sprintf("Selecting work — reading %d books", len(allIDs)-startIdx))
+	// Every progress message names the run's mode (introModeMarker), starting
+	// with this one, which both modes report before they diverge.
+	mark := introModeMarker(dryRun)
+	_ = reporter.UpdateProgress(0, 1, mark+fmt.Sprintf("Selecting work — reading %d books", len(allIDs)-startIdx))
 	sel, err := selectTranscribeWork(ctx, store, allIDs[startIdx:], transcribeSelect{
 		onlyMissing:  onlyMissing,
 		retrySilence: retrySilence,
@@ -318,7 +321,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 
 	if total == 0 {
 		accum.flush(true) // the monitor still sees the run, its skip count and that it is over
-		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+		_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
 			"Done — nothing to transcribe (%d already transcribed, %d unreadable)",
 			sel.skipped, sel.unreadable()))
 		return nil
@@ -393,7 +396,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		onBook := func(d, _ int) {
 			cur := base + d
 			_ = reporter.UpdateProgress(cur, total,
-				fmt.Sprintf("%s — %d/%d books", verb, cur, total))
+				mark+fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
 		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, pj)
 		cum := int(processed.Add(int64(done)))
@@ -405,7 +408,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		Concurrency:   introTranscribePageConc,
 		ProgressTotal: len(pages),
 		Label: func(i, t int) string {
-			return fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))
+			return mark + fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))
 		},
 		// NOTE: registry.runItemsPar never calls CheckpointFn -- only the
 		// sequential runItemsSeq does -- so at introTranscribePageConc > 1 this
@@ -438,12 +441,30 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		"empty", st.Empty, "deferred", st.Deferred, "skipped_existing", st.SkippedExisting,
 		"skipped_known_broken", sel.failedSkipped,
 		"unreadable", st.Unreadable, "cache_hits", st.CacheHits)
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+	_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
 		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty, %d deferred "+
 			"(of %d total; %d skipped, %d of them known-broken not retried, %d unreadable)",
 		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, st.Deferred, total,
 		st.SkippedExisting, sel.failedSkipped, st.Unreadable)+journalFailureNote(st.JournalWriteFailures))
 	return nil
+}
+
+// introPreviewMarker and introLiveMarker open every progress message of a
+// full-transcribe or extract_only run, so a reader of the run's progress
+// (scripts/transcribe_monitor.py's PREVIEW_MARKER and LIVE_MARKER) can tell
+// the mode from any message, including the "Selecting work" line both modes
+// report first. TestIntroTranscribe_ProgressNamesTheMode pins them; change
+// the monitor with them.
+const (
+	introPreviewMarker = "PREVIEW (dry_run, nothing written) — "
+	introLiveMarker    = "LIVE — "
+)
+
+func introModeMarker(dryRun bool) string {
+	if dryRun {
+		return introPreviewMarker
+	}
+	return introLiveMarker
 }
 
 // introPreviewSamples bounds the book ids a preview names.
@@ -459,11 +480,8 @@ func previewIntroTranscribe(reporter sdk.Reporter, sel transcribeSelection, extr
 		verb = "extract clips for"
 	}
 	samples := sel.work[:min(introPreviewSamples, len(sel.work))]
-	// The "PREVIEW (dry_run" prefix is load-bearing: scripts/transcribe_monitor.py
-	// matches it in the progress message to raise RELAUNCH_IS_PREVIEW, and
-	// TestPreviewBehaviour_TranscribeBookIntros pins it. Change all three together.
-	msg := fmt.Sprintf(
-		"PREVIEW (dry_run, nothing written) — would %s %d books (of %d listed, starting at %d); "+
+	msg := introPreviewMarker + fmt.Sprintf(
+		"would %s %d books (of %d listed, starting at %d); "+
 			"%d skipped (%d of them known-broken, not retried), %d unreadable; first ids: [%s]. "+
 			"Pass dry_run=false to run.",
 		verb, len(sel.work), libraryBooks, startIdx,

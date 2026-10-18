@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/transcribe_monitor.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 2f7c4a91-8b03-4d6e-9a52-1c6e8f0b3d47
 # last-edited: 2026-10-18
 """Transcription progress monitor + alerter.
@@ -18,10 +18,14 @@ ALERTs when:
                 (the "did-nothing completion" pattern: mostly source_file_missing).
   * WHISPER_DOWN — the Whisper server /health check fails.
   * RELAUNCH_IS_PREVIEW — an auto-relaunch came back as a preview run (its
-                progress message says PREVIEW): it transcribes nothing, writes
-                no stats, and the next IDLE poll would relaunch another one.
-                Raised loudly (ERROR plus a banner on stderr) because the
-                server, not this script, decided the mode.
+                progress message opens with the PREVIEW marker): it
+                transcribes nothing, writes no stats, and the next IDLE poll
+                would relaunch another one. Raised loudly (ERROR plus a banner
+                on stderr) because the server, not this script, decided the
+                mode.
+  * RELAUNCH_UNVERIFIED — a relaunched run settled, or stayed silent past
+                --relaunch-verify-max, without a message carrying either mode
+                marker (for example a server build older than the markers).
 
 This is deliberately a STANDALONE script meant to run persistently on the
 always-up Linux server (systemd timer or a screen/tmux loop), NOT an agent
@@ -137,17 +141,28 @@ def fetch_stats(base, token, insecure):
 
 def relaunch_op(base, token, insecure):
     url = base.rstrip("/") + "/api/v1/operations/v2"
-    return http_post(url, token, insecure, {
-        "def_id": "maintenance.transcribe-book-intros",
-        # The op previews unless told otherwise (dry_run defaults to true): a
-        # relaunch that omitted this would queue a run that transcribes nothing.
-        "params": {"dry_run": False},
-    })
+    return http_post(
+        url,
+        token,
+        insecure,
+        {
+            "def_id": "maintenance.transcribe-book-intros",
+            # The op previews unless told otherwise (dry_run defaults to true): a
+            # relaunch that omitted this would queue a run that transcribes nothing.
+            "params": {"dry_run": False},
+        },
+    )
 
 
 # A preview run of transcribe-book-intros says so in its progress message
 # (previewIntroTranscribe in internal/plugins/maintenance/intro_transcribe.go).
-PREVIEW_MARKER = "PREVIEW (dry_run"
+# Every progress message of a transcribe-book-intros run opens with its mode
+# (introPreviewMarker / introLiveMarker in
+# internal/plugins/maintenance/intro_transcribe.go, pinned by
+# TestIntroTranscribe_ProgressNamesTheMode), including the "Selecting work"
+# line both modes report before they diverge. Only these markers decide.
+PREVIEW_MARKER = "PREVIEW (dry_run, nothing written) — "
+LIVE_MARKER = "LIVE — "
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled", "interrupted", "abandoned"}
 
 
@@ -162,15 +177,14 @@ def fetch_op(base, token, insecure, op_id):
 def classify_relaunch(op):
     """'preview', 'live' or 'unknown' for a relaunched op's v2 view.
 
-    A preview names itself in its progress message. A run that has reported any
-    other progress, or settled without the marker, is live. A queued run with no
-    message yet is unknown.
+    Decided only by the mode marker its progress message opens with. Anything
+    else (no message yet, an error, a server build without the markers) is
+    unknown: a message without a marker is not evidence of a live run.
     """
     msg = op.get("progress_message") or ""
-    if PREVIEW_MARKER in msg:
+    if msg.startswith(PREVIEW_MARKER):
         return "preview"
-    status = (op.get("status") or "").lower()
-    if msg or status in TERMINAL_STATUSES:
+    if msg.startswith(LIVE_MARKER):
         return "live"
     return "unknown"
 
@@ -196,8 +210,10 @@ def preview_banner(op_id, msg, alerts_path):
 def check_relaunch(args, token, state, record, wait_secs=0):
     """Classify the pending relaunch, waiting up to wait_secs for it to report.
 
-    Resolved (preview or live) clears state['pending_relaunch']; unknown keeps it
-    for the next poll. Returns the classification.
+    Resolved (preview or live) clears state['pending_relaunch']. Unknown keeps it
+    for the next poll, unless the run has already settled (it will never report
+    a marker now) or --relaunch-verify-max has passed: then RELAUNCH_UNVERIFIED.
+    Returns the classification.
     """
     pending = state.get("pending_relaunch")
     if not pending:
@@ -223,18 +239,22 @@ def check_relaunch(args, token, state, record, wait_secs=0):
         emit_alert(
             "INFO",
             "RELAUNCH_LIVE",
-            f"relaunched op {op_id} is not a preview (status {op.get('status')!r})",
+            f"relaunched op {op_id} is running live (status {op.get('status')!r})",
             args.alerts_log,
         )
-    elif time.time() - pending["ts"] >= args.relaunch_verify_max:
-        state.pop("pending_relaunch", None)
-        emit_alert(
-            "WARN",
-            "RELAUNCH_UNVERIFIED",
-            f"relaunched op {op_id} has reported nothing for {int(time.time() - pending['ts'])}s "
-            f"(status {op.get('status')!r}); cannot tell whether it is a preview",
-            args.alerts_log,
-        )
+    else:
+        status = (op.get("status") or "").lower()
+        settled = status in TERMINAL_STATUSES
+        if settled or time.time() - pending["ts"] >= args.relaunch_verify_max:
+            state.pop("pending_relaunch", None)
+            emit_alert(
+                "WARN",
+                "RELAUNCH_UNVERIFIED",
+                f"relaunched op {op_id} (status {status!r}, after "
+                f"{int(time.time() - pending['ts'])}s) reported no mode marker: "
+                f"{(op.get('progress_message') or '')!r}; cannot tell whether it is a preview",
+                args.alerts_log,
+            )
     return kind
 
 
@@ -257,10 +277,19 @@ def progress_key(stats):
     """A scalar that increases while a run makes progress, for stall detection."""
     if not stats:
         return -1
-    return sum(stats.get(k, 0) for k in (
-        "attempted", "ok", "source_file_missing", "ffmpeg_error",
-        "whisper_error", "no_audio", "empty", "skipped_existing",
-    ))
+    return sum(
+        stats.get(k, 0)
+        for k in (
+            "attempted",
+            "ok",
+            "source_file_missing",
+            "ffmpeg_error",
+            "whisper_error",
+            "no_audio",
+            "empty",
+            "skipped_existing",
+        )
+    )
 
 
 def emit_alert(level, code, msg, alerts_path):
@@ -293,7 +322,9 @@ def run_once(args, token, state):
     try:
         stats = fetch_stats(args.base, token, args.insecure)
     except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError) as e:
-        emit_alert("ERROR", "API_UNREACHABLE", f"transcribe-stats fetch failed: {e}", args.alerts_log)
+        emit_alert(
+            "ERROR", "API_UNREACHABLE", f"transcribe-stats fetch failed: {e}", args.alerts_log
+        )
         record["error"] = str(e)
         log_line(args.metrics_log, record)
         return record
@@ -319,7 +350,8 @@ def run_once(args, token, state):
         # Completed run. Flag the did-nothing pattern, then treat as idle.
         if attempted > 0 and ok == 0:
             emit_alert(
-                "WARN", "NOPROGRESS",
+                "WARN",
+                "NOPROGRESS",
                 f"run completed with 0 ok of {attempted} attempted "
                 f"({src_missing} source_file_missing) — files likely moved (stale paths)",
                 args.alerts_log,
@@ -336,7 +368,8 @@ def run_once(args, token, state):
             record["stalled_for_sec"] = int(stalled_for)
             if stalled_for >= args.stall_secs:
                 emit_alert(
-                    "ERROR", "STALL",
+                    "ERROR",
+                    "STALL",
                     f"counters unchanged for {int(stalled_for)}s (>= {args.stall_secs}s) "
                     f"while run in-flight; op or GPU may be stuck",
                     args.alerts_log,
@@ -382,27 +415,52 @@ def _try_relaunch(args, token, state, record):
 
 def main():
     ap = argparse.ArgumentParser(description="Transcription progress monitor + alerter")
-    ap.add_argument("--base",
-                    default=os.environ.get("ABK_API_URL", os.environ.get("ABK_BASE")),
-                    help="API base URL, e.g. https://<server>:8484 "
-                         "(required; defaults to $ABK_API_URL, then $ABK_BASE)")
-    ap.add_argument("--token-file", default=os.environ.get("ABK_TOKEN_FILE", ".api-token"),
-                    help="file with 'api_key=abk_...' (default ./.api-token)")
-    ap.add_argument("--whisper-url", default=os.environ.get("WHISPER_URL", ""),
-                    help="Whisper server base for /health check, e.g. "
-                         "http://<whisper-host>:19847 (defaults to $WHISPER_URL; "
-                         "'' skips the check)")
+    ap.add_argument(
+        "--base",
+        default=os.environ.get("ABK_API_URL", os.environ.get("ABK_BASE")),
+        help="API base URL, e.g. https://<server>:8484 "
+        "(required; defaults to $ABK_API_URL, then $ABK_BASE)",
+    )
+    ap.add_argument(
+        "--token-file",
+        default=os.environ.get("ABK_TOKEN_FILE", ".api-token"),
+        help="file with 'api_key=abk_...' (default ./.api-token)",
+    )
+    ap.add_argument(
+        "--whisper-url",
+        default=os.environ.get("WHISPER_URL", ""),
+        help="Whisper server base for /health check, e.g. "
+        "http://<whisper-host>:19847 (defaults to $WHISPER_URL; "
+        "'' skips the check)",
+    )
     ap.add_argument("--interval", type=int, default=30, help="poll interval seconds (default 30)")
-    ap.add_argument("--stall-secs", type=int, default=300,
-                    help="alert if in-flight counters unchanged this long (default 300)")
-    ap.add_argument("--metrics-log", default=os.environ.get("ABK_METRICS_LOG", "transcribe-metrics.jsonl"),
-                    help="JSONL metrics output path ('' to disable)")
-    ap.add_argument("--alerts-log", default=os.environ.get("ABK_ALERTS_LOG", "transcribe-alerts.log"),
-                    help="alerts output path ('' to disable)")
-    ap.add_argument("--relaunch", action="store_true",
-                    help="auto-relaunch the op when idle (respects --relaunch-cooldown)")
-    ap.add_argument("--relaunch-cooldown", type=int, default=900,
-                    help="min seconds between auto-relaunches (default 900)")
+    ap.add_argument(
+        "--stall-secs",
+        type=int,
+        default=300,
+        help="alert if in-flight counters unchanged this long (default 300)",
+    )
+    ap.add_argument(
+        "--metrics-log",
+        default=os.environ.get("ABK_METRICS_LOG", "transcribe-metrics.jsonl"),
+        help="JSONL metrics output path ('' to disable)",
+    )
+    ap.add_argument(
+        "--alerts-log",
+        default=os.environ.get("ABK_ALERTS_LOG", "transcribe-alerts.log"),
+        help="alerts output path ('' to disable)",
+    )
+    ap.add_argument(
+        "--relaunch",
+        action="store_true",
+        help="auto-relaunch the op when idle (respects --relaunch-cooldown)",
+    )
+    ap.add_argument(
+        "--relaunch-cooldown",
+        type=int,
+        default=900,
+        help="min seconds between auto-relaunches (default 900)",
+    )
     ap.add_argument(
         "--relaunch-verify-wait",
         type=int,
@@ -417,16 +475,22 @@ def main():
         help="give up classifying a relaunch after this many seconds and "
         "raise RELAUNCH_UNVERIFIED (default 1800)",
     )
-    ap.add_argument("--insecure", action="store_true", default=False,
-                    help="skip TLS cert verification. Prod uses a self-signed cert, so "
-                         "you must pass --insecure (or add the server CA to the trust store). "
-                         "Off by default to avoid silently disabling verification.")
+    ap.add_argument(
+        "--insecure",
+        action="store_true",
+        default=False,
+        help="skip TLS cert verification. Prod uses a self-signed cert, so "
+        "you must pass --insecure (or add the server CA to the trust store). "
+        "Off by default to avoid silently disabling verification.",
+    )
     ap.add_argument("--once", action="store_true", help="run a single poll and exit")
     args = ap.parse_args()
 
     if not args.base:
-        ap.error("--base is required (or set the ABK_API_URL environment variable "
-                 "to your server URL, e.g. https://<server>:8484)")
+        ap.error(
+            "--base is required (or set the ABK_API_URL environment variable "
+            "to your server URL, e.g. https://<server>:8484)"
+        )
 
     token = read_token(args.token_file)
     state = {}
@@ -435,8 +499,11 @@ def main():
         run_once(args, token, state)
         return
 
-    print(f"{now_iso()} transcribe-monitor starting: base={args.base} interval={args.interval}s "
-          f"stall={args.stall_secs}s relaunch={args.relaunch}", flush=True)
+    print(
+        f"{now_iso()} transcribe-monitor starting: base={args.base} interval={args.interval}s "
+        f"stall={args.stall_secs}s relaunch={args.relaunch}",
+        flush=True,
+    )
     while True:
         try:
             run_once(args, token, state)
