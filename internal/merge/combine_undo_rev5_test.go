@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
 // last-edited: 2026-10-18
 
@@ -7,6 +7,7 @@ package merge
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -253,4 +254,69 @@ func TestRev5_PartialPutBackThenRerun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(100), rev5Listened(t, store, f.user.ID, f.survivor))
 	require.Equal(t, float64(600), rev5Listened(t, store, f.user.ID, f.absA))
+}
+
+// S1: a re-combine of the same pair after an undo whose marker drop failed.
+// The absorbed book has a position only and the survivor no state row, so
+// the follow's newest timestamp is the carried position's kept UpdatedAt:
+// both follows had the same one, and the marker keyed by it made the second
+// undo skip, leaving the carried position on the survivor. Markers are now
+// keyed by a per-follow id.
+func TestRev5_LeftoverMarkerDoesNotApplyToAReCombineOfTheSamePair(t *testing.T) {
+	store := setupTestStore(t).(*database.PebbleStore)
+	keep, gone := overrideBooks(t, store)
+	u := seedSyncUser(t, store)
+	require.NoError(t, store.SetUserPosition(u.ID, gone, "seg-g", 777))
+	ms := NewService(store)
+
+	res1, err := ms.CombineBooks([]string{keep, gone}, keep, nil)
+	require.NoError(t, err)
+	j1, err := ms.GetCombineJournal(res1.JournalID)
+	require.NoError(t, err)
+	require.Len(t, j1.Absorbed, 1)
+	require.Len(t, j1.Absorbed[0].Progress, 1, "the user is journaled")
+	p1 := j1.Absorbed[0].Progress[0]
+	require.NotEmpty(t, p1.FollowID)
+
+	// Undo #1 completes; dropping its marker fails (best effort), so the
+	// marker stays.
+	_, err = NewService(&rev5Store{PebbleStore: store, survivor: keep, failMarkerDel: 1}).UndoCombine(res1.JournalID)
+	require.NoError(t, err)
+	rows, err := store.ScanPrefix(survivorReconcilePrefix)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "undo #1 left its marker")
+
+	res2, err := ms.CombineBooks([]string{keep, gone}, keep, nil)
+	require.NoError(t, err)
+	j2, err := ms.GetCombineJournal(res2.JournalID)
+	require.NoError(t, err)
+	p2 := j2.Absorbed[0].Progress[0]
+	require.Equal(t, followStamp(p1), followStamp(p2), "the two follows share a timestamp: the old key collided")
+	require.NotEqual(t, survivorReconcileKey(keep, gone, p1), survivorReconcileKey(keep, gone, p2))
+
+	// The user listens on the survivor.
+	time.Sleep(5 * time.Millisecond)
+	require.NoError(t, store.SetUserPosition(u.ID, keep, "seg-new", 4321))
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: keep, Status: "in_progress", ProgressPct: 30, LastActivityAt: time.Now().UTC(), LastSegmentID: "seg-new", TotalListenedSeconds: 50}))
+
+	_, err = ms.UndoCombine(res2.JournalID)
+	require.NoError(t, err)
+	pos, err := store.ListUserPositionsForBook(u.ID, keep)
+	require.NoError(t, err)
+	var segs []string
+	for _, p := range pos {
+		segs = append(segs, p.SegmentID)
+	}
+	require.Equal(t, []string{"seg-new"}, segs, "the carried position was taken back off the survivor and the user's own stays")
+}
+
+// A journal from before FollowID keeps the timestamp marker key, so a re-run
+// of its undo still finds the markers an earlier run of the same journal
+// wrote (survivorReconcileKey).
+func TestRev5_JournalWithoutFollowIDKeepsTheTimestampMarkerKey(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	p := CombineUserProgress{UserID: "u", SurvivorPosAfter: []database.UserPosition{{SegmentID: "s", UpdatedAt: at}}}
+	require.Equal(t, fmt.Sprintf("%ss:a:u:%d", survivorReconcilePrefix, at.UnixNano()), survivorReconcileKey("s", "a", p))
+	p.FollowID = "F1"
+	require.Equal(t, survivorReconcilePrefix+"s:a:u:f:F1", survivorReconcileKey("s", "a", p))
 }
