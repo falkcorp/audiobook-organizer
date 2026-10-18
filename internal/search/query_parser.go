@@ -1,5 +1,5 @@
 // file: internal/search/query_parser.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 3c4a1d8f-5b2e-4f70-a7c6-2f8d0e1b9a57
 // last-edited: 2026-10-18
 //

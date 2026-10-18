@@ -1,7 +1,7 @@
 // file: internal/database/iface_assert.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b9b0aba-e44f-43f0-a40b-56de5e95ab8e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package database
 

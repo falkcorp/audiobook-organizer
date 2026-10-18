@@ -1,7 +1,7 @@
 // file: internal/database/iface_catalog.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package database
 

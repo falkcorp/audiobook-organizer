@@ -1,7 +1,7 @@
 // file: internal/search/field_routing.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 package search
 

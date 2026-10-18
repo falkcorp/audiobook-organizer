@@ -1,7 +1,7 @@
 // file: internal/search/index_builder.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8a1c2f4d-5b3e-4f70-b7d6-2e8d0f1b9a57
-// last-edited: 2026-09-11
+// last-edited: 2026-10-18
 //
 // Helpers that project a database.Book (with its author, series,
 // and tag relations resolved) into a BookDocument ready for

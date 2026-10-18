@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-09-27
+// last-edited: 2026-10-18
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable

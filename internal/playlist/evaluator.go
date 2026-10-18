@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //

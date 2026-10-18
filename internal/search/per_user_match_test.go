@@ -1,7 +1,7 @@
 // file: internal/search/per_user_match_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f3d8b2a-1c4e-4a9f-9d2b-7e5a1f3c8b60
-// last-edited: 2026-07-10
+// last-edited: 2026-10-18
 
 package search
 

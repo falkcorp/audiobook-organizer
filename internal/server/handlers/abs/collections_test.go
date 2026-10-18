@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0f5a92c3-71b8-4d26-9e04-3ca8175bd6e1
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package abs_test
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package handlers
 

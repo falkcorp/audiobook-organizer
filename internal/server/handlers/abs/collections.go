@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 package abs
 
