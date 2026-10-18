@@ -141,7 +141,8 @@ func (s *Server) invalidateSeriesCaches() {
 
 // invalidateBookDuplicateCaches drops the "book-dedup-scan" entry that the
 // dedup.book-scan op writes, as the merge-undo route
-// (duplicates.Handler.UndoCombine) does. That key currently has no reader: its
+// (duplicates.Handler.UndoCombine, retired in 01-P81h; the revert reaches
+// this through revertOperation) did. That key currently has no reader: its
 // only one, GET /audiobooks/duplicates/scan-results, went with 03-PR12, and the
 // op has no HTTP launcher left. Whether the op and this invalidation stay is
 // the open decision with brief area 04, recorded in
@@ -158,7 +159,7 @@ func (s *Server) invalidateBookDuplicateCaches() {
 // operation's change ledger and, when any series_rename row was restored,
 // drops the series caches so GET /series shows the restored name at once;
 // when any merge_combine_journal row was restored (a Repairs merge undone),
-// it drops the book duplicate caches, as the merge-undo route does; when any
+// it drops the book duplicate caches, as the retired merge-undo route did; when any
 // author merge or reclassify row was restored, it drops the author list and
 // dedup caches, as the merge itself does (entities.author-merge), so the
 // restored author is listed again at once.

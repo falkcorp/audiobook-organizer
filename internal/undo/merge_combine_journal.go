@@ -27,7 +27,7 @@ import (
 // (merge.Service.UndoCombine), which moves every file row, external id and
 // listening progress the merge recorded back and restores the books it
 // retired, refusing as a whole when the library changed since. A journal
-// already undone (through POST /merge/undo/:journal_id, or an earlier revert)
+// already undone (by an earlier revert; POST /merge/undo/:journal_id is retired)
 // counts restored with nothing written.
 //
 // merge.RecordJournalPointer writes the row and merge cannot import this
