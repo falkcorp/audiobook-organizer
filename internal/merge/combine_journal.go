@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -266,7 +266,7 @@ type CombineOverrideUndo struct {
 	// is written in the same journal write as AuthorIDAfter, before the author
 	// is linked. Nothing deletes that row on its account: the undo only warns
 	// when no book credits it any more (createdAuthorNote), and
-	// maintenance.purge-empty-authors removes it. False for an author that
+	// maintenance.purge-empty-authors can remove it. False for an author that
 	// already existed, and absent from a journal written before the field: no
 	// warning for either.
 	AuthorCreated bool                                    `json:"author_created,omitempty"`
@@ -926,14 +926,17 @@ func (ms *Service) overrideAuthorsToRestore(survivorID string, o *CombineOverrid
 // four holes: the check and the delete were not one step (a book linked in
 // between lost the credit), a crash between restoring the links and the
 // delete left the orphan anyway, the delete wrote no author_delete ledger
-// row (so nothing could revert it), and tombstones and series rows naming the
-// id were left dangling. maintenance.purge-empty-authors
+// row (no record of the name), and tombstones and series rows naming the id
+// were left dangling. maintenance.purge-empty-authors
 // (internal/plugins/maintenance/author_purge_empty.go) already removes an
-// author no book credits, with the gates this lacked (references in every
-// book state, series owners, file counts, a per-item re-check), journals each
-// delete as an author_delete row first, and is revertible. So the undo
-// leaves the row and says so, and the crash case needs no special handling:
-// an orphan is one more empty author for that op.
+// author no book credits when it is run, with the gates this lacked
+// (references in every book state, series owners, file counts, a per-item
+// re-check), and writes an author_delete ledger row naming the author before
+// each delete. That row is a record, not an automatic undo
+// (undo.NotRestorableLabel lists author_delete as record-only), but it keeps
+// the name, which this delete did not. So the undo leaves the row and says
+// so, and the crash case needs no special handling: an orphan is one more
+// empty author for that op.
 //
 // "Credited" is database.VerifyAuthorUnlinked: any role (narrators are
 // book_authors rows too) and any book state, the legacy Book.AuthorID
@@ -1098,7 +1101,12 @@ func intPtrEqual(a, b *int) bool {
 // the reconcile's marker (survivorReconcileMarker) before its write for
 // that: without it, a re-run after the user listened read the survivor as
 // "touched since the follow" and reconciled it again, taking the carried
-// listened seconds off a second time (round-4 review S2 of #4064).
+// listened seconds off a second time (round-4 review S2 of #4064). The one
+// window left is crash-only, as for the reconcile: the process dies after
+// the put-back's marker and before its write, and a client writes the
+// survivor before the re-run. The re-run then reads the put-back as landed
+// and leaves the carried state on the survivor as well as on the absorbed
+// book: listened time counted twice, never fewer seconds than listened.
 //
 // The absorbed side gets the same care (restoreAbsorbedSide): the absorbed
 // book is often still live when this runs (CarryStateBeforeHardDelete puts a
@@ -1219,9 +1227,16 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 const survivorReconcilePrefix = "merge:survivor-reconcile:"
 
 // survivorReconcileMarker records the survivor state's UpdatedAt as it was
-// right before reconcileTouchedSurvivor's state write. SetUserBookState
-// stamps UpdatedAt on every write, so on a re-run a different UpdatedAt
-// means that write (or a later one) landed.
+// right before a put-back's state write: reconcileTouchedSurvivor's, or the
+// plain put-back in RestoreFollowedProgress (zero when the survivor had no
+// state row). SetUserBookState stamps UpdatedAt on every write, so on a
+// re-run a different UpdatedAt means that write (or a later one) landed.
+//
+// Markers are dropped once nothing can re-run the put-back
+// (dropSurvivorReconcileMarkers). The user_state_follow operation revert
+// (audiobooks revertUserStateFollow) does not drop them: a revert whose row
+// mark then fails is retried, and needs them. Its markers are inert (each key
+// names a follow stamp no later follow reuses) and stay as small raw keys.
 type survivorReconcileMarker struct {
 	PreUpdatedAt time.Time `json:"pre_updated_at"`
 }
@@ -1258,7 +1273,7 @@ func survivorReconcileKey(survivorID, absorbedID, userID string, stamp int64) st
 func dropSurvivorReconcileMarkers(db UserProgressMerger, survivorID, absorbedID string, progress []CombineUserProgress) {
 	for _, p := range progress {
 		if p.SurvivorStateAfter == nil && len(p.SurvivorPosAfter) == 0 {
-			continue // no after-snapshot: reconcileTouchedSurvivor never ran
+			continue // no after-snapshot: no put-back wrote a marker
 		}
 		key := survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
 		if err := db.DeleteRaw(key); err != nil {
@@ -1316,9 +1331,13 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 // destroying the user's listened time). So before the state write a
 // per-user marker is journaled (survivorReconcileMarker) with the state's
 // UpdatedAt as it was then. A re-run that finds the marker and a different
-// UpdatedAt knows the write landed and keeps the current listened time
-// (every second the user added after it is already in it); one that finds
-// the same UpdatedAt knows it did not land and does the full reconcile.
+// UpdatedAt knows the write landed: RestoreFollowedProgress then leaves this
+// user's survivor alone without calling here (since the round-4 review; the
+// plain put-back writes the same marker), and a client write that lands
+// between that check and the re-read here makes this keep the current
+// listened time (every second the user added after it is already in it). One
+// that finds the same UpdatedAt knows it did not land and does the full
+// reconcile.
 //
 // Every write -- positions, marker, state -- happens under the per-(user,
 // book) stripe (database.LockUserBookState), after a re-read of the state AND

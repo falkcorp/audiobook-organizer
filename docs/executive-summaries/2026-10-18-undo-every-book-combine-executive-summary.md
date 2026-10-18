@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -203,7 +203,7 @@ fully undone, or put a reader's progress or a user's later edit at risk.
 **The fix.**
 
 - An undo now notes "started" before it changes anything, so running it
-  again finishes the job. A test crashes the undo at 44 different points
+  again finishes the job. A test crashes the undo at 46 different points
   (just before and just after each thing it writes) and runs it again;
   every time, everything comes back.
 - A combine that stops part-way now returns its undo number and says so.
@@ -253,10 +253,11 @@ routine repair run far slower and heavier than it needed to be.
 **The fix.**
 
 - Undoing a combine never deletes an author. When no book credits an
-  author the combine created, the undo says so, and the existing clean-up
-  job for empty authors removes it with its own safety checks and its own
-  undo. A combine that cancels its own author or title change now says so
-  on screen instead of only in the log.
+  author the combine created, the undo says so. The existing clean-up job
+  for empty authors can remove it when someone runs it; that job has its
+  own safety checks and keeps a record of every author it removes. A
+  combine that cancels its own author or title change now says so on
+  screen instead of only in the log.
 - The undo takes back only the one author credit the combine wrote, so
   the same person credited since as narrator or co-author stays, and the
   undo says so.
