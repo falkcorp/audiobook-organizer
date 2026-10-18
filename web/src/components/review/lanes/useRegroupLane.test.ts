@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.12.1
+// version: 1.13.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-10-18
 
@@ -346,6 +346,7 @@ describe('actionFor', () => {
   it.each([
     ['REVIEW_ITEM_CHANGED', /^This hold changed since it was shown/],
     ['REVIEW_APPLIED_UNRECORDED', /^Applied, but the result was not recorded/],
+    ['REVIEW_APPLY_PARTIAL', /^The apply changed part of the library before it failed/],
   ])('reloads the rows after a %s refusal', async (code, toastText) => {
     mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
     vi.mocked(api.approveReviewItem).mockRejectedValue(
@@ -414,6 +415,27 @@ describe('actionFor', () => {
 
     expect(toast).toHaveBeenCalledWith(
       expect.stringMatching(/^Applied, but the result was not recorded: applied, but/),
+      'error'
+    );
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/^Failed to/), 'error');
+  });
+
+  it('does not call a partially applied approve a failure and says it is held', async () => {
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      Object.assign(new Error('the apply failed and may already have changed part of the library'), {
+        status: 409,
+        data: { code: 'REVIEW_APPLY_PARTIAL' },
+      })
+    );
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/held mid-apply\. Retry or abandon it from the held list\./),
       'error'
     );
     expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/^Failed to/), 'error');
