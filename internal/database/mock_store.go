@@ -638,7 +638,6 @@ type MockStore struct {
 	GetBooksByTagFunc          func(tag string) ([]string, error)
 
 	// Author Tags
-	AddAuthorTagFunc             func(authorID int, tag string) error
 	AddAuthorTagWithSourceFunc   func(authorID int, tag, source string) error
 	RemoveAuthorTagFunc          func(authorID int, tag string) error
 	RemoveAuthorTagsByPrefixFunc func(authorID int, prefix, source string) error
@@ -649,7 +648,6 @@ type MockStore struct {
 	GetAuthorsByTagFunc          func(tag string) ([]int, error)
 
 	// Series Tags
-	AddSeriesTagFunc             func(seriesID int, tag string) error
 	AddSeriesTagWithSourceFunc   func(seriesID int, tag, source string) error
 	RemoveSeriesTagFunc          func(seriesID int, tag string) error
 	RemoveSeriesTagsByPrefixFunc func(seriesID int, prefix, source string) error
@@ -3199,19 +3197,9 @@ func (m *MockStore) GetBookTagsDetailed(bookID string) ([]BookTag, error) {
 
 // ---- Author tag methods ----
 
-func (m *MockStore) AddAuthorTag(authorID int, tag string) error {
-	if m.AddAuthorTagFunc != nil {
-		return m.AddAuthorTagFunc(authorID, tag)
-	}
-	return nil
-}
-
 func (m *MockStore) AddAuthorTagWithSource(authorID int, tag, source string) error {
 	if m.AddAuthorTagWithSourceFunc != nil {
 		return m.AddAuthorTagWithSourceFunc(authorID, tag, source)
-	}
-	if m.AddAuthorTagFunc != nil {
-		return m.AddAuthorTagFunc(authorID, tag)
 	}
 	return nil
 }
@@ -3267,19 +3255,9 @@ func (m *MockStore) GetAuthorsByTag(tag string) ([]int, error) {
 
 // ---- Series tag methods ----
 
-func (m *MockStore) AddSeriesTag(seriesID int, tag string) error {
-	if m.AddSeriesTagFunc != nil {
-		return m.AddSeriesTagFunc(seriesID, tag)
-	}
-	return nil
-}
-
 func (m *MockStore) AddSeriesTagWithSource(seriesID int, tag, source string) error {
 	if m.AddSeriesTagWithSourceFunc != nil {
 		return m.AddSeriesTagWithSourceFunc(seriesID, tag, source)
-	}
-	if m.AddSeriesTagFunc != nil {
-		return m.AddSeriesTagFunc(seriesID, tag)
 	}
 	return nil
 }

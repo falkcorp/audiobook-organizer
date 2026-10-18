@@ -22,9 +22,9 @@ import (
 // lower it next. Any PR that removes Store methods lowers this one.
 //
 // Why a test and not interfacebloat: that linter counts declared entries
-// (Store declares 6 embedded interfaces), so it cannot see the 450 methods
+// (Store declares 6 embedded interfaces), so it cannot see the 448 methods
 // the embeds flatten to.
-const storeMethodBaseline = 450
+const storeMethodBaseline = 448
 
 // flattenedMethodCount parses the non-test Go files in dir and returns the
 // number of distinct methods of the interface named iface, following
