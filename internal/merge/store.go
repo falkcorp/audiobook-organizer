@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package merge
 
@@ -14,15 +14,14 @@ import (
 // compiler probe under -gcflags=-e: 19 methods, no forwarding constraints. It
 // was database.Store (398 methods) until 2026-08-19. On 2026-09-13
 // playCountMarkStore added ModifyBook to the progress carry, making 20
-// (GetBookByID was already counted, through BookReader).
+// (GetBookByID was already counted, through bookReader).
 //
 // Grouped rather than declared flat so each consumer can name the slice it uses:
-// the free functions in sync_follow.go need only user-progress methods, and
-// BookTitle needs exactly one.
+// the free functions in sync_follow.go need only user-progress methods.
 
-// BookReader is the single lookup collision.go needs. Exported because
-// BookTitle is exported and internal/importer forwards its store into it.
-type BookReader interface {
+// bookReader is the single book lookup the merge writers build on. Unexported:
+// nothing outside this package names it (BookWriter embeds it).
+type bookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
@@ -30,7 +29,7 @@ type BookReader interface {
 // SoftDeleteBook is exported, so a caller that forwards its own store into it
 // has to be able to name this requirement -- see internal/dedup.
 type BookWriter interface {
-	BookReader
+	bookReader
 
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	// ModifyBook is the read-modify-write every merge column write goes
@@ -105,10 +104,9 @@ type mergeExternalIDReader interface {
 // is_primary_version=true and the group ends up with two primaries.
 //
 // Deliberately its own interface rather than an addition to
-// BookReader/BookWriter: those two are exported precisely so internal/importer
-// and internal/dedup can forward their own stores into BookTitle and
-// SoftDeleteBook, and widening either would force a method on callers that do
-// not need it. Only Store composes this.
+// bookReader/BookWriter: BookWriter is exported precisely so internal/dedup
+// can forward its own store into SoftDeleteBook, and widening either would
+// force a method on callers that do not need it. Only Store composes this.
 //
 // It also carries versionprimary.EnsureStore: CombineBooks hands the primary
 // flag on in each group a participant left (handOffLeftGroups), and MergeBooks

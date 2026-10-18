@@ -1,7 +1,7 @@
 // file: internal/search/query_parser.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3c4a1d8f-5b2e-4f70-a7c6-2f8d0e1b9a57
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 //
 // Parser for the library search DSL (spec 3.4 / DES-1 v1.1).
 //
@@ -461,13 +461,4 @@ func (p *parser) parseRange(field string) (Node, error) {
 		Field: field, Op: "range",
 		RangeMin: minVal, RangeMax: maxVal,
 	}, nil
-}
-
-// QuoteIfNeeded wraps a string in quotes if it contains spaces.
-// Used by query builders to ensure multi-word values are treated as single tokens.
-func QuoteIfNeeded(s string) string {
-	if strings.Contains(s, " ") {
-		return `"` + s + `"`
-	}
-	return s
 }

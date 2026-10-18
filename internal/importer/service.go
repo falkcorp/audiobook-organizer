@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.21.2
+// version: 1.21.3
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 package importer
 
@@ -25,7 +25,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -44,12 +43,10 @@ import (
 // ever measured -- it was inherited.
 
 // importForwarded is what this package hands its store to. Named rather than
-// inlined: four entries instead of ~20, and each re-narrows on its own.
+// inlined: three entries instead of ~20, and each re-narrows on its own.
 type importForwarded interface {
 	// fileops.ValidateUserPath, and NewImportPathService.
 	database.ImportPathStore
-	// merge.BookTitle.
-	merge.BookReader
 	// versions.CheckFingerprint and versions.LiveTorrentHolder.
 	versions.TorrentHolderReader
 	// versions.CreateIngestVersion.
@@ -80,18 +77,6 @@ type Store interface {
 	importForwarded
 	importEntityStore
 	importBookStore
-}
-
-// collisionStore is what CheckImportCollisions needs: two direct lookups plus
-// the three checks it forwards into. Notably NOT the full importer.Store --
-// it neither creates entities nor ingests versions.
-type collisionStore interface {
-	database.ImportPathStore
-	merge.BookReader
-	versions.FingerprintReader
-
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetBookByFileHash(hash string) (*database.Book, error)
 }
 
 type ImportService struct {

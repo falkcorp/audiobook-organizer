@@ -1,7 +1,7 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3f8a2c1d-7e4b-4d9a-b6c5-0e1f2a3b4c5d
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package merge
 
@@ -280,20 +280,4 @@ func TestUnit_BookIsBetter_IdenticalBooksReturnsFalse(t *testing.T) {
 
 	// When everything is equal, a is NOT better than b
 	assert.False(t, BookIsBetter(a, b))
-}
-
-// ---------- BookTitle (collision.go) ----------
-
-func TestUnit_BookTitle_ReturnsTitle(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID("book-1").Return(&database.Book{ID: "book-1", Title: "Foundation"}, nil)
-
-	assert.Equal(t, "Foundation", BookTitle(mockStore, "book-1"))
-}
-
-func TestUnit_BookTitle_NotFound(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookByID("missing").Return(nil, fmt.Errorf("not found"))
-
-	assert.Equal(t, "", BookTitle(mockStore, "missing"))
 }
