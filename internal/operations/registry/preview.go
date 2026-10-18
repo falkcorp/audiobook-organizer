@@ -1,5 +1,5 @@
 // file: internal/operations/registry/preview.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 1d72f677-0951-40e4-9b15-cb9211c3e50a
 // last-edited: 2026-10-18
 
@@ -233,6 +233,13 @@ func (p PreviewSpec) SameMode(a, b json.RawMessage) bool {
 // modeSignature is the normalized value of every mode key and LiveOneOf
 // switch, in declaration order; an absent switch is false.
 func (p PreviewSpec) modeSignature(params json.RawMessage) (string, error) {
+	// A JSON null body is "no params", as empty is: EnqueueOp marshals a nil
+	// json.RawMessage to null, and scheduler ticks enqueue with no params. Left
+	// as an error it would make every tick "a different mode" and queue a new
+	// row each time, which is the pile-up this dedupe exists to stop.
+	if bytes.Equal(bytes.TrimSpace(params), []byte("null")) {
+		params = nil
+	}
 	out, err := p.resolve(params, "", false)
 	if err != nil {
 		return "", err
