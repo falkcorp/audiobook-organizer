@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2400,6 +2400,12 @@ func (ms *Service) planCombineOverride(primaryID string, override *CombineOverri
 	return plan
 }
 
+// overrideAuthorRole is the role of the one book_authors link an author
+// override writes: (AuthorIDAfter, overrideAuthorRole). The undo takes back
+// exactly that link (overrideAuthorsToRestore); a link to the same author in
+// any other role was added by someone else and is kept.
+const overrideAuthorRole = "author"
+
 // writeCombineOverride writes a journaled override plan onto the survivor.
 // The before-values are refreshed from the row each write actually replaces
 // (ModifyBook), and a sub-write that fails is dropped from the plan (its
@@ -2506,7 +2512,7 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 	}
 	authorID := *plan.AuthorIDAfter
 	if err := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
-		{BookID: primaryID, AuthorID: authorID, Role: "author", Position: 0},
+		{BookID: primaryID, AuthorID: authorID, Role: overrideAuthorRole, Position: 0},
 	}); err != nil {
 		slog.Warn("combine override SetBookAuthors", "id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(plan.Applied.Author), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
 		dropAuthor(fmt.Sprintf("the author link could not be written: %v", err))

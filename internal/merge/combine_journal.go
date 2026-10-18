@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -795,12 +795,17 @@ func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool
 // overrideAuthorsToRestore returns the author links the undo of an author
 // override writes back: the links the override replaced (AuthorsBefore), then
 // every link added to the survivor since the combine, each with a warning.
-// The override left the survivor with exactly one link, to AuthorIDAfter, so a
-// current link to any other author (one the survivor did not have before) is
-// someone's later edit, a co-author added by hand or by a fetch. Writing
-// AuthorsBefore alone dropped it without a word; it is kept, listed after the
-// restored authors, and the warning reaches the revert's Kept list. Safe to
-// re-run: after a first restore the same links read as "added since" again.
+// The override left the survivor with exactly one link, (AuthorIDAfter,
+// overrideAuthorRole), so every other current link the survivor did not have
+// before is someone's later edit: a co-author added by hand or by a fetch, or
+// the same author credited in another role (an author-narrated book's
+// narrator row, a co-author row). Writing AuthorsBefore alone dropped it
+// without a word; it is kept, listed after the restored authors, and the
+// warning reaches the revert's Kept list. Only the exact link the override
+// wrote is taken back: until the round-4 review every link to AuthorIDAfter
+// was skipped whatever its role, so a later (A, narrator) row vanished on
+// undo. Safe to re-run: after a first restore the same links read as "added
+// since" again.
 func (ms *Service) overrideAuthorsToRestore(survivorID string, o *CombineOverrideUndo) ([]database.BookAuthor, []string, error) {
 	cur, err := ms.db.GetBookAuthors(survivorID)
 	if err != nil {
@@ -818,7 +823,7 @@ func (ms *Service) overrideAuthorsToRestore(survivorID string, o *CombineOverrid
 	}
 	var warns []string
 	for _, a := range cur {
-		if a.AuthorID == *o.AuthorIDAfter || had[link{a.AuthorID, a.Role}] {
+		if (a.AuthorID == *o.AuthorIDAfter && a.Role == overrideAuthorRole) || had[link{a.AuthorID, a.Role}] {
 			continue
 		}
 		had[link{a.AuthorID, a.Role}] = true
