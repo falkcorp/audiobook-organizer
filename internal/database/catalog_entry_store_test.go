@@ -1,12 +1,11 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
 // last-edited: 2026-10-18
 
 package database
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -27,10 +26,9 @@ func openTestCatalogStore(t *testing.T) *CatalogStore {
 	return NewCatalogStore(NewGatedDB(db))
 }
 
-// TestCatalogList_UnfilteredUsesKeysOnlyIndex: the unfiltered list and the
-// entry count must never iterate the cat: prefix (every ~1 KB entry value);
-// they walk the keys-only cat_id index, page by offset/limit, and decode only
-// the entries in the window.
+// TestCatalogList_UnfilteredUsesKeysOnlyIndex: the entry count must never
+// iterate the cat: prefix (every ~1 KB entry value); it walks the keys-only
+// cat_id index.
 func TestCatalogList_UnfilteredUsesKeysOnlyIndex(t *testing.T) {
 	st := openTestCatalogStore(t)
 	items := make([]CatalogUpsert, 7)
@@ -38,30 +36,13 @@ func TestCatalogList_UnfilteredUsesKeysOnlyIndex(t *testing.T) {
 		items[i] = CatalogUpsert{Entry: CatalogEntry{Provider: "audible", Marketplace: "us",
 			ProviderID: fmt.Sprintf("P%d", i), Title: fmt.Sprintf("T%d", i), AuthorKeys: []string{"name:ann"}}}
 	}
-	res, err := st.UpsertEntries(items, "ann")
-	if err != nil {
+	if _, err := st.UpsertEntries(items, "ann"); err != nil {
 		t.Fatal(err)
 	}
-	ids := slices.Clone(res.IDs)
-	slices.Sort(ids)
-
 	var mu sync.Mutex
 	var scanned []string
 	st.scanHook = func(p string) { mu.Lock(); scanned = append(scanned, p); mu.Unlock() }
 
-	page, total, err := st.ListEntries(CatalogListQuery{Limit: 2, Offset: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if total != 7 || len(page) != 2 || page[0].ID != ids[3] || page[1].ID != ids[4] {
-		t.Fatalf("page = %d entries (total %d); want ids[3:5] of 7 in id order", len(page), total)
-	}
-	if page, total, _ := st.ListEntries(CatalogListQuery{Limit: 5, Offset: 9}); len(page) != 0 || total != 7 {
-		t.Errorf("offset past the end: %d entries, total %d", len(page), total)
-	}
-	if page, total, _ := st.ListEntries(CatalogListQuery{AuthorKey: "name:ann", Limit: 3}); len(page) != 3 || total != 7 {
-		t.Errorf("author filter: %d entries, total %d; want 3 of 7", len(page), total)
-	}
 	if n, err := st.CountEntries(); err != nil || n != 7 {
 		t.Errorf("CountEntries = %d, %v; want 7", n, err)
 	}
@@ -70,7 +51,7 @@ func TestCatalogList_UnfilteredUsesKeysOnlyIndex(t *testing.T) {
 	}
 	for _, p := range scanned {
 		if p == catEntryPrefix {
-			t.Errorf("a list/count scan iterated the entry values (%q); scans: %v", p, scanned)
+			t.Errorf("a count scan iterated the entry values (%q); scans: %v", p, scanned)
 		}
 	}
 	// Re-upserting must not duplicate the id index.
@@ -257,60 +238,4 @@ func TestPutAuthorAliases_ResolveAmbiguousAndIdempotent(t *testing.T) {
 			t.Errorf("ResolveAuthorAlias(%q) = %v, %v; want not found", alias, ok, err)
 		}
 	}
-}
-
-// CatalogListQuery selects entries for the keys-only index tests. The
-// GET /catalog/entries read API that used it was retired by 01-P81j, so this
-// lives in the test file. At most one of AuthorKey and SeriesKey may be set;
-// neither lists every entry in id order.
-type CatalogListQuery struct {
-	AuthorKey string
-	SeriesKey string
-	Limit     int
-	Offset    int
-}
-
-// ListEntries returns one page of entries and the total matching count (test
-// only since 01-P81j). Every branch walks a keys-only index (cat_id, cat_author, cat_series), copies only
-// the ids inside the requested window, and decodes only those entries; the
-// total is a key count. No branch iterates the entry values.
-func (s *CatalogStore) ListEntries(q CatalogListQuery) ([]CatalogEntry, int, error) {
-	if q.AuthorKey != "" && q.SeriesKey != "" {
-		return nil, 0, errors.New("catalog list: author and series filters are exclusive")
-	}
-	limit := q.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 50
-	}
-	offset := max(q.Offset, 0)
-
-	prefix := catIDPrefix
-	switch {
-	case q.AuthorKey != "":
-		prefix = catAuthorPrefix + q.AuthorKey + ":"
-	case q.SeriesKey != "":
-		prefix = catSeriesPrefix + q.SeriesKey + ":"
-	}
-	ids, total, err := s.pageUnder(prefix, offset, limit)
-	if err != nil {
-		return nil, 0, err
-	}
-	out := make([]CatalogEntry, 0, len(ids))
-	for _, id := range ids {
-		e, err := s.GetEntry(id)
-		if errors.Is(err, ErrCatalogEntryNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, *e)
-	}
-	return out, total, nil
-}
-
-// EditionGroupMembers returns the entry ids in one edition group (test only
-// since 01-P81j).
-func (s *CatalogStore) EditionGroupMembers(groupID string) ([]string, error) {
-	return s.idsUnder(catGroupPrefix + groupID + ":")
 }
