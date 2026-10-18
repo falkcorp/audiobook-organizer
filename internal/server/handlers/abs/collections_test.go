@@ -8,6 +8,8 @@ package abs_test
 import (
 	"fmt"
 	"net/http"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -26,6 +28,9 @@ import (
 // established is load-bearing.
 
 type abscolFakeStore struct {
+	// mu gives the membership operations the same lock semantics as the real
+	// store: read inside the lock, apply, bump Version, all one critical section.
+	mu   sync.Mutex
 	cols []database.Collection
 	err  error
 	// gotType records the type filter the handler passed, so "the list is not
@@ -34,6 +39,9 @@ type abscolFakeStore struct {
 	creates int
 	updates int
 	deletes int
+	// membershipWrites counts UpdateCollectionBooks calls that changed the
+	// row; a membership write that does not change it is not counted.
+	membershipWrites int
 	// staleRead, when non-nil, is returned ONCE by the next GetCollection call
 	// for its ID instead of the live row, then cleared. It exists to simulate
 	// a caller whose read happened before a concurrent caller's write landed —
@@ -117,6 +125,60 @@ func (f *abscolFakeStore) UpdateCollection(col *database.Collection) error {
 		}
 	}
 	return nil
+}
+
+// UpdateCollectionBooks mirrors PebbleStore.UpdateCollectionBooks: the row is
+// read inside the lock, fn maps the current membership to the new one, and
+// Version moves only when the membership changed. A dynamic collection returns
+// the real ErrCollectionNotStatic sentinel, an unknown id wraps
+// ErrCollectionNotFound.
+func (f *abscolFakeStore) UpdateCollectionBooks(id string, fn func(current []string) ([]string, error)) (*database.Collection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	for i := range f.cols {
+		if f.cols[i].ID != id {
+			continue
+		}
+		if f.cols[i].Type == database.CollectionTypeDynamic {
+			return nil, fmt.Errorf("collection %s: %w", id, database.ErrCollectionNotStatic)
+		}
+		next, err := fn(append([]string(nil), f.cols[i].BookIDs...))
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Equal(next, f.cols[i].BookIDs) {
+			f.cols[i].BookIDs = next
+			f.cols[i].Version++
+			f.membershipWrites++
+		}
+		cp := f.cols[i]
+		return &cp, nil
+	}
+	return nil, fmt.Errorf("collection %s %w", id, database.ErrCollectionNotFound)
+}
+
+func (f *abscolFakeStore) AddBooksToCollection(id string, bookIDs []string) (*database.Collection, error) {
+	return f.UpdateCollectionBooks(id, func(current []string) ([]string, error) {
+		for _, b := range bookIDs {
+			if !slices.Contains(current, b) {
+				current = append(current, b)
+			}
+		}
+		return current, nil
+	})
+}
+
+func (f *abscolFakeStore) RemoveBookFromCollection(id, bookID string) (*database.Collection, error) {
+	return f.UpdateCollectionBooks(id, func(current []string) ([]string, error) {
+		i := slices.Index(current, bookID)
+		if i < 0 {
+			return nil, fmt.Errorf("collection %s: %w", id, database.ErrCollectionBookNotMember)
+		}
+		return slices.Delete(current, i, i+1), nil
+	})
 }
 
 func (f *abscolFakeStore) DeleteCollection(id string) error {
@@ -533,28 +595,25 @@ func TestCollections_DynamicMembershipIsNotEditable(t *testing.T) {
 		t.Fatalf("the rejected edit still wrote to the store (%d updates)", store.updates)
 	}
 }
-
-// TestAddBookToCollection_ConcurrentAdds_SecondGets409 pins the CAS this task
-// added to PebbleStore.UpdateCollection (internal/database/pebble_store_collections.go)
-// at the HTTP boundary this handler actually exercises.
+// TestAddBookToCollection_ConcurrentAdds_BothLand pins the lost-update fix for
+// the ABS single-add route.
 //
-// AddBookToCollection has no locking of its own: it reads the collection via
-// lookupCollection, mutates BookIDs in memory, and writes it back — a classic
-// read-modify-write. Two requests racing on the same collection, where the
-// second one's read happened before the first one's write landed, must not
-// both succeed: the second must be rejected (409), not silently accept and
-// clobber the first request's change. A test that only checks the version
-// counter incremented would pass even if both writes silently landed one after
-// another — it would not prove the CONFLICTING write was ever rejected. This
-// test instead asserts on the actual outcome that matters: one write wins
-// (200, its book present), the other is refused (409, its book absent), and no
-// request silently lost its change.
+// This used to be TestAddBookToCollection_ConcurrentAdds_SecondGets409: the
+// route read the collection, mutated BookIDs in memory and wrote it back with
+// UpdateCollection, so a second request whose read predated the first one's
+// write was REFUSED with a 409 (the Version compare-and-swap catching what would
+// otherwise be a clobber). Refusing was correct for that shape and wrong for the
+// product: two people adding different books to one collection is not a
+// conflict. The route now adds through the store's locked AddBooksToCollection,
+// which re-reads the row inside the lock, so both adds succeed and both books
+// are present.
 //
-// Real goroutines through gin/httptest have no guaranteed interleave, so the
-// race is engineered explicitly via abscolFakeStore.staleRead: request B's
-// GetCollection is made to return the pre-A snapshot, exactly reproducing "B
-// read before A wrote" without depending on scheduler timing.
-func TestAddBookToCollection_ConcurrentAdds_SecondGets409(t *testing.T) {
+// The stale read is still engineered through abscolFakeStore.staleRead, which
+// makes request B's up-front GetCollection return the pre-A snapshot. Under the
+// old read-modify-write that was the 409; here it must not matter, because the
+// membership is applied to the row the store holds, not to B's stale copy. The
+// real-store, real-goroutine version of this is collections_race_test.go.
+func TestAddBookToCollection_ConcurrentAdds_BothLand(t *testing.T) {
 	seed := seedOracleLibrary(t)
 	initial := database.Collection{
 		ID: "c1", Name: "Road Trip", Type: database.CollectionTypeStatic, Version: 1,
@@ -565,8 +624,6 @@ func TestAddBookToCollection_ConcurrentAdds_SecondGets409(t *testing.T) {
 	abscolGrantManage(t, h, "u1")
 	tok := str(t, userObj(t, h.login(t, "curator", "pw-pw-pw-pw")), "accessToken")
 
-	// Caller A: reads the collection at Version 1, adds seed.singleID, and
-	// writes it back. This must succeed and bump the stored Version to 2.
 	codeA, _ := h.doAny(t, request{
 		method:  http.MethodPost,
 		path:    "/api/collections/c1/book",
@@ -580,9 +637,7 @@ func TestAddBookToCollection_ConcurrentAdds_SecondGets409(t *testing.T) {
 		t.Fatalf("after caller A, store.cols[0].Version = %d, want 2", store.cols[0].Version)
 	}
 
-	// Caller B: engineer its read to be the PRE-A snapshot (Version 1, no
-	// books) — this is the stale read a genuinely concurrent second request
-	// would have gotten had it read before A's write landed.
+	// Caller B read the pre-A snapshot.
 	stale := initial
 	store.staleRead = &stale
 
@@ -592,26 +647,24 @@ func TestAddBookToCollection_ConcurrentAdds_SecondGets409(t *testing.T) {
 		headers: bearer(tok),
 		body:    map[string]any{"id": absplSyncIDFor(t, seed, seed.multiID)},
 	})
-	if codeB != http.StatusConflict {
-		t.Fatalf("caller B: POST = %d, want 409 — a write built from a stale read must not "+
-			"silently succeed and clobber caller A's change; body: %v", codeB, bodyB)
+	if codeB != http.StatusOK {
+		t.Fatalf("caller B: POST = %d, want 200 (the add is applied to the stored row, "+
+			"not to B's stale read); body: %v", codeB, bodyB)
 	}
 
-	// The decisive assertion: the store holds caller A's change and ONLY
-	// caller A's change. A version counter that merely incremented would not
-	// prove this — it would pass even if both writes had silently landed
-	// sequentially, one clobbering the other with no rejection at all.
 	final := store.cols[0]
-	if len(final.BookIDs) != 1 || final.BookIDs[0] != seed.singleID {
-		t.Fatalf("final BookIDs = %v, want exactly [%s] (caller A's book only — "+
-			"caller B's rejected write must not have been applied)", final.BookIDs, seed.singleID)
+	if len(final.BookIDs) != 2 ||
+		!slices.Contains(final.BookIDs, seed.singleID) || !slices.Contains(final.BookIDs, seed.multiID) {
+		t.Fatalf("final BookIDs = %v, want both %s and %s", final.BookIDs, seed.singleID, seed.multiID)
 	}
-	if final.Version != 2 {
-		t.Fatalf("final Version = %d, want 2 (unchanged by caller B's rejected write)", final.Version)
+	if final.Version != 3 {
+		t.Fatalf("final Version = %d, want 3 (one bump per add)", final.Version)
 	}
-	if store.updates != 2 {
-		t.Fatalf("store.updates = %d, want 2 (one accepted write from A, one rejected attempt from B)",
-			store.updates)
+	if store.updates != 0 {
+		t.Fatalf("store.updates = %d, want 0: membership must not go through UpdateCollection", store.updates)
+	}
+	if store.membershipWrites != 2 {
+		t.Fatalf("store.membershipWrites = %d, want 2", store.membershipWrites)
 	}
 }
 
