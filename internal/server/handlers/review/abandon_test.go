@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/abandon_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a69f495d-437b-4cc8-be64-db0a76852163
 // last-edited: 2026-10-18
 
@@ -433,5 +433,154 @@ func TestConflict_UnknownReasonIsNotReportedAsInProgress(t *testing.T) {
 	want409(t, "unknown conflict reason", code, body, "REVIEW_CONFLICT")
 	if strings.Contains(body, "REVIEW_APPLY_IN_PROGRESS") {
 		t.Fatalf("an unknown conflict is reported as an apply in progress: %s", body)
+	}
+}
+
+// abandonedOverride returns the store and handler for an item that recommends combine,
+// was approved as version-group (an override) by a process that then died mid-apply,
+// whose re-run kept failing, and that an operator abandoned: needs_attention, with
+// ApplyAbandonedAction version-group and a payload still recommending combine. ran
+// reports which apply handler ran last once registered.
+func abandonedOverride(t *testing.T, applyOn bool) (*database.PebbleStore, database.ReviewItem, *reviewhandler.Handler, *string) {
+	t.Helper()
+	dir := t.TempDir()
+	s := openStoreAt(t, dir)
+	a := seedAction(t, s, "regroup.multidisc", "p1", itunesservice.ActionCombine)
+	// The dying process: an approve of version-group claimed the item and never finished.
+	if _, err := s.ClaimReviewItemForApply(a.ID, itunesservice.ActionVersionGroup, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s = restart(t, s, dir)
+
+	on := true
+	h := reviewhandler.New(s, func() bool { return on }, nil)
+	ran := ""
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(context.Context, database.ReviewItem) error {
+		ran = itunesservice.ActionCombine
+		return nil
+	})
+	failing := true
+	h.RegisterApplyHandler(itunesservice.ActionVersionGroup, func(context.Context, database.ReviewItem) error {
+		if failing {
+			return errors.New("version-group apply failed")
+		}
+		ran = itunesservice.ActionVersionGroup
+		return nil
+	})
+	code, body := approveReq(t, h, a.ID, nil)
+	want409(t, "re-run of the overridden claim", code, body, "REVIEW_RERUN_FAILED")
+	if code, body := abandonReq(t, h, a.ID); code != http.StatusOK {
+		t.Fatalf("abandon: %d %s", code, body)
+	}
+	got, _ := s.GetReviewItem(a.ID)
+	if got.Status != database.ReviewStatusNeedsAttention || got.ApplyAbandonedAction != itunesservice.ActionVersionGroup {
+		t.Fatalf("after abandon = %+v", got)
+	}
+	failing = false
+	on = applyOn
+	return s, a, h, &ran
+}
+
+// 🔴 Was the review's probe_needs_attention_test.go. A needs_attention item abandoned
+// as version-group (over a combine recommendation) and approved with NO action must
+// re-run version-group, not the payload's combine: combine hard-deletes the absorbed
+// Book rows, which the reviewer had overridden. Both ways of approving without naming
+// an action: an empty body, and bulk by ids.
+func TestNeedsAttention_ApproveWithoutAnAction_RunsTheAbandonedAction(t *testing.T) {
+	t.Run("empty body", func(t *testing.T) {
+		s, a, h, ran := abandonedOverride(t, true)
+		code, body := approveReq(t, h, a.ID, nil)
+		if code != http.StatusOK || !strings.Contains(body, `"chosen_action":"version-group"`) {
+			t.Fatalf("empty-body approve: %d %s, want 200 with chosen_action version-group", code, body)
+		}
+		if *ran != itunesservice.ActionVersionGroup {
+			t.Fatalf("ran %q, want version-group (the abandoned action), not the recommendation", *ran)
+		}
+		got, _ := s.GetReviewItem(a.ID)
+		if got.Status != database.ReviewStatusApplied || got.ChosenAction != itunesservice.ActionVersionGroup {
+			t.Fatalf("after approve = %+v, want applied as version-group", got)
+		}
+	})
+	t.Run("bulk by ids", func(t *testing.T) {
+		s, a, h, ran := abandonedOverride(t, true)
+		w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+			map[string]any{"action": "approve", "ids": []string{a.ID}}, gin.Params{})
+		if w.Code != http.StatusOK {
+			t.Fatalf("bulk approve: %d %s", w.Code, w.Body.String())
+		}
+		if *ran != itunesservice.ActionVersionGroup {
+			t.Fatalf("bulk ran %q, want version-group (the abandoned action), not the recommendation", *ran)
+		}
+		got, _ := s.GetReviewItem(a.ID)
+		if got.Status != database.ReviewStatusApplied || got.ChosenAction != itunesservice.ActionVersionGroup {
+			t.Fatalf("after bulk approve = %+v, want applied as version-group", got)
+		}
+	})
+}
+
+// 🔴 With apply OFF a needs_attention item cannot be approved: nothing would run, yet
+// the approve used to move it to approved and erase ApplyAbandonedAction, the only
+// record that the library may hold a partial apply. It answers 409
+// REVIEW_APPLY_DISABLED and the item is untouched; a reject is still accepted.
+func TestNeedsAttention_ApproveWhileApplyIsOff_Is409AndKeepsTheNote(t *testing.T) {
+	s, a, h, ran := abandonedOverride(t, false)
+	before, _ := s.GetReviewItem(a.ID)
+	check := func(what string) {
+		t.Helper()
+		got, _ := s.GetReviewItem(a.ID)
+		if got.Status != database.ReviewStatusNeedsAttention || got.ApplyAbandonedAction != itunesservice.ActionVersionGroup ||
+			!got.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Fatalf("%s changed the item: %+v (was %+v)", what, got, before)
+		}
+	}
+
+	for name, body := range map[string]any{
+		"empty body":        nil,
+		"explicit action":   map[string]any{"action": itunesservice.ActionVersionGroup},
+		"explicit separate": map[string]any{"action": itunesservice.ActionSeparate},
+	} {
+		code, resp := approveReq(t, h, a.ID, body)
+		want409(t, "approve ("+name+") while apply is off", code, resp, "REVIEW_APPLY_DISABLED")
+		if !strings.Contains(resp, "review_apply_enabled") || !strings.Contains(resp, "version-group") {
+			t.Fatalf("%s: body %s, want a message naming review_apply_enabled and the abandoned action", name, resp)
+		}
+		check("approve (" + name + ")")
+	}
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": []string{a.ID}}, gin.Params{})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "REVIEW_APPLY_DISABLED") {
+		t.Fatalf("bulk approve while apply is off: %d %s, want the item skipped with REVIEW_APPLY_DISABLED", w.Code, w.Body.String())
+	}
+	check("bulk approve")
+	if *ran != "" {
+		t.Fatalf("an apply ran (%q) while apply was off", *ran)
+	}
+
+	// Reject needs no apply and is still accepted.
+	code, body := rejectReq(t, h, a.ID)
+	if code != http.StatusOK {
+		t.Fatalf("reject while apply is off: %d %s", code, body)
+	}
+	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusRejected {
+		t.Fatalf("after reject = %+v", got)
+	}
+}
+
+// A re-run refused by the iTunes guard leaves the item held as interrupted, so it
+// answers REVIEW_RERUN_FAILED (a code clients treat as "no longer pending"), not
+// REVIEW_ITUNES_PROTECTED, which means a first run that was handed back and is still
+// pending (TestApproveReviewItem_ITunesRefusal_Is409AndStaysPending).
+func TestTakeover_RerunRefusedByTheITunesGuard_IsRerunFailed(t *testing.T) {
+	s, a := interruptedItem(t, itunesservice.ActionCombine)
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+	h.RegisterApplyHandler(itunesservice.ActionCombine, itunesRefusingApply)
+
+	code, body := approveReq(t, h, a.ID, nil)
+	want409(t, "iTunes-refused re-run", code, body, "REVIEW_RERUN_FAILED")
+	if strings.Contains(body, "REVIEW_ITUNES_PROTECTED") || !strings.Contains(body, "x.m4b") {
+		t.Fatalf("body %s, want REVIEW_RERUN_FAILED carrying the iTunes detail", body)
+	}
+	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplying {
+		t.Fatalf("after an iTunes-refused re-run status = %q, want applying (held as interrupted)", got.Status)
 	}
 }
