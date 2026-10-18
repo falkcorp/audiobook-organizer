@@ -129,6 +129,12 @@ type PebbleStore struct {
 	// the book lock first, then its stripe; Put and Delete take only the
 	// stripe.
 	metadataCacheLocks [64]sync.Mutex
+	// collMu serialises every write of a collection row that rewrites it from
+	// a re-read: the locked membership primitive (UpdateCollectionBooks and
+	// its Add/Remove wrappers), UpdateCollection and DeleteCollection. One
+	// mutex, not one per collection id: collection writes are human-rate and
+	// the table is small, so there is no contention worth the striping.
+	collMu sync.Mutex
 	// ident is the in-process half of the book identification index
 	// (ident_state.go): the counter mirror, identMu and the ready flag.
 	ident identIndex

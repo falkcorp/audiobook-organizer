@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -192,6 +193,22 @@ var ErrCollectionVersionConflict = errors.New("collection version conflict")
 // it to 409 with errors.Is, never by matching the text.
 var ErrCollectionNameInUse = errors.New("collection name already in use")
 
+// ErrCollectionNotFound is wrapped by every collection write that targets an id
+// with no row. Its text is deliberately just "not found" so the wrapped message
+// keeps the "collection <id> not found" wording UpdateCollection has always
+// produced; callers use errors.Is, never the text.
+var ErrCollectionNotFound = errors.New("not found")
+
+// ErrCollectionNotStatic is returned by the membership operations
+// (UpdateCollectionBooks, AddBooksToCollection, RemoveBookFromCollection) for a
+// dynamic collection: its members are the result of its query, so an explicit
+// add or remove has nothing to act on and would be a write that changes nothing.
+var ErrCollectionNotStatic = errors.New("collection is not static")
+
+// ErrCollectionBookNotMember is returned by RemoveBookFromCollection when the
+// book is not a member of the collection.
+var ErrCollectionBookNotMember = errors.New("book is not a member of the collection")
+
 // UpdateCollection rewrites a collection, moving the name index if the name
 // changed.
 func (p *PebbleStore) UpdateCollection(col *Collection) error {
@@ -208,12 +225,20 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 		return fmt.Errorf("collection: a dynamic collection requires a query")
 	}
 
+	// Held across the read, the compare and the commit. This is what makes the
+	// Version check below an atomic compare-and-swap against the membership
+	// operations as well as against another UpdateCollection: without it a
+	// membership write could commit between this call's read and its commit and
+	// be overwritten, with no conflict raised to either side.
+	p.collMu.Lock()
+	defer p.collMu.Unlock()
+
 	prev, err := p.GetCollection(col.ID)
 	if err != nil {
 		return err
 	}
 	if prev == nil {
-		return fmt.Errorf("collection %s not found", col.ID)
+		return fmt.Errorf("collection %s %w", col.ID, ErrCollectionNotFound)
 	}
 
 	// Compare-and-swap on Version: without this, two concurrent
@@ -236,16 +261,8 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 	// so a first read-then-write of a legacy row satisfies 0 == 0 and proceeds
 	// normally — no separate legacy-compat branch is needed.
 	//
-	// This check is NOT atomic with the write below: there is no lock held
-	// across GetCollection → compare → Commit, so two goroutines in the same
-	// process racing inside this function can both read the same prev.Version,
-	// both pass the check, and both commit (last one wins, same as before).
-	// What it does close is the far more common case in practice — two
-	// separate request cycles (e.g. two sequential HTTP calls that each did
-	// their own read-modify-write) where the second call's read happened after
-	// the first call's write. Closing the intra-process race too would need a
-	// per-collection lock (or a pebble conditional-write primitive); that is
-	// out of scope for this change.
+	// The check is atomic with the write below: collMu is held from the read of
+	// prev to the commit, and every other writer of this row takes it too.
 	if col.Version != prev.Version {
 		return fmt.Errorf("collection %s: %w: expected %d, got %d", col.ID, ErrCollectionVersionConflict, prev.Version, col.Version)
 	}
@@ -293,6 +310,11 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 
 // DeleteCollection removes a collection and its name index entry.
 func (p *PebbleStore) DeleteCollection(id string) error {
+	// Locked so a membership write that has already re-read the row cannot
+	// commit after the delete and resurrect it.
+	p.collMu.Lock()
+	defer p.collMu.Unlock()
+
 	prev, err := p.GetCollection(id)
 	if err != nil {
 		return err
@@ -310,4 +332,108 @@ func (p *PebbleStore) DeleteCollection(id string) error {
 		return err
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// UpdateCollectionBooks atomically rewrites the member list of one static
+// collection.
+//
+// collMu is held across the whole operation and the row is re-read INSIDE the
+// lock, so fn always sees the membership that is actually stored and its result
+// is committed on top of exactly that row. That is the lost-update fix: the old
+// shape was read in the handler, mutate, UpdateCollection, which let two racing
+// requests both start from the same row and one change vanish.
+//
+// fn receives a private copy of the current membership and returns the new one;
+// returning an error aborts with nothing written and the error returned as is.
+// When fn returns the membership unchanged the call is a no-op: the stored row
+// is returned without bumping Version or UpdatedAt, so a repeated add does not
+// look like an edit to cache invalidation (the ABS DTO exposes UpdatedAt).
+// Otherwise Version and UpdatedAt are bumped and the row is committed in one
+// batch.
+//
+// Errors: an id with no row wraps ErrCollectionNotFound; a dynamic collection
+// returns ErrCollectionNotStatic. Callers needing a membership rule that depends
+// on the current list (the ABS remove maps a survivor id to the stored merge
+// loser) use this directly; the common cases are the two wrappers below.
+func (p *PebbleStore) UpdateCollectionBooks(id string, fn func(current []string) ([]string, error)) (*Collection, error) {
+	if id == "" {
+		return nil, fmt.Errorf("collection: id required")
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("collection: membership function required")
+	}
+
+	p.collMu.Lock()
+	defer p.collMu.Unlock()
+
+	cur, err := p.GetCollection(id)
+	if err != nil {
+		return nil, err
+	}
+	if cur == nil {
+		return nil, fmt.Errorf("collection %s %w", id, ErrCollectionNotFound)
+	}
+	if cur.Type == CollectionTypeDynamic {
+		return nil, fmt.Errorf("collection %s: %w", id, ErrCollectionNotStatic)
+	}
+
+	next, err := fn(append([]string(nil), cur.BookIDs...))
+	if err != nil {
+		return nil, err
+	}
+	if slices.Equal(next, cur.BookIDs) {
+		return cur, nil
+	}
+
+	cur.BookIDs = next
+	cur.UpdatedAt = time.Now()
+	cur.Version++
+
+	data, err := json.Marshal(cur)
+	if err != nil {
+		return nil, err
+	}
+	b := p.db.NewBatch()
+	if err := b.Set([]byte(collKeyPrefix+cur.ID), data, nil); err != nil {
+		b.Close()
+		return nil, err
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		return nil, err
+	}
+	return cur, nil
+}
+
+// AddBooksToCollection appends the given book ids to a static collection,
+// skipping ids already present (and repeats within bookIDs) and keeping the
+// existing order, new ids landing in the order given. See UpdateCollectionBooks
+// for the locking, no-op and error rules.
+func (p *PebbleStore) AddBooksToCollection(id string, bookIDs []string) (*Collection, error) {
+	return p.UpdateCollectionBooks(id, func(current []string) ([]string, error) {
+		have := make(map[string]struct{}, len(current)+len(bookIDs))
+		for _, b := range current {
+			have[b] = struct{}{}
+		}
+		for _, b := range bookIDs {
+			if _, dup := have[b]; dup {
+				continue
+			}
+			have[b] = struct{}{}
+			current = append(current, b)
+		}
+		return current, nil
+	})
+}
+
+// RemoveBookFromCollection removes one book id from a static collection. A book
+// that is not a member returns ErrCollectionBookNotMember with nothing written.
+// See UpdateCollectionBooks for the locking and the other errors.
+func (p *PebbleStore) RemoveBookFromCollection(id, bookID string) (*Collection, error) {
+	return p.UpdateCollectionBooks(id, func(current []string) ([]string, error) {
+		i := slices.Index(current, bookID)
+		if i < 0 {
+			return nil, fmt.Errorf("collection %s: %w", id, ErrCollectionBookNotMember)
+		}
+		return slices.Delete(current, i, i+1), nil
+	})
 }

@@ -7,6 +7,9 @@ package database
 
 import (
 	"errors"
+	"fmt"
+	"slices"
+	"sync"
 	"testing"
 )
 
@@ -215,5 +218,237 @@ func TestCollectionNameInUse_IsSentinel(t *testing.T) {
 	}
 	if errors.Is(err, ErrCollectionVersionConflict) {
 		t.Fatalf("a name conflict must not also read as a version conflict: %v", err)
+	}
+}
+
+// newStaticCollection creates a static collection with the given members.
+func newStaticCollection(t *testing.T, store *PebbleStore, name string, ids ...string) *Collection {
+	t.Helper()
+	col, err := store.CreateCollection(&Collection{Name: name, Type: CollectionTypeStatic, BookIDs: ids})
+	if err != nil {
+		t.Fatalf("create %q: %v", name, err)
+	}
+	return col
+}
+
+func TestAddBooksToCollection_AppendsSkipsDuplicatesKeepsOrder(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf", "b1", "b2")
+
+	got, err := store.AddBooksToCollection(col.ID, []string{"b3", "b1", "b4", "b3"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	want := []string{"b1", "b2", "b3", "b4"}
+	if !slices.Equal(got.BookIDs, want) {
+		t.Fatalf("BookIDs = %v, want %v", got.BookIDs, want)
+	}
+	if got.Version != col.Version+1 {
+		t.Fatalf("Version = %d, want %d", got.Version, col.Version+1)
+	}
+	stored, _ := store.GetCollection(col.ID)
+	if !slices.Equal(stored.BookIDs, want) || stored.Version != got.Version {
+		t.Fatalf("stored row %v v%d does not match the returned one", stored.BookIDs, stored.Version)
+	}
+}
+
+func TestAddBooksToCollection_NoChangeIsNoOp(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf", "b1", "b2")
+
+	got, err := store.AddBooksToCollection(col.ID, []string{"b2", "b1"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if got.Version != col.Version || !got.UpdatedAt.Equal(col.UpdatedAt) {
+		t.Fatalf("an add that changes nothing must not bump Version/UpdatedAt: v%d (was %d)", got.Version, col.Version)
+	}
+}
+
+func TestRemoveBookFromCollection_RemovesAndKeepsOrder(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf", "b1", "b2", "b3")
+
+	got, err := store.RemoveBookFromCollection(col.ID, "b2")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if want := []string{"b1", "b3"}; !slices.Equal(got.BookIDs, want) {
+		t.Fatalf("BookIDs = %v, want %v", got.BookIDs, want)
+	}
+	if got.Version != col.Version+1 {
+		t.Fatalf("Version = %d, want %d", got.Version, col.Version+1)
+	}
+}
+
+func TestRemoveBookFromCollection_AbsentMember(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf", "b1")
+
+	_, err := store.RemoveBookFromCollection(col.ID, "b9")
+	if !errors.Is(err, ErrCollectionBookNotMember) {
+		t.Fatalf("err = %v, want ErrCollectionBookNotMember", err)
+	}
+	stored, _ := store.GetCollection(col.ID)
+	if stored.Version != col.Version || !slices.Equal(stored.BookIDs, []string{"b1"}) {
+		t.Fatalf("a refused remove must write nothing, got %v v%d", stored.BookIDs, stored.Version)
+	}
+}
+
+func TestCollectionMembership_DynamicRefused(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	dyn, err := store.CreateCollection(&Collection{Name: "live", Type: CollectionTypeDynamic, Query: "read_status:finished"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.AddBooksToCollection(dyn.ID, []string{"b1"}); !errors.Is(err, ErrCollectionNotStatic) {
+		t.Fatalf("add err = %v, want ErrCollectionNotStatic", err)
+	}
+	if _, err := store.RemoveBookFromCollection(dyn.ID, "b1"); !errors.Is(err, ErrCollectionNotStatic) {
+		t.Fatalf("remove err = %v, want ErrCollectionNotStatic", err)
+	}
+	if _, err := store.UpdateCollectionBooks(dyn.ID, func(c []string) ([]string, error) { return c, nil }); !errors.Is(err, ErrCollectionNotStatic) {
+		t.Fatalf("update err = %v, want ErrCollectionNotStatic", err)
+	}
+	stored, _ := store.GetCollection(dyn.ID)
+	if stored.Version != dyn.Version {
+		t.Fatalf("a refused write must not bump Version")
+	}
+}
+
+func TestCollectionMembership_NotFound(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	if _, err := store.AddBooksToCollection("nope", []string{"b1"}); !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("add err = %v, want ErrCollectionNotFound", err)
+	}
+	if _, err := store.RemoveBookFromCollection("nope", "b1"); !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("remove err = %v, want ErrCollectionNotFound", err)
+	}
+	// UpdateCollection keeps its historical wording.
+	err := store.UpdateCollection(&Collection{ID: "nope", Name: "x", Type: CollectionTypeStatic})
+	if !errors.Is(err, ErrCollectionNotFound) || err.Error() != "collection nope not found" {
+		t.Fatalf("UpdateCollection err = %v", err)
+	}
+}
+
+func TestUpdateCollectionBooks_FnErrorAbortsWithoutWriting(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf", "b1")
+	boom := errors.New("boom")
+
+	_, err := store.UpdateCollectionBooks(col.ID, func(c []string) ([]string, error) {
+		return append(c, "b2"), boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	stored, _ := store.GetCollection(col.ID)
+	if stored.Version != col.Version || !slices.Equal(stored.BookIDs, []string{"b1"}) {
+		t.Fatalf("an aborted update must write nothing, got %v v%d", stored.BookIDs, stored.Version)
+	}
+}
+
+// TestCollectionMembership_ConcurrentAddsLoseNothing is the lost-update test:
+// N goroutines each add one disjoint id to the same collection. Before the
+// locked primitive each did read, append, UpdateCollection and the Version
+// compare-and-swap was not atomic in-process, so adds were lost or refused.
+// Run with -race.
+func TestCollectionMembership_ConcurrentAddsLoseNothing(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf")
+
+	const n = 64
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := store.AddBooksToCollection(col.ID, []string{fmt.Sprintf("b%d", i)}); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent add: %v", err)
+	}
+
+	stored, _ := store.GetCollection(col.ID)
+	if len(stored.BookIDs) != n {
+		t.Fatalf("len(BookIDs) = %d, want %d (an add was lost)", len(stored.BookIDs), n)
+	}
+	have := map[string]bool{}
+	for _, b := range stored.BookIDs {
+		have[b] = true
+	}
+	for i := 0; i < n; i++ {
+		if !have[fmt.Sprintf("b%d", i)] {
+			t.Errorf("b%d missing", i)
+		}
+	}
+	if stored.Version != col.Version+n {
+		t.Fatalf("Version = %d, want %d", stored.Version, col.Version+n)
+	}
+}
+
+// TestCollectionMembership_ConcurrentUpdateStillConflicts pins that
+// UpdateCollection is not clobbered by, and does not clobber, the membership
+// operations: a caller holding a pre-add copy of the row gets a conflict, and
+// the added book survives.
+func TestCollectionMembership_ConcurrentUpdateStillConflicts(t *testing.T) {
+	store := newTestCollectionsStore(t)
+	col := newStaticCollection(t, store, "shelf", "b1")
+
+	stale, _ := store.GetCollection(col.ID)
+	if _, err := store.AddBooksToCollection(col.ID, []string{"b2"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	stale.Description = "stale writer"
+	if err := store.UpdateCollection(stale); !errors.Is(err, ErrCollectionVersionConflict) {
+		t.Fatalf("stale UpdateCollection err = %v, want ErrCollectionVersionConflict", err)
+	}
+	stored, _ := store.GetCollection(col.ID)
+	if !slices.Equal(stored.BookIDs, []string{"b1", "b2"}) || stored.Description != "" {
+		t.Fatalf("stale writer clobbered the row: %+v", stored)
+	}
+
+	// And the other direction, under -race: UpdateCollection (fresh read each
+	// time, retrying on conflict) racing adds must keep every add.
+	const n = 32
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := store.AddBooksToCollection(col.ID, []string{fmt.Sprintf("x%d", i)}); err != nil {
+				t.Errorf("add: %v", err)
+			}
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			for {
+				cur, err := store.GetCollection(col.ID)
+				if err != nil || cur == nil {
+					t.Errorf("get: %v", err)
+					return
+				}
+				cur.Description = fmt.Sprintf("edit %d", i)
+				err = store.UpdateCollection(cur)
+				if errors.Is(err, ErrCollectionVersionConflict) {
+					continue
+				}
+				if err != nil {
+					t.Errorf("update: %v", err)
+				}
+				return
+			}
+		}(i)
+	}
+	wg.Wait()
+	stored, _ = store.GetCollection(col.ID)
+	if len(stored.BookIDs) != 2+n {
+		t.Fatalf("len(BookIDs) = %d, want %d: an add was clobbered by UpdateCollection", len(stored.BookIDs), 2+n)
 	}
 }

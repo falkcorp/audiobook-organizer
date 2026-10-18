@@ -40,6 +40,31 @@ type CollectionStore interface {
 	DeleteCollection(id string) error
 }
 
+// CollectionMembershipStore is the locked member-list side of collections.
+//
+// It is deliberately NOT embedded in Store: Store is a ratcheted wide
+// interface (store_width_test.go) and these three methods are reached through
+// database.AsCapability by the two consumers that need them, the native and the
+// ABS collection handlers. Embedding them would widen the interface every other
+// consumer is trying to narrow.
+//
+// Every method runs under one store-level lock and re-reads the row inside it,
+// so concurrent membership writes never lose one another. All three return
+// ErrCollectionNotStatic for a dynamic collection and wrap ErrCollectionNotFound
+// for an unknown id. They bump Version and UpdatedAt only when the membership
+// actually changes.
+type CollectionMembershipStore interface {
+	// AddBooksToCollection appends bookIDs, skipping ids already present and
+	// keeping order. Returns the stored collection.
+	AddBooksToCollection(id string, bookIDs []string) (*Collection, error)
+	// RemoveBookFromCollection removes one member; ErrCollectionBookNotMember
+	// when bookID is not in the collection.
+	RemoveBookFromCollection(id, bookID string) (*Collection, error)
+	// UpdateCollectionBooks is the primitive both are built on: fn maps the
+	// current membership (a private copy, read inside the lock) to the new one.
+	UpdateCollectionBooks(id string, fn func(current []string) ([]string, error)) (*Collection, error)
+}
+
 // WorkScanStore is the whole-table side of the works store: a cancelable walk
 // of every work row, and a generation counter that says whether a copy of the
 // table taken earlier is still current. The scanner's works lookup cache uses
