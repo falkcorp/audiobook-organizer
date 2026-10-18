@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.7.2 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -343,7 +343,7 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | BookDetail | `/library/:id` | Full metadata, provenance locks, fetch/AI parse, rename, versions, segments |
 | Authors | `/authors` | ConfigurableTable, merge/split/alias/reclassify, action history |
 | Series | `/series` | ConfigurableTable, merge/split/prune, action history |
-| Review | `/review` | One workspace with five lanes, in tab order: Duplicates (layer filters, bulk keep-older/keep-newer, Clusters view, CSV export, Labels and Suspicious sub-views), Metadata, Review queue (the regroup queue), Authors & series (author and series duplicates, AI scans), Repairs (fixers, including empty-series pruning, `reconcile.missing-files` and `dedup.split-books`). The old dedup page is gone: `/dedup`, `/dedup/labels`, `/authors/dedup` and `/books/dedup` redirect into `/review` (`web/src/pages/DedupRedirect.tsx` maps `?tab=` to a lane; `?book=` and `?band=` are kept) |
+| Review | `/review` | One workspace with five lanes, in tab order: Duplicates (layer filters, bulk keep-older/keep-newer, Clusters view, CSV export, Labels and Suspicious sub-views), Metadata, Review queue (the regroup queue), Authors & series (author and series duplicates, AI scans), Repairs (fixers, including series pruning that merges duplicate series and deletes empty ones, `reconcile.missing-files` and `dedup.split-books`). The old dedup page is gone: `/dedup`, `/dedup/labels`, `/authors/dedup` and `/books/dedup` redirect into `/review` (`web/src/pages/DedupRedirect.tsx` maps `?tab=` to a lane; `?book=` and `?band=` are kept) |
 | Settings | `/settings` | 12 tabs: General, Import Paths, Metadata, AI, Storage, Advanced, Auto-Update, iTunes, Blocked Hashes, System Info, Auth, Backup |
 | Operations | `/operations` | Active ops (live), history with logs/changes/revert |
 | Maintenance | `/maintenance` | Background task management (enable/disable/run/interval) |

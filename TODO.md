@@ -228,7 +228,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **AUTHOR-RECLASSIFY-ROUTE-UNDO** `POST /authors/:id/reclassify-as-narrator` (the Authors view's button) still deletes the author and moves its credits with no undo journal, because it has no operation to journal under. The AI apply's reclassify is journaled and undoable (`entities.ReclassifyJournal`, change types `author_reclassify_credits` / `author_reclassify_delete`). Run the route as an operation (or pass it an operation id) and hand `ReclassifyOptions.Journal` the same way `ai.author-scan-apply` does. Related, left as it was: a scan result whose keep author cannot be chosen (every author in it is gone) is re-evaluated on each read of the scan instead of being remembered, which costs one author lookup per id per read and no book-count load.
 
-- [ ] **03-PR11-MOVE-DEDUP-E2E** When 03-PR11 deletes the old dedup pages, MOVE (do not delete) the tests in `web/tests/e2e/dedup.spec.ts` and `web/tests/e2e/dedup-operations.spec.ts`. After 03-PR10 they no longer test the old page: they open `/review?lane=authors` (and `&view=series`) directly, so they are the only e2e coverage of the Authors and Series sub-views' merge, split, rename, pagination, bulk-merge and production-company flows. Re-home them in `review-authors-lane.spec.ts` (or equivalent) before removing the files. Also, the "Scheduler Tasks for Dedup" block that 03-PR10 moved into `operation-monitoring.spec.ts` only asserts mocked `fetch` responses from `/api/v1/system/tasks`, not any UI: rewrite it against a real surface (System page scheduler list) or drop it there.
+- [ ] **03-PR11-MOVE-DEDUP-E2E** (remaining half) The "Scheduler Tasks for Dedup" block that 03-PR10 moved into `web/tests/e2e/operation-monitoring.spec.ts` (line ~334) still only asserts mocked `fetch` responses from `/api/v1/system/tasks`, not any UI: rewrite it against a real surface (System page scheduler list) or drop it there.
 
 - [ ] **04-P6 fresh-install boot ops** On a fresh install, or any library where their done flags are unset, the four boot-enqueued ops (`maintenance.external-id-backfill`, `movement-atom-cleanup`, `malformed-m4b-remux`, `malformed-m4b-transcode`) are full-library walks with timeouts of 30 min, 60 min, 120 min and 6 h, which a large first run can exceed. Each holds a registry worker while it runs. They are PriorityLow, so they never jump queued user work, but they still occupy workers. Decide whether a first run should get longer timeouts, a resumable checkpoint (ResumeRestart over a file cursor), or a lower per-plugin concurrency cap. Part 2 adds `maintenance.book-atpath-index-backfill` to the same list: a first build on a library with no `book_atpath:` sentinel is a full book scan under a 30 min timeout, ResumeDrop. A timeout is a failure and leaves the sentinel unset, so a library too large for it starts the scan over at every boot and never finishes; the same decision covers it. `maintenance.activity-filter-index-backfill {"reconcile": true}` has a 6 h timeout and only reads rows above the open mark, so it is not part of the question.
 
@@ -19878,7 +19878,11 @@ frontend + backend feature work, not a mechanical change.
     page (what it shows today, interaction friction, per-hold actions) → propose
     redesign. Ties to the review-queue track (A1/A2/B1 shipped; B2 apply path merged
     #1953, default OFF — see [[project_review_queue_regroup]]). Prereq for item 52.
-52. **Consolidate the dedup page into the review page** — slim the dedup page down to
+52. ~~**Consolidate the dedup page into the review page**~~ — ✅ DONE 2026-10-18: the old
+    dedup page is deleted and every job moved into the Review page (Duplicates, Authors &
+    series and Repairs lanes); old `/dedup` addresses redirect into `/review` (PR #4065 docs;
+    see `docs/executive-summaries/2026-10-18-dedup-page-retired-executive-summary.md`).
+    Original scope, kept for the record: slim the dedup page down to
     run-control only (start/stop dedup runs + run status/progress); move ALL candidate
     and result display + review actions into the review page so there is one place to
     review everything. Depends on item 51 (the review UI must be good enough to absorb
