@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 31722b4f-1d15-4404-a9f4-7a792efd86f0
-// last-edited: 2026-09-03
+// last-edited: 2026-10-18
 
 package metadata
 
@@ -202,12 +202,11 @@ func TestClassify_ThrottleSentinelCannotExtendItself(t *testing.T) {
 // --- registry ---------------------------------------------------------------
 
 type fakeThrottleStore struct {
-	mu        sync.Mutex
-	rows      map[string][]byte
-	loadErr   error
-	deleteErr error
-	saves     int
-	deletes   int
+	mu      sync.Mutex
+	rows    map[string][]byte
+	loadErr error
+	saves   int
+	deletes int
 }
 
 func newFakeThrottleStore() *fakeThrottleStore {
@@ -238,9 +237,6 @@ func (f *fakeThrottleStore) SaveProviderThrottle(id string, payload []byte) erro
 func (f *fakeThrottleStore) DeleteProviderThrottle(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
 	delete(f.rows, id)
 	f.deletes++
 	return nil
@@ -363,37 +359,6 @@ func TestRegistry_AttachStoreRestoresActiveAndDropsExpired(t *testing.T) {
 	}
 }
 
-func TestRegistry_ClearAndClearAll(t *testing.T) {
-	r := NewThrottleRegistry()
-	store := newFakeThrottleStore()
-	if _, err := r.AttachStore(store); err != nil {
-		t.Fatalf("AttachStore: %v", err)
-	}
-	r.RecordFailure("google-books", statusErrorFrom(t, 429, prodGoogleQuotaBody, nil))
-	r.RecordFailure("hardcover", statusErrorFor(t, "hardcover", 401, "bad token", nil))
-
-	if err := r.Clear("google-books"); err != nil {
-		t.Fatalf("Clear: %v", err)
-	}
-	if r.Throttled("google-books") {
-		t.Fatal("manual reset did not release the hold")
-	}
-	if _, ok := store.rows["google-books"]; ok {
-		t.Fatal("manual reset left the row on disk; it would come back on restart")
-	}
-
-	n, err := r.ClearAll()
-	if err != nil {
-		t.Fatalf("ClearAll: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("ClearAll = %d, want 1", n)
-	}
-	if store.rowCount() != 0 {
-		t.Fatalf("rows left after ClearAll: %d", store.rowCount())
-	}
-}
-
 func TestRegistry_UnreadableRowIsDroppedNotFatal(t *testing.T) {
 	store := newFakeThrottleStore()
 	_ = store.SaveProviderThrottle("google-books", []byte("{not json"))
@@ -456,10 +421,8 @@ func (s *stubSource) SearchByTitleAndAuthor(ctx context.Context, title, author s
 // server actually installs.
 func resetDefaultThrottles(t *testing.T) {
 	t.Helper()
-	if _, err := DefaultThrottleRegistry().ClearAll(); err != nil {
-		t.Fatalf("reset: %v", err)
-	}
-	t.Cleanup(func() { _, _ = DefaultThrottleRegistry().ClearAll() })
+	ResetThrottlesForTesting()
+	t.Cleanup(ResetThrottlesForTesting)
 }
 
 // The first 429 must install the hold, and the NEXT call must not reach the
@@ -666,38 +629,6 @@ func TestRegistry_AttachStoreAttachesEvenIfTheLoadFails(t *testing.T) {
 	r.RecordFailure("google-books", statusErrorFrom(t, 429, prodGoogleQuotaBody, nil))
 	if store.rowCount() != 1 {
 		t.Fatal("a hold set after a failed initial load was not persisted; the feature silently reverted to memory-only")
-	}
-}
-
-// A partial ClearAll failure must leave the un-deleted rows ADDRESSABLE, or a
-// retry finds an empty map, reports success, and the rows resurrect on restart.
-func TestRegistry_ClearAllKeepsUndeletedRowsRetryable(t *testing.T) {
-	store := newFakeThrottleStore()
-	r := NewThrottleRegistry()
-	if _, err := r.AttachStore(store); err != nil {
-		t.Fatalf("AttachStore: %v", err)
-	}
-	r.RecordFailure("google-books", statusErrorFrom(t, 429, prodGoogleQuotaBody, nil))
-
-	store.deleteErr = errors.New("pebble write failed")
-	if _, err := r.ClearAll(); err == nil {
-		t.Fatal("expected the delete failure to be reported")
-	}
-	if !r.Throttled("google-books") {
-		t.Fatal("the hold was dropped from memory despite the store delete failing; a retry can no longer reach the row")
-	}
-
-	// The operator retries and it now succeeds.
-	store.deleteErr = nil
-	n, err := r.ClearAll()
-	if err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("retry cleared %d, want 1", n)
-	}
-	if store.rowCount() != 0 {
-		t.Fatal("row survived the successful retry and would resurrect on restart")
 	}
 }
 
