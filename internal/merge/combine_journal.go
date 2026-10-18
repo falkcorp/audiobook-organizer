@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1296,10 +1296,11 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 // can land in between. Lock order: the caller holds merge.LockMergeRMW and
 // no user-state stripe (restoreAbsorbedSide released the absorbed book's
 // before this runs), and nothing called under this one takes a user-state
-// stripe, which is not reentrant. A writer that does not take the stripe
-// (database's "NOT YET HELD BY" list: the web reading heartbeat and
-// RecomputeUserBookState, the iTunes position sync) can still land between
-// these reads and the writes, and is then written over.
+// stripe, which is not reentrant. Since 2026-10-18 every writer of a user's
+// state or positions takes the stripe (database.LockUserBookState's HELD BY
+// list: the web reading heartbeat, readstatus' recompute and rebuild, the
+// iTunes position sync and backfill, the merge follow), so none can land
+// between these reads and the writes.
 //
 // Until round 6 of the #4064 review the reads came before the stripe; each
 // writer took it, re-read and compared, and a change sent the whole decision
@@ -1651,8 +1652,8 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 // cur and curPos are what restoreSurvivorSide read, and it still holds the
 // survivor's per-(user, book) stripe (database.LockUserBookState) it read
 // them under, so every write here -- positions, marker, state -- replaces
-// exactly what want and st below were built from, unless a writer that does
-// not take the stripe landed in between (restoreSurvivorSide). Until
+// exactly what want and st below were built from (every listening-state
+// writer takes the stripe since 2026-10-18; restoreSurvivorSide). Until
 // 2026-10-06 the positions were written before the stripe was taken, so a
 // client position that landed after the read was rewound to the
 // before-snapshot's row (the review of #3777). A state write that fails

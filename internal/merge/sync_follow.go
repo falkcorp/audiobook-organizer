@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.7.5
+// version: 1.8.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-10-18
 
@@ -427,7 +427,20 @@ func mergeUserProgressUsers(db UserProgressMerger, users []database.User, loserB
 // onto the winner when later than the winner's own. The rule: one listen is
 // one iTunes play-count bump across a merge, not one per iTunes track that
 // ever held it.
+//
+// The reads of both books and every write (the survivor's merged state and
+// carried positions, the loser's drain) are one step under BOTH books'
+// user-state stripes (database.LockUserBookStatePair). Without them a device
+// sync to the loser landing after its read was drained away with the loser
+// -- listening progress removed -- and one to the winner landing after its
+// read was overwritten by the merged state built from the stale read. Lock
+// order: the caller holds merge.LockMergeRMW (merges, combines, the
+// pending-repair sweep, the stranded-state repair) or syncRepointMu
+// (FollowBookIDChange) and no user-state stripe; carryPlayCountMark's
+// ModifyBook takes the winner's book write stripe under these, which is the
+// documented order (user-state stripe, then book write stripe).
 func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookID string) error {
+	defer database.LockUserBookStatePair(userID, loserBookID, winnerBookID)()
 	loserState, err := db.GetUserBookState(userID, loserBookID)
 	if err != nil {
 		return fmt.Errorf("get loser state: %w", err)

@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package merge
 
@@ -101,7 +101,12 @@ type SliceMapping struct {
 // The absorbed side is drained as FollowMerge does. Nothing is lost: the
 // caller journaled the absorbed book's state and positions beforehand, and
 // UndoCombine writes them back.
+//
+// Like mergeUserProgressFor, the reads of both books and every write are one
+// step under both books' user-state stripes (database.LockUserBookStatePair;
+// same lock order: the caller holds merge.LockMergeRMW and no stripe).
 func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string, slice SliceMapping) error {
+	defer database.LockUserBookStatePair(userID, absorbedID, survivorID)()
 	loserState, err := db.GetUserBookState(userID, absorbedID)
 	if err != nil {
 		return fmt.Errorf("get absorbed state: %w", err)
