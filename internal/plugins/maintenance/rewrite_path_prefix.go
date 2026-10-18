@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -322,6 +322,7 @@ type rewritePathPrefixStore interface {
 func (p *Plugin) rewritePathPrefixDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.rewrite-path-prefix",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: rewritePathPrefixParams{}},
 		Plugin:      "maintenance",
 		DisplayName: "Rewrite a stored path prefix after a folder rename",
 		Description: "Substitutes old_prefix → new_prefix in book.file_path, book.source_import_path " +

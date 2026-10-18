@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
-// last-edited: 2026-09-23
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -164,6 +164,7 @@ func (r splitJoinedReport) summary() string {
 func (p *Plugin) splitJoinedNarratorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.split-joined-narrators",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: splitJoinedNarratorsParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Split joined narrators",

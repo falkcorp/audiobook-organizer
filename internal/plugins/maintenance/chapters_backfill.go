@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -232,6 +232,7 @@ type chapterPersister interface {
 func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.chapters-backfill",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: chaptersBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill embedded chapters (single-file books)",

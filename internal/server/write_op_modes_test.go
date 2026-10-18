@@ -1,15 +1,20 @@
 // file: internal/server/write_op_modes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 96a36061-1106-45e7-8f9f-7bc530c6495e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 const writeOpModesPath = "testdata/write_op_modes.golden"
@@ -72,20 +77,45 @@ func readWriteOpModes(t *testing.T) map[string]string {
 	return out
 }
 
-// TestWriteOpModes_EmbeddedLedgerIsTheFile: the copy /api/v3/ops reads at
-// runtime is the file this test checks, and it parses.
-func TestWriteOpModes_EmbeddedLedgerIsTheFile(t *testing.T) {
-	raw, err := os.ReadFile(writeOpModesPath)
-	if err != nil {
-		t.Fatal(err)
+// isMaintenanceJobOp: maintenance.<job id> for a registered job. Those ops
+// are not in the ledger; TestMaintenanceJobs_PreviewByDefault checks that
+// every one previews by default.
+func isMaintenanceJobOp(id string) bool {
+	jobID, ok := strings.CutPrefix(id, "maintenance.")
+	if !ok {
+		return false
 	}
-	if !bytes.Equal(raw, writeOpModesLedger) {
-		t.Fatal("embedded ledger differs from the file")
+	j, err := maintenance.Get(jobID)
+	return err == nil && j != nil
+}
+
+// parseWriteOpModes reads the ledger format: `<op id><TAB><class>` lines,
+// `#` comments and blank lines. A malformed line, an unknown class or a
+// duplicate id is an error, never skipped.
+func parseWriteOpModes(b []byte) (map[string]string, error) {
+	out := map[string]string{}
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		id, class, ok := strings.Cut(line, "\t")
+		if !ok {
+			return nil, fmt.Errorf("malformed line %q (want <op id><TAB><class>)", line)
+		}
+		switch class {
+		case "preview", "no-mode":
+		default:
+			return nil, fmt.Errorf("%s has class %q; allowed: preview, no-mode", id, class)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("%s listed twice", id)
+		}
+		out[id] = class
 	}
-	if _, err := parseWriteOpModes(writeOpModesLedger); err != nil {
-		t.Fatal(err)
+	if err := sc.Err(); err != nil {
+		return nil, err
 	}
-	if len(recordedWriteOpModes()) == 0 {
-		t.Fatal("embedded ledger parsed to nothing")
-	}
+	return out, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-09-26
+// last-edited: 2026-10-18
 
 package acoustid
 
@@ -273,6 +273,7 @@ func remoteOnlyTools(live bool) (fingerprint.WindowTools, error) {
 func (p *Plugin) windowBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          windowBackfillDefID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewLive, Params: WindowBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "acoustid",
 		DisplayName: "AcoustID window backfill",

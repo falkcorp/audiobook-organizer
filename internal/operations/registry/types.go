@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.15.1
+// version: 2.16.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See
@@ -141,6 +141,14 @@ type OperationDef struct {
 	// params against it before enqueue; EnqueueOp and the v1 trigger route
 	// do not check it.
 	ParamsSchema *json.RawMessage
+
+	// Preview declares the params key that makes a run write nothing
+	// (dry_run, apply or live) and the params type the Run decodes it into. The
+	// zero value means no preview: /api/v3/ops then starts the op only with
+	// an explicit mode "live" and never writes a mode key into its params.
+	// Declare it only when the Run really gates every write on that key; see
+	// PreviewSpec.
+	Preview PreviewSpec
 
 	// Permissions. Optional.
 	Permissions  []auth.Permission // user perms required to trigger via API

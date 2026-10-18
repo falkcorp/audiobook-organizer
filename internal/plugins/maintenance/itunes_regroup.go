@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -71,7 +71,8 @@ type itunesRegroupParams struct {
 
 func (p *Plugin) itunesRegroupDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID: "itunes.regroup",
+		ID:      "itunes.regroup",
+		Preview: sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: itunesRegroupParams{}},
 		// Renamed 2026-09-25 (naming audit class 8): every iTunes op lives in itunes.*, whichever Go package implements it.
 		FormerIDs:       []string{"maintenance.itunes-regroup"},
 		Liveness:        sdk.LivenessManual,

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/auto_resolve.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7c1f08-9d24-4e6b-8b15-2c9f0a5d7e61
-// last-edited: 2026-07-03
+// last-edited: 2026-10-18
 
 package dedup
 
@@ -33,6 +33,7 @@ type autoResolveParams struct {
 func (p *Plugin) autoResolveDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.auto-resolve",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: autoResolveParams{}},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Auto-resolve CERTAIN dedup candidates (Tier 1)",

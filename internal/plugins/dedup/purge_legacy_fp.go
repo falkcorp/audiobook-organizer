@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -69,6 +69,7 @@ type purgeLegacyFPParams struct {
 func (p *Plugin) purgeLegacyFPDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.purge-legacy-fp-candidates",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: purgeLegacyFPParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Purge legacy fingerprint candidates",

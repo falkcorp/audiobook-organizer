@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -186,6 +186,7 @@ const transcodeTempMaxAge = 2 * time.Hour
 func (p *Plugin) transcodeTempCleanupDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.transcode-temp-cleanup",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: opmode.DryRunParams{}},
 		Permissions:     []auth.Permission{auth.PermSettingsManage}, // deletes files
 		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: tempFileCleanupProgressTimeout, // LivenessNone requires an explicit budget

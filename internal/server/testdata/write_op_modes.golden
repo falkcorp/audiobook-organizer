@@ -9,11 +9,16 @@
 # (TestWriteOps_EveryWriteOpHasARecordedMode): every such op must have exactly
 # one line here, and every line must name a registered op.
 #
-# Also embedded into the server binary (internal/server/write_op_modes.go):
-# /api/v3/ops treats a `no-mode` op as having no preview, refuses a "preview"
-# or mode-less start of it with 409 and requires an explicit mode "live".
-# Marking an op `preview` here therefore makes the API trust it to honour
-# dry_run; do that only after it does.
+# /api/v3/ops does not read this file. `preview` here says only that an
+# omitted mode writes nothing; it does not say which params key the op reads
+# (several gate on apply or live, not dry_run, and a few preview only through
+# a different op). How an op previews in v3 is the op's own declaration,
+# OperationDef.Preview, checked against its params type by
+# TestOpsV3_PreviewDeclarationsMatchTheOpsParams
+# (internal/server/wire_ops_v3_routes_test.go). That test also requires every
+# op listed `preview` here to declare its key or to be listed in its
+# previewOnlyElsewhere table with the reason, and every `no-mode` op to
+# declare none.
 #
 # Classes:
 #   preview  omitted mode is a preview (owner rule 2026-09-25)

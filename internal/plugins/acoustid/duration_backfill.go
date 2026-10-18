@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/duration_backfill.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a8b
-// last-edited: 2026-09-21
+// last-edited: 2026-10-18
 
 package acoustid
 
@@ -37,6 +37,7 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 		// They are sequential stages — this one produces the field the
 		// maintenance op prefers as its first source of truth — not duplicates.
 		ID:              "acoustid.fingerprint-duration-repair",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewLive, Params: DurationBackfillParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "Repair fingerprint duration (re-runs fpcalc)",

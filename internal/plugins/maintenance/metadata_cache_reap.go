@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -153,6 +153,7 @@ func (p *reapPlan) record(d reapDecision) {
 func (p *Plugin) metadataCacheReapDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.metadata-cache-reap",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: metadataCacheReapParams{}},
 		DisplayName: "Reap metadata cache rows whose book is gone",
 		Description: "Deletes metadata_cache rows whose book_id no longer resolves. Cache rows are " +
 			"derived and regenerable; no library record is touched. Soft-deleted books still " +

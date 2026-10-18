@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.19.0
+// version: 2.19.1
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -179,6 +179,7 @@ var (
 func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.fs-regroup-xml",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: fsRegroupParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair chapter-per-folder books (fragments, duplicates, layout)",

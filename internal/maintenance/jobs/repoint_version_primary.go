@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package jobs
 
@@ -119,7 +119,9 @@ func (j *repointVersionPrimaryJob) Description() string {
 		"Report only by default; send {\"apply\": true, \"dry_run\": false} to write. Keeps the version link intact."
 }
 
-// Policy is DefaultPolicy, so registration derives the per-job key
+// Policy is DefaultPolicy plus ExtraWriteKey "apply" (a write needs apply=true
+// as well as dry_run=false: Run's `write := p.Apply && !dryRun`), so
+// registration declares no dry_run preview for it, and derives the per-job key
 // "maintenance.repoint-version-primary" and this job serializes against ITSELF.
 //
 // It briefly declared library.scan's key instead, to join the lane the way
@@ -146,7 +148,9 @@ func (j *repointVersionPrimaryJob) Description() string {
 //     stale snapshot — a strictly stronger guarantee than the lane, because it
 //     holds per row and at the instant of the write.
 func (j *repointVersionPrimaryJob) Policy() maintenance.ExecutionPolicy {
-	return maintenance.DefaultPolicy()
+	p := maintenance.DefaultPolicy()
+	p.ExtraWriteKey = "apply"
+	return p
 }
 
 // repointVersionPrimaryParams is the operator-facing parameter shape.

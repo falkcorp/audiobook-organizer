@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-09-15
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -189,6 +189,7 @@ func classifyStatusRepair(b database.Book) repairVerdict {
 func (p *Plugin) repairTranscribeStatusDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.repair-transcribe-status",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: repairStatusParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair transcribe status after a transport outage",

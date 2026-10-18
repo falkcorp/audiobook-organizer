@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -82,6 +82,7 @@ const opChangeBookIndexRebuildID = "maintenance.opchange-book-index-rebuild"
 func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          opChangeBookIndexRebuildID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: opChangeBookIndexParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Operation-journal by-book index rebuild",

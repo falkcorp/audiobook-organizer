@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/defs.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a701dc58-da75-41f2-b165-03a957c6e540
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package opsv3
 
@@ -65,9 +65,14 @@ type DefView struct {
 	ParamsSchema json.RawMessage `json:"params_schema,omitempty"`
 	// HasPreview says whether a "preview" run of a writing definition really
 	// writes nothing; false means only mode "live" starts it (POST runs
-	// answers 409 otherwise). null for a read-only definition, where the
-	// mode changes nothing.
+	// answers 409 otherwise). It is the op's own declaration of how it
+	// previews (OperationDef.Preview), never inferred. null for a read-only
+	// definition, where the mode changes nothing.
 	HasPreview *bool `json:"has_preview"`
+	// PreviewParam is the params key the mode is written into: "dry_run"
+	// (true = preview), "apply" or "live" (false = preview). null when the
+	// definition has no preview or is read-only.
+	PreviewParam *string `json:"preview_param"`
 }
 
 // lastRunWindow and lastRunTTL bound the work of finding every definition's
@@ -195,8 +200,12 @@ func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo, window map[
 		v.ParamsSchema = d.ParamsSchema
 	}
 	if d.Writer {
-		hp := d.HasPreview
+		hp := d.HasPreview()
 		v.HasPreview = &hp
+		if hp {
+			pp := d.PreviewParam
+			v.PreviewParam = &pp
+		}
 	}
 	if s, ok := scheds[d.ID]; ok {
 		v.Schedule = ScheduleView{Kind: s.Kind, Active: s.Active, NextFire: s.NextFire, Live: s.Live}

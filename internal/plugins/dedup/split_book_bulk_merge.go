@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f8eb2e1-b4b7-4d83-b176-fc427cc5d98c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 package dedup
 
@@ -21,6 +21,7 @@ import (
 func (p *Plugin) splitBookBulkMergeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.split-book-bulk-merge",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: dedupengine.BulkSplitBookMergeParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Merge reviewed split-book candidates",

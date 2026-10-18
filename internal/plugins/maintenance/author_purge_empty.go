@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -162,6 +162,7 @@ func (r emptyAuthorReport) summary() string {
 func (p *Plugin) purgeEmptyAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.purge-empty-authors",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: purgeEmptyAuthorsParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Purge empty authors",

@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -132,14 +132,58 @@ func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.
 		info.ParamsSchema = json.RawMessage(*od.ParamsSchema)
 	}
 	if compiled.Kind == ops.KindAdapted {
-		// FromV2 declares no effects, so the v2 op's own capabilities and the
-		// write-mode ledger say whether it writes and whether it previews.
-		info.Writer, info.HasPreview = v2PreviewMode(od)
+		// FromV2 declares no effects, so the v2 op's own capabilities say
+		// whether it writes, and its own Preview declaration how it previews.
+		info.Writer = canWrite(od)
+		if info.Writer {
+			info.PreviewParam, info.UnreadModeKeys = adaptedPreview(od.Preview)
+		}
 	} else {
+		// A native definition's mode is resolved by the runner from dry_run.
 		info.Writer = c.Effects.IsWriter()
-		info.HasPreview = info.Writer
+		if info.Writer {
+			info.PreviewParam = string(opsregistry.PreviewDryRun)
+		}
 	}
 	return info
+}
+
+// canWrite: declares a write capability, or declares none (undeclared is not
+// evidence of read-only).
+func canWrite(d opsregistry.OperationDef) bool {
+	if len(d.Capabilities) == 0 {
+		return true
+	}
+	for _, c := range d.Capabilities {
+		switch c {
+		case opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite, opsregistry.CapDBMigrate:
+			return true
+		}
+	}
+	return false
+}
+
+// modeKeys are every params key a caller can state a mode with.
+var modeKeys = []string{"dry_run", "dryRun", string(opsregistry.PreviewApply), string(opsregistry.PreviewLive)}
+
+// adaptedPreview turns a v2 op's Preview declaration into the params key
+// /api/v3/ops writes the mode into, plus the mode keys its params type does
+// not decode (refused in a start request). Nothing declared, or a declaration
+// that does not check (its key is not a bool field of the params type it
+// names), is no preview: fail closed, so the op starts only in mode live with
+// params untouched. TestOpsV3_PreviewDeclarationsMatchTheOpsParams fails on
+// such a declaration.
+func adaptedPreview(p opsregistry.PreviewSpec) (string, []string) {
+	if p.IsZero() || p.Check() != nil {
+		return "", nil
+	}
+	var unread []string
+	for _, k := range modeKeys {
+		if !p.HasJSONField(k) {
+			unread = append(unread, k)
+		}
+	}
+	return string(p.Key), unread
 }
 
 func (d *opsV3Defs) ListDefs() []opsv3.DefInfo {

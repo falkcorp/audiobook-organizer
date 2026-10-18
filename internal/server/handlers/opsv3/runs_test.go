@@ -1,11 +1,12 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package opsv3
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -160,7 +161,7 @@ func TestStartUnnestedRouteAndUnknownDef(t *testing.T) {
 }
 
 func TestStartModeIsExplicitAndConsistent(t *testing.T) {
-	enq, _, _, h := startHarness(map[string]DefInfo{"test.w": {ID: "test.w", Title: "W", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, HasPreview: true}}, nil)
+	enq, _, _, h := startHarness(map[string]DefInfo{"test.w": {ID: "test.w", Title: "W", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, PreviewParam: "dry_run"}}, nil)
 	r := newRouter(h)
 	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
 	post := func(body string) *int {
@@ -206,8 +207,9 @@ func TestStartModeIsExplicitAndConsistent(t *testing.T) {
 	}
 }
 
-// TestStartNoPreviewDefNeedsExplicitLive: an adapted v2 op recorded `no-mode`
-// ignores dry_run, so a "preview" (or a request with no mode) would run live.
+// TestStartNoPreviewDefNeedsExplicitLive: a writing op that declares no
+// preview key ignores every mode key, so a "preview" (or a request with no
+// mode) would run live.
 // Both are refused with 409 and nothing is queued; only mode "live" starts it,
 // with params passed through as sent.
 func TestStartNoPreviewDefNeedsExplicitLive(t *testing.T) {
@@ -247,6 +249,108 @@ func TestStartNoPreviewDefNeedsExplicitLive(t *testing.T) {
 	raw = do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.report", nil).Body.String()
 	if !strings.Contains(raw, `"has_preview":null`) {
 		t.Errorf("read-only def view lacks has_preview=null: %s", raw)
+	}
+}
+
+// TestStartApplyAndLiveDefsGetTheirOwnKey: an op that previews with apply
+// (or live) gets that key, never dry_run: preview is false, live is true, an
+// omitted mode takes the key from params or else previews, a contradiction is
+// a 400, and a dry_run sent to it is a 400 because it would never be read.
+// This is the review probe: mode "" with apply:true used to queue
+// {"apply":true,"dry_run":true}, a "preview" that wrote.
+func TestStartApplyAndLiveDefsGetTheirOwnKey(t *testing.T) {
+	unread := []string{"dry_run", "dryRun"}
+	enq, _, _, h := startHarness(map[string]DefInfo{
+		"test.apply": {ID: "test.apply", Title: "A", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, PreviewParam: "apply", UnreadModeKeys: unread},
+		"test.live":  {ID: "test.live", Title: "L", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}, Writer: true, PreviewParam: "live", UnreadModeKeys: append(unread, "apply")},
+	}, nil)
+	r := newRouter(h)
+	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
+	cases := []struct {
+		def, body, want string
+	}{
+		{"test.apply", `{"mode":"preview"}`, `{"apply":false}`},
+		{"test.apply", `{"mode":"live","params":{"k":1}}`, `{"apply":true,"k":1}`},
+		{"test.apply", `{}`, `{"apply":false}`},
+		{"test.apply", `{"params":{"apply":true}}`, `{"apply":true}`},
+		{"test.apply", `{"params":{"apply":false}}`, `{"apply":false}`},
+		{"test.live", `{}`, `{"live":false}`},
+		{"test.live", `{"mode":"live"}`, `{"live":true}`},
+	}
+	for i, tc := range cases {
+		w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/"+tc.def+"/runs", tc.body)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%s %s = %d %s", tc.def, tc.body, w.Code, w.Body.String())
+		}
+		if got := string(enq.calls[i].params); got != tc.want {
+			t.Errorf("%s %s queued %s, want %s", tc.def, tc.body, got, tc.want)
+		}
+	}
+	for _, bad := range []struct{ def, body string }{
+		{"test.apply", `{"mode":"preview","params":{"apply":true}}`},
+		{"test.apply", `{"mode":"live","params":{"apply":false}}`},
+		{"test.apply", `{"params":{"apply":"yes"}}`},
+		{"test.apply", `{"params":{"apply":true,"dry_run":true}}`},
+		{"test.apply", `{"mode":"live","params":{"dryRun":false}}`},
+		{"test.live", `{"mode":"live","params":{"apply":true}}`},
+	} {
+		if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/"+bad.def+"/runs", bad.body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s %s = %d, want 400", bad.def, bad.body, w.Code)
+		}
+	}
+	if enq.count() != len(cases) {
+		t.Fatalf("enqueued %d, want %d", enq.count(), len(cases))
+	}
+	raw := do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.apply", nil).Body.String()
+	if !strings.Contains(raw, `"has_preview":true`) || !strings.Contains(raw, `"preview_param":"apply"`) {
+		t.Errorf("apply def view = %s, want has_preview=true and preview_param=apply", raw)
+	}
+}
+
+// TestStartReadOnlyDefParamsAreUntouched: a read-only definition's mode is
+// checked and otherwise ignored; nothing is written into its params, so an op
+// that decodes strictly (DisallowUnknownFields) never sees a dry_run it does
+// not declare.
+func TestStartReadOnlyDefParamsAreUntouched(t *testing.T) {
+	enq, _, _, h := startHarness(map[string]DefInfo{
+		"test.audit": {ID: "test.audit", Title: "Audit", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}},
+	}, nil)
+	r := newRouter(h)
+	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
+	for i, body := range []string{`{}`, `{"mode":"preview","params":{"limit":3}}`, `{"mode":"live","params":{"limit":3}}`} {
+		w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.audit/runs", body)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%s = %d %s", body, w.Code, w.Body.String())
+		}
+		if got := string(enq.calls[i].params); strings.Contains(got, "dry_run") {
+			t.Errorf("%s queued %s: a mode key was written into a read-only def's params", body, got)
+		}
+	}
+	if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.audit/runs", `{"mode":"sometimes"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("bad mode on a read-only def = %d, want 400", w.Code)
+	}
+}
+
+// batchEnq answers like EnqueueOp for a batchable def: ("", nil).
+type batchEnq struct{ fakeEnq }
+
+func (b *batchEnq) EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error) {
+	_, _ = b.fakeEnq.EnqueueOp(ctx, defID, params, opts...)
+	return "", nil
+}
+
+// TestStartBatchableDefSaysBatched: a request that joined a pending batch has
+// no run yet; the answer says so instead of an empty run_id.
+func TestStartBatchableDefSaysBatched(t *testing.T) {
+	enq := &batchEnq{}
+	h := New(Deps{Runs: &memRuns{runs: map[string]database.RunRecord{}}, Defs: &fakeDefs{defs: map[string]DefInfo{
+		"test.b": {ID: "test.b", Title: "B", Kind: "adapted", Permissions: []auth.Permission{auth.PermScanTrigger}},
+	}}, Enqueuer: enq})
+	r := newRouter(h)
+	scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger, user: "u", method: string(auth.MethodSession)}
+	w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/defs/test.b/runs", `{}`)
+	if w.Code != http.StatusAccepted || strings.TrimSpace(w.Body.String()) != `{"batched":true}` {
+		t.Fatalf("batchable start = %d %s, want 202 {\"batched\":true}", w.Code, w.Body.String())
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -239,6 +239,7 @@ type rbfEnv struct {
 func (p *Plugin) repointBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          rbfOpID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: rbfParams{}},
 		DisplayName: "Repoint missing book_file rows at a named file",
 		Description: "Repoints named MISSING book_file rows at a file on disk that no row owns: " +
 			"{\"repoints\":[{\"row_id\":..., \"book_id\":..., \"new_path\":...}]}. Keeps the row's id, track, book " +

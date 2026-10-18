@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-10-01
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -273,6 +273,7 @@ func (r *vgRepairReport) summary() string {
 func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.version-group-primary-repair",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: vgPrimaryRepairParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Version-group primary repair",

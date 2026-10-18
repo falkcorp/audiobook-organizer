@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -89,6 +89,7 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
 		ID:          "maintenance.author-split-scan",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: opmode.DryRunParams{}},
 		FormerIDs:   []string{"scheduler.author-split-scan"},
 		Permissions: []auth.Permission{auth.PermSettingsManage},
 		Writes:      []sdk.Resource{sdk.ResBooks, sdk.ResAuthors},
@@ -579,6 +580,7 @@ func (p *Plugin) previewAuthorSplit(ctx context.Context, store OpsStore, reporte
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.resolve-production-authors",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: opmode.DryRunParams{}},
 		FormerIDs:   []string{"scheduler.resolve-production-authors"},
 		Permissions: []auth.Permission{auth.PermSettingsManage},
 		Liveness:    sdk.LivenessManual,

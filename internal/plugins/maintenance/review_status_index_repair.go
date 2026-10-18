@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/review_status_index_repair.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e2b7c41-3f8d-4a65-b1c9-7d0e5f2a8b36
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -50,6 +50,7 @@ type reviewStatusIndexRepairResult struct {
 func (p *Plugin) reviewStatusIndexRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.review-status-index-repair",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: reviewStatusIndexRepairParams{}},
 		DisplayName: "Repair review-queue status index",
 		Description: "Rebuilds the review_item:status:* secondary index from the review " +
 			"item records: removes index rows that name an item under a status it no " +

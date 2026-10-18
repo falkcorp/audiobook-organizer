@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -53,6 +53,7 @@ func (p *Plugin) repairsPlanDef() sdk.OperationDef {
 func (p *Plugin) repairsApplyDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          repairs.ApplyOpID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: repairs.ApplyParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repairs: apply",

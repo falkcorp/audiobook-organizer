@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -164,6 +164,7 @@ type mbfEnv struct {
 func (p *Plugin) moveBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          mbfOpID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: mbfParams{}},
 		DisplayName: "Move book_file rows to another book",
 		Description: "Reassigns named book_file rows to a named book: {\"moves\":[{\"row_id\":..., \"to_book_id\":...}]} " +
 			"(optional from_book_id pins the current owner). Keeps every field of the row (hashes, size, fingerprints), " +
