@@ -1,7 +1,7 @@
-// file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.3.0
+// file: internal/database/sql_activity_wal_truncate_test.go
+// version: 2.0.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package database
 
@@ -18,16 +18,39 @@ import (
 	"time"
 )
 
+// shrinkLegacyRows rewrites every row's summary to one byte, the way a clamp
+// pass did, so the freed overflow pages land in the WAL and give the truncate
+// something to return.
+func shrinkLegacyRows(t *testing.T, s *SQLActivityStore) {
+	t.Helper()
+	if _, err := s.writer.Exec(`UPDATE activity SET summary = 'x'`); err != nil {
+		t.Fatalf("shrink legacy rows: %v", err)
+	}
+}
+
+// vacuumAndTruncate is the sequence the retired VacuumActivity ran: VACUUM on
+// the writer connection, then the post-vacuum WAL truncate that production code
+// still reaches through the checkpointer. It lives here so the truncate keeps
+// the coverage these tests gave it.
+func vacuumAndTruncate(ctx context.Context, s *SQLActivityStore) (time.Duration, error) {
+	start := time.Now()
+	if _, err := s.writer.ExecContext(ctx, `VACUUM`); err != nil {
+		return time.Since(start), fmt.Errorf("sql_activity: vacuum: %w", err)
+	}
+	if err := s.truncateWALAfterVacuum(ctx); err != nil {
+		return time.Since(start), fmt.Errorf("sql_activity: vacuum succeeded but WAL truncate failed (space still held): %w", err)
+	}
+	return time.Since(start), nil
+}
+
 // legacySrcKeySeq makes each fixture row's src_key unique.
 var legacySrcKeySeq int
 
 // insertLegacyOversizedSummary writes a row the way it existed BEFORE
-// clampActivitySummary was added to the write path.
-//
-// It has to bypass Record on purpose: Record clamps, so it is structurally
-// incapable of producing the rows this backfill exists to fix. A test that built
-// its fixture through Record would be asserting against an empty set and would
-// pass no matter what ClampOversizedSummaries did.
+// clampActivitySummary was added to the write path: an oversized summary that
+// spills onto overflow pages. The truncate tests use these rows as a workload
+// that leaves a large WAL behind once shrinkLegacyRows rewrites them. It has to
+// bypass Record on purpose, because Record clamps.
 func insertLegacyOversizedSummary(t *testing.T, s *SQLActivityStore, summary string) int64 {
 	t.Helper()
 	// src_key is a UNIQUE index. Deriving it from the summary text would
@@ -48,179 +71,7 @@ func insertLegacyOversizedSummary(t *testing.T, s *SQLActivityStore, summary str
 	return id
 }
 
-func readSummary(t *testing.T, s *SQLActivityStore, id int64) string {
-	t.Helper()
-	var got string
-	if err := s.reader.QueryRow(s.dialect.rebind(`SELECT summary FROM activity WHERE id = ?`), id).
-		Scan(&got); err != nil {
-		t.Fatalf("read summary id=%d: %v", id, err)
-	}
-	return got
-}
-
-// A summary can sit under the cap in CHARACTERS while sitting far over it in
-// BYTES. SQLite's length() returns characters for TEXT, so an uncast predicate
-// (`length(summary) > 8192`) does not select this row — and it is exactly the
-// kind of row worth clamping, because it occupies three bytes per character on
-// disk.
-//
-// This is the oracle for the CAST(summary AS BLOB) in oversizedSummarySelect.
-// Delete the cast and only this test fails; every other test here uses ASCII,
-// where characters and bytes coincide and the bug is invisible.
-func TestClampOversizedSummaries_SelectsByBytesNotCharacters(t *testing.T) {
-	s := newTestSQLStore(t)
-
-	// 4,000 three-byte runes: 4,000 characters (under the 8,192 cap by
-	// character count) but 12,000 bytes (over it by byte count).
-	const runeCount = 4000
-	summary := strings.Repeat("あ", runeCount)
-	if len([]rune(summary)) >= activitySummaryMax {
-		t.Fatalf("fixture invalid: %d characters is not under the %d cap",
-			len([]rune(summary)), activitySummaryMax)
-	}
-	if len(summary) <= activitySummaryMax {
-		t.Fatalf("fixture invalid: %d bytes is not over the %d cap",
-			len(summary), activitySummaryMax)
-	}
-	id := insertLegacyOversizedSummary(t, s, summary)
-
-	res, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{})
-	if err != nil {
-		t.Fatalf("clamp: %v", err)
-	}
-	if res.Clamped != 1 {
-		t.Fatalf("a row over the cap in bytes but under it in characters was not clamped: "+
-			"Clamped=%d (length() on TEXT counts characters — the predicate needs CAST AS BLOB)",
-			res.Clamped)
-	}
-	if got := readSummary(t, s, id); len(got) > activitySummaryMax {
-		t.Errorf("clamped summary is still %d bytes, over the %d cap", len(got), activitySummaryMax)
-	}
-}
-
-// The clamp must be safe to re-run: a second pass over an already-clamped table
-// rewrites nothing. Without this, an interrupted-and-resumed backfill (the
-// expected way a multi-GB pass completes) would keep re-truncating rows and
-// stacking a second marker onto each one.
-func TestClampOversizedSummaries_IsIdempotent(t *testing.T) {
-	s := newTestSQLStore(t)
-	for i := range 3 {
-		insertLegacyOversizedSummary(t, s, strings.Repeat("x", activitySummaryMax*2)+string(rune('a'+i)))
-	}
-
-	first, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{})
-	if err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	if first.Clamped != 3 {
-		t.Fatalf("first pass clamped %d rows, want 3", first.Clamped)
-	}
-
-	second, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{})
-	if err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-	if second.Scanned != 0 || second.Clamped != 0 {
-		t.Errorf("second pass was not a no-op: scanned=%d clamped=%d "+
-			"(the clamp result must fall at or under the cap so it stops matching the predicate)",
-			second.Scanned, second.Clamped)
-	}
-}
-
-// DryRun must measure exactly what a real run would free, while leaving the
-// stored value untouched. A dry run that under-reports is worse than none: it is
-// the number someone uses to decide whether the real run is worth its downtime.
-func TestClampOversizedSummaries_DryRunMeasuresWithoutWriting(t *testing.T) {
-	s := newTestSQLStore(t)
-	original := strings.Repeat("y", activitySummaryMax*3)
-	id := insertLegacyOversizedSummary(t, s, original)
-
-	dry, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{DryRun: true})
-	if err != nil {
-		t.Fatalf("dry run: %v", err)
-	}
-	if got := readSummary(t, s, id); got != original {
-		t.Fatalf("dry run modified the row: stored length %d, original %d", len(got), len(original))
-	}
-
-	wet, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{})
-	if err != nil {
-		t.Fatalf("real run: %v", err)
-	}
-	if dry.Reclaimed() != wet.Reclaimed() {
-		t.Errorf("dry run predicted %d bytes reclaimed, real run freed %d",
-			dry.Reclaimed(), wet.Reclaimed())
-	}
-}
-
-// Reclaimed() must equal the bytes actually removed from the column, measured
-// from the database rather than from the result struct's own arithmetic.
-func TestClampOversizedSummaries_ReclaimedMatchesBytesActuallyFreed(t *testing.T) {
-	s := newTestSQLStore(t)
-	original := strings.Repeat("z", activitySummaryMax*5)
-	id := insertLegacyOversizedSummary(t, s, original)
-
-	res, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{})
-	if err != nil {
-		t.Fatalf("clamp: %v", err)
-	}
-	actual := int64(len(original) - len(readSummary(t, s, id)))
-	if res.Reclaimed() != actual {
-		t.Errorf("Reclaimed()=%d but the column shrank by %d bytes", res.Reclaimed(), actual)
-	}
-}
-
-// A capped run must say it stopped early. Without Truncated a caller cannot
-// distinguish "clamped every oversized row" from "clamped the first Max of
-// them", which is the difference between finished and half-done.
-func TestClampOversizedSummaries_MaxStopsEarlyAndReportsTruncated(t *testing.T) {
-	s := newTestSQLStore(t)
-	for i := range 5 {
-		insertLegacyOversizedSummary(t, s, strings.Repeat("q", activitySummaryMax*2)+string(rune('a'+i)))
-	}
-
-	res, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{Max: 2})
-	if err != nil {
-		t.Fatalf("clamp: %v", err)
-	}
-	if res.Clamped != 2 {
-		t.Errorf("Clamped=%d, want 2 (Max must bound the rewrite count)", res.Clamped)
-	}
-	if !res.Truncated {
-		t.Error("Truncated is false after a run that stopped on Max with rows left")
-	}
-
-	rest, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{})
-	if err != nil {
-		t.Fatalf("resume: %v", err)
-	}
-	if rest.Clamped != 3 {
-		t.Errorf("resume clamped %d rows, want the remaining 3", rest.Clamped)
-	}
-	if rest.Truncated {
-		t.Error("Truncated is true after a run that reached the end of the table")
-	}
-}
-
-// Cancelling mid-pass must return committed progress rather than discarding it,
-// so an interrupted multi-hour run resumes instead of restarting.
-func TestClampOversizedSummaries_CancelReturnsCommittedProgress(t *testing.T) {
-	s := newTestSQLStore(t)
-	insertLegacyOversizedSummary(t, s, strings.Repeat("w", activitySummaryMax*2))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	res, err := s.ClampOversizedSummaries(ctx, ClampSummariesOptions{})
-	if err == nil {
-		t.Fatal("cancelled pass returned nil error")
-	}
-	if res.Clamped != 0 {
-		t.Errorf("Clamped=%d on a pass cancelled before its first batch", res.Clamped)
-	}
-}
-
-// VacuumActivity must leave the -wal file truncated, not merely checkpointed.
+// vacuumAndTruncate must leave the -wal file truncated, not merely checkpointed.
 //
 // This is the half that a "did the main file shrink?" assertion misses, and it
 // is the half that decides whether the user gets their disk space back. In WAL
@@ -229,7 +80,7 @@ func TestClampOversizedSummaries_CancelReturnsCommittedProgress(t *testing.T) {
 // high-water mark and never shrinks the file. Hit for real on prod 2026-09-08:
 // the main file fell 22,898,438,144 → 11,447,480,320 while the WAL held at
 // 11,514,065,152 and stayed there, so the net reclaim was about zero.
-func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
+func TestVacuumTruncate_TruncatesTheWAL(t *testing.T) {
 	s := newTestSQLStore(t)
 
 	// Build a WAL worth truncating: write, then clamp, which rewrites every one
@@ -237,9 +88,7 @@ func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
 	for range 40 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
 	}
-	if _, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{}); err != nil {
-		t.Fatalf("clamp: %v", err)
-	}
+	shrinkLegacyRows(t, s)
 
 	walPath := s.path + "-wal"
 	before, err := os.Stat(walPath)
@@ -250,7 +99,7 @@ func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
 		t.Skip("WAL already empty before vacuum; fixture did not build one")
 	}
 
-	if _, err := s.VacuumActivity(context.Background()); err != nil {
+	if _, err := vacuumAndTruncate(context.Background(), s); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 
@@ -266,8 +115,8 @@ func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
 	}
 }
 
-// TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns is the regression
-// test for VacuumActivity treating a busy TRUNCATE as success.
+// TestVacuumTruncate_TruncatesTheWALWhileTheCheckpointerRuns is the regression
+// test for vacuumAndTruncate treating a busy TRUNCATE as success.
 //
 // The background checkpointer runs PASSIVE/TRUNCATE on its own connection. A
 // TRUNCATE issued while that one holds the checkpoint lock returns a normal
@@ -280,19 +129,17 @@ func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
 // It passes now mainly because the vacuum's checkpoints run on the same single
 // connection (s.ckpt) as the background loop's, so the two can no longer run at
 // the same moment; the busy retry is the second line of defence, exercised by
-// TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt.
-func TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns(t *testing.T) {
+// TestVacuumTruncate_BusyTruncateSucceedsOnALaterAttempt.
+func TestVacuumTruncate_TruncatesTheWALWhileTheCheckpointerRuns(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Millisecond)
 
 	for range 40 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
 	}
-	if _, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{}); err != nil {
-		t.Fatalf("clamp: %v", err)
-	}
+	shrinkLegacyRows(t, s)
 
 	for i := range 5 {
-		if _, err := s.VacuumActivity(context.Background()); err != nil {
+		if _, err := vacuumAndTruncate(context.Background(), s); err != nil {
 			t.Fatalf("vacuum %d: %v", i, err)
 		}
 		// Success must mean the WAL really is empty. Writes are quiescent, so
@@ -486,14 +333,14 @@ func requirePassiveCopiedVacuumFramesBeforeTruncate(t *testing.T, calls []ckptCa
 	}
 }
 
-// TestVacuumActivity_ReportsSpaceStillHeldWhileAReaderPinsTheWAL: a reader
+// TestVacuumTruncate_ReportsSpaceStillHeldWhileAReaderPinsTheWAL: a reader
 // that opened its snapshot before the VACUUM keeps PASSIVE from copying the
 // VACUUM's frames for as long as it lives. Retrying cannot fix that, so after
-// the bounded attempts VacuumActivity must return the "space still held" error
+// the bounded attempts vacuumAndTruncate must return the "space still held" error
 // rather than claim the WAL was emptied, and it must never issue a TRUNCATE in
 // the meantime: that TRUNCATE would hold the write lock while waiting for the
 // reader and while copying.
-func TestVacuumActivity_ReportsSpaceStillHeldWhileAReaderPinsTheWAL(t *testing.T) {
+func TestVacuumTruncate_ReportsSpaceStillHeldWhileAReaderPinsTheWAL(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
 	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 3, 10*time.Millisecond
@@ -505,9 +352,9 @@ func TestVacuumActivity_ReportsSpaceStillHeldWhileAReaderPinsTheWAL(t *testing.T
 	holdReaderSnapshot(t, s)
 	calls := recordCheckpoints(t, s, nil)
 
-	_, err := s.VacuumActivity(context.Background())
+	_, err := vacuumAndTruncate(context.Background(), s)
 	if err == nil || !strings.Contains(err.Error(), "space still held") {
-		t.Fatalf("VacuumActivity err = %v; want the space-still-held error while a reader pins the WAL", err)
+		t.Fatalf("vacuumAndTruncate err = %v; want the space-still-held error while a reader pins the WAL", err)
 	}
 	got := calls()
 	passives := 0
@@ -557,11 +404,11 @@ func holdReaderSnapshot(t *testing.T, s *SQLActivityStore) (release func()) {
 	return release
 }
 
-// TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt: once PASSIVE has
+// TestVacuumTruncate_BusyTruncateSucceedsOnALaterAttempt: once PASSIVE has
 // copied everything, a TRUNCATE can still be busy, because a reader that opened
 // after a later write keeps the WAL from being reset. That attempt must be retried,
 // and the later attempt that gets through counts as success with the WAL empty.
-func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
+func TestVacuumTruncate_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	for range 10 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
@@ -585,7 +432,7 @@ func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
 		}
 	})
 
-	if _, err := s.VacuumActivity(context.Background()); err != nil {
+	if _, err := vacuumAndTruncate(context.Background(), s); err != nil {
 		t.Fatalf("vacuum: %v (a busy TRUNCATE must be retried, not reported)", err)
 	}
 	got := calls()
@@ -598,7 +445,7 @@ func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
 	}
 }
 
-// TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy is the
+// TestVacuumTruncate_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy is the
 // SF-A regression test. A reader that opened before the VACUUM keeps PASSIVE
 // short of the VACUUM's frames; it lets go part-way through the truncate phase.
 // The old code issued TRUNCATE after every PASSIVE regardless, so once the
@@ -631,7 +478,7 @@ func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
 // is short; the frame-count bound now catches it on any runner, where the
 // wall-clock bound depended on the runner's disk and CPU. The slowest Record is
 // logged for diagnosis, not asserted.
-func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *testing.T) {
+func TestVacuumTruncate_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	for range 40 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
@@ -712,7 +559,7 @@ func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *t
 	}
 }
 
-// TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft: when the vacuum
+// TestVacuumTruncate_IdleTickReclaimsWhatAGivenUpTruncateLeft: when the vacuum
 // gives up because a reader pins the WAL and reports the space still held, the
 // background checkpointer's idle-tick step must reset the WAL once the reader
 // lets go, so the space is not stranded until a restart.
@@ -725,7 +572,7 @@ func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *t
 // for a second at a time waiting on the test's reader and starved the VACUUM
 // ("database is locked"). That the loop calls this step on idle ticks is
 // covered by TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle.
-func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
+func TestVacuumTruncate_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
 	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 1, time.Millisecond
@@ -735,8 +582,8 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
 	}
 	release := holdReaderSnapshot(t, s)
-	if _, err := s.VacuumActivity(context.Background()); err == nil || !strings.Contains(err.Error(), "space still held") {
-		t.Fatalf("VacuumActivity err = %v; want space still held while a reader pins the WAL", err)
+	if _, err := vacuumAndTruncate(context.Background(), s); err == nil || !strings.Contains(err.Error(), "space still held") {
+		t.Fatalf("vacuumAndTruncate err = %v; want space still held while a reader pins the WAL", err)
 	}
 	walPath := s.path + "-wal"
 	if fi, err := os.Stat(walPath); err != nil || fi.Size() == 0 {
@@ -750,7 +597,7 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 	}
 }
 
-// TestVacuumActivity_TruncateDoesNotStallForegroundWrites is the regression
+// TestVacuumTruncate_TruncateDoesNotStallForegroundWrites is the regression
 // test for the post-vacuum TRUNCATE holding the WAL write lock for the whole
 // frame copy. After a VACUUM the WAL holds the entire rebuilt database, and a
 // TRUNCATE that copies it blocks every Record for that long; on prod (an 11 GB
@@ -774,7 +621,7 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 // TRUNCATE after it and a 3.84 s Record behind the TRUNCATE. The frame-count
 // checks above cover the same failure deterministically; the timings are
 // logged only.
-func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
+func TestVacuumTruncate_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	// The background checkpointer is held off (1 h interval): its own ticks would
 	// show up in the hook and copy frames this test attributes to the vacuum.
 	s, _ := openCkptTestStore(t, time.Hour)
@@ -867,7 +714,7 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	requireTruncateLeftoverBounded(t, got)
 }
 
-// TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate is the
+// TestVacuumTruncate_LateReaderDoesNotStallWritersThroughTheTruncate is the
 // regression test for the checkpoint connection's busy_timeout. A reader that
 // opens AFTER the VACUUM does not stop PASSIVE from copying every frame, so
 // the TRUNCATE is issued; it takes the WAL write lock and then has to wait for
@@ -890,7 +737,7 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 // a TRUNCATE is issued while the reader is held, every one reports busy
 // (returns after its bounded wait rather than waiting for the reader to leave),
 // and no Record fails. The slowest Record is logged for diagnosis.
-func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testing.T) {
+func TestVacuumTruncate_LateReaderDoesNotStallWritersThroughTheTruncate(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	var ckptBusyMS int
 	if err := s.ckpt.QueryRow(`PRAGMA busy_timeout`).Scan(&ckptBusyMS); err != nil {
@@ -1024,8 +871,8 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 	}
 }
 
-// TestVacuumActivity_BusyTruncateRetriesHaveTheirOwnBudget is the deterministic
-// form of the SF1 flake (TestVacuumActivity_ReaderReleasedMidTruncate failing
+// TestVacuumTruncate_BusyTruncateRetriesHaveTheirOwnBudget is the deterministic
+// form of the SF1 flake (TestVacuumTruncate_ReaderReleasedMidTruncate failing
 // "WAL not reset after 8 attempts (last checkpoint busy=1 wal_frames=2153
 // checkpointed=2153)" in 15 of 135 loaded runs). A reader that predates the
 // VACUUM holds PASSIVE short for some attempts; after it lets go, a writer
@@ -1034,7 +881,7 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 // reader used to leave too few for the busy TRUNCATEs a steady stream of
 // Records causes. The write lock is held well past vacuumTruncateResetWaitMS,
 // so each of those TRUNCATEs is busy whatever the wait is.
-func TestVacuumActivity_BusyTruncateRetriesHaveTheirOwnBudget(t *testing.T) {
+func TestVacuumTruncate_BusyTruncateRetriesHaveTheirOwnBudget(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
 	oldBusy, oldPause := vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause
@@ -1119,10 +966,10 @@ func TestVacuumActivity_BusyTruncateRetriesHaveTheirOwnBudget(t *testing.T) {
 	}
 }
 
-// TestVacuumActivity_GiveUpNamesTheReason: when the busy-TRUNCATE budget runs
+// TestVacuumTruncate_GiveUpNamesTheReason: when the busy-TRUNCATE budget runs
 // out, the error must say so rather than blame a reader with counts that look
 // complete (busy=1, wal_frames == checkpointed).
-func TestVacuumActivity_GiveUpNamesTheReason(t *testing.T) {
+func TestVacuumTruncate_GiveUpNamesTheReason(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	oldBusy, oldPause := vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause
 	vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause = 2, time.Millisecond

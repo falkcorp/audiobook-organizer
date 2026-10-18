@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 package handlers_test
 
@@ -329,7 +329,6 @@ func TestCollectionsAreNotScopedToTheCallingUser(t *testing.T) {
 // So this mounts servermiddleware.RequirePermission directly — the same
 // middleware s.perm() returns when auth IS enabled — over a store with a user
 // in it, and injects the caller's permissions the way the auth middleware does.
-// The precedent is newAdminInvalidateRouter in list_cache_generation_test.go.
 func TestCollectionWrites_RequirePermission(t *testing.T) {
 	store, cleanup := colAuthStore(t)
 	defer cleanup()

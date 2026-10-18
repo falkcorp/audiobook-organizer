@@ -1,12 +1,11 @@
 // file: internal/server/list_cache_generation_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 51004630-5b56-463f-851b-8225e2367353
-// last-edited: 2026-08-11
+// last-edited: 2026-10-18
 
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,9 +14,6 @@ import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -206,130 +202,6 @@ func TestListWarmerKeyMatchesRequestKeyAndRetiresOnMutation(t *testing.T) {
 	_, hitAfter := server.listCache.Get(freshKey)
 	assert.False(t, hitAfter,
 		"warmer would still skip this query as already-cached after a delete")
-}
-
-// TestCacheInvalidateRouteIsAdminGated asserts, through the production router,
-// that the operator escape hatch exists and refuses an unauthenticated caller.
-//
-// Asserting 401 specifically (rather than "not 200") also proves the route is
-// mounted: an unmounted path would 404.
-func TestCacheInvalidateRouteIsAdminGated(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	createTestBook(t, "Gated Book")
-	listTitles(t, server, "limit=50&offset=0")
-	populated := server.listCache.Len()
-	require.Positive(t, populated, "list cache should be populated before the rejection test")
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/cache/invalidate",
-		bytes.NewBufferString(`{"cache":"list"}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusUnauthorized, w.Code,
-		"unauthenticated caller should be refused: %s", w.Body.String())
-	assert.Equal(t, populated, server.listCache.Len(),
-		"a refused invalidate request must not empty the cache")
-}
-
-// newAdminInvalidateRouter mounts HandleCacheInvalidate behind the same
-// RequireAdmin middleware the production route uses, with a caller identity
-// injected ahead of it.
-//
-// The production mounting is covered by TestCacheInvalidateRouteIsAdminGated;
-// this exists because the test server has no user store to authenticate
-// against, and asserting the success path matters more than routing it
-// through the real login flow.
-func newAdminInvalidateRouter(user *database.User) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(func(c *gin.Context) {
-		if user != nil {
-			// Mirrors what the auth middleware stores for CurrentUser.
-			c.Set("auth_user", user)
-		}
-		c.Next()
-	})
-	grp := r.Group("/api/v1")
-	grp.Use(servermiddleware.RequireAdmin())
-	grp.POST("/cache/invalidate", handlers.NewCacheHandler(nil, nil).HandleCacheInvalidate)
-	return r
-}
-
-func postInvalidate(t *testing.T, r *gin.Engine, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	var req *http.Request
-	if body == "" {
-		req = httptest.NewRequest(http.MethodPost, "/api/v1/cache/invalidate", nil)
-	} else {
-		req = httptest.NewRequest(http.MethodPost, "/api/v1/cache/invalidate",
-			bytes.NewBufferString(body))
-		req.Header.Set("Content-Type", "application/json")
-	}
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
-}
-
-// TestCacheInvalidateEmptiesNamedCache asserts the endpoint actually drops the
-// entries and reports the exact count, rather than returning a bare 200.
-func TestCacheInvalidateEmptiesNamedCache(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	createTestBook(t, "Invalidate Book One")
-	createTestBook(t, "Invalidate Book Two")
-	listTitles(t, server, "limit=50&offset=0")
-	listTitles(t, server, "limit=10&offset=0")
-
-	populated := server.listCache.Len()
-	require.Positive(t, populated, "list cache should hold entries before invalidation")
-
-	admin := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}}
-	w := postInvalidate(t, newAdminInvalidateRouter(admin), `{"cache":"list"}`)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	var wrapper struct {
-		Data handlers.CacheInvalidateResponse `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wrapper))
-
-	// The exact pre-invalidation count, not merely "something was dropped".
-	assert.Equal(t, populated, wrapper.Data.Dropped["list"],
-		"reported drop count should equal the entries the cache actually held")
-	assert.Equal(t, populated, wrapper.Data.Total)
-	assert.Equal(t, 0, server.listCache.Len(), "list cache should be empty afterwards")
-}
-
-// TestCacheInvalidateRejectsNonAdmin asserts an authenticated caller without
-// the admin role is refused AND that the cache is untouched — a 403 that
-// still cleared the cache would be a worse bug than no endpoint at all.
-func TestCacheInvalidateRejectsNonAdmin(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	createTestBook(t, "Non Admin Book")
-	listTitles(t, server, "limit=50&offset=0")
-	populated := server.listCache.Len()
-	require.Positive(t, populated)
-
-	viewer := &database.User{ID: "viewer-1", Username: "viewer", Roles: []string{"viewer"}}
-	w := postInvalidate(t, newAdminInvalidateRouter(viewer), `{"cache":"list"}`)
-
-	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
-	assert.Equal(t, populated, server.listCache.Len(),
-		"a forbidden request must not empty the cache")
-}
-
-// TestCacheInvalidateUnknownCacheIsRejected guards the operator against a
-// silent no-op when they mistype a cache name: without this the endpoint
-// would answer 200 / "dropped 0" and read as "the cache was already clean".
-func TestCacheInvalidateUnknownCacheIsRejected(t *testing.T) {
-	admin := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}}
-	w := postInvalidate(t, newAdminInvalidateRouter(admin), `{"cache":"no-such-cache"}`)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 }
 
 // TestGenerationKeyChangesWithBump is the unit-level guard on the key

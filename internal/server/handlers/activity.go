@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.11.3
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-04
+// last-edited: 2026-10-18
 
 package handlers
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"runtime"
 	"slices"
@@ -22,7 +21,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
@@ -61,7 +59,6 @@ func abortIfClientGone(c *gin.Context, err error, op string) bool {
 type ActivityService interface {
 	Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error)
 	GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)
-	ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error)
 }
 
 // activityPartialQuerier is the optional read ListActivity prefers: Query plus
@@ -669,82 +666,4 @@ func operationLogTags(opID, level, opType string, attrs map[string]any) []string
 	}
 	activity.EnrichTags(&entry)
 	return entry.Tags
-}
-
-// activityClampLog carries the clamp handler's warnings through the
-// sanitizing logger (direct slog calls are ratcheted by
-// internal/logger's TestGuard_NoDirectSlogCalls).
-var activityClampLog = logger.New("handlers.activity")
-
-// clampVacuumFailedMessage is the fixed vacuum_error text for a committed clamp
-// whose vacuum or WAL reset failed. The underlying error is logged, never sent:
-// it can carry file paths, as the 500 path's errors can.
-const clampVacuumFailedMessage = "the clamp committed, but the vacuum or WAL reset that returns the freed space to disk failed; " +
-	"the space is still held and the next idle checkpoint or vacuum can release it (details in the server log)"
-
-// ClampActivitySummaries handles POST /api/v1/activity/clamp-summaries.
-//
-// Retroactively applies the write-path summary cap to rows written before that
-// cap existed. Defaults to a dry run: this rewrites historical rows, so the
-// safe default is to measure and report rather than to mutate, and the caller
-// must opt in explicitly with {"apply": true}.
-func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
-	if h.svc == nil {
-		httputil.RespondWithInternalError(c, "activity log not available")
-		return
-	}
-
-	var req struct {
-		Apply  bool `json:"apply"`  // false (default) = dry run
-		Max    int  `json:"max"`    // 0 = no cap
-		Vacuum bool `json:"vacuum"` // reclaim file space after a real pass
-	}
-	// An absent body is a valid request: it means "dry run, no cap".
-	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		httputil.RespondWithBadRequest(c, "invalid request body")
-		return
-	}
-	if req.Max < 0 {
-		httputil.RespondWithBadRequest(c, "max must be zero or positive")
-		return
-	}
-
-	res, err := h.svc.ClampSummaries(c.Request.Context(), req.Max, !req.Apply, req.Vacuum)
-	if errors.Is(err, activity.ErrSummaryClampUnsupported) {
-		httputil.RespondWithBadRequest(c, "summary clamp requires the SQLite activity backend")
-		return
-	}
-	// A committed clamp whose vacuum or WAL reset failed is a SUCCESSFUL clamp:
-	// the rows were rewritten and res is complete. Answering 500 would tell the
-	// caller nothing happened and invite a re-run of a pass that may have taken
-	// hours. Report it as 200 with space_still_held, so the caller knows the
-	// freed space is not back on disk yet. The reason is logged, not returned:
-	// vacuum_error is a fixed message.
-	var vacuumErr error
-	if errors.Is(err, activity.ErrClampVacuumFailed) {
-		vacuumErr, err = err, nil
-		// The detail goes to the log only, sanitized, like the 500 path's
-		// InternalError; the response carries a fixed message.
-		activityClampLog.Warn("summary clamp committed (scanned=%d clamped=%d) but the vacuum or WAL reset failed; space still held: %s",
-			res.Scanned, res.Clamped, logging.SanitizeErr(vacuumErr))
-	}
-	if err != nil {
-		httputil.InternalError(c, "activity summary clamp failed", err)
-		return
-	}
-
-	body := gin.H{
-		"dry_run":          !req.Apply,
-		"scanned":          res.Scanned,
-		"clamped":          res.Clamped,
-		"bytes_before":     res.BytesBefore,
-		"bytes_after":      res.BytesAfter,
-		"bytes_reclaimed":  res.Reclaimed(),
-		"truncated":        res.Truncated,
-		"space_still_held": vacuumErr != nil,
-	}
-	if vacuumErr != nil {
-		body["vacuum_error"] = clampVacuumFailedMessage
-	}
-	httputil.RespondWithOK(c, body)
 }
