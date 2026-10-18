@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
 // last-edited: 2026-10-18
 
@@ -140,8 +140,9 @@ func (s *Server) invalidateSeriesCaches() {
 }
 
 // invalidateBookDuplicateCaches drops the "book-dedup-scan" entry that the
-// dedup.book-scan op writes; the retired merge-undo route did the same, and
-// revertOperation now does it for a reverted combine. That key currently has no reader: its
+// dedup.book-scan op writes; the retired merge-undo routes did the same, and
+// revertOperation now does it for a reverted combine or sibling move. That key
+// currently has no reader: its
 // only one, GET /audiobooks/duplicates/scan-results, went with 03-PR12, and the
 // op has no HTTP launcher left. Whether the op and this invalidation stay is
 // the open decision with brief area 04, recorded in
@@ -157,8 +158,9 @@ func (s *Server) invalidateBookDuplicateCaches() {
 // revertOperation is the operations handler's revert: it reverses the
 // operation's change ledger and, when any series_rename row was restored,
 // drops the series caches so GET /series shows the restored name at once;
-// when any merge_combine_journal row was restored (a Repairs merge undone),
-// it drops the book duplicate caches, as the retired merge-undo route did; when any
+// when any merge_combine_journal or merge_sibling_journal row was restored (a
+// combine or sibling move undone), it drops the book duplicate caches, as the
+// retired merge-undo routes did; when any
 // author merge or reclassify row was restored, it drops the author list and
 // dedup caches, as the merge itself does (entities.author-merge), so the
 // restored author is listed again at once.

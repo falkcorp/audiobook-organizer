@@ -1,5 +1,5 @@
 // file: internal/server/wire_merge_journal_gone_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: f7287a40-9996-4784-8c46-4f09afcab92e
 // last-edited: 2026-10-18
 
@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	combineUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert (only for a combine made by the dedup.split-books Repairs fixer; other combines have no HTTP undo now) instead"}`
-	siblingUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
+	combineUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert with the combine's operation id (operation_id in the combine response; GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older combine gets one from the backfill-merge-undo-pointers job) instead"}`
+	siblingUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert with the merge's operation id (GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older merge gets one from the backfill-merge-undo-pointers job) instead"}`
 )
 
 // retiredMergeUndoRoutes are the two merge-journal undo routes retired by

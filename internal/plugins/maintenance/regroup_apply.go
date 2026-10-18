@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-10-18
 
@@ -31,9 +31,9 @@
 // ambiguous hold could ever merge anything. That is FALSE now: an `ambiguous` hold
 // whose evidence recommends `combine` (24 of 356 measured on 2026-08-06) dispatches
 // straight into ApplyMultidisc, which retires absorbed Book rows (soft-deleted and
-// journaled since 2026-09-13; the journal is merge.Service.UndoCombine's
-// input, but no route reaches it for a regroup approval since POST
-// /merge/undo/:journal_id was retired, 01-P81h). The gate is
+// journaled since 2026-09-13; the approval is undone by reverting the
+// undo_operation id ApplyMultidisc logs, POST /operations/:id/revert, since
+// POST /merge/undo/:journal_id was retired, 01-P81h). The gate is
 // no longer the Kind — it is the recommendation, which refuses `combine` unless a
 // strict majority of members have a KNOWN runtime and those runtimes are short.
 // (Anthology had already lost its handler-less status on 2026-07-26, when an
