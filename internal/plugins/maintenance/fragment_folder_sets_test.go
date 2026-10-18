@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
-// last-edited: 2026-10-08
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -1126,6 +1126,38 @@ func TestFragmentFixer_ChapterSetRecheckSeesWritesBetweenRows(t *testing.T) {
 		require.Contains(t, err.Error(), holder)
 		f.requireUntouched(t, frags[1])
 		require.Equal(t, 1, sess.loads, "caught up point by point, not listed again")
+	})
+	// Round-4 S1 (#4064): the trash purge deletes a trashed book under an
+	// uncounted hold of the merge lock (merge.LockMergeRMWBookRowsOnly). Its
+	// writes are book-row writes the change log records, so the snapshot is
+	// caught up point by point: the deleted book leaves it, and the library
+	// is not listed again. Counted, every purged book cost the run a
+	// whole-library listing.
+	t.Run("a trash purge between rows is caught up from the change log", func(t *testing.T) {
+		f, rows, _, plan, ctx, sess := setup(t)
+		doomed := f.book(t, "doomed", "Trashed Elsewhere", f.path("lib/Elsewhere/Trashed"), nil)
+		require.NoError(t, applyRow(t, f, ctx, plan, rows[0]))
+		require.Equal(t, 1, sess.loads)
+		_, inSnapshot := sess.lib.books[doomed]
+		require.True(t, inSnapshot, "the live book is in the run's snapshot")
+		_, err := f.s.ModifyBook(doomed, func(b *database.Book) error {
+			yes, now := true, time.Now()
+			b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now
+			return nil
+		})
+		require.NoError(t, err)
+		// What purgeIfStateless does under its hold, after the state check.
+		before := merge.MergeLockAcquisitions()
+		merge.LockMergeRMWBookRowsOnly()
+		err = f.s.DeleteBook(doomed)
+		merge.UnlockMergeRMW()
+		require.NoError(t, err)
+		require.Equal(t, before, merge.MergeLockAcquisitions(), "the purge's hold is not counted")
+
+		require.NoError(t, applyRow(t, f, ctx, plan, rows[1]))
+		require.Equal(t, 1, sess.loads, "caught up point by point, not listed again")
+		_, inSnapshot = sess.lib.books[doomed]
+		require.False(t, inSnapshot, "the purged book is gone from the snapshot")
 	})
 	t.Run("another merge-lock holder between rows: listed again", func(t *testing.T) {
 		f, rows, frags, plan, ctx, sess := setup(t)

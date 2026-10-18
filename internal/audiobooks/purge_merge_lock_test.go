@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
 // last-edited: 2026-10-18
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -176,4 +177,27 @@ func TestPurgeNow_BookRestoredMeanwhileIsNotInTrash(t *testing.T) {
 	_, err := svc.DeleteAudiobook(context.Background(), "back", &DeleteAudiobookOptions{})
 	require.True(t, errors.Is(err, ErrNotInTrash), "err = %v", err)
 	require.False(t, bookGone(t, store, "back"))
+}
+
+// Round-4 S1 (#4064): the stateless purge's hold of the merge lock is not
+// counted in merge.MergeLockAcquisitions. Counted once per trashed book, it
+// made the chapter-fragment fixer list the whole library again (~460 MB on
+// prod) before nearly every row of an apply running beside a purge. The
+// hold is still exclusive (TestPurge_StateCheckAndDeleteHoldTheMergeLock);
+// only the count is skipped, because all it writes is the book delete the
+// book change log records.
+func TestPurge_StatelessHoldsAreNotCounted(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	const n = 25
+	for i := 0; i < n; i++ {
+		softDeleted(t, store, fmt.Sprintf("doomed-%02d", i), "")
+	}
+	before := merge.MergeLockAcquisitions()
+	res, err := NewAudiobookService(store).PurgeSoftDeletedBooks(context.Background(), false, nil)
+	require.NoError(t, err)
+	require.Equal(t, n, res.Purged, "result %+v", res)
+	require.Zero(t, merge.MergeLockAcquisitions()-before, "a stateless purge adds no counted hold")
+	for i := 0; i < n; i++ {
+		require.True(t, bookGone(t, store, fmt.Sprintf("doomed-%02d", i)))
+	}
 }
