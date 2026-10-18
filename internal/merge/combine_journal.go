@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -782,6 +782,46 @@ func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool
 	}
 	return f.FilePath == fm.FilePath
 }
+
+// overrideAuthorsToRestore returns the author links the undo of an author
+// override writes back: the links the override replaced (AuthorsBefore), then
+// every link added to the survivor since the combine, each with a warning.
+// The override left the survivor with exactly one link, to AuthorIDAfter, so a
+// current link to any other author (one the survivor did not have before) is
+// someone's later edit, a co-author added by hand or by a fetch. Writing
+// AuthorsBefore alone dropped it without a word; it is kept, listed after the
+// restored authors, and the warning reaches the revert's Kept list. Safe to
+// re-run: after a first restore the same links read as "added since" again.
+func (ms *Service) overrideAuthorsToRestore(survivorID string, o *CombineOverrideUndo) ([]database.BookAuthor, []string, error) {
+	cur, err := ms.db.GetBookAuthors(survivorID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read survivor authors before restoring them: %w", err)
+	}
+	type link struct {
+		author int
+		role   string
+	}
+	restore := make([]database.BookAuthor, 0, len(o.AuthorsBefore)+len(cur))
+	had := map[link]bool{}
+	for _, a := range o.AuthorsBefore {
+		restore = append(restore, a)
+		had[link{a.AuthorID, a.Role}] = true
+	}
+	var warns []string
+	for _, a := range cur {
+		if a.AuthorID == *o.AuthorIDAfter || had[link{a.AuthorID, a.Role}] {
+			continue
+		}
+		had[link{a.AuthorID, a.Role}] = true
+		a.BookID = survivorID
+		a.Position = len(restore)
+		restore = append(restore, a)
+		warns = append(warns, fmt.Sprintf("author %d (%s) was linked to book %s after the combine; kept, listed after the authors the override replaced",
+			a.AuthorID, a.Role, survivorID))
+	}
+	return restore, warns, nil
+}
+
 
 // retiredByJournal reports whether b is still the shell this combine retired:
 // soft-deleted, carrying exactly the stamp the combine wrote and journaled.
@@ -1777,9 +1817,14 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			return res, fmt.Errorf("reload survivor %s: not found", j.SurvivorID)
 		}
 		if o.AuthorIDAfter != nil {
-			if err := ms.db.SetBookAuthors(j.SurvivorID, o.AuthorsBefore); err != nil {
+			restore, warns, err := ms.overrideAuthorsToRestore(j.SurvivorID, o)
+			if err != nil {
+				return res, err
+			}
+			if err := ms.db.SetBookAuthors(j.SurvivorID, restore); err != nil {
 				return res, fmt.Errorf("restore survivor authors: %w", err)
 			}
+			res.Warnings = append(res.Warnings, warns...)
 		}
 		for field, prior := range o.FieldStates {
 			if prior == nil {
