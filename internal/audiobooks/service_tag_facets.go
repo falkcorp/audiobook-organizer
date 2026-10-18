@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tag_facets.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e9a6c1d-7b2f-4d85-a0c4-8f1e2b6d9a73
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 // Scoped tag facets: the Library's Browse-by-Tag chips counted over the
 // CURRENT result set instead of the whole library. The match set comes from
@@ -225,7 +225,8 @@ func (svc *AudiobookService) scopedTagFacetsKey(search string, authorID, seriesI
 		return "", false
 	}
 	if len(f.PerUserFilters) > 0 || f.RestrictToIDs != nil ||
-		f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil {
+		f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil ||
+		HasRelativeDateFilter(f.FieldFilters) { // a relative window moves with the clock
 		return "", false
 	}
 	q := strings.TrimSpace(search)

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_unified_grammar_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2c7e9a14-5b3f-4e81-9d06-a4f1c8b2e753
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -172,10 +172,10 @@ func TestUnifiedGrammar_OwnerQueryThroughGetAudiobooks(t *testing.T) {
 
 func TestUnifiedGrammar_ProgressPctComparison(t *testing.T) {
 	st := &database.UserBookState{ProgressPct: 80}
-	assert.True(t, matchesPerUserFilter(st, FieldFilter{Field: "progress_pct", Value: ">75"}))
-	assert.False(t, matchesPerUserFilter(st, FieldFilter{Field: "progress_pct", Value: "<75"}))
-	assert.True(t, matchesPerUserFilter(st, FieldFilter{Field: "progress_pct", Value: "80"}))
-	assert.True(t, matchesPerUserFilter(st, FieldFilter{Field: "progress_pct", Value: "[50 TO 90]"}))
+	assert.True(t, perUserMatches(t, st, FieldFilter{Field: "progress_pct", Value: ">75"}))
+	assert.False(t, perUserMatches(t, st, FieldFilter{Field: "progress_pct", Value: "<75"}))
+	assert.True(t, perUserMatches(t, st, FieldFilter{Field: "progress_pct", Value: "80"}))
+	assert.True(t, perUserMatches(t, st, FieldFilter{Field: "progress_pct", Value: "[50 TO 90]"}))
 }
 
 // A regex or glob review:/library_state: value must NOT be plucked into the

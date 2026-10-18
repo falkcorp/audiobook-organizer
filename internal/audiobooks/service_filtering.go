@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -174,53 +174,6 @@ func paginateFilteredBooks(books []database.Book, limit, offset int) []database.
 		books = books[:limit]
 	}
 	return books
-}
-
-// matchesPerUserFilter evaluates one per-user FieldFilter against a
-// UserBookState. A nil state is treated as zero-value (Status="",
-// ProgressPct=0, no last activity) so that e.g. `-read_status:finished`
-// correctly matches books the user has never opened. Mirrors the
-// semantics of playlist_evaluator.perUserFilterMatches so smart
-// playlists and the library list agree on what "finished" means.
-func matchesPerUserFilter(state *database.UserBookState, f FieldFilter) bool {
-	if state == nil {
-		state = &database.UserBookState{}
-	}
-	switch f.Field {
-	case "read_status":
-		return strings.EqualFold(state.Status, f.Value)
-	case "progress_pct":
-		// Unified numeric grammar: progress_pct:>75, <=10, [25 TO 75], 50.
-		// This used to be strconv.Atoi equality, so the search help's own
-		// example progress_pct:>75 failed to parse and matched nothing.
-		c, err := querygrammar.ParseNumericExpr(f.Value)
-		if err != nil {
-			return false
-		}
-		return c.Match(float64(state.ProgressPct))
-	case "last_played":
-		// Without an operator we can only test presence — value is
-		// ignored. Useful as `-last_played:` (never played).
-		return !state.LastActivityAt.IsZero()
-	default:
-		return false
-	}
-}
-
-// matchesAllPerUserFilters returns true iff every per-user filter
-// matches (with negation applied), i.e. the book belongs in the
-// filtered set for this user.
-func matchesAllPerUserFilters(state *database.UserBookState, filters []FieldFilter) bool {
-	for _, f := range filters {
-		ok := matchesPerUserFilter(state, f)
-		if f.Negated {
-			ok = !ok
-		}
-		if !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // FirstEmptyFilterValue returns the field name of the first filter carrying an
@@ -646,6 +599,16 @@ func bookFieldValue(book database.Book, field string) (string, bool) {
 	case "updated_at":
 		bookValue = timePtrToSearchString(book.UpdatedAt)
 
+	// date_added / date_modified (and the aliases added / modified) are DATE
+	// filters, compiled to a date term and matched in fieldMatchesCompiled
+	// (filter_date.go), not by this substring path. They are listed here so
+	// FieldIsKnown, which asks this switch, knows them; the value is the
+	// same RFC3339 text created_at / updated_at render.
+	case "date_added", "added":
+		bookValue = timePtrToSearchString(book.CreatedAt)
+	case "date_modified", "modified":
+		bookValue = timePtrToSearchString(book.UpdatedAt)
+
 	// The trash bit, as "true"/"false". Note this predicate alone is not enough
 	// to make marked_for_deletion:true return anything — the rows have to reach
 	// this filter first, which is what the pushdown in
@@ -757,6 +720,7 @@ var allFilterFieldNames = []string{
 	"sample_rate_hz", "channels", "bit_depth", "isbn10", "isbn13", "asin", "work_id",
 	"version_group_id", "ident",
 	"year", "created_at", "updated_at", "marked_for_deletion",
+	"date_added", "added", "date_modified", "modified",
 	"read_status", "progress_pct", "last_played",
 	"user_rating_overall", "user_rating_story", "user_rating_performance",
 }
@@ -1101,7 +1065,13 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	if len(remainingFF) > 0 || hasPerUser || hasFPFilters {
 		store := svc.store
 		userID := f.UserID
-		perUser := f.PerUserFilters
+		// Per-user filters are built ONCE for the walk, with one "now" for every
+		// row. A parse failure (a bypassed boundary: the entry points validate)
+		// fails closed below, like a field filter that did not compile.
+		perUserM, perUserErr := newPerUserMatcher(f.PerUserFilters)
+		if perUserErr != nil && hasPerUser {
+			filterCompiledLog.Error("per-user filter reached the matcher without validation; matching nothing: err=%v", perUserErr)
+		}
 		fpStatus := f.FingerprintStatus
 		fpCovMin := f.CoveragePercentMin
 		fpCovMax := f.CoveragePercentMax
@@ -1147,8 +1117,11 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 				}
 			}
 			if hasPerUser {
+				if perUserErr != nil {
+					return false // fail closed; see above
+				}
 				state, _ := store.GetUserBookState(userID, b.ID)
-				if !matchesAllPerUserFilters(state, perUser) {
+				if !perUserM.matches(state) {
 					return false
 				}
 			}

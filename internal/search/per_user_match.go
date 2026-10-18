@@ -1,7 +1,7 @@
 // file: internal/search/per_user_match.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a82911d7-d9dc-4f47-9863-1a7638e47194
-// last-edited: 2026-07-10
+// last-edited: 2026-10-18
 
 // Per-user DSL filter evaluation (INIT-4 T2). Moved here — verbatim —
 // from internal/playlist/evaluator.go so internal/search is the single
@@ -66,10 +66,8 @@ func perUserFilterMatches(state *database.UserBookState, node *FieldNode, now ti
 	case "progress_pct":
 		return numericFieldMatches(float64(state.ProgressPct), node)
 	case "last_played":
-		if state.LastActivityAt.IsZero() {
-			return false
-		}
-		return timeFieldMatches(state.LastActivityAt, node, now)
+		// last_played:* is "has been played at all"; MatchTimeNode knows the form.
+		return MatchTimeNode(state.LastActivityAt, node, now)
 	default:
 		return false
 	}
