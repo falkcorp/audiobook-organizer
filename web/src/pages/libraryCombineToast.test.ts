@@ -1,5 +1,5 @@
 // file: web/src/pages/libraryCombineToast.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: c0c7ee3f-0536-48da-951a-b0bfa6e93857
 // last-edited: 2026-10-18
 
@@ -79,6 +79,19 @@ describe('libraryCombineToast', () => {
     expect(p.actionLabel).toBe('Retry');
     expect(p.message).not.toContain('Activity');
     expect(p.message).toContain('operation op-2');
+  });
+
+  it('an undo that left things as they are is a warning that shows them, with no retry', () => {
+    const message =
+      'operation reverted: 2 of 2 changes restored; 1 combine(s) undone with some things left as they are: author 7 (narrator) was linked to book k after the combine; kept';
+    const p = describeUndoResult(
+      { message, partial: false, combines_undone_in_part: 1, kept: ['change c1: ...'] },
+      'op-4'
+    );
+    expect(p.severity).toBe('warning');
+    expect(p.message).toBe(message);
+    expect(p.undoOperationId).toBeUndefined();
+    expect(p.actionLabel).toBeUndefined();
   });
 
   it('a refused undo (409) offers no retry; a failed one does', () => {

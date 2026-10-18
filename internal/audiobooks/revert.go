@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-18
 
@@ -292,6 +292,16 @@ type RevertResult struct {
 	// (undo.AuthorPartlyRestoredError). Nothing in RestoredTypes shows them, and
 	// the restored author is still a write a caller's caches must see.
 	AuthorsPartlyRestored int `json:"authors_partly_restored,omitempty"`
+	// CombinesUndoneInPart counts Restored merge_combine_journal rows whose
+	// undo finished but left something as it is (merge.CombineUndoResult
+	// .Warnings): a credit or lock someone added since, a created file row
+	// with no book to return to, an author the combine created that no book
+	// credits any more. Kept names each one, and Summary (the message the
+	// Library toast and the Activity log show) lists them. Counted apart
+	// from PartiallyRestored, whose wording is about tags.
+	CombinesUndoneInPart int `json:"combines_undone_in_part,omitempty"`
+	// combineKept is what those combine undos left, for Summary.
+	combineKept []string
 	// Kept lists, per partially restored row, what was left as it is: the
 	// tags (or metadata fields) that changed since the operation, or what a
 	// combine's undo could not put back (a created file row with no book to
@@ -355,6 +365,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.PartiallyRestored > 0 {
 		fmt.Fprintf(&b, "; %d restored in part (tags changed since the operation were left as they are)", r.PartiallyRestored)
+	}
+	if r.CombinesUndoneInPart > 0 {
+		fmt.Fprintf(&b, "; %d combine(s) undone with some things left as they are: %s", r.CombinesUndoneInPart, strings.Join(r.combineKept, "; "))
 	}
 	if r.Superseded > 0 {
 		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
@@ -566,8 +579,14 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		if errors.As(err, &partial) {
 			// Every tag that still held what the operation wrote was put
 			// back; the rest are later changes and stay. The row is done:
-			// a retry could only overwrite those later changes.
-			result.PartiallyRestored++
+			// a retry could only overwrite those later changes. A combine
+			// row is counted on its own, with its own wording.
+			if partial.combineNotes != nil {
+				result.CombinesUndoneInPart++
+				result.combineKept = append(result.combineKept, partial.combineNotes...)
+			} else {
+				result.PartiallyRestored++
+			}
 			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, partial.detail))
 			revertLog.Warn("revert of change %s restored in part: %s", c.ID, partial.detail)
 			err = nil
@@ -1266,8 +1285,14 @@ func retiredBefore(b *database.Book, c *database.OperationChange) bool {
 // tag_write row whose kept properties changed since the operation, a metadata
 // apply batch with fields left, or a merge_combine_journal row whose undo
 // returned warnings (merge.CombineUndoResult.Warnings). RevertOperation counts
-// the row restored and reports detail in RevertResult.Kept.
-type partialTagRestore struct{ detail string }
+// the row restored and reports detail in RevertResult.Kept. combineNotes is
+// set (to the undo's warnings) only for a combine row: RevertOperation counts
+// it in CombinesUndoneInPart, not PartiallyRestored, and Summary lists the
+// notes.
+type partialTagRestore struct {
+	detail       string
+	combineNotes []string
+}
 
 // supersededRestore is a row's revert that wrote nothing because what it
 // would restore no longer applies (see RevertResult.Superseded). The row is

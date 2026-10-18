@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -240,6 +240,11 @@ Each of these has a test.
   again, and that second run removed a lock the user had set since,
   subtracted the reader's listening time a second time, and reported
   changes it had not made.
+- When an undo left something as it was, the message said "tags changed
+  since the operation were left as they are", which is not what happened
+  in a combine, and did not say what was left.
+- A combine that stopped part-way lost its undo number in some error
+  messages.
 
 **Why it mattered.** The first two and the fourth could quietly lose a
 credit, a lock or listening time someone had added. The third made a
@@ -262,5 +267,9 @@ routine repair run far slower and heavier than it needed to be.
   lock back only while it is still the one the combine set, it recognises
   listening progress it already put back, and it reports only what it
   actually changed.
+- An undo that leaves something as it was now says so in plain combine
+  terms and lists each item, in the Library message and the Activity log.
+- The error for a combine that stopped part-way now always carries its
+  undo number.
 
 Each of these has a test.

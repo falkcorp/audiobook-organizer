@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_combine.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7b0d52-c1e4-4a98-8d26-9e5a7c13b0f4
 // last-edited: 2026-10-18
 
@@ -90,7 +90,7 @@ func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) 
 		// changed since, progress it could not put back. Report each one on
 		// the revert (RevertResult.Kept) rather than only in the log.
 		return &partialTagRestore{detail: fmt.Sprintf("book %s: combine %s undone; left as is: %s",
-			c.BookID, c.NewValue, strings.Join(res.Warnings, "; "))}
+			c.BookID, c.NewValue, strings.Join(res.Warnings, "; ")), combineNotes: res.Warnings}
 	}
 	return nil
 }

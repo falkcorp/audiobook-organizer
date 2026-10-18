@@ -1,5 +1,5 @@
 // file: web/src/pages/libraryCombineToast.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 153032e4-1d3e-45a8-9827-f498afe24850
 // last-edited: 2026-10-18
 
@@ -102,6 +102,16 @@ export function describeUndoResult(
       severity: 'warning',
       undoOperationId: operationId,
       actionLabel: 'Retry',
+    };
+  }
+  if ((result.combines_undone_in_part ?? 0) > 0) {
+    // Undone, but the undo left something as it is (a credit or lock added
+    // since, an author it created that no book credits now). The server's
+    // message lists each one; a warning, and no Retry: running it again
+    // would leave the same things.
+    return {
+      message: result.message || 'Combine undone; some things were left as they are.',
+      severity: 'warning',
     };
   }
   return { message: result.message || 'Combine undone.', severity: 'success' };
