@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.35.0
+// version: 3.35.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-18
 
@@ -450,7 +450,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 }
 
 // introPreviewMarker and introLiveMarker open every progress message of a
-// full-transcribe or extract_only run, so a reader of the run's progress
+// run in every mode (full transcribe, extract_only and reparse_only), so a reader of the run's progress
 // (scripts/transcribe_monitor.py's PREVIEW_MARKER and LIVE_MARKER) can tell
 // the mode from any message, including the "Selecting work" line both modes
 // report first. TestIntroTranscribe_ProgressNamesTheMode pins them; change
@@ -586,6 +586,7 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 	if dryRun {
 		verb = "would update"
 	}
+	mark := introModeMarker(dryRun)
 	var scanned, changed int
 	for i, id := range ids {
 		if i%500 == 0 {
@@ -595,7 +596,7 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 			default:
 			}
 			_ = reporter.UpdateProgress(i, total,
-				fmt.Sprintf("Reparsing intros — %d/%d (%d %s)", i, total, changed, verb))
+				mark+fmt.Sprintf("Reparsing intros — %d/%d (%d %s)", i, total, changed, verb))
 		}
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil || b.IntroTranscription == nil || *b.IntroTranscription == "" {
@@ -671,10 +672,10 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 		"scanned", scanned, "changed", changed, "total_books", total)
 	if dryRun {
 		_ = reporter.UpdateProgress(total, total,
-			fmt.Sprintf("Dry run — would update %d of %d transcribed (%d books, nothing written; pass dry_run=false to apply)", changed, scanned, total))
+			mark+fmt.Sprintf("would update %d of %d transcribed (%d books; pass dry_run=false to apply)", changed, scanned, total))
 	} else {
 		_ = reporter.UpdateProgress(total, total,
-			fmt.Sprintf("Reparse complete — updated %d of %d transcribed (%d books)", changed, scanned, total))
+			mark+fmt.Sprintf("Reparse complete — updated %d of %d transcribed (%d books)", changed, scanned, total))
 	}
 	return nil
 }
