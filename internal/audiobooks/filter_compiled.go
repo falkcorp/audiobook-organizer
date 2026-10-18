@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -28,6 +29,7 @@ type compiledFilter struct {
 	text *querygrammar.TextMatcher // text forms (substring/glob/regex)
 	cmp  *querygrammar.Comparison  // numeric comparison / range / equality
 	dur  durationExpr              // parsed duration expression (duration fields only)
+	date *dateFilter               // parsed date term (date_added/date_modified and aliases only)
 	// budget times the regex and glob matches of a list or count scan
 	// (withBudget); nil for single-row callers, which are not timed.
 	budget *querygrammar.Budget
@@ -82,6 +84,13 @@ var ratingFields = map[string]bool{
 // internal/querygrammar). The error names the field and the value, and is
 // what the list handler returns as its 400.
 func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
+	return compileFieldFilterAt(f, time.Now())
+}
+
+// compileFieldFilterAt is compileFieldFilter with the instant relative dates
+// resolve against. A scan compiles its whole filter set at one instant
+// (compileFieldFilters), so every row, and every date filter, sees the same now.
+func compileFieldFilterAt(f FieldFilter, now time.Time) (compiledFilter, error) {
 	cf := compiledFilter{FieldFilter: f}
 	wrap := func(err error) error {
 		return fmt.Errorf("%s:%s — %w", f.Field, querygrammar.ShortToken(f.Value), err)
@@ -124,7 +133,20 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 		}
 		return cf, nil
 	case f.Field == "last_played":
-		return cf, nil // presence semantics, see matchesPerUserFilter
+		// A date term (>-30d, a..b, 2026-01-01) or last_played:* (ever played);
+		// matched by search.MatchPerUserFilters through perUserMatcher. Checked
+		// here so a malformed term is a 400, not a list that matches nothing.
+		if _, err := compileDateFilter(f, now); err != nil {
+			return cf, wrap(err)
+		}
+		return cf, nil
+	case dateFilterFields[f.Field]:
+		d, err := compileDateFilter(f, now)
+		if err != nil {
+			return cf, wrap(err)
+		}
+		cf.date = d
+		return cf, nil
 	case ratingFields[f.Field] ||
 		(numericFilterFields[f.Field] && !f.Quoted &&
 			(querygrammar.LooksLikeComparison(f.Value) || isBareNumericValue(f.Field, f.Value))):
@@ -155,8 +177,9 @@ func compileFieldFilters(filters []FieldFilter) ([]compiledFilter, error) {
 		(*hook)()
 	}
 	out := make([]compiledFilter, 0, len(filters))
+	now := time.Now() // one instant for the whole set; see compileFieldFilterAt
 	for _, f := range filters {
-		cf, err := compileFieldFilter(f)
+		cf, err := compileFieldFilterAt(f, now)
 		if err != nil {
 			return nil, err
 		}
@@ -284,6 +307,8 @@ func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt ru
 // fieldMatchesCompiled evaluates one compiled filter against a book.
 func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc, credits *creditLookup) bool {
 	switch {
+	case f.date != nil:
+		return f.date.matchesBook(book, f.Field)
 	case durationFilterFields[f.Field]:
 		return durationMatchesExpr(book, f.dur, rt)
 	case f.Field == "has_duration":

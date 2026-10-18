@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -330,6 +330,11 @@ func (svc *AudiobookService) searchCacheKey(search string, authorID, seriesID *i
 	q := search
 	if len(f.PerUserFilters) > 0 || f.RestrictToIDs != nil ||
 		f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil {
+		return "", false
+	}
+	// A relative date filter (date_added:>-1y) answers differently tomorrow
+	// under the same key.
+	if HasRelativeDateFilter(f.FieldFilters) {
 		return "", false
 	}
 	if SearchHasPerUserFilters(strings.TrimSpace(q)) || SearchHasRelativeDate(strings.TrimSpace(q)) {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-18
 
@@ -719,11 +719,13 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// is invalidated by all of them, so a search page never goes through this
 	// cache while that one is on. A per-user DSL query (read_status: and
 	// friends) is never cached here either: the key does not carry the user. Nor
-	// is a relative date query (last_played:>-30d): it depends on the clock.
+	// is a relative date query (last_played:>-30d, or a date_added:>-1y filter):
+	// it depends on the clock.
 	// An ident: filter is never cached here either: identification states
 	// move on metadata_cache writes, which do not move the library generation.
 	useListCache := len(filters.PerUserFilters) == 0 &&
 		!audiobookspkg.HasIdentFilter(filters.FieldFilters) &&
+		!audiobookspkg.HasRelativeDateFilter(filters.FieldFilters) &&
 		!(params.Search != "" && (h.searchServedByResultCache(params.Search, authorID, seriesID, filters) || audiobookspkg.SearchHasPerUserFilters(params.Search) || audiobookspkg.SearchHasRelativeDate(params.Search)))
 	if useListCache {
 		if cached, ok := h.listCache.Get(cacheKey); ok {

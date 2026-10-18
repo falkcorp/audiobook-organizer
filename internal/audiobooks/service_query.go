@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.37.1
+// version: 1.38.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -759,10 +759,15 @@ func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit 
 		// Requires a caller user ID; without one we skip rather than
 		// silently dropping every book.
 		if hasPerUser {
+			// Built once, with one "now" for every row of the pass.
+			perUserM, err := newPerUserMatcher(f.PerUserFilters)
+			if err != nil {
+				return nil, 0, fmt.Errorf("invalid filter value: %w", err)
+			}
 			perUserFiltered := make([]database.Book, 0, len(filtered))
 			for _, b := range filtered {
 				state, _ := svc.store.GetUserBookState(f.UserID, b.ID)
-				if matchesAllPerUserFilters(state, f.PerUserFilters) {
+				if perUserM.matches(state) {
 					perUserFiltered = append(perUserFiltered, b)
 				}
 			}
