@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -254,12 +254,12 @@ func (f *CombineFillEmpty) Empty() bool {
 
 // CombineOverrideUndo records the survivor's metadata before an override.
 type CombineOverrideUndo struct {
-	Applied        CombineOverride                         `json:"applied"`
-	TitleBefore    string                                  `json:"title_before"`
-	NarratorBefore *string                                 `json:"narrator_before,omitempty"`
-	AuthorIDBefore *int                                    `json:"author_id_before,omitempty"`
-	AuthorsBefore  []database.BookAuthor                   `json:"authors_before,omitempty"`
-	AuthorIDAfter  *int                                    `json:"author_id_after,omitempty"`
+	Applied        CombineOverride       `json:"applied"`
+	TitleBefore    string                `json:"title_before"`
+	NarratorBefore *string               `json:"narrator_before,omitempty"`
+	AuthorIDBefore *int                  `json:"author_id_before,omitempty"`
+	AuthorsBefore  []database.BookAuthor `json:"authors_before,omitempty"`
+	AuthorIDAfter  *int                  `json:"author_id_after,omitempty"`
 	// AuthorCreated is true when the combine itself created the author row
 	// AuthorIDAfter names (database.MintAuthor reported it minted the row), so
 	// its undo may delete that row once nothing credits it. It is written in
@@ -267,7 +267,7 @@ type CombineOverrideUndo struct {
 	// False for an author that already existed, and absent from a journal
 	// written before the field: an undo deletes nothing for either.
 	AuthorCreated bool                                    `json:"author_created,omitempty"`
-	FieldStates    map[string]*database.MetadataFieldState `json:"field_states_before,omitempty"`
+	FieldStates   map[string]*database.MetadataFieldState `json:"field_states_before,omitempty"`
 }
 
 // CombineUndoResult is what UndoCombine returns on success.
