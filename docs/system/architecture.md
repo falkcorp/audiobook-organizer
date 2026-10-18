@@ -1,5 +1,5 @@
 <!-- file: docs/system/architecture.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -116,7 +116,7 @@ Long-running jobs run as v2 Operations registered via `registry.OperationDef` (`
 
 ### Review Workspace and Repairs Lane
 
-`/review` in the UI is one workspace with four lanes — Review queue, Duplicates, Metadata and Repairs (`web/src/components/review/lanes/`). The review queue (`internal/server/handlers/review`, `database.ReviewStore`) is producer-agnostic: a producer such as the regroup op writes items, a human approves or rejects, and approve dispatches on the chosen action to a registered apply handler only while `review_apply_enabled` is on; approving an item again (`POST /review/items/:id/approve`, or `POST /review/bulk` with ids) executes one that was approved while the switch was off (`POST /review/replay-approved` was retired by 01-P81j).
+`/review` in the UI is one workspace with four lanes — Review queue, Duplicates, Metadata and Repairs (`web/src/components/review/lanes/`). The review queue (`internal/server/handlers/review`, `database.ReviewStore`) is producer-agnostic: a producer such as the regroup op writes items, a human approves or rejects, and approve dispatches on the chosen action to a registered apply handler only while `review_apply_enabled` is on; approving an item again (`POST /review/items/:id/approve`, or `POST /review/bulk` with ids) executes one that was approved while the switch was off; the bulk response lists `failed` items (they stay approved for a retry) and sets `apply_disabled` when the switch is off (`POST /review/replay-approved` was retired by 01-P81j).
 
 The Repairs lane is the shared framework in `internal/repairs`: a `Fixer` (`ID/Title/Description/Plan/Replan/Apply`) decides what a row is and how one row is written, and the engine owns everything that must not differ between fixers — plans run as the `repairs.plan` operation with every row stored in the op result, `repairs.apply` takes explicit row ids from a stored plan and refuses a row whose fingerprint changed (`changed_since_plan`), rows under `books/itunes/**` or Doctor Who / Big Finish / Torchwood are skipped and refused, writes go through a `Writer` that records metadata history and offers no delete, and apply holds the library-scan stand-down. The maintenance plugin registers the fixers (`Plugin.Repairs()`): `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.normalize-letter-l-ordinals`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair`. HTTP surface: `GET /api/v1/repairs`, `POST /repairs/:fixer/plan`, `GET /repairs/:fixer/plan/:op_id/rows`, `POST /repairs/:fixer/apply`.
 

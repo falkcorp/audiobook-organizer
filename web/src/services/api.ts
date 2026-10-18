@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.185.0
+// version: 2.186.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -7465,7 +7465,7 @@ export interface ReviewItem {
   updated_at: string;
   /** The action a HUMAN chose when approving, which may disagree with the payload's
    *  recommendedAction. Empty while pending, and empty on holds decided before
-   *  2026-08-06. The replay path prefers it over the recommendation, so this is the
+   *  2026-08-06. A later re-approve prefers it over the recommendation, so this is the
    *  durable record that an override happened. */
   chosen_action?: string;
 }
@@ -7524,6 +7524,14 @@ export interface ReviewBulkSkip {
   reason: string;
 }
 
+/** One item a bulk action could not complete (an apply handler or status-write
+ *  error). The item keeps the status it had, so it stays in the list and a resend
+ *  of its id retries it. */
+export interface ReviewBulkFail {
+  id: string;
+  reason: string;
+}
+
 /** POST /review/bulk → data.{action, processed, ...id buckets}. Note: the
  *  backend reports `processed`, NOT an `affected` count.
  *
@@ -7536,6 +7544,11 @@ export interface ReviewBulkResult {
   rejected?: string[];
   not_found?: string[];
   skipped?: ReviewBulkSkip[];
+  /** Items whose apply errored; the batch carried on past them. MUST be surfaced. */
+  failed?: ReviewBulkFail[];
+  /** True on an approve while review_apply_enabled is off: approvals were recorded
+   *  but nothing was applied. */
+  apply_disabled?: boolean;
   processed: number;
 }
 
@@ -7603,7 +7616,7 @@ export async function getReviewItems(
  *  Omitting `action` means "do what the hold recommends" — but the backend refuses to
  *  default an `insufficient-evidence` hold (400), which is every hold written before
  *  2026-08-06, so the UI must send an explicit choice for those. The chosen action is
- *  persisted on the item, so an override survives to the later replay.
+ *  persisted on the item, so an override survives to the later re-approve.
  *
  *  Errors carry the backend's own message (buildApiError reads `error`), which is how
  *  the 501 for `duplicate-of` reaches the reviewer intact instead of as "failed". */

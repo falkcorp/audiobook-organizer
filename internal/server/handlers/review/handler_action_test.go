@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_action_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5c1f0a83-6d47-4e29-b0a5-3f7c8e2d94b1
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 // Tests for ACTION-KEYED approve dispatch (owner item 2, 2026-08-06).
 //
@@ -312,12 +312,12 @@ func TestApprove_AmbiguousRecommendingCombine_NowCombines(t *testing.T) {
 }
 
 // 🔴 review_apply_enabled IS STILL THE GATE, AND THE OVERRIDE IS STILL RECORDED.
-// With the switch OFF — production's setting — an explicit override of a REPLAYABLE
+// With the switch OFF — production's setting — an explicit override of a APPLYABLE
 // recommendation must be accepted (that is the only way a reviewer can register a
 // disagreement at all), must execute nothing, and must persist what they chose.
 //
 // This case used to be a 409 REVIEW_OVERRIDE_NOT_PERSISTABLE, because there was
-// nowhere to store the choice and a later replay would have re-read `combine` from
+// nowhere to store the choice and a later re-approve would have re-read `combine` from
 // the payload. ChosenAction is that storage, so the refusal is gone.
 func TestApprove_ApplyGateOff_OverrideRecordsButDoesNotApply(t *testing.T) {
 	s := newTestStore(t)
@@ -337,7 +337,7 @@ func TestApprove_ApplyGateOff_OverrideRecordsButDoesNotApply(t *testing.T) {
 	}
 	if got.ChosenAction != itunesservice.ActionSeparate {
 		t.Fatalf("chosen_action = %q, want separate — the override must survive the write, "+
-			"or a later replay re-reads 'combine' from the payload and merges the books", got.ChosenAction)
+			"or a later re-approve re-reads 'combine' from the payload and merges the books", got.ChosenAction)
 	}
 	if body["data"].(map[string]any)["note"] == nil {
 		t.Fatal("expected the review-only note explaining nothing was applied")
@@ -345,7 +345,7 @@ func TestApprove_ApplyGateOff_OverrideRecordsButDoesNotApply(t *testing.T) {
 }
 
 // The recommendation is persisted too when the reviewer accepts it (empty body), so
-// replay never has to re-derive an action for a hold decided after 2026-08-06.
+// a later re-approve never has to re-derive an action for a hold decided after 2026-08-06.
 func TestApprove_AcceptedRecommendationIsAlsoPersisted(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
@@ -361,8 +361,8 @@ func TestApprove_AcceptedRecommendationIsAlsoPersisted(t *testing.T) {
 }
 
 // 🔴 A RE-APPROVE WITH AN EMPTY BODY MUST NOT REVERT A RECORDED OVERRIDE. Re-approving
-// a decided hold is a supported flow (it is the recovery path replay's skip reason
-// advertises), so the default has to be the hold's EFFECTIVE action — what the human
+// a decided hold is a supported flow (it is how a hold approved while apply was off
+// is executed now that replay-approved is retired), so the default has to be the hold's EFFECTIVE action — what the human
 // last chose — not the payload's recommendation.
 func TestApprove_EmptyBodyOnDecidedHold_KeepsThePersistedOverride(t *testing.T) {
 	s := newTestStore(t)
