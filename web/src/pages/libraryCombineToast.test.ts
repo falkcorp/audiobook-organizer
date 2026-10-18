@@ -1,5 +1,5 @@
 // file: web/src/pages/libraryCombineToast.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: c0c7ee3f-0536-48da-951a-b0bfa6e93857
 // last-edited: 2026-10-18
 
@@ -69,6 +69,7 @@ describe('libraryCombineToast', () => {
     expect(p.undoOperationId).toBe('op-1');
     expect(p.actionLabel).toBe('Undo');
     expect(p.message.match(/stopped part-way/g)).toHaveLength(1);
+    expect(p.message).toContain('operation op-1');
   });
 
   it('a partial undo offers Retry of the same operation', () => {
@@ -77,6 +78,7 @@ describe('libraryCombineToast', () => {
     expect(p.undoOperationId).toBe('op-2');
     expect(p.actionLabel).toBe('Retry');
     expect(p.message).not.toContain('Activity');
+    expect(p.message).toContain('operation op-2');
   });
 
   it('a refused undo (409) offers no retry; a failed one does', () => {
@@ -87,5 +89,6 @@ describe('libraryCombineToast', () => {
     expect(failed.undoOperationId).toBe('op-3');
     expect(failed.actionLabel).toBe('Retry');
     expect(failed.message).toContain('disk full');
+    expect(failed.message).toContain('operation op-3');
   });
 });
