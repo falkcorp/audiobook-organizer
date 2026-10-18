@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package versions
 
@@ -638,7 +638,7 @@ func (failStrandedLookupStore) GetBookVersionsByBookID(string) ([]database.BookV
 // NewBook means the caller created the book moments ago, so nothing can be
 // stranded and the stranded-version lookup is skipped: a failure of that read
 // must not cost the version, and with it the torrent index entry that turns a
-// retried discover import into a 409. Without NewBook the same failure aborts
+// retried import of the same torrent into a 409. Without NewBook the same failure aborts
 // the create (the control half), so the test cannot pass because the store
 // stopped failing.
 func TestCreateIngestVersion_NewBookSkipsStrandedLookup(t *testing.T) {

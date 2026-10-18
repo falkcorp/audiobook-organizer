@@ -1,7 +1,7 @@
 // file: internal/importer/torrent_link_race_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e2a91c4-0b7d-4f53-a8e6-3d15c9b7f402
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 package importer
 
@@ -133,8 +133,8 @@ func (s *failingFileStore) CreateBookFile(*database.BookFile) error {
 }
 
 // A failed book_file write keeps the version, and with it the torrent index
-// entry. That entry is the only thing that turns a retried discover import
-// into a 409 instead of a second book (every ImportFile mints a new book), so
+// entry. That entry is the only thing that turns a retried import of the
+// same torrent into a 409 instead of a second book (every ImportFile mints a new book), so
 // it is the reason the version is not rolled back with the row.
 func TestImportFile_FileWriteFailureKeepsTorrentIndexForRetry(t *testing.T) {
 	withSupportedExt(t)
