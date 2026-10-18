@@ -1,5 +1,5 @@
 // file: internal/database/review_claim_test.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 74ff5b50-d848-43ed-91e5-889e92c828b1
 // last-edited: 2026-10-18
 
@@ -436,7 +436,7 @@ func TestAbandon_MovesOnlyAnInterruptedClaimToNeedsAttention(t *testing.T) {
 	}
 	if got.Status != ReviewStatusNeedsAttention || got.ApplyAbandonedAction != "version-group" ||
 		got.ApplyClaimAction != "" || got.ApplyClaimToken != "" || got.ApplyClaimInstance != "" ||
-		got.ApplyClaimedFrom != "" || got.ApplyClaimRerun || got.ChosenAction != "combine" {
+		got.ApplyClaimedFrom != "" || got.ApplyClaimRerun || got.ChosenAction != "version-group" {
 		t.Fatalf("after abandon = %+v", got)
 	}
 	if countStatus(t, s, ReviewStatusNeedsAttention) != 1 {
@@ -536,5 +536,56 @@ func TestUpsert_LeavesAClaimedItemAlone(t *testing.T) {
 	if got.Status != ReviewStatusApplying || after.Status != ReviewStatusApplying || after.Payload != before.Payload ||
 		after.Summary != before.Summary || !after.UpdatedAt.Equal(before.UpdatedAt) || after.ApplyClaimToken != c.Token {
 		t.Fatalf("re-scan of a claimed item: returned %+v, stored %+v; want it untouched (%+v)", got, after, before)
+	}
+}
+
+// Abandoning records the abandoned action as ChosenAction. An approve with no
+// explicit action resolves to ChosenAction (effectiveActionFor), so without this an
+// operator who abandoned an override ("version-group" over a "combine"
+// recommendation) and approved again with an empty body or bulk by ids would run the
+// recommendation instead. Only a claim that ends in an abandon (or a finish) records
+// the action; a claim that is released does not, so a failed first run leaves no
+// override behind.
+func TestAbandon_RecordsTheAbandonedActionAsChosenAction(t *testing.T) {
+	s := newReviewTestStore(t)
+	it := seedClaimItem(t, s, "k1", ReviewStatusPending)
+
+	c := mustClaim(t, s, it.ID, "version-group")
+	if c.Item.ChosenAction != "" {
+		t.Fatalf("a claim recorded ChosenAction %q; only a finish or an abandon may", c.Item.ChosenAction)
+	}
+	simulateRestart(t, s)
+	got, err := s.AbandonReviewItemClaim(it.ID)
+	if err != nil || got == nil {
+		t.Fatalf("abandon = %+v, %v", got, err)
+	}
+	if got.ChosenAction != "version-group" || got.ApplyAbandonedAction != "version-group" {
+		t.Fatalf("after abandon chosen=%q abandoned=%q; want both version-group", got.ChosenAction, got.ApplyAbandonedAction)
+	}
+	stored, _ := s.GetReviewItem(it.ID)
+	if stored.ChosenAction != "version-group" {
+		t.Fatalf("stored ChosenAction = %q, want version-group", stored.ChosenAction)
+	}
+	// A decision with no action keeps it; the operator's later approve resolves to it.
+	decided, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "", time.Time{})
+	if err != nil || decided.ChosenAction != "version-group" {
+		t.Fatalf("decide with no action = %+v, %v; want ChosenAction kept", decided, err)
+	}
+	assertStatusIndexConsistent(t, s)
+}
+
+// A first-run claim that is released (its apply failed) leaves no override behind:
+// ChosenAction is what a later approve with no action runs, and an apply that never
+// finished must not have changed it.
+func TestClaim_ReleasedFirstRunLeavesChosenActionAlone(t *testing.T) {
+	s := newReviewTestStore(t)
+	it := seedClaimItem(t, s, "k1", ReviewStatusApproved) // approved as "combine"
+	c := mustClaim(t, s, it.ID, "version-group")
+	back, err := s.ReleaseReviewItemClaim(it.ID, c.Token)
+	if err != nil || back == nil {
+		t.Fatalf("release = %+v, %v", back, err)
+	}
+	if back.Status != ReviewStatusApproved || back.ChosenAction != "combine" {
+		t.Fatalf("after a released first run status=%q chosen=%q; want approved/combine", back.Status, back.ChosenAction)
 	}
 }
