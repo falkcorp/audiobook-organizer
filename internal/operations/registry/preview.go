@@ -1,5 +1,5 @@
 // file: internal/operations/registry/preview.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 1d72f677-0951-40e4-9b15-cb9211c3e50a
 // last-edited: 2026-10-18
 
@@ -204,10 +204,12 @@ func modeErrorf(format string, args ...any) error {
 
 // SameMode reports whether two params bodies of the op run in the same mode,
 // judged by what each body does at run time, not by Resolve's normalization:
-// Resolve refuses bodies (an undecoded key, keys that disagree, a case
-// variant) that a run still decodes and runs in some mode. A body whose mode
-// cannot be read (malformed JSON, a non-bool mode value, two case variants of
-// one key) is in no mode and never the same as another. EnqueueOp's dedupe
+// Resolve refuses bodies (an undecoded key, a case variant) that a run still
+// decodes and runs in some mode. A body with no run-time mode is in no mode
+// and never the same as another: malformed JSON, a non-bool mode value, two
+// case variants of one key only when their values differ, and a body the run
+// itself refuses (dry_run and dryRun that disagree; for AnyFamilyWrites, a
+// write switch beside dry_run=true). EnqueueOp's dedupe
 // uses it, after a byte-equality check, so a live request is never answered
 // with a queued preview's run id, or the reverse.
 func (p PreviewSpec) SameMode(a, b json.RawMessage) bool {
@@ -229,8 +231,10 @@ func (p PreviewSpec) SameMode(a, b json.RawMessage) bool {
 //
 //   - an absent or null key takes the op's preview default (dry_run and
 //     dryRun true, apply and live false);
-//   - dry_run and dryRun that disagree are a preview, as opmode.ResolveDryRun
-//     fails toward preview;
+//   - dry_run and dryRun stated with different values are an error: the run
+//     refuses them (opmode.ResolveDryRun), so the body has no mode;
+//   - for AnyFamilyWrites, a family that says write beside dry_run stated
+//     true is an error too (version-group-primary-repair refuses it);
 //   - each family says write or not, and the run is live when every family
 //     does, or when any does for an op that declares AnyFamilyWrites;
 //   - an op with no mode-key family is live when a LiveOneOf switch is true.
@@ -259,22 +263,22 @@ func (p PreviewSpec) modeSignature(params json.RawMessage) (string, error) {
 
 	families := p.ModeFamilies()
 	writes := 0
+	dryRunStatedTrue := false
 	for _, f := range families {
 		var w bool
 		switch f {
 		case ModeKeyDryRun:
-			// One switch, two spellings: it writes when a spelling is stated
-			// false and none is stated true (a disagreement previews, and
-			// neither stated is the preview default).
+			// One switch, two spellings: it writes when a stated spelling is
+			// false; neither stated is the preview default.
+			if stated[ModeKeyDryRun] && stated[ModeKeyDryRunCamel] &&
+				switches[ModeKeyDryRun] != switches[ModeKeyDryRunCamel] {
+				return "", modeErrorf("dry_run and dryRun disagree; the run refuses the body")
+			}
 			for _, k := range []string{ModeKeyDryRun, ModeKeyDryRunCamel} {
-				if !stated[k] {
-					continue
+				if stated[k] {
+					w = !switches[k]
+					dryRunStatedTrue = dryRunStatedTrue || switches[k]
 				}
-				if switches[k] {
-					w = false
-					break
-				}
-				w = true
 			}
 		default:
 			w = switches[f]
@@ -290,6 +294,9 @@ func (p PreviewSpec) modeSignature(params json.RawMessage) (string, error) {
 			live = live || switches[k]
 		}
 	case p.AnyFamilyWrites:
+		if writes > 0 && dryRunStatedTrue {
+			return "", modeErrorf("a write switch beside dry_run=true; the run refuses the body")
+		}
 		live = writes > 0
 	default:
 		live = writes == len(families)

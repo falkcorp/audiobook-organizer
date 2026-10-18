@@ -1,5 +1,5 @@
 // file: internal/operations/registry/enqueue_dedupe_mode_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: bf374303-0b13-466b-b0d6-f5efc8453cff
 // last-edited: 2026-10-18
 
@@ -141,8 +141,9 @@ func TestEnqueueDedupe_LiveOneOfSwitchesAreDifferentWork(t *testing.T) {
 
 // TestPreviewSpec_SameMode reads bodies by what they do at run time: an
 // absent or null key is the preview default, a case variant decodes into the
-// same field, a key the type does not decode is ignored, and dry_run/dryRun
-// that disagree are a preview. Bodies whose mode cannot be read are in no mode.
+// same field, and a key the type does not decode is ignored. Bodies whose mode
+// cannot be read, or that the run refuses (dry_run/dryRun that disagree), are
+// in no mode.
 func TestPreviewSpec_SameMode(t *testing.T) {
 	spec := registry.PreviewSpec{Params: opmode.DryRunParams{}}
 	same := [][2]string{
@@ -152,7 +153,6 @@ func TestPreviewSpec_SameMode(t *testing.T) {
 		{`{"apply":true}`, `{}`},
 		{`{"dry_run":null}`, `{}`},
 		{`{"DRY_RUN":false}`, `{"dry_run":false}`},
-		{`{"dry_run":true,"dryRun":false}`, `{}`},
 		{` null` + "\n", `{}`},
 		{``, `{}`},
 	}
@@ -166,6 +166,10 @@ func TestPreviewSpec_SameMode(t *testing.T) {
 		{`[1]`, `[1]`},
 		{`{"dry_run":"false"}`, `{"dry_run":"false"}`},
 		{`{"DRY_RUN":true,"dry_run":false}`, `{"DRY_RUN":true,"dry_run":false}`},
+		// The run refuses dry_run and dryRun that disagree, so the body has
+		// no mode; it is not a preview.
+		{`{"dry_run":true,"dryRun":false}`, `{}`},
+		{`{"dry_run":true,"dryRun":false}`, `{"dry_run":true,"dryRun":false}`},
 	}
 	for _, c := range diff {
 		if spec.SameMode(json.RawMessage(c[0]), json.RawMessage(c[1])) {
@@ -209,6 +213,12 @@ func TestPreviewSpec_SameMode_TwoFamilies(t *testing.T) {
 		{anyW, `{"apply":true}`, `{"dry_run":false}`, true},
 		{anyW, `{"apply":true}`, `{}`, false},
 		{anyW, `{"dry_run":false}`, `{"dry_run":false,"apply":true}`, true},
+		// version-group-primary-repair refuses apply beside dry_run=true, so
+		// that body has no mode: not live (as "any family writes" would say),
+		// not a preview.
+		{anyW, `{"dry_run":true,"apply":true}`, `{"apply":true}`, false},
+		{anyW, `{"dry_run":true,"apply":true}`, `{}`, false},
+		{anyW, `{"dry_run":true}`, `{}`, true},
 	} {
 		if got := c.spec.SameMode(json.RawMessage(c.a), json.RawMessage(c.b)); got != c.same {
 			t.Errorf("AnyFamilyWrites=%v SameMode(%s, %s) = %v, want %v", c.spec.AnyFamilyWrites, c.a, c.b, got, c.same)
