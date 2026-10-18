@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 1c9d0e8f-2a3b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 //
 // Deluge integration — HTTP handlers and thin shims.
 //
@@ -143,7 +143,12 @@ func (s *Server) registerDelugeRoutes(protected *gin.RouterGroup) {
 		dg.GET("/torrents", s.perm("integrations.manage"), s.handleDelugeListTorrents)
 		dg.GET("/labels", s.perm("integrations.manage"), s.handleDelugeListLabels)
 		dg.GET("/discover", s.perm("integrations.manage"), s.handleDelugeDiscover)
-		dg.POST("/discover/import", s.perm("integrations.manage"), s.handleDelugeDiscoverImport)
+		// POST /discover/import (import one discovered torrent file) had no caller
+		// in the repo (01-P81k). It answers 410 Gone for one release (owner
+		// decision D9) and is then removed. It keeps its s.perm guard, so an
+		// unauthenticated caller still gets 401 and only an allowed caller learns
+		// it is gone. GET /discover and GET /labels are kept (owner decision D73).
+		dg.POST("/discover/import", s.perm("integrations.manage"), gone("POST /api/v1/import/file (imports one file by path, without a torrent link)"))
 	}
 
 	// Bulk-import pending Deluge files (settings.manage permission).
