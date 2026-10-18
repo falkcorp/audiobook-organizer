@@ -399,3 +399,43 @@ func TestReconcileStaleHolds_SkippedOnCappedRun(t *testing.T) {
 		t.Fatalf("hold must remain after a capped run, got %d", n)
 	}
 }
+
+// decidingLister approves one hold right after the reconcile lists the pending
+// holds: a reviewer acting between the list and the delete.
+type decidingLister struct {
+	*database.PebbleStore
+	decideID string
+}
+
+func (d *decidingLister) ListReviewItems(f database.ReviewFilter) ([]database.ReviewItem, int, error) {
+	items, total, err := d.PebbleStore.ListReviewItems(f)
+	if err == nil {
+		if _, derr := d.DecideReviewItem(d.decideID, database.ReviewStatusApproved, "separate"); derr != nil {
+			return nil, 0, derr
+		}
+	}
+	return items, total, err
+}
+
+// TestReconcileStaleHolds_LeavesAHoldDecidedAfterTheList: the list is a snapshot, so
+// a hold approved between it and the delete keeps its decision and is not counted.
+func TestReconcileStaleHolds_LeavesAHoldDecidedAfterTheList(t *testing.T) {
+	s := regroupStore(t)
+	staleKey := regroupDedupKey(itunesservice.KindAnthology, "/books/stale")
+	seedHold(t, s, itunesservice.KindAnthology, staleKey, "/books/stale")
+	decidedKey := regroupDedupKey(itunesservice.KindAnthology, "/books/decided")
+	decided := seedHold(t, s, itunesservice.KindAnthology, decidedKey, "/books/decided")
+
+	purged := reconcileStaleHolds(context.Background(), &decidingLister{PebbleStore: s, decideID: decided.ID},
+		&fakeReporter{}, nil, 0)
+	if purged != 1 {
+		t.Fatalf("purged %d, want 1 (only the hold still pending)", purged)
+	}
+	got, _ := s.GetReviewItem(decided.ID)
+	if got == nil || got.Status != database.ReviewStatusApproved || got.ChosenAction != "separate" {
+		t.Fatalf("decided hold = %+v, want it kept with its decision", got)
+	}
+	if keys := remainingKeys(t, s); keys[staleKey] || !keys[decidedKey] {
+		t.Fatalf("remaining keys = %v", keys)
+	}
+}

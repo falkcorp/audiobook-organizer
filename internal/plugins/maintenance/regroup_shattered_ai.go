@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-10-18
 
@@ -352,7 +352,13 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 				"(already-decided=%d left as they are, marshal-errors=%d, skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
 			wouldUpsert, len(stale), alreadyDecided, writeErrs, skippedFrozen.Load(), len(groups), st.ByKind)
 	} else {
-		purged := reconcileStaleHolds(ctx, store, reporter, groups, params.Limit)
+		purged := 0
+		if holds, ok := database.AsCapability[reviewHoldStore](store); ok {
+			purged = reconcileStaleHolds(ctx, holds, reporter, groups, params.Limit)
+		} else {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				"reconcile: store %T cannot delete review holds conditionally; skipping the stale-hold purge", store))
+		}
 		result = fmt.Sprintf(
 			"APPLY — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d, "+
 				"skipped-frozen-itunes=%d) from %d detected groups; books and files untouched. bykind=%v",
@@ -373,10 +379,13 @@ const reconcileScanLimit = 100_000
 // reconcileStaleHolds deletes PENDING regroup.* holds whose DedupKey is not in the set
 // this run emitted, returning the number purged. Returns 0 (a no-op) when limit > 0 (a
 // canary run emits only a subset, so purging the rest would be wrong). It never touches
-// non-regroup holds (another producer's rows) or human-decided holds. Sequential by
-// design: the pending-hold count is bounded (intentional holds only), each delete is a
-// cheap local Pebble write, and DeleteReviewItem/UpsertReviewItem share one mutex, so a
-// worker pool would only add contention.
+// non-regroup holds (another producer's rows) or human-decided holds: the list is a
+// snapshot, so each delete re-checks the status under the store's review lock
+// (DeleteReviewItemIfPending) and a hold decided or claimed for apply since the list
+// is left alone and not counted. Sequential by design: the pending-hold count is
+// bounded (intentional holds only), each delete is a cheap local Pebble write, and the
+// delete and UpsertReviewItem share one mutex, so a worker pool would only add
+// contention.
 func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
 	stale := staleRegroupHolds(store, reporter, groups, limit)
 	purged := 0
@@ -384,11 +393,14 @@ func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sd
 		if ctx.Err() != nil {
 			break
 		}
-		if derr := store.DeleteReviewItem(it.ID); derr != nil {
+		deleted, derr := store.DeleteReviewItemIfPending(it.ID)
+		if derr != nil {
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: delete stale hold %s (%s): %v", it.ID, it.FolderRef, derr))
 			continue
 		}
-		purged++
+		if deleted {
+			purged++
+		}
 	}
 	_ = reporter.Log(slog.LevelInfo,
 		fmt.Sprintf("RECONCILE-PURGE: deleted %d superseded pending regroup holds (folder no longer emitted)", purged))
@@ -403,7 +415,7 @@ const regroupPreviewSamples = 5
 // to report what a live run would purge and reconcileStaleHolds deletes exactly this
 // list. Nil when limit > 0 (a canary run emits a subset) or when the pending list cannot
 // be read (logged).
-func staleRegroupHolds(store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
+func staleRegroupHolds(store reviewHoldLister, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
 	if limit > 0 {
 		return nil
 	}
@@ -437,7 +449,7 @@ func staleRegroupHolds(store reviewHoldStore, reporter sdk.Reporter, groups []it
 // review queue (the status index has no "not pending" scan, and a new decided
 // status must not be missed). On a read error it logs and returns nil, so the
 // preview counts every group as would-upsert, as it did before this check.
-func decidedRegroupHolds(store reviewHoldStore, reporter sdk.Reporter) map[string]struct{} {
+func decidedRegroupHolds(store reviewHoldLister, reporter sdk.Reporter) map[string]struct{} {
 	items, total, err := store.ListReviewItems(database.ReviewFilter{Limit: reconcileScanLimit})
 	if err != nil {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("preview: list review items: %v; already-decided holds are counted as would-upsert", err))

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -231,8 +231,20 @@ type bookByIDReader interface {
 
 // reviewHoldStore lists and clears review-queue items. Scoped to the review
 // tables so a hold-reconciler cannot reach book data at all.
+//
+// The delete is the conditional one (database.ReviewItemPendingDeleter): the
+// reconcile lists pending holds and then deletes, and an unconditional delete would
+// erase a decision or an apply claim made in between. It is a capability, not a
+// Store method, so callers resolve this slice with database.AsCapability and the
+// MockStore (which lacks it) is not asserted against it.
 type reviewHoldStore interface {
-	DeleteReviewItem(id string) error
+	database.ReviewItemPendingDeleter
+	reviewHoldLister
+}
+
+// reviewHoldLister is the read half of reviewHoldStore: the preview and the
+// stale-hold scan only list, so they take this and need no capability lookup.
+type reviewHoldLister interface {
 	ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
 }
 
@@ -275,7 +287,6 @@ var (
 	_ fsRegroupStore     = (*database.MockStore)(nil)
 	_ itunesRegroupStore = (*database.MockStore)(nil)
 	_ orphanFileScanner  = (*database.MockStore)(nil)
-	_ reviewHoldStore    = (*database.MockStore)(nil)
 )
 
 // The five holdouts below took database.Store -- 398 methods -- until
