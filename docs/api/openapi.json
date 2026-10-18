@@ -7684,6 +7684,7 @@
               "backfill-book-files",
               "backfill-file-hashes",
               "backfill-itunes-positions",
+              "backfill-merge-undo-pointers",
               "backfill-metadata-source-hash",
               "backfill-sync-ids",
               "bulk-deluge-import",

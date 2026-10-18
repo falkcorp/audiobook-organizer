@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 package jobs_test
 
@@ -58,7 +58,12 @@ import (
 // library.bulk-metadata-fetch (apply) and metadata.candidate-fetch (candidate
 // cache) replace it. Its op ID is in opscatalog.Tombstones. It was one of
 // the CanResume()==true jobs, so the resumable count drops from 8 to 7.
-const wantJobCount = 33
+//
+// 2026-10-18: 33 → 34. `backfill-merge-undo-pointers` was added: it gives
+// older combine and sibling-move journals the undo pointer POST
+// /operations/:id/revert follows. CanResume()==false, so the resumable count
+// stays 7.
+const wantJobCount = 34
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.

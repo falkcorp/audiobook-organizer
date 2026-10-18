@@ -274,3 +274,4 @@ dedup.window-index-build
 dedup.label-refinement
 maintenance.transcode-temp-cleanup
 identification.advance
+maintenance.backfill-merge-undo-pointers
