@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_wal_truncate_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-18
 
@@ -1124,7 +1124,7 @@ func freedPagesStoreWithInterval(t *testing.T, interval time.Duration) *SQLActiv
 			t.Fatalf("open: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
-		s.freeBytes = func(string) (uint64, error) { return 1 << 50, nil }
+		s.SetFreeBytesFunc(func(string) (uint64, error) { return 1 << 50, nil })
 	} else {
 		s = newTestSQLStore(t)
 	}
@@ -1276,7 +1276,7 @@ func TestVacuumActivity_RefusesWithoutFreeSpace(t *testing.T) {
 		t.Fatalf("RequiredBytes = %d, want vacuumRequiredBytes (>= the 1 GiB floor)", base.RequiredBytes)
 	}
 
-	s.freeBytes = func(string) (uint64, error) { return uint64(base.RequiredBytes) - 1, nil }
+	s.SetFreeBytesFunc(func(string) (uint64, error) { return uint64(base.RequiredBytes) - 1, nil })
 	prev, err := RunActivityVacuum(ctx, s, true)
 	if err != nil {
 		t.Fatalf("a preview that would refuse must still succeed: %v", err)
@@ -1298,7 +1298,7 @@ func TestVacuumActivity_RefusesWithoutFreeSpace(t *testing.T) {
 	}
 
 	// Exactly the required amount is enough.
-	s.freeBytes = func(string) (uint64, error) { return uint64(base.RequiredBytes), nil }
+	s.SetFreeBytesFunc(func(string) (uint64, error) { return uint64(base.RequiredBytes), nil })
 	if _, err := RunActivityVacuum(ctx, s, false); err != nil {
 		t.Fatalf("free == required must proceed: %v", err)
 	}
@@ -1308,7 +1308,7 @@ func TestVacuumActivity_RefusesWithoutFreeSpace(t *testing.T) {
 // proof of enough space.
 func TestVacuumActivity_RefusesWhenFreeSpaceIsUnreadable(t *testing.T) {
 	s := freedPagesStore(t)
-	s.freeBytes = func(string) (uint64, error) { return 0, fmt.Errorf("statfs: boom") }
+	s.SetFreeBytesFunc(func(string) (uint64, error) { return 0, fmt.Errorf("statfs: boom") })
 	rep, err := RunActivityVacuum(context.Background(), s, false)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("error = %v, want the free-space failure named", err)
@@ -1392,5 +1392,23 @@ func TestVacuumActivity_RefusesWhenTheTempDirPinFails(t *testing.T) {
 	_, err := s.VacuumActivity(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "cannot keep its temp copy off TMPDIR") {
 		t.Fatalf("error = %v, want the pin failure to refuse the vacuum", err)
+	}
+}
+
+// TestVacuumActivity_NoFreeSpaceProbeFailsClosed: internal/database does not import
+// diskstats (SDK closure), so a store nobody wired a probe into must refuse.
+func TestVacuumActivity_NoFreeSpaceProbeFailsClosed(t *testing.T) {
+	s := freedPagesStore(t)
+	s.SetFreeBytesFunc(nil)
+	prev, err := RunActivityVacuum(context.Background(), s, true)
+	if err != nil || !prev.Before.WouldRefuse || !strings.Contains(prev.Before.PreflightNote, "free space unknown") {
+		t.Fatalf("preview = %+v, %v; want would_refuse with 'free space unknown'", prev.Before, err)
+	}
+	rep, err := RunActivityVacuum(context.Background(), s, false)
+	if err == nil || !strings.Contains(err.Error(), "free space unknown") {
+		t.Fatalf("live error = %v, want a free-space-unknown refusal", err)
+	}
+	if after, _ := s.VacuumStats(context.Background()); after.FreelistCount != rep.Before.FreelistCount {
+		t.Error("a refused run vacuumed anyway")
 	}
 }

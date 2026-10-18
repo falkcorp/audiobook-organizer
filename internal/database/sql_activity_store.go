@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-10-18
 
@@ -59,10 +59,10 @@ type SQLActivityStore struct {
 	dialect sqlDialect
 	path    string
 
-	// freeBytes reports free space for the vacuum preflight; nil means
-	// diskstats. A field, not a package var, so a test can inject a figure
-	// without racing parallel tests.
-	freeBytes freeBytesFunc
+	// freeBytes is the free-space probe for the vacuum preflight, injected by
+	// SetFreeBytesFunc (nil = unknown, which fails closed). A field, not a
+	// package var, so a test can inject a figure without racing parallel tests.
+	freeBytes atomic.Pointer[FreeBytesFunc]
 
 	// backfillGate keeps every row-deleting maintenance pass (CompactByDay,
 	// Summarize, Prune — write side) out of the window between

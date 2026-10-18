@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_wal_truncate.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
 // last-edited: 2026-10-18
 
@@ -33,8 +33,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/diskstats"
 )
 
 // ActivityVacuumStats is a point-in-time measurement of the SQLite activity
@@ -97,13 +95,20 @@ func vacuumRequiredBytes(st ActivityVacuumStats) int64 {
 	return base + margin
 }
 
-// freeBytesFunc reports the bytes available to this process on the filesystem
-// holding path. Production uses diskstats.Stats; tests inject a fake.
-type freeBytesFunc func(path string) (uint64, error)
+// FreeBytesFunc reports the bytes available to this process on the filesystem
+// holding path. It is INJECTED (SetFreeBytesFunc), not imported: internal/database
+// is in the plugin SDK's dependency closure, which sdkguard pins, so the real
+// diskstats.Stats is wired in by internal/server. A store with no func wired
+// fails closed: the preview reports would_refuse and a live run refuses.
+type FreeBytesFunc func(path string) (uint64, error)
 
-func diskstatsFreeBytes(path string) (uint64, error) {
-	_, free, err := diskstats.Stats(path)
-	return free, err
+// SetFreeBytesFunc wires the free-space probe the VACUUM preflight uses.
+func (s *SQLActivityStore) SetFreeBytesFunc(f FreeBytesFunc) {
+	if f == nil {
+		s.freeBytes.Store(nil)
+		return
+	}
+	s.freeBytes.Store(&f)
 }
 
 // compile-time proof that the SQLite store is the vacuumer: without it a rename
@@ -146,11 +151,13 @@ func (s *SQLActivityStore) VacuumStats(ctx context.Context) (ActivityVacuumStats
 	}
 
 	st.RequiredBytes = vacuumRequiredBytes(st)
-	freeFn := s.freeBytes
-	if freeFn == nil {
-		freeFn = diskstatsFreeBytes
+	var free uint64
+	var ferr error
+	if fp := s.freeBytes.Load(); fp == nil {
+		ferr = errors.New("free space unknown: no free-space probe wired")
+	} else {
+		free, ferr = (*fp)(filepath.Dir(s.path))
 	}
-	free, ferr := freeFn(filepath.Dir(s.path))
 	switch {
 	case ferr != nil:
 		// Fail closed: an unreadable free-space figure is not proof of enough space.
@@ -169,6 +176,7 @@ func (s *SQLActivityStore) VacuumStats(ctx context.Context) (ActivityVacuumStats
 type ActivityVacuumer interface {
 	VacuumStats(ctx context.Context) (ActivityVacuumStats, error)
 	VacuumActivity(ctx context.Context) (time.Duration, error)
+	SetFreeBytesFunc(f FreeBytesFunc)
 }
 
 // FindActivityVacuumer digs the SQLite store out from behind the migration
