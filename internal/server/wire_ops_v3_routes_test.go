@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-18
 
@@ -329,8 +329,42 @@ func TestOpsV3_WritesWithoutPreviewAreLiveOnly(t *testing.T) {
 			s.router.ServeHTTP(rec, req)
 			require.Equal(t, http.StatusConflict, rec.Code, "%s %s: %s", id, body, rec.Body.String())
 		}
+		// The unnested POST /api/v3/ops/runs names the definition in the
+		// body and must refuse the same way.
+		for _, body := range []string{`{"def":"` + id + `","mode":"preview"}`, `{"def":"` + id + `"}`} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v3/ops/runs", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			s.router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusConflict, rec.Code, "POST /ops/runs %s: %s", body, rec.Body.String())
+		}
 	}
 	require.Positive(t, routed, "no listed op is wired on the test server; the router check did not run")
+
+	// A live start is accepted and its params are queued as sent: no mode
+	// key is injected for an op that reads none. Only
+	// library.bulk-metadata-fetch is started: the test server's dispatcher
+	// runs what is queued, it has no books to fetch for, and the other two
+	// wired ops make paid AI calls when a key is configured.
+	const liveID = "library.bulk-metadata-fetch"
+	_, wired := s.opRegistry.Def(liveID)
+	require.True(t, wired, "%s is not wired on the test server; pick another listed op for the live check", liveID)
+	for _, path := range []string{"/api/v3/ops/runs", "/api/v3/ops/defs/" + liveID + "/runs"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"def":"`+liveID+`","mode":"live","params":{}}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusAccepted, rec.Code, "%s live: %s", path, rec.Body.String())
+		var started struct {
+			RunID string `json:"run_id"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &started))
+		require.NotEmpty(t, started.RunID, rec.Body.String())
+		row, err := s.store.GetOperationV2(started.RunID)
+		require.NoError(t, err)
+		require.NotNil(t, row, "run %s not stored", started.RunID)
+		require.JSONEq(t, `{}`, row.Params, "%s live: params must be queued untouched", path)
+	}
 }
 
 // TestOpsV3Routes_NoPreviewOpRefusesPreview drives the real router: a
