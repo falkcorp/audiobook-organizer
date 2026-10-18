@@ -1,7 +1,7 @@
 // file: internal/security/safepath/safepath.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8e4b29-9c1f-4f8b-8b6a-2c3f4e5a6b7c
-// last-edited: 2026-05-15
+// last-edited: 2026-10-18
 package safepath
 
 import (
@@ -48,14 +48,4 @@ func Validate(root, path string) (SafePath, error) {
 		return SafePath{}, fmt.Errorf("safepath: %q escapes root %q", cleaned, cleanRoot)
 	}
 	return SafePath{s: cleaned}, nil
-}
-
-// MustJoin is like Join but panics on error. Only use in tests or where the
-// inputs are compile-time constants.
-func MustJoin(root string, parts ...string) SafePath {
-	p, err := Join(root, parts...)
-	if err != nil {
-		panic(err)
-	}
-	return p
 }

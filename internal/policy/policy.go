@@ -1,7 +1,7 @@
 // file: internal/policy/policy.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-10-18
 
 // Package policy evaluates per-book processing policy tags.
 //
@@ -10,8 +10,6 @@
 // BookPolicy struct so every consumer can branch on named booleans
 // rather than repeated string comparisons.
 package policy
-
-import "github.com/falkcorp/audiobook-organizer/internal/database"
 
 // Known policy tag strings.
 const (
@@ -79,13 +77,4 @@ func EvaluatePolicy(tags []string) BookPolicy {
 		}
 	}
 	return p
-}
-
-// EvaluatePolicyDetailed derives a BookPolicy from detailed BookTag entries.
-func EvaluatePolicyDetailed(tags []database.BookTag) BookPolicy {
-	names := make([]string, len(tags))
-	for i, t := range tags {
-		names[i] = t.Tag
-	}
-	return EvaluatePolicy(names)
 }

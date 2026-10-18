@@ -1,7 +1,7 @@
 // file: internal/security/pathvalidation/pathvalidation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7b3d9f1e-2a6c-4f8d-8e0b-5c4a3b2d1e0f
-// last-edited: 2026-06-22
+// last-edited: 2026-10-18
 
 package pathvalidation_test
 
@@ -14,109 +14,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ValidateRelativePath
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestValidateRelativePath_HappyPath(t *testing.T) {
-	root := "/srv/books"
-	cases := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"simple filename", "book.m4b", "/srv/books/book.m4b"},
-		{"subdirectory", "author/book.m4b", "/srv/books/author/book.m4b"},
-		{"nested", "a/b/c.m4b", "/srv/books/a/b/c.m4b"},
-		{"dot-slash prefix is safe", "./book.m4b", "/srv/books/book.m4b"},
-		// A ".." that is cancelled by a later segment is safe:
-		{"dot-dot within root", "author/../other/book.m4b", "/srv/books/other/book.m4b"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := pathvalidation.ValidateRelativePath(root, tc.input)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestValidateRelativePath_TraversalRejected(t *testing.T) {
-	root := "/srv/books"
-	cases := []struct {
-		name  string
-		input string
-	}{
-		{"double dot", "../etc/passwd"},
-		{"double dot deep", "author/../../etc/passwd"},
-		{"triple dot escape", "author/../../../etc/shadow"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := pathvalidation.ValidateRelativePath(root, tc.input)
-			if err == nil {
-				t.Fatalf("expected error for input %q but got nil", tc.input)
-			}
-			if !errors.Is(err, pathvalidation.ErrPathTraversal) {
-				t.Errorf("expected ErrPathTraversal, got %v", err)
-			}
-		})
-	}
-}
-
-func TestValidateRelativePath_AbsolutePathRejected(t *testing.T) {
-	_, err := pathvalidation.ValidateRelativePath("/srv/books", "/etc/passwd")
-	if err == nil {
-		t.Fatal("expected error for absolute user path, got nil")
-	}
-	if !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) {
-		t.Errorf("expected ErrAbsolutePathNotAllowed, got %v", err)
-	}
-}
-
-func TestValidateRelativePath_EmptyPathRejected(t *testing.T) {
-	_, err := pathvalidation.ValidateRelativePath("/srv/books", "")
-	if err == nil {
-		t.Fatal("expected error for empty user path, got nil")
-	}
-	if !errors.Is(err, pathvalidation.ErrEmptyPath) {
-		t.Errorf("expected ErrEmptyPath, got %v", err)
-	}
-}
-
-func TestValidateRelativePath_RootWithTrailingSlash(t *testing.T) {
-	// Root with trailing slash should be equivalent to one without.
-	got1, err1 := pathvalidation.ValidateRelativePath("/srv/books/", "sub/file.m4b")
-	got2, err2 := pathvalidation.ValidateRelativePath("/srv/books", "sub/file.m4b")
-	if err1 != nil || err2 != nil {
-		t.Fatalf("unexpected errors: %v, %v", err1, err2)
-	}
-	if got1 != got2 {
-		t.Errorf("trailing slash changed result: %q vs %q", got1, got2)
-	}
-}
-
-// URL-encoded percent sequences are NOT path separators at the filesystem
-// level; filepath.Clean treats them as literal characters.  A path like
-// "..%2Fetc%2Fpasswd" is therefore a valid relative filename that stays inside
-// the root (its cleaned form is the literal string "..%2Fetc%2Fpasswd" appended
-// to root).  This test documents and asserts that behaviour.
-func TestValidateRelativePath_URLEncodedPercent_IsLiteralChar(t *testing.T) {
-	root := "/srv/books"
-	// filepath.Clean does NOT decode percent-encoding, so this is safe.
-	got, err := pathvalidation.ValidateRelativePath(root, "..%2Fetc%2Fpasswd")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.HasPrefix(got, root) {
-		t.Errorf("path %q does not start with root %q", got, root)
-	}
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SanitizeFilename
@@ -299,21 +196,6 @@ func TestSecureJoin_RootOnly(t *testing.T) {
 	}
 }
 
-func TestSecureJoin_ConsistentWithValidateRelativePath(t *testing.T) {
-	root := "/tmp/testroot"
-	input := "sub/dir/file.m4b"
-
-	v, err1 := pathvalidation.ValidateRelativePath(root, input)
-	j, err2 := pathvalidation.SecureJoin(root, "sub", "dir", "file.m4b")
-
-	if err1 != nil || err2 != nil {
-		t.Fatalf("unexpected errors: %v, %v", err1, err2)
-	}
-	if v != j {
-		t.Errorf("ValidateRelativePath=%q, SecureJoin=%q — expected equal results", v, j)
-	}
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // SecureJoinResolved (filesystem required)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -376,28 +258,20 @@ func TestErrors_AreDistinct(t *testing.T) {
 	if pathvalidation.ErrPathTraversal == pathvalidation.ErrAbsolutePathNotAllowed {
 		t.Error("ErrPathTraversal and ErrAbsolutePathNotAllowed must be distinct")
 	}
-	if pathvalidation.ErrPathTraversal == pathvalidation.ErrEmptyPath {
-		t.Error("ErrPathTraversal and ErrEmptyPath must be distinct")
-	}
 }
 
 func TestErrors_WrappedCorrectly(t *testing.T) {
 	// ErrPathTraversal must be detectable via errors.Is from wrapped errors.
 	root := "/srv/books"
 
-	_, err := pathvalidation.ValidateRelativePath(root, "../escape")
+	_, err := pathvalidation.SecureJoin(root, "../escape")
 	if !errors.Is(err, pathvalidation.ErrPathTraversal) {
 		t.Errorf("errors.Is(err, ErrPathTraversal) = false, got: %v", err)
 	}
 
-	_, err = pathvalidation.ValidateRelativePath(root, "/absolute")
+	_, err = pathvalidation.SecureJoin(root, "/absolute")
 	if !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) {
 		t.Errorf("errors.Is(err, ErrAbsolutePathNotAllowed) = false, got: %v", err)
-	}
-
-	_, err = pathvalidation.ValidateRelativePath(root, "")
-	if !errors.Is(err, pathvalidation.ErrEmptyPath) {
-		t.Errorf("errors.Is(err, ErrEmptyPath) = false, got: %v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/security/safepath/safepath_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a7b6c5d-4e3f-2a1b-9c0d-123456789abc
-// last-edited: 2026-05-15
+// last-edited: 2026-10-18
 package safepath
 
 import (
@@ -55,15 +55,6 @@ func TestValidateOutsideReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for Validate outside root, got nil")
 	}
-}
-
-func TestMustJoinPanicsOnEscape(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("MustJoin did not panic on escape attempt")
-		}
-	}()
-	MustJoin("/tmp/safepath-root", "..")
 }
 
 func TestStringReturnsCleanedPath(t *testing.T) {

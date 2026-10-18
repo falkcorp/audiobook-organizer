@@ -1,21 +1,15 @@
 // file: internal/util/normalize.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a3f7e2d1-9b4c-4e8a-b6f0-2c5d7a1e3f9b
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 
-// Package util provides shared string and path normalization helpers.
+// Package util provides shared string normalization helpers.
 package util
 
 import (
-	"path/filepath"
 	"strings"
 	"unicode"
 )
-
-// NormalizePath cleans a filepath and lowercases it for consistent comparison.
-func NormalizePath(p string) string {
-	return strings.ToLower(filepath.Clean(p))
-}
 
 // NormalizeTitle trims whitespace and lowercases a title for comparison.
 func NormalizeTitle(s string) string {
