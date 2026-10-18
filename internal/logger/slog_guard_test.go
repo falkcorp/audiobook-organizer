@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c0e7a3b-9d41-4f6e-8b2a-71e4c9d0f3a8
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 package logger
 
@@ -25,7 +25,7 @@ import (
 // slog.LogAttrs, the *Context variants) or slog.Default(), outside the
 // ratchet in slog_guard_ratchet_test.go.
 //
-// Why: this package's Logger, OperationLogger and the std-logger bridge run
+// Why: this package's Logger and the std-logger bridge run
 // every line through sanitizeLogLine. A direct slog call gets no barrier at
 // all, which is how main came to hold 307 open go/log-injection alerts on
 // 2026-09-13 (docs/audits/2026-09-13-log-injection-sweep.md).
@@ -144,7 +144,7 @@ func TestGuard_NoDirectSlogCalls(t *testing.T) {
 	sort.Strings(bad)
 	if len(bad) > 0 {
 		t.Errorf("%d file(s) call log/slog directly, which bypasses the log-injection barrier. "+
-			"Log through internal/logger (logger.New / OperationLogger), or wrap every "+
+			"Log through internal/logger (logger.New), or wrap every "+
 			"user-controlled value with logger.SanitizeLogValue AND route the call through "+
 			"this package. Do NOT add to slogRatchet or raise a count:\n\t%s",
 			len(bad), strings.Join(bad, "\n\t"))

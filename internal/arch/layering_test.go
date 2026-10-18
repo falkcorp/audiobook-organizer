@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -95,6 +95,7 @@ var layerOf = map[string]int{
 	"internal/operations/state":        0, // computed: imports no module package
 	"internal/pathutil":                0, // table: leaf
 	"internal/personname":              0, // table: leaf
+	"internal/policy":                  0, // computed: imports no module package
 	"internal/querygrammar":            0, // table: leaf
 	"internal/scanlock":                0, // computed: imports no module package
 	"internal/sdnotify":                0, // computed: imports no module package
@@ -175,7 +176,6 @@ var layerOf = map[string]int{
 	"internal/organizer":                3, // table: domain
 	"internal/playlist":                 3, // computed: max of imports=2, floored at 3
 	"internal/plugin":                   3, // computed: max of imports=0, floored at 3
-	"internal/policy":                   3, // computed: max of imports=2, floored at 3
 	"internal/quarantine":               3, // computed: max of imports=3, floored at 3
 	"internal/readstatus":               3, // computed: max of imports=2, floored at 3
 	"internal/reconcile":                3, // table: domain

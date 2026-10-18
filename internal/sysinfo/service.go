@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package sysinfo
 
@@ -310,12 +310,12 @@ func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset i
 	//
 	// This walks operation ids only to call GetOperationLogs(op.ID), which reads
 	// the `operationlog:` keyspace. That keyspace has no writer: AddOperationLog
-	// is called only from logger.OperationLogger, which is only constructed by
-	// logger.ForOperation — and ForOperation has zero production callers. Ops
-	// log through the activity store instead (see the note at
-	// server/batch_save_op.go:99, which spells out that the two are different
-	// keyspaces). Verified against production 2026-09-07: GET /system/logs
-	// returns {"logs":null,"total":0}.
+	// was called only from logger.OperationLogger, which was only constructed by
+	// logger.ForOperation, and ForOperation had zero production callers (the
+	// logger package deleted both on 2026-10-18). Ops log through the activity
+	// store instead (see the note at server/batch_save_op.go:99, which spells
+	// out that the two are different keyspaces). Verified against production
+	// 2026-09-07: GET /system/logs returns {"logs":null,"total":0}.
 	//
 	// So the System Logs page is already empty, and it is empty for a reason
 	// that has nothing to do with which keyspace supplies the ids. Feeding it

@@ -1,7 +1,7 @@
 // file: internal/security/pathvalidation/pathvalidation.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3a8f5c2b-7d4e-4a19-9f6b-1c0e2d3a5b7c
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 
 // Package pathvalidation provides centralized path validation utilities to
 // prevent path traversal and injection vulnerabilities. It is the foundation
@@ -10,14 +10,12 @@
 //
 // Primary API:
 //
-//   - [ValidateRelativePath] – validates that a user-supplied relative path
-//     does not escape a given root directory.
 //   - [SanitizeFilename] – strips or replaces characters that are unsafe in
 //     file or directory names.
 //   - [SecureJoin] – joins a root with user-supplied path components and
 //     returns an error if the result would escape the root.
 //
-// All three functions are pure (no filesystem I/O) so they are cheap, easy to
+// Both functions are pure (no filesystem I/O) so they are cheap, easy to
 // unit-test, and usable before any disk access occurs. For callers that need
 // symlink-safe joins, use [SecureJoinResolved] which also calls
 // [filepath.EvalSymlinks].
@@ -43,9 +41,6 @@ var ErrPathTraversal = errors.New("path traversal detected: path escapes root")
 // where only a relative path is expected.
 var ErrAbsolutePathNotAllowed = errors.New("absolute path not allowed in user-supplied input")
 
-// ErrEmptyPath is returned when a path is empty after sanitisation.
-var ErrEmptyPath = errors.New("empty path")
-
 // unsafeFilenameRE matches characters that are illegal or dangerous in
 // filenames on Windows, macOS, or Linux. The set is intentionally conservative:
 // only printable, non-control, non-reserved characters are allowed.
@@ -54,37 +49,6 @@ var unsafeFilenameRE = regexp.MustCompile(`[<>:"/\\|?*` + "\x00-\x1f\x7f" + `]`)
 // maxFilenameLen is the maximum byte length allowed for a sanitised filename.
 // FAT32 / VFAT limit is 255 bytes; we use the same limit for safety.
 const maxFilenameLen = 255
-
-// ValidateRelativePath validates that userPath, when joined with root, produces
-// a path that stays inside root. Both root and userPath are cleaned before
-// comparison.
-//
-// Rules enforced:
-//   - userPath must not be absolute.
-//   - The cleaned join of root and userPath must have root as a prefix.
-//   - Traversal sequences ("..") that escape root are rejected.
-//
-// Only path strings are examined; no I/O is performed. If you need symlink
-// safety you must additionally call [filepath.EvalSymlinks] on the result.
-//
-// Returns the cleaned absolute path on success.
-func ValidateRelativePath(root, userPath string) (string, error) {
-	if userPath == "" {
-		return "", ErrEmptyPath
-	}
-	if filepath.IsAbs(userPath) {
-		return "", ErrAbsolutePathNotAllowed
-	}
-
-	cleanRoot := filepath.Clean(root)
-	joined := filepath.Join(cleanRoot, userPath)
-	cleaned := filepath.Clean(joined)
-
-	if !isWithinRoot(cleaned, cleanRoot) {
-		return "", fmt.Errorf("%w: %q (root %q)", ErrPathTraversal, userPath, root)
-	}
-	return cleaned, nil
-}
 
 // SanitizeFilename returns a safe version of name suitable for use as a single
 // filename (not a path). It:

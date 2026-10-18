@@ -1,7 +1,7 @@
 // file: internal/logger/sanitize.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1a7f3c92-5e6b-4d08-9c2a-3b8e0f1d6a47
-// last-edited: 2026-09-01
+// last-edited: 2026-10-18
 
 package logger
 
@@ -31,8 +31,8 @@ import "strings"
 // user-controlled values through log/slog (or any other logger) instead of
 // this package's Logger.
 //
-// The unexported sanitizeLogLine is applied automatically by logger.Logger,
-// logger.OperationLogger and the standard-logger bridge — but ONLY by those.
+// The unexported sanitizeLogLine is applied automatically by logger.Logger
+// and the standard-logger bridge — but ONLY by those.
 // A package that reaches for log/slog directly gets no barrier at all, which
 // is how internal/versions came to hold two open go/log-injection alerts while
 // the rest of the codebase was clean. Prefer this package's Logger; where a

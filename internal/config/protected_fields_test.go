@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4f2a8c61-d93e-4b07-a5c8-1e6b3d9f7a20
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package config
 
@@ -74,6 +74,32 @@ func configLeafPaths() []string {
 	}
 	walk(reflect.TypeFor[Config](), "")
 	return out
+}
+
+// parentFieldPath is the nearest ancestor of a rule path: "a.b[]" -> "a.b",
+// "a.b" -> "a", "a" -> "". Test-only: production resolves classes through
+// configFieldRules directly (it had a production twin, ConfigFieldClass, with
+// no caller outside these tests until 2026-10-18).
+func parentFieldPath(p string) string {
+	if strings.HasSuffix(p, "[]") {
+		return strings.TrimSuffix(p, "[]")
+	}
+	i := strings.LastIndex(p, ".")
+	if i < 0 {
+		return ""
+	}
+	return p[:i]
+}
+
+// fieldClassAt returns the class of the field at a JSON path (as the rules
+// spell it), using the nearest classified ancestor.
+func fieldClassAt(path string) FieldClass {
+	for p := path; p != ""; p = parentFieldPath(p) {
+		if r, ok := configFieldRules[p]; ok {
+			return r.Class
+		}
+	}
+	return FieldUnprotected
 }
 
 func classifiedAt(path string) bool {
@@ -393,8 +419,8 @@ func TestOwnerTrustRootFields_AreSignInRules(t *testing.T) {
 		if why == "" {
 			t.Errorf("trust-root field %q has no reason", path)
 		}
-		if ConfigFieldClass(path) != FieldSignIn {
-			t.Errorf("trust-root field %q is %v, want a sign-in setting", path, ConfigFieldClass(path))
+		if fieldClassAt(path) != FieldSignIn {
+			t.Errorf("trust-root field %q has field class %d, want FieldSignIn (%d)", path, fieldClassAt(path), FieldSignIn)
 		}
 		if _, err := projectField(reflect.ValueOf(Config{}), strings.Split(path, ".")); err != nil {
 			t.Errorf("trust-root field %q does not resolve: %v", path, err)

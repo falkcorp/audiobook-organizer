@@ -1,7 +1,7 @@
 // file: internal/errhandling/errhandling_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 21b860a5-1a53-4ed1-8cc2-d62c8862bea9
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 
 package errhandling
 
@@ -16,6 +16,21 @@ import (
 	"testing"
 )
 
+// swapLogger overrides the logger [activeLogger] returns and gives back a
+// function that restores the previous one. Test-only: production always logs
+// through slog.Default().
+func swapLogger(l *slog.Logger) (restore func()) {
+	loggerMu.Lock()
+	prev := logger
+	logger = l
+	loggerMu.Unlock()
+	return func() {
+		loggerMu.Lock()
+		logger = prev
+		loggerMu.Unlock()
+	}
+}
+
 // captureLogs installs a JSON logger over a buffer and returns a function that
 // decodes whatever was written. Tests assert on the DECODED RECORDS, not on
 // "it didn't panic" — a test that cannot see the output would pass with the
@@ -24,7 +39,7 @@ func captureLogs(t *testing.T) func() []map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
 	h := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	restore := SetLogger(slog.New(h))
+	restore := swapLogger(slog.New(h))
 	t.Cleanup(restore)
 
 	return func() []map[string]any {
@@ -125,20 +140,6 @@ func TestMustLog_DanglingKeyIsPreservedNotDropped(t *testing.T) {
 	// this package exists to prevent, reintroduced inside the fix.
 	if got[0]["error"] != "x" {
 		t.Errorf("error = %v, want %q — a dangling key swallowed the error", got[0]["error"], "x")
-	}
-}
-
-func TestSetLogger_RestoresPrevious(t *testing.T) {
-	var buf bytes.Buffer
-	first := slog.New(slog.NewJSONHandler(&buf, nil))
-
-	restore := SetLogger(first)
-	if activeLogger() != first {
-		t.Fatal("SetLogger did not install the logger")
-	}
-	restore()
-	if activeLogger() == first {
-		t.Fatal("restore() did not put the previous logger back")
 	}
 }
 

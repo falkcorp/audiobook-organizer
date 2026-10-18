@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package config
 
@@ -32,21 +32,6 @@ const (
 	// serves, or decides which of several such paths it uses.
 	FieldServerPath
 )
-
-func (c FieldClass) String() string {
-	switch c {
-	case FieldSignIn:
-		return "sign-in setting"
-	case FieldExecutable:
-		return "executable"
-	case FieldDatabase:
-		return "database location"
-	case FieldServerPath:
-		return "server path"
-	default:
-		return "unprotected"
-	}
-}
 
 // Protected reports whether a field of this class needs an interactive
 // session to change.
@@ -175,28 +160,6 @@ var configFieldRules = map[string]fieldRule{
 	"telemetry_environment":       {FieldUnprotected, "label value on exported telemetry"},
 	"deluge_web_url":              {FieldUnprotected, "outbound endpoint"},
 	"download_client":             {FieldUnprotected, "outbound endpoints"},
-}
-
-// ConfigFieldClass returns the class of the field at a JSON path (as the
-// rules spell it), using the nearest classified ancestor.
-func ConfigFieldClass(path string) FieldClass {
-	for p := path; p != ""; p = parentFieldPath(p) {
-		if r, ok := configFieldRules[p]; ok {
-			return r.Class
-		}
-	}
-	return FieldUnprotected
-}
-
-func parentFieldPath(p string) string {
-	if strings.HasSuffix(p, "[]") {
-		return strings.TrimSuffix(p, "[]")
-	}
-	i := strings.LastIndex(p, ".")
-	if i < 0 {
-		return ""
-	}
-	return p[:i]
 }
 
 // ChangedProtectedFields returns, sorted, the protected fields whose value

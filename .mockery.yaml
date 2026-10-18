@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.30.0
+# version: 1.30.1
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-10-17
+# last-edited: 2026-10-18
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -161,12 +161,6 @@ packages:
     config:
       dir: internal/logger/mocks
     interfaces:
-      OperationStore:
-        config:
-          filename: mock_operation_store.go
-      RealtimeHub:
-        config:
-          filename: mock_realtime_hub.go
       ActivityLogWriter:
         config:
           filename: mock_activity_log_writer.go

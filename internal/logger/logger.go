@@ -1,7 +1,7 @@
 // file: internal/logger/logger.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: f47ac10b-58cc-4372-a567-0e02b2c3d479
-// last-edited: 2026-08-18
+// last-edited: 2026-10-18
 
 package logger
 
@@ -37,24 +37,6 @@ func (l Level) String() string {
 		return "error"
 	default:
 		return "unknown"
-	}
-}
-
-// ParseLevel converts a string to a Level.
-func ParseLevel(s string) Level {
-	switch s {
-	case "trace":
-		return LevelTrace
-	case "debug":
-		return LevelDebug
-	case "info":
-		return LevelInfo
-	case "warn":
-		return LevelWarn
-	case "error":
-		return LevelError
-	default:
-		return LevelInfo
 	}
 }
 
@@ -116,9 +98,8 @@ type Logger interface {
 	SubLoggerFactory
 }
 
-// Compile-time assertions that both concrete types fully implement Logger.
+// Compile-time assertion that StandardLogger fully implements Logger.
 var _ Logger = (*StandardLogger)(nil)
-var _ Logger = (*OperationLogger)(nil)
 
 // logToStdout formats and prints a log line to stdout using slog.
 func logToStdout(subsystem string, level Level, msg string, args ...any) {

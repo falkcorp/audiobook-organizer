@@ -1,6 +1,6 @@
 // file: internal/util/pointers_test.go
-// version: 1.0.1
-// last-edited: 2026-09-02
+// version: 1.0.2
+// last-edited: 2026-10-18
 
 package util
 
@@ -26,18 +26,6 @@ func TestBoolPtr(t *testing.T) {
 	p := new(true)
 	assert.NotNil(t, p)
 	assert.True(t, *p)
-}
-
-func TestDerefStr(t *testing.T) {
-	assert.Equal(t, "", DerefStr(nil))
-	s := "hello"
-	assert.Equal(t, "hello", DerefStr(&s))
-}
-
-func TestDerefInt(t *testing.T) {
-	assert.Equal(t, 0, DerefInt(nil))
-	i := 42
-	assert.Equal(t, 42, DerefInt(&i))
 }
 
 func TestExtractStringField(t *testing.T) {

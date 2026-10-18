@@ -1,6 +1,7 @@
 // file: internal/util/perms.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a2b3c4d5-e6f7-8901-ab23-cd45ef678901
+// last-edited: 2026-10-18
 
 package util
 
@@ -20,9 +21,3 @@ const FileMode os.FileMode = 0o664
 
 // SecretFileMode is for sensitive files like encryption keys (rw-------).
 const SecretFileMode os.FileMode = 0o600
-
-// CreateFile is a convenience wrapper for os.OpenFile that creates a new file
-// with ACL-safe permissions (0664) instead of os.Create's default (0666 & umask).
-func CreateFile(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, FileMode)
-}

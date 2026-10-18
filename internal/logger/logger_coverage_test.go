@@ -1,14 +1,13 @@
 // file: internal/logger/logger_coverage_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: dbb463d6-f89b-4dee-8f50-b9ea2a790f2e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package logger
 
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger/mocks"
@@ -120,121 +119,6 @@ func TestCoverage_StandardLogger_ActivityWriter_Error(t *testing.T) {
 
 	if len(*captured) != 1 {
 		t.Errorf("expected 1 captured, got %d", len(*captured))
-	}
-}
-
-// --- OperationLogger coverage ---
-
-func TestCoverage_OperationLogger_Trace(t *testing.T) {
-	store, calls := newOpStoreMock(t)
-	log := ForOperation("op1", store, nil)
-	log.Trace("trace msg") // should not go to DB (below minDBLevel)
-	if len(calls.logs) != 0 {
-		t.Errorf("expected 0 DB logs, got %d", len(calls.logs))
-	}
-}
-
-func TestCoverage_OperationLogger_Error(t *testing.T) {
-	store, calls := newOpStoreMock(t)
-	log := ForOperation("op1", store, nil)
-	log.Error("error msg")
-	if len(calls.logs) != 1 {
-		t.Errorf("expected 1 DB log, got %d", len(calls.logs))
-	}
-}
-
-func TestCoverage_OperationLogger_Changes(t *testing.T) {
-	log := ForOperation("op1", nil, nil)
-	log.RecordChange(Change{ChangeType: "book_create", Summary: "Created A"})
-	log.RecordChange(Change{ChangeType: "book_update", Summary: "Updated B"})
-
-	changes := log.Changes()
-	if len(changes) != 2 {
-		t.Fatalf("expected 2 changes, got %d", len(changes))
-	}
-	if changes[0].Summary != "Created A" {
-		t.Errorf("expected 'Created A', got %q", changes[0].Summary)
-	}
-}
-
-func TestCoverage_OperationLogger_OperationID(t *testing.T) {
-	log := ForOperation("test-op-id", nil, nil)
-	if log.OperationID() != "test-op-id" {
-		t.Errorf("OperationID() = %q, want 'test-op-id'", log.OperationID())
-	}
-}
-
-func TestCoverage_OperationLogger_SetMinDBLevel(t *testing.T) {
-	store, calls := newOpStoreMock(t)
-	log := ForOperation("op1", store, nil)
-	log.SetMinDBLevel(LevelError)
-
-	log.Info("should not appear")
-	log.Warn("should not appear")
-	log.Error("should appear")
-
-	if len(calls.logs) != 1 {
-		t.Errorf("expected 1 log, got %d: %v", len(calls.logs), calls.logs)
-	}
-}
-
-func TestCoverage_OperationLogger_With_Prefix(t *testing.T) {
-	log := ForOperation("op1", nil, nil)
-	child := log.With("scanner")
-	child2 := child.With("deep")
-
-	opLog, ok := child2.(*OperationLogger)
-	if !ok {
-		t.Fatal("expected *OperationLogger")
-	}
-	if opLog.subsystem != "scanner.deep" {
-		t.Errorf("subsystem = %q, want 'scanner.deep'", opLog.subsystem)
-	}
-}
-
-func TestCoverage_OperationLogger_WithHub(t *testing.T) {
-	store, _ := newOpStoreMock(t)
-	hub, hubCalls := newHubMock(t)
-	log := ForOperation("op1", store, hub)
-
-	log.Info("msg")
-
-	hubCalls.mu.Lock()
-	sent := hubCalls.logsSent
-	hubCalls.mu.Unlock()
-	if sent != 1 {
-		t.Errorf("expected 1 hub log, got %d", sent)
-	}
-}
-
-func TestCoverage_OperationLogger_Log_WithDetails(t *testing.T) {
-	store, calls := newOpStoreMock(t)
-	log := ForOperation("op1", store, nil)
-	details := "some details"
-	_ = log.Log("info", "msg with details", &details)
-	if len(calls.logs) != 1 {
-		t.Errorf("expected 1 DB log, got %d", len(calls.logs))
-	}
-}
-
-func TestCoverage_OperationLogger_UpdateProgress_NilStore(t *testing.T) {
-	log := ForOperation("op1", nil, nil)
-	log.UpdateProgress(1, 10, "test") // should not panic
-}
-
-func TestCoverage_OperationLogger_ConcurrentRecordChange(t *testing.T) {
-	log := ForOperation("op1", nil, nil)
-	var wg sync.WaitGroup
-	for range 100 {
-		wg.Go(func() {
-			log.RecordChange(Change{ChangeType: "test"})
-		})
-	}
-	wg.Wait()
-
-	counters := log.ChangeCounters()
-	if counters["test"] != 100 {
-		t.Errorf("expected 100, got %d", counters["test"])
 	}
 }
 

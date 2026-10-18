@@ -1,7 +1,7 @@
 // file: internal/util/normalize_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b4e8f3a2-0c5d-4f9b-a7e1-3d6c8b2e4f0a
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 
 package util_test
 
@@ -10,22 +10,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
-
-func TestNormalizePath(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"/foo/Bar/BAZ.mp3", "/foo/bar/baz.mp3"},
-		{"./Audio/Book/../file.MP3", "audio/file.mp3"},
-		{"/Audiobooks/Author/Title/", "/audiobooks/author/title"},
-		{"UPPER/lower/Mixed.go", "upper/lower/mixed.go"},
-	}
-	for _, c := range cases {
-		if got := util.NormalizePath(c.in); got != c.want {
-			t.Errorf("NormalizePath(%q) = %q; want %q", c.in, got, c.want)
-		}
-	}
-}
 
 func TestNormalizeTitle(t *testing.T) {
 	cases := []struct {
