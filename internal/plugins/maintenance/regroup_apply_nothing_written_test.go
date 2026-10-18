@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_nothing_written_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7f3e52-9a14-4d68-b3c1-6e2a85d9f470
 // last-edited: 2026-10-18
 
@@ -23,6 +23,8 @@ import (
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
 // These pin the CLASSIFICATION the review handler's hold-or-release decision rests on:
@@ -213,6 +215,68 @@ func TestApplyVersionGroup_NothingWrittenClassification(t *testing.T) {
 		err := ApplyVersionGroup(store)(context.Background(), versionGroupItem(t, "/lib/nw-vg3", ids))
 		require.Error(t, err)
 		assert.False(t, database.IsNothingWritten(err), "an attempted write is held whatever it reported: %v", err)
+	})
+}
+
+// markITunesAfterStore passes every ModifyBook through and, once afterCalls calls
+// have gone by, gives each of marks an iTunes persistent id directly on the real
+// store. It models the group changing between the pre-link iTunes check and the
+// hand-off, which the hand-off's own MayWrite call under the group lock exists for.
+type markITunesAfterStore struct {
+	*database.PebbleStore
+	t          *testing.T
+	calls      int
+	afterCalls int
+	marks      []string
+}
+
+func (s *markITunesAfterStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	out, err := s.PebbleStore.ModifyBook(id, fn)
+	s.calls++
+	if s.calls == s.afterCalls {
+		for _, m := range s.marks {
+			pid := "PID-" + m
+			_, merr := s.PebbleStore.ModifyBook(m, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+			require.NoError(s.t, merr)
+		}
+	}
+	return out, err
+}
+
+// The hand-off branch of ApplyVersionGroup (the two w.may updates after
+// EnsureSinglePrimary / CrownEnv): a first run whose every member is already in the
+// target group performs no link write (each link-loop ModifyBook returns
+// ErrSkipBookWrite, so w.may stays false), and the two explicit-true primaries make
+// EnsureSinglePrimary demote one. A demote write that fails after committing must be
+// held; a hand-off refused before any write must be released.
+func TestApplyVersionGroup_HandOffClassification(t *testing.T) {
+	seed := func(t *testing.T) (*vptest.Fixture, []string) {
+		f := vptest.New(t)
+		withLibraryRoot(t, f.Root)
+		a := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true"})
+		b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "true"})
+		return f, []string{a, b}
+	}
+
+	t.Run("a demote that committed then failed is held although no link write ran", func(t *testing.T) {
+		f, ids := seed(t)
+		// Calls 1 and 2 are the link loop's skips; call 3 is the demote.
+		store := &failingModifyStore{PebbleStore: f.S, failAfter: len(ids), commitThenFail: true, armed: true}
+		err := ApplyVersionGroup(store)(context.Background(), versionGroupItem(t, "/lib/nw-ho", ids))
+		require.Error(t, err)
+		require.Equal(t, len(ids)+1, store.calls, "the failure must land on the hand-off's first write, after the link-loop skips")
+		assert.False(t, database.IsNothingWritten(err), "the demote may have committed: %v", err)
+		assert.False(t, errors.Is(err, versionprimary.ErrWriteRefused), "%v", err)
+	})
+	t.Run("a hand-off refused before any write is nothing written", func(t *testing.T) {
+		f, ids := seed(t)
+		store := &markITunesAfterStore{PebbleStore: f.S, t: t, afterCalls: len(ids), marks: ids}
+		err := ApplyVersionGroup(store)(context.Background(), versionGroupItem(t, "/lib/nw-ho", ids))
+		require.ErrorIs(t, err, versionprimary.ErrWriteRefused)
+		assert.True(t, database.IsNothingWritten(err), "the guard refused before the demote wrote: %v", err)
+		for _, id := range ids {
+			assert.Equal(t, "true", f.Flag(t, id), "member %s must be untouched", id)
+		}
 	})
 }
 
