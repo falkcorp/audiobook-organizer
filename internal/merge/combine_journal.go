@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -72,7 +72,9 @@ const (
 	// but hit a store error part way through. LastError says where. It is NOT
 	// terminal: UndoCombine accepts it and re-runs the undo, treating every item
 	// the failed attempt already restored as done (see undoPreconditions and
-	// applyUndo, whose steps are each safe to re-run).
+	// applyUndo, whose steps are each safe to re-run). A journal left here by
+	// an undo that finished and could not record itself carries an applied
+	// record (combineUndoAppliedKey); its re-run only records it undone.
 	CombineJournalUndoFailed = "undo_failed"
 )
 
@@ -631,6 +633,20 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An undo that finished but could not record itself left its applied
+	// record (combineUndoAppliedKey). Checked before the preconditions:
+	// what the user changed after that undo would make them refuse, and the
+	// journal would stay undo_failed for good. Only the status write is
+	// retried; nothing is replayed.
+	if j.Status == CombineJournalUndoFailed || j.Status == CombineJournalPending {
+		applied, err := readCombineUndoApplied(ms.db, j.ID)
+		if err != nil {
+			return nil, fmt.Errorf("undo combine %s: %w", j.ID, err)
+		}
+		if applied != nil {
+			return ms.recordAppliedUndo(j, applied)
+		}
+	}
 	if reasons := ms.undoPreconditions(j); len(reasons) > 0 {
 		return nil, &CombineUndoRefusedError{JournalID: j.ID, Reasons: reasons}
 	}
@@ -661,34 +677,110 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 		}
 		return nil, fmt.Errorf("undo combine %s: %w", j.ID, applyErr)
 	}
-	j.Status = CombineJournalUndone
-	j.UndoneAt = &now
-	j.LastError = ""
-	j.Warnings = append(j.Warnings, res.Warnings...)
-	if err := ms.putCombineJournal(j); err != nil {
-		// The undo itself is done, but the journal still says undo_failed
-		// ("undo started and did not finish", written before the first
-		// write), so it reads as a cut-short undo and a re-run is allowed:
-		// undoPreconditions accepts every row in its pre-combine state, and
-		// applyUndo replays. That replay must change nothing the user did
-		// after this undo. Every step decides row by row from what is there
-		// now: a row already back is not written, the survivor's progress
-		// put-back recognises its own marker (RestoreFollowedProgress), and
-		// a lock row is put back only while it still holds the combine's
-		// lock (restoreOverrideLocks). The reconcile markers are kept, since
-		// that re-run still needs them; it drops them once it records the
-		// journal undone.
+	// The undo is done. Say so in its own raw key before the journal's
+	// status write: if that write fails, the journal still reads
+	// undo_failed ("undo started and did not finish", written before the
+	// first write), and a re-run must then only retry the status write
+	// (recordAppliedUndo), never replay applyUndo over what the user has
+	// done since -- a title, lock or author link re-picked to the combine's
+	// own value reads, to a replay, as the combine's and is taken away
+	// again. If this write fails too, the status write below is still made;
+	// only when both fail does a re-run replay, and every step of applyUndo
+	// is then safe to re-run against rows already put back (a row already
+	// back is not written, the survivor's put-back recognises its marker,
+	// a lock row is put back only while it still holds the combine's lock),
+	// though a value re-picked to the combine's own is not told from it.
+	applied := combineUndoApplied{UndoneAt: now, Warnings: res.Warnings}
+	if err := writeCombineUndoApplied(ms.db, j.ID, applied); err != nil {
+		mlog.Error("combine undo: completed but its applied record not written journal=%s err=%s", j.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+	}
+	if err := ms.markCombineUndone(j, applied); err != nil {
+		// The undo itself is done. The reconcile markers and the applied
+		// record are kept: a re-run finds the record and only retries this
+		// write.
 		mlog.Error("combine undo: completed but journal status not updated journal=%s err=%s", j.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
-	} else {
-		// Recorded as undone: no re-run of its put-backs can come, so their
-		// reconcile markers go.
-		for _, a := range j.Absorbed {
-			dropSurvivorReconcileMarkers(ms.db, j.SurvivorID, a.BookID, a.Progress)
-		}
 	}
 	mlog.Info("combine undone journal=%s survivor=%s restored=%d files_moved=%d warnings=%d",
 		j.ID, logger.SanitizeLogValue(j.SurvivorID), len(res.RestoredBooks), res.FilesMoved, len(res.Warnings))
 	return res, nil
+}
+
+// combineUndoAppliedPrefix keys the record an undo writes once applyUndo
+// has succeeded, before the journal's status write:
+// merge:combine-undo-applied:<journal id> -> combineUndoApplied JSON. It is
+// deleted once the journal reads undone (markCombineUndone); one left behind
+// next to an undone journal is never read (UndoCombine reads it only for an
+// undo_failed or pending journal).
+const combineUndoAppliedPrefix = "merge:combine-undo-applied:"
+
+func combineUndoAppliedKey(journalID string) string { return combineUndoAppliedPrefix + journalID }
+
+// combineUndoApplied is what the journal's status write records: when the
+// undo finished and what it left as it is.
+type combineUndoApplied struct {
+	UndoneAt time.Time `json:"undone_at"`
+	Warnings []string  `json:"warnings,omitempty"`
+}
+
+func writeCombineUndoApplied(db CombineJournalWriter, journalID string, a combineUndoApplied) error {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("encode undo applied record: %w", err)
+	}
+	return db.SetRaw(combineUndoAppliedKey(journalID), data)
+}
+
+// readCombineUndoApplied returns the journal's applied record, nil when there
+// is none. A record that cannot be read is an error, not "none": reading it
+// as none would replay an undo that finished.
+func readCombineUndoApplied(kv journalKVReader, journalID string) (*combineUndoApplied, error) {
+	data, err := kv.GetRaw(combineUndoAppliedKey(journalID))
+	if err != nil {
+		return nil, fmt.Errorf("read undo applied record: %w", err)
+	}
+	if data == nil {
+		return nil, nil
+	}
+	var a combineUndoApplied
+	if err := json.Unmarshal(data, &a); err != nil {
+		return nil, fmt.Errorf("decode undo applied record: %w", err)
+	}
+	return &a, nil
+}
+
+// markCombineUndone records j as undone with what the undo left as it is,
+// then drops what only a re-run of the undo could need: the survivor
+// put-backs' reconcile markers and the applied record. Both drops are best
+// effort; a marker or record left behind is never read again.
+func (ms *Service) markCombineUndone(j *CombineJournal, a combineUndoApplied) error {
+	undoneAt := a.UndoneAt
+	j.Status = CombineJournalUndone
+	j.UndoneAt = &undoneAt
+	j.LastError = ""
+	j.Warnings = append(j.Warnings, a.Warnings...)
+	if err := ms.putCombineJournal(j); err != nil {
+		return err
+	}
+	for _, ab := range j.Absorbed {
+		dropSurvivorReconcileMarkers(ms.db, j.SurvivorID, ab.BookID, ab.Progress)
+	}
+	if err := ms.db.DeleteRaw(combineUndoAppliedKey(j.ID)); err != nil {
+		mlog.Warn("combine undo: applied record of journal=%s not dropped: %s", j.ID, logger.SanitizeLogValue(err.Error()))
+	}
+	return nil
+}
+
+// recordAppliedUndo finishes a re-run of an undo that completed but could not
+// record itself: it writes the journal's status and nothing else. The result
+// reports nothing restored and no warnings, since this run changed nothing;
+// what the undo itself left as it is goes into the journal's warnings.
+func (ms *Service) recordAppliedUndo(j *CombineJournal, a *combineUndoApplied) (*CombineUndoResult, error) {
+	if err := ms.markCombineUndone(j, *a); err != nil {
+		return nil, fmt.Errorf("undo combine %s: the undo had completed, and recording it failed again: %w", j.ID, err)
+	}
+	mlog.Info("combine undo recorded journal=%s survivor=%s: the undo had completed earlier and could not record itself; nothing replayed",
+		j.ID, logger.SanitizeLogValue(j.SurvivorID))
+	return &CombineUndoResult{JournalID: j.ID, SurvivorID: j.SurvivorID}, nil
 }
 
 // undoPreconditions returns every reason the undo must not run. Read-only.
