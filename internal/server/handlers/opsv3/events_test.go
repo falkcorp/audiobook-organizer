@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package opsv3
 
@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,7 +157,9 @@ func TestSSEProgressCarriesChunks(t *testing.T) {
 
 func TestSSEHeartbeatAndResumeFromLastEventID(t *testing.T) {
 	mem := &memRuns{runs: map[string]database.RunRecord{}}
-	br := NewBroker(mem, nil, nil, BrokerOptions{Heartbeat: 20 * time.Millisecond, RingSize: 4})
+	// Six streams of one caller stay open below: lift the per-user cap,
+	// which TestSSEPerUserCap covers.
+	br := NewBroker(mem, nil, nil, BrokerOptions{Heartbeat: 20 * time.Millisecond, RingSize: 4, MaxClientsPerUser: 16})
 	for i := range 6 {
 		br.publish(RunView{ID: string(rune('a' + i)), State: "running"})
 	}
@@ -229,11 +232,11 @@ func TestSSEIDsCarryTheBootNonce(t *testing.T) {
 // closed stream frees its place.
 func TestSSEClientCap(t *testing.T) {
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 2})
-	_, u1, err := br.subscribe(0, resumeNone)
+	_, u1, err := br.subscribe("", 0, resumeNone)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, u2, err := br.subscribe(0, resumeNone)
+	_, u2, err := br.subscribe("", 0, resumeNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,10 +246,52 @@ func TestSSEClientCap(t *testing.T) {
 		t.Fatalf("third stream = %d, want 503", w.Code)
 	}
 	u1()
-	if _, u3, err := br.subscribe(0, resumeNone); err != nil {
+	if _, u3, err := br.subscribe("", 0, resumeNone); err != nil {
 		t.Fatalf("after one closed: %v", err)
 	} else {
 		u3()
+	}
+}
+
+// TestSSEPerUserCap: one signed-in user may hold MaxClientsPerUser streams;
+// one more is 429 while other users still get in, closing one frees a place,
+// and requests with no user are bounded only by MaxClients.
+func TestSSEPerUserCap(t *testing.T) {
+	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 10, MaxClientsPerUser: 2})
+	_, a1, err := br.subscribe(viewer.user, 0, resumeNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, a2, err := br.subscribe(viewer.user, 0, resumeNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a2()
+	r := newRouter(New(Deps{Runs: &memRuns{}, Broker: br}))
+	if w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/events", nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("third stream of one user = %d, want 429", w.Code)
+	}
+	if _, u, err := br.subscribe("someone-else", 0, resumeNone); err != nil {
+		t.Fatalf("another user refused: %v", err)
+	} else {
+		u()
+	}
+	for range 5 {
+		_, u, err := br.subscribe("", 0, resumeNone)
+		if err != nil {
+			t.Fatalf("no-user stream refused under MaxClients: %v", err)
+		}
+		defer u()
+	}
+	a1()
+	a1() // idempotent: must not free a second place
+	if _, u, err := br.subscribe(viewer.user, 0, resumeNone); err != nil {
+		t.Fatalf("after one closed: %v", err)
+	} else {
+		defer u()
+	}
+	if _, _, err := br.subscribe(viewer.user, 0, resumeNone); !errors.Is(err, ErrTooManyUserClients) {
+		t.Fatalf("a double unsubscribe freed an extra place: %v", err)
 	}
 }
 
@@ -294,7 +339,7 @@ func TestSSEBrokerStartsOnFirstSubscriber(t *testing.T) {
 	}
 	mu.Unlock()
 	for range 3 {
-		_, u, err := br.subscribe(0, resumeNone)
+		_, u, err := br.subscribe("", 0, resumeNone)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -310,7 +355,7 @@ func TestSSEBrokerStartsOnFirstSubscriber(t *testing.T) {
 	stop()
 	late := NewBroker(&memRuns{}, newFakeHub(), nil, BrokerOptions{})
 	late.StartOnFirstSubscriber(done, func(func()) { t.Error("spawned after shutdown") })
-	_, u, _ := late.subscribe(0, resumeNone)
+	_, u, _ := late.subscribe("", 0, resumeNone)
 	u()
 }
 
@@ -384,7 +429,7 @@ func TestBrokerWatchSetIsBounded(t *testing.T) {
 
 func TestSSESlowClientGetsResyncNotBlocking(t *testing.T) {
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{ClientBuffer: 4, RingSize: 1000})
-	cl, unsub, err := br.subscribe(0, resumeNone)
+	cl, unsub, err := br.subscribe("", 0, resumeNone)
 	if err != nil {
 		t.Fatal(err)
 	}
