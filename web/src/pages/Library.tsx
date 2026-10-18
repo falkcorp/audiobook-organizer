@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.104.2
+// version: 1.105.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-18
 
@@ -40,6 +40,13 @@ import { appendTagTerm, removeTagTerm } from '../utils/tagQuery';
 import { useLibraryScrollKeeper } from '../hooks/useLibraryScrollKeeper';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
+import {
+  describeCombineFailure,
+  describeCombineResult,
+  describeUndoFailure,
+  describeUndoResult,
+  type CombineToastPlan,
+} from './libraryCombineToast';
 import type { Audiobook } from '../types';
 import { runOrganizeRollback } from './organizeRollback';
 import { SortField, SortOrder } from '../types';
@@ -849,8 +856,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   }, []);
 
   const buildFieldFilters = useCallback(() => {
-    const fieldFilters: Array<{ field: string; value: string; negated: boolean; quoted?: boolean }> =
-      [];
+    const fieldFilters: Array<{
+      field: string;
+      value: string;
+      negated: boolean;
+      quoted?: boolean;
+    }> = [];
     // Sidebar picks are exact names chosen from a list, so they go quoted
     // (literal): a name containing * or starting with / must never be read
     // as a wildcard or a regex.
@@ -1506,6 +1517,32 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
+  // undoCombine reverts a combine through POST /operations/:id/revert and
+  // toasts the outcome. Reached from the Undo action on the combine toasts.
+  const undoCombine = async (operationId: string) => {
+    try {
+      const result = await api.revertOperation(operationId);
+      const plan = describeUndoResult(result, operationId);
+      toast(plan.message, plan.severity, combineUndoAction(plan));
+      clearLibraryCache();
+      await loadAudiobooks();
+    } catch (error) {
+      console.error('Failed to undo combine:', error);
+      const plan = describeUndoFailure(error, operationId);
+      toast(plan.message, plan.severity, combineUndoAction(plan));
+    }
+  };
+
+  // The action that reverts plan's operation: Undo on a combine toast, Retry
+  // on a partial or failed undo. A function declaration, so undoCombine above
+  // can use it before this line runs.
+  function combineUndoAction(plan: CombineToastPlan) {
+    const id = plan.undoOperationId;
+    return id
+      ? { label: plan.actionLabel ?? 'Undo', onClick: () => void undoCombine(id) }
+      : undefined;
+  }
+
   // handleCombineIntoOneBook combines the selected single-file books into ONE
   // multi-file book on the chosen survivor (mergePrimaryId), hard-deleting the
   // absorbed shells (soft-deleted, undoable). Distinct from handleMergeAsVersions (version-group merge).
@@ -1524,17 +1561,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
             }
           : undefined;
       const result = await api.combineBooks(keepId, mergeIds, override);
-      const combined = `Combined ${result.files_moved} files into one book; moved ${result.books_deleted} entries to trash`;
-      if (result.journal_pending) {
-        toast(
-          `${combined}. Its undo record could not be finalized; it still lists every step, so reverting the operation replays them.`,
-          'warning'
-        );
-      } else if (result.warnings?.length) {
-        toast(`${combined}. ${result.warnings.join(' ')}`, 'warning');
-      } else {
-        toast(`${combined}.`, 'success');
-      }
+      const plan = describeCombineResult(result);
+      toast(plan.message, plan.severity, combineUndoAction(plan));
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
       setCombineOverrideTitle('');
@@ -1545,7 +1573,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await loadAudiobooks();
     } catch (error) {
       console.error('Failed to combine books:', error);
-      toast('Failed to combine books.', 'error');
+      const plan = describeCombineFailure(error);
+      toast(plan.message, plan.severity, combineUndoAction(plan));
+      if (plan.undoOperationId) {
+        // The combine stopped part-way: some rows changed, so refresh.
+        clearLibraryCache();
+        await loadAudiobooks();
+      }
     } finally {
       setCombineInProgress(false);
     }
